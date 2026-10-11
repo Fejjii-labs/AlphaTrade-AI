@@ -162,3 +162,83 @@ verified fee/PnL methodology. Its isolated native closing facts, true-valued leg
 flags or client-order resemblance cannot supply those missing sources. Newly registered
 producer-owned outcomes keep proof and monetary totals unavailable. No native sample
 HTTP adapter, autonomous executor or provider is activated by this contribution.
+
+## Existing governed coordinator connection — 11 October 2026
+
+Isolated branch `codex/blofin-coordinator-evidence`, base reviewed PR248
+`4e5dc16782c8f8a30891179de0a886a44c3f0f37`. The integration owner records this
+contribution's exact corrective and integrated revisions. No migration, shared client,
+HTTP admission, scheduler, production setting or external exchange order was changed.
+The previous 119 distinct foundation cases are reused only for their unchanged source;
+they are not a new combined CI or full release acceptance result.
+
+Executed focused results, zero skips in every selection:
+
+| Selection | Result | Revision coverage |
+| --- | --- | --- |
+| New `test_governed_experiment_context_postgres.py` | **15 passed, 83.20s** | Coordinator origin/claim/binding order, original replay, concurrent one-send, cached-effect refresh, armed real entry, disarmed entry, pause/expiry/fence, frozen risk and tenant guards; after the dispatch cache repair, before the final fresh-membership addition |
+| Existing `test_phase1_slices_7_9_execution_protocol.py` | **38 passed, 14.96s** | Injected claim timestamps and refreshed locked effect; those source files were unchanged afterward |
+| Existing governed worker success, preflight kill and preflight fence | **3 passed, 22.57s** | Actual ordinary unowned Watcher → canonical claim → MockTransport → persisted Journal/restart/protection paths, after the dispatch cache repair |
+| New retained-cache membership downgrade cases | **2 passed, 13.01s** | Final guard source: another-session Viewer downgrade refuses at explicit entry and direct dispatch before new origin, command or provider reads |
+| Permitted-role armed real entry after membership repair | **1 passed, 5.06s** | Final guard source allows the existing authorized path, preserves original committed receipts and performs zero POSTs |
+
+These selections cover **58
+distinct focused cases** (17 new PostgreSQL + 41 existing compatibility cases); repeated
+public-entry executions are not additional cases. PostgreSQL fixtures use UUID-named
+schemas on the owner's disposable PostgreSQL 17 database. Existing ordinary Watcher
+helpers drop `public`, so the three ordinary cases ran against a separately generated
+disposable database in the same local cluster, then that database was dropped. No
+second server, shared schema reset or external request was used.
+
+New PostgreSQL command, from `backend` with explicit local-loopback tool access:
+
+```sh
+EXPERIMENT_TEST_POSTGRES_URL=postgresql+psycopg://alphatrade@127.0.0.1:55439/alphatrade_test \
+PYTHONPATH=src:. .venv/bin/pytest -o addopts='' -q -rs \
+  tests/test_governed_experiment_context_postgres.py
+```
+
+The final authority repair ran only
+`::test_cached_membership_downgrade_refuses_before_new_execution_evidence` (both
+parameters) and `::test_explicit_internal_entry_reaches_real_governed_claim_and_committed_receipts`.
+It did not rerun unchanged green selections. The armed case uses the actual
+FirstSliceEvidenceAssembler against existing synthetic REST fixtures, real
+`continue_experiment_setup` → `continue_confirmed_setup`, canonical persisted Candidate/
+plan reuse, actual approval/claim and existing dispatcher fences. An independent
+session sees committed original origin → command → verified position/entry receipts
+before the mocked submit callback. The callback invokes the real final gate and
+simulates a lost reply without making a POST. Fresh-session replay retains the original
+command/key and performs no second position collection or automatic send.
+
+Repair receipts are retained truthfully. Early fixture runs hit the real capacity
+guard because the fixture multiplier made its contract quantity oversized; fixing the
+initial fixture's exact native contract multiplier preserved the guard. An advancing
+injected clock exposed new ALLOW commands taking model-default wall time; new command
+timestamps now use the claim clock. A late expiry correctly stopped dispatch, but a
+subsequent stale-account diagnostic masked the retained uncertain response; only that
+unavailable identity case now rolls back the diagnostic read transaction. The first
+13-case consolidated run had **12 passed, 1 failed, 84.29s**: the concurrent one-send
+assertion observed two attempts for one command. SELECT FOR UPDATE had retained stale
+effect identity-map state; refreshing that state while locked repaired the race. Its
+assertion and independent concurrency remain intact. New fixture diagnostics also caught
+a wrong hash-helper call and a quote aging across two experiment starts; existing fresh
+REST fixtures fixed input freshness without changing production gates or timeouts.
+A local run without loopback permission failed during PostgreSQL connection setup;
+the same existing server worked with the authorized tool permission, without a restart.
+
+Independent source review then found stale cached membership across a committed
+Owner/Trader → Viewer downgrade. Fresh membership reads were confined to the new
+context/registered-dispatch guards; PostgreSQL proves refusal before new evidence and
+retains the existing final expiry/fence revalidation. No assertion, refusal, temporal
+guard or lease timeout was weakened. Changed-file Ruff lint/format passed for all seven
+Python files; scoped strict mypy passed for the five affected source files. `git diff
+--check` passed. No full CI was dispatched.
+
+N1 is now an implemented/tested explicit connection to the existing governed
+coordinator, conditional on pre-existing arm/credential/approval/risk gates. It does
+not choose a running experiment or activate a scheduler/HTTP route. N3–N5 retain their
+accepted foundation behavior. **N1, N3–N5: 4/5 accepted locally; N2 remains unmet.**
+No native performance, full backend acceptance, deployed or live-accepted result is
+claimed. N2's exact absent venue-owned parent/child and historical money declarations,
+the HTTP 403 official-source limit and corroborating mirror/CCXT hashes are documented
+in the existing outcome contract. Admission stays closed and unknown values stay null.

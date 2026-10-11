@@ -62,7 +62,8 @@ No HTTP or imported activity path writes these attestations.
 
 The reviewed PR245 foundation supplied no executor or attestation writer. The bounded
 11 October supplement adds a server-only **origin and pre-entry receipt producer**,
-described below, but no experiment execution coordinator or qualified exit writer.
+described below. The subsequent coordinator correction connects explicit server-owned
+context to the existing governed loop; it adds no autonomous selector or qualified exit writer.
 Before integration enables native ingestion, the integration and execution owners must
 establish that the server-only
 producer verifies original execution UID, canonical strategy/plan/dispatch authority,
@@ -210,9 +211,10 @@ The caller owns all transactions: commit origin before command creation, and com
 entry/position receipts before dispatch. Advisory locks and deterministic receipt IDs
 converge on the original origin/binding/diagnostic across restart and concurrent calls.
 Replays never contact the venue or replace the original snapshot after plan expiry.
-Neither callable service is wired to an autonomous experiment executor: there is no
-current production coordinator selecting an experiment origin and calling these methods.
-Existing experiment start/approval boundaries and operator settings remain unchanged.
+The existing governed coordinator now calls these services through the explicit internal
+`continue_experiment_setup` entry described below. No autonomous experiment selector,
+Watcher experiment matching, scheduler or HTTP execution entry is installed. Domain
+start alone never invokes this entry. Existing approval and operator boundaries apply.
 
 `reconcile` persists scoped diagnostics without admitting a sample or inventing an exit.
 The current governed lifecycle resolution retains an isolated closing-fill sequence,
@@ -221,8 +223,8 @@ Its documented `fillPnl` is not independently declared gross or net of fees/fund
 native history fee currency/sign may also be unavailable. Producer-owned commands
 therefore remain unavailable, even if legacy true-valued exit flags are present.
 The reader clears sample proof and monetary totals for these unqualified commands.
-The missing sources are a reviewed coordinator callsite, complete native protected
-parent/child or canonical exit authority and independently verified fee/PnL methodology.
+The missing sources are complete native protected parent/child or canonical exit
+authority and independently verified fee/PnL methodology.
 
 Installed read-only HTTP contracts:
 
@@ -235,3 +237,73 @@ Both reads use stored tenant/user-scoped data. They perform no provider IO, writ
 retry, order submission or activation. POST samples remains adapter-unavailable (503).
 Internal simulation remains a separate source; unavailable results are never portfolio
 returns or measured native strategy performance. No migration is added; a12 remains head.
+
+## Explicit existing-coordinator connection — 11 October 2026
+
+`GovernedBloFinDemoLoop.continue_experiment_setup` is a server-only entry into the
+existing `continue_confirmed_setup` pipeline. Its explicit tenant, experiment, version
+and variant must match scoped persisted membership, running approval interval, native
+execution UID, immutable strategy/configuration and canonical plan. No similar running
+experiment is selected. The frozen experiment risk/cost envelope also bounds that plan.
+Current membership is refreshed at entry and registered-dispatch boundaries; a cached
+Owner/Trader row cannot survive another-session downgrade as execution authority.
+It preserves the ordinary unowned Watcher/demo path and all existing posture, risk,
+approval, lease, safety, TTL, reconciliation and execution fences.
+
+The transaction order in `_execute_existing` is:
+
+1. Validate and lock the exact root/version; register and **commit** original plan origin.
+2. Revalidate that version, then create the existing governed approval/ALLOW command.
+   Newly created ALLOW command timestamps use the same injected claim clock. Historical
+   and refused command timestamps are unchanged.
+3. Capture signed UID-bracketed flat-position and exact native contract receipts, then
+   **commit** the position and entry binding before dispatch leasing.
+4. Revalidate the locked version and independently committed receipts at lease and
+   dispatch authorization. After provider preflight, revalidate once more through the
+   existing final send fence. Lifecycle locks use root → version → account epoch order.
+5. Keep the original ambiguous command/key for read-only recovery. Reconciliation
+   persists unavailable diagnostics; it cannot manufacture closing or money proof.
+
+The new guards also apply to registered commands reaching the existing dispatcher
+directly. Independent receipt probes use a separate Engine connection, including when
+the caller Session is Connection-bound. Locked effect reads refresh cached state: a
+worker cannot reuse stale CREATED/authorized state after another consumes the send.
+No DB transaction is held over the existing venue send. Existing pause/expiry or a
+changed dispatch fence after committed receipts still refuses the final send. An identity
+that later becomes stale preserves the already committed uncertain command/key and
+unavailable result, rather than creating a new request or replacing its receipts.
+
+This is implemented coordinator wiring, locally tested with PostgreSQL and mocked
+transport. It does not activate or schedule experiment execution. All qualification
+orders remain inside fixtures; the new positive cases deliberately perform zero POSTs.
+Native HTTP sample admission stays closed because N2 remains unqualified.
+
+### Exact remaining native source requirements
+
+`VerifiedDemoExit.facts()` retains entry/fill IDs, protection IDs and closing fill IDs.
+`reconcile_demo_exit` checks an effective TPSL's client echo, trigger, size and account,
+but the stored evidence does not identify its generated closing child order directly.
+`demo_lifecycle_resolution` deliberately stores `venue_reported_fill_pnl` with gross,
+net and funding unknown. Neither client echoes nor matching prices/quantities establishes
+the missing native parent/child edge or full flat-to-open-to-flat attribution.
+
+Two accessible source leads were reviewed without an exchange connection:
+
+- [Pinned Anonymous-fe documentation mirror](https://github.com/Anonymous-fe/blofin-api-docs/blob/167da57aec7751207d6b53248d002435a397b234/index.md)
+  (SHA256 `062d8b291c64e286cc9143a6e9a269368ac4b6f9aa1315a4a17ad61b1dd23048`)
+  lists TPSL IDs and order/trade IDs, but declares no entry/protection/generated-child
+  edge. It labels `fillPnl` closing profit/loss and `fee` fee, without explicit fee
+  currency, sign, or fee/funding inclusion rules.
+- [CCXT BloFin adapter](https://github.com/ccxt/ccxt/blob/master/python/ccxt/blofin.py)
+  (retrieved SHA256 `df2ab5731e9d7128b88f497585ca0831978893195d57ea5b307d916cd4119f4b`)
+  maps native fees and uses market settlement currency when omitted. This is third-party
+  behavior, not an independently verified venue-owned monetary declaration.
+
+These are corroborating source leads, not authoritative attestations or live acceptance.
+The direct official documentation request returned HTTP 403 under the current enforced
+network policy; it was not bypassed or repeatedly retried. N2 needs a venue-confirmed
+contract/receipt for entry → protection → generated closing order and complete fills,
+plus explicit historical fee currency/sign and `fillPnl` fee/funding basis for the exact
+verified account. Only then can a bounded producer qualify complete position lineage
+and write an exit attestation. Existing documented raw IDs, contract units and original
+native money fields remain preserved; no unsupported mapping or true flag is added.
