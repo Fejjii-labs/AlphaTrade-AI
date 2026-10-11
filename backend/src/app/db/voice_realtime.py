@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -50,6 +51,6 @@ class VoiceSessionReservation(Base):
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     accounted_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     response_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    ledger: Mapped[dict] = mapped_column(JSON, nullable=False)
+    ledger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
