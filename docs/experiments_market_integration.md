@@ -432,3 +432,60 @@ transaction, external message, credential/operator mutation or full CI dispatch.
 Final full backend gate remains after supervising review, staging and fresh SFP
 prerequisites under .ai/RELEASE.md. Native attestations/execution are not authorized
 by this milestone. No new paid model/resource, no new management system.
+
+## Parallel delivery supplement — 11 October 2026
+
+Stabilization PR244 stays at `ba47a228c426da5d2fe8ab38e5a15cba2aa54620`;
+its19 local and1072 backend/399 frontend focused CI passes remain evidence for that
+revision. Frozen PR237 remains3600ec89. New features live on the separate
+`codex/agent-knowledge-ui-integration` branch; no deployment authority is added.
+No existing Agent/compact UI assignment is active in the available worker/thread
+snapshot. Two isolated workers begin from the shared contract commit below.
+
+Ownership before edits: A owns AgentWorkspace, Agent/voice components and supporting
+Agent/capture services and tests. B owns navigation, Dashboard, Strategies,
+Journal/Knowledge and Settings routes/components/tests, excluding A's files.
+Owner owns shared generated API artifacts, shared primitives, migration sequencing,
+real API/browser integration, publication and this checkpoint. Worker branches are
+`codex/agent-voice-records` and `codex/compact-workspace`; only the owner integrates
+reviewed commits. Workers do not edit shared checkpoints, migrations, workflows,
+operator configuration or each other's components.
+
+Agreed existing contracts: `/agent/turns` remains the shared coordinated turn path;
+use existing model routing and explicit approval/recovery behavior. Saved records use
+`/agent/saved` and the existing journal/rules/strategies/news_analysis/lessons categories,
+revision checks, private source ancestry and mixed-content bounds. No new parallel
+persistence system, provider activation or automatic ambiguous retry. Journal links
+use `/journal?saved=<id>`; other categories use
+`/journal?tab=knowledge&category=<category>&saved=<id>`. These are stable links to
+owned persisted records, not proof of strategy approval. Strategies may show captured
+strategy notes but must keep authored configuration/experiment approval separate.
+Lessons stay within Knowledge; technical evidence belongs in expandable details.
+Browser speech controls are browser-dependent and must offer actual errors/text
+fallback; do not relabel backend contract-only audio endpoints as transcription.
+BloFin native facts and internal simulation remain separate with truthful freshness,
+units and unavailable monetary/performance values.
+
+Fixed supplement acceptance (scope explicitly added by the current user request):
+
+- **Agent/voice A1–A5 (5):** A1 compact text/upload/voice controls use one composer;
+  A2 acknowledged replies render immediately and persist across reload; A3 actual
+  transcription errors and unavailable speech allow text fallback; A4 mixed content
+  creates durable category summaries and truthful saved-record links; A5 ownership,
+  exact ambiguous recovery/deduplication and existing routing/approval bounds hold.
+- **Compact UI B1–B5 (5):** B1 page width, compact controls, one heading and parent
+  navigation without nested scrolling/visible IDs; B2 statistics stay on Dashboard,
+  native activity separate from simulation; B3 strategy/risk configuration belongs in
+  Strategies; B4 Settings contains monitoring/notifications/account/system and
+  preserves values; B5 Journal/Knowledge share navigation while retaining categories,
+  Lessons inside Knowledge and expandable details with clear Back navigation.
+- **Owner integration I1–I4 (4):** I1 stabilization and feature branches remain
+  separate; I2 existing shared contracts and immutable migration ancestry align;
+  I3 focused reachable browser/API/persistence journeys cover changed paths; I4
+  reviewed contribution references/exact integration SHA/checkpoint are published.
+
+Accepted/total is pending qualification for this supplement; unchanged original
+milestone counts remain2/2,6/6,4/4,4/4. Implemented/integrated/tested/deployed/live
+states are recorded separately; deployment and live acceptance remain unexecuted.
+Existing access packet is reused without repeating failed probes. Owner collects
+worker results directly, batches publication and runs no full backend CI during iteration.
