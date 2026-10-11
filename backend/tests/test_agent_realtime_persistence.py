@@ -287,6 +287,7 @@ def test_shared_pipeline_reply_history_capture_and_restart_exact_recovery(
     voice_database, monkeypatch, mode
 ):
     calls = []
+    spoken_note = "My earlier BTC risk rule may be outdated."
 
     class SyntheticLLM:
         name, kind = "synthetic-unmeasured", ProviderKind.LLM
@@ -294,7 +295,23 @@ def test_shared_pipeline_reply_history_capture_and_restart_exact_recovery(
         def complete(self, request):
             calls.append(request)
             if request.response_format:
-                content = '{"entries":[],"clarification":null}'
+                content = json.dumps(
+                    {
+                        "entries": [
+                            {
+                                "category": "rules",
+                                "title": "Provisional BTC risk rule",
+                                "summary": spoken_note,
+                                "evidence_quotes": [spoken_note],
+                                "tags": ["BTC"],
+                                "confidence": 0.8,
+                                "target_entry_id": None,
+                                "draft": None,
+                            }
+                        ],
+                        "clarification": None,
+                    }
+                )
             else:
                 content = "My earlier rule is uncertain. Current native fees/PnL are unavailable."
             return LLMCompletionResult(
@@ -313,7 +330,7 @@ def test_shared_pipeline_reply_history_capture_and_restart_exact_recovery(
     ledger.reserve()
     ledger.activate()
     body = {
-        "message": "Please explain my earlier uncertain rule",
+        "message": spoken_note,
         "conversation_id": str(voice_database.conversation_id),
     }
     key, _ = ledger.tool("server-call", body)
@@ -357,6 +374,9 @@ def test_shared_pipeline_reply_history_capture_and_restart_exact_recovery(
     assert result["authority_mutated"] is False and result["execution_attempted"] is False
     assert result["reply"].startswith("My earlier rule is uncertain")
     assert "native_blofin_fills" in result["recorded_evidence"]
+    assert result["capture_status"] == "saved"
+    assert len(result["saved_entries"]) == 1
+    assert result["saved_entries"][0]["summary"] == spoken_note
     with voice_database.sessions() as session:
         rows = session.scalars(
             select(ConversationMessage).where(
@@ -365,6 +385,11 @@ def test_shared_pipeline_reply_history_capture_and_restart_exact_recovery(
         ).all()
         assert len([row for row in rows if row.role.value == "user"]) == 1
         assert len([row for row in rows if row.role.value == "assistant"]) == 1
+        saved = session.scalars(select(AgentSavedEntry)).all()
+        assert len(saved) == 1 and saved[0].summary == spoken_note
+        assert saved[0].original_text == spoken_note and saved[0].category == "rules"
+        assert saved[0].user_id == voice_database.user_id
+        assert saved[0].organization_id == voice_database.organization_id
         pending = session.get(VoiceSessionReservation, ledger.id).ledger["tools"]["server-call"]
         assert pending["body"] == body and pending["key"] == key
 
