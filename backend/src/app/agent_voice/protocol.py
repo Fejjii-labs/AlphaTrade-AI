@@ -89,11 +89,11 @@ def create_response(limits: VoiceLimits, *, grounded: bool = False) -> dict[str,
     }
 
 
-def checked_audio(encoded: str, remaining_bytes: int) -> bytes:
+def checked_audio(encoded: str, remaining_bytes: int, *, maximum_bytes: int = 16384) -> bytes:
     try:
         audio = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise VoiceUnavailableError("invalid_pcm_audio") from exc
-    if not audio or len(audio) % 2 or len(audio) > min(16384, remaining_bytes):
+    if not audio or len(audio) % 2 or len(audio) > min(maximum_bytes, remaining_bytes):
         raise VoiceUnavailableError("audio_limit_or_format")
     return audio

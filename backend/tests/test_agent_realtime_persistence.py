@@ -61,7 +61,7 @@ def voice_database(request):
     with admin.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     engine = create_engine(
-        url, poolclass=NullPool, connect_args={"options": f"-csearch_path={schema},public"}
+        url, poolclass=NullPool, connect_args={"options": f"-csearch_path={schema}"}
     )
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)

@@ -41,7 +41,7 @@ export function RealtimeVoiceControls(props: Props) {
       current.current.onActive?.(false);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [props.sessionKey, props.contextKey]);
+  }, [props.sessionKey, props.contextKey, props.strategyId, props.symbol]);
   useEffect(() => {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();

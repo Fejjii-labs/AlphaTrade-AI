@@ -205,6 +205,47 @@ def session_for(limits, turn=None):
 
 
 @pytest.mark.asyncio
+async def test_effective_provider_session_confirms_caps_before_audio_readiness(voice_limits):
+    session, ledger, sent, _ = session_for(voice_limits)
+    session.ready = False
+    await session.provider(
+        {"type": "session.updated", "session": session_update(voice_limits)["session"]}
+    )
+    assert session.ready and ledger.events == ["active"]
+    assert sent == [{"type": "session.ready", "session_id": str(ledger.id)}]
+
+
+@pytest.mark.asyncio
+async def test_effective_provider_auto_response_or_asr_refused_before_audio(voice_limits):
+    for enabled in ("create_response", "interrupt_response", "transcription"):
+        session, ledger, sent, _ = session_for(voice_limits)
+        session.ready = False
+        effective = session_update(voice_limits)["session"]
+        if enabled == "transcription":
+            effective["audio"]["input"][enabled] = {"model": "unapproved-transcription"}
+        else:
+            effective["audio"]["input"]["turn_detection"][enabled] = True
+        with pytest.raises(VoiceUnavailableError, match="audio_limits_not_confirmed"):
+            await session.provider({"type": "session.updated", "session": effective})
+        assert not session.ready and not ledger.events and not sent
+
+
+@pytest.mark.asyncio
+async def test_bounded_large_provider_pcm_chunk_is_playable_while_browser_upload_cap_remains(
+    voice_limits,
+):
+    session, _ledger, sent, _ = session_for(voice_limits)
+    session.response_grounded = True
+    encoded = base64.b64encode(b"xx" * 16000).decode()
+    await session.provider(
+        {"type": "response.output_audio.delta", "delta": encoded, "item_id": "server-audio"}
+    )
+    assert sent == [{"type": "audio.delta", "audio": encoded, "item_id": "server-audio"}]
+    with pytest.raises(VoiceUnavailableError, match="audio_limit"):
+        checked_audio(encoded, 65536)
+
+
+@pytest.mark.asyncio
 async def test_audio_admission_precedes_forwarding_and_arbitrary_provider_controls_refused(
     voice_limits,
 ):

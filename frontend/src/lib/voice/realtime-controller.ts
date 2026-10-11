@@ -133,7 +133,7 @@ export class RealtimeVoiceController {
   interrupt(): void {
     const position = this.audio.interrupt();
     this.send({ type: "response.interrupt", ...(position ?? { audio_end_ms: 0 }) });
-    this.update({ state: "listening" });
+    if (this.snapshot.active) this.update({ state: "listening" });
   }
 
   setConversation(conversation: string | null): void {

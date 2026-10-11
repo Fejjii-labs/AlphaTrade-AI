@@ -229,6 +229,19 @@ class RealtimeSession:
                 raise VoiceUnavailableError("provider_session_route_mismatch")
             if effective.get("max_output_tokens") != self.ledger.limits.maximum_output_tokens:
                 raise VoiceUnavailableError("provider_output_limit_not_confirmed")
+            audio = effective.get("audio", {})
+            incoming, outgoing = audio.get("input", {}), audio.get("output", {})
+            detection = incoming.get("turn_detection", {})
+            if (
+                detection.get("type") != "server_vad"
+                or detection.get("create_response") is not False
+                or detection.get("interrupt_response") is not False
+                or incoming.get("transcription") is not None
+                or incoming.get("format") != {"type": "audio/pcm", "rate": 24000}
+                or outgoing.get("format") != {"type": "audio/pcm", "rate": 24000}
+                or effective.get("truncation") != "disabled"
+            ):
+                raise VoiceUnavailableError("provider_audio_limits_not_confirmed")
             await asyncio.to_thread(self.ledger.activate)
             self.ready = True
             await self.send({"type": "session.ready", "session_id": str(self.ledger.id)})
@@ -276,7 +289,7 @@ class RealtimeSession:
                 raise VoiceUnavailableError("ungrounded_provider_audio_refused")
             if kind == "response.output_audio.delta":
                 delta = str(event.get("delta", ""))
-                decoded = checked_audio(delta, 16384)
+                decoded = checked_audio(delta, 65536, maximum_bytes=65536)
                 item_id = str(event["item_id"])
                 if self.audio_item != item_id:
                     self.audio_item, self.audio_bytes = item_id, 0
