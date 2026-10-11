@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "56b2cbea880a93b6e5397fa9a077e9e9846cf07854e357d20af580204497a77b",
-  "pilot_sha256": "e44cce1b6fefb81cf6cb3a30d016f1e318e75b2ee29789750f6c3e9b883b7a55",
+  "openapi_sha256": "875f63d09a9d84d7895d07591445cb768aa2088ada789b15b48d286bc9cbd9f9",
+  "pilot_sha256": "15690a9d98d813b468311e0f73908cd567d1fa776fbe2a1fad7dbb17c2ce54a8",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -193,7 +193,14 @@
     "ValidationError": "ca285d0c0e64c42844efd2e860edb239e77cc49d87f065c5ccb7d2f55331b862",
     "VenueId": "a3682fd8840cca2347fb22b0c843b6f2ce0504446b76c3b89adcf4b01c89d001",
     "VersionedDerivation": "f5e972412aa1b7ac4a4bfffcf6192fe075b18ca4e8f9e22d70f6afc9e443ab04",
+    "VoiceConfig": "081ae00a57a22455609107f79abb63a41563bb78753103bf8a41eaeb0b710b8a",
     "VoiceIoContract": "e50d25f903b026c3b977eee6b83553345379df9d9ced42c5e23af4afd243041f",
+    "WatcherAssignmentObservation": "983021082543576b73f43af994db073b8d009e1e15beb044ecca035e903c2227",
+    "WatcherAssignmentRead": "a68b77797fe595efa5d6da6b38ed1de65a757cd35f9d538707588f992191c486",
+    "WatcherAssignmentReplace": "c2a1c27253eccf0019a7bb5439a2e05a7f621737dab44a76d5ca41bbe8233cbf",
+    "WatcherAssignmentVersion": "188d5496d582244d370c50a18e0348f761c198dee5f4aff841fe7c277e77e43b",
+    "WatcherAssignmentWrite": "84234bda3a8b1c7e396ad6eae936fac10f62013d5314e91c9cca6ed4bc19def2",
+    "WatcherAssignmentsRead": "cd3015506bb66be404dd71f08c95c43827ce0058875bac4ba4ff46d37c3a25c4",
     "app__market_contracts__enums__MarketType": "cfcea5d2c81dd7a58b9265fe294c8f429d2ad76ce6384370cf9f3c565d076204",
     "app__schemas__common__MarketType": "4fac96da9a58ccab367a41676f918b29de587bc80cc66deb9b4a48df54b0a1e1",
     "app__schemas__trade_plan__EntryZone": "458148c42dc81cb7b258b58d30eef643eceab62cc6ff0b76c56e0d0b7c3488f2",

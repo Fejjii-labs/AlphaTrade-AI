@@ -247,3 +247,26 @@ export function paperAccount(options?: { signal?: AbortSignal; headers?: Record<
     responseValidator: validators.paperAccountResponse,
   });
 }
+
+export function watcherAssignments(options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
+  return validatedFetch<paths["/watcher/assignments"]["get"]["responses"][200]["content"]["application/json"]>("/watcher/assignments", {
+    method: "GET", auth: true, signal: options?.signal, headers: options?.headers,
+    responseValidator: validators.watcherAssignmentsResponse,
+  });
+}
+
+export function watcherAssignmentsReplace(body: paths["/watcher/assignments"]["put"]["requestBody"]["content"]["application/json"], options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
+  return validatedFetch<paths["/watcher/assignments"]["put"]["responses"][200]["content"]["application/json"]>("/watcher/assignments", {
+    method: "PUT", auth: true, signal: options?.signal, headers: options?.headers,
+    bodyValue: body, requestValidator: validators.watcherAssignmentsReplaceRequest,
+    errorValidators: { 422: validators.watcherAssignmentsReplaceError422 },
+    responseValidator: validators.watcherAssignmentsReplaceResponse,
+  });
+}
+
+export function agentVoiceConfig(options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
+  return validatedFetch<paths["/agent/voice/config"]["get"]["responses"][200]["content"]["application/json"]>("/agent/voice/config", {
+    method: "GET", auth: true, signal: options?.signal, headers: options?.headers,
+    responseValidator: validators.agentVoiceConfigResponse,
+  });
+}

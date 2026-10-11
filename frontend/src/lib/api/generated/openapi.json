@@ -39871,6 +39871,12 @@
             "title": "Monthly Cost Pct",
             "type": "number"
           },
+          "monthly_cost_reserved": {
+            "default": "0",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Monthly Cost Reserved",
+            "type": "string"
+          },
           "monthly_cost_used": {
             "default": "0",
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -39886,6 +39892,12 @@
             "default": 0.0,
             "title": "Monthly Tokens Pct",
             "type": "number"
+          },
+          "monthly_tokens_reserved": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Monthly Tokens Reserved",
+            "type": "integer"
           },
           "monthly_tokens_used": {
             "default": 0,
@@ -53289,6 +53301,65 @@
         "title": "VersionedDerivation",
         "type": "object"
       },
+      "VoiceConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "maximum_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum Seconds"
+          },
+          "maximum_turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum Turns"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "sample_rate": {
+            "const": 24000,
+            "default": 24000,
+            "title": "Sample Rate",
+            "type": "integer"
+          },
+          "transport": {
+            "const": "websocket_pcm24",
+            "default": "websocket_pcm24",
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "VoiceConfig",
+        "type": "object"
+      },
       "VoiceInputRequest": {
         "additionalProperties": false,
         "properties": {
@@ -53445,6 +53516,349 @@
           "lifecycle_state"
         ],
         "title": "WatcherApprovedStrategy",
+        "type": "object"
+      },
+      "WatcherAssignmentObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_id": {
+            "format": "uuid",
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "candidate_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "configuration_revision": {
+            "minimum": 0.0,
+            "title": "Configuration Revision",
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "configuration_revision",
+          "observed_at",
+          "status",
+          "reason_code"
+        ],
+        "title": "WatcherAssignmentObservation",
+        "type": "object"
+      },
+      "WatcherAssignmentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WatcherAssignmentObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monitoring_enabled": {
+            "title": "Monitoring Enabled",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "strategy_id": {
+            "format": "uuid",
+            "title": "Strategy Id",
+            "type": "string"
+          },
+          "strategy_name": {
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "strategy_version_id": {
+            "format": "uuid",
+            "title": "Strategy Version Id",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 6,
+            "pattern": "^[A-Z0-9]+USDT$",
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Timeframes",
+            "type": "array"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "version_content_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Version Content Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "symbol",
+          "strategy_version_id",
+          "monitoring_enabled",
+          "timeframes",
+          "parameters",
+          "strategy_id",
+          "strategy_name",
+          "version",
+          "version_content_hash",
+          "eligible",
+          "reason_code"
+        ],
+        "title": "WatcherAssignmentRead",
+        "type": "object"
+      },
+      "WatcherAssignmentReplace": {
+        "additionalProperties": false,
+        "properties": {
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/WatcherAssignmentWrite"
+            },
+            "maxItems": 25,
+            "title": "Assignments",
+            "type": "array"
+          },
+          "request_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Request Key",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "request_key",
+          "assignments"
+        ],
+        "title": "WatcherAssignmentReplace",
+        "type": "object"
+      },
+      "WatcherAssignmentVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "strategy_id": {
+            "format": "uuid",
+            "title": "Strategy Id",
+            "type": "string"
+          },
+          "strategy_name": {
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "strategy_version_id": {
+            "format": "uuid",
+            "title": "Strategy Version Id",
+            "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Timeframes",
+            "type": "array"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "version_content_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Version Content Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id",
+          "strategy_version_id",
+          "strategy_name",
+          "version",
+          "version_content_hash",
+          "symbol",
+          "timeframes",
+          "parameters"
+        ],
+        "title": "WatcherAssignmentVersion",
+        "type": "object"
+      },
+      "WatcherAssignmentWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "monitoring_enabled": {
+            "title": "Monitoring Enabled",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "strategy_version_id": {
+            "format": "uuid",
+            "title": "Strategy Version Id",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 6,
+            "pattern": "^[A-Z0-9]+USDT$",
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Timeframes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "symbol",
+          "strategy_version_id",
+          "monitoring_enabled",
+          "timeframes",
+          "parameters"
+        ],
+        "title": "WatcherAssignmentWrite",
+        "type": "object"
+      },
+      "WatcherAssignmentsRead": {
+        "additionalProperties": false,
+        "properties": {
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/WatcherAssignmentRead"
+            },
+            "title": "Assignments",
+            "type": "array"
+          },
+          "available_versions": {
+            "items": {
+              "$ref": "#/components/schemas/WatcherAssignmentVersion"
+            },
+            "title": "Available Versions",
+            "type": "array"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "max_assignments": {
+            "const": 25,
+            "default": 25,
+            "title": "Max Assignments",
+            "type": "integer"
+          },
+          "monitoring_only": {
+            "const": true,
+            "default": true,
+            "title": "Monitoring Only",
+            "type": "boolean"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "configured",
+          "assignments",
+          "available_versions",
+          "symbols"
+        ],
+        "title": "WatcherAssignmentsRead",
         "type": "object"
       },
       "WatcherCanonicalCandidateSummary": {
@@ -55950,6 +56364,32 @@
         "summary": "Run one agent turn",
         "tags": [
           "agent"
+        ]
+      }
+    },
+    "/agent/voice/config": {
+      "get": {
+        "operationId": "voice_config_agent_voice_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Voice Config",
+        "tags": [
+          "agent-voice"
         ]
       }
     },
@@ -75432,6 +75872,76 @@
         "summary": "Pending setup counts by action label and reliability",
         "tags": [
           "validation-priority"
+        ]
+      }
+    },
+    "/watcher/assignments": {
+      "get": {
+        "operationId": "read_watcher_assignments_watcher_assignments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatcherAssignmentsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Watcher Assignments",
+        "tags": [
+          "watcher-paper"
+        ]
+      },
+      "put": {
+        "operationId": "replace_watcher_assignments_watcher_assignments_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatcherAssignmentReplace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatcherAssignmentsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace Watcher Assignments",
+        "tags": [
+          "watcher-paper"
         ]
       }
     },

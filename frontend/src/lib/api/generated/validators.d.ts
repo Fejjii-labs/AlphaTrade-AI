@@ -73,3 +73,8 @@ export const trendpulseScreeningDetailError422: ValidateFunction<components["sch
 export const strategyVersionsResponse: ValidateFunction<components["schemas"]["PaginatedUserStrategyVersions"]>;
 export const strategyVersionsError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const paperAccountResponse: ValidateFunction<components["schemas"]["PaperAccountStatus"]>;
+export const watcherAssignmentsResponse: ValidateFunction<components["schemas"]["WatcherAssignmentsRead"]>;
+export const watcherAssignmentsReplaceResponse: ValidateFunction<components["schemas"]["WatcherAssignmentsRead"]>;
+export const watcherAssignmentsReplaceError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
+export const watcherAssignmentsReplaceRequest: ValidateFunction<components["schemas"]["WatcherAssignmentReplace"]>;
+export const agentVoiceConfigResponse: ValidateFunction<components["schemas"]["VoiceConfig"]>;

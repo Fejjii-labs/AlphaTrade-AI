@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/api/client";
+import { agentVoiceConfig } from "@/lib/api/generated/client";
 import { getAccessToken } from "@/lib/auth/session";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { appConfig } from "@/lib/config";
@@ -52,7 +52,7 @@ export class RealtimeVoiceController {
     const current = () => !this.disposed && generation === this.generation && session === sessionGeneration() && !abort.signal.aborted;
     this.update({ state: "connecting", active: true, error: null, transcript: "" });
     try {
-      const config = await (this.options.configuration ?? (signal => apiFetch<VoiceConfiguration>("/agent/voice/config", { signal })))(abort.signal);
+      const config = await (this.options.configuration ?? (signal => agentVoiceConfig({ signal })))(abort.signal);
       if (!current()) return;
       if (!config.available) throw new Error("Interactive voice is unavailable. Continue typing.");
       const conversation = await this.options.ensureConversation(abort.signal);

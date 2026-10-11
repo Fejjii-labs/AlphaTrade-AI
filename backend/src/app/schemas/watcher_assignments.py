@@ -48,7 +48,7 @@ class WatcherAssignmentReplace(StrictModel):
 
 class WatcherAssignmentObservation(StrictModel):
     assignment_id: UUID
-    configuration_revision: int
+    configuration_revision: int = Field(ge=0)
     observed_at: datetime
     status: str
     reason_code: str
@@ -59,8 +59,8 @@ class WatcherAssignmentObservation(StrictModel):
 class WatcherAssignmentRead(WatcherAssignmentWrite):
     strategy_id: UUID
     strategy_name: str
-    version: int
-    version_content_hash: str
+    version: int = Field(ge=1)
+    version_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     eligible: bool
     reason_code: str
     latest: WatcherAssignmentObservation | None = None
@@ -70,15 +70,15 @@ class WatcherAssignmentVersion(StrictModel):
     strategy_id: UUID
     strategy_version_id: UUID
     strategy_name: str
-    version: int
-    version_content_hash: str
+    version: int = Field(ge=1)
+    version_content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     symbol: str | None
     timeframes: list[str]
     parameters: dict[str, Any]
 
 
 class WatcherAssignmentsRead(StrictModel):
-    revision: int
+    revision: int = Field(ge=0)
     configured: bool
     assignments: list[WatcherAssignmentRead]
     available_versions: list[WatcherAssignmentVersion]

@@ -54,6 +54,19 @@ const pilots = [
   ["agentVoiceConfig", "/agent/voice/config", "get"],
 ];
 const schemas = schema.components.schemas;
+// Successful monitoring replies always include the explicit boundary/defaults.
+// Require them at transport so an incomplete committed reply retains recovery.
+for (const [name, required] of [
+  ["WatcherAssignmentsRead", ["max_assignments", "monitoring_only"]],
+  ["WatcherAssignmentRead", ["latest"]],
+  ["WatcherAssignmentObservation", ["replayed", "candidate_count"]],
+]) {
+  schemas[name].required = [...new Set([...schemas[name].required, ...required])];
+}
+// Mirror the server's after-model uniqueness guard before pending storage.
+for (const name of ["WatcherAssignmentWrite", "WatcherAssignmentRead"]) {
+  schemas[name].properties.timeframes.uniqueItems = true;
+}
 // Pydantic after-model guards do not appear in exported JSON Schema. Preserve
 // their core availability requirements at the generated transport boundary.
 // Temporal/identity and sample-count equality remain server-owned validations.
