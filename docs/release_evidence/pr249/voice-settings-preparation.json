@@ -20,8 +20,9 @@
   "approved_receipt_prices_and_caps": null,
   "ready_for_live_voice": false,
   "missing_information": [
-    "existing_current_private_approved_limits_receipt",
-    "existing_approved_live_voice_session_executor_or_activation_reference"
+    "approved_budget_and_session_inputs_not_identified",
+    "selected_realtime_route_and_approved_caps_not_identified",
+    "separate_approved_hosted_activation_reference_not_identified"
   ],
   "required_preservation": [
     "current_provider_fallback",
@@ -31,5 +32,8 @@
     "existing_budgets_and_unknown_holds"
   ],
   "paid_calls": 0,
-  "settings_changed": false
+  "settings_changed": false,
+  "configuration_can_fit_usd1_ceiling": false,
+  "minimum_reasoning_output_reservation_usd": "5.00",
+  "verified_price_configuration_draft": "voice-configuration-draft.json"
 }

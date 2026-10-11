@@ -1,0 +1,37 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "environment_id": "ccarenv_b64_Y2NhcmVudl81NTk4MWFkNWExMDQ4MTkxYjk0NGU3ODIxMDgyNTU0Mw",
+  "source_config_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfg_6abe152de4548195ae254bdd52afc138",
+  "source_config_version_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfgver_6acbe9882bb8819592dbbf49fcc54b35",
+  "spec_revision": "4",
+  "observed_spec_revision": "4",
+  "observations_current": true,
+  "network_state": "enforced",
+  "release_domains": [
+    {
+      "host": "api.github.com",
+      "allowed": true,
+      "observed_result": "HTTP 200"
+    },
+    {
+      "host": "alphatrade-api-staging.onrender.com",
+      "allowed": true,
+      "observed_result": "HTTP 200"
+    },
+    {
+      "host": "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app",
+      "allowed": true,
+      "observed_result": "proxy CONNECT 403 before TLS/HTTP"
+    },
+    {
+      "host": "alpha-trade-atazfn0br-alphatrade-ai.vercel.app",
+      "allowed": true,
+      "observed_result": "proxy CONNECT 403 before TLS/HTTP"
+    }
+  ],
+  "access_ready": false,
+  "reprobe_reason": "Runtime changed from unknown revision 2 to enforced/current revision 4; each preview probed once after that change.",
+  "protection_metadata": "Project ssoProtection.deploymentType=all_except_custom_domains; distinct from current CONNECT denial.",
+  "settings_changed": false,
+  "proxy_bypass": false
+}

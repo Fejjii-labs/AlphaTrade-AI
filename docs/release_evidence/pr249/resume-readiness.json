@@ -1,11 +1,13 @@
 {
   "actions": {
     "budget_changes": 0,
+    "corrected_documented_recovery_inspections": 1,
     "deployments_initiated": 0,
     "existing_candidate_manual_runs": 0,
     "full_gate_dispatched": 0,
     "known_failed_backup_probes_retried": 0,
     "paid_provider_calls": 0,
+    "preview_reprobes_after_runtime_revision_change": 1,
     "trading_settings_changes": 0,
     "vercel_binding_write_retried": 0
   },
@@ -131,10 +133,16 @@
   "environment": {
     "id": "ccarenv_b64_Y2NhcmVudl81NTk4MWFkNWExMDQ4MTkxYjk0NGU3ODIxMDgyNTU0Mw",
     "observations_current": true,
-    "reported_network_state": "unknown",
-    "secret_readiness_states": "unknown",
-    "spec_revision": "2"
+    "reported_network_state": "enforced",
+    "secret_readiness_states": "ready",
+    "spec_revision": "4"
   },
+  "followup_evidence": [
+    "executor-access-inspection.json",
+    "backup-methods-inspection.json",
+    "voice-configuration-draft.json"
+  ],
+  "followup_observed_at": "2026-10-11T20:31:10Z",
   "four_release_domains": [
     {
       "host": "api.github.com",
@@ -160,8 +168,8 @@
   "observed_at": "2026-10-11T20:12:31.497935+00:00",
   "remaining_bindings": {
     "AGENT_REALTIME_LIMITS_FILE": "unbound",
-    "approved_limits_file": "absent",
-    "hosted_backup_restore_receipt": "unavailable",
+    "approved_limits_file": "not identified; no assumption of existing approval",
+    "hosted_backup_restore_receipt": "not identified; platform export existence unknown; metadata 403",
     "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused"
   },
   "routine_ci": {

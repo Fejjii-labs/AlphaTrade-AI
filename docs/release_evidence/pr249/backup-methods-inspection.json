@@ -1,0 +1,48 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "database_id": "dpg-d8fuok57vvec739lm0u0-a",
+  "database_name": "alphatrade",
+  "service_name": "alphatrade-postgres-staging",
+  "verified_plan": "basic_256mb",
+  "official_documentation": "https://render.com/docs/postgresql-backups",
+  "available_platform_methods": {
+    "point_in_time_recovery": "Paid databases provide continuous recovery; retention depends on workspace plan. Restoring creates another managed database and is excluded by current no-paid-resource instruction.",
+    "logical_export": "Recovery page → Create export; compressed .dir.tar.gz, retained 7 days. A completed hosted export can be restored only into an empty isolated local database for verification.",
+    "pg_dump": "External database connection required; no approved direct connection or artifact identified in this executor."
+  },
+  "receipt_search": {
+    "identified_hosted_receipt": false,
+    "identified_local_synthetic_receipt": true,
+    "platform_export_existence": "unknown; inaccessible metadata does not establish absence"
+  },
+  "read_only_inspection": {
+    "method": "GET",
+    "path": "/v1/postgres/dpg-d8fuok57vvec739lm0u0-a/recovery",
+    "http_status": 403,
+    "documented_route_corrected_from": "/recovery-info",
+    "retried_unchanged_export_probes": false
+  },
+  "next_user_action": {
+    "page": "Render Dashboard → alphatrade-postgres-staging → Recovery",
+    "field": "Exports table",
+    "value_type": "Completed export status and creation timestamp, or none; no download links/credentials"
+  },
+  "hosted_receipt_required_fields": [
+    "database_id",
+    "database_name",
+    "backup_or_export_id",
+    "created_at",
+    "status",
+    "retention_or_expiry",
+    "size_bytes",
+    "sha256",
+    "sealed_artifact_reference",
+    "source_alembic_head",
+    "restore_verified_at",
+    "restored_target"
+  ],
+  "writes": 0,
+  "exports_created": 0,
+  "restores": 0,
+  "paid_resources_created": 0
+}

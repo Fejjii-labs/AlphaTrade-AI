@@ -1,0 +1,65 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "document_type": "Preparation only; NOT an approved limits receipt and NOT an activation instruction",
+  "provider_state": {
+    "provider_mode": "fallback",
+    "realtime_enabled": false,
+    "reasoning_model": "gpt-6-astra",
+    "reasoning_max_output_tokens": 25000,
+    "embedding_model": "text-embedding-3-small",
+    "existing_provider_and_vector_credentials": "present; values not exported"
+  },
+  "verified_public_prices": {
+    "reasoning": {
+      "model": "gpt-6-astra",
+      "input_usd_per_million": "10.00",
+      "output_usd_per_million": "50.00",
+      "tier": "Standard, prompts up to 272K input tokens; longer prompts cost more",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+    },
+    "embedding": {
+      "model": "text-embedding-3-small",
+      "input_usd_per_million": "0.02",
+      "source": "https://developers.openai.com/api/docs/models/text-embedding-3-small"
+    },
+    "operator_price_receipt_expiry": null
+  },
+  "reservation_analysis": {
+    "source": "backend/src/app/agent_voice/config.py:VoiceLimits.reservation",
+    "minimum_permitted_turns": 1,
+    "reasoning_calls_reserved_per_turn": 4,
+    "minimum_reasoning_output_reservation_usd": "5.00",
+    "calculation": "1 turn × 4 reserved reasoning calls × 25000 output tokens × USD50 / 1000000 = USD5.00; excludes all positive reasoning input, embedding, realtime text/audio costs",
+    "maximum_session_ceiling_usd": "1.00",
+    "existing_configuration_can_fit_ceiling": false,
+    "actual_provider_calls": 0,
+    "actual_spend_usd": "0"
+  },
+  "approval_discovery": {
+    "identified_private_approval_file": false,
+    "identified_hosted_activation_reference": false,
+    "expected_private_destination": "/workspace/agent-realtime-approved-limits.json",
+    "proposed_hosted_secret_filename": "agent-realtime-approved-limits.json",
+    "proposed_hosted_limits_path": "/etc/secrets/agent-realtime-approved-limits.json",
+    "selector_environment_variable": "AGENT_REALTIME_LIMITS_FILE"
+  },
+  "unresolved_operator_inputs": [
+    "approved organization/session reference",
+    "existing budget_reference, budget_as_of, remaining_budget_usd and valid_until",
+    "approved session_ceiling_usd within existing budget and no more than USD1",
+    "approved realtime model and current text/audio price receipt",
+    "approved reasoning/embedding context caps and price receipt expiry",
+    "provider-supported maximum audio input tokens per second",
+    "approved duration, audio, turn, response and output token caps",
+    "separate authorized hosted voice-session activation executor/reference",
+    "a separately reviewed voice plan that fits preserved budget; current output cap cannot pass"
+  ],
+  "preservation": {
+    "settings_changed": false,
+    "budget_increased": false,
+    "provider_activated": false,
+    "limits_file_created": false,
+    "voice_activation_separate_from_ui_release": true
+  },
+  "ready_for_live_voice": false
+}
