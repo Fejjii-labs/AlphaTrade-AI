@@ -101,6 +101,7 @@ class WatcherWatchlistRepository:
         result = []
         for row in rows:
             payload = dict(row.payload)
+            payload.pop("assignment_observations", None)
             for field in ("last_successful_scan", "last_failed_scan"):
                 value = payload.get(field)
                 payload[field] = datetime.fromisoformat(value) if value else None
@@ -116,6 +117,7 @@ class WatcherWatchlistRepository:
         *,
         observed_at: datetime,
         runtime: dict | None = None,
+        assignment_observations: dict[str, list[dict]] | None = None,
     ) -> bool:
         self._lock_organization(organization_id)
         current = self.session.scalar(
@@ -176,6 +178,8 @@ class WatcherWatchlistRepository:
                 self.session.add(row)
             row.configuration_revision = config.revision
             row.observed_at = observed_at
+            if assignment_observations is not None:
+                payload["assignment_observations"] = assignment_observations.get(status.symbol, [])
             row.payload = payload
         self.session.flush()
         return True
@@ -206,6 +210,7 @@ class WatcherWatchlistRepository:
                 )
             )
             payload = dict(row.payload) if valid else asdict(default)
+            payload.pop("assignment_observations", None)
             if not valid:
                 payload.update(
                     freshness="unknown",

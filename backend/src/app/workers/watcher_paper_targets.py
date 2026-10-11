@@ -43,6 +43,8 @@ class PaperScanTarget:
     fusion_policy_version: str
     symbol: str
     timeframe: str = FIRST_SLICE_TIMEFRAME
+    assignment_id: UUID | None = None
+    configuration_revision: int | None = None
 
     @property
     def policy_id(self) -> UUID:

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
 import { WatcherWatchlistSection } from "@/components/WatcherWatchlistSection";
+import { WatcherAssignmentsSection } from "@/components/WatcherAssignmentsSection";
 import { NotificationSettingsPanel } from "@/components/NotificationSettingsPanel";
 import { PaperAccountSetup } from "@/components/settings/PaperAccountSetup";
 import { SettingsReadout } from "@/components/settings/SettingsReadout";
@@ -51,6 +52,7 @@ function SettingsWorkspace() {
         </summary>
         <div className="space-y-4 pt-4">
           <WatcherWatchlistSection />
+          <WatcherAssignmentsSection />
           <SettingsReadout
             rows={[
               [

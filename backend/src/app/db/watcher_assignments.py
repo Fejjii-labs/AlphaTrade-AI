@@ -1,6 +1,7 @@
 """Pinned monitoring assignments; no trading or operator activation authority."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -44,7 +45,7 @@ class WatcherStrategyAssignmentRow(Base):
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
     version_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     timeframes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    parameters: Mapped[dict] = mapped_column(JSON, nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     monitoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -67,5 +68,5 @@ class WatcherAssignmentReceiptRow(Base):
     user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    response: Mapped[dict] = mapped_column(JSON, nullable=False)
+    response: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
