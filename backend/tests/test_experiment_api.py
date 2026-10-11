@@ -37,6 +37,8 @@ def test_scoped_openapi_matches_published_interface():
         "/experiments",
         "/experiments/{experiment_id}",
         "/experiments/{experiment_id}/versions",
+        "/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}",
+        "/experiments/{experiment_id}/versions/{version_id}/performance",
         *{
             f"/experiments/{{experiment_id}}/versions/{{version_id}}/{action}"
             for action in ("transition", "approve", "promote", "samples")

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.blofin_activity import BloFinActivityAccount, BloFinActivityCursor, BloFinActivityFact
+from app.db.canonical_candidates import CanonicalCandidateRow
 from app.db.models import (
     AuditLog,
     ExecutionCommand,
@@ -33,6 +34,7 @@ from app.experiments.native_lineage import (
 )
 from app.experiments.outcome_contract import NativeFactProvenance, NativeOutcome
 from app.experiments.service import semantic_hash
+from app.market_contracts.identity import EvidenceMarketIdentity
 from app.market_contracts.models import parse_canonical_decimal
 from app.repositories.blofin_activity import fact_hash
 from app.schemas.blofin_activity import NativeActivityFact
@@ -69,6 +71,34 @@ def rounded(value: Decimal) -> Decimal:
 def event_time(ms: str | int) -> datetime:
     # Integer millisecond arithmetic avoids timestamp binary-float rounding.
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=int(ms))
+
+
+def plan_symbol(session: Session, plan: TradePlanRevision) -> str:
+    """Use canonical server identity, never parse a symbol from a client ID.
+
+    Legacy resolver fixtures use phase-1 symbol values. A persisted canonical
+    Candidate instead binds a canonical instrument ID and its provider symbol.
+    """
+    semantic = TradePlanRevisionSemantic.model_validate(plan.semantic_payload)
+    if plan.plan_authority != "canonical":
+        return semantic.evidence_instrument
+    candidate = session.get(CanonicalCandidateRow, plan.canonical_candidate_id)
+    if candidate is None:
+        refuse("experiment_command_lineage_invalid")
+    identity = EvidenceMarketIdentity.model_validate(candidate.evidence_identity)
+    if (
+        candidate.organization_id != plan.organization_id
+        or candidate.strategy_version_id != plan.strategy_version_id
+        or candidate.setup_definition_id != plan.compiled_setup_definition_id
+        or candidate.evidence_instrument != semantic.evidence_instrument
+        or identity.instrument.instrument_id != semantic.evidence_instrument
+        or identity.timeframe is None
+        or identity.timeframe.value != semantic.timeframe
+        or identity.venue.value != semantic.evidence_venue
+        or identity.market_type.name != semantic.evidence_market.value
+    ):
+        refuse("experiment_command_lineage_invalid")
+    return identity.instrument.provider_symbol
 
 
 class BloFinExperimentSourceResolver:
@@ -440,7 +470,7 @@ class BloFinExperimentSourceResolver:
             or plan.plan_authority == "manual_demo_test"
             or plan.execution_instrument != semantic.execution_instrument
             or semantic.timeframe not in version.configuration.timeframes
-            or semantic.evidence_instrument not in version.configuration.symbols
+            or plan_symbol(self.session, plan) not in version.configuration.symbols
             or semantic_hash(semantic.model_dump()) != plan.content_hash
             or semantic.quantity_unit is not QuantityUnit.CONTRACTS
         ):

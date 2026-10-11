@@ -96,3 +96,69 @@ pre-entry inventory and complete position/exit ancestry without manual inventory
 basis mixing, and independently verify contract/PnL/fee allocation. Native account checks,
 exchange permissions/coverage and monetary semantics remain unverified. HTTP sample admission
 must stay unavailable and Strategies performance must stay explicit about unavailable data.
+
+## Bounded origin/entry producer and read facade — 11 October 2026
+
+Base `42e30b866f44e07a83c637764595ebc776c9ba97` on reviewed PR247 `0d3c79ed`.
+The integration checkpoint records the corrective producer commit and combined SHA.
+No historical migration, generated API artifact or runtime setting was edited by this
+worker. a12 remains the sole head. Shared HTTP/client generation belongs to integration.
+
+Final focused command, with an isolated random schema per producer case:
+
+```sh
+EXPERIMENT_TEST_POSTGRES_URL=postgresql+psycopg://alphatrade@127.0.0.1:55439/alphatrade_test \
+PYTHONPATH=src:. .venv/bin/pytest -o addopts='' -q -rs \
+  tests/test_blofin_native_producer_postgres.py \
+  tests/test_experiment_api.py::test_api_requires_auth_roles_exact_revision_and_tenant_scope
+```
+
+**32 passed, 0 failed, 0 skipped, 88.50s**: 31 new producer/persistence/HTTP cases and
+one existing HTTP authorization/admission case. The advancing-clock regression proves
+origin and position timestamps are owned once and survive fresh-session replay. Other
+cases prove canonical pre-command ownership, committed-origin requirement, rejection
+of historical/manual/foreign/simulation identities, signed UID changes, stale identity,
+nonflat/hedged/malformed inventory, native contract mismatch, refusal after dispatch,
+caller truth-flag rejection and concurrent origin/binding/diagnostic deduplication.
+Same-UID receipt replay after plan expiry performs no new provider IO. Read-only GET
+facades preserve ownership and unavailable money; POST native admission remains 503.
+
+Affected resolver/producer compatibility run:
+
+```sh
+EXPERIMENT_TEST_POSTGRES_URL=postgresql+psycopg://alphatrade@127.0.0.1:55439/alphatrade_test \
+PYTHONPATH=src:. .venv/bin/pytest -o addopts='' -q -rs \
+  tests/test_blofin_native_producer_postgres.py \
+  tests/test_blofin_experiment_outcomes_postgres.py
+```
+
+**116 passed, 0 failed, 0 skipped, 157.69s** at the earlier producer repair state:
+87 unchanged resolver cases and 29 producer cases. The final 32-case run covers the
+completed producer guards and two added restart/concurrency cases. There are **119
+distinct focused passing cases** across these runs; overlapping executions are not
+additional cases. These results are local synthetic qualification, not live exchange
+performance, current CI or a complete release gate.
+
+Early repair receipts: collection initially referenced a nonexistent SENT enum;
+fixture setup reversed TenantContext's positional identities and leaked its session
+on construction failure. Correct enum/keyword identities and unconditional teardown
+fixed those fixture errors. The first real canonical case then exposed the genuine
+canonical-instrument-ID versus provider-symbol mismatch; producer and resolver now
+validate the persisted Candidate identity mapping. Source review found independent
+wall-clock reads made receipt timestamps disagree; explicit receipt time ownership
+and the advancing-clock PostgreSQL regression corrected that defect. Strict mypy
+found two optional-type guards, both repaired. No assertions or timeouts were weakened.
+
+Changed-file Ruff lint and format, `git diff --check` and strict mypy on producer,
+resolver, reader and experiment routes passed. The scoped HTTP OpenAPI snapshot is
+updated/generated and checked by the integration owner after the combined backend.
+No full backend/combined CI was dispatched; no external order or operator mutation.
+
+Progress N1–N5: **3/5 accepted locally (N3–N5)**. N1 is partial: the server origin and
+pre-entry services are implemented/tested, but no production experiment coordinator
+calls register_plan/bind_entry/reconcile. N2 remains unmet: the existing governed close
+resolution lacks complete direct protected parent/child evidence and independently
+verified fee/PnL methodology. Its isolated native closing facts, true-valued legacy
+flags or client-order resemblance cannot supply those missing sources. Newly registered
+producer-owned outcomes keep proof and monetary totals unavailable. No native sample
+HTTP adapter, autonomous executor or provider is activated by this contribution.
