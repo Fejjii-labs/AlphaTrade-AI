@@ -88,7 +88,6 @@ export function AgentWorkspace() {
   > | null>(null);
   const [sourceDocumentId, setSourceDocumentId] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const threadRef = useRef<HTMLDivElement>(null);
   const sendInFlight = useRef(false);
   const turnAbort = useRef<AbortController | null>(null);
   const turnConversation = useRef<string | null>(null);
@@ -314,11 +313,6 @@ export function AgentWorkspace() {
     setMessages(retainedMessages.current.get(conversationId) ?? []);
     void reconcileHistory(conversationId);
   }, [conversationId, messagesRetry, reconcileHistory]);
-
-  useEffect(() => {
-    if (threadRef.current)
-      threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [messages, sending]);
 
   async function runTurn(
     message = draft,
@@ -592,7 +586,7 @@ export function AgentWorkspace() {
               aria-modal={mobile ? true : undefined}
               aria-label="Conversation history"
               data-testid="agent-history"
-              className="fixed inset-y-0 left-0 z-[60] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-none bg-surface-0 lg:relative lg:inset-auto lg:z-auto lg:w-auto lg:self-start lg:rounded-card"
+              className="fixed inset-y-0 left-0 z-[60] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-none bg-surface-0 lg:relative lg:inset-auto lg:z-auto lg:w-auto lg:self-start lg:overflow-visible lg:rounded-card"
             >
               <CardHeader>
                 <CardTitle>History</CardTitle>
@@ -628,7 +622,7 @@ export function AgentWorkspace() {
                     No conversations yet.
                   </p>
                 ) : null}
-                <ul className="max-h-64 space-y-1 overflow-y-auto lg:max-h-[32rem]">
+                <ul className="space-y-1">
                   {conversations.items.map((item) => (
                     <li key={item.id}>
                       <button
@@ -681,10 +675,9 @@ export function AgentWorkspace() {
                 </div>
               ) : null}
               <div
-                ref={threadRef}
                 aria-label="Conversation messages"
                 aria-busy={messagesLoading}
-                className="flex min-h-48 max-h-[50dvh] flex-col gap-4 overflow-y-auto overscroll-contain pr-1 lg:min-h-64 lg:max-h-[32rem]"
+                className="flex min-h-48 flex-col gap-4 lg:min-h-64"
                 data-testid="agent-thread"
               >
                 {messagesLoading && messages.length === 0 ? (
@@ -845,7 +838,7 @@ export function AgentWorkspace() {
               >
                 <Textarea
                   aria-label="Message"
-                  className="min-h-28 resize-y"
+                  className="min-h-20 resize-y"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder="Ask about a paper trade, a rule, or a journal note."

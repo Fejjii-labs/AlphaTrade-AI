@@ -14,6 +14,7 @@ import {
 } from "@/components/agent/AgentWorkspace";
 import * as browserVoice from "@/lib/voice/browser-voice-provider";
 import type { VoiceProvider } from "@/lib/voice/types";
+import type { BrowserRecognition } from "@/lib/voice/browser-voice-provider";
 import { agentTurnFixture } from "@/test/pilot-fixtures";
 import { agentTurn } from "@/lib/api/generated/client";
 import { clearPendingTurns, pendingFor, terminalFor } from "./turn-recovery";
@@ -172,6 +173,76 @@ describe("Agent workspace", () => {
     );
     return provider;
   }
+
+  it("allows typed submission after a real browser recognition transcription error", async () => {
+    const recognitions: BrowserRecognition[] = [];
+    class Recognition implements BrowserRecognition {
+      lang = ""; continuous = false; interimResults = false;
+      onstart: BrowserRecognition["onstart"] = null;
+      onend: BrowserRecognition["onend"] = null;
+      onerror: BrowserRecognition["onerror"] = null;
+      onresult: BrowserRecognition["onresult"] = null;
+      start() { this.onstart?.(); }
+      stop() {}
+      abort() {}
+      constructor() { recognitions.push(this); }
+    }
+    vi.stubGlobal("SpeechRecognition", Recognition);
+    vi.stubGlobal("isSecureContext", true);
+    render(<AgentWorkspace />);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep my typed reflection" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Record" })).toBeEnabled());
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
+    act(() => recognitions[0].onerror?.({ error: "network" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Retry or type your message");
+    expect(screen.getByLabelText("Message")).toHaveValue("Keep my typed reflection");
+    expect(apiMocks.agentTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(apiMocks.agentTurn).toHaveBeenCalledWith(expect.objectContaining({ message: "Keep my typed reflection" }), expect.anything()));
+    expect(screen.getByTestId("agent-thread")).not.toHaveClass("overflow-y-auto");
+  });
+
+  it("keeps the actual composer usable when the browser offers no speech recognition", async () => {
+    vi.stubGlobal("SpeechRecognition", undefined);
+    vi.stubGlobal("webkitSpeechRecognition", undefined);
+    render(<AgentWorkspace />);
+    expect(await screen.findByText("Voice input unavailable. Type your message.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Typed fallback" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(apiMocks.agentTurn).toHaveBeenCalledWith(expect.objectContaining({ message: "Typed fallback" }), expect.anything()));
+  });
+
+  it("renders an acknowledged saved summary immediately and restores its link from durable history", async () => {
+    const record = {
+      id: "owned-saved-rule", category: "rules", title: "Wait for a close", summary: "Wait for a closed confirmation.",
+      revision: 1, conversation_id: agentTurnFixture.conversation_id, source_message_ids: ["m3"],
+      source_document_id: null, trade_id: null, tags: [], original_text: "My rule: wait for a close.",
+      created_at: "2026-10-11", updated_at: "2026-10-11", draft: null, undone: false,
+    };
+    apiMocks.listMessages.mockResolvedValue({ items: [] });
+    apiMocks.agentTurn.mockResolvedValue({
+      ...agentTurnFixture, user_message_id: "m3", assistant_message_id: "m4", reply: "Your rule is saved.",
+      saved_entries: [record], capture_status: "saved", capture_source_message_id: "m3",
+    });
+    const view = render(<AgentWorkspace />);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: record.original_text } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    const target = "/journal?tab=knowledge&category=rules&saved=owned-saved-rule";
+    expect(await screen.findByRole("link", { name: "Open Wait for a close in Rules" })).toHaveAttribute("href", target);
+    expect(screen.getByText("Your rule is saved.")).toBeInTheDocument();
+    view.unmount();
+    testParams = new URLSearchParams(`conversation=${agentTurnFixture.conversation_id}`);
+    apiMocks.listMessages.mockResolvedValue({ items: [
+      { id: "m3", role: "user", content: record.original_text, created_at: "2026-10-11" },
+      { id: "m4", role: "assistant", content: "Your rule is saved.", created_at: "2026-10-11",
+        payload: { interactive_agent: { capture: { status: "saved", saved_entries: [record], source_message_id: "m3" } } } },
+    ] });
+    render(<AgentWorkspace />);
+    expect(await screen.findByRole("link", { name: "Open Wait for a close in Rules" })).toHaveAttribute("href", target);
+    expect(screen.getByText("Your rule is saved.")).toBeInTheDocument();
+    expect(apiMocks.agentTurn).toHaveBeenCalledTimes(1);
+  });
 
   function interactiveVoice() {
     let input!: Parameters<VoiceProvider["listen"]>[0];
