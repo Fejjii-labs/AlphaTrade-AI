@@ -1,7 +1,7 @@
 Status: BLOCKED
-Last Updated: 2026-10-12T00:26:30+02:00
+Last Updated: 2026-10-12T00:50:26+02:00
 Task: AT-PR249-STAGING-RELEASE
-Source File SHA256: 167082f52abad8e267e41975e67cbe18341f2802f594792ff37e94d47c2d761b
+Source File SHA256: 47eaaf900be2736874829eac4523f1fa037006c8aeb81e6cfbd22e5b7f90c555
 
 # Session execution record
 
@@ -104,7 +104,16 @@ Source File SHA256: 167082f52abad8e267e41975e67cbe18341f2802f594792ff37e94d47c2d
     writers/global hold/sustained quiescence. Stored drain-activity-baseline.json.
     Old backup/CI/rollback/auth proofs reused. Hosted backup verifiedfalse, restore0;
     no full gate/deploy/drain/migration/provider/order/settings/budget changes.
-15. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
+15. **Reported republish verification** — User confirms environment republished.
+    Runtime13/current/connected/ENFORCED still uses the SAME old config version; key
+    absent from variable and secret declarations. Prepared fetch --inspect-host executed
+    once after relevant reported change: exit1/personal_download_url_variable_unbound,
+    no network request or raw credential output. This intended-use check is not a repeated
+    application/CI/restore test. Current executor remains unbound; published version/key
+    outside it unknown. Existing tasks retain config; continuation must select republished
+    environment in a new task and verify applied readiness. Do not ask to repeat completed
+    republish. Backup restore still pending/verifiedfalse; candidate/settings/budgets fixed.
+16. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
     migration0/paidcalls0/orders0/operator and budgetchanges0. Documentation publication
     requires remote bytes/hash verification. Concurrent shared publication preserved via
     merge, including all prepared auth/voice receipts and updated PR description. Mac/iCloud unavailable/unverified.

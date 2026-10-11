@@ -14,7 +14,8 @@
     "trading_settings_changes": 0,
     "vercel_binding_write_retried": 0,
     "new_active_job_metadata_inspections": 2,
-    "new_read_only_drain_activity_snapshots": 1
+    "new_read_only_drain_activity_snapshots": 1,
+    "secure_url_inspections_after_reported_republish": 1
   },
   "backup_followup": "backup-methods-inspection.json",
   "checks": [
@@ -141,7 +142,7 @@
     "observations_current": true,
     "reported_network_state": "enforced",
     "secret_readiness_states": "ready",
-    "spec_revision": "10"
+    "spec_revision": "13"
   },
   "followup_evidence": [
     "executor-access-inspection.json",
@@ -151,9 +152,10 @@
     "rollout-preparation.json",
     "active-jobs-inspection.json",
     "environment-binding-request.txt",
-    "drain-activity-baseline.json"
+    "drain-activity-baseline.json",
+    "republished-binding-verification.json"
   ],
-  "followup_observed_at": "2026-10-11T22:25:12Z",
+  "followup_observed_at": "2026-10-11T22:50:26Z",
   "four_release_domains": [
     {
       "host": "api.github.com",
@@ -182,7 +184,7 @@
     "approved_limits_file": "not identified; no assumption of existing approval",
     "hosted_backup_restore_receipt": "Export completion confirmed by user at20:58UTC; secure artifact access and actual isolated restore pending",
     "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused",
-    "PR249_RENDER_EXPORT_URL": "Not requested by revision10; value existence unknown; exact account editor action pending",
+    "PR249_RENDER_EXPORT_URL": "User reports republished; missing from this existing executor. Same previous version, --inspect-host returns unbound without network. New task must select republished environment.",
     "hosted_hold_drain": "No active one-off jobs on either service at inspection; method access/private writers/actual drain still pending"
   },
   "routine_ci": {

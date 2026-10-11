@@ -23,11 +23,11 @@
     "retried_unchanged_export_probes": false
   },
   "next_user_action": {
-    "reference": "supported-credential-mechanisms.json / environment-binding-request.txt",
-    "page": "Settings > Codex Cloud > Environments > AlphaTrade-AI release environment > \u2026 > Edit",
-    "action": "Request personal variable; preserve existing config; review and republish",
-    "environment_requests_key": false,
-    "executor_ready": false
+    "action": "Continue release in a task using republished AlphaTrade-AI environment",
+    "reason": "Existing task uses same previous config version; runtime and safe intended-use check both show missing key",
+    "key": "PR249_RENDER_EXPORT_URL",
+    "executor_ready": false,
+    "reference": "republished-binding-verification.json"
   },
   "hosted_receipt_required_fields": [
     "database_id",

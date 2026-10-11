@@ -1,0 +1,28 @@
+{
+  "environment_id": "ccarenv_b64_Y2NhcmVudl81NTk4MWFkNWExMDQ4MTkxYjk0NGU3ODIxMDgyNTU0Mw",
+  "source_config_version_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfgver_6acbe9882bb8819592dbbf49fcc54b35",
+  "spec_revision": "13",
+  "observed_spec_revision": "13",
+  "observations_current": true,
+  "connectivity": "connected",
+  "network_state": "enforced",
+  "backup_key": "PR249_RENDER_EXPORT_URL",
+  "requested_variable_present": false,
+  "secret_binding_present": false,
+  "secure_intended_use_check": {
+    "command": "python docs/release_evidence/pr249/fetch_private_export.py --inspect-host",
+    "exit_code": 1,
+    "safe_reason": "personal_download_url_variable_unbound",
+    "network_request_made": false,
+    "private_value_logged": false
+  },
+  "user_report": "Environment republished",
+  "published_configuration_version": "unknown; not exposed by current executor status",
+  "same_executor_configuration_version_as_before": true,
+  "existing_task_rebind_verified": false,
+  "hosted_backup_verified": false,
+  "full_gate_dispatched": 0,
+  "observed_at": "2026-10-11T22:50:25Z",
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "documentation": "https://learn.chatgpt.com/docs/environments/cloud-environments"
+}
