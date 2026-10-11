@@ -4,7 +4,8 @@ Status: READY for frontend review. Updated: 2026-10-11 (Europe/Berlin).
 Base: PR249 `00f388017c6bcd2fb53d8135df60ac76bc714125`.
 Branch: `codex/frontend-refinement-pr249` → `codex/interactive-voice-monitoring`.
 Tested frontend commit: `2e54d0058efa7b12766a979b069e0d771d11ffdf`.
-Later commits contain only this handoff and screenshot evidence.
+PR250 CI correction also updates test mocks and recovery-test synchronization;
+the frontend implementation and screenshot evidence remain unchanged.
 
 Fixed acceptance checklist: **6/6 accepted** against focused frontend fixtures.
 
@@ -56,3 +57,22 @@ workspace; the canonical release HANDOFF.md was intentionally preserved.
 Implemented and locally verified: 6/6 frontend criteria. Deployed/live accepted by
 this task: none. Next action: review this isolated UI diff and integrate it through
 the release owner, reconciling any later shared-file changes before qualification.
+
+## PR250 CI correction
+
+The first automatic PR250 run failed because the two Journal page test files
+mocked `useSearchParams` without the newly used `usePathname`. Both mocks now
+return `/journal`; Knowledge and Journal native-activity mocks already provide
+the hook. Existing assertions remain intact. The screening recovery test now
+asserts and waits for its recovery button to become enabled before clicking,
+preserving its original request-identity and pending-storage assertions.
+No production code, operator settings, budgets or release configuration changed.
+
+Acceptance: complete affected navigation mocks, pass affected frontend checks,
+publish and hand the automatic-CI passing commit to the release owner. CI evidence
+and the exact passing SHA will be posted to PR250 and PR249 after publication.
+Local verification: **567 tests / 67 files passed** using the existing PR249-base
+focused frontend selector, plus TypeScript, changed-test ESLint (zero warnings)
+and `git diff --check`. All existing assertions are retained; no tests skipped.
+The existing credential, image and rollback evidence remains with the release
+owner; this correction does not repeat environment probes or run full backend CI.

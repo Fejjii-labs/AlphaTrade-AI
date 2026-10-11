@@ -80,7 +80,9 @@ describe("durable research screening", () => {
     vi.mocked(trendpulseScreen).mockRejectedValueOnce(new ApiError("busy", 409, { error: { code: "screening_in_progress" } }));
     render(<ScreeningsPanel version={version} />); await enter(); fireEvent.click(screen.getByRole("button", { name: "Screen trigger" }));
     await screen.findByRole("button", { name: "Recover screening" }); const original = vi.mocked(trendpulseScreen).mock.calls[0][2];
-    expect(pendingCount()).toBe(1); fireEvent.click(screen.getByRole("button", { name: "Recover screening" }));
+    expect(pendingCount()).toBe(1);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Recover screening" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Recover screening" }));
     await screen.findByText("Receipts & evidence"); expect(vi.mocked(trendpulseScreen).mock.calls[1][2]).toEqual(original);
   });
   it("continues identity cleanup when recovery storage removal throws", async () => {
