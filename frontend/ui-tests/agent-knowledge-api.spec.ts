@@ -131,7 +131,7 @@ test("fresh API process preserves owned summaries and compact category navigatio
     await expect(page.getByRole("heading", { name: entry.title, exact: true })).toBeVisible();
     await expect(page.getByText(entry.summary, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Original conversation", exact: true })).toBeVisible();
-    const back = page.getByRole("link", { name: /Back to Journal.*Knowledge/ }).last();
+    const back = page.getByRole("link", { name: /^← Back to (Journal|Knowledge)$/ }).last();
     await expect(back).toBeVisible();
     await back.click();
     await expect(page).not.toHaveURL(/[?&]saved=/);

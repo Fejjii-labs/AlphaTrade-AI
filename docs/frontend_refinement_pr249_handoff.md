@@ -76,3 +76,11 @@ focused frontend selector, plus TypeScript, changed-test ESLint (zero warnings)
 and `git diff --check`. All existing assertions are retained; no tests skipped.
 The existing credential, image and rollback evidence remains with the release
 owner; this correction does not repeat environment probes or run full backend CI.
+
+Integrated into PR249 by merge `05a8bcac17974b7906477a6cf2761da86eec3f8b`.
+The release owner also updates the separate local actual-API browser Back selector
+to match the retained destination-specific Journal/Knowledge labels. This changes
+only a test selector; its navigation, exact saved identity and ownership assertions
+remain intact. TypeScript and changed-test ESLint passed; that local API browser
+suite was not rerun. The shared release HANDOFF.md records the frozen combined head,
+the single full-gate/deployment blockers and separate human microphone acceptance.
