@@ -10,9 +10,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { describeSafetyPosture } from "@/components/workflows";
 import { useAppContext, useSafetyPosture } from "@/contexts/AppContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api, ApiError } from "@/lib/api";
 import type { UserRiskSettings, UserRiskSettingsUpdate } from "@/lib/api/types";
+import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 type FormState = {
   daily_loss_limit: string;
@@ -58,6 +60,16 @@ function toPayload(form: FormState): UserRiskSettingsUpdate {
 }
 
 export default function RiskSettingsPage() {
+  const { user, organization } = useAuth();
+  const [session, setSession] = useState(sessionGeneration);
+  useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
+  if (!user || !organization) return null;
+  return (
+    <RiskSettingsWorkspace key={JSON.stringify([organization.id, user.id, session])} />
+  );
+}
+
+function RiskSettingsWorkspace() {
   const loader = useCallback(() => api.risk.settings(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [form, setForm] = useState<FormState | null>(null);
@@ -128,7 +140,7 @@ export default function RiskSettingsPage() {
   return (
     <PortfolioHubChrome
       title="Risk settings"
-      description="Configure paper discipline limits and protective signals. Current risk posture and cooldowns live on the Portfolio command centre — this page is configuration only."
+      description="Account limits for strategy decisions. Existing safety checks remain authoritative."
       posture={posture}
       riskBlocked={block.blocked}
       riskBlockReason={block.reason}
@@ -140,17 +152,17 @@ export default function RiskSettingsPage() {
         data-testid="risk-settings-ownership"
       >
         <p>
-          Portfolio owns the live risk overview. This page is configuration only.{" "}
+          Configuration only.{" "}
           <Link
-            href="/portfolio"
-            className="underline text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-            data-testid="risk-settings-portfolio-link"
+            href="/strategies#risk"
+            className="inline-flex min-h-11 items-center text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+            data-testid="risk-settings-strategies-link"
           >
-            Open Portfolio &amp; Risk command centre
+            ← Back to Strategies
           </Link>
         </p>
         <p className="mt-1 text-text-muted">
-          Saving settings here does not bypass risk engine BLOCK. Real trading remains disabled.
+          Saving limits does not authorize trading or override a safety block.
         </p>
       </div>
 

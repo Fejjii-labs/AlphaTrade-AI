@@ -171,21 +171,14 @@ describe("AT-040 Phase B AppShell", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows Workspace and Advanced under Settings", () => {
+  it("omits a redundant Settings secondary tab on its parent page", () => {
     navigationState.pathname = "/settings";
     render(
       <AppShell>
         <div>Page</div>
       </AppShell>,
     );
-    const secondary = screen.getByTestId("secondary-navigation");
-    expect(secondary).toHaveAttribute("data-destination", "settings");
-    expect(
-      within(secondary).getByRole("link", { name: "Workspace" }),
-    ).toHaveAttribute("href", "/settings");
-    expect(
-      within(secondary).queryByRole("link", { name: "Advanced" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("secondary-navigation")).not.toBeInTheDocument();
   });
 
   it("keeps diagnostic navigation contextual on operational routes", () => {
@@ -195,6 +188,7 @@ describe("AT-040 Phase B AppShell", () => {
       </AppShell>,
     );
     const secondary = screen.getByTestId("secondary-navigation");
+    expect(within(secondary).getByRole("link", { name: "Back to Settings" })).toHaveAttribute("href", "/settings");
     expect(
       within(secondary).queryByRole("link", { name: "Advanced" }),
     ).not.toBeInTheDocument();
