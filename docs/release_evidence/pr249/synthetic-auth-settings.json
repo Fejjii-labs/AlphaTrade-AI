@@ -1,0 +1,8 @@
+{
+  "operation": "synthetic_auth_verification_requirement",
+  "environment": "staging",
+  "require_email_verified_override": "false",
+  "email_auto_verify_local_override": null,
+  "default_for_staging_requires_verified_email": true,
+  "existing_operator_changed": false
+}

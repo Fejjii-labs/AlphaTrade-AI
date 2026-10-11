@@ -57,14 +57,14 @@
   "actual_api_local_browser_rerun": false,
   "full_release_dispatch_count_this_turn": 0,
   "failed_probe_retries_this_turn": 0,
-  "environment_spec_revision": 5,
+  "environment_spec_revision": 7,
   "missing_policy_hosts": [
     "api.github.com",
     "alphatrade-api-staging.onrender.com",
-    "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app"
+    "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app",
+    "alpha-trade-atazfn0br-alphatrade-ai.vercel.app"
   ],
-  "new_public_binding_write_http_status": 429,
-  "new_public_binding_confirmed": false,
+  "new_public_binding_confirmed": true,
   "paid_provider_calls": 0,
   "render_deployments_initiated": 0,
   "vercel_manual_deployments_initiated": 0,
@@ -78,6 +78,11 @@
     "skips": 0
   },
   "combined_routine_deployment_safety": "success",
-  "combined_routine_backend": "in_progress_last_observed",
-  "combined_routine_docker": "skipped"
+  "combined_routine_backend": "success",
+  "combined_routine_docker": "skipped",
+  "combined_routine_backend_passed": 562,
+  "combined_routine_backend_warnings": 2,
+  "previous_public_binding_write_http_status": 429,
+  "new_public_binding_readback_http_status": 200,
+  "new_public_binding_id": "VAmCnUOwxVZ3jxXh"
 }

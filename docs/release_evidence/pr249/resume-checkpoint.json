@@ -1,0 +1,149 @@
+{
+  "generated_at": "2026-10-11T20:13:26Z",
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "candidate_frozen": true,
+  "shared_handoff_start_sha": "2d8ee33449424a0a65f8dfae9c31e86c03e05f50",
+  "environment": {
+    "environment_id": "ccarenv_b64_Y2NhcmVudl8yNGJiMWEzYTZhZDg4MTkxYjdhYTExODA1YjQzYjRlZA",
+    "source_config_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfg_6abe152de4548195ae254bdd52afc138",
+    "source_config_version_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfgver_6acbcb86913c819580ba4df1c3f53403",
+    "spec_revision": "7",
+    "observed_spec_revision": "7",
+    "observations_current": true,
+    "policy_state": "enforced",
+    "custom_allowed_hosts": [
+      "api.openai.com",
+      "api.render.com",
+      "api.vercel.com",
+      "dl-cdn.alpinelinux.org",
+      "fonts.googleapis.com",
+      "fonts.gstatic.com"
+    ],
+    "missing_release_hosts": [
+      "api.github.com",
+      "alphatrade-api-staging.onrender.com",
+      "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app",
+      "alpha-trade-atazfn0br-alphatrade-ai.vercel.app"
+    ],
+    "provider_secret_readiness": [
+      {
+        "name": "OPENAI_API_KEY",
+        "state": "ready"
+      },
+      {
+        "name": "RENDER_API_KEY",
+        "state": "ready"
+      },
+      {
+        "name": "VERCEL_TOKEN",
+        "state": "ready"
+      }
+    ],
+    "changed_release_allowlist_applied_here": false
+  },
+  "focused_ci": {
+    "run_id": 38168625484,
+    "head_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+    "status": "success",
+    "backend": {
+      "job_id": 114556381455,
+      "tests_passed": 562,
+      "warnings": 2,
+      "duration_seconds": 694.47,
+      "skips": 0
+    },
+    "frontend": {
+      "job_id": 114556381400,
+      "tests_passed": 637,
+      "files": 81,
+      "skips": 0
+    },
+    "deployment_safety": {
+      "job_id": 114556381240,
+      "status": "success"
+    },
+    "full_backend": "skipped",
+    "full_frontend_build": "skipped",
+    "docker_build": "skipped",
+    "evaluation": "skipped",
+    "e2e_smoke": "skipped"
+  },
+  "hosted_backup": {
+    "database_id": "dpg-d8fuok57vvec739lm0u0-a",
+    "database_name": "alphatrade",
+    "status": "available",
+    "postgres_version": "18.4",
+    "alembic_head": "a8agentcapture001",
+    "inventory_has_backup_or_recovery_receipt": false,
+    "hosted_backup_verified": false,
+    "hosted_restore_verified": false,
+    "prior_denied_export_recovery_requests_retried": false
+  },
+  "preview_binding": {
+    "project_id": "prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ",
+    "team_id": "team_LNgcEGBkqntUnTrktNjFzh7a",
+    "id": "VAmCnUOwxVZ3jxXh",
+    "key": "NEXT_PUBLIC_API_URL",
+    "value": "https://alphatrade-api-staging.onrender.com",
+    "target": [
+      "preview"
+    ],
+    "git_branch": "codex/interactive-voice-monitoring",
+    "saved": true,
+    "verified_by_readback_http_status": 200,
+    "production_changed": false,
+    "existing_deployment_rebuilt": false,
+    "compiled_origin_verified": false,
+    "write_response_parser_error": "AttributeError; outcome reconciled by GET before any repeat write",
+    "additional_write_retries": 0
+  },
+  "synthetic_auth": {
+    "prepared_runner": "synthetic_auth_setup.py",
+    "verified_render_require_email_verified_override": "false",
+    "existing_smoke_credentials_bound": false,
+    "isolated_registration_and_normal_login_allowed_by_current_setting": true,
+    "account_created": false,
+    "actual_login_verified": false,
+    "network_requests": 0,
+    "runner_execution": "not executed; syntax only",
+    "requires_new_user_credentials": false
+  },
+  "voice": {
+    "settings_preparation": "voice-settings-preparation.json",
+    "receipt_schema": "voice-approved-receipt.schema.json",
+    "effective_provider_mode": "fallback",
+    "effective_realtime_enabled": false,
+    "reasoning_model": "gpt-6-astra",
+    "reasoning_max_output_tokens": 25000,
+    "embeddings_model": "text-embedding-3-small",
+    "existing_render_provider_and_vector_keys_present": true,
+    "approved_limits_receipt_present": false,
+    "approved_live_executor_or_activation_reference_available": false,
+    "human_microphone_acceptance": "unexecuted",
+    "paid_calls": 0
+  },
+  "pr249": {
+    "url": "https://github.com/Fejjii/AlphaTrade-AI/pull/249",
+    "head_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+    "base": "codex/agent-outcomes-integration",
+    "draft": true,
+    "description_updated_at": "2026-10-11T20:10:09Z",
+    "body_verified": true
+  },
+  "release": {
+    "full_gate_dispatch_count_this_task": 0,
+    "full_gate_run_id": null,
+    "render_manual_deployments": 0,
+    "vercel_manual_deployments": 0,
+    "hosted_migrations": 0,
+    "worker_drains": 0,
+    "production_promotions": 0,
+    "trading_or_budget_changes": 0,
+    "exchange_orders": 0,
+    "blocked_requests_repeated_without_changed_access": 0
+  },
+  "user_stop": {
+    "instruction": "Save the current handoff and stop blocked network attempts. Resume the release in a new task using the updated published environment. Keep candidate 60a5550 unchanged.",
+    "release_requests_stopped": true
+  }
+}

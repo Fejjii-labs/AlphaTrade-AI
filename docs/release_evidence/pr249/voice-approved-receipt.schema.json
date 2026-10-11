@@ -1,0 +1,341 @@
+{
+  "$defs": {
+    "EmbeddingPrice": {
+      "additionalProperties": false,
+      "description": "Optional operator-verified receipt for the existing embedding route.",
+      "properties": {
+        "model": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 500,
+          "pattern": "^https://",
+          "title": "Source",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        },
+        "maximum_input_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Maximum Input Tokens",
+          "type": "integer"
+        },
+        "input_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Input Usd Per Million"
+        }
+      },
+      "required": [
+        "model",
+        "source",
+        "valid_until",
+        "maximum_input_tokens",
+        "input_usd_per_million"
+      ],
+      "title": "EmbeddingPrice",
+      "type": "object"
+    },
+    "RealtimePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 500,
+          "pattern": "^https://",
+          "title": "Source",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        },
+        "maximum_input_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Maximum Input Tokens",
+          "type": "integer"
+        },
+        "input_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Input Usd Per Million"
+        },
+        "output_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Output Usd Per Million"
+        },
+        "audio_input_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Audio Input Usd Per Million"
+        },
+        "audio_output_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Audio Output Usd Per Million"
+        },
+        "maximum_audio_input_tokens_per_second": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Maximum Audio Input Tokens Per Second"
+        }
+      },
+      "required": [
+        "model",
+        "source",
+        "valid_until",
+        "maximum_input_tokens",
+        "input_usd_per_million",
+        "output_usd_per_million",
+        "audio_input_usd_per_million",
+        "audio_output_usd_per_million",
+        "maximum_audio_input_tokens_per_second"
+      ],
+      "title": "RealtimePrice",
+      "type": "object"
+    },
+    "RoutePrice": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 500,
+          "pattern": "^https://",
+          "title": "Source",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        },
+        "maximum_input_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "title": "Maximum Input Tokens",
+          "type": "integer"
+        },
+        "input_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Input Usd Per Million"
+        },
+        "output_usd_per_million": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Output Usd Per Million"
+        }
+      },
+      "required": [
+        "model",
+        "source",
+        "valid_until",
+        "maximum_input_tokens",
+        "input_usd_per_million",
+        "output_usd_per_million"
+      ],
+      "title": "RoutePrice",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "organization_id": {
+      "maxLength": 36,
+      "minLength": 1,
+      "title": "Organization Id",
+      "type": "string"
+    },
+    "budget_reference": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Budget Reference",
+      "type": "string"
+    },
+    "budget_as_of": {
+      "format": "date-time",
+      "title": "Budget As Of",
+      "type": "string"
+    },
+    "valid_until": {
+      "format": "date-time",
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "remaining_budget_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Remaining Budget Usd"
+    },
+    "session_ceiling_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "type": "string"
+        }
+      ],
+      "title": "Session Ceiling Usd"
+    },
+    "realtime": {
+      "$ref": "#/$defs/RealtimePrice"
+    },
+    "reasoning": {
+      "$ref": "#/$defs/RoutePrice"
+    },
+    "embedding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EmbeddingPrice"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "maximum_seconds": {
+      "default": 180,
+      "maximum": 300,
+      "minimum": 10,
+      "title": "Maximum Seconds",
+      "type": "integer"
+    },
+    "maximum_audio_seconds": {
+      "default": 90,
+      "maximum": 180,
+      "minimum": 1,
+      "title": "Maximum Audio Seconds",
+      "type": "integer"
+    },
+    "maximum_turns": {
+      "default": 6,
+      "maximum": 12,
+      "minimum": 1,
+      "title": "Maximum Turns",
+      "type": "integer"
+    },
+    "maximum_responses": {
+      "default": 12,
+      "maximum": 24,
+      "minimum": 2,
+      "title": "Maximum Responses",
+      "type": "integer"
+    },
+    "maximum_output_tokens": {
+      "default": 1024,
+      "maximum": 4096,
+      "minimum": 64,
+      "title": "Maximum Output Tokens",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "organization_id",
+    "budget_reference",
+    "budget_as_of",
+    "valid_until",
+    "remaining_budget_usd",
+    "session_ceiling_usd",
+    "realtime",
+    "reasoning"
+  ],
+  "title": "VoiceLimits",
+  "type": "object"
+}

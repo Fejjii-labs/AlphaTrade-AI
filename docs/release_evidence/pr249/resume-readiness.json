@@ -122,6 +122,12 @@
       "target": "worker-settings"
     }
   ],
+  "concurrent_shared_checkpoint": {
+    "commit": "d2210d5d",
+    "generated_at": "2026-10-11T20:13:26Z",
+    "new_preparations_preserved": true,
+    "normalized_hash_verified": true
+  },
   "environment": {
     "id": "ccarenv_b64_Y2NhcmVudl81NTk4MWFkNWExMDQ4MTkxYjk0NGU3ODIxMDgyNTU0Mw",
     "observations_current": true,
@@ -154,15 +160,18 @@
   "observed_at": "2026-10-11T20:12:31.497935+00:00",
   "remaining_bindings": {
     "AGENT_REALTIME_LIMITS_FILE": "unbound",
-    "SMOKE_ACCESS_TOKEN": "unbound",
-    "SMOKE_EMAIL": "unbound",
-    "SMOKE_PASSWORD": "unbound",
     "approved_limits_file": "absent",
     "hosted_backup_restore_receipt": "unavailable",
     "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused"
   },
   "routine_ci": {
-    "backend_counts": "not retrieved; completed evidence reused; no rerun",
+    "backend_counts": {
+      "duration_seconds": 694.47,
+      "passed": 562,
+      "skips": 0,
+      "source": "reused d2210d5d shared checkpoint on same60a5550",
+      "warnings": 2
+    },
     "conclusion": "success",
     "event": "pull_request",
     "frontend_files": 81,
@@ -182,5 +191,18 @@
     "command": "BASE_URL=https://alphatrade-api-staging.onrender.com ./scripts/verify-safety.sh",
     "exit_code": 0,
     "scope": "baseline before deployment"
+  },
+  "synthetic_auth": {
+    "actual_api_login_verified": true,
+    "authenticated_identity_verified": true,
+    "browser_login_verified": false,
+    "credentials_published": false,
+    "exchange_orders": 0,
+    "paid_provider_calls": 0,
+    "permissions": "0600",
+    "private_file": ".ai/local/pr249-release/synthetic-auth.json",
+    "requires_user_smoke_credentials": false,
+    "runner": "synthetic_auth_setup.py",
+    "runner_reused_from_shared_commit": "d2210d5d"
   }
 }
