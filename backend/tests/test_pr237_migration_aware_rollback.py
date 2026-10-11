@@ -341,6 +341,7 @@ def _seed_feature_retention(engine):
 
 
 BOOT_PROBE = """
+import faulthandler
 import json
 import os
 from pathlib import Path
@@ -355,15 +356,19 @@ from app.providers.qdrant import InMemoryVectorStore
 from app.workers.paper_worker import run_paper_worker_process
 from app.workers.watcher_activation import expected_migration_head, read_migration_revision
 
+faulthandler.dump_traceback_later(20)
+print('rollback_probe_imports_complete', flush=True)
 assert Path(app.main.__file__).resolve().is_relative_to(Path(os.environ['PYTHONPATH']).resolve())
 app.main.get_process_vector_store = lambda: InMemoryVectorStore()
 settings = get_settings()
 assert settings.provider_mode == 'mock'
 assert not settings.knowledge_indexing_enabled
 with TestClient(create_app(settings)) as client:
+    print('rollback_probe_startup_complete', flush=True)
     health = client.get('/health')
     assert health.status_code == 200
     assert health.json()['real_trading_enabled'] is False
+print('rollback_probe_shutdown_complete', flush=True)
 with get_session_factory()() as session:
     assert (
         expected_migration_head() == read_migration_revision(session)
@@ -448,6 +453,9 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
             "DATABASE_URL": dsn,
             "ENVIRONMENT": "local",
             "PROVIDER_MODE": "mock",
+            "WORKER_ENABLED": "false",
+            "MARKET_DATA_ENABLED": "false",
+            "JOURNAL_RAG_SYNC_ENABLED": "false",
             "EXECUTION_MODE": "paper",
             "EXCHANGE_MODE": "paper_internal",
             "ENABLE_REAL_TRADING": "false",
@@ -501,14 +509,19 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
                 for _restart in range(2):
-                    boot = subprocess.run(
-                        [sys.executable, "-c", BOOT_PROBE],
-                        cwd=target,
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        timeout=45,
-                    )
+                    try:
+                        boot = subprocess.run(
+                            [sys.executable, "-c", BOOT_PROBE],
+                            cwd=target,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            timeout=45,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        pytest.fail(
+                            f"Bounded rollback probe timed out: {exc.stdout!r} {exc.stderr!r}"
+                        )
                     assert boot.returncode == 0, boot.stdout + boot.stderr
                     assert _snapshot(engine) == retained
             assert _snapshot(engine) == retained
