@@ -79,54 +79,53 @@ export function SavedReceipt({
       {entries.map((e) => (
         <div
           key={e.id}
-          className="flex flex-wrap items-center gap-3 rounded-control border border-border-subtle p-3"
+          className="space-y-2 rounded-control border border-border-subtle p-3"
           role="status"
         >
-          <span>
-            {e.undone ? "Undone" : `Saved to ${ENTRY_LABELS[e.category]}`}
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-text-secondary">
+              {e.undone ? "Undone" : `Saved to ${ENTRY_LABELS[e.category]}`}
+            </span>
+            {!e.undone && <Link
+              href={e.category === "journal"
+                ? `/journal?saved=${encodeURIComponent(e.id)}`
+                : `/journal?tab=knowledge&category=${e.category}&saved=${encodeURIComponent(e.id)}`}
+              aria-label={`Open ${e.title} in ${ENTRY_LABELS[e.category]}`}
+              className="text-accent"
+            >Open</Link>}
+          </div>
+          <p className="font-medium">{e.title}</p>
+          <p className="line-clamp-2 text-text-secondary">{e.summary}</p>
           {!e.undone && (
-            <>
-              <Link
-                href={`/journal?${e.category !== "journal" ? "tab=knowledge&" : ""}saved=${e.id}`}
-                className="text-accent"
-              >
-                Open
-              </Link>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() => setCategoryId(categoryId === e.id ? null : e.id)}
-              >
-                Reclassify
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={busy}
-                onClick={() => void update(e)}
-              >
-                Undo
-              </Button>
-            </>
-          )}
-          {categoryId === e.id && (
-            <select
-              aria-label="Reclassify saved entry"
-              disabled={busy}
-              value={e.category}
-              onChange={(event) =>
-                void update(e, event.target.value as EntryCategory)
-              }
-              className="min-h-11 bg-surface-1"
-            >
-              {ENTRY_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {ENTRY_LABELS[c]}
-                </option>
-              ))}
-            </select>
+            <details>
+              <summary className="min-h-11 cursor-pointer content-center text-xs text-text-secondary">Saved note details</summary>
+              <p className="py-2 text-text-secondary">{e.summary}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setCategoryId(categoryId === e.id ? null : e.id)}
+                >
+                  Reclassify
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void update(e)}
+                >
+                  Undo
+                </Button>
+              </div>
+              {categoryId === e.id && (
+                <select aria-label="Reclassify saved entry" disabled={busy} value={e.category}
+                  onChange={(event) => void update(e, event.target.value as EntryCategory)}
+                  className="min-h-11 bg-surface-1">
+                  {ENTRY_CATEGORIES.map((c) => <option key={c} value={c}>{ENTRY_LABELS[c]}</option>)}
+                </select>
+              )}
+            </details>
           )}
         </div>
       ))}
