@@ -1,0 +1,156 @@
+{
+  "candidate": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "baseline": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40",
+  "tenant_scoped": true,
+  "scheduled": [
+    {
+      "label": "scheduled",
+      "read_status": "fulfilled",
+      "response": [
+        {
+          "last_scheduled_at": "2026-10-11T20:00:16.43807Z",
+          "scope": 1
+        },
+        {
+          "last_scheduled_at": "2026-10-11T20:00:14.032994Z",
+          "scope": 2
+        },
+        {
+          "last_scheduled_at": "2026-10-11T20:00:26.386731Z",
+          "scope": 3
+        },
+        {
+          "last_scheduled_at": "2026-10-11T20:00:11.538399Z",
+          "scope": 4
+        }
+      ]
+    },
+    {
+      "label": "attempts",
+      "read_status": "fulfilled",
+      "response": [
+        {
+          "attempts": 16,
+          "latest_finished_at": "2026-10-11T20:00:36.377503Z",
+          "outcome_reason_code": "no_setup",
+          "status": "succeeded",
+          "trigger": "worker"
+        },
+        {
+          "attempts": 11,
+          "latest_finished_at": "2026-10-11T20:00:16.202933Z",
+          "outcome_reason_code": "partial_match",
+          "status": "succeeded",
+          "trigger": "worker"
+        },
+        {
+          "attempts": 5,
+          "latest_finished_at": "2026-10-11T19:15:16.548757Z",
+          "outcome_reason_code": "expired",
+          "status": "succeeded",
+          "trigger": "worker"
+        }
+      ]
+    },
+    {
+      "label": "observations",
+      "read_status": "fulfilled",
+      "response": [
+        {
+          "latest_at": "2026-10-11T20:00:35.743366Z",
+          "observations": 16,
+          "reason_code": "no_setup",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "setup_assessment"
+        },
+        {
+          "latest_at": "2026-10-11T20:00:35.743366Z",
+          "observations": 16,
+          "reason_code": "no_setup",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "watcher_scan"
+        },
+        {
+          "latest_at": "2026-10-11T20:00:15.907373Z",
+          "observations": 11,
+          "reason_code": "partial_match",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "setup_assessment"
+        },
+        {
+          "latest_at": "2026-10-11T20:00:15.907373Z",
+          "observations": 11,
+          "reason_code": "partial_match",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "watcher_scan"
+        },
+        {
+          "latest_at": "2026-10-11T19:15:16.254091Z",
+          "observations": 5,
+          "reason_code": "expired",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "setup_assessment"
+        },
+        {
+          "latest_at": "2026-10-11T19:15:16.254091Z",
+          "observations": 5,
+          "reason_code": "expired",
+          "replayed": false,
+          "scan_status": "succeeded",
+          "stage": "watcher_scan"
+        }
+      ]
+    }
+  ],
+  "scope_policy_evaluations": [
+    {
+      "enabled": true,
+      "finished_at": "2026-10-11T20:00:26.159137Z",
+      "fusion_policy_version": "swing_failure_pattern/v1",
+      "outcome_reason_code": "no_setup",
+      "scope": 1,
+      "status": "succeeded",
+      "timeframe": "15m",
+      "trigger": "worker"
+    },
+    {
+      "enabled": true,
+      "finished_at": "2026-10-11T20:00:16.202933Z",
+      "fusion_policy_version": "operational_nested_continuation/v1",
+      "outcome_reason_code": "partial_match",
+      "scope": 2,
+      "status": "succeeded",
+      "timeframe": "15m",
+      "trigger": "worker"
+    },
+    {
+      "enabled": true,
+      "finished_at": "2026-10-11T20:00:36.377503Z",
+      "fusion_policy_version": "swing_failure_pattern/v1",
+      "outcome_reason_code": "no_setup",
+      "scope": 3,
+      "status": "succeeded",
+      "timeframe": "15m",
+      "trigger": "worker"
+    },
+    {
+      "enabled": true,
+      "finished_at": "2026-10-11T20:00:13.794238Z",
+      "fusion_policy_version": "operational_nested_continuation/v1",
+      "outcome_reason_code": "partial_match",
+      "scope": 4,
+      "status": "succeeded",
+      "timeframe": "15m",
+      "trigger": "worker"
+    }
+  ],
+  "failed_combined_query": {
+    "error_code": "INVALID_ARGUMENT",
+    "reason": "Connector requires a single statement; split read-only queries succeeded."
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "actions": {
+    "budget_changes": 0,
+    "deployments_initiated": 0,
+    "existing_candidate_manual_runs": 0,
+    "full_gate_dispatched": 0,
+    "known_failed_backup_probes_retried": 0,
+    "paid_provider_calls": 0,
+    "trading_settings_changes": 0,
+    "vercel_binding_write_retried": 0
+  },
+  "checks": [
+    {
+      "http_status": 200,
+      "posture": {
+        "automatic_telegram_delivery_enabled": false,
+        "environment": "staging",
+        "exchange_mode": "paper_exchange_demo",
+        "execution_mode": "paper",
+        "git_sha": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40",
+        "market_watcher_bridge_enabled": false,
+        "market_watcher_enabled": false,
+        "perpetual_evidence_activation": "active",
+        "perpetual_evidence_intended_staging_source": "binance_usdm",
+        "perpetual_evidence_rollback_source": "replay",
+        "perpetual_evidence_secondary_source": "bybit_usdt_perpetual",
+        "perpetual_evidence_source": "binance_usdm",
+        "real_trading_enabled": false,
+        "status": "ok",
+        "telegram_alerts_enabled": false,
+        "telegram_inbound_mode": "off",
+        "telegram_interaction_enabled": false,
+        "telegram_network_permitted": false,
+        "telegram_paper_activation_armed": false,
+        "watcher_orchestration_enabled": false,
+        "watcher_paper_staging_activation": false
+      },
+      "runtime_summary": {
+        "telegram": {
+          "activation_state": "running",
+          "available": true,
+          "health_state": "RUNNING",
+          "heartbeat_stale_after_seconds": 90,
+          "kill_switch_active": false,
+          "last_scan_at": null,
+          "last_scan_reason": ""
+        },
+        "watcher": {
+          "activation_state": "running",
+          "available": true,
+          "health_state": "RUNNING",
+          "heartbeat_stale_after_seconds": 90,
+          "kill_switch_active": false,
+          "last_scan_at": "2026-10-11T20:12:16.339996Z",
+          "last_scan_reason": "completed"
+        }
+      },
+      "target": "health"
+    },
+    {
+      "http_status": 200,
+      "providers_unavailable": 0,
+      "ready": true,
+      "target": "ready"
+    },
+    {
+      "bindings": [
+        {
+          "branch": "codex/interactive-voice-monitoring",
+          "id": "VAmCnUOwxVZ3jxXh",
+          "matches_staging_api": true,
+          "targets": [
+            "preview"
+          ],
+          "type": "plain"
+        },
+        {
+          "branch": null,
+          "id": "eJtRq5x0LsMt5o0w",
+          "matches_staging_api": null,
+          "targets": [
+            "production"
+          ],
+          "type": "encrypted"
+        },
+        {
+          "branch": null,
+          "id": "ylb0r7KqqyZl5CIs",
+          "matches_staging_api": null,
+          "targets": [
+            "preview"
+          ],
+          "type": "sensitive"
+        }
+      ],
+      "http_status": 200,
+      "target": "preview-binding"
+    },
+    {
+      "captured_nonsecret_operator_keys": [
+        "ENABLE_REAL_TRADING",
+        "PAPER_SIGNAL_ORCHESTRATION_ENABLED",
+        "TELEGRAM_ALERTS_ENABLED",
+        "WORKER_ENABLED"
+      ],
+      "http_status": 200,
+      "settings_sha256": "0a2e516b6d383055784287779c869cd3f887b240c9e0b55f112cb86adee82d41",
+      "target": "api-settings"
+    },
+    {
+      "captured_nonsecret_operator_keys": [
+        "AUTOMATIC_TELEGRAM_DELIVERY_ENABLED",
+        "ENABLE_REAL_TRADING",
+        "EXCHANGE_MODE",
+        "EXECUTION_MODE",
+        "TELEGRAM_INBOUND_MODE",
+        "TELEGRAM_PAPER_ACTIVATION_ARMED",
+        "WATCHER_PAPER_POLL_INTERVAL_SECONDS"
+      ],
+      "http_status": 200,
+      "settings_sha256": "7ff73da7a50445e6d7f8e7f133bd6142ddd4d0c8f6166971053a636e9d6c28dd",
+      "target": "worker-settings"
+    }
+  ],
+  "environment": {
+    "id": "ccarenv_b64_Y2NhcmVudl81NTk4MWFkNWExMDQ4MTkxYjk0NGU3ODIxMDgyNTU0Mw",
+    "observations_current": true,
+    "reported_network_state": "unknown",
+    "secret_readiness_states": "unknown",
+    "spec_revision": "2"
+  },
+  "four_release_domains": [
+    {
+      "host": "api.github.com",
+      "http_status": 200,
+      "policy_listed": true
+    },
+    {
+      "host": "alphatrade-api-staging.onrender.com",
+      "http_status": 200,
+      "policy_listed": true
+    },
+    {
+      "host": "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app",
+      "policy_listed": true,
+      "proxy_connect_status": 403
+    },
+    {
+      "host": "alpha-trade-atazfn0br-alphatrade-ai.vercel.app",
+      "policy_listed": true,
+      "proxy_connect_status": 403
+    }
+  ],
+  "observed_at": "2026-10-11T20:12:31.497935+00:00",
+  "remaining_bindings": {
+    "AGENT_REALTIME_LIMITS_FILE": "unbound",
+    "SMOKE_ACCESS_TOKEN": "unbound",
+    "SMOKE_EMAIL": "unbound",
+    "SMOKE_PASSWORD": "unbound",
+    "approved_limits_file": "absent",
+    "hosted_backup_restore_receipt": "unavailable",
+    "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused"
+  },
+  "routine_ci": {
+    "backend_counts": "not retrieved; completed evidence reused; no rerun",
+    "conclusion": "success",
+    "event": "pull_request",
+    "frontend_files": 81,
+    "frontend_tests": 637,
+    "jobs": {
+      "backend": "success",
+      "deployment-safety": "success",
+      "docker-build": "skipped",
+      "e2e-smoke": "skipped",
+      "evaluation": "skipped",
+      "frontend": "success"
+    },
+    "run_id": 38168625484,
+    "sha": "60a55506393e8ac11a45bd5609d6c70f33d99778"
+  },
+  "safety_check": {
+    "command": "BASE_URL=https://alphatrade-api-staging.onrender.com ./scripts/verify-safety.sh",
+    "exit_code": 0,
+    "scope": "baseline before deployment"
+  }
+}
