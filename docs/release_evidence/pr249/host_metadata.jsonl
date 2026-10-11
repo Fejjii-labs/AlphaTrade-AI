@@ -1,0 +1,27 @@
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a", "http_status": 403}
+{"api": {"id": "srv-d8fvbcd7vvec739mc060", "name": "alphatrade-api-staging", "type": "web_service", "branch": "main", "autoDeploy": "yes", "suspended": "not_suspended", "rootDir": ""}}
+{"api-details": {"url": "https://alphatrade-api-staging.onrender.com", "healthCheckPath": "/health", "runtime": "docker", "region": "frankfurt"}}
+{"api-binding": {"database_matches_expected": false, "DATABASE_URL_present": true}}
+{"api-safety": {"paper": true, "real_trading_disabled": true, "kill_switch_active": false, "realtime_enabled": false}}
+{"api-credential-presence": {"OPENAI_API_KEY": true, "QDRANT_URL": true, "QDRANT_API_KEY": true, "AGENT_REALTIME_LIMITS_FILE": false}}
+{"api-deploys": [{"id": "dep-db4gdkeq1p3s73a395u0", "status": "live", "createdAt": "2026-10-09T15:22:57.85722Z", "finishedAt": "2026-10-09T15:24:27.431843Z", "commit": {"id": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40", "message": "Merge pull request #233 from Fejjii/codex/alphatrade-workspace\n\nConsolidate the trading workspace and add durable Agent capture", "createdAt": "2026-10-09T15:22:55Z"}}, {"id": "dep-db4fu1oae00c73a31lqg", "status": "deactivated", "createdAt": "2026-10-09T14:49:43.262641Z", "finishedAt": "2026-10-09T14:51:39.65513Z", "commit": {"id": "d175613f01646e03e87cec65fd568d1160a0b5c5", "message": "Merge pull request #232 from Fejjii/codex/blofin-reconciliation-presentation\n\nRepair BloFin reconciliation, Journal detail and account presentation", "createdAt": "2026-10-09T14:49:40Z"}}, {"id": "dep-db3uppmftmrc7390plh0", "status": "deactivated", "createdAt": "2026-10-08T19:20:08.034093Z", "finishedAt": "2026-10-08T19:23:42.009733Z", "commit": {"id": "642d2d4b1b041cbb981844345c16efde43ac4aca", "message": "Merge pull request #230 from Fejjii/codex/blofin-demo-dashboard\n\nShow native BloFin demo account fields with bounded Dashboard refresh", "createdAt": "2026-10-08T19:20:04Z"}}]}
+{"worker": {"id": "srv-daqej7o473hc73fsc1k0", "name": "alphatrade-paper-worker-staging", "type": "background_worker", "branch": "main", "autoDeploy": "yes", "suspended": "not_suspended", "rootDir": ""}}
+{"worker-details": {"url": null, "healthCheckPath": null, "runtime": "docker", "region": "frankfurt"}}
+{"worker-binding": {"database_matches_expected": false, "DATABASE_URL_present": true}}
+{"worker-safety": {"paper": true, "real_trading_disabled": true, "kill_switch_active": false, "realtime_enabled": false}}
+{"worker-credential-presence": {"OPENAI_API_KEY": true, "QDRANT_URL": true, "QDRANT_API_KEY": true, "AGENT_REALTIME_LIMITS_FILE": false}}
+{"worker-deploys": [{"id": "dep-db4gdkeq1p3s73a3975g", "status": "live", "createdAt": "2026-10-09T15:22:57.962474Z", "finishedAt": "2026-10-09T15:23:33.89598Z", "commit": {"id": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40", "message": "Merge pull request #233 from Fejjii/codex/alphatrade-workspace\n\nConsolidate the trading workspace and add durable Agent capture", "createdAt": "2026-10-09T15:22:55Z"}}, {"id": "dep-db4fu1oae00c73a31n2g", "status": "deactivated", "createdAt": "2026-10-09T14:49:43.353469Z", "finishedAt": "2026-10-09T14:50:27.543816Z", "commit": {"id": "d175613f01646e03e87cec65fd568d1160a0b5c5", "message": "Merge pull request #232 from Fejjii/codex/blofin-reconciliation-presentation\n\nRepair BloFin reconciliation, Journal detail and account presentation", "createdAt": "2026-10-09T14:49:40Z"}}, {"id": "dep-db3uppm0m5ts73b4tp8g", "status": "deactivated", "createdAt": "2026-10-08T19:20:08.343558Z", "finishedAt": "2026-10-08T19:21:45.244593Z", "commit": {"id": "642d2d4b1b041cbb981844345c16efde43ac4aca", "message": "Merge pull request #230 from Fejjii/codex/blofin-demo-dashboard\n\nShow native BloFin demo account fields with bounded Dashboard refresh", "createdAt": "2026-10-08T19:20:04Z"}}]}
+{"database-bindings-equal": true}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a/recovery", "http_status": 403}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a/backups", "http_status": 403}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a/exports", "http_status": 403}
+{"vercel-projects": [{"id": "prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ", "name": "alpha-trade-ai", "accountId": "team_LNgcEGBkqntUnTrktNjFzh7a", "rootDirectory": "frontend"}]}
+{"provider": "vercel", "path": "/v2/teams", "http_status": 403}
+{"vercel-project": {"id": "prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ", "name": "alpha-trade-ai", "accountId": "team_LNgcEGBkqntUnTrktNjFzh7a", "rootDirectory": "frontend", "framework": null}}
+{"runtime-presence": {"name": "SMOKE_ACCESS_TOKEN", "present": false}}
+{"runtime-presence": {"name": "QDRANT_URL", "present": false}}
+{"runtime-presence": {"name": "QDRANT_API_KEY", "present": false}}
+{"runtime-presence": {"name": "AGENT_REALTIME_LIMITS_FILE", "present": false}}
+{"runtime-presence": {"name": "EMBEDDINGS_MODEL", "present": false}}
+{"receipt-presence": {"path": "/workspace/agent-realtime-approved-limits.json", "exists": false}}
+{"receipt-presence": {"path": "/workspace/agent-quality-approved-limits.json", "exists": false}}

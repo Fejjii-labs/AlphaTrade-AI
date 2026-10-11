@@ -1,0 +1,32 @@
+{
+  "source": "disposable synthetic local PostgreSQL18 only",
+  "hosted_backup_verified": false,
+  "schema": "pr249_image_3cd4cd6098b74ddca304577c6d4d9776",
+  "scratch_database": "pr249_restore_1947eef0797f458884689d12abcf6880",
+  "dump_size": 960052,
+  "dump_sha256": "2a24e00cb80a6713ff8b33ec1789e97e2134859ef7078bc2aea65b1213abbf1c",
+  "retained_snapshot_sha256": "2c373a951517eb5b2dab0d6f5d00cb56a9f10c22aefab5e339890f7d985f409e",
+  "restored_snapshot_matches": true,
+  "row_counts": {
+    "alembic_version": 1,
+    "organizations": 2,
+    "users": 2,
+    "documents": 5,
+    "chunks": 5,
+    "knowledge_indexing_jobs": 5,
+    "blofin_activity_accounts": 1,
+    "blofin_activity_facts": 3,
+    "blofin_activity_cursors": 2,
+    "experiments": 2,
+    "experiment_versions": 2,
+    "experiment_events": 5,
+    "experiment_samples": 1,
+    "trendpulse_screening_runs": 3,
+    "watcher_strategy_assignments": 1,
+    "watcher_assignment_receipts": 1,
+    "voice_session_reservations": 1,
+    "watcher_watchlists": 1,
+    "kill_switch_states": 1,
+    "organization_quotas": 1
+  }
+}

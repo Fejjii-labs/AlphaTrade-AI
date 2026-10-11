@@ -1,0 +1,18 @@
+{"api-db-match": {"expected_host": true, "expected_database": true}}
+{"worker-db-match": {"expected_host": true, "expected_database": true}}
+{"binding-equality": true}
+{"provider": "render", "path": "/postgres?limit=20", "http_status": 403, "proxy_denial": false}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0/export", "http_status": 403, "proxy_denial": false}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a/export", "http_status": 403, "proxy_denial": false}
+{"provider": "render", "path": "/postgres/dpg-d8fuok57vvec739lm0u0-a/recovery-info", "http_status": 403, "proxy_denial": false}
+{"frontend-deploy": {"uid": "dpl_ESesFxgLJaebefBbR3jczU8gxxci", "url": "alpha-trade-cchhytnfz-alphatrade-ai.vercel.app", "state": "READY", "target": null, "created": 1791741357313, "sha": "08701b6c7ef4e26226418a04ad236e49cf19e52f", "branch": "cursor/experiments-market-handoff"}}
+{"frontend-deploy": {"uid": "dpl_G9CxW6VaadyRGebXc1vPzZCYreVC", "url": "alpha-trade-mpn4fslf5-alphatrade-ai.vercel.app", "state": "READY", "target": null, "created": 1791741199594, "sha": "00f388017c6bcd2fb53d8135df60ac76bc714125", "branch": "codex/interactive-voice-monitoring"}}
+{"frontend-deploy": {"uid": "dpl_9mchUdxrZmJBv8USQQfXR9zKEXiJ", "url": "alpha-trade-3gfucklcq-alphatrade-ai.vercel.app", "state": "READY", "target": null, "created": 1791738057380, "sha": "6b08c2787134c1d259079bf9974b3af3c2cd32dc", "branch": "cursor/experiments-market-handoff"}}
+{"frontend-deploy": {"uid": "dpl_AKPawUHbjXnNNdVwMahjTFmkahFa", "url": "alpha-trade-a35kc0s8d-alphatrade-ai.vercel.app", "state": "READY", "target": null, "created": 1791737964015, "sha": "e7b51dced28f683a099304327161a930417ef294", "branch": "codex/interactive-voice-monitoring"}}
+{"frontend-deploy": {"uid": "dpl_WxDL2nUqf8BmBMjrJUrjhWpxcmSk", "url": "alpha-trade-azt7fpvpb-alphatrade-ai.vercel.app", "state": "READY", "target": null, "created": 1791737508605, "sha": "9de63f1d84e0da43515f8dc6e406904c15d39016", "branch": "cursor/experiments-market-handoff"}}
+{"frontend-link": {"type": "github", "repo": "AlphaTrade-AI", "org": "Fejjii", "productionBranch": "main"}}
+{"frontend-target": {"target": "production", "id": "dpl_FEf6q7dMdVRCFbZ2t1GLYQ4TdGLJ", "url": "alpha-trade-mn5bomjo2-alphatrade-ai.vercel.app", "alias": ["alpha-trade-ai-eight.vercel.app", "alpha-trade-ai-alphatrade-ai.vercel.app", "alpha-trade-ai-git-main-alphatrade-ai.vercel.app"], "sha": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40", "state": "READY"}}
+{"frontend-target": {"target": "preview", "id": "dpl_ESesFxgLJaebefBbR3jczU8gxxci", "url": "alpha-trade-cchhytnfz-alphatrade-ai.vercel.app", "alias": ["alpha-trade-ai-git-cursor-experiments-mark-1ccca1-alphatrade-ai.vercel.app"], "sha": "08701b6c7ef4e26226418a04ad236e49cf19e52f", "state": "READY"}}
+{"frontend-api-binding": {"target": ["production"], "branch": null, "type": "encrypted", "id": "eJtRq5x0LsMt5o0w", "plaintext_available": false, "matches_staging_api": null}}
+{"frontend-api-binding": {"target": ["preview"], "branch": null, "type": "sensitive", "id": "ylb0r7KqqyZl5CIs", "plaintext_available": false, "matches_staging_api": null}}
+{"provider": "staging", "path": "/health", "error_type": "URLError"}
