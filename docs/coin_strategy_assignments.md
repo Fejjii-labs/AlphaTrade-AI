@@ -8,13 +8,15 @@ This contribution starts from accepted PR248 `a7a843f7c27e8bdcea5f89c802c8084724
 
 The replacement DTO is `{revision, request_key, assignments}`. Each assignment contains its UUID, coin symbol, immutable saved `strategy_version_id`, independent `monitoring_enabled`, explicit timeframes and the **complete** saved `pattern_spec` parameter snapshot. Use `available_versions` from the read response rather than constructing a different snapshot. Changing timeframes or parameters requires authoring another saved version. The authored coin must match; a BTC strategy cannot silently monitor ETH.
 
-Reads and replacements expose only the actor's private saved strategies and assignments. Other actors' assignments remain intact. Workers resolve each row against its original actor's fresh membership, tenant, immutable version/hash, lifecycle and compiled policy. The limits are 25 assignments per organization and five saved versions per coin. A persisted empty configuration remains configured and disables legacy strategy inference; it does not re-create assignments.
+Reads and replacements expose only the actor's private saved strategies and assignments. Other actors' assignments remain intact. Workers resolve each row against its original actor's fresh membership, tenant, immutable version/hash, lifecycle and compiled policy. The limits are 25 assignments per organization and five saved versions per coin.
+
+Explicit assignments override inferred coverage only for the same organization, actor, strategy and coin. The first save preserves unrelated legacy targets, including other coins and actors. Pinned versions replace that binding's inferred current version without adding a duplicate. Disabled or removed bindings stay suppressed after reload and worker restart: existing immutable replacement receipts retain the previously managed coverage. An empty first save manages no bindings and therefore preserves existing coverage; an empty replacement removes only previously managed bindings. The response's `configured` flag records a saved configuration, not an organization-wide switch. Existing cycle capacity limits remain unchanged.
 
 The root watchlist revision fences changes. Assignment replacement preserves all watchlist enabled toggles. A durable organization/request-key receipt binds the authenticated actor and exact payload hash and retains the original response. Identical concurrent or fresh-session replays converge on one revision; a changed payload or actor cannot reuse the key.
 
 ## Worker and notification boundaries
 
-Configured workers consume these pinned version references rather than a strategy's later current draft. They check authority before evidence acquisition, during the existing Candidate publication fence and again before notification. The short publication probe uses an independent database connection and PostgreSQL `FOR NO KEY UPDATE`, with a two-second lock bound. It serializes with configuration writers while remaining compatible with the scan transaction's own research FK `KEY SHARE` locks. Existing lease and Candidate fences remain in place.
+Explicit targets consume pinned version references rather than a strategy's later current draft. Both explicit and retained inferred targets check the watchlist revision and fresh authority before evidence acquisition, during the existing Candidate publication fence and again before notification. A first save, pause or removal invalidates a previously loaded inferred target. The short publication probe uses an independent database connection and PostgreSQL `FOR NO KEY UPDATE`, with a two-second lock bound. It serializes with configuration writers while remaining compatible with the scan transaction's own research FK `KEY SHARE` locks. Existing lease and Candidate fences remain in place.
 
 Assignment targets skip the paper execution continuation. Existing unassigned governed paths retain their original gates. Read-only research and Candidate qualification do not activate trading. Missing bindings, draft/disabled versions, absent compilation, unsupported authored patterns, disabled coins and cycle capacity have explicit scan inability reasons.
 
@@ -55,6 +57,19 @@ PYTHONPATH=/workspace/AlphaTrade-monitoring-assignments/backend/src:. \
 Frontend verification used `npx vitest run src/components/WatcherAssignmentsSection.test.tsx src/lib/monitoring/assignments-api.test.ts`, `npx tsc --noEmit` and scoped ESLint. Backend verification used changed-file Ruff lint/format and strict mypy on the three new model/schema/service modules.
 
 ## Remaining integration and rollback qualification
+
+PR249's scoped transition correction has 28 distinct focused passing cases:
+19 new (18 PostgreSQL and one portable SQLite case), one adjusted historical
+removal case and eight existing compatibility cases. Zero unexpected skips.
+First-save unrelated coverage, pinned-version deduplication, independent disable
+and removal, empty replacement/restart, actor/tenant/configuration changes and
+publication/dispatch fences are covered. Changed-file Ruff/format and service
+mypy pass. Direct contribution `c9e3be59` is integrated as `5213c94f`; exact source
+hashes, selectors and XML receipts are in
+`/tmp/alphatrade-assignment-transition-final-manifest.json`. One unchanged Binance
+composition case initially failed and passed its isolated retry; its cause is
+not established. No assertion or freshness guard was weakened. This correction
+does not change monitoring settings, schema, execution authority or deployment.
 
 The owner has now integrated this contribution with the generated client, authenticated real-login desktop/mobile API/PostgreSQL save/reload/toggle/recovery and off-panel logout/account-change checks, and eight canonical confirmed Agent action persistence cases. M1–M5 are locally accepted (5/5); these checks do not establish hosted worker consumption or live notification delivery. Shared contracts have sole additive head a13voicemonitor001. The retained-schema rollback preserves assignments, receipts and unknown voice holds; the old worker remains drained. No hosted deployment or operator setting changed. Exact candidate and consolidated receipts are in the existing integration checkpoint.
 
