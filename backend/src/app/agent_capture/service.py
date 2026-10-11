@@ -320,7 +320,17 @@ class CaptureService:
         candidates: set[UUID],
     ) -> None:
         allowed = "\n".join([current, *(m.content for m in history)])
+        seen_suggestions: set[str] = set()
+        seen_targets: set[UUID] = set()
         for suggestion in plan.entries:
+            fingerprint = suggestion.model_dump_json(exclude={"confidence"})
+            if fingerprint in seen_suggestions:
+                raise ValidationAppError("Capture contains a duplicate suggestion.")
+            seen_suggestions.add(fingerprint)
+            if suggestion.target_entry_id is not None:
+                if suggestion.target_entry_id in seen_targets:
+                    raise ValidationAppError("Capture cannot revise the same entry more than once.")
+                seen_targets.add(suggestion.target_entry_id)
             if not all(q.strip() and q in allowed for q in suggestion.evidence_quotes):
                 raise ValidationAppError("Capture quotes do not match the source.")
             if not any(q in current for q in suggestion.evidence_quotes):
