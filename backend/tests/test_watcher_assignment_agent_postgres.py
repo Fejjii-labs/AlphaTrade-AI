@@ -4,6 +4,8 @@ Synthetic approved versions and deterministic providers only. This selection doe
 not grant execution or send orders/Telegram; it uses the isolated assignment schema.
 """
 
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import func, select
 
@@ -178,3 +180,73 @@ def test_agent_proposal_rejects_foreign_saved_version_without_configuration_writ
             propose(db, body(db, [foreign_version_id]))
         db.rollback()
         assert_unconfigured(db)
+
+
+def test_existing_assignment_outside_recent_picker_can_be_paused_by_confirmed_agent(
+    factory, monkeypatch
+):
+    with factory() as db:
+        _, version_id = _seed_approved_compiled(db)
+        original = body(db, [version_id])
+        save(db, original)
+    read = WatcherAssignmentService.read
+
+    def bounded_picker(self, *, organization_id, user_id):
+        result = read(self, organization_id=organization_id, user_id=user_id)
+        # Represent an old saved version outside the bounded latest100 picker;
+        # its real immutable version and existing owned assignment remain stored.
+        return result.model_copy(
+            update={
+                "available_versions": [
+                    version
+                    for version in result.available_versions
+                    if version.strategy_version_id != version_id
+                ]
+            }
+        )
+
+    monkeypatch.setattr(WatcherAssignmentService, "read", bounded_picker)
+    pause = original.model_copy(
+        update={
+            "revision": 1,
+            "request_key": str(uuid4()),
+            "assignments": [
+                original.assignments[0].model_copy(update={"monitoring_enabled": False})
+            ],
+        }
+    )
+    with factory() as proposer:
+        current = WatcherAssignmentService(proposer).read(organization_id=ORG, user_id=USER)
+        assert version_id not in {
+            version.strategy_version_id for version in current.available_versions
+        }
+        assert len(current.assignments) == 1
+        assert current.assignments[0].strategy_version_id == version_id
+        turn = propose(proposer, pause)
+        proposer.commit()
+        assert turn.proposals[0].status is ProposalLifecycle.PROPOSED
+        assert not turn.proposals[0].authority_mutated
+        assert WatcherWatchlistRepository(proposer).load(ORG).revision == 1
+        (target,), _ = assignment_scan_targets(
+            proposer, organization_id=ORG, symbols=("BTCUSDT",), limit=25
+        )
+        assert target.strategy_version_id == version_id
+    with factory() as confirmer:
+        applied = confirm(confirmer, turn)
+        confirmer.commit()
+        assert applied.status is ProposalLifecycle.APPLIED
+        assert applied.application_result["trading_activated"] is False
+        assert applied.application_result["execution_attempted"] is False
+    with factory() as restarted:
+        result = read(WatcherAssignmentService(restarted), organization_id=ORG, user_id=USER)
+        assert result.revision == 2 and len(result.assignments) == 1
+        assert not result.assignments[0].monitoring_enabled
+        assert result.assignments[0].strategy_version_id == version_id
+        assert result.assignments[0].timeframes == original.assignments[0].timeframes
+        assert result.assignments[0].parameters == original.assignments[0].parameters
+        assert restarted.get(WatcherAssignmentReceiptRow, (ORG, pause.request_key)) is not None
+        assert restarted.scalar(select(func.count()).select_from(WatcherAssignmentReceiptRow)) == 2
+        targets, facts = assignment_scan_targets(
+            restarted, organization_id=ORG, symbols=("BTCUSDT",), limit=25
+        )
+        assert targets == () and facts["BTCUSDT"][0]["reason_code"] == "monitoring_disabled"

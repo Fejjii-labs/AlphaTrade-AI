@@ -123,17 +123,19 @@ export function WatcherAssignmentsSection() {
       const saved = config?.assignments.find(r => r.id === row.id);
       const version = config?.available_versions.find(v => v.strategy_version_id === row.strategy_version_id);
       const changed = !saved || saved.monitoring_enabled !== row.monitoring_enabled;
-      return <article key={row.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border-subtle p-3" data-testid="monitoring-assignment">
-        <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{row.symbol} · {version?.strategy_name ?? saved?.strategy_name ?? "Saved strategy"}</p><p className="text-xs text-text-muted">v{version?.version ?? saved?.version} · {row.timeframes.join(" / ")} · {changed ? "Unsaved" : reason(saved?.reason_code ?? "pending")}</p>
+      return <article key={row.id} className="flex flex-col gap-2 rounded border border-border-subtle p-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between" data-testid="monitoring-assignment">
+        <div className="min-w-0 w-full sm:w-auto sm:flex-1"><p className="break-words text-sm font-medium sm:truncate">{row.symbol} · {version?.strategy_name ?? saved?.strategy_name ?? "Saved strategy"}</p><p className="text-xs text-text-muted">v{version?.version ?? saved?.version} · {row.timeframes.join(" / ")} · {changed ? "Unsaved" : reason(saved?.reason_code ?? "pending")}</p>
           {!changed && saved?.latest && <p className="text-xs text-text-muted">{reason(saved.latest.reason_code)} · {formatDateTime(saved.latest.observed_at)}</p>}</div>
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
         <label className="flex min-h-10 items-center gap-2 text-xs"><input type="checkbox" aria-label={`Monitor ${row.symbol} ${version?.strategy_name ?? saved?.strategy_name ?? "saved strategy"}`} checked={row.monitoring_enabled} disabled={busy || !!pending} onChange={e => setRows(current => current.map(value => value.id === row.id ? { ...value, monitoring_enabled: e.target.checked } : value))} />Monitor</label>
         <Button size="sm" variant="secondary" onClick={() => setDetail(row.id)}>Details</Button>
         <Button size="sm" variant="secondary" disabled={busy || !!pending} onClick={() => setRows(current => current.filter(value => value.id !== row.id))}>Remove</Button>
+        </div>
       </article>;
     })}</div>
     {config && <div className="flex flex-wrap items-center gap-2">
       <select aria-label="Assignment coin" className="min-h-10 rounded border border-border bg-surface-2 px-2 text-sm" value={coin} disabled={busy || !!pending} onChange={e => { setCoin(e.target.value); setVersionId(""); }}>{config.symbols.map(symbol => <option key={symbol}>{symbol}</option>)}</select>
-      <select aria-label="Saved strategy version" className="min-h-10 min-w-0 max-w-full flex-1 rounded border border-border bg-surface-2 px-2 text-sm" value={versionId} disabled={busy || !!pending} onChange={e => setVersionId(e.target.value)}><option value="">Select saved version</option>{options.map(version => <option key={version.strategy_version_id} value={version.strategy_version_id}>{version.strategy_name} · v{version.version} · {version.timeframes.join(" / ")}</option>)}</select>
+      <select aria-label="Saved strategy version" className="min-h-10 min-w-0 w-full max-w-full flex-1 basis-full rounded border border-border bg-surface-2 px-2 text-sm sm:w-auto sm:basis-0" value={versionId} disabled={busy || !!pending} onChange={e => setVersionId(e.target.value)}><option value="">Select saved version</option>{options.map(version => <option key={version.strategy_version_id} value={version.strategy_version_id}>{version.strategy_name} · v{version.version} · {version.timeframes.join(" / ")}</option>)}</select>
       <Button size="sm" variant="secondary" disabled={busy || !!pending || !selected || !selected.timeframes.length || rows.length >= config.max_assignments || coinLimit || rows.some(r => r.symbol === coin && r.strategy_version_id === versionId)} onClick={() => {
         if (selected) setRows(current => [...current, { id: crypto.randomUUID(), symbol: coin, strategy_version_id: selected.strategy_version_id, monitoring_enabled: true, timeframes: [...selected.timeframes], parameters: structuredClone(selected.parameters) }]);
       }}>Add</Button>
