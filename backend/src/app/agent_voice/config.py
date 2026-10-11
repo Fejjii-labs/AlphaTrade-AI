@@ -34,6 +34,16 @@ class RealtimePrice(RoutePrice):
     maximum_audio_input_tokens_per_second: Decimal = Field(gt=0, allow_inf_nan=False)
 
 
+class EmbeddingPrice(StrictModel):
+    """Optional operator-verified receipt for the existing embedding route."""
+
+    model: str = Field(min_length=1, max_length=80)
+    source: str = Field(pattern=r"^https://", max_length=500)
+    valid_until: datetime
+    maximum_input_tokens: int = Field(gt=0, le=1000000)
+    input_usd_per_million: Decimal = Field(gt=0, allow_inf_nan=False)
+
+
 class VoiceLimits(StrictModel):
     organization_id: str = Field(min_length=1, max_length=36)
     budget_reference: str = Field(min_length=1, max_length=128)
@@ -43,6 +53,7 @@ class VoiceLimits(StrictModel):
     session_ceiling_usd: Decimal = Field(gt=0, le=1, allow_inf_nan=False)
     realtime: RealtimePrice
     reasoning: RoutePrice
+    embedding: EmbeddingPrice | None = None
     maximum_seconds: int = Field(default=180, ge=10, le=300)
     maximum_audio_seconds: int = Field(default=90, ge=1, le=180)
     maximum_turns: int = Field(default=6, ge=1, le=12)
@@ -56,6 +67,7 @@ class VoiceLimits(StrictModel):
             self.valid_until,
             self.realtime.valid_until,
             self.reasoning.valid_until,
+            *([self.embedding.valid_until] if self.embedding else []),
         ):
             if value.tzinfo is None:
                 raise ValueError("Receipt timestamps require an explicit timezone.")
@@ -85,9 +97,27 @@ class VoiceLimits(StrictModel):
             + settings.agent_max_output_tokens * self.reasoning.output_usd_per_million
         )
         # Reply + auto capture, at most two router attempts each, for every turn.
+        embedding = (
+            self.maximum_turns
+            * self.embedding.maximum_input_tokens
+            * self.embedding.input_usd_per_million
+            if self.embedding
+            else Decimal(0)
+        )
         return (
-            self.maximum_responses * response + orphan_audio + self.maximum_turns * 4 * reasoning
+            self.maximum_responses * response
+            + orphan_audio
+            + self.maximum_turns * 4 * reasoning
+            + embedding
         ) / Decimal(1000000)
+
+    def receipt_deadline(self) -> datetime:
+        return min(
+            self.valid_until,
+            self.realtime.valid_until,
+            self.reasoning.valid_until,
+            *([self.embedding.valid_until] if self.embedding else []),
+        )
 
 
 def load_limits(settings: Settings) -> VoiceLimits:
@@ -105,10 +135,7 @@ def load_limits(settings: Settings) -> VoiceLimits:
     except (OSError, ValueError, ValidationError) as exc:
         raise VoiceUnavailableError("verified_realtime_limits_invalid") from exc
     now = datetime.now(UTC)
-    if (
-        limits.budget_as_of > now
-        or min(limits.valid_until, limits.realtime.valid_until, limits.reasoning.valid_until) <= now
-    ):
+    if limits.budget_as_of > now or limits.receipt_deadline() <= now:
         raise VoiceUnavailableError("verified_realtime_limits_expired")
     if limits.reasoning.model != settings.agent_reasoning_model:
         raise VoiceUnavailableError("verified_reasoning_route_mismatch")

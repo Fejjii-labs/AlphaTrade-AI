@@ -24,6 +24,11 @@ from app.agent_voice.contracts import (
 )
 from app.agent_voice.grounding import read_grounding
 from app.agent_voice.protocol import TOOL_NAME, checked_audio, create_response, session_update
+from app.agent_voice.retrieval import (
+    VoiceEmbeddingsProvider,
+    VoiceEmbeddingUsage,
+    embedding_limitation,
+)
 from app.interactive_agent.contracts import AgentTurnRequest, AgentTurnResult
 from app.interactive_agent.turn_runtime import run_interactive
 from app.providers.base import ProviderHealth, ProviderStatus
@@ -73,7 +78,12 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
             session, ledger.settings, tenant.organization_id, tenant.user_id, request.message
         )
     coordinator = TurnCoordinator(ledger.sessions)
-    provider = VoiceReasoningProvider(resolve_providers(ledger.settings).llm, ledger)
+    providers = resolve_providers(ledger.settings)
+    provider = VoiceReasoningProvider(providers.llm, ledger)
+    limitation = embedding_limitation(ledger)
+    embeddings = (
+        VoiceEmbeddingsProvider(providers.embeddings, ledger, key) if limitation is None else None
+    )
     result = coordinator.run(
         channel="interactive",
         key=UUID(key),
@@ -89,7 +99,10 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
             request,
             llm_provider=provider,
             supplemental_facts=facts,
-            external_retrieval=False,
+            external_retrieval=embeddings is not None,
+            embeddings_provider=embeddings,
+            embedding_usage=VoiceEmbeddingUsage(ledger, key) if embeddings else None,
+            retrieval_unavailable_note=limitation or "Vector embedding unavailable.",
         ),
     )
     return AgentTurnResult.model_validate(result).model_dump(mode="json")

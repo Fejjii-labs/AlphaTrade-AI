@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.db.models import Chunk, Document, UsageEvent
 from app.interactive_agent.contracts import KnowledgeHit, ProvenanceSource
+from app.providers.embeddings import EmbeddingsProvider
 from app.providers.factory import resolve_providers
 from app.repositories.chunks import ChunkRepository
 from app.repositories.documents import DocumentRepository
@@ -73,12 +74,21 @@ class DetachedUsage(UsageService):
 
 
 class AgentVectorAdapter:
-    def __init__(self, settings: Settings, sessions: Callable[[], Session]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        sessions: Callable[[], Session],
+        *,
+        embeddings_provider: EmbeddingsProvider | None = None,
+        usage_service: DetachedUsage | None = None,
+    ) -> None:
         providers = resolve_providers(settings)
-        self.usage = DetachedUsage(sessions)
+        self.usage = usage_service if usage_service is not None else DetachedUsage(sessions)
         self.rag = RagService(
             settings=settings,
-            embeddings=providers.embeddings,
+            embeddings=embeddings_provider
+            if embeddings_provider is not None
+            else providers.embeddings,
             vector_store=providers.vector_store,
             usage_service=self.usage,
         )

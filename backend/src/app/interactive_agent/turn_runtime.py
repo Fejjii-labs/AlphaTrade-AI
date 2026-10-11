@@ -32,7 +32,8 @@ from app.interactive_agent.conversation import (
 )
 from app.interactive_agent.parsing import extract_symbol
 from app.interactive_agent.service import InteractiveAgentService
-from app.interactive_agent.vector_adapter import AgentVectorAdapter
+from app.interactive_agent.vector_adapter import AgentVectorAdapter, DetachedUsage
+from app.providers.embeddings import EmbeddingsProvider
 from app.providers.llm import LLMProvider
 from app.services.turn_coordinator import (
     RESERVATION,
@@ -171,6 +172,11 @@ def run_interactive(
     llm_provider: LLMProvider | None = None,
     supplemental_facts: str = "",
     external_retrieval: bool = True,
+    embeddings_provider: EmbeddingsProvider | None = None,
+    embedding_usage: DetachedUsage | None = None,
+    retrieval_unavailable_note: str = (
+        "Vector embedding unavailable: no verified embedding spending receipt for voice."
+    ),
 ) -> dict[str, Any]:
     deferred = DeferredResponder()
     body = body.model_copy(update={"conversation_id": reservation.conversation_id})
@@ -201,12 +207,17 @@ def run_interactive(
     if not external_retrieval:
         vector = PreparedVectorHits(
             [],
-            ["Vector retrieval unavailable: no verified embedding spending receipt for voice."],
-            allow_sql_fallback=False,
+            [retrieval_unavailable_note],
+            allow_sql_fallback=allow_fallback,
         )
     else:
-        adapter = AgentVectorAdapter(settings, coordinator.sessions)
         try:
+            adapter = AgentVectorAdapter(
+                settings,
+                coordinator.sessions,
+                embeddings_provider=embeddings_provider,
+                usage_service=embedding_usage,
+            )
             hits = adapter.search(
                 organization_id=reservation.organization_id,
                 user_id=reservation.user_id,

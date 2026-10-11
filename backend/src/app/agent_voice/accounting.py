@@ -22,6 +22,8 @@ from app.repositories.usage import UsageRepository
 from app.schemas.common import CostSource, UsageStatus
 from app.services.auth_service import AuthService
 from app.services.conversation_service import ConversationService
+from app.services.quota_service import QuotaService
+from app.services.turn_context import current_turn
 
 ChangeResult = TypeVar("ChangeResult")
 
@@ -71,6 +73,11 @@ class VoiceLedger:
             + self.limits.maximum_turns
             * 4
             * (self.limits.reasoning.maximum_input_tokens + self.settings.agent_max_output_tokens)
+            + (
+                self.limits.maximum_turns * self.limits.embedding.maximum_input_tokens
+                if self.limits.embedding
+                else 0
+            )
         )
         with self.sessions() as session:
             tenant = self.principal(session)
@@ -158,14 +165,13 @@ class VoiceLedger:
                         "limits_digest": digest,
                         "expires_at": min(
                             now + timedelta(seconds=self.limits.maximum_seconds),
-                            self.limits.valid_until,
-                            self.limits.realtime.valid_until,
-                            self.limits.reasoning.valid_until,
+                            self.limits.receipt_deadline(),
                         ).isoformat(),
                         "audio_bytes": 0,
                         "responses": [],
                         "tools": {},
                         "reasoning_attempts": [],
+                        "embedding_attempts": {},
                     },
                     created_at=now,
                     updated_at=now,
@@ -356,6 +362,107 @@ class VoiceLedger:
 
         self.update(remember)
 
+    def embedding_attempt(self, key: str, query: str) -> None:
+        """Commit one original turn admission before embedding transport can start."""
+        price = self.limits.embedding
+        if (
+            price is None
+            or price.model != self.settings.embeddings_model
+            or price.valid_until <= datetime.now(UTC)
+        ):
+            raise VoiceUnavailableError("voice_embedding_receipt_unavailable")
+        if not query or len(query.encode()) > price.maximum_input_tokens:
+            raise VoiceUnavailableError("voice_embedding_input_cap")
+        turn = current_turn()
+        # No reservation/organization lock is held during quota's independent audit.
+        with self.sessions() as session:
+            tenant = self.principal(session)
+            check = QuotaService(session).check_feature(
+                tenant.organization_id, "rag_search", request_id=key, user_id=tenant.user_id
+            )
+            session.commit()
+            if not check.allowed:
+                raise VoiceUnavailableError("voice_embedding_quota_exhausted")
+
+        def admit(row: VoiceSessionReservation, data: dict[str, Any]) -> None:
+            if data["limits_digest"] != hashlib.sha256(
+                self.limits.model_dump_json().encode()
+            ).hexdigest() or row.reserved_cost < self.limits.reservation(self.settings):
+                raise VoiceUnavailableError("voice_embedding_reservation_mismatch")
+            original = next((t for t in data["tools"].values() if t["key"] == key), None)
+            if original is None or original["body"].get("message", "")[:2000] != query:
+                raise VoiceUnavailableError("voice_embedding_turn_identity_conflict")
+            attempts = data.setdefault("embedding_attempts", {})
+            if key in attempts:
+                # A timed-out or interrupted transport is never retried automatically.
+                raise VoiceUnavailableError("voice_embedding_already_admitted")
+            if len(attempts) >= self.limits.maximum_turns:
+                raise VoiceUnavailableError("voice_embedding_turn_cap")
+            if turn is None:
+                raise VoiceUnavailableError("voice_embedding_canonical_turn_required")
+            attempts[key] = {
+                "state": "transport_may_start",
+                "query_digest": hashlib.sha256(query.encode()).hexdigest(),
+                "model": price.model,
+                "request_id": str(turn.turn_id),
+            }
+
+        self.update(admit)
+
+    def embedding_done(self, key: str, result: Any | None, *, valid: bool) -> None:
+        """Persist server-reported usage, or explicit unknown usage without a refund."""
+        price = self.limits.embedding
+        if price is None:
+            raise VoiceUnavailableError("voice_embedding_receipt_unavailable")
+        if valid and result is None:
+            raise VoiceUnavailableError("voice_embedding_usage_receipt_missing")
+        tokens = result.input_tokens if valid and result is not None else 0
+        cost = Decimal(tokens) * price.input_usd_per_million / Decimal(1000000) if valid else None
+        with self.sessions() as session:
+            row = session.scalar(
+                select(VoiceSessionReservation)
+                .where(VoiceSessionReservation.id == self.id)
+                .with_for_update()
+            )
+            if row is None:
+                raise VoiceUnavailableError("voice_session_missing")
+            data = copy.deepcopy(row.ledger)
+            item = data.get("embedding_attempts", {}).get(key)
+            if item is None:
+                raise VoiceUnavailableError("unadmitted_embedding_response")
+            if item["state"] in {"received", "uncertain"}:
+                return
+            item.update(
+                state="received" if valid else "uncertain",
+                input_tokens=tokens if valid else None,
+                estimated_cost=str(cost) if cost is not None else None,
+            )
+            row.ledger, row.updated_at = data, datetime.now(UTC)
+            event_id = uuid5(UUID(key), "voice-embedding:query")
+            if session.get(UsageEvent, event_id) is None:
+                session.add(
+                    UsageEvent(
+                        id=event_id,
+                        organization_id=self.organization_id,
+                        user_id=self.user_id,
+                        request_id=item["request_id"],
+                        feature="rag_search",
+                        provider="openai-embeddings",
+                        model=price.model,
+                        input_tokens=tokens,
+                        output_tokens=0,
+                        total_tokens=tokens,
+                        estimated_cost=cost if cost is not None else Decimal(0),
+                        cost_source=CostSource.STATIC_ESTIMATED
+                        if valid
+                        else CostSource.UNAVAILABLE,
+                        cost_is_placeholder=not valid,
+                        status=UsageStatus.SUCCESS if valid else UsageStatus.FAILURE,
+                        event_at=datetime.now(UTC),
+                    )
+                )
+            session.commit()
+
     def close(self) -> None:
         # Closing is cleanup, not a refund, and must work after expiry/logout.
         with self.sessions() as session:
@@ -375,6 +482,7 @@ class VoiceLedger:
             # Actual tool usage belongs to existing ModelRouter UsageEvent records.
             # Unknown canonical cost cannot be replaced by an assumed tool cost/refund.
             ambiguous |= bool(data["reasoning_attempts"]) or bool(data["audio_bytes"])
+            ambiguous |= bool(data.get("embedding_attempts"))
             row.status = "uncertain" if ambiguous else "closed"
             row.accounted_cost = None if ambiguous else Decimal(0)
             row.updated_at = datetime.now(UTC)
