@@ -63,6 +63,53 @@ def assignment_configuration_exists(session: Session, organization_id: UUID) -> 
     )
 
 
+def managed_assignment_coverage(
+    session: Session,
+    organization_id: UUID,
+    *,
+    coverage: tuple[UUID, UUID, str] | None = None,
+) -> set[tuple[UUID, UUID, str]]:
+    """Durable actor/strategy/coin overrides, including explicitly removed bindings.
+
+    An original response receipt retains previously managed coverage. It never
+    grants monitoring authority: fresh live rows own explicit targets. Project
+    just distinct identifiers in PostgreSQL rather than loading full snapshots.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+
+        query = (
+            "SELECT DISTINCT receipts.user_id, item->>'strategy_id', item->>'symbol' "
+            "FROM watcher_assignment_receipts AS receipts "
+            "CROSS JOIN LATERAL jsonb_array_elements("
+            "COALESCE(receipts.response::jsonb->'assignments', '[]'::jsonb)) AS item "
+            "WHERE receipts.organization_id = :organization_id"
+        )
+        parameters: dict[str, Any] = {"organization_id": organization_id}
+        if coverage is not None:
+            query += (
+                " AND receipts.user_id = :actor AND item->>'strategy_id' = :strategy"
+                " AND item->>'symbol' = :symbol LIMIT 1"
+            )
+            parameters.update(actor=coverage[0], strategy=str(coverage[1]), symbol=coverage[2])
+        rows = session.execute(text(query), parameters)
+        return {(UUID(str(actor)), UUID(strategy), symbol) for actor, strategy, symbol in rows}
+    result: set[tuple[UUID, UUID, str]] = set()
+    receipt_query = select(
+        WatcherAssignmentReceiptRow.user_id, WatcherAssignmentReceiptRow.response
+    ).where(WatcherAssignmentReceiptRow.organization_id == organization_id)
+    if coverage is not None:
+        receipt_query = receipt_query.where(WatcherAssignmentReceiptRow.user_id == coverage[0])
+    for actor, response in session.execute(receipt_query.execution_options(yield_per=20)):
+        for assignment in response.get("assignments", []):
+            item = (actor, UUID(assignment["strategy_id"]), assignment["symbol"])
+            if coverage is None:
+                result.add(item)
+            elif item == coverage:
+                return {item}
+    return result
+
+
 class WatcherAssignmentService:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -413,6 +460,48 @@ def assignment_target_reason(session: Session, target: PaperScanTarget) -> str |
     config = service.watchlists.load(target.organization_id)
     if config.revision != target.configuration_revision:
         return "monitoring_configuration_changed"
+    if target.assignment_id is None:
+        # Inferred coverage was not managed when loaded at this exact revision.
+        # Every explicit replacement atomically advances that same revision, so
+        # a first add/pause/remove cannot reuse a stale inferred target.
+        if managed_assignment_coverage(
+            session,
+            target.organization_id,
+            coverage=(target.user_id, target.strategy_id, target.symbol),
+        ):
+            return "monitoring_configuration_changed"
+        if target.symbol not in config.enabled_symbols():
+            return "coin_disabled"
+        try:
+            service._member(target.organization_id, target.user_id, write=True)
+            version, strategy = service._version(
+                target.organization_id, target.user_id, target.strategy_version_id
+            )
+        except (ForbiddenError, NotFoundError, ValidationAppError):
+            return "strategy_binding_unavailable"
+        if strategy.id != target.strategy_id or strategy.current_version != version.version:
+            return "strategy_binding_unavailable"
+        if not strategy.enabled:
+            return "saved_strategy_disabled"
+        try:
+            executable = resolve_executable_strategy_policy(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                strategy_version_id=target.strategy_version_id,
+            )
+        except StrategyEvaluationPolicyError as exc:
+            return exc.reason_code
+        except NotFoundError:
+            return "strategy_binding_unavailable"
+        if (
+            executable.compiled_setup_definition_id != target.compiled_setup_definition_id
+            or executable.compiled_content_hash != target.compiled_content_hash
+            or executable.authored_spec.symbol != target.symbol
+            or executable.authored_spec.trigger_timeframe != target.timeframe
+        ):
+            return "strategy_binding_unavailable"
+        return None
     row = session.get(WatcherStrategyAssignmentRow, target.assignment_id, populate_existing=True)
     if row is None or (row.organization_id, row.user_id, row.symbol, row.strategy_version_id) != (
         target.organization_id,

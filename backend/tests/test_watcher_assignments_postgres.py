@@ -232,8 +232,9 @@ def test_empty_saved_configuration_never_restores_legacy_strategy_inference(fact
     from app.workers.watcher_paper import WatcherPaperCycleReport
 
     with factory() as db:
-        _seed_approved_compiled(db)
-        save(db, body(db))
+        _, version_id = _seed_approved_compiled(db)
+        save(db, body(db, [version_id]))
+        save(db, body(db, revision=1))
         assert assignment_configuration_exists(db, ORG)
     runtime, _, _, _ = _runtime(factory)
     runtime._watchlist_mode = True
@@ -243,9 +244,9 @@ def test_empty_saved_configuration_never_restores_legacy_strategy_inference(fact
         assert runtime._load_targets(db) == ()
     runtime._project_watchlist_status()
     runtime._record_watchlist_scans(WatcherPaperCycleReport("idle", True, (), 0, False))
-    assert {row.setup_state for row in runtime._symbol_status.snapshot()} == {
-        "no_monitoring_assignment"
-    }
+    states = {row.symbol: row.setup_state for row in runtime._symbol_status.snapshot()}
+    assert states["BTCUSDT"] == "no_monitoring_assignment"
+    assert {state for symbol, state in states.items() if symbol != "BTCUSDT"} == {"no_strategy"}
 
 
 def test_exact_version_does_not_follow_new_current_draft(factory):
