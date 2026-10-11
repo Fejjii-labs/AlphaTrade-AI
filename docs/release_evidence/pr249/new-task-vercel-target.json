@@ -1,0 +1,9 @@
+{
+  "id": "prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ",
+  "name": "alpha-trade-ai",
+  "accountId": "team_LNgcEGBkqntUnTrktNjFzh7a",
+  "rootDirectory": "frontend",
+  "ssoProtection": {
+    "deploymentType": "all_except_custom_domains"
+  }
+}

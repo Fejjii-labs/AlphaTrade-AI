@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-10-11T23:14:16.633898+00:00",
+  "project_id": "prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ",
+  "team_id": "team_LNgcEGBkqntUnTrktNjFzh7a",
+  "method": "Official CLI development environment pull API and origin-scoped Trusted Sources header",
+  "protection_settings_changed": false,
+  "cli_placeholder_validation_failed": true,
+  "native_connector_scope_access": 403,
+  "oidc_token_available": true,
+  "http_status": 307,
+  "application_html_received": true,
+  "followup_at": "2026-10-11T23:14:36.101913+00:00",
+  "redirect_chain": [
+    {
+      "path": "",
+      "http_status": 307,
+      "redirect_hostname": "alpha-trade-atazfn0br-alphatrade-ai.vercel.app",
+      "redirect_path": "/login"
+    },
+    {
+      "path": "/login",
+      "http_status": 200,
+      "application_html": true
+    }
+  ],
+  "headers_sent_only_to_exact_preview_origin": true,
+  "token_logged": false
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "host": "alpha-trade-atazfn0br-alphatrade-ai.vercel.app",
+    "tested_at": "2026-10-11T23:11:10.054085+00:00",
+    "http_status": 302,
+    "transport_reached": true,
+    "server": "envoy"
+  },
+  {
+    "host": "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app",
+    "tested_at": "2026-10-11T23:11:10.407999+00:00",
+    "http_status": 302,
+    "transport_reached": true,
+    "server": "envoy"
+  }
+]

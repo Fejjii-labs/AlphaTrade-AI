@@ -1,0 +1,47 @@
+[
+  {
+    "service_id": "srv-d8fvbcd7vvec739mc060",
+    "observed_at": "2026-10-11T23:12:07.639580+00:00",
+    "metadata": {
+      "id": "srv-d8fvbcd7vvec739mc060",
+      "name": "alphatrade-api-staging",
+      "type": "web_service",
+      "branch": "main",
+      "autoDeployTrigger": "commit",
+      "suspended": "not_suspended",
+      "maintenanceMode": {
+        "enabled": false,
+        "uri": ""
+      },
+      "preDeployCommand_field_paths": [
+        "serviceDetails.envSpecificDetails.preDeployCommand"
+      ],
+      "preDeployCommand_is_alembic_upgrade_head": true,
+      "preDeployCommand_nonempty": true
+    },
+    "active_jobs": {
+      "http_status": 200,
+      "count": 0
+    }
+  },
+  {
+    "service_id": "srv-daqej7o473hc73fsc1k0",
+    "observed_at": "2026-10-11T23:12:07.950544+00:00",
+    "metadata": {
+      "id": "srv-daqej7o473hc73fsc1k0",
+      "name": "alphatrade-paper-worker-staging",
+      "type": "background_worker",
+      "branch": "main",
+      "autoDeployTrigger": "commit",
+      "suspended": "not_suspended",
+      "maintenanceMode": null,
+      "preDeployCommand_field_paths": [],
+      "preDeployCommand_is_alembic_upgrade_head": false,
+      "preDeployCommand_nonempty": false
+    },
+    "active_jobs": {
+      "http_status": 200,
+      "count": 0
+    }
+  }
+]

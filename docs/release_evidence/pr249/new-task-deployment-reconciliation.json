@@ -1,0 +1,23 @@
+{
+  "observed_at": "2026-10-11T23:17:05Z",
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "api": {
+    "id": "dep-db4gdkeq1p3s73a395u0",
+    "status": "live",
+    "sha": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40"
+  },
+  "worker": {
+    "id": "dep-db4gdkeq1p3s73a3975g",
+    "status": "live",
+    "sha": "b165b92276346f0e0fe3ccdbd2bec3443dc75d40"
+  },
+  "frontend": {
+    "id": "dpl_9Y68v8BMUR2hSZS581nqyqaKcYHj",
+    "state": "READY",
+    "sha": "60a55506393e8ac11a45bd5609d6c70f33d99778"
+  },
+  "manual_ci_runs": [],
+  "new_full_gate_dispatches": 0,
+  "new_deployments": 0,
+  "qualification_rerun": false
+}
