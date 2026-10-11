@@ -1,0 +1,14 @@
+{
+  "normal_registration": true,
+  "replacement_identity": true,
+  "normal_login_verified": true,
+  "authenticated_identity_verified": true,
+  "operator_account_touched": false,
+  "registration_attempts": 2,
+  "first_failure": "existing synthetic organization name UniqueViolation; corrected unique replacement tenant name",
+  "existing_credentials_reset": false,
+  "private_auth_file": ".ai/local/pr249-release/synthetic-auth.json",
+  "private_file_permissions": "0600",
+  "paid_provider_calls": 0,
+  "orders": 0
+}

@@ -1,0 +1,87 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "replacement_authorized": true,
+  "persisted_artifacts_checked_once": {
+    "local_original_artifacts": false,
+    "attached_private_files": false,
+    "github_actions_artifacts": 0
+  },
+  "source_commits": {
+    "rollback-api": {
+      "source_commit": "6b44e98facdbad5430ffb883b0a791c3e0b60bea",
+      "backend_tree_oid": "f2c7daac44213e1c1944bf6bd6c0b91bee9245f6",
+      "dockerfile_sha256": "6e2588c48f29d7f2968b9a75b7090a20dc13411cfb19ccdf1b4d840eaf640f54",
+      "difference": "Only session CA trust added to networked dependency/apt steps; source payload and uv.lock exact recorded commit"
+    },
+    "compatible-worker": {
+      "source_commit": "00f388017c6bcd2fb53d8135df60ac76bc714125",
+      "backend_tree_oid": "c43e0bc376c808295701b12d7e6aa58d96e85581",
+      "dockerfile_sha256": "6e2588c48f29d7f2968b9a75b7090a20dc13411cfb19ccdf1b4d840eaf640f54",
+      "difference": "Only session CA trust added to networked dependency/apt steps; source payload and uv.lock exact recorded commit"
+    }
+  },
+  "image_results": [
+    {
+      "image": "alphatrade-pr249-replacement:a13-rollback-api",
+      "image_id": "sha256:bfa7a13b483614710343aa0c44fbe5409860e13331cc240ec4729b5b413e1937",
+      "no_op_upgrade": true,
+      "api_start_restart": true,
+      "worker_disarmed_start_restart": true,
+      "retained_snapshot_matches": true
+    },
+    {
+      "image": "alphatrade-pr249-replacement:a13-compatible-worker",
+      "image_id": "sha256:e116a259dc44ceba40d69b611c6348f751bbc2a6109ba13c7b1d1786bf44813f",
+      "no_op_upgrade": true,
+      "api_start_restart": true,
+      "worker_disarmed_start_restart": true,
+      "retained_snapshot_matches": true
+    }
+  ],
+  "snapshot_sha256": "cc744996f6b34b0930a4fffff8484050953bf382f2769454a4b10f542d3d51c2",
+  "row_counts": {
+    "alembic_version": 1,
+    "organizations": 2,
+    "users": 2,
+    "documents": 5,
+    "chunks": 5,
+    "knowledge_indexing_jobs": 5,
+    "blofin_activity_accounts": 1,
+    "blofin_activity_facts": 3,
+    "blofin_activity_cursors": 2,
+    "experiments": 2,
+    "experiment_versions": 2,
+    "experiment_events": 5,
+    "experiment_samples": 1,
+    "trendpulse_screening_runs": 3,
+    "watcher_strategy_assignments": 1,
+    "watcher_assignment_receipts": 1,
+    "voice_session_reservations": 1,
+    "watcher_watchlists": 1,
+    "kill_switch_states": 1,
+    "organization_quotas": 1
+  },
+  "replacement_archive_size": 228119590,
+  "replacement_archive_sha256": "ddc011a7aad3f2a959ff132c9266f937dcb52a35b877d6ff83737c61e608a5bb",
+  "source_verification": [
+    {
+      "image": "alphatrade-pr249-replacement:a13-rollback-api",
+      "config_image_id": "sha256:bfa7a13b483614710343aa0c44fbe5409860e13331cc240ec4729b5b413e1937",
+      "complete_runtime_source_matches": true,
+      "files": 984,
+      "complete_payload_sha256": "e1cbbaafda0c5e3b414788620b94095f91717b1d349468fcbf63c2de671ab6d9"
+    },
+    {
+      "image": "alphatrade-pr249-replacement:a13-compatible-worker",
+      "config_image_id": "sha256:e116a259dc44ceba40d69b611c6348f751bbc2a6109ba13c7b1d1786bf44813f",
+      "complete_runtime_source_matches": true,
+      "files": 996,
+      "complete_payload_sha256": "ae2cc59da579a9bcaff922bfc660c275e06ea1024c2610d2d47c9169038f582f"
+    }
+  ],
+  "api_boot_restart_probes": 4,
+  "skipped_probes": 0,
+  "hosted_or_paid_provider_checks": 0,
+  "previous_image_ids_not_reused": true,
+  "qualification_limit": "Disarmed synthetic local a13 consumer composition; hosted armed composition and global hold remain unqualified."
+}

@@ -56,7 +56,7 @@ def main():
         auth = json.loads(PRIVATE.read_text())
     else:
         auth = {"email": "release-smoke-60a5550-" + secrets.token_hex(8) + "@example.com",
-                "password": secrets.token_urlsafe(32), "organization_name": "AlphaTrade synthetic release smoke 60a5550",
+                "password": secrets.token_urlsafe(32), "organization_name": "AlphaTrade synthetic release smoke 60a5550-" + secrets.token_hex(8),
                 "allow_registration": True}
         safe_write(auth)
     status, health = request("/health")
