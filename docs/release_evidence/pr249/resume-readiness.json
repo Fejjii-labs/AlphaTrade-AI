@@ -4,13 +4,17 @@
     "corrected_documented_recovery_inspections": 1,
     "deployments_initiated": 0,
     "existing_candidate_manual_runs": 0,
+    "existing_tests_repeated": 0,
     "full_gate_dispatched": 0,
     "known_failed_backup_probes_retried": 0,
+    "new_hosted_export_restores": 0,
+    "new_read_only_identity_routing_diagnostics": 2,
     "paid_provider_calls": 0,
     "preview_reprobes_after_runtime_revision_change": 1,
     "trading_settings_changes": 0,
     "vercel_binding_write_retried": 0
   },
+  "backup_followup": "backup-methods-inspection.json",
   "checks": [
     {
       "http_status": 200,
@@ -135,14 +139,14 @@
     "observations_current": true,
     "reported_network_state": "enforced",
     "secret_readiness_states": "ready",
-    "spec_revision": "4"
+    "spec_revision": "6"
   },
   "followup_evidence": [
     "executor-access-inspection.json",
     "backup-methods-inspection.json",
     "voice-configuration-draft.json"
   ],
-  "followup_observed_at": "2026-10-11T20:31:10Z",
+  "followup_observed_at": "2026-10-11T21:31:18Z",
   "four_release_domains": [
     {
       "host": "api.github.com",
@@ -169,7 +173,7 @@
   "remaining_bindings": {
     "AGENT_REALTIME_LIMITS_FILE": "unbound",
     "approved_limits_file": "not identified; no assumption of existing approval",
-    "hosted_backup_restore_receipt": "not identified; platform export existence unknown; metadata 403",
+    "hosted_backup_restore_receipt": "Export completion confirmed by user at20:58UTC; secure artifact access and actual isolated restore pending",
     "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused"
   },
   "routine_ci": {

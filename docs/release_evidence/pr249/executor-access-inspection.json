@@ -33,5 +33,15 @@
   "reprobe_reason": "Runtime changed from unknown revision 2 to enforced/current revision 4; each preview probed once after that change.",
   "protection_metadata": "Project ssoProtection.deploymentType=all_except_custom_domains; distinct from current CONNECT denial.",
   "settings_changed": false,
-  "proxy_bypass": false
+  "proxy_bypass": false,
+  "current_runtime_followup": {
+    "spec_revision": "6",
+    "observed_spec_revision": "6",
+    "observations_current": true,
+    "network_state": "enforced",
+    "four_release_domains_allowed": true,
+    "credential_readiness": "ready",
+    "preview_probes_repeated": false,
+    "observed_at": "2026-10-11T21:31:18Z"
+  }
 }

@@ -1,7 +1,7 @@
 Status: BLOCKED
-Last Updated: 2026-10-11T20:31:10Z
+Last Updated: 2026-10-11T21:31:18Z
 Task: AT-PR249-STAGING-RELEASE
-Source File SHA256: 2432c5e0f1e5a401f30073696a48e3f6a3018d49e2d952c7a5a7e6d1289e2283
+Source File SHA256: 8f2acd3eb4e751056e24b9b026608641acdb0191c8de5ab8a6d52a869f33dcd9
 
 # Session execution record
 
@@ -51,7 +51,25 @@ Source File SHA256: 2432c5e0f1e5a401f30073696a48e3f6a3018d49e2d952c7a5a7e6d1289e
     No approval file/session identified; no invented approval or setting/budget change.
     Separate voice activation does not block UI. No repository global write-hold endpoint
     identified; SIGTERM shutdown support alone does not qualify hosted drain.
-12. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
+12. **Completed-export continuation** — User reports completed private Render export at
+    2026-10-11 22:58 Europe/Berlin =20:58UTC, minute precision. Completion is identified;
+    creation time/exportID/expiry/checksum/actual restore remain unknown. No new export.
+    Runtime6/current/ENFORCED/four release hosts allowed; no unchanged preview or backup
+    probes repeated. New /v1/owners diagnostic with Authorization returned non-JSON envoy403;
+    controlled unauthenticated request returned same403, so wrong-key/scope is NOT proven.
+    No replacement key requested. Connector metadata/SQL confirms correct DB available,
+    PG18,plpgsql1.0,head a8. Docker socket initially denied without command network grant;
+    supported grant makes daemon28.4.0 available. Pulled official PG18 immutable digest
+    74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336; UID999 read confirmed.
+    Prepared fetch_private_export.py/verify_hosted_export.py; AST syntax valid, code reviewed,
+    not executed. Private0700/gitignored hosted-backup directory prepared; all URL/artifact/
+    receipts stay private0600. Restore will be a new hosted-artifact verification in an EMPTY
+    local networkNONE container with no app/providers/exchanges/migrations/live DSN; remove
+    isolated target afterward. Existing synthetic proof and tests reused, no test repetition.
+    One next action requested: existing Download link via secure executor secret FILE binding
+    hosted-backup/export-download-url.txt; then check exact download host before retrieval.
+    No private URL in chat/shared evidence; source remains private in Render.
+13. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
     migration0/paidcalls0/orders0/operator and budgetchanges0. Documentation publication
     requires remote bytes/hash verification. Concurrent shared publication preserved via
     merge, including all prepared auth/voice receipts and updated PR description. Mac/iCloud unavailable/unverified.

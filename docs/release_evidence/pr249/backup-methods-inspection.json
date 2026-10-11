@@ -7,13 +7,13 @@
   "official_documentation": "https://render.com/docs/postgresql-backups",
   "available_platform_methods": {
     "point_in_time_recovery": "Paid databases provide continuous recovery; retention depends on workspace plan. Restoring creates another managed database and is excluded by current no-paid-resource instruction.",
-    "logical_export": "Recovery page → Create export; compressed .dir.tar.gz, retained 7 days. A completed hosted export can be restored only into an empty isolated local database for verification.",
+    "logical_export": "Recovery page \u2192 Create export; compressed .dir.tar.gz, retained 7 days. A completed hosted export can be restored only into an empty isolated local database for verification.",
     "pg_dump": "External database connection required; no approved direct connection or artifact identified in this executor."
   },
   "receipt_search": {
     "identified_hosted_receipt": false,
     "identified_local_synthetic_receipt": true,
-    "platform_export_existence": "unknown; inaccessible metadata does not establish absence"
+    "platform_export_existence": "confirmed by user; independent API metadata and artifact verification still pending"
   },
   "read_only_inspection": {
     "method": "GET",
@@ -23,9 +23,11 @@
     "retried_unchanged_export_probes": false
   },
   "next_user_action": {
-    "page": "Render Dashboard → alphatrade-postgres-staging → Recovery",
-    "field": "Exports table",
-    "value_type": "Completed export status and creation timestamp, or none; no download links/credentials"
+    "page": "Executor secure environment configuration",
+    "field": "Secret file binding destination",
+    "destination": "/workspace/AlphaTrade-AI/.ai/local/pr249-release/hosted-backup/export-download-url.txt",
+    "value_type": "UTF-8 text containing existing completed-export private HTTPS Download link; never send in chat",
+    "then": "Inspect exact download hostname against current approved policy before any retrieval; source backup remains private in Render"
   },
   "hosted_receipt_required_fields": [
     "database_id",
@@ -44,5 +46,58 @@
   "writes": 0,
   "exports_created": 0,
   "restores": 0,
-  "paid_resources_created": 0
+  "paid_resources_created": 0,
+  "operator_report": {
+    "database": "alphatrade-postgres-staging",
+    "status": "completed",
+    "completed_at_local": "2026-10-11T22:58:00+02:00",
+    "timezone": "Europe/Berlin",
+    "completed_at_utc": "2026-10-11T20:58:00Z",
+    "timestamp_precision": "minute",
+    "source": "User observed private Render export; no download link or archive exposed in chat",
+    "created_at": "unknown; completion is not creation time"
+  },
+  "new_identity_route_diagnostic": {
+    "method": "GET",
+    "path": "/v1/owners?limit=100",
+    "purpose": "identify whether bound API identity can access confirmed database workspace; new read-only diagnostic",
+    "http_status": 403,
+    "content_type": "text/html; charset=UTF-8",
+    "server": "envoy",
+    "json_body": false
+  },
+  "new_unauthenticated_route_diagnostic": {
+    "method": "GET",
+    "path": "/v1/owners?limit=100",
+    "authorization_header": false,
+    "purpose": "new diagnostic to distinguish credential-injection failure from unauthenticated API routing; no private export request",
+    "http_status": 403,
+    "content_type": "text/html; charset=UTF-8",
+    "server": "envoy",
+    "json_body": false
+  },
+  "authorization_conclusion": "Non-JSON envoy403 also occurs without Authorization. Do not infer wrong key, missing workspace permission or absent export from this response.",
+  "restore_preparation": {
+    "docker_daemon_available": true,
+    "docker_permission": "normal supported command network grant; inherited proxy/CA preserved",
+    "image": "postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336",
+    "image_pulled": true,
+    "postgres_uid": 999,
+    "live_extensions": [
+      "plpgsql 1.0"
+    ],
+    "live_schema_head": "a8agentcapture001",
+    "live_reads_scope": "metadata only, not snapshot equivalence at backup time",
+    "private_destination": "/workspace/AlphaTrade-AI/.ai/local/pr249-release/hosted-backup",
+    "gitignored": true,
+    "runner_syntax_valid": true,
+    "fetch_runner": "fetch_private_export.py",
+    "restore_runner": "verify_hosted_export.py",
+    "restore_attempts": 0,
+    "network_during_restore": "none",
+    "application_processes": 0,
+    "providers_or_exchanges": 0,
+    "migrations": 0,
+    "uses_completed_evidence": "Prior synthetic app/image qualification remains reused; this is the first pending verification of the newly reported hosted export"
+  }
 }
