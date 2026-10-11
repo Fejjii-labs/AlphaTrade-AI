@@ -1,7 +1,7 @@
 Status: BLOCKED
-Last Updated: 2026-10-11T23:55:35+02:00
+Last Updated: 2026-10-12T00:26:30+02:00
 Task: AT-PR249-STAGING-RELEASE
-Source File SHA256: d668e8ca173094f949d2b53e11d1b3dcffabc02384375d44dab6e28472cba905
+Source File SHA256: 167082f52abad8e267e41975e67cbe18341f2802f594792ff37e94d47c2d761b
 
 # Session execution record
 
@@ -87,7 +87,24 @@ Source File SHA256: d668e8ca173094f949d2b53e11d1b3dcffabc02384375d44dab6e28472cb
     Candidate60a5550 unchanged. Existing tests, rollback proofs and auth identity reused.
     Transient exec-server disconnect interrupted initial staging; runtime reported
     offline. A single local pwd retry succeeded; publication resumed without bypass.
-14. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
+14. **Binding capability / independent jobs** — User authorizes agent to complete binding;
+    inspected available tools and current runtime10/current/connected/ENFORCED. Only status
+    tool exposed; no editor/vault/account-browser capability. Personal export key still
+    not requested; saved private value existence unknown. Prepared exact secret-free
+    environment-binding-request.txt and requested only the account environment editor
+    action. Verify actual executor configuration after publication; do not assume live
+    injection. No raw secret inspection, fake binding, new credential or deployment approval.
+    New documented GET service jobs filtered pending/running returnedHTTP200/empty for API
+    and worker. This resolves current active one-off inventory; final hold must reconcile
+    again. No commands/secret-bearing job fields logged, job creates/cancels0. Existing
+    service Dashboard shell supported; no executor SSH identity/network path/browser or
+    installed CLI identified. No SSH/ephemeral instance, no unchanged403/preview retries.
+    New read-only pg_stat_activity aggregation shows 8 idle connections and zero open
+    transactions; no caller queries/credentials collected. A baseline only, not stopped
+    writers/global hold/sustained quiescence. Stored drain-activity-baseline.json.
+    Old backup/CI/rollback/auth proofs reused. Hosted backup verifiedfalse, restore0;
+    no full gate/deploy/drain/migration/provider/order/settings/budget changes.
+15. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
     migration0/paidcalls0/orders0/operator and budgetchanges0. Documentation publication
     requires remote bytes/hash verification. Concurrent shared publication preserved via
     merge, including all prepared auth/voice receipts and updated PR description. Mac/iCloud unavailable/unverified.

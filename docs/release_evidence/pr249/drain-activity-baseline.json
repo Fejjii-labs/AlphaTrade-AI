@@ -1,0 +1,22 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "observed_at": "2026-10-11T22:26:29Z",
+  "database_id": "dpg-d8fuok57vvec739lm0u0-a",
+  "database_name": "alphatrade",
+  "method": "Render read-only SQL",
+  "query": "SELECT backend_type, COALESCE(state, 'unavailable') AS state, COUNT(*) AS connections, COUNT(*) FILTER (WHERE xact_start IS NOT NULL) AS open_transactions, MAX(EXTRACT(EPOCH FROM (clock_timestamp() - xact_start))) FILTER (WHERE xact_start IS NOT NULL) AS oldest_transaction_seconds FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() GROUP BY backend_type, COALESCE(state, 'unavailable') ORDER BY backend_type, state",
+  "rows": [
+    {
+      "backend_type": "client backend",
+      "connections": 8,
+      "oldest_transaction_seconds": null,
+      "open_transactions": 0,
+      "state": "idle"
+    }
+  ],
+  "conclusion": "Snapshot only: 8 idle connections and 0 open transactions. Does not identify private callers or prove a global write hold, stopped workers or sustained quiescence.",
+  "global_write_hold_verified": false,
+  "in_flight_drain_verified": false,
+  "writes": 0,
+  "caller_query_text_or_credentials_logged": false
+}

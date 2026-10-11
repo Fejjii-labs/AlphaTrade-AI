@@ -49,7 +49,11 @@
     "executor_write_access_verified": false,
     "global_write_hold_verified": false,
     "in_flight_drain_verified": false,
-    "one_off_jobs_reconciled": false
+    "one_off_jobs_reconciled": true,
+    "one_off_jobs_evidence": "active-jobs-inspection.json; both services pending/running empty, HTTP200",
+    "one_off_jobs_recheck_required_before_hold": true,
+    "database_activity_baseline": "drain-activity-baseline.json: 8 idle connections, zero open transactions; snapshot only, no global hold/drain proof",
+    "database_activity_recheck_required_after_stop": true
   },
   "deployment_selection": {
     "method": "Render deploy API commitId, or verified Dashboard specific-commit selection",
@@ -83,5 +87,18 @@
   "deployments": 0,
   "migrations": 0,
   "paid_resources_created": 0,
-  "settings_or_budget_changes": 0
+  "settings_or_budget_changes": 0,
+  "followup_observed_at": "2026-10-11T22:25:12Z",
+  "hosted_shell_preparation": {
+    "documentation": "https://render.com/docs/ssh",
+    "api_shell_supported": true,
+    "worker_shell_supported": true,
+    "installed_render_cli_identified": false,
+    "account_browser_available": false,
+    "executor_ssh_binding_or_capability_identified": false,
+    "ssh_network_approval_identified": false,
+    "ssh_attempts": 0,
+    "ephemeral_paid_instance_created": false,
+    "access_conclusion": "Existing service shell is supported by platform; authorized executor access is not identified. No assumed SSH credentials or network access."
+  }
 }

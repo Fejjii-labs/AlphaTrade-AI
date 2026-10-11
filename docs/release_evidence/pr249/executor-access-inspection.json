@@ -35,15 +35,16 @@
   "settings_changed": false,
   "proxy_bypass": false,
   "current_runtime_followup": {
-    "spec_revision": "8",
-    "observed_spec_revision": "8",
+    "spec_revision": "10",
+    "observed_spec_revision": "10",
     "observations_current": true,
     "network_state": "enforced",
     "four_release_domains_allowed": true,
     "credential_readiness": "ready",
     "preview_probes_repeated": false,
-    "observed_at": "2026-10-11T21:55:35Z",
+    "observed_at": "2026-10-11T22:25:12Z",
     "credential_targets_changed": false,
-    "private_export_key_requested": false
+    "private_export_key_requested": false,
+    "connectivity": "connected"
   }
 }

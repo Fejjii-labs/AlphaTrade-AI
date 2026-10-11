@@ -23,11 +23,9 @@
     "retried_unchanged_export_probes": false
   },
   "next_user_action": {
-    "reference": "supported-credential-mechanisms.json",
-    "page": "Settings > Codex Cloud > Personal vault > Add",
-    "type": "Environment variable",
-    "key": "PR249_RENDER_EXPORT_URL",
-    "value_type": "Existing private HTTPS Download URL; never chat",
+    "reference": "supported-credential-mechanisms.json / environment-binding-request.txt",
+    "page": "Settings > Codex Cloud > Environments > AlphaTrade-AI release environment > \u2026 > Edit",
+    "action": "Request personal variable; preserve existing config; review and republish",
     "environment_requests_key": false,
     "executor_ready": false
   },
@@ -106,5 +104,6 @@
   },
   "secure_delivery_correction": "User cannot create the previously requested file binding; that unsupported instruction is withdrawn. Supported personal variable requires matching environment request/applied readiness.",
   "hosted_backup_verified": false,
-  "observed_at": "2026-10-11T21:55:35Z"
+  "observed_at": "2026-10-11T22:25:12Z",
+  "service_job_api_routing_evidence": "New GET active-job routes returned200 for both services. This does not establish backup metadata access; unchanged denied routes were not repeated."
 }

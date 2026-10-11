@@ -1,0 +1,27 @@
+{
+  "observed_at": "2026-10-11T22:23:15.751372+00:00",
+  "documentation": "https://api-docs.render.com/reference/list-job",
+  "results": [
+    {
+      "service_id": "srv-d8fvbcd7vvec739mc060",
+      "method": "GET",
+      "path": "/v1/services/srv-d8fvbcd7vvec739mc060/jobs?limit=100&status=pending&status=running",
+      "new_route_inspection": true,
+      "active_jobs_verified": true,
+      "http_status": 200,
+      "jobs": []
+    },
+    {
+      "service_id": "srv-daqej7o473hc73fsc1k0",
+      "method": "GET",
+      "path": "/v1/services/srv-daqej7o473hc73fsc1k0/jobs?limit=100&status=pending&status=running",
+      "new_route_inspection": true,
+      "active_jobs_verified": true,
+      "http_status": 200,
+      "jobs": []
+    }
+  ],
+  "jobs_created": 0,
+  "jobs_cancelled": 0,
+  "writes": 0
+}
