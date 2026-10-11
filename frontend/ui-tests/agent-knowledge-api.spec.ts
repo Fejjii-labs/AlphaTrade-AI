@@ -157,10 +157,38 @@ test("fresh API process preserves owned summaries and compact category navigatio
   await expect(page.getByText("Risk policy", { exact: true })).toHaveCount(0);
   await page.goto("/journal?tab=knowledge&category=lessons");
   await expect(page.getByLabel("Knowledge category")).toHaveValue("lessons");
-  await page.screenshot({ path: path.resolve("../docs/screenshots/experiments/delivery-knowledge.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/strategies");
   await expect(page.getByTestId("captured-strategy-notes")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const menu = page.getByTestId("header-status-menu");
+  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await login(page, base, auth.other);
+  await page.goto("/strategies");
+  await expect(page.getByTestId("captured-strategy-notes")).toBeVisible();
+  await expect(page.getByText(strategy.title, { exact: true })).toHaveCount(0);
+});
+
+test("compact screenshots wait for owned records and account changes finish loading", async ({ page }) => {
+  test.setTimeout(180_000);
+  const { base, auth } = await fixture(page);
+  const state = JSON.parse(await fs.readFile(stateFile, "utf8")) as { entries: SavedEntry[] };
+  await login(page, base, auth);
+  const lesson = state.entries.find(entry => entry.category === "lessons")!;
+  const strategy = state.entries.find(entry => entry.category === "strategies")!;
+  await page.goto("/journal?tab=knowledge&category=lessons");
+  await expect(page.getByText(lesson.title, { exact: true })).toBeVisible();
+  await expect(page.getByText("Loading entries…", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: path.resolve("../docs/screenshots/experiments/delivery-knowledge.png"), fullPage: true });
+  await page.goto("/strategies");
+  await expect(page.getByText(strategy.title, { exact: true })).toBeVisible();
+  await expect(page.getByText("Loading experiments…", { exact: true })).toHaveCount(0);
+  await page.getByText(strategy.title, { exact: true }).click();
+  await expect(page.getByText(strategy.summary, { exact: true })).toBeVisible();
+  await page.screenshot({ path: path.resolve("../docs/screenshots/experiments/delivery-strategies.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.resolve("../docs/screenshots/experiments/delivery-strategies-mobile.png"), fullPage: true });
   const menu = page.getByTestId("header-status-menu");
@@ -169,6 +197,6 @@ test("fresh API process preserves owned summaries and compact category navigatio
   await expect(page).toHaveURL(/\/login/);
   await login(page, base, auth.other);
   await page.goto("/strategies");
-  await expect(page.getByTestId("captured-strategy-notes")).toBeVisible();
+  await expect(page.getByText("No captured strategy notes yet.", { exact: true })).toBeVisible();
   await expect(page.getByText(strategy.title, { exact: true })).toHaveCount(0);
 });
