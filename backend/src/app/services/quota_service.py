@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import structlog
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import OrganizationQuota as OrganizationQuotaModel
+from app.db.voice_realtime import VoiceSessionReservation
 from app.repositories.quota import QuotaRepository
 from app.repositories.usage import UsageRepository
 from app.schemas.audit import AuditRecordCreate
@@ -237,14 +239,15 @@ class QuotaService:
                     request_id=request_id,
                     user_id=user_id,
                 )
-            pct = usage.monthly_tokens_used / quota.monthly_token_limit
+            committed_tokens = usage.monthly_tokens_used + usage.monthly_tokens_reserved
+            pct = committed_tokens / quota.monthly_token_limit
             if pct >= float(quota.hard_block_threshold):
                 return self._block(
                     organization_id,
                     feature,
                     (
                         "Monthly token quota exceeded "
-                        f"({usage.monthly_tokens_used}/{quota.monthly_token_limit})."
+                        f"({committed_tokens}/{quota.monthly_token_limit}, including reservations)."
                     ),
                     request_id=request_id,
                     user_id=user_id,
@@ -252,18 +255,19 @@ class QuotaService:
             if pct >= float(quota.soft_warning_threshold):
                 warnings.append(
                     "Monthly token soft warning "
-                    f"({usage.monthly_tokens_used}/{quota.monthly_token_limit})."
+                    f"({committed_tokens}/{quota.monthly_token_limit}, including reservations)."
                 )
 
         if quota.monthly_cost_limit > 0:
-            pct = float(usage.monthly_cost_used / quota.monthly_cost_limit)
+            committed_cost = usage.monthly_cost_used + usage.monthly_cost_reserved
+            pct = float(committed_cost / quota.monthly_cost_limit)
             if pct >= float(quota.hard_block_threshold):
                 return self._block(
                     organization_id,
                     feature,
                     (
                         "Monthly cost quota exceeded "
-                        f"(${usage.monthly_cost_used}/${quota.monthly_cost_limit})."
+                        f"(${committed_cost}/${quota.monthly_cost_limit}, including reservations)."
                     ),
                     request_id=request_id,
                     user_id=user_id,
@@ -271,7 +275,7 @@ class QuotaService:
             if pct >= float(quota.soft_warning_threshold):
                 warnings.append(
                     "Monthly cost soft warning "
-                    f"(${usage.monthly_cost_used}/${quota.monthly_cost_limit})."
+                    f"(${committed_cost}/${quota.monthly_cost_limit}, including reservations)."
                 )
 
         limit_field = FEATURE_LIMIT_FIELDS.get(feature)
@@ -381,19 +385,41 @@ class QuotaService:
             )
 
         monthly_cost = monthly.total_cost
+        # A socket/restart failure cannot release a promise of potentially billed
+        # work. Outstanding holds span a month boundary until server evidence
+        # closes them. Keep actual usage separate from these conservative holds.
+        reservations = list(
+            self._session.scalars(
+                select(VoiceSessionReservation).where(
+                    VoiceSessionReservation.organization_id == organization_id,
+                    or_(
+                        VoiceSessionReservation.status != "closed",
+                        VoiceSessionReservation.accounted_cost.is_(None),
+                    ),
+                )
+            )
+        )
+        reserved_cost = sum((row.reserved_cost for row in reservations), Decimal("0"))
+        reserved_tokens = sum(row.reserved_tokens for row in reservations)
         token_pct = (
-            monthly.total_tokens / quota.monthly_token_limit if quota.monthly_token_limit else 0.0
+            (monthly.total_tokens + reserved_tokens) / quota.monthly_token_limit
+            if quota.monthly_token_limit
+            else 0.0
         )
         cost_pct = (
-            float(monthly_cost / quota.monthly_cost_limit) if quota.monthly_cost_limit else 0.0
+            float((monthly_cost + reserved_cost) / quota.monthly_cost_limit)
+            if quota.monthly_cost_limit
+            else 0.0
         )
         daily_pct = daily_count / quota.daily_request_limit if quota.daily_request_limit else 0.0
 
         return QuotaUsageSnapshot(
             monthly_tokens_used=monthly.total_tokens,
+            monthly_tokens_reserved=reserved_tokens,
             monthly_tokens_limit=quota.monthly_token_limit,
             monthly_tokens_pct=min(token_pct, 1.0),
             monthly_cost_used=monthly_cost,
+            monthly_cost_reserved=reserved_cost,
             monthly_cost_limit=quota.monthly_cost_limit,
             monthly_cost_pct=min(cost_pct, 1.0),
             daily_requests_used=daily_count,

@@ -49,6 +49,9 @@ const pilots = [
   ["trendpulseScreeningDetail", "/trendpulse-screenings/{record_id}", "get"],
   ["strategyVersions", "/strategies/{strategy_id}/versions", "get"],
   ["paperAccount", "/execution/accounts/paper", "get"],
+  ["watcherAssignments", "/watcher/assignments", "get"],
+  ["watcherAssignmentsReplace", "/watcher/assignments", "put"],
+  ["agentVoiceConfig", "/agent/voice/config", "get"],
 ];
 const schemas = schema.components.schemas;
 // Pydantic after-model guards do not appear in exported JSON Schema. Preserve

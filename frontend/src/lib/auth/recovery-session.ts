@@ -1,7 +1,7 @@
 // Recovery belongs to an authenticated tab session, not a module's reloadable
 // generation counter. Token refresh does not change this non-secret identity.
 const SESSION_KEY = "alphatrade:recovery-session";
-const PREFIXES = ["alphatrade:experiment-draft:", "alphatrade:screening:"];
+const PREFIXES = ["alphatrade:experiment-draft:", "alphatrade:screening:", "alphatrade:watcher-assignments:"];
 type RecoverySession = { id: string; organizationId: string; userId: string };
 let current: RecoverySession | null = null;
 let invalidated = false;

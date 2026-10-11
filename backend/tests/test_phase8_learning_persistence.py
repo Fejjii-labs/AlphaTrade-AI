@@ -63,7 +63,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src/app/learning_attributi
 PERSISTENCE_MODULE = (
     Path(__file__).resolve().parents[1] / "src/app/persistence/attribution_postgres.py"
 )
-HEAD = "a12trendpulsescreen001"
+HEAD = "a13voicemonitor001"
 WATCHER_TENANT_WATCHLIST = "b6f2d9a10e73"
 PHASE8_REVISION = "d4f7a2c8e901"
 PREVIOUS_HEAD = "c9e2b4a1d078"

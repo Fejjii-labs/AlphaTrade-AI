@@ -23,7 +23,8 @@ def test_additive_migration_and_rollback_preserve_existing_organization(monkeypa
     monkeypatch.setenv("ALEMBIC_DATABASE_URL", isolated_url.render_as_string(hide_password=False))
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["a12trendpulsescreen001"]
+    assert script.get_heads() == ["a13voicemonitor001"]
+    assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
     assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
     assert script.get_revision("a10blofinactivity001").down_revision == "a9knowledgeoutbox001"

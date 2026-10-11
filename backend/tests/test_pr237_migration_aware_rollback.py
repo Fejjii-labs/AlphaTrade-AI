@@ -24,14 +24,25 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.db.models import Organization, User
+from app.db.models import KillSwitchState, Organization, User, UserStrategy, UserStrategyVersion
+from app.db.voice_realtime import VoiceSessionReservation
+from app.db.watcher_assignments import WatcherAssignmentReceiptRow, WatcherStrategyAssignmentRow
+from app.schemas.usage import OrganizationQuotaUpdate
+from app.services.quota_service import QuotaService
 
 BASELINE = "b165b92276346f0e0fe3ccdbd2bec3443dc75d40"
 ROLLBACK_BASE = "bda597c2fffbf1a49beadc64d757100808094ca2"
+REVIEWED_BASE = "a7a843f7c27e8bdcea5f89c802c808472477a969"
 MIGRATIONS = (
     "src/app/db/migrations/versions/a10blofinactivity001_account_scoped_native_blofin_activity.py",
     "src/app/db/migrations/versions/a11experiments001_generic_experiment_domain.py",
     "src/app/db/migrations/versions/a12trendpulsescreen001_bounded_trendpulse_research_screening.py",
+    "src/app/db/migrations/versions/a13voicemonitor001_bounded_voice_and_strategy_assignments.py",
+)
+QUOTA_COMPATIBILITY = (
+    "src/app/db/voice_realtime.py",
+    "src/app/services/quota_service.py",
+    "src/app/schemas/usage.py",
 )
 TABLES = (
     "alembic_version",
@@ -48,6 +59,12 @@ TABLES = (
     "experiment_events",
     "experiment_samples",
     "trendpulse_screening_runs",
+    "watcher_strategy_assignments",
+    "watcher_assignment_receipts",
+    "voice_session_reservations",
+    "watcher_watchlists",
+    "kill_switch_states",
+    "organization_quotas",
 )
 
 
@@ -228,6 +245,101 @@ def _seed(engine):
         assert rejected.status == "refused" and rejected.reason == "trigger_expired"
 
 
+def _seed_feature_retention(engine):
+    """Preserve exact future configuration and uncertain spending across rollback."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.db.watcher_watchlist import WatcherWatchlistRow
+
+    with Session(engine) as session:
+        strategy = session.scalars(select(UserStrategy).order_by(UserStrategy.id)).first()
+        assert strategy is not None
+        version = session.scalars(
+            select(UserStrategyVersion)
+            .where(
+                UserStrategyVersion.strategy_id == strategy.id,
+            )
+            .order_by(UserStrategyVersion.version)
+        ).first()
+        assert version is not None
+        now = datetime.now(UTC)
+        org, user = strategy.organization_id, strategy.user_id
+        session.add(
+            KillSwitchState(
+                organization_id=org,
+                active=True,
+                reason="Retained synthetic operator state",
+                version=7,
+            )
+        )
+        session.add(
+            WatcherWatchlistRow(
+                organization_id=org,
+                revision=3,
+                updated_at=now,
+                slots=[{"position": 1, "symbol": "BTCUSDT", "enabled": True}],
+                runtime_summary={"paper_only": True, "synthetic": True},
+            )
+        )
+        session.add(
+            WatcherStrategyAssignmentRow(
+                id=uuid4(),
+                organization_id=org,
+                user_id=user,
+                strategy_id=strategy.id,
+                strategy_version_id=version.id,
+                symbol="BTCUSDT",
+                version_content_hash="a" * 64,
+                timeframes=["15m"],
+                parameters=version.pattern_spec,
+                monitoring_enabled=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            WatcherAssignmentReceiptRow(
+                organization_id=org,
+                user_id=user,
+                request_key="retained-request-key",
+                payload_hash="b" * 64,
+                configuration_revision=3,
+                response={"revision": 3, "exact": ["retained-body-and-key"]},
+                created_at=now,
+            )
+        )
+        session.add(
+            VoiceSessionReservation(
+                id=uuid4(),
+                organization_id=org,
+                user_id=user,
+                conversation_id=None,
+                budget_reference="synthetic-retained-reservation",
+                model="synthetic-model",
+                status="uncertain",
+                reserved_cost=Decimal("1"),
+                reserved_tokens=100,
+                accounted_cost=None,
+                response_count=1,
+                ledger={"responses": [{"state": "unknown"}]},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        QuotaService(session).update_quota(
+            org,
+            OrganizationQuotaUpdate(
+                monthly_token_limit=100,
+                monthly_cost_limit=Decimal("1"),
+            ),
+        )
+        session.commit()
+        return org
+
+
 BOOT_PROBE = """
 import json
 import os
@@ -262,6 +374,15 @@ with get_session_factory()() as session:
     assert len(docs) == len(jobs) == 5
     assert all(doc.user_id and doc.organization_id for doc in docs)
     assert any(job.operation == 'delete' for job in jobs)
+    from uuid import UUID
+    from app.services.quota_service import QuotaService
+    if os.environ.get('ROLLBACK_RESERVATION_ORG'):
+        # The reviewed older package needs the forward-compatible quota fence;
+        # it must not discard potentially billed voice work during rollback.
+        status = QuotaService(session).get_status(UUID(os.environ['ROLLBACK_RESERVATION_ORG']))
+        assert status.hard_limit_reached
+        assert status.usage.monthly_cost_reserved == 1
+        assert status.usage.monthly_tokens_reserved == 100
 # The worker's disarmed boot role is specifically a staging posture. The API
 # above uses local/mock settings; neither modifies deployed operator settings.
 os.environ.update({
@@ -294,7 +415,7 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
         pytest.skip("Set PR237_ROLLBACK_POSTGRES_URL to disposable loopback PostgreSQL.")
     url = make_url(raw)
     assert url.get_backend_name() == "postgresql" and url.host in {"127.0.0.1", "localhost"}
-    assert url.database in {"alphatrade_test", "pr237_rollback_test"}
+    assert url.database in {"alphatrade_test", "pr237_rollback_test", "alphatrade_voice_monitoring"}
     backend = Path(__file__).resolve().parents[1]
     admin = create_engine(url)
     schema = "pr237_rollback_" + uuid4().hex
@@ -307,13 +428,20 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "src/app/db/migrations"))
     head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "a12trendpulsescreen001"
+    assert head == "a13voicemonitor001"
     try:
         command.upgrade(config, "head")
         _seed(engine)
+        retained_org = _seed_feature_retention(engine)
         retained = _snapshot(engine)
         assert len(retained["trendpulse_screening_runs"]) == 3
         assert len(retained["experiment_versions"]) == 2
+        assert len(retained["watcher_strategy_assignments"]) == 1
+        assert len(retained["watcher_assignment_receipts"]) == 1
+        assert len(retained["voice_session_reservations"]) == 1
+        with pytest.raises(RuntimeError, match="requires retained schema rollback"):
+            command.downgrade(config, "a12trendpulsescreen001")
+        assert _snapshot(engine) == retained
         env = {
             **os.environ,
             "ALEMBIC_DATABASE_URL": dsn,
@@ -342,16 +470,20 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
             "ACCESS_TOKEN_DENYLIST_USE_REDIS": "false",
             "MARKET_DATA_CACHE_USE_REDIS": "false",
             "ROLLBACK_EXPECTED_HEAD": head,
+            "ROLLBACK_RESERVATION_ORG": str(retained_org),
         }
         for label, revision in (
             ("plain-b165", BASELINE),
             ("plain-bda", ROLLBACK_BASE),
-            ("rollback", ROLLBACK_BASE),
+            ("plain-reviewed", REVIEWED_BASE),
+            ("rollback", REVIEWED_BASE),
         ):
             target = _archive(backend.parent, revision, tmp_path / label)
             if label == "rollback":
                 for migration in MIGRATIONS:
                     (target / migration).write_bytes((backend / migration).read_bytes())
+                for compatibility in QUOTA_COMPATIBILITY:
+                    (target / compatibility).write_bytes((backend / compatibility).read_bytes())
             env["PYTHONPATH"] = str(target / "src")
             result = subprocess.run(
                 [sys.executable, "-m", "alembic", "upgrade", "head"],

@@ -41,7 +41,7 @@ WATCHER_TENANT_WATCHLIST = "b6f2d9a10e73"
 STRATEGY_BRAIN = "a1brain001"
 TELEGRAM_POLICY_V2 = "a2tgpolicy002"
 RELEASE_WAVE002 = "a3release002"
-CURRENT_HEAD = "a12trendpulsescreen001"
+CURRENT_HEAD = "a13voicemonitor001"
 
 _NEW_TABLES = (
     "watcher_worker_leases",
@@ -195,7 +195,8 @@ def test_alembic_single_head() -> None:
     assert script.get_heads() == [CURRENT_HEAD]
     head = script.get_revision(CURRENT_HEAD)
     assert head is not None
-    assert head.down_revision == "a11experiments001"
+    assert head.down_revision == "a12trendpulsescreen001"
+    assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
     assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
     assert script.get_revision("a10blofinactivity001").down_revision == "a9knowledgeoutbox001"
     assert script.get_revision("a9knowledgeoutbox001").down_revision == "a8agentcapture001"

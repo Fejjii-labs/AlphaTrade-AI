@@ -183,6 +183,11 @@ class Settings(BaseSettings):
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
     email_alerts_enabled: bool = False
 
+    # Interactive provider voice stays unavailable without a verified finite
+    # budget/pricing receipt. These defaults never activate an operator's provider.
+    agent_realtime_enabled: bool = False
+    agent_realtime_limits_file: str = ""
+
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False
     market_watcher_stale_data_max_age_minutes: int = Field(default=60, ge=5, le=1440)

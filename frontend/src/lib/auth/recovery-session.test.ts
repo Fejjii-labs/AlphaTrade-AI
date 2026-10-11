@@ -4,9 +4,11 @@ beforeEach(() => { vi.resetModules(); sessionStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); });
 const draftKey = "alphatrade:experiment-draft:original";
 const screenKey = "alphatrade:screening:original";
+const assignmentKey = "alphatrade:watcher-assignments:original";
 function pending() {
   sessionStorage.setItem(draftKey, JSON.stringify({ idempotency_key: "original-draft", configuration: { exact: true } }));
   sessionStorage.setItem(screenKey, JSON.stringify({ request_id: "original-screen", trigger_end: "2026-10-10T12:00:00Z" }));
+  sessionStorage.setItem(assignmentKey, JSON.stringify({ request_key: "original-assignment", assignments: [{ exact: true }] }));
 }
 
 it("restores the same authenticated recovery identity and requests when module generation resets on reload", async () => {
@@ -44,6 +46,7 @@ it("invalidates both namespaces with no panels mounted and rotates a same-accoun
   events.sessionCleared();
   expect(session.recoverySessionId("org", "user")).toBeNull();
   expect(sessionStorage.getItem(draftKey)).toBeNull(); expect(sessionStorage.getItem(screenKey)).toBeNull();
+  expect(sessionStorage.getItem(assignmentKey)).toBeNull();
   session.bindRecoverySession("org", "user");
   expect(session.recoverySessionId("org", "user")).not.toBe(previous);
 });
@@ -57,6 +60,7 @@ it("rejects a stored foreign binding and removes its requests before binding the
   restored.bindRecoverySession("new-org", "new-user");
   expect(restored.recoverySessionId("old-org", "old-user")).toBeNull();
   expect(sessionStorage.getItem(draftKey)).toBeNull(); expect(sessionStorage.getItem(screenKey)).toBeNull();
+  expect(sessionStorage.getItem(assignmentKey)).toBeNull();
 });
 
 it.each(["not-json", JSON.stringify({ id: "incomplete" })])("rejects malformed stored bindings: %s", async value => {
@@ -81,6 +85,7 @@ it("continues cleanup after one storage removal and one listener throw", async (
   expect(() => tokens.clearTokens()).not.toThrow();
   expect(last).toHaveBeenCalledOnce(); expect(tokens.getAccessToken()).toBeNull();
   expect(session.recoverySession()).toBeNull(); expect(sessionStorage.getItem(screenKey)).toBeNull();
+  expect(sessionStorage.getItem(assignmentKey)).toBeNull();
   expect(document.cookie).not.toContain("alphatrade_session=1");
 });
 
