@@ -1042,6 +1042,11 @@ schema search path, system reservation counts and real StrategyCard fixture
 construction. Typed UI intentionally keeps recorded evidence in details; the
 browser verifies both the visible reply and exact complete persisted API content.
 Zero unexpected skips occurred; targeted Vitest exclusions are deliberate filters.
+Automatic CI38157112271 on 763c01c passed 417 frontend cases, but deployment
+safety exposed two additional activation-test current-head assertions still at
+a12. Both now expect a13; two affected local cases pass. Historical revision and
+fail-closed reader assertions remain unchanged. This corrective revision needs its
+own automatic focused result; the earlier frontend result accepts 763c01c only.
 Receipts are `/tmp/agent-realtime-worker-evidence.json`,
 `/tmp/alphatrade-assignments-*.xml` and `/tmp/voice-monitoring-*.{log,xml}`.
 
