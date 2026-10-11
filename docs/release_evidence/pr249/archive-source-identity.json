@@ -1,0 +1,16 @@
+[
+  {
+    "image": "alphatrade-pr249:a13-rollback-api",
+    "config_image_id": "sha256:7073d593a559fff92bd161fe342c18dcbf9bd9d938794f76b175856b4788a384",
+    "complete_runtime_source_matches": true,
+    "files": 984,
+    "complete_payload_sha256": "e1cbbaafda0c5e3b414788620b94095f91717b1d349468fcbf63c2de671ab6d9"
+  },
+  {
+    "image": "alphatrade-pr249:a13-compatible-worker",
+    "config_image_id": "sha256:9549ae1e49e2473d5005b2617339045ab4f59adfcce82d928dc6845ada403304",
+    "complete_runtime_source_matches": true,
+    "files": 996,
+    "complete_payload_sha256": "ae2cc59da579a9bcaff922bfc660c275e06ea1024c2610d2d47c9169038f582f"
+  }
+]

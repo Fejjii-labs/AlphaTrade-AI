@@ -1,7 +1,7 @@
 Status: BLOCKED
-Last Updated: 2026-10-11T20:45:25+02:00
+Last Updated: 2026-10-11T20:52:08+02:00
 Task: AT-PR249-STAGING-RELEASE
-Source File SHA256: 54dbf8823c5b05e99e0f1e8b5f25d1b700831a4e8c5633302f7f4f629b073d6a
+Source File SHA256: 585fb5af0c4f0a1db5f8a72ebe7fc67d2a9c457701cc61f3630f08f5c40b9ce8
 
 # Session execution record
 
@@ -16,6 +16,7 @@ no corrections repeated. Authorization: current user release instruction, preser
 - Command `backend/.venv/bin/python /tmp/pr249-image-qualification.py`:exit0,4 boot/restart probes,0skips, both no-op a13 upgrades and exact retained rows.
 - Command `backend/.venv/bin/python /tmp/pr249-local-restore.py`:exit0,local synthetic dump960052bytes/restored snapshot equality; not hosted proof.
 - Command `backend/.venv/bin/python /tmp/pr249-source-identity.py`:exit0,exact packaged payload equality.
+- Additional complete-source container inspection:40second timeout on worker inspection; prior successful subset check retained. Direct saved-archive validation exit0,984/984 and996/996 files match; exact image config IDs match.
 - Voice preflight:exit2,approved private receipt missing,0paidcalls. Actual V5 provider/microphone unexecuted.
 - Full dispatch command:exit1 at GET workflow lookup, proxyCONNECT403; no POST/run. Staging health also proxyCONNECT403.
 - Prepared/published rollback source6b44e98. Archived local image bundle228110922bytes/hash3d91182955012a92f76fca2affad24639e9334dc17059c7ebb50d11e4cf4a4ff.
