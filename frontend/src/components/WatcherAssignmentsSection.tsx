@@ -138,11 +138,12 @@ export function WatcherAssignmentsSection() {
         if (selected) setRows(current => [...current, { id: crypto.randomUUID(), symbol: coin, strategy_version_id: selected.strategy_version_id, monitoring_enabled: true, timeframes: [...selected.timeframes], parameters: structuredClone(selected.parameters) }]);
       }}>Add</Button>
       <Link className="text-sm text-accent" href="/agent">Capture a strategy</Link>
+      {coin && options.length === 0 && <p className="text-xs text-text-muted">No saved version for {coin}. Capture one in Agent.</p>}
       {coinLimit && <p className="text-xs text-text-muted">Five saved versions per coin.</p>}
     </div>}
     <div className="flex flex-wrap items-center gap-3">
       <Button disabled={busy || !config || !!pending || !dirty} onClick={() => void submit()}>{busy ? "Saving…" : "Save monitoring"}</Button>
-      {pending && <><span className="text-xs text-text-muted">Reply uncertain. The original request is retained.</span><Button variant="secondary" disabled={busy} onClick={() => void submit(true)}>Recover saved request</Button></>}
+      {pending && <><span className="text-xs text-text-muted">Reply uncertain. The original request is retained.</span><Button variant="secondary" disabled={busy || !config} onClick={() => void submit(true)}>Recover saved request</Button></>}
       {message && <p role="status" className="text-xs text-text-muted">{message}</p>}
     </div>
   </section>;

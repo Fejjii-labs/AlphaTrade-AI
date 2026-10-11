@@ -93,6 +93,32 @@ it("definite first-attempt rejection preserves editable rows and releases recove
   expect(screen.getByRole("button", { name: "Save monitoring" })).not.toBeDisabled();
 });
 
+it("keeps restored recovery disabled until the initial configuration is ready", async () => {
+  replace.mockRejectedValueOnce(new TypeError("Lost reply"));
+  const first = render(<WatcherAssignmentsSection />);
+  await screen.findByText("BTCUSDT · Nested"); toggleFirst();
+  fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
+  await screen.findByText("Lost reply");
+  const original = structuredClone(replace.mock.calls[0]![0]);
+  first.unmount();
+  let finish!: (value: AssignmentsConfiguration) => void;
+  read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<WatcherAssignmentsSection />);
+  const recovery = await screen.findByRole("button", { name: "Recover saved request" });
+  expect(screen.getByText("Loading monitoring…")).toBeInTheDocument();
+  expect(recovery).toBeDisabled();
+  fireEvent.click(recovery);
+  expect(replace).toHaveBeenCalledTimes(1);
+  finish(configuration());
+  await screen.findByText("BTCUSDT · Nested");
+  await waitFor(() => expect(recovery).not.toBeDisabled());
+  expect(replace).toHaveBeenCalledTimes(1);
+  fireEvent.click(recovery);
+  await screen.findByText("Monitoring saved.");
+  expect(replace).toHaveBeenCalledTimes(2);
+  expect(replace.mock.calls[1]![0]).toEqual(original);
+});
+
 it("validates before storing recovery and lets a locally rejected edit be corrected normally", async () => {
   await loaded(); toggleFirst();
   validateRequest.mockImplementationOnce(() => { throw new ApiError("Invalid monitoring request", 422, {}); });
@@ -131,6 +157,17 @@ it("explains and enforces the five-version coin limit", async () => {
   await screen.findByText("Five saved versions per coin.");
   fireEvent.change(screen.getByLabelText("Saved strategy version"), { target: { value: "version-2" } });
   expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+});
+
+it.each(["ETHUSDT", "ZECUSDT"])("explains why %s has no saved version without cloning another coin's strategy", async coin => {
+  const initial = configuration(); initial.symbols.push("ZECUSDT"); read.mockResolvedValue(initial);
+  await loaded();
+  fireEvent.change(screen.getByLabelText("Assignment coin"), { target: { value: coin } });
+  expect(screen.getByText(`No saved version for ${coin}. Capture one in Agent.`)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+  expect(screen.getByRole("link", { name: "Capture a strategy" })).toHaveAttribute("href", "/agent");
+  expect(screen.getByLabelText("Saved strategy version").querySelectorAll("option")).toHaveLength(1);
+  expect(replace).not.toHaveBeenCalled();
 });
 
 it("storage denial prevents transport and cannot stop session cancellation cleanup", async () => {
