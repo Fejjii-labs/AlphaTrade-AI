@@ -3,7 +3,7 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Barrier
 from types import SimpleNamespace
@@ -141,6 +141,16 @@ def test_budget_is_committed_before_transport_and_survives_new_session(voice_dat
         assert row.reserved_tokens > 0
         assert row.accounted_cost is None
         assert "access_token" not in json.dumps(row.ledger)
+
+
+def test_session_cannot_outlive_approved_price_or_budget_receipt(voice_database):
+    deadline = datetime.now(UTC) + timedelta(seconds=5)
+    ledger = ledger_for(voice_database)
+    ledger.limits = ledger.limits.model_copy(update={"valid_until": deadline})
+    ledger.reserve()
+    with voice_database.sessions() as session:
+        row = session.get(VoiceSessionReservation, ledger.id)
+        assert datetime.fromisoformat(row.ledger["expires_at"]) == deadline
 
 
 def test_competing_sessions_cannot_double_spend_existing_receipt(voice_database):

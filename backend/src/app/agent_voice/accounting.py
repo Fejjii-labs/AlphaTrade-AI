@@ -156,8 +156,11 @@ class VoiceLedger:
                     response_count=0,
                     ledger={
                         "limits_digest": digest,
-                        "expires_at": (
-                            now + timedelta(seconds=self.limits.maximum_seconds)
+                        "expires_at": min(
+                            now + timedelta(seconds=self.limits.maximum_seconds),
+                            self.limits.valid_until,
+                            self.limits.realtime.valid_until,
+                            self.limits.reasoning.valid_until,
                         ).isoformat(),
                         "audio_bytes": 0,
                         "responses": [],
