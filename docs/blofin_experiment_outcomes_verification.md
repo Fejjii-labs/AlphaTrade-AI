@@ -242,3 +242,100 @@ No native performance, full backend acceptance, deployed or live-accepted result
 claimed. N2's exact absent venue-owned parent/child and historical money declarations,
 the HTTP 403 official-source limit and corroborating mirror/CCXT hashes are documented
 in the existing outcome contract. Admission stays closed and unknown values stay null.
+
+## N2 publisher-source and existing receipt inspection — 11 October 2026
+
+Documentation-only branch `codex/blofin-native-source-evidence`, based on accepted PR248
+`a7a843f7c27e8bdcea5f89c802c808472477a969`. The published coordinator contribution
+`b2c6d90468d673664ac30ddafe97761b69d3661f` and its branch are unchanged. The source and
+test evidence above is reused for unchanged implementation; it was not rerun. **N1,
+N3–N5 remain 4/5 accepted locally; N2 remains unmet.** This inspection adds no outcome
+writer, monetary assertion, schema change, native sample admission or activation.
+
+The supported GitHub connector supplied repository metadata, pinned commit references
+and public files from the `blofin` publisher organization. The SDK README links BloFin
+and its official documentation. These are publisher contracts and developer recipes,
+not authenticated venue receipts or proof of historical account methodology. External
+`SKILL.md` files were read as source evidence, not adopted as operational instructions.
+No SDK, MCP server or CLI was installed or executed. The previously rejected official
+documentation HTTP request was not repeated, and no network restriction was bypassed.
+
+Every fetched file was checked against its Git blob identity using
+`SHA1("blob " + byte_length + NUL + file_bytes)`: **7/7 matched**. The SHA256 values below
+cover the exact fetched UTF-8 source bytes, independently of the Git blob checks.
+
+| Pinned publisher source | SHA256 |
+| --- | --- |
+| [SDK REST trading contract](https://github.com/blofin/blofin-sdk-python/blob/df75d514292d90fd6ad67eb12a9f0ca6db738a73/src/blofin/rest_trading.py) | `efe31042066c9776fb3618d315fe8e161d638597a6ac16e3ad1c279b23583277` |
+| [SDK README](https://github.com/blofin/blofin-sdk-python/blob/df75d514292d90fd6ad67eb12a9f0ca6db738a73/README.md) | `4f5c6aea5d373a5c19937b6e7f897120cd3c9df6f7ce5372b2fc6286aa3821a6` |
+| [MCP trading tools](https://github.com/blofin/blofin-mcp/blob/25d296062075329b743630cb9a969dfe09dd3a27/src/tools/trading.ts) | `fe57f56ee8ca135ba27d297756ba9b09e511f34eba4040e2fca2bf397eb121d8` |
+| [Trader recipe](https://github.com/blofin/blofin-skills-hub/blob/64f4a0ba6b43b8e094a7b6d7eb28a56feb493311/skills/blofin-trader/SKILL.md) | `31e3980c993c8e3106f7b9ad3770a751fd445c3d8410584cc45c30cb476ca52e` |
+| [Portfolio recipe](https://github.com/blofin/blofin-skills-hub/blob/64f4a0ba6b43b8e094a7b6d7eb28a56feb493311/skills/blofin-portfolio-analyst/SKILL.md) | `2589b43052d2f962381cf51050a14b9d0d70bc23e324a51a2bfd061be163ed22` |
+| [CLI commands](https://github.com/blofin/blofin-cli/blob/e729a8986d8e320559ec65384dc2e7dd16690fdb/src/commands.ts) | `3e169c3925aa9a0ecb655bf168fb29f19d5e38f75f747c3a9914b71318399763` |
+| [CLI test routes](https://github.com/blofin/blofin-cli/blob/e729a8986d8e320559ec65384dc2e7dd16690fdb/src/test-utils/routes/trading.ts) | `0aecd13bc8fa84a041233fa660fc564d67a64eb95e09518a86da69a9ea708fc5` |
+
+### Separate ancestry and money findings
+
+| Required fact | Supported source finding | Remaining qualification gap |
+| --- | --- | --- |
+| Historical algo fields | SDK `getOrdersHistory`, lines 483–564, documents `algoId` and `algoClientOrderId` on historical orders. MCP `get_order_detail`, lines 173–190, accepts the client algo ID for lookup. | These are relation candidates. Neither field alone proves TPSL ownership, canonical experiment ownership or a protected parent binding. Client-selected IDs grant no authority. |
+| TPSL → generated closing child | SDK `getOrdersTpslHistory`, lines 566–625, documents `tpslId`, trigger fields and effective state; separate `getOrdersAlgoHistory`, lines 627–693, documents trigger algo fields. | No declared `tpslId` ↔ historical `algoId` equality, generated closing-order IDs or direct canonical entry → protection → child chain. Attached trigger prices do not establish that chain. |
+| Complete partial fills | SDK documents terminal `partially_canceled`, accumulated `filledSize`, native `tradeId`/`orderId` and paged fills with before/after trade-ID cursors, time bounds and a 100-record limit. | No observed, verified-UID, complete page sweep for an attributed entry/exit exists in this inspection. A terminal state or one page is not complete lineage; retention and missing-page coverage still require evidence. |
+| Futures fee currency | SDK `getFillsHistory`, lines 695–749, documents `fee` without futures `feeCurrency`. | Currency remains unknown when absent. The SDK withdrawal `feeCurrency` field is a different contract and cannot supply futures currency. Settlement currency is not a substitute. |
+| Fee sign and rebates | Historical order `fee` is described as “Fee and rebate”; the fill field is only “Fee.” | No explicit signed debit/rebate convention is declared by these sources. Preserve native strings; do not normalize sign from a recipe or example. |
+| Closing PnL and fee inclusion | SDK describes `pnl` and `fillPnl` as closing profit/loss. Portfolio recipe lines 91–94 sums closing `fillPnl`, sums fees separately and subtracts total fees for its presentation. | The recipe suggests separated reporting, but does not independently declare the historical fill-level gross/net accounting contract, allocation or sign convention. Do not set a verified “excludes fees” flag from the recipe. |
+| Closing PnL and funding inclusion | No funding inclusion declaration accompanies those PnL fields or the portfolio recipe. | Funding inclusion/exclusion remains independently unknown; fee treatment cannot establish it. |
+
+The MCP tools return raw JSON and supply no additional verified parent/child decoder or
+monetary attestation. CLI fixture responses are mocks, not account observations. Earlier
+third-party documentation mirrors and CCXT remain corroborating leads; none closes N2.
+
+At the accepted candidate, `NativeActivityFact` in
+`backend/src/app/schemas/blofin_activity.py` has no normalized algo relation fields.
+`backend/src/app/providers/exchange/blofin_activity.py::parse_fact` selects declared
+fields and drops wire `algoId`/`algoClientOrderId`; the activity service persists the
+normalized model, not the complete raw response. These fields are **not already
+preserved** in immutable native facts. Retaining supported future relation candidates
+requires a coordinated shared contract change with old payload/hash compatibility and
+generated artifacts; it would still not prove TPSL ancestry. That change is deferred,
+and the accepted contracts/hashes remain unchanged during staging qualification.
+
+### Existing hosted evidence: executed read-only checks
+
+Two supported Render PostgreSQL query calls completed for workspace
+`tea-d7hn0fvavr4c73f62c70`, database `dpg-d8fuok57vvec739lm0u0-a`. The first returned
+only selected column names/types for existing governed execution, audit and lifecycle
+tables. The second returned only aggregate proof-record and JSON-key-presence counts:
+
+| Selected proof class | Records | Protection keys | Closing facts keys | Relation/methodology keys |
+| --- | ---: | ---: | ---: | ---: |
+| `governed_demo_lifecycle_resolutions` | 0 | 0 | 0 | 0 |
+| `audit_logs` where `resource_type = 'experiment_execution'` | 0 | 0 | 0 | 0 |
+
+The first group inspected `protection_ids`, `exit_fills` and direct relation candidates
+`algoId`/`algoClientOrderId`/`generated_order_ids`; the second inspected `protection_ids`,
+`exit_orders` and `monetary_methodology_version`. No account IDs, private payloads,
+credentials, user records or monetary values were returned. These zeros mean the
+selected database supplied no existing close/experiment attestation for this proof.
+They do not prove the API's database binding, absence of exchange activity, strategy
+performance or the cause of the undiagnosed manual BloFin incident.
+
+Public source bytes, pinned Git blobs and digests are retained locally in
+`/tmp/alphatrade-n2-sources/sources.json` and `manifest.json`; the aggregate-only hosted
+receipt is `hosted-redacted-receipts.json`, SHA256
+`6a81902ac954efdb7049598c4c37c2509f569f1bb0cc6d0b791f70110d52fb35`.
+No external source dumps or hosted payloads are committed. The owner collects the
+receipt files directly. `git diff --check` passed for this documentation contribution;
+no backend tests, green CI jobs or full acceptance gate were rerun for a prose-only change.
+
+Next bounded N2 action: obtain a venue-owned declaration or authenticated read-only
+receipt proving the exact server-acknowledged TPSL parent → generated child identity,
+then collect its complete paged order/fill lineage under the verified account binding.
+Separately establish historical futures fee currency, signed fee/rebate conventions,
+and each closing PnL field's fee and funding inclusion/allocation basis. The permitted
+publisher-source connector and selected database cannot supply those missing facts;
+the existing access packet needs supported official contract/support access and a
+scoped read-only venue identity for that evidence, without exposing secrets in chat.
+Until then the trusted closing producer remains unqualified, money remains unavailable
+and native HTTP sample admission stays closed. This gap blocks N2 activation only;
+independent UI staging qualification can proceed under its existing release controls.
