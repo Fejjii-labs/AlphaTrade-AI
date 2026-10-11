@@ -183,7 +183,7 @@ function ExperimentDetails({ id, onBack, onChange }: { id: string; onBack: () =>
             <div className="space-y-3 pt-3 text-sm">
               <Link href={`/strategy-lab/${version.configuration.strategy_id}`} className="text-accent">View authored strategy</Link>
               <p>Approval expires: {version.authorized_until ? timestamp(version.authorized_until) : "Not approved"}. Execution runtime: inactive.</p>
-              <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-control bg-surface-0 p-3 text-xs">{JSON.stringify({ experiment_id: id, versions: detail?.versions }, null, 2)}</pre>
+              <pre className="whitespace-pre-wrap break-all rounded-control bg-surface-0 p-3 text-sm">{JSON.stringify({ experiment_id: id, versions: detail?.versions }, null, 2)}</pre>
             </div>
           </details>
         </>

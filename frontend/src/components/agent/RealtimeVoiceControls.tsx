@@ -48,17 +48,17 @@ export function RealtimeVoiceControls(props: Props) {
   }, [props.authenticated, props.conversationId]);
   return <div aria-label="Interactive voice" className="space-y-2">
     <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" size="sm" variant="secondary"
+      <Button type="button" variant="secondary"
         disabled={!state.active && (props.disabled || !props.authenticated)}
         onClick={() => state.active ? controller.current?.end() : void controller.current?.start()}>
         {state.active ? "End voice" : "Talk to Agent"}
       </Button>
-      {state.active && <Button type="button" size="sm" variant="secondary" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
-      {state.active && <span role="status" className="text-xs text-text-muted">
+      {state.active && <Button type="button" variant="secondary" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
+      {state.active && <span role="status" className="text-sm text-text-muted">
         {state.state === "connecting" ? "Connecting…" : state.state === "thinking" ? "Thinking…" : state.state === "speaking" ? "Speaking" : "Listening"}
       </span>}
     </div>
-    {state.transcript && <details className="text-xs text-text-muted"><summary>Heard request</summary><p className="mt-1 whitespace-pre-wrap">{state.transcript}</p></details>}
-    {state.error && <p role="alert" className="text-xs text-danger">{state.error}</p>}
+    {state.transcript && <details className="text-sm text-text-muted"><summary className="min-h-11 cursor-pointer content-center">Heard request</summary><p className="mt-1 whitespace-pre-wrap">{state.transcript}</p></details>}
+    {state.error && <p role="alert" className="text-sm text-danger">{state.error}</p>}
   </div>;
 }

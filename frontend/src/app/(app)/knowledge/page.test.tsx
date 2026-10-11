@@ -186,7 +186,7 @@ it("retrieves an exact linked document without substituting another source", asy
     }),
   );
   expect(
-    await screen.findByRole("link", { name: /Back to Journal/ }),
+    await screen.findByRole("link", { name: /Back to Knowledge/ }),
   ).toBeInTheDocument();
   expect(screen.queryByText("Confirmation rule")).not.toBeInTheDocument();
   fireEvent.click(
@@ -198,6 +198,21 @@ it("retrieves an exact linked document without substituting another source", asy
     "/knowledge?document_id=exact-document&chunk_page=1",
     { scroll: false },
   );
+});
+it("keeps a Back path to Knowledge when an exact saved entry is unavailable", async () => {
+  state.params.set("saved", "missing");
+  vi.mocked(savedEntries.get).mockRejectedValue(new Error("Missing"));
+  render(<Page />);
+  await screen.findByText("Saved entry unavailable.");
+  expect(screen.getByRole("link", { name: /Back to Knowledge/ })).toHaveAttribute("href", "/journal?tab=knowledge");
+});
+it("restores the stored filtered list from an unavailable saved entry", async () => {
+  state.params.set("saved", "missing");
+  sessionStorage.setItem("alphatrade.journal.return:o:u", JSON.stringify({ href: "/journal?tab=knowledge&category=rules&q=close", scroll: 480 }));
+  vi.mocked(savedEntries.get).mockRejectedValue(new Error("Missing"));
+  render(<Page />);
+  await screen.findByText("Saved entry unavailable.");
+  expect(screen.getByRole("link", { name: /Back to Knowledge/ })).toHaveAttribute("href", "/journal?tab=knowledge&category=rules&q=close");
 });
 it("resolves an unavailable exact document independently of stalled library lists", async () => {
   state.params.set("document", "missing-for-readiness");
