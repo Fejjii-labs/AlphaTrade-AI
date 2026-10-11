@@ -978,3 +978,94 @@ integration. Both workers propose their public interfaces before edits. Monitori
 configuration is the single authority; Agent writes use the same service through
 an explicit proposal/confirmation boundary. No new free-form execution authority.
 
+## Collected feature qualification — 11 October 2026
+
+The feature branch is `codex/interactive-voice-monitoring`, stacked on frozen
+PR248/a7a843f7. PR237 remains 3600ec89. The final candidate SHA is recorded in
+the feature PR and existing operational HANDOFF; no earlier CI accepts this batch.
+
+Worker A returned `220efc78`, `b14dfc7e`, `fb48d458`, `d21366eb` directly. These
+implement a server-held official OpenAI SDK3.28 realtime WebSocket connection,
+PCM audio, interruption, canonical text/voice turn delegation, scoped SQL
+grounding, durable capture/history, exact pending recovery and explicit confirmed
+monitoring proposals. Effective provider session caps must be acknowledged before
+readiness. Reservations end at the earliest session/budget/price receipt expiry.
+The feature is off by default; model/rate/context/budget identifiers come from a
+verified private receipt, not an invented model or activated provider.
+
+Worker B returned `fa24b212`, `95bb51aa`, `9849e4b2`, `15739087` directly. Multiple assignments
+pin owned immutable versions, their authored coin, timeframes and complete
+parameter snapshots. Mobile title/status use the card width with controls beneath;
+an older bound version outside the bounded picker remains confirmable without
+rebinding it. UI, confirmed Agent actions and worker use one configuration
+service. Monitoring never enters the assigned target's paper execution loop.
+Configured-empty remains empty. The four `no_strategy` coins lacked matching
+approved compiled authored versions; no assignments or notification eligibility
+are fabricated. Nested developing/expired observations remain intentionally
+suppressed by existing delivery policy; qualifying Nested/SFP outbox delivery and
+restart deduplication use fake transport only.
+
+| Fixed milestone | Locally accepted | Implemented/integrated | Hosted/live acceptance |
+| --- | --- | --- | --- |
+| V1–V5 interactive Agent | V1–V4: 4/5 (80%) | Supported connection and grounding integrated | V5: 0/1; actual provider/microphone unexecuted |
+| M1–M5 monitoring | 5/5 (100%) | Configuration/UI/Agent/worker integrated | No installed feature worker or live notification acceptance |
+| I1–I3 integration | 3/3 (100%) | Contracts, migration, rollback, browser proof and checkpoint | No deployment or full release gate |
+
+Overall local acceptance is 12/13 (92.3%). Recording/browser speech playback is
+not counted as interactive voice. Deterministic transcripts/CapturePlan are not
+measured model reasoning quality. Legacy Q4 actual evaluation remains 0/16 and
+native N2 money/protected-exit proof remains unavailable, independently of this
+feature's staging qualification. Simulation and native performance stay separate.
+
+Focused evidence is accumulated by source scope, not a new full suite:
+
+- Voice: 23 protocol, 16 disposable-PostgreSQL and 76 frontend distinct passing
+  cases; the two shared voice/text capture cases now persist one faithful scoped
+  note, survive a fresh session and replay without another capture/provider call.
+- Assignments: 26 new PostgreSQL cases, eight confirmed Agent cases and six
+  existing compatibility cases; 14 component and nine generated-adapter cases.
+- Owner: 19 quota and 13 authentication/recovery cases; 37 affected migration
+  cases, one populated retained-schema rollback, three actual authenticated
+  WebSocket/SQL composition cases using a synthetic SDK, one offline OpenAPI
+  export case, and four real-login API/PostgreSQL browser journeys. Desktop/mobile
+  save/reload/toggle, committed malformed-response exact recovery, off-panel
+  logout/foreign account isolation and immediate typed reply/reload all pass.
+- Generated drift passes: full schema SHA256
+  `875f63d09a9d84d7895d07591445cb768aa2088ada789b15b48d286bc9cbd9f9`.
+  Changed-file Ruff/format, scoped ESLint, TypeScript and relevant strict mypy pass.
+
+These groups overlap (controller, confirmed Agent and adapter checks); do not sum
+them as a distinct grand total. Initial failed cases remain in local XML receipts.
+The genuine assignment publication deadlock and restored-recovery readiness race
+were repaired. Other repairs corrected fixture database allowlisting, private
+schema search path, system reservation counts and real StrategyCard fixture
+construction. Typed UI intentionally keeps recorded evidence in details; the
+browser verifies both the visible reply and exact complete persisted API content.
+Zero unexpected skips occurred; targeted Vitest exclusions are deliberate filters.
+Receipts are `/tmp/agent-realtime-worker-evidence.json`,
+`/tmp/alphatrade-assignments-*.xml` and `/tmp/voice-monitoring-*.{log,xml}`.
+
+The sole additive head is `a13voicemonitor001`, retaining a8→a9→a10→a11→a12→a13.
+It adds assignment rows, replacement receipts and bounded voice holds only;
+historical migrations and existing operator rows are unchanged. Populated a13
+downgrade refuses before any drop. The exercised retained-schema rollback preserves
+documents/chunks/jobs/tombstones, native activity, research, assignments, receipts,
+unknown usage holds and custom safety/configuration state across API/disarmed-worker
+restart and forward restart. Snapshot SHA256:
+`89351695ab06122cdf8487f301e16bc5f02b84b2df66521bd279970e144829d5`.
+This is a local migration-aware source package, not a qualified new deployable image.
+Plain b165/bda/a7 images are refused at a13. An old worker lacks the assignment
+consumer and must stay drained until a compatible consumer/image and captured
+runtime composition are qualified. Never downgrade or stamp retained populated data.
+
+Release access is unchanged: current spec60 has no secret/outbound bindings;
+the existing operational secure setup packet remains the only setup action. Bind
+server `OPENAI_API_KEY`, HTTPS/WSS api.openai.com and a verified realtime receipt at
+`/workspace/agent-realtime-approved-limits.json` for V5; receipt prices/model/context
+and finite ceiling must fit existing approved remaining budget. Microphone browser
+acceptance is separate. Hosting needs existing scoped Render/Vercel/synthetic login
+bindings, actual service DB/backup verification and the verified frontend identity.
+No unchanged failed hosted probe, full CI, main merge, deployment, order, Telegram
+test, paid activation or operator mutation occurred. The preserved staging smoke
+instructions and final reviewed/aligned-staging/fresh-SFP release gate still apply.
+

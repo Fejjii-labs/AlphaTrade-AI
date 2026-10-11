@@ -56,7 +56,7 @@ Frontend verification used `npx vitest run src/components/WatcherAssignmentsSect
 
 ## Remaining integration and rollback qualification
 
-Local worker acceptance supports M3/M4/M5 (3/5); M1/M2 still require the integration owner's combined actual-login browser save/reload/toggle/reason journeys and confirmed Agent action integration. Shared generated clients, a13 migration registration, combined migration/retained-schema rollback, publication, deployment and hosted acceptance belong to the owner. This contribution has not deployed or changed a hosted setting.
+The owner has now integrated this contribution with the generated client, authenticated real-login desktop/mobile API/PostgreSQL save/reload/toggle/recovery and off-panel logout/account-change checks, and eight canonical confirmed Agent action persistence cases. M1–M5 are locally accepted (5/5); these checks do not establish hosted worker consumption or live notification delivery. Shared contracts have sole additive head a13voicemonitor001. The retained-schema rollback preserves assignments, receipts and unknown voice holds; the old worker remains drained. No hosted deployment or operator setting changed. Exact candidate and consolidated receipts are in the existing integration checkpoint.
 
 The owner sequences the additive a13 tables after immutable a12 ancestry. Retain assignment rows and replay receipts during a drained rollback. An a7 worker lacks this assignment consumer and must **not** resume against configured assignment data unless a compatible consumer is separately ported and qualified. A compatible image and aligned API/worker/frontend revisions are prerequisites; retaining the schema alone does not make an old armed worker compatible.
 
