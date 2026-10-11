@@ -8,7 +8,7 @@ from app.agent_capture.contracts import CapturePlan
 from app.core.config import Settings
 from app.interactive_agent.conversation import _correlation
 from app.providers.factory import resolve_providers
-from app.providers.llm import LLMMessage
+from app.providers.llm import LLMMessage, LLMProvider
 from app.schemas.model_routing import (
     ModelCallerScope,
     ModelContextScope,
@@ -48,8 +48,9 @@ class CaptureUnavailableError(Exception):
 
 
 class CaptureModel:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, llm_provider: LLMProvider | None = None) -> None:
         self.settings = settings
+        self._llm_provider = llm_provider
         self.last_usage: dict[str, Any] = {}
 
     def plan(
@@ -60,9 +61,9 @@ class CaptureModel:
         conversation_id: UUID,
         content: dict[str, Any],
     ) -> CapturePlan:
-        providers = resolve_providers(self.settings)
+        llm = self._llm_provider or resolve_providers(self.settings).llm
         router = ModelRouter(
-            providers.llm,
+            llm,
             tier_a_model=self.settings.agent_reasoning_model,
             tier_b_model=self.settings.agent_reasoning_model,
             fail_closed=True,
