@@ -22,12 +22,13 @@ import { clearPendingTurns, pendingFor, terminalFor } from "./turn-recovery";
 const recoveryScope = "00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002";
 
 let testParams = new URLSearchParams();
+let testIdentity = { user: "00000000-0000-0000-0000-000000000002", organization: "00000000-0000-0000-0000-000000000001" };
 vi.mock("next/navigation", () => ({
   useSearchParams: () => testParams,
 }));
 
 vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({ user: { id: "00000000-0000-0000-0000-000000000002" }, organization: { id: "00000000-0000-0000-0000-000000000001" } }),
+  useAuth: () => ({ user: { id: testIdentity.user }, organization: { id: testIdentity.organization } }),
 }));
 const apiMocks = vi.hoisted(() => ({
   listConversations: vi.fn(),
@@ -78,6 +79,7 @@ vi.mock("@/contexts/AppContext", () => ({
 
 describe("Agent workspace", () => {
   beforeEach(() => {
+    testIdentity = { user: "00000000-0000-0000-0000-000000000002", organization: "00000000-0000-0000-0000-000000000001" };
     clearPendingTurns();
     sessionStorage.clear();
     apiMocks.createConversation.mockResolvedValue({ id: "11111111-1111-4111-8111-111111111111" });
@@ -179,6 +181,98 @@ describe("Agent workspace", () => {
     await screen.findByText("History 0");
     expect(screen.getAllByTestId("agent-message")).toHaveLength(230);
     expect(screen.queryByRole("button", { name: "Earlier messages" })).not.toBeInTheDocument();
+  });
+
+  it("releases an earlier request superseded by turn reconciliation without releasing its replacement", async () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    testParams.set("conversation", id);
+    const messages = Array.from({ length: 130 }, (_, index) => ({
+      id: `overlap-${index}`, role: "assistant", content: `Overlap history ${index}`,
+      created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    }));
+    let acknowledge!: (value: unknown) => void;
+    let staleEarlier!: (value: unknown) => void;
+    let replacementEarlier!: (value: unknown) => void;
+    let earlierCalls = 0;
+    let staleSignal!: AbortSignal;
+    apiMocks.agentTurn.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+    apiMocks.listMessages.mockImplementation(async (_id, params, options) => {
+      if (params.offset === 0) {
+        earlierCalls++;
+        if (earlierCalls === 1) {
+          staleSignal = options.signal;
+          return new Promise(resolve => { staleEarlier = resolve; });
+        }
+        return new Promise(resolve => { replacementEarlier = resolve; });
+      }
+      return { items: messages.slice(params.offset ?? 0, (params.offset ?? 0) + 100), total: 130, limit: 100, offset: params.offset ?? 0 };
+    });
+    render(<AgentWorkspace />);
+    await screen.findByText("Overlap history 129");
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "New intentional turn" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
+    await screen.findByRole("button", { name: "Loading earlier messages…" });
+    await act(async () => acknowledge({ conversation_id: id, user_message_id: "overlap-user", assistant_message_id: "overlap-reply", reply: "Acknowledged during paging", proposals: [] }));
+    await screen.findByText("Acknowledged during paging");
+    expect(staleSignal.aborted).toBe(true);
+    const earlier = await screen.findByRole("button", { name: "Earlier messages" });
+    await waitFor(() => expect(earlier).toBeEnabled());
+    fireEvent.click(earlier);
+    await waitFor(() => expect(earlierCalls).toBe(2));
+    await act(async () => staleEarlier({ items: [{ id: "stale-page", role: "assistant", content: "Stale aborted page", created_at: "2026-01-01" }], total: 130 }));
+    expect(screen.getByRole("button", { name: "Loading earlier messages…" })).toBeDisabled();
+    expect(screen.queryByText("Stale aborted page")).not.toBeInTheDocument();
+    await act(async () => replacementEarlier({ items: messages.slice(0, 100), total: 130 }));
+    await screen.findByText("Overlap history 0");
+    expect(screen.getByText("Overlap history 129")).toBeInTheDocument();
+    expect(screen.getByText("Acknowledged during paging")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Earlier messages" })).not.toBeInTheDocument();
+  });
+
+  it.each(["conversation", "account"])("keeps earlier loading and private content owned by the current %s", async change => {
+    testParams.set("conversation", "first");
+    const items = (prefix: string) => Array.from({ length: 130 }, (_, index) => ({
+      id: `${prefix}-${index}`, role: "assistant", content: `${prefix} history ${index}`,
+      created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    }));
+    let finishOld!: (value: unknown) => void;
+    let finishNew!: (value: unknown) => void;
+    let oldSignal!: AbortSignal;
+    apiMocks.listMessages.mockImplementation(async (id, params, options) => {
+      if (params.offset === 0) {
+        if (id === "first") {
+          oldSignal = options.signal;
+          return new Promise(resolve => { finishOld = resolve; });
+        }
+        return new Promise(resolve => { finishNew = resolve; });
+      }
+      return { items: items(id).slice(params.offset ?? 0, (params.offset ?? 0) + 100), total: 130, limit: 100, offset: params.offset ?? 0 };
+    });
+    const { rerender } = render(<AgentWorkspace />);
+    await screen.findByText("first history 129");
+    fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
+    await screen.findByRole("button", { name: "Loading earlier messages…" });
+    testParams = new URLSearchParams("conversation=second");
+    if (change === "account") testIdentity = { user: "00000000-0000-0000-0000-000000000004", organization: "00000000-0000-0000-0000-000000000003" };
+    rerender(<AgentWorkspace />);
+    await screen.findByText("second history 129");
+    expect(oldSignal.aborted).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
+    await screen.findByRole("button", { name: "Loading earlier messages…" });
+    await act(async () => finishOld({ items: items("private-old").slice(0, 100), total: 130 }));
+    expect(screen.getByRole("button", { name: "Loading earlier messages…" })).toBeDisabled();
+    expect(screen.queryByText("private-old history 0")).not.toBeInTheDocument();
+    await act(async () => finishNew({ items: items("second").slice(0, 100), total: 130 }));
+    await screen.findByText("second history 0");
+    expect(screen.queryByRole("button", { name: "Earlier messages" })).not.toBeInTheDocument();
+    if (change === "account") {
+      testParams = new URLSearchParams("conversation=first");
+      apiMocks.listMessages.mockRejectedValue(new Error("New account cannot read that conversation"));
+      rerender(<AgentWorkspace />);
+      await screen.findByText(/New account cannot read that conversation/);
+      expect(screen.queryByText("first history 129")).not.toBeInTheDocument();
+    }
   });
 
   function enableVoice(text: string) {

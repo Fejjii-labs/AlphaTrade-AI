@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 type Fixture = { email: string; password: string; conversation_id: string; experiment_id: string; other: { email: string; password: string } };
-async function login(page: Page) {
+async function login(page: Page, otherAccount = false) {
   const api = process.env.PLAYWRIGHT_API_URL!;
   const authFile = process.env.EXPERIMENT_BROWSER_AUTH_FILE!;
   for (const url of [api, process.env.PLAYWRIGHT_BASE_URL!])
@@ -17,15 +17,16 @@ async function login(page: Page) {
     expect(health.headers()["x-synthetic-fixture-process"]).toBe(process.env.EXPECTED_SYNTHETIC_API_PROCESS);
   expect((await health.json()).real_trading_enabled).toBe(false);
   await page.goto("/login");
-  await page.getByLabel("Email", { exact: true }).fill(auth.email);
-  await page.getByLabel("Password", { exact: true }).fill(auth.password);
+  const identity = otherAccount ? auth.other : auth;
+  await page.getByLabel("Email", { exact: true }).fill(identity.email);
+  await page.getByLabel("Password", { exact: true }).fill(identity.password);
   const response = page.waitForResponse(r => r.url() === `${api}/auth/login` && r.request().method() === "POST");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   const signedIn = await response;
   expect(signedIn.ok()).toBe(true);
   const tokens = (await signedIn.json()).tokens;
   await page.waitForURL(url => url.pathname !== "/login");
-  await page.goto(`/agent?conversation=${auth.conversation_id}`);
+  await page.goto(otherAccount ? "/agent" : `/agent?conversation=${auth.conversation_id}`);
   return { api, auth, headers: { Authorization: `Bearer ${tokens.access_token}` } };
 }
 async function composerIsReachable(page: Page, mobile: boolean) {
@@ -105,7 +106,125 @@ for (const [name, viewport] of [
     await composerIsReachable(page, name === "mobile");
     await page.screenshot({ path: `../docs/screenshots/experiments/conversation-${name}.png` });
   });
+
+  test(`${name} overlapping earlier history yields to turn reconciliation and can resume`, async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize(viewport);
+    const { api, auth } = await login(page);
+    await expect(page.getByTestId("agent-message").filter({ hasText: "Synthetic viewport message 129." })).toBeVisible();
+    await composerIsReachable(page, name === "mobile");
+    let acknowledge!: () => void;
+    let committed!: () => void;
+    const committedTurn = new Promise<void>(resolve => { committed = resolve; });
+    const acknowledgeTurn = new Promise<void>(resolve => { acknowledge = resolve; });
+    await page.route(`${api}/agent/turns`, async route => {
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      committed();
+      await acknowledgeTurn;
+      await route.fulfill({ response });
+    });
+    let earlierStarted!: () => void;
+    let releaseEarlier!: () => void;
+    let earlierCalls = 0;
+    const delayedEarlier = new Promise<void>(resolve => { earlierStarted = resolve; });
+    const releaseStale = new Promise<void>(resolve => { releaseEarlier = resolve; });
+    const history = `${api}/conversations/${auth.conversation_id}/messages*`;
+    await page.route(history, async route => {
+      if (new URL(route.request().url()).searchParams.get("offset") === "0" && ++earlierCalls === 1) {
+        const response = await route.fetch();
+        expect(response.ok()).toBe(true);
+        earlierStarted();
+        await releaseStale;
+        await route.fulfill({ response });
+      } else await route.continue();
+    });
+    try {
+      await page.getByLabel("Message", { exact: true }).fill(`Synthetic ${name} overlapping-history turn.`);
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await committedTurn;
+      await page.mouse.wheel(0, -100000);
+      const earlier = page.getByRole("button", { name: "Earlier messages", exact: true });
+      await expect(earlier).toBeInViewport();
+      const firstId = await page.getByTestId("agent-message").first().getAttribute("data-message-id");
+      const first = page.locator(`[data-message-id="${firstId}"]`);
+      await earlier.click();
+      await delayedEarlier;
+      await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toBeDisabled();
+      const before = await first.boundingBox();
+      acknowledge();
+      await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
+      await expect(earlier).toBeEnabled();
+      await expect.poll(async () => Math.abs((await first.boundingBox())!.y - before!.y)).toBeLessThan(8);
+      await earlier.click();
+      await expect(page.getByTestId("agent-message").filter({ hasText: "Synthetic viewport message 000." })).toHaveCount(1);
+      await expect.poll(async () => Math.abs((await first.boundingBox())!.y - before!.y)).toBeLessThan(8);
+      releaseEarlier();
+      await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toHaveCount(0);
+      expect(earlierCalls).toBe(2);
+      const ids = await page.getByTestId("agent-message").evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.messageId));
+      expect(new Set(ids).size).toBe(ids.length);
+      await page.getByRole("button", { name: "Latest messages ↓", exact: true }).click();
+      await composerIsReachable(page, name === "mobile");
+    } finally {
+      acknowledge();
+      releaseEarlier();
+      await page.unroute(`${api}/agent/turns`);
+      await page.unroute(history);
+    }
+  });
 }
+test("pending earlier history stays private across conversation navigation and actual reauthentication", async ({ page }) => {
+  test.setTimeout(180_000);
+  const { api, auth, headers } = await login(page);
+  await expect(page.getByTestId("agent-message").filter({ hasText: "Synthetic viewport message 129." })).toBeVisible();
+  const created = await page.request.post(`${api}/conversations`, { headers, data: { title: "Synthetic second reading context" } });
+  expect(created.ok()).toBe(true);
+  const second = (await created.json()).id as string;
+  const saved = await page.request.post(`${api}/agent/turns`, {
+    headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
+    data: { conversation_id: second, message: "Synthetic second-context observation; no execution." },
+  });
+  expect(saved.ok()).toBe(true);
+  const releases: Array<() => void> = [];
+  const history = `${api}/conversations/${auth.conversation_id}/messages*`;
+  await page.route(history, async route => {
+    if (new URL(route.request().url()).searchParams.get("offset") !== "0") return route.continue();
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    await new Promise<void>(resolve => { releases.push(resolve); });
+    await route.fulfill({ response });
+  });
+  try {
+    await page.mouse.wheel(0, -100000);
+    await page.getByRole("button", { name: "Earlier messages", exact: true }).click();
+    await expect.poll(() => releases.length).toBe(1);
+    await page.evaluate(id => window.history.pushState(null, "", `/agent?conversation=${id}`), second);
+    await expect(page.getByText("Synthetic second-context observation; no execution.", { exact: true })).toBeVisible();
+    releases[0]();
+    await expect(page.getByText("Synthetic viewport message 129.", { exact: false })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toHaveCount(0);
+    await page.evaluate(id => window.history.pushState(null, "", `/agent?conversation=${id}`), auth.conversation_id);
+    await expect(page.getByTestId("agent-message").filter({ hasText: "Synthetic viewport message 129." })).toBeVisible();
+    await page.mouse.wheel(0, -100000);
+    await page.getByRole("button", { name: "Earlier messages", exact: true }).click();
+    await expect.poll(() => releases.length).toBe(2);
+    await page.goto("/journal");
+    const menu = page.getByTestId("header-status-menu");
+    await menu.locator("summary").click();
+    await menu.getByRole("button", { name: "Log out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login/);
+    const other = await login(page, true);
+    releases[1]();
+    expect((await page.request.get(`${api}/conversations/${auth.conversation_id}/messages`, { headers: other.headers })).status()).toBe(404);
+    await expect(page.getByTestId("agent-message")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toHaveCount(0);
+    await expect(page.getByText("Synthetic second-context observation; no execution.", { exact: true })).toHaveCount(0);
+  } finally {
+    releases.forEach(release => release());
+    await page.unroute(history);
+  }
+});
 test("mobile compact experiments and Knowledge filters keep provenance and hide irrelevant pages", async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 390, height: 844 });

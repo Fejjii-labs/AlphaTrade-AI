@@ -99,10 +99,13 @@ export function AgentWorkspace() {
   const decisionAbort = useRef<AbortController | null>(null);
   const strategyAbort = useRef<AbortController | null>(null);
   const historyGeneration = useRef(0);
+  const historyScope = useRef(recoveryScope);
   const mounted = useRef(true);
   const conversationListGeneration = useRef(0);
   const [voiceContextKey, setVoiceContextKey] = useState(0);
-  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState<{ generation: number; kind: "tail" | "earlier" } | null>(null);
+  const messagesLoading = historyLoading?.kind === "tail";
+  const earlierLoading = historyLoading?.kind === "earlier";
   const [messagesRetry, setMessagesRetry] = useState(0);
   const [conversations, setConversations] =
     useState<LoadState<ConversationSummary>>(emptyLoad);
@@ -113,7 +116,6 @@ export function AgentWorkspace() {
   const historyCursors = useRef(new Map<string, number>());
   const historyAnchor = useRef<{ element: HTMLElement; top: number; generation: number; conversation: string } | null>(null);
   const [earlierOffset, setEarlierOffset] = useState(0);
-  const [earlierLoading, setEarlierLoading] = useState(false);
   const viewport = useConversationViewport(
     `${recoveryScope}:${conversationId}`,
     messages.at(-1)?.id ?? "",
@@ -169,12 +171,6 @@ export function AgentWorkspace() {
   }, [recoveryScope, conversationId]);
 
   useEffect(() => {
-    contextGeneration.current++;
-    turnAbort.current?.abort();
-    typedDrafts.current.clear();
-  }, [recoveryScope]);
-
-  useEffect(() => {
     setSessionLive(Boolean(recoveryScope));
     if (!recoveryScope) return;
     return subscribeRecovery(recoveryScope, () => {
@@ -209,11 +205,12 @@ export function AgentWorkspace() {
     window.history.replaceState(null, "", address.pathname + address.search);
     turnAbort.current?.abort();
     historyAbort.current?.abort();
+    historyGeneration.current++;
     decisionAbort.current?.abort();
     setConversationId(id);
     setMessages(id ? retainedMessages.current.get(id) ?? [] : []);
     setEarlierOffset(id ? historyCursors.current.get(id) ?? 0 : 0);
-    setEarlierLoading(false);
+    setHistoryLoading(null);
     historyAnchor.current = null;
     setLatest(null);
     setProposals(id ? proposalsFromMessages(retainedMessages.current.get(id) ?? []) : []);
@@ -226,6 +223,18 @@ export function AgentWorkspace() {
     setStrategyContext(null);
     setStrategyError(null);
   }, [recoveryScope, sessionLive]);
+
+  useLayoutEffect(() => {
+    if (historyScope.current === recoveryScope) return;
+    historyScope.current = recoveryScope;
+    retainedMessages.current.clear();
+    historyCursors.current.clear();
+    typedDrafts.current.clear();
+    strategyAbort.current?.abort();
+    conversationListGeneration.current++;
+    setConversations({ items: [], error: null, loading: false });
+    changeConversation(null, false);
+  }, [recoveryScope, changeConversation]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -249,22 +258,37 @@ export function AgentWorkspace() {
     }
     void loadBinding();
     return () => controller.abort();
-  }, [strategyId, conversationId]);
+  }, [strategyId, conversationId, recoveryScope]);
 
   const urlConversation = params.get("conversation");
   useEffect(() => {
     if (urlConversation !== activeConversation.current) changeConversation(urlConversation);
   }, [urlConversation, changeConversation]);
 
-  const reconcileHistory = useCallback(async (id: string) => {
+  const beginHistory = useCallback((id: string, kind: "tail" | "earlier") => {
     historyAbort.current?.abort();
     const controller = new AbortController();
     historyAbort.current = controller;
     const generation = ++historyGeneration.current;
+    const scope = currentScope.current;
+    const session = sessionGeneration();
     const isCurrent = () => mounted.current && activeConversation.current === id &&
+      scope !== null && scope === currentScope.current && session === sessionGeneration() &&
       generation === historyGeneration.current && !controller.signal.aborted;
+    // Every replacement owns the loading indicator, including cancellations.
+    // A superseded request may finish, but cannot release its successor's state.
+    setHistoryLoading({ generation, kind });
+    const finish = () => {
+      if (mounted.current)
+        setHistoryLoading(current => current?.generation === generation ? null : current);
+    };
+    return { controller, generation, isCurrent, finish };
+  }, []);
+
+  const reconcileHistory = useCallback(async (id: string) => {
+    if (!currentScope.current) return;
+    const { controller, isCurrent, finish } = beginHistory(id, "tail");
     setMessagesError(null);
-    setMessagesLoading(true);
     try {
       let page = await api.conversations.listMessages(id, { limit: 100 }, { signal: controller.signal });
       if (!isCurrent()) return;
@@ -283,21 +307,15 @@ export function AgentWorkspace() {
     } catch (error) {
       if (isCurrent()) setMessagesError(error instanceof Error ? error.message : "Messages unavailable");
     } finally {
-      if (isCurrent()) setMessagesLoading(false);
+      finish();
     }
-  }, []);
+  }, [beginHistory]);
 
   async function loadEarlier() {
     const id = conversationId;
-    if (!id || earlierLoading || !earlierOffset) return;
-    historyAbort.current?.abort();
-    const controller = new AbortController();
-    historyAbort.current = controller;
-    const generation = ++historyGeneration.current;
-    const isCurrent = () => mounted.current && activeConversation.current === id &&
-      generation === historyGeneration.current && !controller.signal.aborted;
+    if (!id || historyLoading || !earlierOffset || !currentScope.current) return;
+    const { controller, generation, isCurrent, finish } = beginHistory(id, "earlier");
     const anchor = viewport.thread.current?.querySelector<HTMLElement>('[data-testid="agent-message"]');
-    setEarlierLoading(true);
     setMessagesError(null);
     try {
       const offset = Math.max(0, earlierOffset - 100);
@@ -317,7 +335,7 @@ export function AgentWorkspace() {
     } catch (error) {
       if (isCurrent()) setMessagesError(error instanceof Error ? error.message : "Earlier messages unavailable");
     } finally {
-      if (isCurrent()) setEarlierLoading(false);
+      finish();
     }
   }
 
@@ -340,7 +358,10 @@ export function AgentWorkspace() {
   const refreshConversations = useCallback(async () => {
     const generation = ++conversationListGeneration.current;
     const session = sessionGeneration();
-    const isCurrent = () => mounted.current && generation === conversationListGeneration.current && session === sessionGeneration();
+    const scope = currentScope.current;
+    if (!scope) return;
+    const isCurrent = () => mounted.current && scope === currentScope.current &&
+      generation === conversationListGeneration.current && session === sessionGeneration();
     setConversations((current) => ({ ...current, loading: true, error: null }));
     try {
       const page = await api.conversations.list({ limit: 30 });
@@ -359,13 +380,13 @@ export function AgentWorkspace() {
 
   useEffect(() => {
     void refreshConversations();
-  }, [refreshConversations]);
+  }, [refreshConversations, recoveryScope]);
 
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
       setMessagesError(null);
-      setMessagesLoading(false);
+      setHistoryLoading(null);
       return;
     }
     // The turn loads its own messages; avoid a competing history read on creation.
@@ -375,7 +396,7 @@ export function AgentWorkspace() {
     }
     setMessages(retainedMessages.current.get(conversationId) ?? []);
     void reconcileHistory(conversationId);
-  }, [conversationId, messagesRetry, reconcileHistory]);
+  }, [conversationId, messagesRetry, reconcileHistory, recoveryScope]);
 
   async function runTurn(
     message = draft,

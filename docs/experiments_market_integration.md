@@ -769,3 +769,65 @@ requested `full_backend=true` release gate. Failure uses coordinated qualified A
 frontend rollback while retaininga12 and all documents/jobs/native facts/receipt metadata.
 No main merge, replacement infrastructure, exchange orders, Telegram tests, paid-provider
 activation or operator changes. The manual BloFin incident remains undiagnosed.
+
+### PR248 completion continuation — fixed checklist, 11 October 2026
+
+Continue from `4e5dc16782c8f8a30891179de0a886a44c3f0f37` on the same PR248 integration
+branch. Its CI38136849882 passed364 backend/379 frontend and deployment-safety, with
+zero test skips; evaluation/Docker/e2e were manual-policy skipped. Reuse unchanged
+evidence. Reviewed PR244ba47, PR2470d3 and PR2373600 remain frozen. The U/Q/N/I
+denominator stays15. Routine Q4 evaluation within the existing approved test budget is
+authorized; missing credentials are a separate blocker, not another approval loop.
+
+Ownership is isolated before edits: owner has Agent history/loading and browser tests,
+shared artifacts/migrations and existing checkpoints. Worker A has private actual-provider
+evaluation/corpus/accounting and Agent routing support, base4e5 on
+`codex/agent-provider-quality`. Worker B has the canonical governed coordinator, explicit
+server-origin context, native evidence and affected tests, base4e5 on
+`codex/blofin-coordinator-evidence`. Neither worker edits owner UI, public generated
+artifacts, migrations or operational checkpoints. Contributions are collected directly.
+
+Owner request ownership: one history-loading token identifies generation and request
+kind. Reconciliation replaces/aborts earlier paging; only the owning completion releases
+the current indicator. Every response checks conversation, account, session and generation.
+Account changes clear retained history/cursors/anchors before paint; superseded completions
+cannot release a new request or restore private content. The initial negative control
+reproduced the permanently busy earlier button. Three new overlap/conversation/account
+cases passed, plus six affected history/logout/unmount cases. Initial positive fixtures
+exceeded the existing five-second per-case limit and used an exact text locator against
+a prefixed error; reducing the fixture to130 (still more than one page) and matching the
+actual error resolved the test issues. No assertions/timeouts were weakened.
+Receipts: `/tmp/quality-overlap-{before,after,repair,neighbors}.log`;49 and46 intentional
+filters are separate from executed passes. Desktop/mobile actual-login/API overlap journeys
+passed2/2 in2.1m, including delayed committed turn, aborted earlier read, completed
+reconciliation, successful repaging, uniqueness and reading-anchor delta below8px.
+Receipt: `/tmp/alphatrade-next-postgres/overlap-browser.log`.
+A third actual-login browser journey passed1/1 in1.2m: delayed earlier history survives
+same-page conversation switching without stale content; navigation away then actual
+logout/other-account login excludes both prior transcripts and loading state, with a
+real foreign-tenant404. Receipt:`overlap-identity-browser.log` in the same folder.
+These three new journeys supplement the unchanged four, rather than rerunning them.
+Changed-file ESLint, frontend typecheck and diff check pass.
+
+Executable release metadata was refreshed through the previously working Render connector,
+with no failed HTTPS/auth probes repeated. On11October the exact API/worker deploys remain
+live at `b165b92276346f0e0fe3ccdbd2bec3443dc75d40`: API receipt
+`dep-db4gdkeq1p3s73a395u0`, worker receipt`dep-db4gdkeq1p3s73a3975g`. No current candidate
+was deployed. Frontend target/revision and actual hosted database binding remain unknown.
+
+The single concrete access setup action now has an exact destination: update the existing
+managed environment configuration
+`d8e448e9-266c-4462-9846-dc4819fb0132~cecfg_6abe152de4548195ae254bdd52afc138`
+(bound environment
+`ccarenv_b64_Y2NhcmVudl80MThhNjYxNDk2ZDg4MTkxYWY1ODVjZWUyMmM2NGIzOA`).
+Safe status reports current spec57, no secret or outbound-identity bindings, and enforced
+package-manager-only HTTP policy. Bind `OPENAI_API_KEY` for the existing approved route,
+`RENDER_API_KEY` scoped to the two named staging services and existing DB snapshot/restore
+operations, scoped `VERCEL_TOKEN` for the existing team/project, and existing synthetic
+smoke identity (`SMOKE_ACCESS_TOKEN`/private real-login credential file). Permit
+`api.openai.com`, `api.render.com`, the existing staging API and the verified existing
+Vercel frontend/protection endpoints through the supported configuration workflow. No
+policy bypass, new infrastructure, application-provider activation or operator reset.
+This refines the earlier target-specific packet; it does not start another access checklist.
+Q4's finite price-verified cap/usage runner and native supported-evidence receipt are
+recorded below when collected; absent provider lineage/money declarations remain unavailable.
