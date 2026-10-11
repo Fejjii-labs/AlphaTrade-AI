@@ -1,8 +1,21 @@
-import { beforeEach, expect, it } from "vitest";
-import { clearPendingTurns, pendingFor, persistPending, persistTypedDraft, typedDraftFor, recordTerminal, recoveryDetails, removePending, terminalFor } from "./turn-recovery";
+import { beforeEach, expect, it, vi } from "vitest";
+import { clearPendingTurns, pendingFor, persistPending, persistPendingDurably, persistTypedDraft, typedDraftFor, recordTerminal, recoveryDetails, removePending, terminalFor } from "./turn-recovery";
 const key = "11111111-1111-4111-8111-111111111111";
 const conversation = "22222222-2222-4222-8222-222222222222";
 beforeEach(() => { clearPendingTurns(); sessionStorage.clear(); });
+it("acknowledges realtime recovery only after the exact body is durably stored", () => {
+  const saved = { key, body: { message: "Original spoken input", conversation_id: conversation },
+    conversationId: conversation, state: "uncertain" as const, createdAt: "2026-01-01T00:00:00Z" };
+  expect(persistPendingDurably("actor", saved)).toBe(true);
+  expect(JSON.parse(sessionStorage.getItem("alphatrade:pending-turn:actor")!)).toEqual([saved]);
+});
+it("storage denial cannot acknowledge a realtime business turn", () => {
+  const saved = { key, body: { message: "Original spoken input", conversation_id: conversation },
+    conversationId: conversation, state: "uncertain" as const, createdAt: "2026-01-01T00:00:00Z" };
+  const denied = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+  try { expect(persistPendingDurably("actor", saved)).toBe(false); }
+  finally { denied.mockRestore(); }
+});
 it("keeps typed drafts scoped to their actor/conversation and clears them on logout", () => {
   persistTypedDraft("actor", conversation, "Private draft");
   expect(typedDraftFor("actor", conversation)).toBe("Private draft");

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.interactive_agent.presentation import readable_number
 from app.providers.factory import resolve_providers
-from app.providers.llm import LLMMessage, OpenAILLMProvider
+from app.providers.llm import LLMMessage, LLMProvider, OpenAILLMProvider
 from app.schemas.model_routing import (
     ModelCallerScope,
     ModelContextScope,
@@ -107,9 +107,16 @@ class ConversationalResponder(Protocol):
 class ModelConversationalResponder:
     """Route one general-agent completion through the existing model router."""
 
-    def __init__(self, session: Session | None, settings: Settings) -> None:
+    def __init__(
+        self,
+        session: Session | None,
+        settings: Settings,
+        *,
+        llm_provider: LLMProvider | None = None,
+    ) -> None:
         self._session = session
         self._settings = settings
+        self._llm_provider = llm_provider
         self.last_usage: dict[str, Any] = {}
 
     def compose(
@@ -123,12 +130,12 @@ class ModelConversationalResponder:
         history: tuple[LLMMessage, ...] = (),
     ) -> str:
         try:
-            providers = resolve_providers(self._settings)
-            if self._session is not None and isinstance(providers.llm, OpenAILLMProvider):
+            llm = self._llm_provider or resolve_providers(self._settings).llm
+            if self._session is not None and isinstance(llm, OpenAILLMProvider):
                 logger.warning("interactive_agent_model_requires_detached_phase")
                 return MODEL_REPLY_UNAVAILABLE
             router = ModelRouter.from_settings(
-                providers.llm,
+                llm,
                 self._settings.model_copy(
                     update={
                         "llm_tier_a_model": self._settings.agent_reasoning_model,

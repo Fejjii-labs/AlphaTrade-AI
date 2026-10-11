@@ -33,6 +33,7 @@ from app.interactive_agent.conversation import (
 from app.interactive_agent.parsing import extract_symbol
 from app.interactive_agent.service import InteractiveAgentService
 from app.interactive_agent.vector_adapter import AgentVectorAdapter
+from app.providers.llm import LLMProvider
 from app.services.turn_coordinator import (
     RESERVATION,
     TurnCoordinator,
@@ -106,6 +107,7 @@ def capture_in_phases(
     message_id: UUID,
     source_document_id: UUID | None = None,
     usage_sink: list[dict[str, Any]] | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> tuple[list[SavedEntry], CaptureStatus, str | None, dict[str, Any]]:
     started = time.perf_counter()
     prepare_started = time.perf_counter()
@@ -123,7 +125,11 @@ def capture_in_phases(
     from app.agent_capture import service as capture_module
 
     prepare_ms = (time.perf_counter() - prepare_started) * 1000
-    model = capture_module.CaptureModel(settings)
+    model = (
+        capture_module.CaptureModel(settings, llm_provider=llm_provider)
+        if llm_provider is not None
+        else capture_module.CaptureModel(settings)
+    )
     model_started = time.perf_counter()
     provider_ms, write_ms = 0.0, 0.0
     try:
@@ -161,11 +167,25 @@ def run_interactive(
     reservation: TurnReservation,
     body: AgentTurnRequest,
     paper_factory: Callable[[Session], Any] | None = None,
+    *,
+    llm_provider: LLMProvider | None = None,
+    supplemental_facts: str = "",
+    external_retrieval: bool = True,
 ) -> dict[str, Any]:
     deferred = DeferredResponder()
     body = body.model_copy(update={"conversation_id": reservation.conversation_id})
     with coordinator.sessions() as session:
         coordinator.guard(session, reservation)
+        if not supplemental_facts:
+            from app.agent_voice.grounding import read_grounding
+
+            supplemental_facts = read_grounding(
+                session,
+                settings,
+                reservation.organization_id,
+                reservation.user_id,
+                body.message,
+            )
         if body.source_document_id:
             if body.action is not None:
                 from app.core.errors import ValidationAppError
@@ -178,25 +198,32 @@ def run_interactive(
     from app.core.provider_policy import provider_fail_closed
 
     allow_fallback = not provider_fail_closed(settings)
-    adapter = AgentVectorAdapter(settings, coordinator.sessions)
-    try:
-        hits = adapter.search(
-            organization_id=reservation.organization_id,
-            user_id=reservation.user_id,
-            query=body.message,
-            limit=5,
-        )
-        vector = PreparedVectorHits(hits, adapter.notes, allow_sql_fallback=allow_fallback)
-    except Exception:
+    if not external_retrieval:
         vector = PreparedVectorHits(
             [],
-            [
-                "Vector retrieval unavailable; policy permits bounded SQL fallback."
-                if allow_fallback
-                else "Vector retrieval unavailable; provider policy refuses fallback."
-            ],
-            allow_sql_fallback=allow_fallback,
+            ["Vector retrieval unavailable: no verified embedding spending receipt for voice."],
+            allow_sql_fallback=False,
         )
+    else:
+        adapter = AgentVectorAdapter(settings, coordinator.sessions)
+        try:
+            hits = adapter.search(
+                organization_id=reservation.organization_id,
+                user_id=reservation.user_id,
+                query=body.message,
+                limit=5,
+            )
+            vector = PreparedVectorHits(hits, adapter.notes, allow_sql_fallback=allow_fallback)
+        except Exception:
+            vector = PreparedVectorHits(
+                [],
+                [
+                    "Vector retrieval unavailable; policy permits bounded SQL fallback."
+                    if allow_fallback
+                    else "Vector retrieval unavailable; provider policy refuses fallback."
+                ],
+                allow_sql_fallback=allow_fallback,
+            )
     from app.interactive_agent.classify import classify_turn
     from app.interactive_agent.contracts import AgentCapability
 
@@ -257,7 +284,15 @@ def run_interactive(
         revision = transcript_revision(session, reservation.conversation_id)
     coordinator.transaction_ms.append((time.perf_counter() - prepare_started) * 1000)
     if deferred.inputs is not None:
-        responder = ModelConversationalResponder(None, settings)
+        if supplemental_facts:
+            deferred.inputs["factual_context"] = (
+                supplemental_facts + "\n" + deferred.inputs["factual_context"]
+            )
+        responder = (
+            ModelConversationalResponder(None, settings, llm_provider=llm_provider)
+            if llm_provider is not None
+            else ModelConversationalResponder(None, settings)
+        )
         model_started = time.perf_counter()
         model_text = responder.compose(**deferred.inputs)
         logger.info(
@@ -277,6 +312,8 @@ def run_interactive(
                 )
                 result.limitations = [n for n in result.limitations if n != MODEL_REPLY_UNAVAILABLE]
             result.model_usage = [responder.last_usage] if responder.last_usage else []
+            if supplemental_facts:
+                result.recorded_evidence = deferred.inputs["factual_context"]
             result.capture_status = "unavailable"
             result.capture_error = (
                 "Reply saved. Capture is pending; recover or retry capture if interrupted."
@@ -284,6 +321,8 @@ def run_interactive(
             assistant.content = result.reply
             detail = dict(assistant.payload[PAYLOAD_KEY])
             detail.update(full_reply=result.full_reply, model_usage=result.model_usage)
+            if supplemental_facts:
+                detail["recorded_evidence"] = result.recorded_evidence
             assistant.payload = {**assistant.payload, PAYLOAD_KEY: detail}
             store_capture_receipt(session, result)
             reservation_row.payload = {
@@ -308,6 +347,7 @@ def run_interactive(
                 result.user_message_id,
                 body.source_document_id,
                 usage_sink=result.model_usage,
+                llm_provider=llm_provider,
             )
             result.saved_entries, result.capture_status = entries, status
             result.capture_clarification, result.capture_error = clarification, None

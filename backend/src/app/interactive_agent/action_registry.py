@@ -45,6 +45,7 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.daily_review import route_daily_review
 from app.interactive_agent.parsing import extract_direction, extract_symbol, extract_timeframe
 from app.schemas.common import MembershipRole, StrictModel
+from app.schemas.watcher_assignments import WatcherAssignmentReplace
 
 
 @dataclass(frozen=True)
@@ -279,6 +280,20 @@ _TOOLS = [
         (
             "Confirmation applies through the existing five-slot validation and revision fence.",
             "Does not activate the Watcher worker or change Telegram preferences.",
+        ),
+    ),
+    _tool(
+        "watcher.assignments.replace",
+        WatcherAssignmentReplace,
+        "WatcherAssignmentService",
+        StructuredActionKind.PROPOSE_WATCHER_CHANGE,
+        ArtifactKind.OBSERVATION,
+        AgentCapability.STRATEGY_BRAIN,
+        (
+            "Explicit hash-protected confirmation applies the reviewed owned version snapshots.",
+            "Monitoring only; no trading activation, approval, "
+            "notification or execution authority.",
+            "Timeframes and parameters must match the server-owned immutable version exactly.",
         ),
     ),
     _tool(

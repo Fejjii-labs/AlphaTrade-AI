@@ -105,6 +105,15 @@ export function persistPending(scope: string, pending: PendingTurn): void {
   write(scope, [...read(scope).filter(p => p.key !== pending.key), pending]);
 }
 
+/** A realtime turn starts only after its exact recovery envelope survives storage. */
+export function persistPendingDurably(scope: string, pending: PendingTurn): boolean {
+  persistPending(scope, pending);
+  try {
+    return stored(prefix + scope).some(value => validPending(value) &&
+      value.key === pending.key && JSON.stringify(value.body) === JSON.stringify(pending.body));
+  } catch { return false; }
+}
+
 /** Only call with a proven terminal outcome for this exact request, never from missing storage/history. */
 export function recordTerminal(scope: string, proof: VoiceTerminalProof): void {
   if (!validTerminal(proof)) return;

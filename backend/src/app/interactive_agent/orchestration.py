@@ -37,6 +37,7 @@ from app.repositories.watcher_watchlist import WatcherWatchlistRepository
 from app.schemas.common import DocumentSourceType, RiskAction, StrictModel
 from app.schemas.journal import JournalEntryUpdate
 from app.schemas.rag import IngestDocumentRequest
+from app.schemas.watcher_assignments import WatcherAssignmentReplace
 from app.schemas.watcher_watchlist import WatcherWatchlistReplace
 from app.services.agent_paper_execution import AgentPaperExecutionService
 from app.services.audit_service import AuditService
@@ -184,6 +185,40 @@ def propose_action(
             )
             payload["ingest_request"] = ingest.model_dump(mode="json")
             payload["provenance"] = provenance
+    elif isinstance(inputs, WatcherAssignmentReplace):
+        from app.services.watcher_assignment_service import WatcherAssignmentService
+
+        current = WatcherAssignmentService(session).read(
+            organization_id=conversation.organization_id, user_id=conversation.user_id
+        )
+        if inputs.revision != current.revision:
+            raise ConflictError("Monitoring assignments changed; draft a new proposal.")
+        snapshots = {
+            version.strategy_version_id: (version.timeframes, version.parameters)
+            for version in current.available_versions
+        }
+        # An owned existing binding may be older than the bounded recent picker.
+        # Preserve that canonical snapshot for pause/toggle without widening it.
+        snapshots.update(
+            {
+                assignment.strategy_version_id: (assignment.timeframes, assignment.parameters)
+                for assignment in current.assignments
+            }
+        )
+        for assignment in inputs.assignments:
+            if snapshots.get(assignment.strategy_version_id) != (
+                assignment.timeframes,
+                assignment.parameters,
+            ):
+                raise ValidationAppError(
+                    "Monitoring needs an exact owned immutable version snapshot."
+                )
+        payload = {
+            "configuration_revision": current.revision,
+            "assignment_replace_request": inputs.model_dump(mode="json"),
+            "monitoring_only": True,
+            "configuration_changed": False,
+        }
     elif isinstance(inputs, WatcherChangeInput):
         payload, missing = _watcher_preview(session, conversation.organization_id, inputs)
     elif isinstance(inputs, PaperExecutionInput):
@@ -502,6 +537,14 @@ def check_action_confirmation(
             version = UserStrategyVersionRepository(session).get_by_id(request.strategy_version_id)
             if version is None or str(version.strategy_id) != captured_target:
                 raise NotFoundError("Strategy version not found.")
+    if isinstance(inputs, WatcherAssignmentReplace):
+        from app.services.watcher_assignment_service import WatcherAssignmentService
+
+        assignments = WatcherAssignmentService(session).read(
+            organization_id=conversation.organization_id, user_id=conversation.user_id
+        )
+        if assignments.revision != proposal.payload["configuration_revision"]:
+            raise ConflictError("Monitoring assignments changed; draft a new proposal.")
     if isinstance(inputs, WatcherChangeInput):
         current = WatcherWatchlistRepository(session).load(conversation.organization_id)
         if current.revision != proposal.payload["configuration_revision"]:

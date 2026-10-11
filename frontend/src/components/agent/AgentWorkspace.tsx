@@ -11,14 +11,15 @@ import { AGENT_TURN_TIMEOUT_MS, waitForAgent } from "@/lib/agent-turn-budget";
 import type { VoiceTurn, VoiceTurnResult } from "@/lib/voice/conversation-types";
 import { createAgentVoiceTransport } from "./agent-voice-transport";
 import { ApiError } from "@/lib/api/client";
-import { agentTurnRequest } from "@/lib/api/generated/validators";
-import { clearPendingTurns, pendingFor, persistPending, persistTypedDraft, typedDraftFor, recordTerminal, subscribeRecovery, recoveryDetails, removePending, type PendingTurn, type TurnBody } from "./turn-recovery";
+import { agentTurnRequest, agentTurnResponse } from "@/lib/api/generated/validators";
+import { clearPendingTurns, pendingFor, persistPending, persistPendingDurably, pendingTurn, persistTypedDraft, typedDraftFor, recordTerminal, subscribeRecovery, recoveryDetails, removePending, type PendingTurn, type TurnBody } from "./turn-recovery";
 import { StrategyDraftReview } from "./StrategyDraftReview";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { acknowledgedMessages, mergeProposals, proposalsFromMessages, reconcileMessages } from "./acknowledged-turn";
 import { AgentMessageContent } from "./AgentMessageContent";
 import { VoiceConversationControls } from "./VoiceConversationControls";
+import { RealtimeVoiceControls } from "./RealtimeVoiceControls";
 import { useConversationViewport } from "./useConversationViewport";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -138,6 +139,7 @@ export function AgentWorkspace() {
   const [importOpen, setImportOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendOrigin, setSendOrigin] = useState<"text" | "voice" | null>(null);
+  const [realtimeActive, setRealtimeActive] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [latest, setLatest] = useState<AgentTurnResult | null>(null);
   const [proposals, setProposals] = useState<AgentStructuredProposal[]>([]);
@@ -530,6 +532,41 @@ export function AgentWorkspace() {
   const voiceTransport = useMemo(() => createAgentVoiceTransport(recoveryScope ?? "", (request, recovery) =>
     voiceRun.current(request.transcript, "voice", recovery, false, request)), [recoveryScope]);
 
+  function retainRealtimeTurn(key: string, body: TurnBody): boolean {
+    if (!sessionLive || !recoveryScope || currentScope.current !== recoveryScope ||
+        !agentTurnRequest(body) || body.conversation_id !== activeConversation.current ||
+        !body.conversation_id || sendInFlight.current || pendingRef.current) return false;
+    const original: PendingTurn = {
+      key, body, conversationId: body.conversation_id, state: "uncertain",
+      createdAt: new Date().toISOString(), origin: "voice",
+      voice: { turnKey: key, transcript: body.message, conversationId: body.conversation_id, origin: "voice" },
+    };
+    if (!persistPendingDurably(recoveryScope, original)) {
+      removePending(recoveryScope, key);
+      return false;
+    }
+    pendingRef.current = original; setPending(original);
+    return true;
+  }
+
+  function acknowledgeRealtimeTurn(key: string, result: AgentTurnResult): boolean {
+    if (!sessionLive || !recoveryScope || currentScope.current !== recoveryScope || !agentTurnResponse(result)) return false;
+    const original = pendingTurn(recoveryScope, key);
+    if (!original || original.body.conversation_id !== result.conversation_id ||
+        result.conversation_id !== activeConversation.current) return false;
+    const retained = reconcileMessages(retainedMessages.current.get(result.conversation_id) ?? [],
+      acknowledgedMessages(original.body.message, result, original.body.source_document_id ?? undefined));
+    retainedMessages.current.set(result.conversation_id, retained);
+    const capturePending = result.capture_status === "unavailable" && Boolean(result.capture_error?.includes("pending"));
+    if (capturePending) persistPending(recoveryScope, { ...original, state: "turn_capture" });
+    else recordTerminal(recoveryScope, { turnKey: key, conversationId: result.conversation_id, outcome: "acknowledged", origin: "voice" });
+    setLatest(result); setMessages(retained); setMessagesError(null);
+    setProposals(current => mergeProposals(current, result.proposals ?? []));
+    void reconcileHistory(result.conversation_id);
+    void refreshConversations();
+    return true;
+  }
+
   async function ensureConversation(signal: AbortSignal): Promise<string | null> {
     if (activeConversation.current) return activeConversation.current;
     if (!sessionLive || !recoveryScope || sendInFlight.current || pendingRef.current || (strategyId && !strategyContext)) return null;
@@ -828,6 +865,7 @@ export function AgentWorkspace() {
                   : pending.state === "uncertain" ? "The response is uncertain. Recover the original request before starting another."
                     : `Request state: ${pending.state}. Review history before deliberately starting a new turn.`}</p>
                 {pending.origin !== "voice" ? <Button disabled={sending} onClick={() => void sendMessage(pending.body.message, "text", pending)}>Recover original request</Button> : null}
+                {pending.origin === "voice" && !realtimeActive ? <Button disabled={sending} onClick={() => void sendMessage(pending.body.message, "voice", pending)}>Recover voice request</Button> : null}
                 {pending.conversationId ? <Button variant="outline" onClick={() => {
                   changeConversation(pending.conversationId);
                   void reconcileHistory(pending.conversationId!);
@@ -949,7 +987,7 @@ export function AgentWorkspace() {
                     <summary className="min-h-11 cursor-pointer content-center text-text-secondary">Strategy options</summary>
                     <div className="flex flex-wrap gap-2 py-2">
                       <Button type="button" variant="outline"
-                        disabled={!sessionLive || sending || Boolean(pending) || (!draft.trim() && !attachmentPreview) || Boolean(strategyError) || Boolean(!conversationId && strategyId && !strategyContext)}
+                        disabled={!sessionLive || sending || realtimeActive || Boolean(pending) || (!draft.trim() && !attachmentPreview) || Boolean(strategyError) || Boolean(!conversationId && strategyId && !strategyContext)}
                         onClick={() => void sendMessage(draft, "text", undefined, true)}>
                         Review strategy draft
                       </Button>
@@ -971,12 +1009,22 @@ export function AgentWorkspace() {
                     {importOpen ? "Close attachment" : "Attach document"}
                   </Button>
                 </div>
-                <VoiceConversationControls
+                <RealtimeVoiceControls
+                  conversationId={conversationId} sessionKey={recoveryScope} contextKey={voiceContextKey}
+                  authenticated={Boolean(recoveryScope) && sessionLive}
+                  disabled={sending || Boolean(pending) || Boolean(attached) || Boolean(!conversationId && strategyId && !strategyContext)}
+                  strategyId={strategyContext?.id} symbol={params.get("symbol") ?? undefined}
+                  ensureConversation={ensureConversation} onPending={retainRealtimeTurn}
+                  onResult={acknowledgeRealtimeTurn} onActive={setRealtimeActive}
+                />
+                <details className="text-xs text-text-muted">
+                  <summary>Browser dictation fallback</summary>
+                  <VoiceConversationControls
                   conversationId={conversationId}
                   sessionKey={recoveryScope}
                   authenticated={Boolean(recoveryScope) && sessionLive}
                   contextKey={voiceContextKey}
-                  disabled={(sending && sendOrigin !== "voice") ||
+                  disabled={realtimeActive || (sending && sendOrigin !== "voice") ||
                     Boolean(pending && pending.origin !== "voice") ||
                     Boolean(!conversationId && strategyId && !strategyContext) ||
                     (messagesLoading && messages.length === 0) || (Boolean(attached) && !attachmentPreview)}
@@ -986,6 +1034,7 @@ export function AgentWorkspace() {
                   ensureConversation={ensureConversation}
                   showReply={false}
                 />
+                </details>
                 {sendError ? (
                   <p
                     role="alert"
