@@ -167,6 +167,7 @@ Coordinated rollback sequence:
 | Actual Chromium API/browser |2 passed,0 skipped;24.8s +17.3s|Synthetic document→confirmation→bounded draft→malformed-success recovery; real API restart; history/reload/tenant404/sample503|
 | Auth-owned recovery correction |49 passed,0 skipped;7 files,9.72s|5 token,9 recovery-session,7 AuthContext,7 draft,13 screening and8 transport cases; new binding/panels supersede prior recovery coverage|
 | Actual-login Chromium recovery |2 passed,0 skipped;51.3s|Real `/login`; committed malformed draft/lost screening; reload exact byte-for-byte bodies/keys; explicit recovery keeps counts/DTOs; off-panel logout/same-account and other-account login; foreign reads404|
+| Empty-tenant safety bootstrap |19 passed,0 skipped|4 real PostgreSQL bootstrap/protection cases plus15 existing AT014 cases; synchronous status route owns commit/rollback; original route fails the bounded contention negative control|
 
 These are focused results, not full backend acceptance. Initial PR244 CI38083209763
 had928 backend passes and one cache failure; PR246 CI38084766737 completed418 backend
@@ -187,6 +188,8 @@ Reproduction uses explicitly disposable loopback PostgreSQL `alphatrade_test`:
 
 ```sh
 # backend; never a hosted DATABASE_URL
+EXPERIMENT_TEST_POSTGRES_URL="$disposable_url" .venv/bin/pytest -o addopts='' -q -rs \
+  tests/test_kill_switch_bootstrap_postgres.py tests/test_at014_persistent_kill_switch.py
 EXPERIMENT_TEST_POSTGRES_URL="$disposable_url" .venv/bin/pytest -o addopts='' -q -rs \
   tests/test_research_authoring_integration.py tests/test_strategy_conversation_foundation.py
 PR237_ROLLBACK_POSTGRES_URL="$disposable_url" .venv/bin/pytest -o addopts='' -q -rs \
@@ -218,20 +221,23 @@ Both synthetic accounts start with persisted **blocked** safety rows; only newly
 created disposable tenants are initialized, with no operator row changed. During
 initial qualification, concurrent lazy `GET /risk/kill-switch` inserts for an empty
 synthetic organization caused a transaction-ID lock and blocked the local event loop.
-The fixture now represents existing initialized account settings; production risk
-code remains unchanged. Empty-tenant safety bootstrap is a separate observed issue,
-not qualified or repaired here. Verify the smoke tenant's existing persisted safety
+The fixture represents existing initialized account settings; production risk code
+was unchanged at reviewed revision `11dc274c`. The subsequent bounded bootstrap repair
+is qualified separately below, without preinitializing its test tenant. Verify the
+smoke tenant's existing persisted safety
 state through the authorized executor; never reset settings to manufacture a pass.
 The initial private-file writer error and one session-loading/blocked-API browser
 failure were diagnosed; the final selected run executes both cases with no skips.
 Frontend typecheck/changed ESLint, seeder Ruff/format and diff whitespace checks pass.
-Production backend, combined generated contracts and immutable migration tree are
-byte-identical to `48ca2e68`; their valid prior evidence is reused, not rerun or
-attributed as new full acceptance.
+At `11dc274c`, production backend, combined generated contracts and immutable migration
+tree were byte-identical to `48ca2e68`. The new status-read correction changes only its
+route; unchanged recovery, authoring, contracts, migrations and retained-schema rollback
+evidence are reused, not rerun or attributed as new full acceptance.
 
 ## Hosting receipt and one release access packet
 
-Read-only Render access works in workspace `tea-d7hn0fvavr4c73f62c70`:
+The existing read-only receipts below were last verified on 10 October 2026 in
+Render workspace `tea-d7hn0fvavr4c73f62c70`. They are not a new live revision check:
 
 | Target | Verified configuration and live revision |
 | --- | --- |
@@ -269,6 +275,12 @@ One concrete action packet for the existing release/access administrator:
 This packet enables the blocked exact-ref deploy, frontend identity/binding verification,
 coordinated backup/drain/migration and authenticated hosted smoke. It grants no runtime,
 provider, exchange, Telegram, billing or kill-switch changes.
+
+The 11 October bootstrap repair found no changed executor access: the scoped Render,
+Vercel and staging-smoke environment credentials remain unbound, their CLIs are
+unavailable, and the Render deploy connector still has no exact-commit parameter.
+No failed HTTPS or Vercel probe was repeated. The remaining executable access action
+is the same packet above; do not trigger a main-tracking deploy to substitute for it.
 
 ## Prepared staging order and workstream status
 
@@ -323,6 +335,56 @@ All local capabilities remain undeployed. Remaining external dependencies are th
 single access packet, verified rollback images/armed-worker compatibility, supervising
 review, aligned staging smoke/fresh SFP, final full gate and a separately verified
 native attestation producer before any sample/performance activation.
+
+## Empty-tenant safety bootstrap repair — 11 October 2026
+
+Baseline: `11dc274ccdb1207d9fe8ded614f54007c34592bb`. The reviewed authentication
+recovery correction and its unchanged evidence remain accepted. This bounded repair
+owns the status-read transaction and synchronous database scheduling; it changes no
+operator defaults, execution authority or historical migration. Fix these four proof
+requirements before publishing, using authenticated requests and disposable PostgreSQL:
+
+1. Concurrent status reads for a tenant with no kill-switch row complete within a
+   bounded timeout, including actual PostgreSQL unique-insert contention.
+2. Unrelated API requests stay responsive while that database contention exists.
+3. Initialization commits the existing intended state, observed through a fresh
+   session, with exactly one organization row; failures release their transaction.
+4. Existing operator state, optimistic versions, tenant boundaries, mutation audits
+   and fail-closed execution protections remain intact.
+
+These are repair verification requirements within the unchanged original 16-criterion
+milestone, not additional product features. No fixture preinitialization or increased
+production timeout qualifies this repair. Deployment/live acceptance and the single
+final full backend gate remain unexecuted until their existing prerequisites pass.
+
+Retained-a12 rollback evidence still proves schema/data compatibility for its exact
+tested source. It does not prove empty-tenant status responsiveness in an older API
+image. Reverting to the old asynchronous status handler would reintroduce this defect:
+a qualified API rollback image must retain this correction or an equivalent reviewed
+transaction boundary and pass the empty-tenant proof. Preserve populated a12 and the
+existing coordinated API/worker/frontend image prerequisites; never downgrade or stamp
+the database to make an old image start.
+
+**Result:4/4 repair requirements locally accepted; implemented and integrated.** The
+four new PostgreSQL cases and15 existing AT014 cases passed (19 executed,0 skipped).
+The first authenticated GET owns the initially absent row; a test-only insert hook
+holds its transaction. A second authenticated GET must show an actual PostgreSQL
+`Lock` wait in `pg_stat_activity`, while authenticated `/auth/me` finishes before
+release. Both reads then return identical default state; fresh sessions see one row
+and its unchanged ID. A synthetic commit failure rolls back and permits a later
+normal read to initialize. Existing operator activation/deactivation, optimistic
+conflicts, owner-only changes, tenant isolation, audit events, global blocking and
+execution refusal remain covered. A separate service test proves the caller can
+still roll back bootstrap; no service-wide commit was introduced.
+
+The original handler produced one **expected negative-control failure**: the second
+request could not start on the ASGI loop. An independent watchdog bounded that
+failure. PostgreSQL lock/statement limits and synchronization hooks exist only in the
+disposable tests; no production timeout was increased. Changed-file Ruff lint/format,
+route-only mypy and diff checks pass. Public request/response contracts and the API
+description are preserved. The shared service, authentication recovery, migrations,
+watcher, Telegram and operator configuration remain unchanged. No hosted operation or
+full backend acceptance was executed.
 
 ## Active milestone contract — 10 October 2026
 

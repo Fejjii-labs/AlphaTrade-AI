@@ -116,12 +116,21 @@ async def reset_risk_settings(
     summary="Get organization kill switch status",
     dependencies=[_KILL_SWITCH_READ],
 )
-async def get_kill_switch(
+def get_kill_switch(
     tenant: ReaderDep,
     service: KillSwitchServiceDep,
+    session: SessionDep,
 ) -> KillSwitchStatus:
     """Read-only; available while execution is blocked."""
-    return service.get_status(organization_id=tenant.organization_id)
+    # Run sync database work off the event loop and own the outer transaction:
+    # the service's lazy default insert releases only its initialization savepoint.
+    try:
+        result = service.get_status(organization_id=tenant.organization_id)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.post(
