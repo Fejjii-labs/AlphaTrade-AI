@@ -402,7 +402,7 @@ def test_migration_reader_fails_closed_without_one_revision() -> None:
         session.execute(text("INSERT INTO alembic_version (version_num) VALUES ('other')"))
         session.commit()
         assert read_migration_revision(session) is None
-    assert expected_migration_head() == "a12trendpulsescreen001"
+    assert expected_migration_head() == "a13voicemonitor001"
 
 
 @pytest.mark.parametrize(
@@ -508,4 +508,4 @@ def test_expected_migration_head_is_independent_of_process_working_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert expected_migration_head() == "a12trendpulsescreen001"
+    assert expected_migration_head() == "a13voicemonitor001"
