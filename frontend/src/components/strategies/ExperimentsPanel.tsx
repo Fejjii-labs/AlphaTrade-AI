@@ -68,17 +68,27 @@ function ScopedExperiments({ initialExperiment }: { initialExperiment?: string |
               if (!version) return null;
               const activity = experimentActivity(version)[0];
               return (
-                <article key={experiment.id} className="space-y-3 rounded-card border border-border-subtle bg-surface-1 p-4" data-testid="experiment-card">
+                <article key={experiment.id} className="space-y-2 rounded-card border border-border-subtle bg-surface-1 p-3 sm:space-y-3 sm:p-4" data-testid="experiment-card">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <h3 className="font-semibold">{experiment.name}</h3>
                     <Badge variant="info">{version.configuration.mode === "exploration" ? "Exploration" : "Validation"}</Badge>
                   </div>
-                  <p className="text-sm text-text-secondary">{experimentFamily[version.configuration.family]} · {version.configuration.symbols.join(", ")} · {version.configuration.timeframes.join(", ")}</p>
-                  <div className="flex flex-wrap gap-2 text-sm"><Badge>{lifecycleLabel[version.state]}</Badge><span className="text-text-muted">v{version.version}</span></div>
-                  <p className="text-sm">{sampleSummary(version)} · {version.configuration.variants.length} {version.configuration.variants.length === 1 ? "variant" : "variants"}</p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
+                    <Badge>{lifecycleLabel[version.state]}</Badge>
+                    <span>{version.configuration.symbols.join(", ")} · {version.configuration.timeframes.join(", ")}</span>
+                    <span>{version.configuration.account.source === "blofin_demo" ? "BloFin demo" : "Simulation"}</span>
+                  </div>
                   <p className="text-xs text-text-muted">{activity ? <>{activity[0]} <time dateTime={activity[1]}>{timestamp(activity[1])}</time></> : "Activity unavailable"}</p>
-                  <p className="text-sm text-text-muted">Performance unavailable</p>
-                  <Button size="sm" variant="outline" onClick={event => { backFocus.current = event.currentTarget; setSelected(experiment.id); }}>Open {experiment.name}</Button>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-text-muted">Performance unavailable</p>
+                    <Button size="sm" variant="outline" aria-label={`Open ${experiment.name}`}
+                      onClick={event => { backFocus.current = event.currentTarget; setSelected(experiment.id); }}>Details</Button>
+                  </div>
+                  <details className="text-xs text-text-secondary">
+                    <summary className="cursor-pointer py-1">Configuration summary</summary>
+                    <p className="pt-2">{experimentFamily[version.configuration.family]} · v{version.version}</p>
+                    <p>{sampleSummary(version)} · {version.configuration.variants.length} {version.configuration.variants.length === 1 ? "variant" : "variants"}</p>
+                  </details>
                 </article>
               );
             })}

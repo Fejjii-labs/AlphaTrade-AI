@@ -21,8 +21,15 @@ from tests.support.experiment_fixtures import World
 from tests.test_trendpulse_1r_adapter import END, spec
 
 from app.core.config import Settings
-from app.db.models import KillSwitchState, User, UserStrategy, UserStrategyVersion
-from app.schemas.common import StrategyId
+from app.db.models import (
+    Conversation,
+    ConversationMessage,
+    KillSwitchState,
+    User,
+    UserStrategy,
+    UserStrategyVersion,
+)
+from app.schemas.common import ConversationMessageRole, StrategyId
 from app.schemas.experiments import ExperimentCreate
 from app.schemas.strategy_library import StrategyCard
 from app.security.passwords import hash_password
@@ -55,6 +62,7 @@ def main() -> None:
     parser.add_argument("--database-url", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--local-jwt-secret", required=True)
+    parser.add_argument("--long-conversation", action="store_true")
     args = parser.parse_args()
     url = make_url(args.database_url)
     if (
@@ -136,6 +144,35 @@ def main() -> None:
             session.add(world.strategy)
             session.flush()
             world.add_strategy_version(spec(), 1)
+            conversation_id = None
+            if args.long_conversation:
+                conversation = Conversation(
+                    organization_id=world.tenant.organization_id,
+                    user_id=world.tenant.user_id,
+                    title="Synthetic long viewport conversation",
+                )
+                session.add(conversation)
+                session.flush()
+                conversation_id = str(conversation.id)
+                for index in range(130):
+                    session.add(
+                        ConversationMessage(
+                            conversation_id=conversation.id,
+                            organization_id=world.tenant.organization_id,
+                            user_id=world.tenant.user_id,
+                            role=ConversationMessageRole.USER
+                            if index % 2 == 0
+                            else ConversationMessageRole.ASSISTANT,
+                            content=f"Synthetic viewport message {index:03d}. "
+                            + (
+                                "This is a synthetic observation for reading navigation. "
+                                "It provides no performance evidence or trading authority. "
+                            )
+                            * 4,
+                            created_at=world.now + timedelta(seconds=index),
+                            payload={},
+                        )
+                    )
             session.commit()
             token, _ = create_access_token(
                 user_id=world.tenant.user_id,
@@ -154,6 +191,7 @@ def main() -> None:
                 json.dump(
                     {
                         "token": token,
+                        "conversation_id": conversation_id,
                         "email": user.email,
                         "password": password,
                         "other": {"email": other_user.email, "password": other_password},

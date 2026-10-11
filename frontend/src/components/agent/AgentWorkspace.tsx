@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { acknowledgedMessages, mergeProposals, proposalsFromMessages, reconcileMessages } from "./acknowledged-turn";
 import { AgentMessageContent } from "./AgentMessageContent";
 import { VoiceConversationControls } from "./VoiceConversationControls";
+import { useConversationViewport } from "./useConversationViewport";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -109,6 +110,13 @@ export function AgentWorkspace() {
     params.get("conversation"),
   );
   const [messages, setMessages] = useState<ConversationMessageRecord[]>([]);
+  const historyCursors = useRef(new Map<string, number>());
+  const [earlierOffset, setEarlierOffset] = useState(0);
+  const [earlierLoading, setEarlierLoading] = useState(false);
+  const viewport = useConversationViewport(
+    `${recoveryScope}:${conversationId}`,
+    messages.at(-1)?.id ?? "",
+  );
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const draftRef = useRef(draft);
@@ -195,6 +203,8 @@ export function AgentWorkspace() {
     decisionAbort.current?.abort();
     setConversationId(id);
     setMessages(id ? retainedMessages.current.get(id) ?? [] : []);
+    setEarlierOffset(id ? historyCursors.current.get(id) ?? 0 : 0);
+    setEarlierLoading(false);
     setLatest(null);
     setProposals(id ? proposalsFromMessages(retainedMessages.current.get(id) ?? []) : []);
     setDecidingId(null);
@@ -246,8 +256,16 @@ export function AgentWorkspace() {
     setMessagesError(null);
     setMessagesLoading(true);
     try {
-      const page = await api.conversations.listMessages(id, { limit: 100 }, { signal: controller.signal });
+      let page = await api.conversations.listMessages(id, { limit: 100 }, { signal: controller.signal });
       if (!isCurrent()) return;
+      const tailOffset = Math.max(0, page.total - 100);
+      if (tailOffset > 0) {
+        page = await api.conversations.listMessages(id, { limit: 100, offset: tailOffset }, { signal: controller.signal });
+        if (!isCurrent()) return;
+      }
+      const cursor = Math.min(historyCursors.current.get(id) ?? tailOffset, tailOffset);
+      historyCursors.current.set(id, cursor);
+      setEarlierOffset(cursor);
       const merged = reconcileMessages(page.items, retainedMessages.current.get(id) ?? []);
       retainedMessages.current.set(id, merged);
       setMessages(merged);
@@ -259,6 +277,40 @@ export function AgentWorkspace() {
     }
   }, []);
 
+  async function loadEarlier() {
+    const id = conversationId;
+    if (!id || earlierLoading || !earlierOffset) return;
+    historyAbort.current?.abort();
+    const controller = new AbortController();
+    historyAbort.current = controller;
+    const generation = ++historyGeneration.current;
+    const isCurrent = () => mounted.current && activeConversation.current === id &&
+      generation === historyGeneration.current && !controller.signal.aborted;
+    const anchor = viewport.thread.current?.querySelector<HTMLElement>('[data-testid="agent-message"]');
+    const top = anchor?.getBoundingClientRect().top;
+    setEarlierLoading(true);
+    setMessagesError(null);
+    try {
+      const offset = Math.max(0, earlierOffset - 100);
+      const page = await api.conversations.listMessages(id, { limit: 100, offset }, { signal: controller.signal });
+      if (!isCurrent()) return;
+      const merged = reconcileMessages(page.items, retainedMessages.current.get(id) ?? []);
+      retainedMessages.current.set(id, merged);
+      historyCursors.current.set(id, offset);
+      setEarlierOffset(offset);
+      setMessages(merged);
+      setProposals(current => mergeProposals(current, proposalsFromMessages(merged)));
+      requestAnimationFrame(() => {
+        if (isCurrent() && anchor && top !== undefined)
+          window.scrollBy(0, anchor.getBoundingClientRect().top - top);
+      });
+    } catch (error) {
+      if (isCurrent()) setMessagesError(error instanceof Error ? error.message : "Earlier messages unavailable");
+    } finally {
+      if (isCurrent()) setEarlierLoading(false);
+    }
+  }
+
   useEffect(() => onSessionCleared(() => {
     setSessionLive(false);
     clearPendingTurns();
@@ -266,6 +318,7 @@ export function AgentWorkspace() {
     pendingRef.current = null;
     setPending(null);
     retainedMessages.current.clear();
+    historyCursors.current.clear();
     strategyAbort.current?.abort();
     setStrategyContext(null);
     changeConversation(null, false);
@@ -675,11 +728,17 @@ export function AgentWorkspace() {
                 </div>
               ) : null}
               <div
+                ref={viewport.thread}
                 aria-label="Conversation messages"
                 aria-busy={messagesLoading}
                 className="flex min-h-48 flex-col gap-4 lg:min-h-64"
                 data-testid="agent-thread"
               >
+                {earlierOffset > 0 ? <Button type="button" variant="outline" size="sm"
+                  className="self-start" disabled={earlierLoading || messagesLoading}
+                  onClick={() => void loadEarlier()}>
+                  {earlierLoading ? "Loading earlier messages…" : "Earlier messages"}
+                </Button> : null}
                 {messagesLoading && messages.length === 0 ? (
                   <p role="status" className="py-6 text-sm text-text-secondary">
                     Loading conversation…
@@ -689,8 +748,12 @@ export function AgentWorkspace() {
                     Start a conversation.
                   </p>
                 ) : (
-                  messages.map((message) => (
-                    <div
+                  messages.map((message) => {
+                    const capture = (message.payload?.interactive_agent as
+                      Record<string, unknown> | undefined)?.capture as
+                      Parameters<typeof SavedReceipt>[0]["capture"] | undefined;
+                    return (
+                      <div
                       key={message.id}
                       data-testid="agent-message"
                       data-message-id={message.id}
@@ -707,8 +770,16 @@ export function AgentWorkspace() {
                         {formatDateTime(message.created_at)}
                       </p>
                       <AgentMessageContent message={message} />
-                    </div>
-                  ))
+                      {message.role === "assistant" && capture ? (
+                        <SavedReceipt
+                          capture={capture}
+                          conversationId={conversationId!}
+                          sourceDocumentId={sourceDocumentFor(messages, capture.source_message_id)}
+                        />
+                      ) : null}
+                      </div>
+                    );
+                  })
                 )}
               </div>
 
@@ -792,22 +863,6 @@ export function AgentWorkspace() {
                   ))}
                 </ul>
               ) : null}
-              {messages
-                .filter((m) => m.role === "assistant")
-                .map((message) => {
-                  const payload = message.payload?.interactive_agent as
-                    Record<string, unknown> | undefined;
-                  const capture = payload?.capture as
-                    Parameters<typeof SavedReceipt>[0]["capture"] | undefined;
-                  return capture ? (
-                    <SavedReceipt
-                      key={`receipt:${message.id}`}
-                      capture={capture}
-                      conversationId={conversationId!}
-                      sourceDocumentId={sourceDocumentFor(messages, capture.source_message_id)}
-                    />
-                  ) : null;
-                })}
               {latest &&
                 !messages.some(
                   (m) =>
@@ -830,7 +885,9 @@ export function AgentWorkspace() {
                   />
                 )}
               <form
-                className="space-y-3 border-t border-border-subtle pt-4"
+                ref={viewport.composer}
+                data-testid="agent-composer"
+                className="scroll-mb-[calc(5rem+env(safe-area-inset-bottom,0px))] space-y-3 border-t border-border-subtle pt-4 lg:scroll-mb-4"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void sendMessage();
@@ -991,6 +1048,9 @@ export function AgentWorkspace() {
               )}
             </CardContent>
           </Card>
+          {messages.length > 0 && viewport.away ? <Button type="button"
+            className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom,0px))] right-4 z-40 shadow-lg lg:bottom-4"
+            onClick={viewport.returnToLatest}>Latest messages ↓</Button> : null}
         </div>
       </div>
     </div>

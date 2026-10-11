@@ -356,17 +356,18 @@ function JournalWorkspaceContent() {
         </Link>
       </nav>
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
-      {!savedId && !documentId ? <div className="flex flex-wrap items-center gap-3">
+      {!savedId && !documentId ? <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
         <Input
           aria-label="Search entries"
           placeholder="Search"
           value={query}
           onChange={(e) => filter("q", e.target.value)}
-          className="max-w-md"
+          className="col-span-2 min-w-0 sm:w-auto sm:flex-1 sm:max-w-md"
         />
         {knowledge && (
           <Select
             aria-label="Knowledge category"
+            className="min-w-0 sm:w-auto"
             value={category}
             onChange={(e) => filter("category", e.target.value)}
           >
@@ -381,6 +382,7 @@ function JournalWorkspaceContent() {
         <Button
           disabled={loading}
           variant="outline"
+          size="sm"
           onClick={() => { readinessDeadline.current = 0; void reload(); }}
         >
           Refresh
@@ -538,7 +540,7 @@ function JournalWorkspaceContent() {
                   data.sourceTotal,
                   knowledge ? "Documents" : "Recorded reviews",
                 ],
-              ].map(([key, index, total, label]) => (
+              ].filter(([, index, total]) => Number(total) > 50 || Number(index) > 0).map(([key, index, total, label]) => (
                 <nav
                   key={String(key)}
                   aria-label={`${label} pages`}

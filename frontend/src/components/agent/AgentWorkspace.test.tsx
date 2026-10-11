@@ -158,6 +158,29 @@ describe("Agent workspace", () => {
     apiMocks.killSwitchActive = false;
   });
 
+  it("opens the current tail beyond one API page and explicitly retains older messages", async () => {
+    testParams.set("conversation", "11111111-1111-4111-8111-111111111111");
+    const messages = Array.from({ length: 230 }, (_, index) => ({
+      id: `page-message-${index}`, role: "assistant", content: `History ${index}`,
+      created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    }));
+    apiMocks.listMessages.mockImplementation(async (_id, params) => ({
+      items: messages.slice(params.offset ?? 0, (params.offset ?? 0) + 100),
+      total: messages.length, limit: 100, offset: params.offset ?? 0,
+    }));
+    render(<AgentWorkspace />);
+    await screen.findByText("History 229");
+    expect(screen.queryByText("History 0")).not.toBeInTheDocument();
+    expect(apiMocks.listMessages).toHaveBeenLastCalledWith(expect.any(String), { limit: 100, offset: 130 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
+    await screen.findByText("History 30");
+    expect(screen.getByText("History 229")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Earlier messages" }));
+    await screen.findByText("History 0");
+    expect(screen.getAllByTestId("agent-message")).toHaveLength(230);
+    expect(screen.queryByRole("button", { name: "Earlier messages" })).not.toBeInTheDocument();
+  });
+
   function enableVoice(text: string) {
     const provider: VoiceProvider = {
       capabilities: { input: true, output: true },

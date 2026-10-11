@@ -295,3 +295,24 @@ it("requires execution lifecycle provenance for default exchange activity", asyn
     screen.getAllByRole("link", { name: "Open exact trade" }),
   ).toHaveLength(1);
 });
+
+it("hides pagination for empty or single-page libraries", async () => {
+  render(<Page />);
+  await screen.findByText("Confirmation rule");
+  expect(screen.queryByRole("navigation", { name: "Saved notes pages" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("navigation", { name: "Documents pages" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("knowledge-filters")).toContainElement(screen.getByLabelText("Knowledge category"));
+});
+it("retains independent document paging and a way back from a stale empty page", async () => {
+  state.params.set("page", "1");
+  vi.mocked(savedEntries.list).mockResolvedValue({ items: [], total: 0 });
+  vi.mocked(api.knowledge.listDocuments).mockResolvedValue({ items: [], total: 80, limit: 50, offset: 0 });
+  render(<Page />);
+  const documents = await screen.findByRole("navigation", { name: "Documents pages" });
+  fireEvent.click(within(documents).getByRole("button", { name: "Next" }));
+  expect(state.replace).toHaveBeenCalledWith("/knowledge?page=1&source_page=1", { scroll: false });
+  const notes = screen.getByRole("navigation", { name: "Saved notes pages" });
+  expect(within(notes).getByRole("button", { name: "Next" })).toBeDisabled();
+  fireEvent.click(within(notes).getByRole("button", { name: "Previous" }));
+  expect(state.replace).toHaveBeenCalledWith("/knowledge?page=0", { scroll: false });
+});

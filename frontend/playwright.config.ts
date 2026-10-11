@@ -22,7 +22,7 @@ export default defineConfig({
   testDir: ".",
   // Research persistence requires an explicit disposable PostgreSQL fixture and
   // two selected phases separated by a real API restart; never run it on staging.
-  testMatch: ["e2e/**/*.spec.ts", "ui-tests/reviewer-wave.spec.ts", "ui-tests/reviewer-api-persistence.spec.ts", "ui-tests/experiments-api.spec.ts", ...(process.env.EXPERIMENT_BROWSER_AUTH_FILE ? ["ui-tests/research-api.spec.ts", "ui-tests/auth-recovery-api.spec.ts", "ui-tests/agent-knowledge-api.spec.ts"] : [])],
+  testMatch: ["e2e/**/*.spec.ts", "ui-tests/reviewer-wave.spec.ts", "ui-tests/reviewer-api-persistence.spec.ts", "ui-tests/experiments-api.spec.ts", ...(process.env.EXPERIMENT_BROWSER_AUTH_FILE ? ["ui-tests/research-api.spec.ts", "ui-tests/auth-recovery-api.spec.ts", "ui-tests/agent-knowledge-api.spec.ts", "ui-tests/conversation-viewport-api.spec.ts"] : [])],
   timeout: 90_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
