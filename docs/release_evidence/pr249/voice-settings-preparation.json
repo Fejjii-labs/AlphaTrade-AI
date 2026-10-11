@@ -1,0 +1,35 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "actual_render_api_settings": {
+    "PROVIDER_MODE": "fallback",
+    "AGENT_REALTIME_ENABLED": null,
+    "AGENT_REASONING_MODEL": null,
+    "EMBEDDINGS_MODEL": "text-embedding-3-small",
+    "AGENT_MAX_OUTPUT_TOKENS": null
+  },
+  "effective_candidate_reasoning_model": "gpt-6-astra",
+  "effective_candidate_reasoning_max_output_tokens": 25000,
+  "effective_candidate_embeddings_model": "text-embedding-3-small",
+  "effective_realtime_enabled": false,
+  "approved_limits_file_present": false,
+  "expected_private_limits_file": "/workspace/agent-realtime-approved-limits.json",
+  "proposed_hosted_secret_filename": "agent-realtime-approved-limits.json",
+  "proposed_hosted_limits_path": "/etc/secrets/agent-realtime-approved-limits.json",
+  "maximum_allowed_session_usd": "1",
+  "remaining_approved_budget": null,
+  "approved_receipt_prices_and_caps": null,
+  "ready_for_live_voice": false,
+  "missing_information": [
+    "existing_current_private_approved_limits_receipt",
+    "existing_approved_live_voice_session_executor_or_activation_reference"
+  ],
+  "required_preservation": [
+    "current_provider_fallback",
+    "current_realtime_disabled",
+    "current_reasoning_output_cap",
+    "trading_and_operator_settings",
+    "existing_budgets_and_unknown_holds"
+  ],
+  "paid_calls": 0,
+  "settings_changed": false
+}

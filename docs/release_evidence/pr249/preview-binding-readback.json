@@ -1,0 +1,19 @@
+{
+  "operation": "read_after_public_binding_write",
+  "http_status": 200,
+  "bindings": [
+    {
+      "id": "VAmCnUOwxVZ3jxXh",
+      "key": "NEXT_PUBLIC_API_URL",
+      "branch": "codex/interactive-voice-monitoring",
+      "target": [
+        "preview"
+      ],
+      "type": "plain",
+      "matches_approved_staging_api": true
+    }
+  ],
+  "branch_binding_verified": true,
+  "production_changed": false,
+  "redeployed": false
+}
