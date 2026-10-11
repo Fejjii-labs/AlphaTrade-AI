@@ -15,7 +15,11 @@ from app.agent_voice.config import VoiceUnavailableError
 from app.db.models import UsageEvent
 from app.interactive_agent.vector_adapter import DetachedUsage
 from app.providers.base import ProviderHealth, ProviderStatus
-from app.providers.embeddings import EmbeddingResult, EmbeddingsProvider
+from app.providers.embeddings import (
+    EmbeddingResult,
+    EmbeddingsProvider,
+    OpenAIEmbeddingsProvider,
+)
 from app.schemas.usage import UsageEvent as UsageEventRecord
 from app.schemas.usage import UsageEventCreate
 from app.services.usage_service import _to_event
@@ -39,6 +43,17 @@ def embedding_limitation(ledger: VoiceLedger) -> str | None:
 
 class VoiceEmbeddingsProvider:
     def __init__(self, provider: EmbeddingsProvider, ledger: VoiceLedger, key: str):
+        if isinstance(provider, OpenAIEmbeddingsProvider):
+            # Preserve ordinary text defaults. Only this prepaid voice route
+            # refuses raw missing/model-coerced metadata and all mock fallback.
+            provider = OpenAIEmbeddingsProvider(
+                model=ledger.settings.embeddings_model,
+                api_key=ledger.settings.openai_api_key,
+                base_url=ledger.settings.openai_base_url,
+                dimensions=provider.dimensions,
+                fail_closed=True,
+                require_usage_receipt=True,
+            )
         self.provider, self.ledger, self.key = provider, ledger, key
         self.name, self.kind = provider.name, provider.kind
 

@@ -14,13 +14,14 @@ from app.agent_voice.config import EmbeddingPrice, VoiceLimits, VoiceUnavailable
 from app.agent_voice.retrieval import VoiceEmbeddingsProvider, embedding_limitation
 from app.agent_voice.service import shared_turn
 from app.core.config import Environment
+from app.core.errors import ServiceUnavailableError
 from app.db.models import Membership, Organization, OrganizationQuota, UsageEvent, User
 from app.db.voice_realtime import VoiceSessionReservation
 from app.interactive_agent.contracts import AgentTurnRequest
 from app.interactive_agent.turn_runtime import run_interactive
 from app.interactive_agent.vector_adapter import AgentVectorAdapter
 from app.providers.base import ProviderKind
-from app.providers.embeddings import EmbeddingResult
+from app.providers.embeddings import EmbeddingResult, OpenAIEmbeddingsProvider
 from app.providers.qdrant import InMemoryVectorStore, VectorPoint
 from app.repositories.usage import UsageRepository
 from app.schemas.common import CostSource, MembershipRole, UsageStatus
@@ -184,6 +185,7 @@ def world(database, monkeypatch, *, receipt=True, credential=True, environment=N
         embeddings=embeddings,
         llm=llm,
         ids=ids,
+        store=store,
         vector_hits=vector_hits,
     )
 
@@ -516,3 +518,158 @@ def test_optional_embedding_receipt_failure_is_explicit(voice_database, invalid)
         return
     ledger.limits = ledger.limits.model_copy(update={"embedding": price})
     assert "embedding unavailable" in embedding_limitation(ledger).lower()
+
+
+def official_sdk_payload(model, *, change=None):
+    return {
+        "model": model,
+        "usage": {"prompt_tokens": 12, "total_tokens": 12},
+        "data": [{"index": 0, "embedding": [1.0, 0.0]}],
+        **(change or {}),
+    }
+
+
+def synthetic_official_sdk(monkeypatch, payload, *, scenario=None, transport_failure=False):
+    calls, clients = [], []
+
+    class SyntheticSDK:
+        def __init__(self, **kwargs):
+            clients.append(kwargs)
+            self.embeddings = SimpleNamespace(create=self.create)
+
+        def create(self, **body):
+            if scenario:
+                with scenario.ledger.sessions() as session:
+                    row = session.get(VoiceSessionReservation, scenario.ledger.id)
+                    assert (
+                        row.ledger["embedding_attempts"][scenario.key]["state"]
+                        == "transport_may_start"
+                    )
+            calls.append(body)
+            if transport_failure:
+                raise TimeoutError("synthetic lost raw SDK reply")
+            return SimpleNamespace(model_dump=lambda **_: payload)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr("app.providers.embeddings.OpenAI", SyntheticSDK)
+    return calls, clients
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model": None},
+        {"model": ""},
+        {"model": "unverified-route"},
+        {"usage": None},
+        {"usage": {"total_tokens": 12}},
+        {"usage": {"prompt_tokens": True}},
+        {"usage": {"prompt_tokens": 0}},
+        {"usage": {"prompt_tokens": -1}},
+        {"usage": {"prompt_tokens": "12"}},
+        {"usage": {"prompt_tokens": 12.5}},
+    ],
+)
+def test_strict_official_embedding_receipt_refuses_raw_missing_or_coerced_metadata(
+    monkeypatch, change
+):
+    model = "configured-synthetic-route-not-model-support-evidence"
+    calls, clients = synthetic_official_sdk(monkeypatch, official_sdk_payload(model, change=change))
+    provider = OpenAIEmbeddingsProvider(
+        model=model,
+        api_key="synthetic-not-a-credential",
+        base_url="https://example.invalid",
+        dimensions=2,
+        fail_closed=True,
+        require_usage_receipt=True,
+    )
+    with pytest.raises(ServiceUnavailableError, match="Embeddings provider is unavailable"):
+        provider.embed_with_metadata(["quasar"])
+    assert len(calls) == len(clients) == 1
+    assert clients[0]["max_retries"] == 0
+    assert clients[0]["timeout"].read == 30 and clients[0]["timeout"].connect == 5
+
+
+def test_ordinary_embedding_defaults_are_unchanged_while_raw_strict_receipt_is_optional(
+    monkeypatch,
+):
+    model = "configured-synthetic-route-not-model-support-evidence"
+    calls, _clients = synthetic_official_sdk(
+        monkeypatch,
+        official_sdk_payload(model, change={"model": None, "usage": {"prompt_tokens": "12"}}),
+    )
+    result = OpenAIEmbeddingsProvider(
+        model=model,
+        api_key="synthetic-not-a-credential",
+        base_url="https://example.invalid",
+        dimensions=2,
+        fail_closed=True,
+    ).embed_with_metadata(["quasar"])
+    assert result.model == model and result.input_tokens == 12
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", [None, "model", "tokens", "transport"])
+def test_guarded_official_voice_embedding_raw_receipt_accounting_and_recovery(
+    voice_database, monkeypatch, failure
+):
+    scenario = world(voice_database, monkeypatch)
+    payload = official_sdk_payload(voice_database.settings.embeddings_model)
+    if failure == "model":
+        payload.pop("model")
+    elif failure == "tokens":
+        payload["usage"] = {"prompt_tokens": True}
+    calls, clients = synthetic_official_sdk(
+        monkeypatch, payload, scenario=scenario, transport_failure=failure == "transport"
+    )
+    provider = OpenAIEmbeddingsProvider(
+        model=voice_database.settings.embeddings_model,
+        api_key=voice_database.settings.openai_api_key,
+        base_url=voice_database.settings.openai_base_url,
+        dimensions=2,
+    )
+    bundle = SimpleNamespace(llm=scenario.llm, embeddings=provider, vector_store=scenario.store)
+    monkeypatch.setattr("app.agent_voice.service.resolve_providers", lambda _: bundle)
+    monkeypatch.setattr("app.interactive_agent.vector_adapter.resolve_providers", lambda _: bundle)
+    result = shared_turn(scenario.ledger, scenario.key, scenario.body)
+    assert_scope(result, scenario, mode="vector" if failure is None else "lexical_store")
+    scenario.ledger.tool_done("original-call", result)
+    replay_ledger = ledger_for(voice_database)
+    replay_ledger.id = scenario.ledger.id
+    replay_ledger.organization_id, replay_ledger.user_id = (
+        scenario.ledger.organization_id,
+        scenario.ledger.user_id,
+    )
+    assert shared_turn(replay_ledger, scenario.key, scenario.body) == result
+    assert len(calls) == len(clients) == 1
+    assert clients[0]["max_retries"] == 0 and clients[0]["timeout"].read == 30
+    scenario.ledger.close()
+    with voice_database.sessions() as session:
+        row = session.get(VoiceSessionReservation, scenario.ledger.id)
+        assert row.status == "uncertain" and row.accounted_cost is None
+        event = session.get(UsageEvent, uuid5(UUID(scenario.key), "voice-embedding:query"))
+        admission = session.scalar(
+            select(UsageEvent).where(UsageEvent.provider == "agent_turn_admission")
+        )
+        assert event.request_id == admission.request_id
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(UsageEvent)
+                .where(UsageEvent.feature == "rag_search")
+            )
+            == 1
+        )
+        if failure is None:
+            assert event.estimated_cost == Decimal("0.00000120") and event.total_tokens == 12
+            assert (
+                event.cost_source == CostSource.STATIC_ESTIMATED and not event.cost_is_placeholder
+            )
+        else:
+            assert event.cost_source == CostSource.UNAVAILABLE and event.cost_is_placeholder
+            assert event.status == UsageStatus.FAILURE

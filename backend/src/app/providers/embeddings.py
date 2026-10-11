@@ -125,6 +125,7 @@ class OpenAIEmbeddingsProvider:
         fallback: MockEmbeddingsProvider | None = None,
         timeout_seconds: float = 30.0,
         fail_closed: bool = False,
+        require_usage_receipt: bool = False,
     ) -> None:
         if dimensions < 1:
             raise ValueError("dimensions must be >= 1")
@@ -133,6 +134,7 @@ class OpenAIEmbeddingsProvider:
         self._base_url = base_url.rstrip("/")
         self._dimensions = dimensions
         self._fail_closed = fail_closed
+        self._require_usage_receipt = require_usage_receipt
         self._fallback = (
             None if fail_closed else (fallback or MockEmbeddingsProvider(dimensions=dimensions))
         )
@@ -182,6 +184,18 @@ class OpenAIEmbeddingsProvider:
                 timeout=httpx2.Timeout(self._timeout, connect=min(5.0, self._timeout)),
             ) as client:
                 payload = client.embeddings.create(**body).model_dump(mode="json")
+            if self._require_usage_receipt:
+                usage = payload.get("usage")
+                incoming = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                if (
+                    payload.get("model") != self._model
+                    or not isinstance(incoming, int)
+                    or isinstance(incoming, bool)
+                    or incoming <= 0
+                ):
+                    raise ValueError(
+                        "Embedding response has no verified model/input usage receipt."
+                    )
             vectors = _validated_vectors(payload, len(texts), self._dimensions)
         except Exception as exc:
             self._last_generation_failed = True
