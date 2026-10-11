@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,11 +14,12 @@ from starlette.websockets import WebSocketDisconnect
 from app.agent_voice.config import load_limits
 from app.api.routes import agent_voice
 from app.core.config import get_settings
-from app.db.models import ConversationMessage
+from app.db.models import Chunk, ConversationMessage, Document, Organization, User
 from app.db.session import get_session
 from app.main import create_app
 from app.providers.base import ProviderKind
 from app.providers.llm import LLMCompletionResult
+from app.schemas.common import DocumentSourceType
 from tests.test_agent_realtime_persistence import voice_database as voice_database
 from tests.test_agent_realtime_protocol import voice_limits as voice_limits
 
@@ -30,6 +32,7 @@ class SyntheticConnection:
         self.messages = []
         self.response = 0
         self.utterance = 0
+        self.tool_message = None
 
     async def __aenter__(self):
         return self
@@ -66,7 +69,8 @@ class SyntheticConnection:
                         "name": "alpha_trade_turn",
                         "arguments": json.dumps(
                             {
-                                "message": f"Synthetic spoken request {self.utterance}: "
+                                "message": self.tool_message
+                                or f"Synthetic spoken request {self.utterance}: "
                                 "challenge my unsupported BTC assumption"
                             }
                         ),
@@ -263,3 +267,105 @@ def test_actual_ws_delegates_two_turns_interrupts_and_retains_shared_sql_context
         assert len([row for row in messages if row.role.value == "assistant"]) == 2
         # The shared coordinator also persists one system reservation per turn.
         assert len([row for row in messages if row.role.value == "system"]) == 2
+
+
+def test_authenticated_ws_uses_owned_knowledge_and_reports_unfunded_vector_limit(voice_client):
+    """Actual route/SQL proof; the SDK and model remain synthetic and unmeasured."""
+    fixture = voice_client
+    peer_id, foreign_org_id = uuid4(), uuid4()
+    expected_documents = set()
+    with fixture.db.sessions() as session:
+        session.add_all(
+            [
+                User(
+                    id=peer_id,
+                    email=f"{peer_id}@example.invalid",
+                    hashed_password="synthetic-unused",
+                ),
+                Organization(id=foreign_org_id, name="Synthetic foreign knowledge"),
+            ]
+        )
+        session.flush()
+        for organization_id, user_id, title, content in (
+            (
+                fixture.db.organization_id,
+                fixture.db.user_id,
+                "Owned observation",
+                "Liquidity patience: OWNED_REFERENCE says wait for confirmed evidence.",
+            ),
+            (
+                fixture.db.organization_id,
+                None,
+                "Shared observation",
+                "Liquidity patience: SHARED_REFERENCE keeps monitoring separate from orders.",
+            ),
+            (
+                fixture.db.organization_id,
+                peer_id,
+                "Peer private observation",
+                "Liquidity patience: PEER_PRIVATE_SECRET must not enter this conversation.",
+            ),
+            (
+                foreign_org_id,
+                fixture.db.user_id,
+                "Foreign tenant observation",
+                "Liquidity patience: FOREIGN_TENANT_SECRET must not enter this conversation.",
+            ),
+        ):
+            document = Document(
+                id=uuid4(),
+                organization_id=organization_id,
+                user_id=user_id,
+                title=title,
+                source_type=DocumentSourceType.GENERAL_NOTE,
+            )
+            session.add(document)
+            session.flush()
+            session.add(
+                Chunk(
+                    id=uuid4(),
+                    document_id=document.id,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    ordinal=0,
+                    content=content,
+                )
+            )
+            if organization_id == fixture.db.organization_id and user_id in (
+                fixture.db.user_id,
+                None,
+            ):
+                expected_documents.add(str(document.id))
+        session.commit()
+    fixture.upstream.tool_message = "Search my knowledge for liquidity patience"
+    with fixture.client.websocket_connect(
+        "/agent/voice/realtime", headers={"origin": fixture.db.settings.cors_origins[0]}
+    ) as websocket:
+        websocket.send_json(
+            {
+                "type": "session.start",
+                "access_token": fixture.db.token,
+                "conversation_id": str(fixture.db.conversation_id),
+            }
+        )
+        receive_type(websocket, "session.ready")
+        websocket.send_json(
+            {"type": "audio.append", "audio": base64.b64encode(b"\0\0" * 240).decode()}
+        )
+        websocket.send_json({"type": "audio.commit"})
+        pending = receive_type(websocket, "turn.pending")
+        websocket.send_json({"type": "turn.accept", "request_key": pending["request_key"]})
+        result = receive_type(websocket, "turn.result")["result"]
+        assert {hit["document_id"] for hit in result["knowledge"]} == expected_documents
+        assert {hit["retrieval_mode"] for hit in result["knowledge"]} == {"lexical_store"}
+        assert any(
+            "embedding" in note.lower() and "unavailable" in note.lower()
+            for note in result["limitations"]
+        )
+        assert result["execution_attempted"] is False
+        websocket.send_json({"type": "session.end"})
+    narrative = [call for call in fixture.calls if not call.response_format]
+    assert len(narrative) == 1
+    prompt = "\n".join(message.content for message in narrative[0].messages)
+    assert "OWNED_REFERENCE" in prompt and "SHARED_REFERENCE" in prompt
+    assert "PEER_PRIVATE_SECRET" not in prompt and "FOREIGN_TENANT_SECRET" not in prompt
