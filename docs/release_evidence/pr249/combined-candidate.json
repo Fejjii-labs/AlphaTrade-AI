@@ -1,0 +1,83 @@
+{
+  "base_sha": "00f388017c6bcd2fb53d8135df60ac76bc714125",
+  "candidate_branch": "codex/interactive-voice-monitoring",
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "pr250_corrected_sha": "25f5c00975d346b9352660462d2960c9d0fc8f1f",
+  "pr250_merge_sha": "05a8bcac17974b7906477a6cf2761da86eec3f8b",
+  "pr250_merged": true,
+  "protected_inputs": {
+    "backend": {
+      "base_oid": "c43e0bc376c808295701b12d7e6aa58d96e85581",
+      "candidate_oid": "c43e0bc376c808295701b12d7e6aa58d96e85581",
+      "unchanged": true
+    },
+    "scripts": {
+      "base_oid": "e80b8c458338f512222a26e8dd1faf8a6c6a0fed",
+      "candidate_oid": "e80b8c458338f512222a26e8dd1faf8a6c6a0fed",
+      "unchanged": true
+    },
+    ".github": {
+      "base_oid": "19a08ee704ad499f960defd53320f56d0bc18c46",
+      "candidate_oid": "19a08ee704ad499f960defd53320f56d0bc18c46",
+      "unchanged": true
+    },
+    "render.yaml": {
+      "base_oid": "2c3078459d1a12ae23f3c4a60dbfcdfeb44300e8",
+      "candidate_oid": "2c3078459d1a12ae23f3c4a60dbfcdfeb44300e8",
+      "unchanged": true
+    },
+    "frontend/package.json": {
+      "base_oid": "9cf791f56d2f382cd682df158dcb129c9d6fe0c4",
+      "candidate_oid": "9cf791f56d2f382cd682df158dcb129c9d6fe0c4",
+      "unchanged": true
+    },
+    "frontend/package-lock.json": {
+      "base_oid": "1e4892c667ed187e70019ff06ed53d91084ec182",
+      "candidate_oid": "1e4892c667ed187e70019ff06ed53d91084ec182",
+      "unchanged": true
+    },
+    "frontend/src/lib/voice": {
+      "base_oid": "edf7f6b0712611007ed77e8f7a69bb10d13ed501",
+      "candidate_oid": "edf7f6b0712611007ed77e8f7a69bb10d13ed501",
+      "unchanged": true
+    },
+    "frontend/src/lib/api": {
+      "base_oid": "8c3b3bfd5dd8f74b48e6fd61a028cd6167d25c7a",
+      "candidate_oid": "8c3b3bfd5dd8f74b48e6fd61a028cd6167d25c7a",
+      "unchanged": true
+    }
+  },
+  "reused_focused_run": 38168231073,
+  "reused_frontend_unit_tests": 567,
+  "reused_ui_browser_scenarios": 3,
+  "additional_failed_file_tests_passed": 40,
+  "additional_skips": 0,
+  "additional_typecheck": "passed",
+  "additional_changed_test_eslint": "passed",
+  "actual_api_local_browser_rerun": false,
+  "full_release_dispatch_count_this_turn": 0,
+  "failed_probe_retries_this_turn": 0,
+  "environment_spec_revision": 5,
+  "missing_policy_hosts": [
+    "api.github.com",
+    "alphatrade-api-staging.onrender.com",
+    "alpha-trade-ai-git-codex-interactive-voice-e9ba74-alphatrade-ai.vercel.app"
+  ],
+  "new_public_binding_write_http_status": 429,
+  "new_public_binding_confirmed": false,
+  "paid_provider_calls": 0,
+  "render_deployments_initiated": 0,
+  "vercel_manual_deployments_initiated": 0,
+  "production_promotions": 0,
+  "trading_or_budget_changes": 0,
+  "combined_routine_run": 38168625484,
+  "combined_routine_frontend": {
+    "status": "success",
+    "test_files": 81,
+    "tests": 637,
+    "skips": 0
+  },
+  "combined_routine_deployment_safety": "success",
+  "combined_routine_backend": "in_progress_last_observed",
+  "combined_routine_docker": "skipped"
+}
