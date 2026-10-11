@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.experiments.blofin_source import BloFinExperimentSourceResolver, rounded
 from app.experiments.models import ExperimentSampleRow
+from app.experiments.native_producer import BloFinNativeOutcomeProducer
 from app.experiments.outcome_contract import ExperimentPerformance, NativeOutcome
 from app.experiments.repository import ExperimentRepository
 from app.experiments.service import ExperimentService, semantic_hash
@@ -50,7 +51,11 @@ class BloFinExperimentReads:
         self, experiment_id: UUID, version_id: UUID, variant_key: str, source_record_id: str
     ) -> NativeOutcome:
         row = ExperimentRepository(self.session, self.tenant).version(experiment_id, version_id)
-        return self.resolver.read(self.domain.view(row), variant_key, source_record_id)
+        version = self.domain.view(row)
+        result = self.resolver.read(version, variant_key, source_record_id)
+        return BloFinNativeOutcomeProducer(
+            self.session, self.resolver.settings, self.tenant, clock=self.clock
+        ).qualify_existing_origin(version, variant_key, source_record_id, result)
 
     def performance(
         self, experiment_id: UUID, version_id: UUID, variant_key: str
@@ -96,9 +101,15 @@ class BloFinExperimentReads:
         resolver = BloFinExperimentSourceResolver(
             self.session, self.resolver.settings, self.tenant, clock=lambda: now
         )
+        producer = BloFinNativeOutcomeProducer(
+            self.session, self.resolver.settings, self.tenant, clock=lambda: now
+        )
         outcomes, valid = [], []
         for sample in samples:
             outcome = resolver.read(version, variant_key, sample.source_record_id)
+            outcome = producer.qualify_existing_origin(
+                version, variant_key, sample.source_record_id, outcome
+            )
             outcomes.append(outcome)
             if (
                 outcome.status == "available"

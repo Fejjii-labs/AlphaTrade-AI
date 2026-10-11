@@ -60,8 +60,11 @@ untrusted actors, future observations and malformed hashes fail closed. Hashes d
 corruption; they are not signatures or a substitute for the trusted server producer.
 No HTTP or imported activity path writes these attestations.
 
-**This task supplies no executor or attestation writer.** Before integration enables
-native ingestion, Agent 1 and the execution owner must establish that its server-only
+The reviewed PR245 foundation supplied no executor or attestation writer. The bounded
+11 October supplement adds a server-only **origin and pre-entry receipt producer**,
+described below, but no experiment execution coordinator or qualified exit writer.
+Before integration enables native ingestion, the integration and execution owners must
+establish that the server-only
 producer verifies original execution UID, canonical strategy/plan/dispatch authority,
 and each exit's experiment command or protected parent lineage. It cannot attest an
 ordinary manual entry/exit by instrument, time, quantity or client-order similarity.
@@ -76,8 +79,10 @@ reduceOnly exits, zero reported entry PnL or flat current positions. The reviewe
 must establish actual native pre-entry inventory and complete position/fill ancestry for
 the same UID/instrument, withholding attribution if unrelated/manual fills, preexisting
 inventory, average-cost mixing or unverified contract/PnL allocation could contaminate
-the outcome. No producer is installed here; synthetic fixtures explicitly assert these
-claims only to exercise the resolver. They do not prove native position attribution.
+the outcome. The new producer verifies original flat inventory through restricted
+native GET requests; no complete closing-position producer is installed. Existing
+synthetic resolver fixtures assert closing claims only to exercise the resolver.
+They do not prove native position attribution or live performance.
 
 The resolver independently verifies stored current UID/account identity using the
 existing account proof, immutable strategy content hash, full canonical plan hash,
@@ -173,12 +178,60 @@ pure module contract, not a new endpoint. Reproduce or check from backend:
 PYTHONPATH=src python scripts/export_blofin_experiment_outcomes.py --check
 ```
 
-Agent 1 should wire the existing sample dependency to this resolver for verified BloFin
-source, expose the facade's outcome/performance reads under existing Reader tenant
-RBAC, and regenerate shared API/client artifacts once on the combined candidate.
-Keep the default sample route unavailable until its trusted producer exists. Preserve
+The HTTP facade now exposes outcome/performance reads under existing Reader tenant
+RBAC. The integration owner regenerates shared API/client artifacts once on the combined
+candidate. Keep the default sample route unavailable until the complete trusted
+producer and its execution coordinator are reviewed and qualified. Preserve
 PR242's accepted acquisition/evaluation clock correction when consolidating. No new
 migration is needed. The internal simulator must use an independent source resolver.
 Native connectivity/permissions/fee semantics/retention/protected parent lineage have
 not been exercised against an actual account; fixtures demonstrate code, not native
 performance or activation readiness. Enforced exchange egress is unavailable here.
+
+## Bounded server producer supplement — 11 October 2026
+
+`BloFinNativeOutcomeProducer.register_plan` persists an explicit experiment/version/
+variant origin for a persisted canonical plan before any command exists. It checks the
+frozen experiment, approved running interval, immutable strategy and semantic/envelope
+hashes. Canonical Candidate instrument identity supplies the provider symbol used by
+the authored experiment universe; instrument IDs are never parsed from client order IDs.
+An existing command or another experiment/version cannot be retrospectively assigned.
+
+`bind_entry` requires that origin to be visible in a separate committed session, the
+exact ALLOW command and consumed authorization, and an undispatched CREATED effect.
+The restricted GET transport must match the current read-only credential selector.
+Signed UID verification brackets the account-wide position and instrument reads.
+Malformed/truncated, hedged or nonzero inventory refuses a receipt. Native contract
+value/type/currencies must match the immutable plan. The receipt owns one explicit
+observation timestamp, even with an advancing clock. Caller-supplied truth flags are
+not method inputs. Hashes detect corruption; they do not replace verified source IO.
+
+The caller owns all transactions: commit origin before command creation, and commit
+entry/position receipts before dispatch. Advisory locks and deterministic receipt IDs
+converge on the original origin/binding/diagnostic across restart and concurrent calls.
+Replays never contact the venue or replace the original snapshot after plan expiry.
+Neither callable service is wired to an autonomous experiment executor: there is no
+current production coordinator selecting an experiment origin and calling these methods.
+Existing experiment start/approval boundaries and operator settings remain unchanged.
+
+`reconcile` persists scoped diagnostics without admitting a sample or inventing an exit.
+The current governed lifecycle resolution retains an isolated closing-fill sequence,
+but its stored protection IDs do not establish direct native parent/child ancestry.
+Its documented `fillPnl` is not independently declared gross or net of fees/funding;
+native history fee currency/sign may also be unavailable. Producer-owned commands
+therefore remain unavailable, even if legacy true-valued exit flags are present.
+The reader clears sample proof and monetary totals for these unqualified commands.
+The missing sources are a reviewed coordinator callsite, complete native protected
+parent/child or canonical exit authority and independently verified fee/PnL methodology.
+
+Installed read-only HTTP contracts:
+
+- `GET /experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}`
+  returns `NativeOutcome`; `variant_key` defaults to `baseline`.
+- `GET /experiments/{experiment_id}/versions/{version_id}/performance` returns
+  `ExperimentPerformance` with the same variant selector.
+
+Both reads use stored tenant/user-scoped data. They perform no provider IO, write,
+retry, order submission or activation. POST samples remains adapter-unavailable (503).
+Internal simulation remains a separate source; unavailable results are never portfolio
+returns or measured native strategy performance. No migration is added; a12 remains head.

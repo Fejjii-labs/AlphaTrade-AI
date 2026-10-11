@@ -6,6 +6,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import SessionDep, SettingsDep
+from app.experiments.outcome_contract import ExperimentPerformance, NativeOutcome
+from app.experiments.outcomes import BloFinExperimentReads
 from app.experiments.service import ExperimentService
 from app.schemas.experiments import (
     ExperimentApproval,
@@ -30,6 +32,17 @@ def get_experiment_service(session: SessionDep, settings: SettingsDep) -> Experi
 
 
 ServiceDep = Annotated[ExperimentService, Depends(get_experiment_service)]
+
+
+def get_native_reads(
+    session: SessionDep, settings: SettingsDep, tenant: ReaderDep
+) -> BloFinExperimentReads:
+    # Stored, scoped reads only. No producer, provider, dispatcher or sample
+    # adapter is installed into the HTTP mutation service above.
+    return BloFinExperimentReads(session, settings, tenant)
+
+
+NativeReadsDep = Annotated[BloFinExperimentReads, Depends(get_native_reads)]
 
 
 @router.post("", response_model=ExperimentVersion, status_code=201)
@@ -131,3 +144,29 @@ def sample(
     result = service.record_sample(tenant, experiment_id, version_id, body)
     session.commit()
     return result
+
+
+@router.get(
+    "/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}",
+    response_model=NativeOutcome,
+)
+def native_outcome(
+    experiment_id: UUID,
+    version_id: UUID,
+    source_record_id: str,
+    reads: NativeReadsDep,
+    variant_key: Annotated[str, Query(pattern=r"^[a-z][a-z0-9_-]{0,39}$")] = "baseline",
+) -> NativeOutcome:
+    return reads.outcome(experiment_id, version_id, variant_key, source_record_id)
+
+
+@router.get(
+    "/{experiment_id}/versions/{version_id}/performance", response_model=ExperimentPerformance
+)
+def native_performance(
+    experiment_id: UUID,
+    version_id: UUID,
+    reads: NativeReadsDep,
+    variant_key: Annotated[str, Query(pattern=r"^[a-z][a-z0-9_-]{0,39}$")] = "baseline",
+) -> ExperimentPerformance:
+    return reads.performance(experiment_id, version_id, variant_key)
