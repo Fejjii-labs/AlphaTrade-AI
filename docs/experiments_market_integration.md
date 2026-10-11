@@ -139,9 +139,7 @@ Coordinated rollback sequence:
    experiment state and a10/a9 delete native/outbox state. Never use plain b165 as
    rollback compatibility proof, and never stamp or downgrade to hide a mismatch.
 3. Select separately built/tested migration-aware API and worker images carrying
-   every retained revision through a12, the empty-tenant bootstrap correction and
-   registered-experiment dispatch fences. The earlier bda overlay is historical
-   source-only evidence; use the current rollback qualification below for PR248.
+   every retained revision through a12, using the qualified bda overlay manifest.
    The worker must remain disarmed unless its existing authorized behavior has
    separately passed compatibility checks. Retain the schema during image rollback.
 4. Coordinate API, worker and a verified compatible frontend artifact/API binding.
@@ -286,7 +284,7 @@ is the same packet above; do not trigger a main-tracking deploy to substitute fo
 
 ## Prepared staging order and workstream status
 
-1. Preserve reviewed PR248 candidate `a7a843f7c27e8bdcea5f89c802c808472477a969` and qualify the rollback
+1. Supervising review freezes the exact PR244 candidate and accepts the rollback
    source/image manifest. Preserve frozen PR237 independently. Capture current operator
    flags/account identity/providers securely without resetting render.yaml defaults.
 2. Through the established authorized release executor, verify API/worker database
@@ -733,11 +731,8 @@ Typecheck, changed-file ESLint/Ruff/format and generated drift check pass.
 
 ### Release boundary and the one setup action
 
-**Independent UI staging qualification may proceed after its release prerequisites.**
-U/Q/N/I local counts do not include deployment or live acceptance. Q4 and N2 remain
-activation gaps for measured Agent quality and trusted native outcomes; neither blocks
-independent UI/reviewer-fix staging. Unsupported execution/performance stays unavailable.
-N1 is locally qualified below. Prior PR24714/14 and stabilization/bootstrap evidence
+**Not release-ready.** U/Q/N/I local counts do not include deployment or live acceptance.
+Q4 and N2 remain as named gaps; N1 is now locally qualified below. Prior PR24714/14 and stabilization/bootstrap evidence
 remain unchanged, overlapping evidence. Frozen PR244ba47, PR2470d3 and PR2373600 are
 not moved. The current candidate/automatic focused CI receipt is recorded in the PR and
 existing operational checkpoint; older green CI does not accept this revision.
@@ -829,12 +824,12 @@ managed environment configuration
 `d8e448e9-266c-4462-9846-dc4819fb0132~cecfg_6abe152de4548195ae254bdd52afc138`
 (bound environment
 `ccarenv_b64_Y2NhcmVudl80MThhNjYxNDk2ZDg4MTkxYWY1ODVjZWUyMmM2NGIzOA`).
-Latest safe status reports current spec59, no secret or outbound-identity bindings, and enforced
+Safe status reports current spec57, no secret or outbound-identity bindings, and enforced
 package-manager-only HTTP policy. Bind `OPENAI_API_KEY` for the existing approved route,
 `RENDER_API_KEY` scoped to the two named staging services and existing DB snapshot/restore
 operations, scoped `VERCEL_TOKEN` for the existing team/project, and existing synthetic
 smoke identity (`SMOKE_ACCESS_TOKEN`/private real-login credential file). Permit
-`api.openai.com`, `api.render.com`, `api.vercel.com`, official `docs.blofin.com`, the existing staging API and the verified existing
+`api.openai.com`, `api.render.com`, official `docs.blofin.com`, the existing staging API and the verified existing
 Vercel frontend/protection endpoints through the supported configuration workflow. No
 policy bypass, new infrastructure, application-provider activation or operator reset.
 This refines the earlier target-specific packet; it does not start another access checklist.
@@ -945,138 +940,131 @@ unexecuted. Product/worker publication is batched; the exact candidate and curre
 automatic focused CI are recorded in PR248 and the existing operational checkpoint.
 The green4e5 run covers4e5 only. Full release acceptance remains gated by review,
 qualified rollback images, aligned authenticated staging and fresh natural SFP evidence.
+# Interactive voice and coin assignments — fixed feature acceptance
 
+This separate feature batch starts at reviewed PR248
+`a7a843f7c27e8bdcea5f89c802c808472477a969`. PR248 and its release evidence stay
+frozen. The existing operational release packet remains authoritative; spec60
+still has no secret/outbound bindings and package-manager-only egress. No failed
+hosting or provider probe is repeated. Dedicated news, calendar, sentiment and
+heatmap integrations are deferred. D Line awaits examples and exact rules.
 
-### Reviewed UI staging qualification — 11 October 2026
+The checklist below is fixed before implementation. Each criterion needs its own
+evidence; implementation, local integration, deployment and live acceptance are
+reported separately. Legacy audio recording and browser speech are not interactive
+voice acceptance.
 
-Product candidate remains **a7a843f7c27e8bdcea5f89c802c808472477a969**, PR248.
-Supervising review accepts the history repair and bounded coordinator. Reuse exact
-CI38142038531:435 backend,382 frontend, deployment-safety passed; manual Docker,
-evaluation and browser jobs were policy-skipped. No green run was repeated and no
-full backend acceptance was dispatched. Frozen PR2373600ec89, PR244ba47a228 and
-PR2470d3c79ed remain unchanged. This release documentation is published on the
-existing operational handoff branch so the accepted product SHA remains unchanged.
+| Criterion | Required evidence |
+| --- | --- |
+| V1 | Supported OpenAI realtime transport, consecutive spoken turns and interruption; deterministic protocol tests clearly separated from actual provider/microphone evidence. |
+| V2 | Voice/text use the shared scoped turn pipeline, durable history, retrieval and explicit confirmation/recovery; continued dialogue retains context. |
+| V3 | Grounded tools read current market, native BloFin activity, saved strategies/rules/journal; replies retain source age, contradictions and unavailable facts. |
+| V4 | Server-held credentials, scoped authorization, bounded usage/cost accounting, cancellation and typed fallback; no operator/provider activation. |
+| V5 | Actual provider plus microphone journey: consecutive spoken turns, interruption, a grounded tool request and retained context. Simulations cannot satisfy V5. |
+| M1 | Multiple saved-version assignments per coin with explicit timeframes/parameters survive authenticated save/reload and tenant isolation. |
+| M2 | Worker consumes exactly the authoritative configuration shared by UI and Agent actions. |
+| M3 | Independent monitoring toggles preserve trading/confirmation/execution boundaries and other assignments. |
+| M4 | Enabled but unscannable assignments show precise reasons; trace the five-enabled/four-no_strategy gap without changing hosted operator state. |
+| M5 | Nested expiry/developing and SFP outcomes are traced through mock notification delivery, preserving qualification and deduplication. |
+| I1 | Combined contracts regenerated, one immutable migration head, exercised retained-schema rollback preserving existing data. |
+| I2 | Focused combined authentication/API/persistence/browser journeys pass with exact source revisions and no unexplained skips. |
+| I3 | Contributions collected directly, frozen refs preserved, checkpoint and existing access packet updated; deployment status remains truthful. |
 
-| Fixed checklist | Accepted/total | Percent | Boundary |
+Ownership: worker A owns Agent/voice backend and components/services, excluding
+shared generated artifacts, migrations and checkpoints. Worker B owns watcher
+assignment configuration/worker/compact monitoring UI and their tests, with the
+same exclusions. Owner serializes shared generation, migration sequencing and
+integration. Both workers propose their public interfaces before edits. Monitoring
+configuration is the single authority; Agent writes use the same service through
+an explicit proposal/confirmation boundary. No new free-form execution authority.
+
+## Collected feature qualification — 11 October 2026
+
+The feature branch is `codex/interactive-voice-monitoring`, stacked on frozen
+PR248/a7a843f7. PR237 remains 3600ec89. The final candidate SHA is recorded in
+the feature PR and existing operational HANDOFF; no earlier CI accepts this batch.
+
+Worker A returned `220efc78`, `b14dfc7e`, `fb48d458`, `d21366eb` directly. These
+implement a server-held official OpenAI SDK3.28 realtime WebSocket connection,
+PCM audio, interruption, canonical text/voice turn delegation, scoped SQL
+grounding, durable capture/history, exact pending recovery and explicit confirmed
+monitoring proposals. Effective provider session caps must be acknowledged before
+readiness. Reservations end at the earliest session/budget/price receipt expiry.
+The feature is off by default; model/rate/context/budget identifiers come from a
+verified private receipt, not an invented model or activated provider.
+
+Worker B returned `fa24b212`, `95bb51aa`, `9849e4b2`, `15739087` directly. Multiple assignments
+pin owned immutable versions, their authored coin, timeframes and complete
+parameter snapshots. Mobile title/status use the card width with controls beneath;
+an older bound version outside the bounded picker remains confirmable without
+rebinding it. UI, confirmed Agent actions and worker use one configuration
+service. Monitoring never enters the assigned target's paper execution loop.
+Configured-empty remains empty. The four `no_strategy` coins lacked matching
+approved compiled authored versions; no assignments or notification eligibility
+are fabricated. Nested developing/expired observations remain intentionally
+suppressed by existing delivery policy; qualifying Nested/SFP outbox delivery and
+restart deduplication use fake transport only.
+
+| Fixed milestone | Locally accepted | Implemented/integrated | Hosted/live acceptance |
 | --- | --- | --- | --- |
-| UI U |3/3|100%|Implemented, integrated and locally accepted; hosted unexecuted|
-| Agent quality Q |3/4|75%|Deterministic/persistence evidence accepted; actual-provider Q4 unexecuted|
-| Native outcomes N |4/5|80%|Bounded coordinator/fences accepted; N2 unavailable, admission closed|
-| Integration I |3/3|100%|Source/contracts/migration integration accepted; deployment excluded|
-| Total |13/15|86.7%|Fixed denominator retained|
+| V1–V5 interactive Agent | V1–V4: 4/5 (80%) | Supported connection and grounding integrated | V5: 0/1; actual provider/microphone unexecuted |
+| M1–M5 monitoring | 5/5 (100%) | Configuration/UI/Agent/worker integrated | No installed feature worker or live notification acceptance |
+| I1–I3 integration | 3/3 (100%) | Contracts, migration, rollback, browser proof and checkpoint | No deployment or full release gate |
 
-Q4 and N2 block their own activation, **not independent UI/reviewer-fix staging**.
-No unverified performance or experiment execution is presented as available.
-Worker A directly returned unchanged runner e28d4fb5 and fresh spec59 readiness:
-OPENAI_API_KEY/limits absent, approved local mock settings unchanged, all16 actual
-cases unexecuted and category accuracy/false captures/summary faithfulness/latency/
-usage null. Existing34 runner checks are reused; no more oracle fixtures were run.
-The disposable evaluation DB binding can be prepared locally, without hosting access.
-Worker B evidence-only a7dbefd25ce20a1bd43c35fbec3313652b880f65 is collected in the
-existing native verification ledger:7/7 pinned BloFin publisher blob/SHA256 checks,
-two aggregate-only existing Render reads, zero governed close receipts/experiment
-attestations. Historical algo IDs are relation candidates, not TPSL ownership; current
-normalization drops those fields. Complete attributed pages, TPSL child edges, futures
-fee currency/sign and PnL fee/funding inclusion remain independently unqualified.
-No implementation/schema contract is expanded from incomplete evidence.
+Overall local acceptance is 12/13 (92.3%). Recording/browser speech playback is
+not counted as interactive voice. Deterministic transcripts/CapturePlan are not
+measured model reasoning quality. Legacy Q4 actual evaluation remains 0/16 and
+native N2 money/protected-exit proof remains unavailable, independently of this
+feature's staging qualification. Simulation and native performance stay separate.
 
-The outcome contract now describes **actual commits**: origin independently commits;
-approval/authorization/ALLOW only flush; signed read-only snapshots run in that caller
-transaction; approval/command/position/entry commit together before leasing. Barrier3,
-ambiguous-before-preflight and final-fence commits precede the transaction-free venue
-POST. A pre-binding failure requires caller rollback, preserving committed origin.
-Independent source review confirmed this wording against accepted a7; no code changed.
+Focused evidence is accumulated by source scope, not a new full suite:
 
-#### Local rollback image and backup evidence
+- Voice: 23 protocol, 16 disposable-PostgreSQL and 76 frontend distinct passing
+  cases; the two shared voice/text capture cases now persist one faithful scoped
+  note, survive a fresh session and replay without another capture/provider call.
+- Assignments: 26 new PostgreSQL cases, eight confirmed Agent cases and six
+  existing compatibility cases; 14 component and nine generated-adapter cases.
+- Owner: 19 quota and 13 authentication/recovery cases; 37 affected migration
+  cases, one populated retained-schema rollback, three actual authenticated
+  WebSocket/SQL composition cases using a synthetic SDK, one offline OpenAPI
+  export case, and four real-login API/PostgreSQL browser journeys. Desktop/mobile
+  save/reload/toggle, committed malformed-response exact recovery, off-panel
+  logout/foreign account isolation and immediate typed reply/reload all pass.
+- Generated drift passes: full schema SHA256
+  `875f63d09a9d84d7895d07591445cb768aa2088ada789b15b48d286bc9cbd9f9`.
+  Changed-file Ruff/format, scoped ESLint, TypeScript and relevant strict mypy pass.
 
-Rollback source is published reviewed **b2c6d90468d673664ac30ddafe97761b69d3661f**
-(base4e5 plus accepted coordinator contribution). Its bootstrap, migration files,
-producer/context, command/effect refresh and registered dispatch fences are identical
-to a7. No old b165 image is presumed compatible with a12. Local linux/amd64 API/worker
-image: `sha256:792084b35433610c2d3dcfd179c34da5cb68ef545bdca4f8b671eb789c710262`.
-Production Dockerfile/application were unchanged; a temporary qualification Dockerfile
-adds BuildKit CA mounts to uv network steps. Frozen dependencies and the non-root
-runtime are retained. Image is local, unpushed; its digest is not a hosted deploy receipt.
+These groups overlap (controller, confirmed Agent and adapter checks); do not sum
+them as a distinct grand total. Initial failed cases remain in local XML receipts.
+The genuine assignment publication deadlock and restored-recovery readiness race
+were repaired. Other repairs corrected fixture database allowlisting, private
+schema search path, system reservation counts and real StrategyCard fixture
+construction. Typed UI intentionally keeps recorded evidence in details; the
+browser verifies both the visible reply and exact complete persisted API content.
+Zero unexpected skips occurred; targeted Vitest exclusions are deliberate filters.
+Receipts are `/tmp/agent-realtime-worker-evidence.json`,
+`/tmp/alphatrade-assignments-*.xml` and `/tmp/voice-monitoring-*.{log,xml}`.
 
-**17 focused image cases passed,0 skipped,106.809s** against isolated PostgreSQL18:
-4 authenticated bootstrap/operator cases,8 coordinator/replay/role/pause/expiry/effect
-cases,3 native history/restart/account cases,2 enabled indexing-component cases. Mock
-transports/embeddings stay synthetic; this is artifact compatibility qualification,
-not another candidate CI run or measured provider quality. Test-only harness startup
-first lacked py.py/distribution metadata; it was corrected without changing app code.
-The successful run has one read-only pytest-cache warning. No assertion was weakened.
+The sole additive head is `a13voicemonitor001`, retaining a8→a9→a10→a11→a12→a13.
+It adds assignment rows, replacement receipts and bounded voice holds only;
+historical migrations and existing operator rows are unchanged. Populated a13
+downgrade refuses before any drop. The exercised retained-schema rollback preserves
+documents/chunks/jobs/tombstones, native activity, research, assignments, receipts,
+unknown usage holds and custom safety/configuration state across API/disarmed-worker
+restart and forward restart. Snapshot SHA256:
+`89351695ab06122cdf8487f301e16bc5f02b84b2df66521bd279970e144829d5`.
+This is a local migration-aware source package, not a qualified new deployable image.
+Plain b165/bda/a7 images are refused at a13. An old worker lacks the assignment
+consumer and must stay drained until a compatible consumer/image and captured
+runtime composition are qualified. Never downgrade or stamp retained populated data.
 
-Actual image entrypoint migration/startup returns paper health200 and real_trading=false;
-actual worker command starts/restarts disarmed and stops with authority_intact=true.
-Snapshot unchanged before/after both process restarts and after pg_dump/pg_restore
-into a separate disposable database:5 documents,5 chunks,5 jobs including tombstone,
-1 native account,3 facts,2 cursors,2 experiments/versions,5 events,1 sample,3 screenings.
-Snapshot SHA256 `64657eba5eecd35e2f75570bf157bd38993ccfb05246e5895209c1269c17225f`.
-Image archive SHA256 `d2f4daf2701e2a9ee1030d03a2d683c9234d7029e71dec050e300eeb92c1d9ad`;
-backup SHA256 `7490dc48d41cc001919505f05520b9a1670bcfd88743b8964c020c92619617f1`.
-Local manifest/logs/XML/archive/backup: `/tmp/pr248-rollback-qualification/`; manifest
-SHA256 `7e68584f4427015d3195b0cb7cd91be3a0865dcef37d4ca6c1471309cecc22ca`.
-All owned qualification containers are stopped; preserved test data/archive remain.
-Enabled indexing/native components were fixture-qualified, but exact hosted armed
-settings and credentials are unavailable. Qualify that captured composition before
-resuming it; local disarmed startup is not its substitute.
-
-Frontend rollback packaging is unexecuted: production runner cannot fetch
-`dl-cdn.alpinelinux.org` (policy403), and an isolated builder fails on Google Fonts
-`fonts.googleapis.com` (Inter/JetBrains Mono). No font mocks, TLS bypass, package
-substitution or repeated denied probes were used to claim a deployable artifact.
-Allow its font assets at `fonts.gstatic.com` for the production build. Actual Vercel
-rollback artifact/source/API binding also remains unverified; historical aliases are
-not evidence. The reviewed a7 actual-login desktop/mobile browser evidence is reused.
-
-#### Exact remaining external operation
-
-Latest safe spec59/current observation reports no secret/outbound bindings at the
-**existing** configuration
-`d8e448e9-266c-4462-9846-dc4819fb0132~cecfg_6abe152de4548195ae254bdd52afc138`.
-The only available environment tool reads readiness; it cannot attach existing secret
-references or change egress. Update this existing secure configuration once:
-
-- Bind existing `RENDER_API_KEY`; permit `api.render.com` and the named staging API.
-  Scope exact-commit deploy/drain/service DATABASE_URL inspection and snapshot/restore
-  for workspace tea-d7hn0fvavr4c73f62c70, API srv-d8fvbcd7vvec739mc060, worker
-  srv-daqej7o473hc73fsc1k0, DB dpg-d8fuok57vvec739lm0u0-a. Verify service connection
-  privately and a restorable hosted backup before writes/migration. The working connector
-  can read metadata/SQL but deploys main only; it has no commit selector. No main merge
-  or service-setting reset substitutes for this binding.
-- Bind scoped existing `VERCEL_TOKEN` for team_LNgcEGBkqntUnTrktNjFzh7a /
-  prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ; permit api.vercel.com and the resolved existing
-  deployment/protection hosts. Identify actual frontend/environment/revision/API binding
-  and existing rollback deployment. Bind synthetic SMOKE_ACCESS_TOKEN/private real-login
-  credentials for authenticated staging and fresh authorized SFP.
-- Permit fonts.googleapis.com/fonts.gstatic.com for the actual production frontend
-  build; dl-cdn.alpinelinux.org is required for the local Docker runner qualification.
-- For Q4 only, bind existing approved OPENAI_API_KEY/api.openai.com and verified
-  approved remaining-budget/price/context limits receipt; run the existing16-case command
-  once with finite USD1 ceiling no higher than verified remaining balance. No provider
-  activation or new budget approval is requested. For N2 only, make official contract
-  access/scoped existing read-only venue evidence available, without execution secrets
-  or orders. Missing facts continue to close native admission.
-
-11October working metadata still reports API/worker **b165b92276346f0e0fe3ccdbd2bec3443dc75d40**,
-API dep-db4gdkeq1p3s73a395u0 / worker dep-db4gdkeq1p3s73a3975g. Both track main,
-Docker backend; API predeploy is alembic upgrade head, worker command is unchanged.
-DB connector verifies alphatrade/PG18/a8agentcapture001; it does not prove actual
-service DATABASE_URL or backup. **Frontend target and installed revision UNKNOWN.**
-Candidate deployed0/3; hosted smoke/SFP/final full gate unexecuted.
-
-After that one secure setup action, the next executable release operation is the
-private binding/backup/operator-snapshot/frontend rollback check. Then use the preserved
-coordinated staging order above with exact a7 for all three components, drain old
-writers/consumers, retain immutable a8→a12 and original settings, and run the preserved
-smoke. Official CLI v2.28.0 is installed locally at
-`/tmp/pr248-rollback-qualification/render-cli/cli_v2.28.0`; its official ZIP checksum
-`00d1ca6f3c31b1f4bc7316837b8ee24acbeb11cf372b7593c7d2c3106a1987b4` matches publisher
-SHA256SUMS, and local version/help confirm exact-commit support without auth/network calls.
-Use `render deploys create <service> --commit <exact-sha> --wait --confirm -o json`;
-never call the connector's main-only deploy. After aligned staging and fresh natural
-SFP at the established checkpoint, dispatch exactly one final full_backend=true gate
-for frozen a7. No main merge, orders, Telegram test or activation is authorized here.
-Rollback holds writes/drains consumers and restores qualified coordinated source/images
-plus the verified compatible frontend, retaining a12/data/original receipts; no downgrade
-or stamp. Manual BloFin incident remains undiagnosed.
+Release access is unchanged: current spec60 has no secret/outbound bindings;
+the existing operational secure setup packet remains the only setup action. Bind
+server `OPENAI_API_KEY`, HTTPS/WSS api.openai.com and a verified realtime receipt at
+`/workspace/agent-realtime-approved-limits.json` for V5; receipt prices/model/context
+and finite ceiling must fit existing approved remaining budget. Microphone browser
+acceptance is separate. Hosting needs existing scoped Render/Vercel/synthetic login
+bindings, actual service DB/backup verification and the verified frontend identity.
+No unchanged failed hosted probe, full CI, main merge, deployment, order, Telegram
+test, paid activation or operator mutation occurred. The preserved staging smoke
+instructions and final reviewed/aligned-staging/fresh-SFP release gate still apply.
