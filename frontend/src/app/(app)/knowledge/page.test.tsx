@@ -90,7 +90,7 @@ it("consolidates Knowledge categories and keeps original evidence on demand", as
   );
   expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
     "href",
-    "/journal?tab=knowledge&saved=note",
+    "/journal?tab=knowledge&category=rules&saved=note",
   );
   expect(screen.queryByText(entry.original_text)).not.toBeInTheDocument();
   expect(api.knowledge.listChunks).not.toHaveBeenCalled();

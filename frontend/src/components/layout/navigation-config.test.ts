@@ -132,9 +132,10 @@ describe("Trader primary navigation", () => {
     );
   });
 
-  it("keeps Settings secondary navigation to Workspace and Advanced", () => {
+  it("keeps one Settings parent link for retained operational routes", () => {
     const settings = getSecondaryItems("settings");
     expect(settings.map((item) => item.href)).toEqual(["/settings"]);
+    expect(settings.map((item) => item.label)).toEqual(["Back to Settings"]);
     expect(getSecondaryItems("dashboard")).toEqual([]);
     expect(getSecondaryItems("agent")).toEqual([]);
     expect(resolveSecondaryActiveHref("/settings", settings)).toBe("/settings");

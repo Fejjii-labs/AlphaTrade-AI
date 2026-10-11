@@ -144,11 +144,12 @@ describe("Compact truthful header", () => {
     );
     expect(summary).toHaveFocus();
   });
-  it("uses the consolidated journal identity", () => {
+  it("keeps the global identity separate from the page heading", () => {
     navigationState.pathname = "/knowledge";
     renderTopBar();
     expect(screen.getByTestId("topbar-page-identity")).toHaveTextContent(
-      "Journal & Knowledge",
+      "AlphaTrade",
     );
+    expect(screen.queryByText("Journal & Knowledge")).not.toBeInTheDocument();
   });
 });

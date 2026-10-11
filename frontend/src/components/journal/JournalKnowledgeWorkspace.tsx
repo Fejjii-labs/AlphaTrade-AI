@@ -142,7 +142,7 @@ export function SavedEntryDetail({
         </summary>
         <p className="whitespace-pre-wrap text-sm">{current.original_text}</p>
         {current.draft && (
-          <pre className="overflow-auto whitespace-pre-wrap text-xs">
+          <pre className="whitespace-pre-wrap break-words text-xs">
             {JSON.stringify(current.draft, null, 2)}
           </pre>
         )}
@@ -356,8 +356,7 @@ function JournalWorkspaceContent() {
         </Link>
       </nav>
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
-      {knowledge ? <Button variant="outline" onClick={() => { readinessDeadline.current = 0; void reload(); }}>Refresh search readiness</Button> : null}
-      <div className="flex flex-wrap items-center gap-3">
+      {!savedId && !documentId ? <div className="flex flex-wrap items-center gap-3">
         <Input
           aria-label="Search entries"
           placeholder="Search"
@@ -382,11 +381,11 @@ function JournalWorkspaceContent() {
         <Button
           disabled={loading}
           variant="outline"
-          onClick={() => void reload()}
+          onClick={() => { readinessDeadline.current = 0; void reload(); }}
         >
           Refresh
         </Button>
-      </div>
+      </div> : null}
       {loading ? (
         <p role="status">Loading entries…</p>
       ) : (
@@ -477,7 +476,7 @@ function JournalWorkspaceContent() {
                   </p>
                   <Link
                     onClick={remember}
-                    href={`/journal?${knowledge ? "tab=knowledge&" : ""}saved=${e.id}`}
+                    href={`/journal?${knowledge ? `tab=knowledge&category=${e.category}&` : ""}saved=${encodeURIComponent(e.id)}`}
                     className="inline-flex min-h-11 items-center text-sm text-accent"
                   >
                     Open

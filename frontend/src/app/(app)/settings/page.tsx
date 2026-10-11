@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
 import { WatcherWatchlistSection } from "@/components/WatcherWatchlistSection";
 import { NotificationSettingsPanel } from "@/components/NotificationSettingsPanel";
@@ -12,8 +12,19 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { useWatcherMonitoring } from "@/hooks/useWatcherMonitoring";
 import { formatDateTime } from "@/lib/format";
+import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 export default function SettingsPage() {
+  const { user, organization } = useAuth();
+  const [session, setSession] = useState(sessionGeneration);
+  useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
+  if (!user || !organization) return null;
+  return (
+    <SettingsWorkspace key={JSON.stringify([organization.id, user.id, session])} />
+  );
+}
+
+function SettingsWorkspace() {
   const { user, organization } = useAuth();
   const { health, providers, refreshStatus, loading } = useAppContext();
   const monitoring = useWatcherMonitoring();

@@ -3,9 +3,7 @@
 import { Search, RefreshCw } from "lucide-react";
 import { useRef } from "react";
 import { FreshnessPill } from "@/components/ui/freshness-pill";
-import { usePathname } from "next/navigation";
 import { KillSwitchButton } from "@/components/KillSwitchButton";
-import { resolvePageIdentity } from "@/components/layout/navigation-config";
 import { resolveExecutionDisplay } from "@/components/layout/status-strip-state";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -20,7 +18,6 @@ export function TopBar({
   onOpenCommandMenu?: () => void;
 }) {
   const menu = useRef<HTMLDetailsElement>(null);
-  const identity = resolvePageIdentity(usePathname());
   const {
     refreshStatus,
     loading,
@@ -46,7 +43,7 @@ export function TopBar({
           data-testid="topbar-page-identity"
           className="order-1 min-w-0 flex-1 basis-[calc(100%-6rem)] truncate text-sm font-semibold sm:basis-auto"
         >
-          {identity.title}
+          AlphaTrade
         </p>
         <div
           className="order-3 flex items-center gap-2 sm:order-2"

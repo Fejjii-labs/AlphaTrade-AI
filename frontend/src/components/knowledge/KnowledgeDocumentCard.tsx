@@ -12,6 +12,7 @@ import {
   type DeepLinkExclusionNotice,
 } from "@/components/knowledge/knowledgeDisplay";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { RagDocument } from "@/lib/api/types";
 
@@ -67,12 +68,12 @@ export function KnowledgeDocumentCard({
         <p role="status" data-testid="knowledge-indexing-status">
           Stored · Search {status === "upsert_acknowledged" ? "previously acknowledged" : status === "unknown" ? "unverified" : status}
         </p>
-        {status === "failed" ? <button type="button" disabled={retrying} onClick={async () => {
+        {status === "failed" ? <Button size="sm" variant="outline" type="button" disabled={retrying} onClick={async () => {
           setRetrying(true); setRetryError(null);
           try { await api.knowledge.retryIndexing(document.id); setRetryError("Retry queued. Refresh the library to check readiness."); }
           catch (error) { setRetryError(error instanceof Error ? error.message : "Indexing retry failed"); }
           finally { setRetrying(false); }
-        }}>Retry indexing</button> : null}
+        }}>Retry indexing</Button> : null}
         {retryError ? <p role="status">{retryError}</p> : null}
         {deepLinkNotices.map((notice) => (
           <p
@@ -173,15 +174,16 @@ export function KnowledgeDocumentCard({
         </ul>
 
         {onToggleExpand ? (
-          <button
+          <Button
             type="button"
-            className="inline-flex h-10 items-center rounded-control border border-border bg-surface-1 px-4 text-sm font-medium text-text-primary hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            size="sm"
+            variant="outline"
             data-testid={`knowledge-expand-${document.id}`}
             aria-expanded={expanded}
             onClick={onToggleExpand}
           >
             {expanded ? "Close" : "Open"}
-          </button>
+          </Button>
         ) : null}
 
         {expanded ? detailSlot : null}
