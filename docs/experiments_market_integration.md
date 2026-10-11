@@ -940,3 +940,41 @@ unexecuted. Product/worker publication is batched; the exact candidate and curre
 automatic focused CI are recorded in PR248 and the existing operational checkpoint.
 The green4e5 run covers4e5 only. Full release acceptance remains gated by review,
 qualified rollback images, aligned authenticated staging and fresh natural SFP evidence.
+# Interactive voice and coin assignments — fixed feature acceptance
+
+This separate feature batch starts at reviewed PR248
+`a7a843f7c27e8bdcea5f89c802c808472477a969`. PR248 and its release evidence stay
+frozen. The existing operational release packet remains authoritative; spec60
+still has no secret/outbound bindings and package-manager-only egress. No failed
+hosting or provider probe is repeated. Dedicated news, calendar, sentiment and
+heatmap integrations are deferred. D Line awaits examples and exact rules.
+
+The checklist below is fixed before implementation. Each criterion needs its own
+evidence; implementation, local integration, deployment and live acceptance are
+reported separately. Legacy audio recording and browser speech are not interactive
+voice acceptance.
+
+| Criterion | Required evidence |
+| --- | --- |
+| V1 | Supported OpenAI realtime transport, consecutive spoken turns and interruption; deterministic protocol tests clearly separated from actual provider/microphone evidence. |
+| V2 | Voice/text use the shared scoped turn pipeline, durable history, retrieval and explicit confirmation/recovery; continued dialogue retains context. |
+| V3 | Grounded tools read current market, native BloFin activity, saved strategies/rules/journal; replies retain source age, contradictions and unavailable facts. |
+| V4 | Server-held credentials, scoped authorization, bounded usage/cost accounting, cancellation and typed fallback; no operator/provider activation. |
+| V5 | Actual provider plus microphone journey: consecutive spoken turns, interruption, a grounded tool request and retained context. Simulations cannot satisfy V5. |
+| M1 | Multiple saved-version assignments per coin with explicit timeframes/parameters survive authenticated save/reload and tenant isolation. |
+| M2 | Worker consumes exactly the authoritative configuration shared by UI and Agent actions. |
+| M3 | Independent monitoring toggles preserve trading/confirmation/execution boundaries and other assignments. |
+| M4 | Enabled but unscannable assignments show precise reasons; trace the five-enabled/four-no_strategy gap without changing hosted operator state. |
+| M5 | Nested expiry/developing and SFP outcomes are traced through mock notification delivery, preserving qualification and deduplication. |
+| I1 | Combined contracts regenerated, one immutable migration head, exercised retained-schema rollback preserving existing data. |
+| I2 | Focused combined authentication/API/persistence/browser journeys pass with exact source revisions and no unexplained skips. |
+| I3 | Contributions collected directly, frozen refs preserved, checkpoint and existing access packet updated; deployment status remains truthful. |
+
+Ownership: worker A owns Agent/voice backend and components/services, excluding
+shared generated artifacts, migrations and checkpoints. Worker B owns watcher
+assignment configuration/worker/compact monitoring UI and their tests, with the
+same exclusions. Owner serializes shared generation, migration sequencing and
+integration. Both workers propose their public interfaces before edits. Monitoring
+configuration is the single authority; Agent writes use the same service through
+an explicit proposal/confirmation boundary. No new free-form execution authority.
+
