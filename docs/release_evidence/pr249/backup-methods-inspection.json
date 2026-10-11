@@ -7,7 +7,7 @@
   "official_documentation": "https://render.com/docs/postgresql-backups",
   "available_platform_methods": {
     "point_in_time_recovery": "Paid databases provide continuous recovery; retention depends on workspace plan. Restoring creates another managed database and is excluded by current no-paid-resource instruction.",
-    "logical_export": "Recovery page \u2192 Create export; compressed .dir.tar.gz, retained 7 days. A completed hosted export can be restored only into an empty isolated local database for verification.",
+    "logical_export": "Existing completed logical export available by operator report; .dir.tar.gz. Retrieve privately and verify in an empty isolated local target; no new export.",
     "pg_dump": "External database connection required; no approved direct connection or artifact identified in this executor."
   },
   "receipt_search": {
@@ -23,11 +23,13 @@
     "retried_unchanged_export_probes": false
   },
   "next_user_action": {
-    "page": "Executor secure environment configuration",
-    "field": "Secret file binding destination",
-    "destination": "/workspace/AlphaTrade-AI/.ai/local/pr249-release/hosted-backup/export-download-url.txt",
-    "value_type": "UTF-8 text containing existing completed-export private HTTPS Download link; never send in chat",
-    "then": "Inspect exact download hostname against current approved policy before any retrieval; source backup remains private in Render"
+    "reference": "supported-credential-mechanisms.json",
+    "page": "Settings > Codex Cloud > Personal vault > Add",
+    "type": "Environment variable",
+    "key": "PR249_RENDER_EXPORT_URL",
+    "value_type": "Existing private HTTPS Download URL; never chat",
+    "environment_requests_key": false,
+    "executor_ready": false
   },
   "hosted_receipt_required_fields": [
     "database_id",
@@ -98,6 +100,11 @@
     "application_processes": 0,
     "providers_or_exchanges": 0,
     "migrations": 0,
-    "uses_completed_evidence": "Prior synthetic app/image qualification remains reused; this is the first pending verification of the newly reported hosted export"
-  }
+    "uses_completed_evidence": "Prior synthetic app/image qualification remains reused; this is the first pending verification of the newly reported hosted export",
+    "fetch_cli": "--inspect-host before --fetch; check current effective policy first",
+    "credential_key": "PR249_RENDER_EXPORT_URL"
+  },
+  "secure_delivery_correction": "User cannot create the previously requested file binding; that unsupported instruction is withdrawn. Supported personal variable requires matching environment request/applied readiness.",
+  "hosted_backup_verified": false,
+  "observed_at": "2026-10-11T21:55:35Z"
 }

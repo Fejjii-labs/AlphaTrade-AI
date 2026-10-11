@@ -139,14 +139,16 @@
     "observations_current": true,
     "reported_network_state": "enforced",
     "secret_readiness_states": "ready",
-    "spec_revision": "6"
+    "spec_revision": "8"
   },
   "followup_evidence": [
     "executor-access-inspection.json",
     "backup-methods-inspection.json",
-    "voice-configuration-draft.json"
+    "voice-configuration-draft.json",
+    "supported-credential-mechanisms.json",
+    "rollout-preparation.json"
   ],
-  "followup_observed_at": "2026-10-11T21:31:18Z",
+  "followup_observed_at": "2026-10-11T21:55:35Z",
   "four_release_domains": [
     {
       "host": "api.github.com",
@@ -174,7 +176,9 @@
     "AGENT_REALTIME_LIMITS_FILE": "unbound",
     "approved_limits_file": "not identified; no assumption of existing approval",
     "hosted_backup_restore_receipt": "Export completion confirmed by user at20:58UTC; secure artifact access and actual isolated restore pending",
-    "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused"
+    "qualified_image_archive": "not present in this fresh executor; prior manifest evidence reused",
+    "PR249_RENDER_EXPORT_URL": "not requested by current environment; Personal vault action pending; must verify applied readiness before retrieval",
+    "hosted_hold_drain": "Maintenance/suspend/resume methods identified; write access, private writers and actual quiescence pending"
   },
   "routine_ci": {
     "backend_counts": {

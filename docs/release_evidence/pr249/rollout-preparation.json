@@ -1,0 +1,87 @@
+{
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "observed_at": "2026-10-11T21:55:35Z",
+  "preparation_only": true,
+  "sources": {
+    "maintenance_mode": "https://render.com/docs/maintenance-mode",
+    "deploys": "https://render.com/docs/deploys",
+    "suspend": "https://api-docs.render.com/reference/suspend-service-1",
+    "resume": "https://api-docs.render.com/reference/resume-service-1",
+    "service_update": "https://api-docs.render.com/reference/update-service",
+    "one_off_jobs": "https://render.com/docs/one-off-jobs",
+    "candidate_entrypoint": "backend/docker/entrypoint.sh at 60a55506393e8ac11a45bd5609d6c70f33d99778"
+  },
+  "service_metadata": [
+    {
+      "id": "srv-d8fvbcd7vvec739mc060",
+      "name": "alphatrade-api-staging",
+      "type": "web_service",
+      "plan": "starter",
+      "branch": "main",
+      "autoDeployTrigger": "commit",
+      "suspended": false,
+      "maintenance_mode": false,
+      "pre_deploy_command": "alembic upgrade head",
+      "docker_command": "",
+      "dockerfile": "./backend/Dockerfile",
+      "context": "./backend"
+    },
+    {
+      "id": "srv-daqej7o473hc73fsc1k0",
+      "name": "alphatrade-paper-worker-staging",
+      "type": "background_worker",
+      "plan": "starter",
+      "branch": "main",
+      "autoDeployTrigger": "commit",
+      "suspended": false,
+      "pre_deploy_command": null,
+      "docker_command": "python -m app.workers.paper_worker",
+      "dockerfile": "./backend/Dockerfile",
+      "context": "./backend"
+    }
+  ],
+  "migration_overlap": "API pre-deploy migration precedes replacement; old services may still be running. API entrypoint repeats upgrade (normally no-op); worker command bypasses entrypoint migrations.",
+  "hold_methods": {
+    "public_api": "Existing paid service supports Maintenance Mode; public HTTP503 only, private traffic continues",
+    "worker_suspend": "POST /v1/services/{serviceId}/suspend (202)",
+    "worker_resume": "POST /v1/services/{serviceId}/resume (202)",
+    "method_availability_verified": true,
+    "executor_write_access_verified": false,
+    "global_write_hold_verified": false,
+    "in_flight_drain_verified": false,
+    "one_off_jobs_reconciled": false
+  },
+  "deployment_selection": {
+    "method": "Render deploy API commitId, or verified Dashboard specific-commit selection",
+    "commitId": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+    "main_only_mcp_trigger_allowed": false,
+    "autodeploy_freeze_required": true,
+    "autodeploy_note": "Dashboard specific-commit deployment disables autodeploy; API/CLI commit selection does not. Record original hosting trigger and explicitly freeze when needed; do not change trading flags."
+  },
+  "release_order": [
+    "Resolve preview transport, secure hosted export verification, accessible qualified rollback selection and executable hold/drain",
+    "Reconcile existing manual runs; dispatch exactly one full_backend=true gate at candidate; require all six jobs successful",
+    "Record hosting configuration and freeze competing autodeploys; hold public API, stop/drain worker and account for private/one-off writers before migration",
+    "Install exact candidate API then compatible worker only after migration; keep writes held until checks pass",
+    "Rebuild frontend once for confirmed staging binding; verify installed revisions, a13, preserved settings and real browser flows",
+    "Restore existing hosting availability/composition and verify candidate diagnostics without activation/budget changes"
+  ],
+  "postdeploy_acceptance": {
+    "mandatory_script": "scripts/post-deploy-smoke-gate.sh",
+    "synthetic_identity": "Existing ignored normal-login credentials; reuse identity; refresh via login only when expiry requires it",
+    "skip_register": true,
+    "hosted_canonical_mutation_fixtures": false,
+    "cors_script_limitation": "Existing OPTIONS check warns only; browser origin/credential/CORS assertions remain separate requirements",
+    "cookie_mode": "Verify actual frontend configuration; bearer smoke alone does not prove browser cookie login",
+    "actual_voice": "Separate, inactive; not a UI-release dependency"
+  },
+  "completed_evidence_reused": true,
+  "application_tests_run": 0,
+  "full_gates_dispatched": 0,
+  "hosting_mutations": 0,
+  "drains": 0,
+  "deployments": 0,
+  "migrations": 0,
+  "paid_resources_created": 0,
+  "settings_or_budget_changes": 0
+}

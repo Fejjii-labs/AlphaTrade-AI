@@ -1,7 +1,7 @@
 Status: BLOCKED
-Last Updated: 2026-10-11T21:31:18Z
+Last Updated: 2026-10-11T23:55:35+02:00
 Task: AT-PR249-STAGING-RELEASE
-Source File SHA256: 8f2acd3eb4e751056e24b9b026608641acdb0191c8de5ab8a6d52a869f33dcd9
+Source File SHA256: d668e8ca173094f949d2b53e11d1b3dcffabc02384375d44dab6e28472cba905
 
 # Session execution record
 
@@ -66,10 +66,28 @@ Source File SHA256: 8f2acd3eb4e751056e24b9b026608641acdb0191c8de5ab8a6d52a869f33
     receipts stay private0600. Restore will be a new hosted-artifact verification in an EMPTY
     local networkNONE container with no app/providers/exchanges/migrations/live DSN; remove
     isolated target afterward. Existing synthetic proof and tests reused, no test repetition.
-    One next action requested: existing Download link via secure executor secret FILE binding
-    hosted-backup/export-download-url.txt; then check exact download host before retrieval.
+    Previously requested file binding is superseded by section13 below; the user has
+    no interface to create it. No URL file is required.
     No private URL in chat/shared evidence; source remains private in Render.
-13. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
+13. **Supported delivery / rollout preparation** — Corrected unsupported file-binding
+    assumption. Primary UI docs identify Personal vault; PR249_RENDER_EXPORT_URL is a
+    direct Environment variable, not a proxy placeholder. Current revision8 ENFORCED,
+    four hosts allowed, existing credential targets unchanged; no blocked probes repeated.
+    Matching personal key is NOT requested by current environment. One user action pending;
+    save alone will not inject it. Secret-free configuration edit request prepared, not
+    submitted; no config mutation tool. Updated fetch runner requires explicit --inspect-host
+    or --fetch; URL never persisted or echoed. AST syntax verification only, no app tests.
+    Hosted restore still0/verifiedfalse. Prepared supported-credential-mechanisms.json and
+    rollout-preparation.json. Fresh safe service metadata identifies API paid maintenance
+    support, both main/commit autodeploys, API preDeploy migration and worker command.
+    Official suspend/resume methods verified; actual global hold/drain/write access and
+    private/one-off writers unresolved. API preDeploy can overlap old service execution;
+    worker must be drained before migration. Existing postdeploy script OPTIONS check
+    does not assert CORS; real browser/cookie/compiled-origin acceptance remains pending.
+    Candidate60a5550 unchanged. Existing tests, rollback proofs and auth identity reused.
+    Transient exec-server disconnect interrupted initial staging; runtime reported
+    offline. A single local pwd retry succeeded; publication resumed without bypass.
+14. **Final status** — BLOCKED; productSHA unchanged, full dispatch0/deploy0/drain0/
     migration0/paidcalls0/orders0/operator and budgetchanges0. Documentation publication
     requires remote bytes/hash verification. Concurrent shared publication preserved via
     merge, including all prepared auth/voice receipts and updated PR description. Mac/iCloud unavailable/unverified.
