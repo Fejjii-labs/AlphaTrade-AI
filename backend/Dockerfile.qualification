@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+# Production-oriented backend image for Docker Compose and deployment.
+# Local development: use `uv run uvicorn app.main:app --reload` (see README.md).
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+
+WORKDIR /app
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=secret,id=proxy_ca,required=true SSL_CERT_FILE=/run/secrets/proxy_ca uv sync --frozen --no-dev --no-install-project
+
+COPY alembic.ini ./
+COPY README.md ./
+COPY src ./src
+RUN --mount=type=secret,id=proxy_ca,required=true SSL_CERT_FILE=/run/secrets/proxy_ca uv sync --frozen --no-dev
+
+
+FROM python:3.12-slim-bookworm AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 alphatrade \
+    && useradd --uid 1000 --gid alphatrade --create-home --shell /usr/sbin/nologin alphatrade
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH"
+
+COPY --from=builder --chown=alphatrade:alphatrade /app/.venv /app/.venv
+COPY --chown=alphatrade:alphatrade alembic.ini ./
+COPY --chown=alphatrade:alphatrade prompts ./prompts
+COPY --chown=alphatrade:alphatrade src ./src
+COPY --chown=alphatrade:alphatrade docker/entrypoint.sh /app/docker/entrypoint.sh
+
+RUN chmod +x /app/docker/entrypoint.sh
+
+USER alphatrade
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-${API_PORT:-8000}}/health" || exit 1
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
