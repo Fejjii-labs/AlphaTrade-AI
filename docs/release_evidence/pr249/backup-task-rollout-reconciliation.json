@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-10-11T23:22:45.262912+00:00",
+  "services": [
+    {
+      "service_id": "srv-d8fvbcd7vvec739mc060",
+      "name": "alphatrade-api-staging",
+      "branch": "main",
+      "suspended": "not_suspended",
+      "autoDeployTrigger": "commit",
+      "maintenance_enabled": false,
+      "predeploy_migrates": true,
+      "active_jobs": 0,
+      "global_write_hold_verified": false
+    },
+    {
+      "service_id": "srv-daqej7o473hc73fsc1k0",
+      "name": "alphatrade-paper-worker-staging",
+      "branch": "main",
+      "suspended": "not_suspended",
+      "autoDeployTrigger": "commit",
+      "maintenance_enabled": null,
+      "predeploy_migrates": false,
+      "active_jobs": 0,
+      "global_write_hold_verified": false
+    }
+  ],
+  "mutations": 0
+}

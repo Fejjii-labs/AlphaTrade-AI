@@ -1,0 +1,36 @@
+{
+  "observed_at": "2026-10-11T23:24:27Z",
+  "candidate_sha": "60a55506393e8ac11a45bd5609d6c70f33d99778",
+  "global_hold_qualified": false,
+  "in_flight_drain_verified": false,
+  "database_baseline": {
+    "connections": 8,
+    "state": "idle",
+    "open_transactions": 0,
+    "anonymous_application_name": true,
+    "source": "read-only pg_stat_activity; snapshot only"
+  },
+  "api_predeploy": "alembic upgrade head before replacement",
+  "maintenance_mode_blocks_private_traffic": false,
+  "suspension_is_deploy_solution": false,
+  "reason": "Suspended service deploys can return409; resume may start old source. An approved existing executor must hold all private/background/one-off writers across migration, with verified drain and controlled restart. No speculative suspend/resume/deploy attempted.",
+  "existing_shell_binding_identified": false,
+  "executor_tcp_grants": {
+    "domains": [],
+    "ip_ranges": []
+  },
+  "sources": [
+    "https://render.com/docs/maintenance-mode",
+    "https://render.com/docs/deploys",
+    "https://render.com/docs/deploy-hooks"
+  ],
+  "deployment_selection": {
+    "api": "POST /v1/services/srv-d8fvbcd7vvec739mc060/deploys commitId exact candidate",
+    "worker": "POST /v1/services/srv-daqej7o473hc73fsc1k0/deploys commitId exact candidate after migration",
+    "autodeploy": "capture, freeze competing commit triggers for rollout, restore only with source/composition safe; do not let main replace frozen candidate"
+  },
+  "ci_dispatch": "gh workflow run ci.yml --repo Fejjii/AlphaTrade-AI --ref codex/interactive-voice-monitoring -f full_backend=true",
+  "ci_conditions_verified": "full_backend=true enables full frontend/build and Docker/evaluation/e2e; combined_validation is not separately required",
+  "full_gate_started": false,
+  "settings_changed": false
+}

@@ -1,0 +1,31 @@
+{
+  "observed_at": "2026-10-11T23:24:27Z",
+  "environment_id": "ccarenv_b64_Y2NhcmVudl8xNWI3OWZkNzJjZTQ4MTkxYjA5NTJhZmJhZWIyZTRkZQ",
+  "source_config_version_id": "d8e448e9-266c-4462-9846-dc4819fb0132~cecfgver_6acc18e5b90081958c6d45a3e62acfd1",
+  "spec_revision": "2",
+  "observations_current": true,
+  "runtime_network_state": "unknown",
+  "runtime_secret_states": "unknown",
+  "backups_host_in_configured_allowlist": true,
+  "backups_host_in_executor_policy": true,
+  "export_variable_nonempty": true,
+  "actual_download_status": 200,
+  "actual_head_status": 200,
+  "blanket_readiness_claimed": false,
+  "qualified_archive_present": false,
+  "synthetic_auth_present": false,
+  "smoke_variable_presence": {
+    "SMOKE_EMAIL": false,
+    "SMOKE_PASSWORD": false,
+    "SMOKE_ACCESS_TOKEN": false
+  },
+  "manual_full_runs": [],
+  "application_tests_repeated": 0,
+  "full_ci_dispatches": 0,
+  "deployments": 0,
+  "hosting_mutations": 0,
+  "paid_resources_created": 0,
+  "new_secrets_created": 0,
+  "secret_values_printed": false,
+  "inherited_proxy_and_ca_preserved": true
+}
