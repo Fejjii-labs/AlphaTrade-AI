@@ -558,6 +558,8 @@ class PaperPlanClaimService:
             correlation_id=request.correlation_id or self._new_id(),
             outcome=ExecutionCommandOutcome.ALLOW,
             blocked_reason_code=None,
+            created_at=now,
+            updated_at=now,
         )
         receipt = ExecutionReceipt(
             id=self._new_id(),

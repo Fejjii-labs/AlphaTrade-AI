@@ -1,8 +1,9 @@
 """Server-owned native origin/position receipts, without execution authority.
 
-An explicit future experiment coordinator must call ``register_plan`` before
-creating a command, commit that origin, then call ``bind_entry`` before dispatch.
-No production coordinator is installed here. Neither method is exposed through
+The existing governed canonical coordinator calls ``register_plan`` before
+creating a command and commits origin, then ``bind_entry`` and its receipt before
+dispatch, when explicit server-validated experiment context is supplied.
+Neither method is exposed through
 HTTP or selected by a strategy/client-order similarity match. Transactions belong
 to that caller, not this producer. No order is sent.
 
