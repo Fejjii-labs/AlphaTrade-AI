@@ -574,3 +574,61 @@ binding remains UNKNOWN. PR237 smoke instructions, operator settings and trading
 boundaries are preserved. Next: review the published integration revision, bind that
 single existing access packet, then qualify authorized staging and fresh SFP before
 the single explicitly requested full backend release gate.
+
+## Agent quality, native outcomes and viewport completion — 11 October 2026
+
+This bounded next batch starts at reviewed PR247 `0d3c79ed90c00ce57da4e0e74bbfeb298e5408b9`
+(on accepted PR244 `ba47a228`). Both reviewed branches remain fixed; work is isolated
+on `codex/agent-outcomes-integration`. Existing passing evidence is reused.
+
+Ownership agreed before edits: owner owns frontend AgentWorkspace, its viewport
+helper/tests, mobile experiment cards and Journal/Knowledge filters, shared API
+artifacts, migration sequencing, integration browser checks and existing checkpoint.
+Worker A owns backend Agent/capture services, routing/classification evaluations and
+related backend tests; no owner frontend, native outcome, shared migrations or
+checkpoint files. Worker B owns native outcome producer/resolver/reader, related
+backend HTTP integration and tests; no Agent/frontends, shared migrations or checkpoint.
+Workers propose any shared schema/migration needs before edits; owner serializes them.
+
+Existing shared contracts remain authoritative: five saved categories and at most
+three independent capture entries; natural language evaluation has no category tags;
+existing configurable ModelRouter, validation and usage accounting are reused.
+Synthetic or oracle completions are not measured model quality. No invented model ID,
+paid-provider activation, new spending budget or silent fallback quality claim.
+Native evidence must derive from verified UID/account, canonical server command/plan
+and immutable strategy/experiment bindings, complete position/order/fill ancestry and
+verified monetary semantics. Echoed client IDs, retrospectively assigned experiment
+ownership or caller-supplied truth flags never qualify evidence. Unknown/incomplete
+facts remain unavailable; native facts/samples deduplicate separately from simulation.
+Producer implementation does not activate trading. Existing reader contracts should
+be reused; owner regenerates combined public contracts. Historical migrations are
+immutable; a12 remains head unless a justified additive migration is coordinated.
+
+Fixed next-batch acceptance (prior checklists remain unchanged):
+
+- **Owner UI U1–U3 (3):** U1 long desktop/mobile conversations follow latest while
+  pinned, preserve intentional older reading, offer clear Latest navigation and a
+  reachable composer; U2 mobile experiment cards remain compact without hiding
+  lifecycle/source/unavailable performance; U3 Knowledge filters are compact and
+  irrelevant pagination is hidden without losing paged data access.
+- **Agent quality Q1–Q4 (4):** Q1 realistic untagged journal/strategy/rule/news/
+  analysis/lesson/mixed/ambiguous evaluation corpus and existing pipeline; Q2
+  demonstrated capture gaps corrected with faithful source/uncertainty validation;
+  Q3 routing, usage, ownership and durable mixed records preserve existing bounds;
+  Q4 measured configured approved-provider classification results under existing
+  spending limits (unavailable measurement remains an explicit unmet criterion).
+- **Native outcomes N1–N5 (5):** N1 server-owned verified account/command/plan/
+  immutable strategy binding; N2 complete opening/exit/position ancestry, partial
+  fills and verified fee/PnL semantics; N3 existing reader consumes qualified evidence
+  and incomplete/missing facts remain unavailable; N4 PostgreSQL durability,
+  tenant isolation and restart/concurrency deduplication; N5 no client-ID ownership
+  inference, simulation mixing or execution/operator activation.
+- **Integration/release I1–I3 (3):** I1 reviewed worker refs integrate separately from
+  stabilization with aligned contracts and one migration head; I2 affected real
+  browser/API/persistence checks and exact revision evidence; I3 checkpoint/batched
+  publication and one precise release setup packet, advancing only executable access.
+
+Accepted/total is pending this batch. Implemented, integrated, deployed and live
+acceptance are distinct. No full backend CI during iteration; no main merge,
+deployment workaround, exchange order, Telegram message, provider activation or
+operator-setting change. Existing inaccessible hosting operations are not re-probed.
