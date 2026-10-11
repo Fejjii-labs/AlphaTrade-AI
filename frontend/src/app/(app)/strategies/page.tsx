@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import { savedEntries } from "@/lib/api/saved-entries";
+import { formatDateTime } from "@/lib/format";
 import { strategyStatusFor } from "@/lib/strategy-status";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
@@ -17,9 +18,10 @@ const families = [
   {
     id: "nested",
     name: "Nested Continuation",
+    detectionFamily: "nested_continuation",
     kind: "operational_nested_continuation/v1",
   },
-  { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1" },
+  { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
 ];
 export default function StrategiesPage() {
   const { user, organization } = useAuth();
@@ -116,13 +118,15 @@ function StrategiesWorkspace() {
         </>
       ) : (
         <>
-          <ExperimentsPanel initialExperiment={params.get("experiment")} />
           <h2 className="text-lg font-semibold">Strategy library</h2>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid items-start gap-4 md:grid-cols-2">
             {families.map((f) => {
               const configs = data?.brain?.strategies.filter(
                 (s) => s.spec.kind === f.kind,
               );
+              const recent = data?.brain?.setups.filter(s =>
+                s.family === f.detectionFamily && Date.parse(s.observed_at) >= Date.now() - 7 * 86400000,
+              ).sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at));
               return (
                 <article
                   key={f.id}
@@ -135,12 +139,33 @@ function StrategiesWorkspace() {
                       ? "Loading…"
                       : !configs
                         ? "Configurations unavailable"
-                        : `${configs.length} directional configurations`}
+                        : `${configs.length} configurations`}
                   </p>
                   <div className="flex gap-4 text-sm text-accent">
                     <Link href={`/strategies?family=${f.id}`}>Open</Link>
                     <Link href={`/agent?discuss=${f.id}`}>Ask Agent</Link>
                   </div>
+                  <details className="border-t border-border-subtle pt-2">
+                    <summary className="min-h-11 cursor-pointer content-center text-sm">
+                      Recent detections{recent ? ` (${recent.length})` : ""}
+                    </summary>
+                    <div className="space-y-3 pt-2 text-sm">
+                      <p className="text-text-muted">Last 7 days · market observations</p>
+                      {loading ? <p role="status">Loading detections…</p> : !recent ?
+                        <p>Detections unavailable.</p> : recent.length === 0 ?
+                        <p>No recent detections.</p> : <ul className="space-y-3">
+                          {recent.slice(0, 3).map(s => <li key={s.setup_id}>
+                            <Link className="text-accent" href={`/strategies/setups/${s.setup_id}?returnTo=${encodeURIComponent("/strategies")}`}>
+                              {s.symbol || s.instrument} · {s.direction} · {s.timeframe}
+                            </Link>
+                            <p className="text-text-muted">{s.state.replaceAll("_", " ")} · {formatDateTime(s.observed_at)}</p>
+                          </li>)}
+                        </ul>}
+                      <Link className="inline-flex min-h-11 items-center text-accent" href={`/strategies/detections?family=${f.detectionFamily}`}>
+                        Browse detections
+                      </Link>
+                    </div>
+                  </details>
                 </article>
               );
             })}
@@ -151,6 +176,7 @@ function StrategiesWorkspace() {
           >
             Recent detections →
           </Link>
+          <ExperimentsPanel initialExperiment={params.get("experiment")} />
           <section className="space-y-3" data-testid="captured-strategy-notes">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">Captured strategy notes</h2>

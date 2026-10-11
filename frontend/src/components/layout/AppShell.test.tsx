@@ -156,12 +156,13 @@ describe("AT-040 Phase B AppShell", () => {
     },
   );
 
-  it("opens the command menu from the phone search control", () => {
+  it("opens the command menu from the phone status menu", () => {
     render(
       <AppShell>
         <div>Page</div>
       </AppShell>,
     );
+    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Search pages and destinations" }),
     );

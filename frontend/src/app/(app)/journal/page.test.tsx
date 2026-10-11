@@ -19,6 +19,7 @@ vi.mock("@/components/journal/JournalTradeScreen", () => ({ JournalTradeScreen: 
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: "fixture-user" }, organization: { id: "fixture-org" } }) }));
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/journal",
   useSearchParams: () => search,
 }));
 

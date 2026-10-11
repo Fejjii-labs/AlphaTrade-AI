@@ -52,13 +52,12 @@ export function SavedEntryDetail({
   }
   return (
     <article className="space-y-3 rounded-card border border-border-subtle p-4">
-      <JournalReturnLink />
       <h2 className="text-xl font-semibold">{current.title}</h2>
       <p className="text-sm text-text-muted">
         {ENTRY_LABELS[current.category]} · {formatDateTime(current.updated_at)}{" "}
         · {current.undone ? "Undone" : `v${current.revision}`}
       </p>
-      <p className="text-sm">{current.summary}</p>
+      <p className="whitespace-pre-wrap break-words text-base leading-relaxed">{current.summary}</p>
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm">
           Category{" "}
@@ -140,7 +139,7 @@ export function SavedEntryDetail({
         <summary className="min-h-11 cursor-pointer text-sm">
           Original content &amp; evidence
         </summary>
-        <p className="whitespace-pre-wrap text-sm">{current.original_text}</p>
+        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{current.original_text}</p>
         {current.draft && (
           <pre className="whitespace-pre-wrap break-words text-xs">
             {JSON.stringify(current.draft, null, 2)}
@@ -327,7 +326,7 @@ function JournalWorkspaceContent() {
               : d.source_type === "general_note")),
   );
   return (
-    <div className="space-y-4" data-testid="journal-knowledge-workspace">
+    <div className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
       <div className="flex flex-wrap justify-between gap-3">
         <h1 className="text-2xl font-semibold">Journal &amp; Knowledge</h1>
         <Link href="/agent" className="text-accent">
@@ -355,6 +354,7 @@ function JournalWorkspaceContent() {
           Knowledge
         </Link>
       </nav>
+      {savedId || documentId ? <JournalReturnLink /> : null}
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
       {!savedId && !documentId ? <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
         <Input
@@ -362,7 +362,7 @@ function JournalWorkspaceContent() {
           placeholder="Search"
           value={query}
           onChange={(e) => filter("q", e.target.value)}
-          className="col-span-2 min-w-0 sm:w-auto sm:flex-1 sm:max-w-md"
+          className="col-span-2 min-w-0 sm:w-auto sm:flex-1"
         />
         {knowledge && (
           <Select
@@ -406,7 +406,6 @@ function JournalWorkspaceContent() {
           ) : null}
           {documentId && (
             <>
-              <JournalReturnLink />
               {(!data?.chunks || data.chunks.total === 0) && (
                 <p role="alert" data-testid="knowledge-document-stale">
                   Original document unavailable or has no readable text. No

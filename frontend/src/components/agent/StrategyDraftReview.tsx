@@ -55,7 +55,7 @@ export function StrategyDraftReview({ conversationId, proposalId }: { conversati
       <p className="text-sm font-medium">Strategy draft · {proposal.status}</p>
       {(proposal.challenge_notes ?? []).slice(0, 3).map(note => <p key={note} className="text-sm">{note}</p>)}
       <details><summary className="cursor-pointer text-sm">Review structured rules</summary>
-        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify({
+        <pre className="whitespace-pre-wrap break-words text-sm">{JSON.stringify({
           rules: proposal.proposed_structured_rules, pattern: proposal.proposed_pattern_spec, card: proposal.proposed_card,
         }, null, 2)}</pre>
       </details>

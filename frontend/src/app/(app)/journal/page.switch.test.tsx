@@ -13,6 +13,7 @@ vi.mock("@/contexts/AuthContext", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/journal",
   useSearchParams: () => search,
 }));
 

@@ -41,7 +41,7 @@ function SettingsWorkspace() {
     return () => window.removeEventListener("hashchange", openAnchor);
   }, []);
   return (
-    <div className="space-y-4" data-testid="settings-workspace">
+    <div className="space-y-4 [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
       <h1 className="text-2xl font-semibold">Settings</h1>
       <details
         className="rounded-card border border-border-subtle bg-surface-1 p-4"
