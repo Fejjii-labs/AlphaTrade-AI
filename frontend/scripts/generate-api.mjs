@@ -41,6 +41,8 @@ const pilots = [
   ["experimentTransition", "/experiments/{experiment_id}/versions/{version_id}/transition", "post"],
   ["experimentApprove", "/experiments/{experiment_id}/versions/{version_id}/approve", "post"],
   ["experimentPromote", "/experiments/{experiment_id}/versions/{version_id}/promote", "post"],
+  ["experimentNativeOutcome", "/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}", "get"],
+  ["experimentNativePerformance", "/experiments/{experiment_id}/versions/{version_id}/performance", "get"],
   ["experimentSample", "/experiments/{experiment_id}/versions/{version_id}/samples", "post"],
   ["trendpulseScreen", "/experiments/{experiment_id}/versions/{version_id}/trendpulse-screenings", "post"],
   ["trendpulseScreenings", "/experiments/{experiment_id}/versions/{version_id}/trendpulse-screenings", "get"],
@@ -49,6 +51,44 @@ const pilots = [
   ["paperAccount", "/execution/accounts/paper", "get"],
 ];
 const schemas = schema.components.schemas;
+// Pydantic after-model guards do not appear in exported JSON Schema. Preserve
+// their core availability requirements at the generated transport boundary.
+// Temporal/identity and sample-count equality remain server-owned validations.
+const nonNull = (schemaName, property) => {
+  const schemaProperty = schemas[schemaName].properties[property];
+  return schemaProperty.anyOf?.find(option => option.type !== "null") ?? schemaProperty;
+};
+function availability(schemaName, required, extra = {}) {
+  schemas[schemaName].allOf = [
+    ...(schemas[schemaName].allOf ?? []),
+    { if: { properties: { status: { const: "unavailable" } }, required: ["status"] },
+      then: { properties: { reason: { type: "string" } }, required: ["reason"] } },
+    { if: { properties: { status: { const: "available" } }, required: ["status"] },
+      then: { required, properties: {
+        ...Object.fromEntries(required.map(property => [property, nonNull(schemaName, property)])),
+        reason: { type: "null" }, ...extra,
+      } } },
+  ];
+}
+availability("NativeOutcome", ["proof", "facts", "quantity", "currency",
+  "reported_realized_pnl", "fee_cost", "realized_pnl_after_fees_excluding_funding",
+  "identity_verified_at", "native_exit_order_ids", "monetary_methodology_version", "coverage", "freshness"], {
+  facts: { ...schemas.NativeOutcome.properties.facts, minItems: 1 },
+  native_exit_order_ids: { ...schemas.NativeOutcome.properties.native_exit_order_ids, minItems: 1 },
+  coverage: { const: "reconciled_lineage_only" }, freshness: { const: "fresh" },
+});
+availability("ExperimentPerformance", ["currency", "reported_realized_pnl", "fee_cost",
+  "realized_pnl_after_fees_excluding_funding", "win_rate", "outcomes"], {
+  currency: { type: "string", minLength: 1 }, sample_count: { type: "integer", minimum: 1 },
+  outcomes: { ...schemas.ExperimentPerformance.properties.outcomes, minItems: 1,
+    items: { allOf: [schemas.ExperimentPerformance.properties.outcomes.items,
+      { properties: { status: { const: "available" } } }] } },
+});
+schemas.ExperimentPerformance.allOf.push({
+  if: { properties: { status: { const: "unavailable" } }, required: ["status"] },
+  then: { properties: Object.fromEntries(["reported_realized_pnl", "fee_cost",
+    "realized_pnl_after_fees_excluding_funding", "win_rate"].map(property => [property, { type: "null" }])) },
+});
 const used = new Set();
 function visit(value) {
   if (!value || typeof value !== "object") return;

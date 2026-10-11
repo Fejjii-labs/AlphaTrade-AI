@@ -14,7 +14,7 @@ import { ApiError } from "@/lib/api/client";
 import { agentTurnRequest } from "@/lib/api/generated/validators";
 import { clearPendingTurns, pendingFor, persistPending, persistTypedDraft, typedDraftFor, recordTerminal, subscribeRecovery, recoveryDetails, removePending, type PendingTurn, type TurnBody } from "./turn-recovery";
 import { StrategyDraftReview } from "./StrategyDraftReview";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { acknowledgedMessages, mergeProposals, proposalsFromMessages, reconcileMessages } from "./acknowledged-turn";
 import { AgentMessageContent } from "./AgentMessageContent";
@@ -111,12 +111,21 @@ export function AgentWorkspace() {
   );
   const [messages, setMessages] = useState<ConversationMessageRecord[]>([]);
   const historyCursors = useRef(new Map<string, number>());
+  const historyAnchor = useRef<{ element: HTMLElement; top: number; generation: number; conversation: string } | null>(null);
   const [earlierOffset, setEarlierOffset] = useState(0);
   const [earlierLoading, setEarlierLoading] = useState(false);
   const viewport = useConversationViewport(
     `${recoveryScope}:${conversationId}`,
     messages.at(-1)?.id ?? "",
   );
+  useLayoutEffect(() => {
+    const anchor = historyAnchor.current;
+    if (!anchor) return;
+    historyAnchor.current = null;
+    if (mounted.current && anchor.element.isConnected &&
+        anchor.generation === historyGeneration.current && anchor.conversation === activeConversation.current)
+      window.scrollBy(0, anchor.element.getBoundingClientRect().top - anchor.top);
+  }, [messages]);
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const draftRef = useRef(draft);
@@ -205,6 +214,7 @@ export function AgentWorkspace() {
     setMessages(id ? retainedMessages.current.get(id) ?? [] : []);
     setEarlierOffset(id ? historyCursors.current.get(id) ?? 0 : 0);
     setEarlierLoading(false);
+    historyAnchor.current = null;
     setLatest(null);
     setProposals(id ? proposalsFromMessages(retainedMessages.current.get(id) ?? []) : []);
     setDecidingId(null);
@@ -287,7 +297,6 @@ export function AgentWorkspace() {
     const isCurrent = () => mounted.current && activeConversation.current === id &&
       generation === historyGeneration.current && !controller.signal.aborted;
     const anchor = viewport.thread.current?.querySelector<HTMLElement>('[data-testid="agent-message"]');
-    const top = anchor?.getBoundingClientRect().top;
     setEarlierLoading(true);
     setMessagesError(null);
     try {
@@ -297,13 +306,14 @@ export function AgentWorkspace() {
       const merged = reconcileMessages(page.items, retainedMessages.current.get(id) ?? []);
       retainedMessages.current.set(id, merged);
       historyCursors.current.set(id, offset);
+      // Restore after React commits the prepended nodes. A scheduled frame can
+      // precede a large mobile render and inspect the previous DOM instead.
+      if (anchor) historyAnchor.current = {
+        element: anchor, top: anchor.getBoundingClientRect().top, generation, conversation: id,
+      };
       setEarlierOffset(offset);
       setMessages(merged);
       setProposals(current => mergeProposals(current, proposalsFromMessages(merged)));
-      requestAnimationFrame(() => {
-        if (isCurrent() && anchor && top !== undefined)
-          window.scrollBy(0, anchor.getBoundingClientRect().top - top);
-      });
     } catch (error) {
       if (isCurrent()) setMessagesError(error instanceof Error ? error.message : "Earlier messages unavailable");
     } finally {

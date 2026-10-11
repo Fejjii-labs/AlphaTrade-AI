@@ -179,6 +179,24 @@ export function experimentPromote(experimentId: paths["/experiments/{experiment_
   });
 }
 
+export function experimentNativeOutcome(experimentId: paths["/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}"]["get"]["parameters"]["path"]["experiment_id"], versionId: paths["/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}"]["get"]["parameters"]["path"]["version_id"], sourceRecordId: paths["/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}"]["get"]["parameters"]["path"]["source_record_id"], query?: paths["/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}"]["get"]["parameters"]["query"], options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
+  return validatedFetch<paths["/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}"]["get"]["responses"][200]["content"]["application/json"]>(`/experiments/${encodeURIComponent(experimentId)}/versions/${encodeURIComponent(versionId)}/outcomes/${encodeURIComponent(sourceRecordId)}`, {
+    method: "GET", auth: true, signal: options?.signal, headers: options?.headers,
+    query,
+    errorValidators: { 422: validators.experimentNativeOutcomeError422 },
+    responseValidator: validators.experimentNativeOutcomeResponse,
+  });
+}
+
+export function experimentNativePerformance(experimentId: paths["/experiments/{experiment_id}/versions/{version_id}/performance"]["get"]["parameters"]["path"]["experiment_id"], versionId: paths["/experiments/{experiment_id}/versions/{version_id}/performance"]["get"]["parameters"]["path"]["version_id"], query?: paths["/experiments/{experiment_id}/versions/{version_id}/performance"]["get"]["parameters"]["query"], options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
+  return validatedFetch<paths["/experiments/{experiment_id}/versions/{version_id}/performance"]["get"]["responses"][200]["content"]["application/json"]>(`/experiments/${encodeURIComponent(experimentId)}/versions/${encodeURIComponent(versionId)}/performance`, {
+    method: "GET", auth: true, signal: options?.signal, headers: options?.headers,
+    query,
+    errorValidators: { 422: validators.experimentNativePerformanceError422 },
+    responseValidator: validators.experimentNativePerformanceResponse,
+  });
+}
+
 export function experimentSample(experimentId: paths["/experiments/{experiment_id}/versions/{version_id}/samples"]["post"]["parameters"]["path"]["experiment_id"], versionId: paths["/experiments/{experiment_id}/versions/{version_id}/samples"]["post"]["parameters"]["path"]["version_id"], body: paths["/experiments/{experiment_id}/versions/{version_id}/samples"]["post"]["requestBody"]["content"]["application/json"], options?: { signal?: AbortSignal; headers?: Record<string, string> }) {
   return validatedFetch<paths["/experiments/{experiment_id}/versions/{version_id}/samples"]["post"]["responses"][201]["content"]["application/json"]>(`/experiments/${encodeURIComponent(experimentId)}/versions/${encodeURIComponent(versionId)}/samples`, {
     method: "POST", auth: true, signal: options?.signal, headers: options?.headers,

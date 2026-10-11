@@ -56,6 +56,10 @@ export const experimentApproveRequest: ValidateFunction<components["schemas"]["E
 export const experimentPromoteResponse: ValidateFunction<components["schemas"]["ExperimentVersion"]>;
 export const experimentPromoteError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const experimentPromoteRequest: ValidateFunction<components["schemas"]["ExperimentPromotion"]>;
+export const experimentNativeOutcomeResponse: ValidateFunction<components["schemas"]["NativeOutcome"]>;
+export const experimentNativeOutcomeError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
+export const experimentNativePerformanceResponse: ValidateFunction<components["schemas"]["ExperimentPerformance"]>;
+export const experimentNativePerformanceError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const experimentSampleResponse: ValidateFunction<components["schemas"]["ExperimentSample"]>;
 export const experimentSampleError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const experimentSampleRequest: ValidateFunction<components["schemas"]["ExperimentSampleCreate"]>;

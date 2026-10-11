@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "1955b672b6ed3099a3043f4fe4d23419182880b5bd3d19e70b848de9cff279bb",
-  "pilot_sha256": "2acfa70b817e7665fb05afa26eccd374e0a90478f62d7bc46795ab63f2bff681",
+  "openapi_sha256": "56b2cbea880a93b6e5397fa9a077e9e9846cf07854e357d20af580204497a77b",
+  "pilot_sha256": "e44cce1b6fefb81cf6cb3a30d016f1e318e75b2ee29789750f6c3e9b883b7a55",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -57,6 +57,7 @@
     "ExperimentModelPolicy-Input": "cbf68b28d4c6e1a3137b16cdb362a179f41cbe1a6b3d507e10d178c2140498d3",
     "ExperimentModelPolicy-Output": "7dad47d49814ff76167cb34efe62a8e077e26a783d1d81e12cb1d53b10b114ab",
     "ExperimentPage": "730cc7f77915df6b0487be016e25ec1df70739a9632a3c5dc6412fd564c8c67b",
+    "ExperimentPerformance": "3b469601333e496ac098d566b4f92d04e7e7305ffc839abed381914f05b33cbe",
     "ExperimentPromotion": "54f6612fd691bc69ceee727ce013627e65a1120906e205d6481143fe8381e2e4",
     "ExperimentRiskLimits-Input": "8b9fb0e7f0e88207688c2a68b875e089c2b3c8771786c8ef24a5e579239d176a",
     "ExperimentRiskLimits-Output": "35bbb305c4e2eff485548a1a8ea756100adeb3e2b1448a327028da792293d8be",
@@ -92,6 +93,9 @@
     "MarketQuoteView": "155909305d80346f39bbf159dac997cb00d98de2b8238c4181c85bb440d328fa",
     "MarketRegime": "c6a83a845c7a9c0a3a45e91771362de063941c7cb6491a18659f1e20aced1305",
     "NarrativeMetadata": "205c2b6d262bae04fa0871cf3cf523969dba9005ab23aae91e9d4869d2adb8ad",
+    "NativeExperimentSourceProof": "cf6a0da559720fe0151e61b9d4bcbb3ce11786d65f8de77af16f669d6d379edd",
+    "NativeFactProvenance": "cb284a17758644c795c3ece4859a4a63514d6523c969d56343078b8f17bdb97c",
+    "NativeOutcome": "43f56557cd5e787407e545702725049ae759360912e47776cba05dc437e9103d",
     "NestedMaturityStage": "2e61295c64bb5f9d48739debb1d25c76a33a49fe88422fec287e4f89843907c6",
     "NoTradeRuleBlock-Output": "7a22c88f3e3b900faa2c443095e8048784ea291d68767f588792d78c2077a23f",
     "NoTradeRuleType": "d31834824a1f5ba711ea0c140a02d370fdc0284112a8c7e54ed508a600f262a6",

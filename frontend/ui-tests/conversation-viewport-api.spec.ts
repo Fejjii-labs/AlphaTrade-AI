@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-type Fixture = { email: string; password: string; conversation_id: string };
+type Fixture = { email: string; password: string; conversation_id: string; experiment_id: string; other: { email: string; password: string } };
 async function login(page: Page) {
   const api = process.env.PLAYWRIGHT_API_URL!;
   const authFile = process.env.EXPERIMENT_BROWSER_AUTH_FILE!;
@@ -13,20 +13,24 @@ async function login(page: Page) {
   const auth = JSON.parse(await fs.readFile(authFile, "utf8")) as Fixture;
   const health = await page.request.get(`${api}/health`);
   expect(health.headers()["x-synthetic-fixture-process"]).toBeTruthy();
+  if (process.env.EXPECTED_SYNTHETIC_API_PROCESS)
+    expect(health.headers()["x-synthetic-fixture-process"]).toBe(process.env.EXPECTED_SYNTHETIC_API_PROCESS);
   expect((await health.json()).real_trading_enabled).toBe(false);
   await page.goto("/login");
   await page.getByLabel("Email", { exact: true }).fill(auth.email);
   await page.getByLabel("Password", { exact: true }).fill(auth.password);
   const response = page.waitForResponse(r => r.url() === `${api}/auth/login` && r.request().method() === "POST");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  expect((await response).ok()).toBe(true);
+  const signedIn = await response;
+  expect(signedIn.ok()).toBe(true);
+  const tokens = (await signedIn.json()).tokens;
   await page.waitForURL(url => url.pathname !== "/login");
   await page.goto(`/agent?conversation=${auth.conversation_id}`);
-  return api;
+  return { api, auth, headers: { Authorization: `Bearer ${tokens.access_token}` } };
 }
 async function composerIsReachable(page: Page, mobile: boolean) {
   const textarea = page.getByLabel("Message", { exact: true });
-  const send = page.getByRole("button", { name: "Send", exact: true });
+  const send = page.getByRole("button", { name: /^(Send|Sending…)$/ });
   const bottomBoundary = mobile ? 72 : 0;
   for (const locator of [textarea, send]) {
     await expect.poll(async () => {
@@ -42,7 +46,7 @@ for (const [name, viewport] of [
   test(`${name} long conversation follows latest and preserves deliberate older reading`, async ({ page }) => {
     test.setTimeout(180_000);
     await page.setViewportSize(viewport);
-    const api = await login(page);
+    const { api } = await login(page);
     await expect(page.getByTestId("agent-message").filter({ hasText: "Synthetic viewport message 129." })).toBeVisible();
     await composerIsReachable(page, name === "mobile");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -67,6 +71,7 @@ for (const [name, viewport] of [
     await page.getByLabel("Message", { exact: true }).fill(`Synthetic ${name} viewport continuation; no execution request.`);
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await didCommit;
+    await composerIsReachable(page, name === "mobile");
     await page.mouse.wheel(0, -1800);
     await expect(page.getByRole("button", { name: "Latest messages ↓", exact: true })).toBeVisible();
     // Wait for the deliberate scroll itself, not an arbitrary time delay.
@@ -125,4 +130,25 @@ test("mobile compact experiments and Knowledge filters keep provenance and hide 
   expect((await filters.boundingBox())!.height).toBeLessThan(115);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "../docs/screenshots/experiments/compact-knowledge-mobile.png" });
+});
+
+test("combined API readers enforce actual login, private ownership and simulation separation", async ({ page }) => {
+  test.setTimeout(120_000);
+  const { api, auth, headers } = await login(page);
+  const detail = await page.request.get(`${api}/experiments/${auth.experiment_id}`, { headers });
+  expect(detail.ok()).toBe(true);
+  const version = (await detail.json()).versions[0].id as string;
+  const otherLogin = await page.request.post(`${api}/auth/login`, { data: auth.other });
+  expect(otherLogin.ok()).toBe(true);
+  const other = { Authorization: `Bearer ${(await otherLogin.json()).tokens.access_token}` };
+  for (const suffix of ["performance", `outcomes/${auth.conversation_id}`]) {
+    const target = `${api}/experiments/${auth.experiment_id}/versions/${version}/${suffix}`;
+    const owned = await page.request.get(target, { headers });
+    expect(owned.status()).toBe(409);
+    expect(JSON.stringify(await owned.json())).toContain("experiment_native_source_required");
+    expect((await page.request.get(target, { headers: other })).status()).toBe(404);
+    expect((await page.request.get(target)).status()).toBe(401);
+  }
+  const unchanged = await page.request.get(`${api}/experiments/${auth.experiment_id}`, { headers });
+  expect(await unchanged.json()).toEqual(await detail.json());
 });

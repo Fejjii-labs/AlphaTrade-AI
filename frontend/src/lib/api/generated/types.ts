@@ -323,6 +323,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/experiments/{experiment_id}/versions/{version_id}/outcomes/{source_record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Native Outcome */
+        get: operations["native_outcome_experiments__experiment_id__versions__version_id__outcomes__source_record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/experiments/{experiment_id}/versions/{version_id}/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Native Performance */
+        get: operations["native_performance_experiments__experiment_id__versions__version_id__performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/experiments/{experiment_id}/versions/{version_id}/samples": {
         parameters: {
             query?: never;
@@ -1601,6 +1635,91 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** ExperimentPerformance */
+        ExperimentPerformance: {
+            /**
+             * Account History Complete
+             * @default false
+             * @constant
+             */
+            account_history_complete?: false;
+            /**
+             * Contract Version
+             * @default blofin-experiment-performance/v1
+             * @constant
+             */
+            contract_version?: "blofin-experiment-performance/v1";
+            /** Currency */
+            currency?: string | null;
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /** Fee Cost */
+            fee_cost?: string | null;
+            /** Funding */
+            funding?: null;
+            /**
+             * Methodology Version
+             * @default attributable-native-outcomes/v1
+             * @constant
+             */
+            methodology_version?: "attributable-native-outcomes/v1";
+            /** Native Uid */
+            native_uid: string | null;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * Outcomes
+             * @default []
+             */
+            outcomes?: components["schemas"]["NativeOutcome"][];
+            /** Realized Pnl After Fees Excluding Funding */
+            realized_pnl_after_fees_excluding_funding?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Reported Realized Pnl */
+            reported_realized_pnl?: string | null;
+            /** Required Sample Count */
+            required_sample_count: number;
+            /**
+             * Rounding
+             * @default 18_decimal_places_half_even
+             * @constant
+             */
+            rounding?: "18_decimal_places_half_even";
+            /** Sample Count */
+            sample_count: number;
+            /**
+             * Sample Group Id
+             * Format: uuid
+             */
+            sample_group_id: string;
+            /**
+             * Source
+             * @default blofin_demo
+             * @constant
+             */
+            source?: "blofin_demo";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable";
+            /** Variant Key */
+            variant_key: string;
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+            /** Win Rate */
+            win_rate?: string | null;
+        } & (unknown & unknown & unknown);
         /** ExperimentPromotion */
         ExperimentPromotion: {
             /** Expected Revision */
@@ -2408,6 +2527,275 @@ export interface components {
              */
             validation_passed?: boolean;
         };
+        /**
+         * NativeExperimentSourceProof
+         * @description Additive stored JSON proof; a11 already stores opaque proof/evidence hashes.
+         */
+        NativeExperimentSourceProof: {
+            /**
+             * Authority Origin
+             * @constant
+             */
+            authority_origin: "experiment";
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /**
+             * Execution Account Id
+             * Format: uuid
+             */
+            execution_account_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "closed_trade" | "setup_observation";
+            /**
+             * Lineage Methodology Version
+             * @default experiment-native-lineage/v1
+             * @constant
+             */
+            lineage_methodology_version?: "experiment-native-lineage/v1";
+            /** Native Entry Fill Ids */
+            native_entry_fill_ids: string[];
+            /** Native Entry Order Id */
+            native_entry_order_id?: string | null;
+            /** Native Exit Fill Ids */
+            native_exit_fill_ids: string[];
+            /** Native Exit Order Id */
+            native_exit_order_id?: string | null;
+            /** Native Exit Order Ids */
+            native_exit_order_ids: string[];
+            /** Native Uid */
+            native_uid: string | null;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Ownership Command Id */
+            ownership_command_id?: string | null;
+            /**
+             * Sample Group Id
+             * Format: uuid
+             */
+            sample_group_id: string;
+            source: components["schemas"]["ExperimentSource"];
+            /** Source Content Hash */
+            source_content_hash: string;
+            /** Source Record Id */
+            source_record_id: string;
+            /**
+             * Strategy Version Id
+             * Format: uuid
+             */
+            strategy_version_id: string;
+            /** Variant Key */
+            variant_key: string;
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+        };
+        /** NativeFactProvenance */
+        NativeFactProvenance: {
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Event Time
+             * Format: date-time
+             */
+            event_time: string;
+            /** Fee */
+            fee: string | null;
+            /** Fee Currency */
+            fee_currency: string | null;
+            /**
+             * First Observed At
+             * Format: date-time
+             */
+            first_observed_at: string;
+            /** Instrument */
+            instrument: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "order" | "fill";
+            /** Native Id */
+            native_id: string;
+            /** Price */
+            price: string | null;
+            /** Quantity */
+            quantity: string;
+            /**
+             * Quantity Unit
+             * @default contracts
+             * @constant
+             */
+            quantity_unit?: "contracts";
+            /** Realized Pnl */
+            realized_pnl: string | null;
+        };
+        /** NativeOutcome */
+        NativeOutcome: {
+            /**
+             * Account History Complete
+             * @default false
+             * @constant
+             */
+            account_history_complete?: false;
+            /**
+             * Contract Version
+             * @default blofin-experiment-outcome/v1
+             * @constant
+             */
+            contract_version?: "blofin-experiment-outcome/v1";
+            /**
+             * Coverage
+             * @default incomplete
+             * @enum {string}
+             */
+            coverage?: "reconciled_lineage_only" | "incomplete";
+            /** Currency */
+            currency?: string | null;
+            /** Entry Binding Hash */
+            entry_binding_hash?: string | null;
+            /**
+             * Environment
+             * @default demo
+             * @constant
+             */
+            environment?: "demo";
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /**
+             * Execution Account Id
+             * Format: uuid
+             */
+            execution_account_id: string;
+            /** Exit Lineage Hash */
+            exit_lineage_hash?: string | null;
+            /**
+             * Facts
+             * @default []
+             */
+            facts?: components["schemas"]["NativeFactProvenance"][];
+            /** Fee Cost */
+            fee_cost?: string | null;
+            /**
+             * Freshness
+             * @default unavailable
+             * @enum {string}
+             */
+            freshness?: "fresh" | "stale" | "unavailable";
+            /** Funding */
+            funding?: null;
+            /** Identity Verified At */
+            identity_verified_at?: string | null;
+            /** Instrument */
+            instrument?: string | null;
+            /**
+             * Limitations
+             * @default [
+             *       "funding_not_collected",
+             *       "account_history_retention_unverified",
+             *       "current_instrument_metadata_not_historical_conversion_proof"
+             *     ]
+             */
+            limitations?: string[];
+            /**
+             * Methodology Version
+             * @default blofin-native-reconciliation/v1
+             * @constant
+             */
+            methodology_version?: "blofin-native-reconciliation/v1";
+            /** Monetary Methodology Version */
+            monetary_methodology_version?: string | null;
+            /**
+             * Native Exit Order Ids
+             * @default []
+             */
+            native_exit_order_ids?: string[];
+            /** Native Uid */
+            native_uid: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            proof?: components["schemas"]["NativeExperimentSourceProof"] | null;
+            /**
+             * Provider
+             * @default blofin_native_activity
+             * @constant
+             */
+            provider?: "blofin_native_activity";
+            /** Quantity */
+            quantity?: string | null;
+            /**
+             * Quantity Unit
+             * @default contracts
+             * @constant
+             */
+            quantity_unit?: "contracts";
+            /** Realized Pnl After Fees Excluding Funding */
+            realized_pnl_after_fees_excluding_funding?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Reported Realized Pnl */
+            reported_realized_pnl?: string | null;
+            /**
+             * Rounding
+             * @default 18_decimal_places_half_even
+             * @constant
+             */
+            rounding?: "18_decimal_places_half_even";
+            /**
+             * Source
+             * @default blofin_demo
+             * @constant
+             */
+            source?: "blofin_demo";
+            /** Source Record Id */
+            source_record_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable";
+            /**
+             * Strategy Version Id
+             * Format: uuid
+             */
+            strategy_version_id: string;
+            /** Variant Key */
+            variant_key: string;
+            /**
+             * Venue
+             * @default BLOFIN
+             * @constant
+             */
+            venue?: "BLOFIN";
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+        } & (unknown & unknown);
         /**
          * NestedMaturityStage
          * @enum {string}
@@ -5561,6 +5949,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExperimentVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    native_outcome_experiments__experiment_id__versions__version_id__outcomes__source_record_id__get: {
+        parameters: {
+            query?: {
+                variant_key?: string;
+            };
+            header?: never;
+            path: {
+                experiment_id: string;
+                version_id: string;
+                source_record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOutcome"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    native_performance_experiments__experiment_id__versions__version_id__performance_get: {
+        parameters: {
+            query?: {
+                variant_key?: string;
+            };
+            header?: never;
+            path: {
+                experiment_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentPerformance"];
                 };
             };
             /** @description Validation Error */
