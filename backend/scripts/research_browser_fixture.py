@@ -5,7 +5,10 @@ with original tagged synthetic receipts. Runtime settings remain disarmed; no
 production dependency or operator flag is changed. Never deploy this test harness.
 """
 
+import json
 import os
+import re
+from dataclasses import replace
 
 from sqlalchemy.engine import make_url
 from tests.support.trendpulse_screening import DelayedReplayAcquirer, after_close
@@ -49,3 +52,74 @@ def synthetic_service(session: SessionDep):
 
 
 app.dependency_overrides[get_screening_service] = synthetic_service
+
+
+if os.getenv("SYNTHETIC_CAPTURE_BROWSER") == "true":
+    # Explicit test-only responses still pass through the production CaptureModel,
+    # ModelRouter, validation, turn coordinator and PostgreSQL persistence. No
+    # production provider configuration or paid model is changed.
+    import app.agent_capture.model as capture_model
+    from app.agent_capture.contracts import CapturePlan, CaptureSuggestion, StrategyDraft
+    from app.providers.llm import LLMCompletionResult, MockLLMProvider
+
+    original_capture_providers = capture_model.resolve_providers
+
+    class SyntheticCaptureProvider(MockLLMProvider):
+        def complete(self, request):
+            schema_name = (request.response_format or {}).get("json_schema", {}).get("name")
+            if schema_name != "agent_capture":
+                return super().complete(request)
+            content = json.loads(next(m.content for m in request.messages if m.role == "user"))
+            source = "\n".join(
+                [content["current_user_content"], content.get("uploaded_reference_content", "")]
+            )
+            suggestions = []
+            for category, quote in re.findall(
+                r"^\[(journal|rules|strategies|news_analysis|lessons)\] (.+)$", source, re.M
+            ):
+                suggestions.append(
+                    CaptureSuggestion(
+                        category=category,
+                        title=f"Synthetic {category.replace('_', ' ')} note",
+                        summary=quote,
+                        evidence_quotes=[quote],
+                        tags=["synthetic-browser"],
+                        confidence=0.99,
+                        target_entry_id=None,
+                        draft=StrategyDraft(
+                            family="synthetic observation",
+                            market=None,
+                            direction=None,
+                            timeframe=None,
+                            entry_rules=[quote],
+                            exit_rules=[],
+                            invalidation=[],
+                            missing_fields=[
+                                "market",
+                                "direction",
+                                "timeframe",
+                                "exit",
+                                "invalidation",
+                            ],
+                        )
+                        if category == "strategies"
+                        else None,
+                    )
+                )
+            plan = CapturePlan(entries=suggestions, clarification=None)
+            payload = plan.model_dump(mode="json")
+            return LLMCompletionResult(
+                content=json.dumps(payload),
+                model=request.model,
+                provider=self.name,
+                parsed_json=payload,
+                fallback_used=False,
+                input_tokens=10,
+                output_tokens=10,
+                latency_ms=1,
+            )
+
+    def synthetic_capture_providers(settings):
+        return replace(original_capture_providers(settings), llm=SyntheticCaptureProvider())
+
+    capture_model.resolve_providers = synthetic_capture_providers
