@@ -4,6 +4,21 @@ import { afterEach, expect, it, vi } from "vitest";
 import DashboardPage from "./page";
 import { api } from "@/lib/api";
 
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({ user: { id: "dashboard-reader" }, organization: { id: "dashboard-tenant" } }),
+}));
+
+vi.mock("@/components/activity/useNativeActivity", () => ({
+  useNativeActivity: () => ({
+    page: null, busy: false, error: "Native activity unavailable", refresh: vi.fn(), more: vi.fn(),
+  }),
+}));
+vi.mock("@/components/dashboard/useDemoAccountSnapshot", () => ({
+  useDemoAccountSnapshot: () => ({
+    account: null, busy: false, error: "Account unavailable", status: "unavailable", hasData: false, load: vi.fn(),
+  }),
+}));
+
 vi.mock("@/contexts/AppContext", () => ({
   useSafetyPosture: () => ({ executionMode: "paper", realTradingEnabled: false }),
 }));
