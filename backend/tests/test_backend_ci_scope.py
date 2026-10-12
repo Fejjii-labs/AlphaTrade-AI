@@ -36,6 +36,69 @@ def test_changed_tests_and_direct_module_regressions_are_selected():
     assert "tests/test_config.py" in selected
 
 
+def test_broad_filename_stems_do_not_expand_into_prefix_families():
+    """``agent`` / ``strategy`` / ``market`` must not pull their filename families."""
+    selected = scope.select_tests(
+        [
+            "backend/src/app/schemas/agent.py",
+            "backend/src/app/schemas/strategy.py",
+            "backend/src/app/confluence/market.py",
+            "backend/src/app/core/config.py",
+            "backend/src/app/core/paper_safety.py",
+        ],
+        ROOT / "backend",
+    )
+    assert selected == sorted(
+        {
+            *scope.BASE_TESTS,
+            "tests/test_config_jwt.py",
+            "tests/test_phase1a_paper_mode_invariant.py",
+        }
+    )
+    for leaked in (
+        "tests/test_agent_capture.py",
+        "tests/test_strategy_slice_36.py",
+        "tests/test_market_watcher_scanner_slice_72.py",
+    ):
+        assert leaked not in selected
+
+
+def test_safety_modules_select_mapped_regressions_without_sibling_prefixes():
+    selected = scope.select_tests(
+        [
+            "backend/src/app/core/exchange_safety.py",
+            "backend/src/app/core/deployment_safety.py",
+        ],
+        ROOT / "backend",
+    )
+    assert "tests/test_exchange_safety.py" in selected
+    assert "tests/test_deployment_safety.py" in selected
+    assert "tests/test_exchange_blackbox.py" not in selected
+    assert "tests/test_exchange_probes.py" not in selected
+    assert "tests/test_deployment_scripts.py" not in selected
+
+
+def test_explicit_dependencies_match_exact_paths_and_real_files():
+    backend = ROOT / "backend"
+    assert scope.EXPLICIT_DEPENDENCIES
+    sources = [source for source, _tests in scope.EXPLICIT_DEPENDENCIES]
+    assert len(sources) == len(set(sources))
+    for source, tests in scope.EXPLICIT_DEPENDENCIES:
+        assert (ROOT / source).is_file()
+        assert source.startswith("backend/src/app/") and source.endswith(".py")
+        assert tests
+        for test in tests:
+            assert (backend / test).is_file()
+    near_miss = scope.select_tests(
+        [
+            "backend/src/app/core/config_extra.py",
+            "backend/src/app/core/paper_safety_notes.py",
+        ],
+        backend,
+    )
+    assert near_miss == sorted(scope.BASE_TESTS)
+
+
 def test_missing_tests_and_paths_outside_tests_cannot_expand_selection():
     selected = scope.select_tests(
         ["backend/tests/test_deleted.py", "backend/tests/../../test_escape.py", "docs/README.md"],

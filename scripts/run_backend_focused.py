@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Development selection only; full release acceptance is a separate CI dispatch."""
+"""Development selection only; full release acceptance is a separate CI dispatch.
+
+A changed application module selects ``tests/test_<stem>.py`` when that exact
+file exists, plus explicit path mappings. Filename prefixes such as
+``test_agent*.py`` are not used: in this tree the stems ``agent`` and
+``strategy`` match 26 and 19 test files.
+"""
 
 from __future__ import annotations
 
@@ -74,10 +80,41 @@ ACTIVITY_BOUNDARY_TESTS = (
     "tests/test_blofin_provider.py",
     "tests/test_dashboard_demo_account.py",
 )
+# Exact source paths only. A directory prefix or a longer filename must not match.
+EXPLICIT_DEPENDENCIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "backend/src/app/core/config.py",
+        ("tests/test_config.py", "tests/test_config_jwt.py"),
+    ),
+    (
+        "backend/src/app/core/deployment_safety.py",
+        ("tests/test_deployment_safety.py",),
+    ),
+    (
+        "backend/src/app/core/exchange_safety.py",
+        ("tests/test_exchange_safety.py",),
+    ),
+    (
+        "backend/src/app/core/paper_safety.py",
+        ("tests/test_phase1a_paper_mode_invariant.py",),
+    ),
+)
+
+
+def _exact_module_test(path: str, backend: Path) -> str | None:
+    """Return ``tests/test_<stem>.py`` for one application module, if it exists."""
+    if not path.startswith("backend/src/app/") or not path.endswith(".py"):
+        return None
+    candidate = Path(path.removeprefix("backend/"))
+    exact = backend / "tests" / f"test_{candidate.stem}.py"
+    if exact.is_file():
+        return exact.relative_to(backend).as_posix()
+    return None
 
 
 def select_tests(changed: list[str], backend: Path) -> list[str]:
     selected = set(BASE_TESTS)
+    explicit = dict(EXPLICIT_DEPENDENCIES)
     for path in changed:
         if path.startswith(SFP_PATHS):
             selected.update(SFP_TESTS)
@@ -85,14 +122,13 @@ def select_tests(changed: list[str], backend: Path) -> list[str]:
             selected.update(REVIEWER_BOUNDARY_TESTS)
         if path.startswith(ACTIVITY_BOUNDARY_PATHS):
             selected.update(ACTIVITY_BOUNDARY_TESTS)
+        if mapped := explicit.get(path):
+            selected.update(mapped)
         candidate = Path(path.removeprefix("backend/"))
         if path.startswith("backend/tests/") and candidate.name.startswith("test_"):
             selected.add(candidate.as_posix())
-        if path.startswith("backend/src/app/") and path.endswith(".py"):
-            selected.update(
-                item.relative_to(backend).as_posix()
-                for item in (backend / "tests").glob(f"test_{candidate.stem}*.py")
-            )
+        if exact := _exact_module_test(path, backend):
+            selected.add(exact)
     tests = (backend / "tests").resolve()
     return sorted(
         node

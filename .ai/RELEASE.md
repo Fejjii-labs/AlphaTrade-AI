@@ -29,8 +29,10 @@ checks. PR runs for the same PR cancel superseded runs; main/master pushes and m
 runs have separate concurrency groups and are not cancelled by PR updates. Read-only
 workflow permissions and job timeouts bound routine execution.
 Backend pytest runs `scripts/run_backend_focused.py`: a small config/deployment/
-workflow baseline, changed backend test files, matching module test names and an
-explicit SFP/receipt/logging regression group for those paths. This is a development
+workflow baseline, changed backend test files, the exact `tests/test_<module>.py`
+file when it exists, and explicit source mappings (safety modules, the
+SFP/receipt/logging group, reviewer boundaries, and native-activity boundaries).
+Filename prefixes such as `test_agent*.py` are not used. This is a development
 selection, not exhaustive dependency analysis. For other cross-module changes,
 include their focused tests explicitly in the PR; the complete gate below remains
 required. A successful focused run is **not complete backend acceptance**.
