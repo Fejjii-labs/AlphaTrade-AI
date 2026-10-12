@@ -115,7 +115,8 @@ identity remain unverified. This feature is not deployed.
    probes establish proxy access refusal only.
 
 No deployment/settings/credentials/migrations, notification sends, native orders,
-local balance resets/top-ups, main merge or full backend gate. The local ignored
-HANDOFF/CHANGELOG are feature checkpoints; publishing another newest root handoff
+local balance resets/top-ups, main merge or full backend gate. Feature
+checkpoints are retained under the existing ignored `.ai/local/trading-workflow/`;
+the inherited root HANDOFF/CHANGELOG are preserved. Publishing another newest root handoff
 would compete with the active release owner's checkpoint, so this PR keeps its
 scoped continuation here. Mac/iCloud sync is unavailable and unverified.
