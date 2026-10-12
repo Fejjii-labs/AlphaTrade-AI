@@ -47,9 +47,7 @@ def _save(root: Path, name: str, value: object) -> None:
     temporary.replace(root / name)
 
 
-def run(
-    command: list[str], root: Path, *, phase_seconds: float, run_seconds: float
-) -> int:
+def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: float) -> int:
     root.mkdir(parents=True, exist_ok=True)
     env = dict(
         os.environ,
@@ -128,9 +126,7 @@ def run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output", type=Path, default=Path("../backend-ci-diagnostics")
-    )
+    parser.add_argument("--output", type=Path, default=Path("../backend-ci-diagnostics"))
     parser.add_argument("--phase-seconds", type=float, default=180)
     parser.add_argument("--run-seconds", type=float, default=6900)
     args = parser.parse_args()
