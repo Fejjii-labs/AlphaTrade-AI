@@ -31,6 +31,7 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.proposals import find_proposal
 from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import MembershipRole
+from tests.support.postgres_persistence import reset_public_schema
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -76,7 +77,7 @@ def _settings() -> Settings:
 @pytest.fixture
 def pg_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
     engine = create_engine(POSTGRES_URL, poolclass=NullPool)
-    Base.metadata.drop_all(engine)
+    reset_public_schema(engine)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     settings = _settings()

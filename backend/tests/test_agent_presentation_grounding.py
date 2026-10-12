@@ -62,6 +62,11 @@ def test_model_context_keeps_both_families_after_a_long_user_message(agent_db, m
                 fallback_used=False,
                 resolved_model="simulated-model",
                 decision=SimpleNamespace(selected_model="simulated-model"),
+                input_tokens=0,
+                output_tokens=0,
+                total_latency_ms=0.0,
+                total_cost=Decimal("0"),
+                cost_source=SimpleNamespace(value="unavailable"),
             )
 
     monkeypatch.setattr(

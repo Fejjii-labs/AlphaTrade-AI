@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   backend:
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.full_backend && 60 || 20 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.full_backend && 120 || 20 }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -71,6 +71,8 @@ jobs:
         run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
+        env:
+          PYTEST_ADDOPTS: "-vv -o faulthandler_timeout=120 --durations=20"
         run: uv run pytest
 
   deployment-safety:

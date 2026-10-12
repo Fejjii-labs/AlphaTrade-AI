@@ -36,6 +36,7 @@ from app.schemas.journal_lifecycle import JournalLifecycleEventInput
 from app.schemas.trade_plan import AccountMode, ExecutionMode
 from app.services.audit_service import AuditService
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
+from tests.support.postgres_persistence import reset_public_schema
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -70,7 +71,7 @@ requires_postgres = pytest.mark.skipif(
 
 def _factory() -> sessionmaker[Session]:
     engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    Base.metadata.drop_all(engine)
+    reset_public_schema(engine)
     Base.metadata.create_all(engine)
     install_persistence_firewall()
     factory = sessionmaker(bind=engine, expire_on_commit=False)

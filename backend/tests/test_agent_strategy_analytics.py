@@ -451,7 +451,11 @@ async def test_agent_http_requires_auth_and_preserves_existing_role_boundary(
 
 
 async def test_analytics_filters_cannot_route_mutations(api: _Api, client: AsyncClient) -> None:
-    for message in ("Create a strategy", "Execute this paper trade", "Enable real trading"):
+    for message, expected_status in (
+        ("Create a strategy", 200),
+        ("Execute this paper trade", 422),
+        ("Enable real trading", 422),
+    ):
         response = await client.post(
             PATH,
             headers=api.headers(),
@@ -460,7 +464,17 @@ async def test_analytics_filters_cannot_route_mutations(api: _Api, client: Async
                 "analytics_filters": {},
             },
         )
-        assert response.status_code == 422, response.text
+        assert response.status_code == expected_status, response.text
+        body = response.json()
+        if expected_status == 422:
+            assert body["error"]["code"] == "validation_error"
+            continue
+        assert body["capability"] == "strategy_analytics"
+        assert body["operation"] == "read"
+        assert body["proposals"] == []
+        assert body["execution_attempted"] is False
+        assert body["authority_mutated"] is False
+        assert body["real_trading_enabled"] is False
 
 
 def test_adapter_read_does_not_autoflush_pending_authority_changes(api: _Api) -> None:

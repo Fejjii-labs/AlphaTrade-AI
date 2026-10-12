@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -46,21 +46,34 @@ requires_postgres = pytest.mark.skipif(
 
 
 def _persistence_tables() -> list[object]:
-    return [
+    selected = {
         table
         for table in Base.metadata.sorted_tables
         if table.name in {"organizations", "users", "user_notification_preferences"}
         or table.name.startswith(
             ("watcher_", "telegram_", "canonical_candidate", "action_eligibility", "controlled_")
         )
-    ]
+    }
+    pending = list(selected)
+    while pending:
+        for key in pending.pop().foreign_keys:
+            parent = key.column.table
+            if parent not in selected:
+                selected.add(parent)
+                pending.append(parent)
+    return [table for table in Base.metadata.sorted_tables if table in selected]
+
+
+def reset_public_schema(engine: Engine) -> None:
+    """Reset the disposable fixture schema, including table-bound SQL functions."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
 
 
 def persistence_session_factory() -> sessionmaker[Session]:
     engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
+    reset_public_schema(engine)
     tables = _persistence_tables()
     Base.metadata.create_all(engine, tables=tables)
     return sessionmaker(bind=engine, expire_on_commit=False)
@@ -70,8 +83,6 @@ def phase7_plan_session_factory() -> sessionmaker[Session]:
     """Full schema for canonical TradePlanRevision PostgreSQL tests."""
 
     engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
+    reset_public_schema(engine)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)

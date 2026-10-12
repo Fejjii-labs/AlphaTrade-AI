@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import create_app
+from app.rag.indexing import IndexingRunner
 
 
 @pytest.fixture
@@ -47,6 +48,7 @@ def client_with_db() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
         jwt_secret="api-route-test-secret-32-bytes-minimum",
         rate_limit_use_redis=False,
         access_token_denylist_use_redis=False,
+        provider_mode="mock",
     )
     app = create_app(settings=settings)
     app.dependency_overrides[get_session] = _override_session
@@ -140,7 +142,7 @@ def test_tools_list(client_with_db: tuple[TestClient, object]) -> None:
 def test_knowledge_ingest_and_search(
     client_with_db: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
-    client, _factory = client_with_db
+    client, factory = client_with_db
     ingest = client.post(
         "/knowledge/ingest",
         json={
@@ -154,6 +156,14 @@ def test_knowledge_ingest_and_search(
     body = ingest.json()
     assert body["chunk_count"] >= 1
     assert body["duplicate"] is False
+    assert body["vector_index_status"] == "pending"
+    resolved = client.app.state.resolved_providers
+    assert IndexingRunner(
+        factory,
+        embeddings=resolved.embeddings,
+        vector_store=resolved.vector_store,
+        settings=client.app.state.settings,
+    ).run_once() == ["ready"]
 
     search = client.post(
         "/knowledge/search",

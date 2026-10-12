@@ -52,7 +52,8 @@ def test_invalid_commit_refs_fail_before_invoking_git(base, head):
 
 
 @pytest.mark.parametrize("base", ["", "0" * 40, "b" * 40])
-def test_commit_diff_uses_fixed_arguments_and_includes_deleted_or_merge_changes(base):
+def test_commit_diff_uses_fixed_arguments_and_includes_deleted_or_merge_changes(base, monkeypatch):
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
     with patch.object(
         scope.subprocess, "check_output", return_value="backend/src/app/core/config.py\n"
     ) as git:
@@ -196,7 +197,7 @@ def test_actual_event_conditions_never_start_expensive_or_full_checks_implicitly
     is_combined = event == "workflow_dispatch" and (combined or full)
     is_full = event == "workflow_dispatch" and full
     assert evaluate_event_value(jobs["backend"]["timeout-minutes"], event, combined, full) == (
-        60 if is_full else 20
+        120 if is_full else 20
     )
     for name in ["evaluation", "docker-build", "e2e-smoke"]:
         assert evaluate_event_condition(jobs[name]["if"], event, combined, full) == is_combined
