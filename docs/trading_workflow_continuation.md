@@ -91,6 +91,24 @@ failures were fixed: typed geometry direction, allowed presentation fields/hash,
 fixture roles and top-level tick response shape. Final counts apply to their
 stated source coverage, not to an older green CI badge.
 
+## PR251 focused CI correction
+
+The original focused run at `03be2d3` did **not pass**: run
+`38249795179`, backend job `114812825333`, failed collected case 840 before
+its 20-minute cancellation. The two-case reproduction identified an in-process
+Alembic logging side effect in the BloFin activity migration fixture. The fixture
+now uses the existing fileless Alembic configuration pattern and asserts that root,
+HTTPX and HTTPCore logging state survives its real migration round-trip.
+No redaction assertion, production logging setting or migration changes.
+
+See [exact collection, reproduction and repair evidence](pr251_focused_ci_repair.md).
+The historical local checks above establish their stated coverage only. They never
+established a passing PR251 CI run or native trading acceptance. Automated research
+continues to return `execution_requested=false` and `samples_admitted=0`; canonical
+internal simulated execution checks do not enable autonomous exchange trades.
+Shared CI isolation, selection and duration changes remain with the PR249 release
+owner. No full CI was launched.
+
 ## Concrete blockers and next executable step
 
 A read-only staging `/health` request on12October returned HTTP200, status

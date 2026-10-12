@@ -2601,3 +2601,9 @@ Focused simulated transport/disposable PostgreSQL evidence only; no full backend
 CI dispatch, deployment, migration, provider activation, native financial action
 or unsupported monetary values. Native end-to-end acceptance remains explicitly
 blocked on source contracts/access; public CONNECT403 is not a provider response.
+
+PR251 correction: original focused run 38249795179 at 03be2d3 failed case 840
+(Telegram log redaction) before cancellation. A real two-case reproduction isolates
+Alembic CLI logging pollution from the activity migration fixture; repair and exact
+collection evidence are in docs/pr251_focused_ci_repair.md. Shared CI/duration
+changes belong to the PR249 release owner; automated research grants no trades.

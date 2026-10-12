@@ -1,6 +1,8 @@
 """Upgrade/downgrade the generated addition in a disposable migrated database."""
 
+import logging
 import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -21,7 +23,12 @@ def test_additive_migration_and_rollback_preserve_existing_organization(monkeypa
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     isolated_url = make_url(url).update_query_dict({"options": f"-csearch_path={schema}"})
     monkeypatch.setenv("ALEMBIC_DATABASE_URL", isolated_url.render_as_string(hide_password=False))
-    config = Config("alembic.ini")
+    # Exercise the real migrations without applying the CLI's process-wide
+    # fileConfig, which disables existing loggers and breaks later log checks.
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(__file__).parents[1] / "src/app/db/migrations")
+    )
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == ["a13voicemonitor001"]
     assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
@@ -33,7 +40,14 @@ def test_additive_migration_and_rollback_preserve_existing_organization(monkeypa
     )
     engine = create_engine(isolated_url)
     try:
+        loggers = [logging.getLogger(name) for name in ("", "httpx", "httpcore")]
+        logging_before = [
+            (logger.disabled, logger.level, tuple(logger.handlers)) for logger in loggers
+        ]
         _verify_roundtrip(config, engine)
+        assert [
+            (logger.disabled, logger.level, tuple(logger.handlers)) for logger in loggers
+        ] == logging_before
     finally:
         engine.dispose()
         with admin.begin() as connection:
