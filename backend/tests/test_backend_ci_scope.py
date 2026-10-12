@@ -138,8 +138,10 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
         "../scripts/run_frontend_focused.py ../scripts/run_backend_release.py"
     )
     assert steps["Complete backend release acceptance"]["run"] == (
-        "uv run python ../scripts/run_backend_release.py"
+        "uv run python ../scripts/run_backend_release.py --run-seconds 6000"
     )
+    # A job timeout skips cleanup steps; the acceptance step must finish earlier.
+    assert steps["Complete backend release acceptance"]["timeout-minutes"] == "105"
     diagnostics = steps["Retain backend release diagnostics"]
     assert diagnostics["if"] == (
         "always() && github.event_name == 'workflow_dispatch' && inputs.full_backend"

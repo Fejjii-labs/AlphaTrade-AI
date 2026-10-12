@@ -71,7 +71,9 @@ jobs:
         run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        run: uv run python ../scripts/run_backend_release.py
+        # Shorten execution below the unchanged 120-minute job limit for diagnostics.
+        timeout-minutes: 105
+        run: uv run python ../scripts/run_backend_release.py --run-seconds 6000
       - name: Retain backend release diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend
         uses: actions/upload-artifact@v4
