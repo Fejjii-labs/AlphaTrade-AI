@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from decimal import Decimal, localcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -202,14 +203,15 @@ def test_final_demo_dispatch_refuses_a_historical_low_reward_plan_before_any_io(
     monkeypatch.setattr(
         "app.services.venue_submit_dispatcher.require_idle_session_for_provider_io", forbid_io
     )
-    dispatcher = VenueSubmitDispatcher(None, None)
+    settings = demo_settings(str(plan.account_id))
+    dispatcher = VenueSubmitDispatcher(None, SimpleNamespace(_settings=settings))
     with pytest.raises(TradingPolicyError) as error:
         dispatcher.attempt_governed_demo_send(
             command_id=uuid4(),
             owner="worker",
             fencing_token=1,
             provider=provider,
-            settings=demo_settings(str(plan.account_id)),
+            settings=settings,
             plan=plan,
         )
     assert error.value.details["reason"] == "planned_reward_risk_below_minimum"

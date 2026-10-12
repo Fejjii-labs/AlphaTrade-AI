@@ -130,13 +130,21 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
     }
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == (
-        "uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py"
+        "uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py "
+        "../scripts/run_backend_release.py"
     )
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py "
-        "../scripts/run_frontend_focused.py"
+        "../scripts/run_frontend_focused.py ../scripts/run_backend_release.py"
     )
-    assert steps["Complete backend release acceptance"]["run"] == "uv run pytest"
+    assert steps["Complete backend release acceptance"]["run"] == (
+        "uv run python ../scripts/run_backend_release.py"
+    )
+    diagnostics = steps["Retain backend release diagnostics"]
+    assert diagnostics["if"] == (
+        "always() && github.event_name == 'workflow_dispatch' && inputs.full_backend"
+    )
+    assert diagnostics["uses"] == "actions/upload-artifact@v4"
     assert steps["Complete backend release acceptance"]["if"] == (
         "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     )

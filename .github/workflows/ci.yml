@@ -60,9 +60,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Ruff check
-        run: uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py
+        run: uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py
       - name: Ruff format
-        run: uv run ruff format --check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py
+        run: uv run ruff format --check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py
       - name: Focused backend development tests
         if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
         env:
@@ -71,9 +71,15 @@ jobs:
         run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        env:
-          PYTEST_ADDOPTS: "-vv -o faulthandler_timeout=120 --durations=20"
-        run: uv run pytest
+        run: uv run python ../scripts/run_backend_release.py
+      - name: Retain backend release diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-release-diagnostics-${{ github.sha }}
+          path: backend-ci-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
 
   deployment-safety:
     timeout-minutes: 10
