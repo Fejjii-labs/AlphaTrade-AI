@@ -344,7 +344,29 @@ def test_actual_agent_turn_consumes_canonical_oi_flow_cvd_and_resting_book(agent
     assert "bullish_print_close_to_close" in result.reply
     assert "Resting order book venue=binance" in result.reply
     assert "historical coverage unavailable" in result.reply
+    assert "provider=binance-usdm-perpetual" in result.reply
+    assert f"observed_at={NOW.isoformat()}" in result.reply
+    assert f"collected_at={NOW.isoformat()}" in result.reply
+    assert "coverage=proven_executed_trade_window" in result.reply
     assert not result.execution_attempted
+
+
+def test_agent_retains_missing_book_reason_without_values_or_raw_provider_text():
+    from app.interactive_agent.market_context import market_context_text
+
+    unavailable = read(VenueId.BINANCE, source(VenueId.BINANCE, {}, status=200))
+    assert unavailable.availability is State.INCOMPLETE
+    context = MarketEvidenceContext(
+        evaluated_at=NOW, anchor_venue="binance", anchor_symbol="BTCUSDT", order_book=unavailable
+    )
+    text = market_context_text(context)
+    assert "Resting order book venue=binance: INCOMPLETE" in text
+    assert f"reason={unavailable.reason}" in text
+    assert "consumer_check=MarketContractError" in text
+    assert "spread=" not in text
+    unsafe = unavailable.model_copy(update={"reason": "private provider body https://secret"})
+    text = market_context_text(context.model_copy(update={"order_book": unsafe}))
+    assert "reason=unrecorded" in text and "https://secret" not in text
 
 
 def test_capture_time_is_separate_from_asof_and_required_consumption_is_causal():

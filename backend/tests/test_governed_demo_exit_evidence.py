@@ -170,7 +170,6 @@ def test_account_activity_arriving_during_history_reads_keeps_exit_held(endpoint
         "duplicate_order",
         "duplicate_fill",
         "missing_fill",
-        "wrong_fee_currency",
         "future_fill",
         "before_entry",
         "wrong_trigger",
@@ -198,8 +197,6 @@ def test_unexplained_or_incomplete_exit_evidence_is_refused(reason):
         responses["fills-history"] *= 2
     elif reason == "missing_fill":
         responses["fills-history"] = []
-    elif reason == "wrong_fee_currency":
-        responses["fills-history"][0]["feeCurrency"] = "BTC"
     elif reason in {"future_fill", "before_entry"}:
         delta = 3 if reason == "future_fill" else -1
         responses["fills-history"][0]["ts"] = str(
@@ -220,3 +217,15 @@ def test_missing_reported_realized_pnl_is_explicit_not_computed_from_prices():
     responses["fills-history"][0].pop("fillPnl")
     closed = provider.reconcile_exit(plan=plan, entry=entry)
     assert closed is not None and closed.fills[0].reported_pnl is None
+
+
+@pytest.mark.parametrize("currency", [None, "BTC"])
+def test_actual_exit_retains_fee_currency_without_inferred_monetary_basis(currency):
+    plan, entry, provider, responses, _ = exit_world()
+    responses["fills-history"][0]["feeCurrency"] = currency
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None and closed.fills[0].fee == Decimal("0.03")
+    assert closed.fills[0].fee_currency == currency
+    assert closed.facts()["exit_fills"][0]["fee_currency"] == currency
+    assert closed.facts()["fee_convention"] is None
+    assert closed.facts()["net_pnl"] is closed.facts()["funding"] is None

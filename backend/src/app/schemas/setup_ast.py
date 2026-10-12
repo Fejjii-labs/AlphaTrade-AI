@@ -7,7 +7,7 @@ Operands are allowlisted fields or literals only.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self, cast
 from uuid import UUID
 
 from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
@@ -15,6 +15,7 @@ from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, mod
 from app.schemas.common import StrictModel, TradeDirection
 from app.schemas.nested_continuation import NestedContinuationSpec
 from app.strategy_brain.sfp.contracts import SfpSpec
+from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
 
 COMPILER_VERSION = "setup-ast/v1"
 GRAMMAR_VERSION = "setup-ast-grammar/v1"
@@ -198,6 +199,7 @@ class PatternAst(StrictModel):
     grammar_version: str = GRAMMAR_VERSION
     nested_spec: NestedContinuationSpec | None = None
     sfp_spec: SfpSpec | None = None
+    trendpulse_spec: TrendPulseSpec | None = None
     symbols: list[str] = Field(min_length=1)
     trigger_timeframe: str = Field(min_length=1, max_length=8)
     context_timeframe: str | None = Field(default=None, max_length=8)
@@ -211,19 +213,23 @@ class PatternAst(StrictModel):
 
     @model_validator(mode="after")
     def one_family(self) -> Self:
-        if self.nested_spec is not None and self.sfp_spec is not None:
+        if sum(s is not None for s in (self.nested_spec, self.sfp_spec, self.trendpulse_spec)) > 1:
             raise ValueError("A pattern must bind exactly one family")
         if self.sfp_spec is None and self.expiration_final_bars > 500:
             raise ValueError("Legacy pattern expiration_final_bars must be <= 500")
         return self
 
     @model_serializer(mode="wrap")
-    def preserve_legacy_serialization(self, handler: SerializerFunctionWrapHandler) -> dict:
-        payload = handler(self)
+    def preserve_legacy_serialization(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        payload = cast(dict[str, Any], handler(self))
         if self.nested_spec is None:
             payload.pop("nested_spec", None)
         if self.sfp_spec is None:
             payload.pop("sfp_spec", None)
+        if self.trendpulse_spec is None:
+            payload.pop("trendpulse_spec", None)
         return payload
 
 

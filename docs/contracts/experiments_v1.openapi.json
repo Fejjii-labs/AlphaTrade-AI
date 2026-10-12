@@ -682,6 +682,36 @@
         "title": "ExperimentPromotion",
         "type": "object"
       },
+      "ExperimentResearchTick": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_requested": {
+            "const": false,
+            "default": false,
+            "title": "Execution Requested",
+            "type": "boolean"
+          },
+          "samples_admitted": {
+            "const": 0,
+            "default": 0,
+            "title": "Samples Admitted",
+            "type": "integer"
+          },
+          "screenings": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPulseScreeningRecord"
+            },
+            "maxItems": 2,
+            "title": "Screenings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "screenings"
+        ],
+        "title": "ExperimentResearchTick",
+        "type": "object"
+      },
       "ExperimentRiskLimits-Input": {
         "additionalProperties": false,
         "properties": {
@@ -1981,6 +2011,190 @@
         "title": "Timeframe",
         "type": "string"
       },
+      "TrendPulseScreeningRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisition_started_at": {
+            "format": "date-time",
+            "title": "Acquisition Started At",
+            "type": "string"
+          },
+          "configuration_hash": {
+            "title": "Configuration Hash",
+            "type": "string"
+          },
+          "contract_version": {
+            "const": "trendpulse-screening/v1",
+            "default": "trendpulse-screening/v1",
+            "title": "Contract Version",
+            "type": "string"
+          },
+          "decision_at": {
+            "format": "date-time",
+            "title": "Decision At",
+            "type": "string"
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          },
+          "entry_receipts": {
+            "title": "Entry Receipts",
+            "type": "integer"
+          },
+          "evidence_hash": {
+            "title": "Evidence Hash",
+            "type": "string"
+          },
+          "evidence_mode": {
+            "enum": [
+              "public_rest",
+              "replay"
+            ],
+            "title": "Evidence Mode",
+            "type": "string"
+          },
+          "execution_authorized": {
+            "const": false,
+            "default": false,
+            "title": "Execution Authorized",
+            "type": "boolean"
+          },
+          "experiment_id": {
+            "format": "uuid",
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "experiment_version_id": {
+            "format": "uuid",
+            "title": "Experiment Version Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "management_authority": {
+            "const": false,
+            "default": false,
+            "title": "Management Authority",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "performance": {
+            "title": "Performance",
+            "type": "null"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "receipt_provenance": {
+            "enum": [
+              "live_public_rest",
+              "recorded_public_receipts",
+              "synthetic_fixture"
+            ],
+            "title": "Receipt Provenance",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "sample_eligible": {
+            "const": false,
+            "default": false,
+            "title": "Sample Eligible",
+            "type": "boolean"
+          },
+          "signal_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrendPulseStatus"
+          },
+          "strategy_content_hash": {
+            "title": "Strategy Content Hash",
+            "type": "string"
+          },
+          "strategy_version_id": {
+            "format": "uuid",
+            "title": "Strategy Version Id",
+            "type": "string"
+          },
+          "trend_receipts": {
+            "title": "Trend Receipts",
+            "type": "integer"
+          },
+          "trigger_end": {
+            "format": "date-time",
+            "title": "Trigger End",
+            "type": "string"
+          },
+          "variant_key": {
+            "title": "Variant Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "request_id",
+          "organization_id",
+          "experiment_id",
+          "experiment_version_id",
+          "configuration_hash",
+          "variant_key",
+          "strategy_version_id",
+          "strategy_content_hash",
+          "trigger_end",
+          "acquisition_started_at",
+          "decision_at",
+          "evidence_mode",
+          "receipt_provenance",
+          "status",
+          "reason",
+          "trend_receipts",
+          "entry_receipts",
+          "evidence_hash"
+        ],
+        "title": "TrendPulseScreeningRecord",
+        "type": "object"
+      },
+      "TrendPulseStatus": {
+        "enum": [
+          "unavailable",
+          "refused",
+          "no_setup",
+          "qualified_research_signal",
+          "duplicate"
+        ],
+        "title": "TrendPulseStatus",
+        "type": "string"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2135,6 +2349,56 @@
           }
         ],
         "summary": "Create",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/experiments/research/tick": {
+      "post": {
+        "operationId": "research_tick_experiments_research_tick_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 2,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResearchTick"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Research Tick",
         "tags": [
           "experiments"
         ]

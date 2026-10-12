@@ -2,12 +2,13 @@
 
 from datetime import datetime
 from decimal import ROUND_FLOOR, Decimal
+from typing import Any
 from uuid import uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import TradingPolicyError
+from app.core.errors import NotFoundError, TradingPolicyError
 from app.db.models import (
     ApprovalAuthorization,
     AuditLog,
@@ -32,6 +33,52 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_claim import conservative_reservation
 from app.services.execution_fills import adjust_symbol_map, fill_content_hash
 from app.services.safety_epoch import SafetyEpochService
+
+
+def recorded_exit_facts(session: Session, command: ExecutionCommand) -> list[dict[str, Any]]:
+    """Read each immutable exit once, including additive native currency receipts.
+
+    Legacy facts omitted currency. A later actual read may append that source;
+    historical bytes/hashes stay unchanged and never become assumed USDT.
+    """
+    rows = list(
+        session.scalars(
+            select(AuditLog)
+            .where(
+                AuditLog.organization_id == command.organization_id,
+                AuditLog.user_id == command.user_id,
+                AuditLog.resource_type == "manual_demo_test",
+                AuditLog.resource_id == str(command.id),
+                AuditLog.redacted_metadata["operation"]
+                .as_string()
+                .in_(("manual_demo_exit_fill", "manual_demo_exit_fill_currency_evidence")),
+            )
+            .limit(2001)
+        )
+    )
+    if len(rows) > 2000:
+        raise NotFoundError("Manual demo exit evidence budget exceeded.")
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        fact = row.redacted_metadata["fact"]
+        if canonical_sha256(fact) != row.redacted_metadata["content_hash"]:
+            raise NotFoundError("Manual demo exit fact integrity failed.")
+        prior = by_id.get(fact["identity"])
+        if prior is not None and (
+            {k: v for k, v in prior.items() if k != "fee_currency"}
+            != {k: v for k, v in fact.items() if k != "fee_currency"}
+            or (
+                "fee_currency" in prior
+                and "fee_currency" in fact
+                and prior["fee_currency"] != fact["fee_currency"]
+            )
+        ):
+            raise NotFoundError(
+                "Manual demo exit currency evidence conflicts with its native fact."
+            )
+        if prior is None or "fee_currency" in fact:
+            by_id[fact["identity"]] = fact
+    return list(by_id.values())
 
 
 def verified_entry_notional(
@@ -97,30 +144,24 @@ def record_lifecycle(
     native_receipt_hash: str | None = None,
 ) -> None:
     """Append unique full-precision exit facts, retain all prior identities on replay."""
-    prior = list(
-        session.scalars(
-            select(AuditLog).where(
-                AuditLog.organization_id == command.organization_id,
-                AuditLog.user_id == command.user_id,
-                AuditLog.resource_type == "manual_demo_test",
-                AuditLog.resource_id == str(command.id),
-                AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_exit_fill",
-            )
-        )
-    )
+    prior = {f["identity"]: f for f in recorded_exit_facts(session, command)}
     current = {f["identity"]: f for f in observation.exit_fills}
     # A failed read does not replace previously proven exits with absence.
-    for old in prior:
-        fact = old.redacted_metadata["fact"]
-        if (fact["identity"] in current or not observation.diagnostics) and current.get(
-            fact["identity"]
-        ) != fact:
+    for identity, fact in prior.items():
+        latest = current.get(identity)
+        equivalent = latest == fact or (
+            "fee_currency" not in fact
+            and latest is not None
+            and {k: v for k, v in latest.items() if k != "fee_currency"} == fact
+        )
+        if (identity in current or not observation.diagnostics) and not equivalent:
             raise TradingPolicyError(
                 "Native exit history conflicts or regressed; keep the command "
                 "held. No exit identities are merged."
             )
     for fact in observation.exit_fills:
-        if any(old.redacted_metadata["fact"]["identity"] == fact["identity"] for old in prior):
+        existing = prior.get(fact["identity"])
+        if existing is not None and "fee_currency" in existing:
             continue
         audit.record(
             AuditRecordCreate(
@@ -132,8 +173,11 @@ def record_lifecycle(
                 organization_id=command.organization_id,
                 user_id=command.user_id,
                 metadata={
-                    "operation": "manual_demo_exit_fill",
+                    "operation": "manual_demo_exit_fill_currency_evidence"
+                    if existing is not None
+                    else "manual_demo_exit_fill",
                     "fact": fact,
+                    "fee_evidence_contract": "manual-demo-native-fee/v2",
                     "content_hash": canonical_sha256(fact),
                     "plan_content_hash": plan.content_hash,
                 },
@@ -170,7 +214,7 @@ def project_verified_exits(
     command: ExecutionCommand,
     plan: TradePlanRevision,
     observation: ManualLifecycleObservation,
-    entry_fees: Decimal,
+    entry_fees: Decimal | None,
 ) -> None:
     if not observation.exit_fills or observation.diagnostics:
         return
@@ -188,12 +232,15 @@ def project_verified_exits(
     if trade is None:
         raise TradingPolicyError("Exact manual Journal entry is required for native exits.")
     facts = observation.facts()
-    trade.fees = entry_fees + Decimal(str(facts["exit_fees"]))
-    trade.gross_pnl = (
-        Decimal(str(facts["venue_reported_fill_pnl"]))
-        if facts["venue_reported_fill_pnl"] is not None
+    trade.fees = (
+        entry_fees + Decimal(str(facts["exit_fees"]))
+        if entry_fees is not None
+        and facts["exit_fees"] is not None
+        and facts["exit_fee_currency"] == plan.instrument_rules.settlement_currency
         else None
     )
+    # Raw fillPnl has no independently verified fee/funding basis here.
+    trade.gross_pnl = trade.funding = trade.net_pnl = None
     if observation.position_status == "closed_verified" and not observation.diagnostics:
         trade.status = JournalTradeStatus.CLOSED
         trade.exit_time = max(
@@ -383,10 +430,8 @@ def resolve_manual_lifecycle(
                 JournalTrade.trade_plan_revision_id == command.revision_id,
             )
         )
-        if trade is None or trade.fees is None:
-            raise TradingPolicyError(
-                "Exact manual Journal entry with native entry fees is required."
-            )
+        if trade is None:
+            raise TradingPolicyError("Exact manual Journal entry is required.")
         if trade.status != JournalTradeStatus.CLOSED:
             raise TradingPolicyError("Verified exit Journal projection is incomplete.")
     recorded = audit.record(

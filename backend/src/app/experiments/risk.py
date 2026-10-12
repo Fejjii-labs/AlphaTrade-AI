@@ -96,8 +96,13 @@ def preview_admission(
         or now >= version.authorized_until
     ):
         return refuse("approval_inactive")
-    if config.family is not ExperimentFamily.NESTED:
+    if config.family not in {ExperimentFamily.NESTED, ExperimentFamily.TRENDPULSE_1R}:
         return refuse("authorized_execution_adapter_missing")
+    if config.family is ExperimentFamily.TRENDPULSE_1R and (
+        config.account.source is not ExperimentSource.INTERNAL_SIMULATION
+        or abs(plan.target - plan.entry) != abs(plan.entry - plan.structural_stop)
+    ):
+        return refuse("trendpulse_source_or_1r_geometry_mismatch")
     if (state.organization_id, state.execution_account_id, state.native_uid, state.source) != (
         version.organization_id,
         config.account.execution_account_id,

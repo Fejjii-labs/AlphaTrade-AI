@@ -398,14 +398,17 @@ def _read(
     )
     if closed:
         entry += f" Closure verified; exit at {_money(lifecycle.exit_price)} USDT."
-        if lifecycle.gross_pnl is not None:
-            entry += f" Gross trading PnL: {_money(lifecycle.gross_pnl)} USDT."
+        if lifecycle.venue_reported_fill_pnl is not None:
+            entry += (
+                f" Reported closing PnL: {_money(lifecycle.venue_reported_fill_pnl)} "
+                "(fee/funding basis unverified)."
+            )
     elif lifecycle.exit_quantity:
         entry += f" Verified exits: {readable_number(lifecycle.exit_quantity)} contracts."
     if lifecycle.entry_fees is not None:
         entry += f" Entry fee: {_money(lifecycle.entry_fees)} USDT."
     if closed and lifecycle.funding is None:
-        issue = "Funding and net PnL remain unverified."
+        issue = "Gross PnL, funding and net PnL remain unverified."
     elif closed:
         issue = ""
     elif lifecycle.position_status == "flat_exit_unverified":
@@ -445,6 +448,7 @@ def _read(
         f"{lifecycle.triggered_protection}. "
         f"Current account: {lifecycle.account_status}; lifecycle: {lifecycle.position_status}. "
         f"Entry fees: {lifecycle.entry_fees}; exit fees: {lifecycle.exit_fees}; "
+        f"native fillPnl: {lifecycle.venue_reported_fill_pnl}; "
         f"gross PnL: {lifecycle.gross_pnl}; funding: {lifecycle.funding}; "
         f"net PnL: {lifecycle.net_pnl}; fee convention: {lifecycle.fee_convention}. "
         f"Recovery: {lifecycle.recovery_status}; {lifecycle.recovery_reason}. "

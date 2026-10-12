@@ -76,7 +76,9 @@ def attach_demo_performance(
         coverage="Partial coverage: verified AlphaTrade manual demo lifecycles only; "
         "outside venue history and strategy outcomes are not included. "
         "Manual tests count as account activity and are excluded from strategy performance. "
-        "Funding and net PnL require native funding evidence.",
+        "Gross/net PnL require verified native fee currency/sign "
+        "and fillPnl fee/funding semantics; "
+        "funding also requires native funding evidence.",
     )
     if truncated:
         performance.coverage += f" Only the latest {_LIMIT} recorded trades were checked."

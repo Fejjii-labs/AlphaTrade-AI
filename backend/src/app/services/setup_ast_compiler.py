@@ -805,6 +805,33 @@ def compile_from_authored(
         return compile_pattern(pattern).model_copy(
             update={"strategy_version_id": strategy_version_id, "organization_id": organization_id}
         )
+    from app.strategy_brain.trendpulse_1r.contracts import TRENDPULSE_KIND, TrendPulseSpec
+
+    if isinstance(pattern_spec, TrendPulseSpec) or (
+        isinstance(pattern_spec, dict) and pattern_spec.get("kind") == TRENDPULSE_KIND
+    ):
+        try:
+            trendpulse = TrendPulseSpec.model_validate(pattern_spec)
+        except ValidationError:
+            return CompileResult(
+                status=SetupCompileStatus.NON_EXECUTABLE.value,
+                failures=[_fail("invalid_trendpulse_spec", "Invalid fixed TrendPulse1R rules.")],
+            )
+        pattern = PatternAst(
+            trendpulse_spec=trendpulse,
+            symbols=[trendpulse.symbol],
+            trigger_timeframe=trendpulse.trigger_timeframe.value,
+            context_timeframe=trendpulse.trend_timeframe.value,
+            direction=trendpulse.direction,
+            preconditions=boolean("and", fld("predicate.finality"), fld("predicate.freshness")),
+            sequence=[PatternStep(step_id="trendpulse_1r_v1", predicate=lit_bool(True))],
+            trigger=lit_bool(False),
+            invalidation=[lit_bool(False)],
+            expiration_final_bars=1,
+        )
+        return compile_pattern(pattern).model_copy(
+            update={"strategy_version_id": strategy_version_id, "organization_id": organization_id}
+        )
     if isinstance(pattern_spec, FirstSliceAuthoredPatternSpec):
         spec = pattern_spec
     else:

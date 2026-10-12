@@ -205,8 +205,8 @@ class ExecutionProjectionView(BaseModel):
     remaining_quantity: NonNegativeCanonicalDecimal
     quantity_unit: str
     weighted_price: CanonicalDecimal | None
-    fees: NonNegativeCanonicalDecimal
-    funding: CanonicalDecimal
+    fees: CanonicalDecimal | None
+    funding: CanonicalDecimal | None
     position_id: UUID | None
     reconciliation_status: ExecutionReconciliationStatus
     event_watermark: int

@@ -16,13 +16,13 @@ import structlog
 
 from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler, _required_derivative
 from app.evidence_pipeline.current_price import quote_current_price
-from app.evidence_pipeline.market_intelligence import read_order_flow
+from app.evidence_pipeline.market_intelligence import read_order_book, read_order_flow
 from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
 from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
 from app.market_contracts.catalog import default_perpetual_catalog, instrument_for_source
 from app.market_contracts.derivatives import DerivativeMetric
-from app.market_contracts.errors import MarketContractError
+from app.market_contracts.errors import MarketContractError, StaleEvidenceError
 from app.market_contracts.evidence_diagnostics import (
     DiagnosticStatus,
     EvidenceComponent,
@@ -33,6 +33,7 @@ from app.market_contracts.first_slice import (
     FIRST_SLICE_MIN_FINAL_15M,
     first_slice_identity,
 )
+from app.market_contracts.order_book import require_order_book
 from app.schemas.common import Timeframe
 
 _PROBE_ORG = UUID("a0640000-1111-4000-8000-000000000064")
@@ -173,18 +174,58 @@ def probe_exchange(
         release = getattr(source, "release_symbol_history", None)
         if callable(release):
             release("BTCUSDT")
+    # A missing historical trade proof must not hide a supported independent book.
+    book_available = False
+    book_report: dict[str, object] = {"availability": "MISSING", "reason": "not_collected"}
+    try:
+        book = read_order_book(
+            source,
+            identity=identity,
+            instrument=instrument,
+            observed_at=clock(),
+            allow_later_observation=True,
+        )
+        book_report = {
+            "availability": book.availability.value,
+            "reason": book.reason,
+            "event_time": book.event_time.isoformat() if book.event_time else None,
+            "observed_at": book.observed_at.isoformat(),
+            "collected_at": book.collected_at.isoformat(),
+            "coverage_kind": book.coverage_kind,
+            "historical_coverage": book.historical_coverage,
+        }
+        require_order_book(book, identity=identity, evaluated_at=clock())
+        book_available = True
+        proof["order_book"] = {
+            "content_hash": book.content_hash,
+            "calculation_method": book.calculation_method,
+            "requested_depth": book.requested_depth,
+            "excluded_liquidity": book.excluded_liquidity,
+            "base_units": book.base_units,
+            "quote_units": book.quote_units,
+        }
+    except (MarketContractError, ValueError, TypeError, KeyError, OverflowError) as exc:
+        book_report["consumer_check"] = type(exc).__name__
+        if isinstance(exc, StaleEvidenceError):
+            book_report["availability"] = "STALE"
+        elif book_report["availability"] == "AVAILABLE":
+            book_report["availability"] = "INCOMPLETE"
     independent = (
         EvidenceComponent.PRICE,
         EvidenceComponent.OPEN_INTEREST,
         EvidenceComponent.FUNDING,
         EvidenceComponent.ORDER_FLOW,
     )
-    all_available = canonical_complete and all(
-        any(
-            row.component is component and row.status is DiagnosticStatus.AVAILABLE
-            for row in diagnostics.items
+    all_available = (
+        canonical_complete
+        and book_available
+        and all(
+            any(
+                row.component is component and row.status is DiagnosticStatus.AVAILABLE
+                for row in diagnostics.items
+            )
+            for component in independent
         )
-        for component in independent
     )
     return {
         "schema_version": "IndependentExchangeProbeV1",
@@ -201,6 +242,7 @@ def probe_exchange(
             "provider_symbol": instrument.provider_symbol,
         },
         "diagnostics": [row.model_dump(mode="json") for row in (*core_rows, *diagnostics.items)],
+        "order_book_diagnostic": book_report,
         "proof": proof,
     }
 

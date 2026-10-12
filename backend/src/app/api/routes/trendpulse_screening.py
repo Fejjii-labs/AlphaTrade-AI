@@ -5,13 +5,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import SessionDep, SettingsDep
+from app.core.dependencies import CanonicalRuntimeDep, SessionDep, SettingsDep
 from app.schemas.trendpulse_screening import (
     TrendPulseScreeningCreate,
     TrendPulseScreeningDetail,
     TrendPulseScreeningPage,
 )
 from app.security.rbac import ReaderDep, TraderDep
+from app.signal_fusion.candidate import Candidate
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseStatus
 from app.strategy_brain.trendpulse_screening.service import TrendPulseScreeningService
 
@@ -63,3 +64,22 @@ def listing(
 @router.get("/trendpulse-screenings/{record_id}", response_model=TrendPulseScreeningDetail)
 def detail(record_id: UUID, tenant: ReaderDep, service: ServiceDep) -> TrendPulseScreeningDetail:
     return service.detail(tenant, record_id)
+
+
+@router.post("/trendpulse-screenings/{record_id}/candidate", response_model=Candidate)
+def canonical_candidate(
+    record_id: UUID,
+    tenant: TraderDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    runtime: CanonicalRuntimeDep,
+) -> Candidate:
+    from app.strategy_brain.trendpulse_screening.pipeline import TrendPulsePipeline
+
+    candidate, _, _, _ = TrendPulsePipeline(session, settings, runtime).candidate(
+        tenant,
+        record_id,
+        now=runtime.clock.now(),
+    )
+    session.commit()
+    return candidate

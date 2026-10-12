@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import { rejectedBeforeCommit } from "./request-recovery";
-import { trendpulseScreen, trendpulseScreenings, trendpulseScreeningDetail } from "@/lib/api/generated/client";
+import { trendpulseScreen, trendpulseScreenings, trendpulseScreeningDetail, trendpulseCandidate } from "@/lib/api/generated/client";
 import { trendpulseScreenRequest } from "@/lib/api/generated/validators";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { recoverySessionId } from "@/lib/auth/recovery-session";
@@ -83,6 +83,19 @@ function ScopedScreenings({ scope, version }: { scope: string; version: Experime
       } else setNotice("Screening could not be confirmed. Recover the original request before starting another.");
     } finally { if (!controller.signal.aborted) { mutation.current = null; setBusy(false); } }
   }
+  async function reviewSetup() {
+    if (!detail || mutation.current || pending) return;
+    const controller = new AbortController(); mutation.current = controller;
+    setBusy(true); setNotice(null);
+    try {
+      await trendpulseCandidate(detail.id, { signal: controller.signal });
+      if (!controller.signal.aborted) setNotice("Setup passed canonical review. Orders still require their existing approval and risk checks.");
+    } catch {
+      if (!controller.signal.aborted) setNotice("Setup review could not be confirmed. Check the approved strategy, experiment window and account evidence. No order was requested.");
+    } finally {
+      if (!controller.signal.aborted) { mutation.current = null; setBusy(false); }
+    }
+  }
   return <section className="space-y-3 rounded-card border border-border-subtle bg-surface-1 p-4" data-testid="screenings">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Research screening</h3><Button size="sm" variant="outline" disabled={loading || busy} onClick={() => setRefresh(value => value + 1)}>Refresh history</Button></div>
     <p className="text-xs text-text-muted">Research only. A signal is not a trade or an admitted sample. Performance unavailable.</p>
@@ -90,6 +103,7 @@ function ScopedScreenings({ scope, version }: { scope: string; version: Experime
     {loading ? <p role="status">Loading screenings…</p> : error ? <p role="status">Screening history unavailable. Refresh to try again.</p> : detail ? <>
       <p className="text-sm"><Badge>{statuses[detail.status]}</Badge> · {detail.reason.replaceAll("_", " ")}</p>
       <p className="text-xs text-text-muted">{provenance[detail.receipt_provenance]} · {time(detail.decision_at)}</p>
+      {version.state === "running" && detail.status === "qualified_research_signal" && detail.receipt_provenance === "live_public_rest" ? <Button size="sm" variant="outline" disabled={busy || !!pending} onClick={() => void reviewSetup()}>Review setup</Button> : null}
       <details><summary className="min-h-11 cursor-pointer">Receipts &amp; evidence</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(detail, null, 2)}</pre></details>
     </> : page?.items.length ? <>
       <ul className="space-y-2">{page.items.map(record => <li key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">

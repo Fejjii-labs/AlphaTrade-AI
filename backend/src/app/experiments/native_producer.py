@@ -33,7 +33,9 @@ from app.db.models import (
     ApprovalAuthorization,
     AuditLog,
     ExecutionCommand,
+    ExecutionFillFact,
     GovernedDemoLifecycleResolution,
+    JournalLifecycleEvent,
     TradePlanRevision,
     UserStrategy,
     UserStrategyVersion,
@@ -50,11 +52,12 @@ from app.market_contracts.models import CanonicalModel
 from app.persistence.trade_plan_postgres import PostgresCanonicalTradePlanStore
 from app.providers.exchange.blofin_activity import BloFinActivityProvider, identifier
 from app.schemas.canonical_trade_plan import CanonicalTradePlanRevision
-from app.schemas.common import ActorType, AuditResult
+from app.schemas.common import ActorType, AuditResult, JournalLifecycleEventType
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.experiments import ExperimentSource, ExperimentVersion
 from app.schemas.trade_plan import AuthorizationState, QuantityUnit, TradePlanRevisionSemantic
 from app.security.tenant import TenantContext
+from app.services.canonical_execution_journal import CANONICAL_EXECUTION_SOURCE_SYSTEM
 from app.services.canonical_serialization import canonical_sha256
 
 ACTOR = "experiment_executor"
@@ -112,6 +115,21 @@ class NativeProducerDiagnostic(CanonicalModel):
     position_hash: str
     reason: str
     # A lifecycle close is useful evidence, never a monetary/parent attestation.
+    governed_resolution_id: UUID | None = None
+    governed_resolution_hash: str | None = None
+
+
+class NativeProducerEvidenceDiagnostic(CanonicalModel):
+    """Explicit missing sources; v1 diagnostic receipt hashes remain readable."""
+
+    contract_version: Literal["experiment-native-producer-diagnostic/v2"] = (
+        "experiment-native-producer-diagnostic/v2"
+    )
+    command_id: UUID
+    origin_hash: str
+    position_hash: str
+    reason: str
+    missing_evidence: tuple[str, ...]
     governed_resolution_id: UUID | None = None
     governed_resolution_hash: str | None = None
 
@@ -179,7 +197,11 @@ class BloFinNativeOutcomeProducer:
         elif operation == ENTRY:
             model = NativeEntryBinding
         elif isinstance(operation, str) and operation.startswith(DIAGNOSTIC + ":"):
-            model = NativeProducerDiagnostic
+            model = (
+                NativeProducerEvidenceDiagnostic
+                if body.get("contract_version") == "experiment-native-producer-diagnostic/v2"
+                else NativeProducerDiagnostic
+            )
         else:
             refuse("experiment_ownership_unverified")
         # Rehydrate typed dates/decimals before hashing; wire JSON strings have
@@ -618,11 +640,12 @@ class BloFinNativeOutcomeProducer:
         reason, resolution = self._closing_diagnostic(command, origin)
         position_row = self._audit(command.id, POSITION)
         assert position_row is not None
-        diagnostic = NativeProducerDiagnostic(
+        diagnostic = NativeProducerEvidenceDiagnostic(
             command_id=command.id,
             origin_hash=origin_audit.payload_hash,
             position_hash=position_row.payload_hash,
             reason=reason,
+            missing_evidence=self._missing_closing_evidence(command, resolution, reason),
             governed_resolution_id=resolution.id if resolution else None,
             governed_resolution_hash=resolution.content_hash if resolution else None,
         )
@@ -666,11 +689,14 @@ class BloFinNativeOutcomeProducer:
                 variant_key,
             ):
                 refuse("experiment_attribution_mismatch")
-            reason, _resolution = self._closing_diagnostic(command, origin)
+            reason, resolution = self._closing_diagnostic(command, origin)
+            missing = self._missing_closing_evidence(command, resolution, reason)
         except ConflictError as error:
             reason = error.code
+            missing = (reason,)
         except (ValidationError, ValueError, TypeError, KeyError):
             reason = "native_evidence_invalid"
+            missing = (reason,)
         # Never expose provisional money or a supposedly eligible sample proof.
         return result.model_copy(
             update={
@@ -682,8 +708,86 @@ class BloFinNativeOutcomeProducer:
                 "realized_pnl_after_fees_excluding_funding": None,
                 "coverage": "incomplete",
                 "freshness": "unavailable",
+                "limitations": tuple(dict.fromkeys((*result.limitations, *missing))),
             }
         )
+
+    def _missing_closing_evidence(
+        self,
+        command: ExecutionCommand,
+        resolution: GovernedDemoLifecycleResolution | None,
+        reason: str,
+    ) -> tuple[str, ...]:
+        """Inventory only supported sources; no inferred parent or money contract."""
+        if reason == "native_lifecycle_evidence_invalid":
+            return (reason,)
+        missing = [
+            "native_exit_command_or_protected_parent_lineage_unverified",
+            "native_complete_position_fill_lineage_unverified",
+            "native_fee_sign_convention_unverified",
+            "native_fill_pnl_fee_and_funding_basis_unverified",
+        ]
+        if reason == "native_entry_receipt_unavailable":
+            missing.insert(0, reason)
+        if resolution is None:
+            missing.append("native_complete_closing_order_fill_receipts_unavailable")
+            return tuple(missing)
+        plan = self.session.get(TradePlanRevision, command.revision_id)
+        currency = (
+            TradePlanRevisionSemantic.model_validate(
+                plan.semantic_payload
+            ).instrument_rules.settlement_currency
+            if plan is not None
+            else None
+        )
+        fills = list(
+            self.session.scalars(
+                select(ExecutionFillFact)
+                .where(
+                    ExecutionFillFact.command_id == command.id,
+                    ExecutionFillFact.organization_id == self.tenant.organization_id,
+                    ExecutionFillFact.venue_source == "blofin_demo",
+                )
+                .limit(101)
+            )
+        )
+        events = list(
+            self.session.scalars(
+                select(JournalLifecycleEvent)
+                .where(
+                    JournalLifecycleEvent.organization_id == self.tenant.organization_id,
+                    JournalLifecycleEvent.user_id == self.tenant.user_id,
+                    JournalLifecycleEvent.account_id == command.account_id,
+                    JournalLifecycleEvent.execution_lifecycle_id == command.id,
+                    JournalLifecycleEvent.event_type == JournalLifecycleEventType.FILL,
+                    JournalLifecycleEvent.source_system == CANONICAL_EXECUTION_SOURCE_SYSTEM,
+                    JournalLifecycleEvent.source_aggregate == "execution-command",
+                    JournalLifecycleEvent.source_event_id.in_([str(fill.id) for fill in fills]),
+                )
+                .limit(101)
+            )
+        )
+        if (
+            not currency
+            or not fills
+            or len(fills) > 100
+            or len(events) != len(fills)
+            or any(event.payload.get("venue_fill_fee_currency") != currency for event in events)
+        ):
+            missing.append("native_historical_entry_fee_currency_unavailable")
+        exits = resolution.evidence_payload.get("exit_fills")
+        if not isinstance(exits, list) or not exits or len(exits) > 100:
+            missing.append("native_complete_closing_order_fill_receipts_unavailable")
+            return tuple(missing)
+        if any(not isinstance(fill, dict) or fill.get("fee") is None for fill in exits):
+            missing.append("native_exit_fill_fee_unavailable")
+        if not currency or any(
+            not isinstance(fill, dict) or fill.get("fee_currency") != currency for fill in exits
+        ):
+            missing.append("native_historical_exit_fee_currency_unavailable")
+        if any(not isinstance(fill, dict) or fill.get("fillPnl") is None for fill in exits):
+            missing.append("native_exit_fill_pnl_unavailable")
+        return tuple(missing)
 
     def _closing_diagnostic(
         self, command: ExecutionCommand, origin: NativePlanOrigin

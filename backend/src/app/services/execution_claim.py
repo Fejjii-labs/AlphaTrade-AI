@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ from app.db.models import (
     ExecutionIdempotencyBinding,
     ExecutionProjection,
     ExecutionReceipt,
+    JournalLifecycleEvent,
     PlanEntryExecutionClaim,
     RiskReservation,
     VenueSubmitEffect,
@@ -50,6 +52,7 @@ from app.repositories.trade_plans import ExecutionAccountRepository, TradePlanRe
 from app.schemas.agent import RequestedAction
 from app.schemas.approval import ApprovalAuthorization
 from app.schemas.canonical_execution import CanonicalExecutionSerializationV1
+from app.schemas.common import JournalLifecycleEventType
 from app.schemas.execution_protocol import (
     EXECUTION_POLICY_PROTOCOL_VERSION,
     SUBMIT_ENTRY_NAMESPACE,
@@ -67,6 +70,7 @@ from app.schemas.execution_protocol import (
 )
 from app.schemas.trade_plan import PlanOperation, TradePlanRevision
 from app.services.approval_service import ApprovalService
+from app.services.canonical_execution_journal import CANONICAL_EXECUTION_SOURCE_SYSTEM
 from app.services.canonical_execution_payload import CanonicalExecutionPayloadSerializerV1
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.execution_client_order_id import derive_entry_client_order_id
@@ -723,6 +727,43 @@ class PaperPlanClaimService:
             )
         effect = self._effects.get_by_command(command.id)
         reservation = self._reservations.get_by_command(command.id)
+        fees: Decimal | None = projection.fees
+        funding: Decimal | None = projection.funding
+        revision = self._revisions.get(command.revision_id)
+        if revision is not None and revision.execution_policy_version == "governed-blofin-demo/v1":
+            # The legacy storage has nonnullable zero defaults. Native funding
+            # and unknown fees must not be presented as exchange-confirmed zero.
+            fees, funding = None, None
+            events = (
+                select(JournalLifecycleEvent)
+                .where(
+                    JournalLifecycleEvent.organization_id == command.organization_id,
+                    JournalLifecycleEvent.user_id == command.user_id,
+                    JournalLifecycleEvent.account_id == command.account_id,
+                    JournalLifecycleEvent.execution_lifecycle_id == command.id,
+                    JournalLifecycleEvent.source_system == CANONICAL_EXECUTION_SOURCE_SYSTEM,
+                    JournalLifecycleEvent.source_aggregate == "execution-command",
+                )
+                .order_by(JournalLifecycleEvent.created_at.desc(), JournalLifecycleEvent.id.desc())
+                .limit(1)
+            )
+            monetary_event = self._session.scalar(
+                events.where(JournalLifecycleEvent.event_type == JournalLifecycleEventType.CLOSE)
+            ) or self._session.scalar(
+                events.where(JournalLifecycleEvent.event_type == JournalLifecycleEventType.FILL)
+            )
+            if monetary_event is not None:
+                currency_key = (
+                    "venue_reported_fee_currency"
+                    if monetary_event.event_type == JournalLifecycleEventType.CLOSE
+                    else "venue_fill_fee_currency"
+                )
+                currency = trade_plan_revision_to_schema(
+                    revision
+                ).instrument_rules.settlement_currency
+                amount = monetary_event.payload.get("fees")
+                if amount is not None and monetary_event.payload.get(currency_key) == currency:
+                    fees = Decimal(str(amount))
         return ExecutePaperPlanResult(
             replayed=replayed,
             outcome=command.outcome,
@@ -748,8 +789,8 @@ class PaperPlanClaimService:
                 remaining_quantity=projection.remaining_quantity,
                 quantity_unit=projection.quantity_unit,
                 weighted_price=projection.weighted_price,
-                fees=projection.fees,
-                funding=projection.funding,
+                fees=fees,
+                funding=funding,
                 position_id=projection.position_id,
                 reconciliation_status=projection.reconciliation_status,
                 event_watermark=projection.event_watermark,

@@ -68,3 +68,9 @@ class TrendPulseScreeningPage(CanonicalModel):
     total: int
     limit: int
     offset: int
+
+
+class ExperimentResearchTick(CanonicalModel):
+    screenings: list[TrendPulseScreeningRecord] = Field(max_length=2)
+    execution_requested: Literal[False] = False
+    samples_admitted: Literal[0] = 0
