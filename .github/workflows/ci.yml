@@ -87,7 +87,7 @@ jobs:
         timeout-minutes: 4
         run: >-
           python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics
-          --stage collection --seconds 180 -- uv run pytest
+          --stage collection --seconds 180 -- uv run python -m pytest
           -p tests.support.release_diagnostics --collect-only -q
       - name: Retain backend collection evidence
         if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend

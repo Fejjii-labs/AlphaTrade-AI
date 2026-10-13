@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,8 @@ import time
 import unittest
 from contextlib import suppress
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "scripts/run_backend_launch.py"
@@ -66,6 +69,42 @@ class BackendLaunchTests(unittest.TestCase):
         self.assertEqual(len(data["checkout_sha"]), 40)
         self.assertIn("scripts/run_backend_release.py", data["sha256"])
         self.assertFalse((self.output / "probe-launch.json").exists())
+
+    def test_workflow_collection_imports_diagnostics_before_conftest(self):
+        workflow = yaml.load(
+            (ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader
+        )
+        step = next(
+            step
+            for step in workflow["jobs"]["backend"]["steps"]
+            if step.get("name") == "Collect backend release nodes within a startup budget"
+        )
+        command = shlex.split(step["run"])
+        command[command.index("--output") + 1] = str(self.output)
+        marker = self.work / "executed"
+        source = self.work / "test_collection.py"
+        source.write_text(
+            "from pathlib import Path\n"
+            f"def test_first(): Path({str(marker)!r}).touch()\n"
+            "def test_second(): pass\n"
+        )
+        # Exercise the workflow entry point, without application fixtures or a
+        # inherited PYTHONPATH masking its early plugin-import behavior.
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [*command, "--noconftest", str(source)],
+            cwd=ROOT / "backend",
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.output / "collection.json").read_text())["count"], 2)
+        nodes = (self.output / "ordered-nodeids.txt").read_text().splitlines()
+        self.assertEqual([node.rsplit("::", 1)[1] for node in nodes], ["test_first", "test_second"])
+        self.assertFalse(marker.exists(), "collection must not execute test bodies")
 
     def test_failure_preserves_exact_exit(self):
         receipt = self.check_run(self.command(sys.executable, "-c", "raise SystemExit(7)"), 7)
