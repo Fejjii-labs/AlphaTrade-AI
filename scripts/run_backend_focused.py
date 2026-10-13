@@ -83,6 +83,14 @@ ACTIVITY_BOUNDARY_TESTS = (
 # Exact source paths only. A directory prefix or a longer filename must not match.
 EXPLICIT_DEPENDENCIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "scripts/run_backend_launch.py",
+        ("tests/test_backend_launch.py", "tests/test_backend_release_diagnostics.py"),
+    ),
+    (
+        "scripts/run_backend_release.py",
+        ("tests/test_backend_launch.py", "tests/test_backend_release_diagnostics.py"),
+    ),
+    (
         "backend/src/app/core/config.py",
         ("tests/test_config.py", "tests/test_config_jwt.py"),
     ),
