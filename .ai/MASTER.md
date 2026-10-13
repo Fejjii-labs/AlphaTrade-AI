@@ -46,6 +46,9 @@ and cleanup policy. Machine-local or sensitive material lives under ignored `.ai
    completion — never only at the end.
 8. End every task by regenerating root `HANDOFF.md` + `CHANGELOG_SESSION.md` (per templates)
    and running the handoff sync, then verifying source/destination SHA256 + `cmp`.
+9. After every task, prompt, or investigation, follow root `AGENTS.md` (Agent Reports)
+   and `.cursor/rules/95-agent-reports.mdc`. Applies to all current active repos
+   (SOF AI, DataPilot AI, AlphaTrade AI) and every future Simply AI project from day one.
 
 ## Non-negotiable safety (summary — full text in PROJECT_CONTEXT.md)
 
