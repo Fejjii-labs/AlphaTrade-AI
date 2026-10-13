@@ -89,6 +89,7 @@ def test_explicit_dependencies_match_exact_paths_and_real_files():
         assert source.startswith("backend/src/app/") or source in {
             "scripts/run_backend_launch.py",
             "scripts/run_backend_release.py",
+            "scripts/backend_checkpoints.py",
         }
         assert tests
         for test in tests:
@@ -110,6 +111,7 @@ def test_release_infrastructure_selects_only_its_process_regressions():
             *scope.BASE_TESTS,
             "tests/test_backend_launch.py",
             "tests/test_backend_release_diagnostics.py",
+            "tests/test_backend_checkpoints.py",
         }
     )
 
@@ -209,18 +211,27 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == (
         "uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py "
-        "../scripts/run_backend_release.py ../scripts/run_backend_launch.py"
+        "../scripts/run_backend_release.py ../scripts/run_backend_launch.py "
+        "../scripts/backend_checkpoints.py"
     )
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py "
         "../scripts/run_frontend_focused.py ../scripts/run_backend_release.py "
-        "../scripts/run_backend_launch.py"
+        "../scripts/run_backend_launch.py ../scripts/backend_checkpoints.py"
     )
-    assert steps["Complete backend release acceptance"]["run"] == (
-        "python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics "
-        "--stage release --seconds 6060 -- uv run python "
-        "../scripts/run_backend_release.py --run-seconds 6000"
+    acceptance = steps["Complete backend release acceptance"]
+    assert acceptance["uses"] == "./.github/actions/backend-release"
+    assert acceptance["with"] == {
+        "command": '["uv", "run", "python", "../scripts/run_backend_release.py", '
+        '"--run-seconds", "6000"]'
+    }
+    action = yaml.load(
+        (ROOT / ".github/actions/backend-release/action.yml").read_text(), Loader=yaml.BaseLoader
     )
+    assert action["inputs"]["seconds"]["default"] == "6060"
+    assert action["inputs"]["checkpoint-seconds"]["default"] == "900"
+    assert action["inputs"]["expected-exit"]["default"] == "0"
+    assert action["runs"] == {"using": "node24", "main": "entry.mjs"}
     # A job timeout skips cleanup steps; the acceptance step must finish earlier.
     assert steps["Complete backend release acceptance"]["timeout-minutes"] == "105"
     diagnostics = steps["Retain backend release diagnostics"]

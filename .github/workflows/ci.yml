@@ -73,9 +73,9 @@ jobs:
         timeout-minutes: 5
         run: uv sync --extra dev
       - name: Ruff check
-        run: uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py
+        run: uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py ../scripts/backend_checkpoints.py
       - name: Ruff format
-        run: uv run ruff format --check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py
+        run: uv run ruff format --check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py ../scripts/backend_checkpoints.py
       - name: Focused backend development tests
         if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
         env:
@@ -97,14 +97,18 @@ jobs:
           path: backend-ci-diagnostics/
           if-no-files-found: error
           retention-days: 7
+      - name: Install checkpoint transport
+        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
+        timeout-minutes: 2
+        working-directory: .github/actions/backend-release
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Complete backend release acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        # Shorten execution below the unchanged 120-minute job limit for diagnostics.
+        # Tests remain one unfiltered process. Checkpoints leave the runner during it.
         timeout-minutes: 105
-        run: >-
-          python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics
-          --stage release --seconds 6060 -- uv run python
-          ../scripts/run_backend_release.py --run-seconds 6000
+        uses: ./.github/actions/backend-release
+        with:
+          command: '["uv", "run", "python", "../scripts/run_backend_release.py", "--run-seconds", "6000"]'
       - name: Retain backend release diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend
         uses: actions/upload-artifact@v4

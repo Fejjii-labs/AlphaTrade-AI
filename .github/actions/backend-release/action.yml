@@ -1,0 +1,22 @@
+name: Backend release with retained progress
+description: Run the bounded backend launcher and retain immutable progress during execution
+inputs:
+  command:
+    description: JSON array of the trusted workflow command and arguments
+    required: true
+  working-directory:
+    default: backend
+  output:
+    default: backend-ci-diagnostics
+  seconds:
+    default: '6060'
+  checkpoint-seconds:
+    default: '900'
+  artifact-prefix:
+    default: backend-release-progress
+  expected-exit:
+    description: Only the short failure proof overrides the successful release exit code
+    default: '0'
+runs:
+  using: node24
+  main: entry.mjs
