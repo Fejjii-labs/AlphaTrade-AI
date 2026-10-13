@@ -1120,28 +1120,40 @@ class WatcherPaperRuntime:
         if loaded is None:
             return report
         assembled, policy = loaded
-        from app.services.automated_paper_loop import AutomatedPaperLoop
+        from app.services.automated_paper_loop import AutomatedPaperLoop, _proof
 
-        loop_type = AutomatedPaperLoop
         loop_clock: Clock = self._eval_clock
+        loop: AutomatedPaperLoop
+        refusal: str | None = None
         if self._settings.exchange_mode.value == "paper_exchange_demo":
+            from app.experiments.execution_selection import select_execution_context
             from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 
-            loop_type = GovernedBloFinDemoLoop
             loop_clock = self._clock
-        proof = loop_type(
-            runtime,  # type: ignore[arg-type]
-            self._settings,
-            loop_clock,
-        ).continue_confirmed_setup(
-            session,
-            target=target,
-            candidate=discussion.candidate,
-            assessment=discussion.assessment,
-            window=discussion.window,
-            assembled=assembled,
-            policy=policy,
-            kill_switch_active=report.kill_switch_active,
+            context, refusal = select_execution_context(
+                session, self._settings, target, loop_clock.now()
+            )
+            loop = GovernedBloFinDemoLoop(
+                runtime,  # type: ignore[arg-type]
+                self._settings,
+                loop_clock,
+                experiment_context=context,
+            )
+        else:
+            loop = AutomatedPaperLoop(runtime, self._settings, loop_clock)  # type: ignore[arg-type]
+        proof = (
+            _proof(discussion.candidate, "blocked", refusal)
+            if refusal
+            else loop.continue_confirmed_setup(
+                session,
+                target=target,
+                candidate=discussion.candidate,
+                assessment=discussion.assessment,
+                window=discussion.window,
+                assembled=assembled,
+                policy=policy,
+                kill_switch_active=report.kill_switch_active,
+            )
         )
         logger.info(
             "automated_paper_loop",

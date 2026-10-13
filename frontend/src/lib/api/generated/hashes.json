@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "da960192a22014d6d443b56add2d85c7fcba4d1842032b618a51022406278577",
-  "pilot_sha256": "7e7d5378f29fc4f9a57f8a22fc9d417a2ad49c60c6a79c390209bb933c5c50fb",
+  "openapi_sha256": "eb9f188b454a8eb944705a7eec0d174212e70b2ddc59faef05ef27ef881546a7",
+  "pilot_sha256": "d7f5783dc68327371f4fe901263a74dddf5689e386e53be85b0fec4f07e3e844",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -60,7 +60,7 @@
     "ExperimentModelPolicy-Input": "cbf68b28d4c6e1a3137b16cdb362a179f41cbe1a6b3d507e10d178c2140498d3",
     "ExperimentModelPolicy-Output": "7dad47d49814ff76167cb34efe62a8e077e26a783d1d81e12cb1d53b10b114ab",
     "ExperimentPage": "730cc7f77915df6b0487be016e25ec1df70739a9632a3c5dc6412fd564c8c67b",
-    "ExperimentPerformance": "3b469601333e496ac098d566b4f92d04e7e7305ffc839abed381914f05b33cbe",
+    "ExperimentPerformance": "ff5f8d50f3584dd352605d938a8bf9eabff1aacb9457c4664ef5f32e41e42c8e",
     "ExperimentPromotion": "54f6612fd691bc69ceee727ce013627e65a1120906e205d6481143fe8381e2e4",
     "ExperimentResearchTick": "e12cb6fb0b1063bf120fd0a2443e986de07d3892947bfeb7632b24872daca38a",
     "ExperimentRiskLimits-Input": "8b9fb0e7f0e88207688c2a68b875e089c2b3c8771786c8ef24a5e579239d176a",
@@ -99,7 +99,7 @@
     "NarrativeMetadata": "205c2b6d262bae04fa0871cf3cf523969dba9005ab23aae91e9d4869d2adb8ad",
     "NativeExperimentSourceProof": "cf6a0da559720fe0151e61b9d4bcbb3ce11786d65f8de77af16f669d6d379edd",
     "NativeFactProvenance": "cb284a17758644c795c3ece4859a4a63514d6523c969d56343078b8f17bdb97c",
-    "NativeOutcome": "43f56557cd5e787407e545702725049ae759360912e47776cba05dc437e9103d",
+    "NativeOutcome": "03e1a7ccc36982ed57d057d7a0ea78261c5a483eddbb5008b4f4872d3f621a2e",
     "NestedMaturityStage": "2e61295c64bb5f9d48739debb1d25c76a33a49fe88422fec287e4f89843907c6",
     "NoTradeRuleBlock-Output": "7a22c88f3e3b900faa2c443095e8048784ea291d68767f588792d78c2077a23f",
     "NoTradeRuleType": "d31834824a1f5ba711ea0c140a02d370fdc0284112a8c7e54ed508a600f262a6",

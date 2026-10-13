@@ -109,6 +109,13 @@ class GovernedBloFinDemoProvider:
         self._client = client
         self._account = BloFinAccountProvider(client)
         self._clock = clock
+        self._expected_native_uid: str | None = None
+
+    def require_account_identity(self, native_uid: str) -> None:
+        """Pin explicit server experiment ownership before any execution IO."""
+        if not native_uid or self._expected_native_uid not in {None, native_uid}:
+            raise ValueError("Demo provider cannot change its expected native account.")
+        self._expected_native_uid = native_uid
 
     def snapshot(
         self, *, symbol: str, now: datetime, side: EntrySide, quantity: Decimal | None = None
@@ -227,13 +234,26 @@ class GovernedBloFinDemoProvider:
                 or permissions.can_transfer
             ):
                 raise ValueError("Verified read/trade-only demo permissions required.")
+            if (
+                self._expected_native_uid is not None
+                and self._account.native_account_uid != self._expected_native_uid
+            ):
+                raise ValueError("Demo execution connection differs from the owned native account.")
 
     def reconcile_exit(
         self, *, plan: TradePlanRevision, entry: DemoOrderEvidence
     ) -> VerifiedDemoExit | None:
         from app.providers.exchange.governed_blofin_exit import reconcile_demo_exit
 
-        return reconcile_demo_exit(self._client, plan=plan, entry=entry, clock=self._clock)
+        self.verify_permissions()
+        uid = self._account.native_account_uid
+        if uid != entry.native_account_uid:
+            raise ValueError("Demo account identity changed before exit reconciliation.")
+        result = reconcile_demo_exit(self._client, plan=plan, entry=entry, clock=self._clock)
+        self.verify_permissions()
+        if self._account.native_account_uid != uid:
+            raise ValueError("Demo account identity changed during exit reconciliation.")
+        return result
 
     def submit(
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]

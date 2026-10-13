@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import String, select
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, ExecutionMode, Settings
@@ -21,11 +21,13 @@ from app.core.execution_credentials import (
     governed_demo_worker_access_requested,
 )
 from app.db.models import (
+    AuditLog,
     ExecutionAccount,
     ExecutionCommand,
     ExecutionProjection,
     GovernedDemoLifecycleResolution,
     JournalTrade,
+    Membership,
     TradePlanRevision,
     VenueSubmitEffect,
 )
@@ -37,9 +39,10 @@ from app.providers.exchange.blofin_activity import BloFinActivityProvider
 from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
 from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBloFinDemoProvider
+from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
-from app.schemas.common import ApprovalAction, TradeDirection
+from app.schemas.common import ApprovalAction, MembershipRole, TradeDirection
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import AuthorizationChannel, EntrySide, TradePlanRevisionCreate
@@ -502,9 +505,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 target.user_id,
             ):
                 raise ValueError("Experiment target must belong to its authenticated tenant.")
-            context.require_active(
+            version = context.require_active(
                 session, self._settings, self._clock.now(), revision_id=revision_id
             )
+            native_uid = version.configuration.account.native_uid
+            if native_uid is None:
+                raise ValueError("Native experiment requires an exact account UID.")
+            self._get_provider().require_account_identity(native_uid)
             producer = BloFinNativeOutcomeProducer(
                 session, self._settings, context.tenant, clock=self._clock.now
             )
@@ -664,7 +671,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 return "demo_plan_required"
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
-                return completed
+                session.commit()
+                return self._finish_closed(session, command, completed)
             effect = session.scalar(
                 select(VenueSubmitEffect).where(VenueSubmitEffect.command_id == command_id)
             )
@@ -692,7 +700,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
                 session.commit()
-                return completed
+                return self._finish_closed(session, command, completed)
             if evidence.status in {"rejected"} and not evidence.fills:
                 self._dispatcher(session).record_demo_order(command_id=command_id, rejected=True)
                 session.commit()
@@ -761,6 +769,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     exit_evidence = self._get_provider().reconcile_exit(
                         plan=envelope.plan, entry=evidence
                     )
+                except DemoPositionLineageError:
+                    KillSwitchService(session, AuditService(session), self._settings).activate(
+                        organization_id=command.organization_id,
+                        actor_user_id=command.user_id,
+                        payload=KillSwitchMutationRequest(
+                            confirm=True,
+                            reason="BloFin demo position differs from owned fills; operator hold",
+                        ),
+                    )
+                    session.commit()
+                    return "demo_position_lineage_operator_hold"
                 except Exception:
                     exit_evidence = None
                     exit_unavailable = True
@@ -777,7 +796,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 evidence=exit_evidence,
                             )
                         session.commit()
-                        return "demo_closed_reconciled"
+                        return self._finish_closed(session, command, "demo_closed_reconciled")
                     except Exception:
                         KillSwitchService(session, AuditService(session), self._settings).activate(
                             organization_id=command.organization_id,
@@ -795,7 +814,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
                 session.commit()
-                return completed
+                return self._finish_closed(session, command, completed)
             if evidence.fills and not evidence.protected:
                 KillSwitchService(session, AuditService(session), self._settings).activate(
                     organization_id=command.organization_id,
@@ -825,7 +844,61 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session.commit()
             return reason
 
+    def _finish_closed(self, session: Session, command: ExecutionCommand, reason: str) -> str:
+        """Retry stored admission after a durable close, including worker restart."""
+        from app.experiments.native_producer import ORIGIN
+
+        if reason != "demo_closed_reconciled":
+            return reason
+        origin = session.scalar(
+            select(AuditLog.id).where(
+                AuditLog.organization_id == command.organization_id,
+                AuditLog.user_id == command.user_id,
+                AuditLog.resource_type == "experiment_execution",
+                AuditLog.resource_id == str(command.revision_id),
+                AuditLog.redacted_metadata["operation"].as_string() == ORIGIN,
+            )
+        )
+        if origin is None:
+            session.commit()
+            return reason
+        membership = session.scalar(
+            select(Membership).where(
+                Membership.organization_id == command.organization_id,
+                Membership.user_id == command.user_id,
+            )
+        )
+        if membership is None or membership.role not in {
+            MembershipRole.OWNER,
+            MembershipRole.TRADER,
+        }:
+            session.commit()
+            return "demo_closed_reconciled_sample_ownership_hold"
+        tenant = TenantContext(
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            email="",
+            membership_role=membership.role,
+        )
+        try:
+            with session.begin_nested():
+                outcome = BloFinNativeOutcomeProducer(
+                    session, self._settings, tenant, clock=self._clock.now
+                ).reconcile(command.id)
+            session.commit()
+        except (ConflictError, ValueError):
+            session.rollback()
+            return "demo_closed_reconciled_sample_unavailable"
+        return (
+            "demo_closed_reconciled_sample_admitted"
+            if outcome.closure_verified
+            else "demo_closed_reconciled_sample_unavailable"
+        )
+
     def reconcile_pending(self, session: Session) -> tuple[str, ...]:
+        from app.experiments.models import ExperimentSampleRow
+        from app.experiments.native_producer import ORIGIN
+
         if demo_posture_refusal(self._settings) is not None:
             return ()
         ids = list(
@@ -845,9 +918,33 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     ExecutionCommand.outcome == ExecutionCommandOutcome.ALLOW,
                     TradePlanRevision.execution_venue == "BLOFIN_DEMO",
                     TradePlanRevision.execution_policy_version == DEMO_POLICY,
-                    GovernedDemoLifecycleResolution.id.is_(None),
+                    (
+                        GovernedDemoLifecycleResolution.id.is_(None)
+                        | (
+                            select(AuditLog.id)
+                            .where(
+                                AuditLog.organization_id == ExecutionCommand.organization_id,
+                                AuditLog.user_id == ExecutionCommand.user_id,
+                                AuditLog.resource_type == "experiment_execution",
+                                AuditLog.resource_id == ExecutionCommand.revision_id.cast(String),
+                                AuditLog.redacted_metadata["operation"].as_string() == ORIGIN,
+                            )
+                            .exists()
+                            & ~select(ExperimentSampleRow.id)
+                            .where(
+                                ExperimentSampleRow.organization_id
+                                == ExecutionCommand.organization_id,
+                                ExperimentSampleRow.source == "blofin_demo",
+                                ExperimentSampleRow.source_record_id
+                                == ExecutionCommand.id.cast(String),
+                            )
+                            .exists()
+                        )
+                    ),
                 )
-                .order_by(ExecutionCommand.created_at)
+                .order_by(
+                    GovernedDemoLifecycleResolution.id.is_not(None), ExecutionCommand.created_at
+                )
                 .limit(20)
             )
         )
