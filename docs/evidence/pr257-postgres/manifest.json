@@ -123,7 +123,7 @@
   },
   "scope": "No provider/trading actions, activation, deployment, workflow edits or full CI.",
   "artifact_sha256": {
-    "README.md": "fb02e14d75bc79a1122f3a459cb96b08fa7a8b5fba7d6c18357d256c1b580006",
+    "README.md": "f901bafc62b7de4084aac0969ca33ac253b8ccbb9ff20429acf44f2c20757140",
     "affected-mocks.txt": "b06f0b235d0cccd54be5cbb3f8f7ba50f700462a40e66f404302bb37c03b44b7",
     "affected-mocks.txt.gz": "f7025a52bce96e730af640910b367a7e25e5ce640015110737ad66fd3905e4bd",
     "affected-mocks.xml.gz": "c51d5ce467df2e48be7082c4060779cadc5348611cf19e117ef3541996ecc97f",
@@ -146,5 +146,6 @@
     "postgres-after.txt": "dad22f09edf48bf68e5c4c48c68d3efa805ba42729fa1d6b76bf6422fd8b0c4f",
     "affected-mocks.xml": "6b8cfae11698aa4a1ed8c8e919ef98b551cbad1bda55e3073e416fac223dc2c9",
     "affected-mocks.txt": "b06f0b235d0cccd54be5cbb3f8f7ba50f700462a40e66f404302bb37c03b44b7"
-  }
+  },
+  "verified_correction_commit": "a48f47cf870d7e4ccbb921a84ed4c1988c0d735d"
 }

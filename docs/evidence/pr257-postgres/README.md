@@ -1,6 +1,7 @@
 # PR257 PostgreSQL verification receipts
 
 This continuation starts at `0132ef2ae15992f39b2f05bc921e06a8dc537c8e`.
+Verified correction/test commit: `a48f47cf870d7e4ccbb921a84ed4c1988c0d735d`.
 The only application correction is `backend/src/app/agent_voice/live_accounting.py`.
 Raw JUnit/stdout are retained byte-for-byte in deterministic `.xml.gz`/`.txt.gz`
 archives. Plain `.txt` previews trim only trailing whitespace; results are unchanged.
