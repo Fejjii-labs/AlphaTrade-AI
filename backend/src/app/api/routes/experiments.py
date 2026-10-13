@@ -21,6 +21,7 @@ from app.schemas.experiments import (
     ExperimentVersion,
     ExperimentVersionCreate,
 )
+from app.schemas.trendpulse_screening import ExperimentResearchTick, TrendPulseScreeningRecord
 from app.security.rbac import OwnerDep, ReaderDep, TraderDep
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -43,6 +44,27 @@ def get_native_reads(
 
 
 NativeReadsDep = Annotated[BloFinExperimentReads, Depends(get_native_reads)]
+
+
+@router.post("/research/tick", response_model=ExperimentResearchTick)
+def research_tick(
+    tenant: TraderDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    limit: Annotated[int, Query(ge=1, le=2)] = 2,
+) -> ExperimentResearchTick:
+    from app.experiments.scheduling import ExperimentResearchScheduler
+
+    result = ExperimentResearchScheduler(session, settings).tick(tenant, limit=limit)
+    session.commit()
+    return ExperimentResearchTick(
+        screenings=[
+            TrendPulseScreeningRecord.model_validate(
+                item.model_dump(include=set(TrendPulseScreeningRecord.model_fields))
+            )
+            for item in result
+        ]
+    )
 
 
 @router.post("", response_model=ExperimentVersion, status_code=201)

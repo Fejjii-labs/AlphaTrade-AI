@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from app.core.errors import NotFoundError, TradingPolicyError
 from app.db.models import (
     AccountRiskAccountingState,
+    AuditLog,
     ExecutionFillFact,
     JournalTrade,
     KillSwitchState,
@@ -25,6 +26,8 @@ from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import JournalTradeStatus
 from app.schemas.manual_demo import ManualDemoHistoryFilter, ManualDemoPreviewRequest
 from app.security.tenant import TenantContext
+from app.services.audit_service import AuditService
+from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.manual_demo_history import ManualDemoHistoryService
 from tests.support.postgres_persistence import requires_postgres
@@ -66,7 +69,15 @@ def two_attempts(native):
 
 
 def set_exit(
-    native, first, *, quantity="0.1", flat=True, category="normal", protection_state="canceled"
+    native,
+    first,
+    *,
+    quantity="0.1",
+    flat=True,
+    category="normal",
+    protection_state="canceled",
+    fee="-0.00498",
+    fee_currency="USDT",
 ):
     world, changes = native
     world[3].clock_delta = 60
@@ -152,7 +163,8 @@ def set_exit(
                             "side": "sell",
                             "fillPrice": "83000.000000000000000000",
                             "fillSize": quantity,
-                            "fee": "-0.00498",
+                            "fee": fee,
+                            "feeCurrency": fee_currency,
                             "fillPnl": "0.0106",
                             "ts": str(int(LIVE_TS) + 31000),
                         }
@@ -163,6 +175,110 @@ def set_exit(
 
     world[4]._client._transport.handler = transport
     return entry, close
+
+
+@pytest.mark.parametrize(
+    "entry_currency,exit_currency,exit_fee",
+    [
+        (None, "USDT", "-0.00498"),
+        ("USDT", None, "-0.00498"),
+        ("USDT", "BTC", "-0.00498"),
+        ("USDT", "USDT", None),
+    ],
+)
+def test_unknown_manual_fee_money_retains_native_facts_and_proven_owned_release(
+    native, entry_currency, exit_currency, exit_fee
+):
+    world, changes = native
+    changes["fill"]["feeCurrency"] = entry_currency
+    _, first = _submit(native)
+    set_exit(native, first, fee=exit_fee, fee_currency=exit_currency)
+    with world[0]() as session:
+        current = _service(world, session).reconcile(world[1], first.command_id)
+        assert current.execution_status == "closed" and current.can_resolve
+        assert current.fees is current.fee_convention is None
+        assert current.gross_pnl is current.net_pnl is current.funding is None
+        assert current.venue_reported_fill_pnl == Decimal(".0106")
+        assert current.exit_fills[0].fee == (Decimal(exit_fee) if exit_fee is not None else None)
+        assert current.exit_fills[0].fee_currency == exit_currency
+        trade = session.get(JournalTrade, first.journal_trade_id)
+        assert trade.status is JournalTradeStatus.CLOSED and trade.fees is None
+        assert trade.gross_pnl is trade.net_pnl is trade.funding is None
+        resolved = _service(world, session).resolve(world[1], first.command_id)
+        assert resolved.recovery_status == "resolved"
+        assert session.scalar(select(RiskReservation)).remaining_reserved_notional == 0
+        assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 1
+    assert world[3].post_count == 1
+
+
+def test_legacy_exit_currency_receipt_is_additive_and_never_counts_fill_twice(native, monkeypatch):
+    world, _changes = native
+    _, first = _submit(native)
+    set_exit(native, first)
+    record = AuditService.record
+
+    def legacy_exit(self, payload):
+        if payload.metadata.get("operation") == "manual_demo_exit_fill":
+            metadata = dict(payload.metadata)
+            fact = dict(metadata["fact"])
+            fact.pop("fee_currency")
+            metadata.update(fact=fact, content_hash=canonical_sha256(fact))
+            metadata.pop("fee_evidence_contract")
+            payload = payload.model_copy(update={"metadata": metadata})
+        return record(self, payload)
+
+    with monkeypatch.context() as scope:
+        scope.setattr(AuditService, "record", legacy_exit)
+        with world[0]() as session:
+            initial = _service(world, session).reconcile(world[1], first.command_id)
+            assert initial.fees is initial.exit_fees is None
+            old = session.scalar(
+                select(AuditLog).where(
+                    AuditLog.resource_id == str(first.command_id),
+                    AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_exit_fill",
+                )
+            )
+            old_id, old_metadata, old_hash = old.id, dict(old.redacted_metadata), old.payload_hash
+    for _ in range(2):
+        with world[0]() as session:
+            current = _service(world, session).reconcile(world[1], first.command_id)
+            assert current.exit_quantity == Decimal(".1")
+            assert current.exit_fees == Decimal("-.00498")
+            assert current.fees == Decimal(".00497364") + Decimal("-.00498")
+            assert len(current.exit_fills) == 1
+            preserved = session.get(AuditLog, old_id)
+            assert (
+                preserved.redacted_metadata == old_metadata and preserved.payload_hash == old_hash
+            )
+            additions = session.scalar(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(
+                    AuditLog.resource_id == str(first.command_id),
+                    AuditLog.redacted_metadata["operation"].as_string()
+                    == "manual_demo_exit_fill_currency_evidence",
+                )
+            )
+            assert additions == 1
+    assert world[3].post_count == 1
+
+
+def test_native_exit_currency_change_cannot_overwrite_original_close_fact(native):
+    world, _changes = native
+    _, first = _submit(native)
+    set_exit(native, first)
+    with world[0]() as session:
+        _service(world, session).reconcile(world[1], first.command_id)
+    set_exit(native, first, fee_currency="BTC")
+    with world[0]() as session:
+        with pytest.raises(TradingPolicyError, match="Native exit history conflicts"):
+            _service(world, session).reconcile(world[1], first.command_id)
+        session.rollback()
+        read = ManualDemoHistoryService(session).get(world[1], first.command_id).evidence
+        assert len(read.exit_fills) == 1 and read.exit_fills[0].fee_currency == "USDT"
+        assert read.exit_fees == Decimal("-.00498")
+        assert read.gross_pnl is read.net_pnl is read.funding is None
+    assert world[3].post_count == 1
 
 
 def test_history_new_session_pagination_distinguishes_original_and_blocked_without_venue_io(native):
@@ -759,7 +875,8 @@ def test_exit_identity_survives_missing_protection_ancestry_without_global_kill(
             assert result.historical_protection == "configured"
             assert result.triggered_protection == "unverified"
             assert result.protection_diagnostics and not result.reconciliation_diagnostics
-            assert result.gross_pnl == Decimal(".0106")
+            assert result.gross_pnl is None
+            assert result.venue_reported_fill_pnl == Decimal(".0106")
             assert result.funding is None and result.net_pnl is None
             assert not session.scalar(select(KillSwitchState.active))
     with world[0]() as session:

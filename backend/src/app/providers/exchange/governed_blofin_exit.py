@@ -27,9 +27,10 @@ class DemoExitFill:
     quantity: Decimal
     price: Decimal
     occurred_at: datetime
-    fee: Decimal
+    fee: Decimal | None
     reported_pnl: Decimal | None
     category: str
+    fee_currency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,10 @@ class VerifiedDemoExit:
     fills: tuple[DemoExitFill, ...]
     protection_ids: tuple[str, ...]
     observed_at: datetime
+    entry_protection_ids: tuple[str, ...] = ()
+    native_entry_tpsl_id: str | None = None
+    # Raw provider pointers are retained without assuming an undocumented edge.
+    exit_order_protection_ids: tuple[tuple[str, str], ...] = ()
 
     def facts(self) -> dict[str, Any]:
         """Stable economic evidence; receipt clock is persisted separately."""
@@ -56,13 +61,24 @@ class VerifiedDemoExit:
                     "quantity": str(fill.quantity),
                     "price": str(fill.price),
                     "occurred_at": fill.occurred_at.isoformat(),
-                    "fee": str(fill.fee),
+                    "fee": str(fill.fee) if fill.fee is not None else None,
+                    "fee_currency": fill.fee_currency,
                     "fillPnl": str(fill.reported_pnl) if fill.reported_pnl is not None else None,
                     "category": fill.category,
                 }
                 for fill in self.fills
             ],
             "protection_ids": list(self.protection_ids),
+            "entry_protection_ids": list(self.entry_protection_ids),
+            "native_entry_tpsl_id": self.native_entry_tpsl_id,
+            "exit_order_protection_ids": [
+                {"order_id": order_id, "tpsl_id": tpsl_id}
+                for order_id, tpsl_id in self.exit_order_protection_ids
+            ],
+            "protective_parent_child_verified": None,
+            "fee_convention": None,
+            "pnl_excludes_fees": None,
+            "monetary_methodology_version": None,
             "positions": "flat_account_wide",
             "pending_orders": "none_account_wide",
             "funding": None,
@@ -107,6 +123,7 @@ def reconcile_demo_exit(
     fills: list[DemoExitFill] = []
     order_ids: set[str] = set()
     trigger_categories: set[str] = set()
+    exit_order_protection_ids: list[tuple[str, str]] = []
     for row in orders:
         order_id = str(row.get("orderId", ""))
         if not order_id or order_id in order_ids:
@@ -147,6 +164,11 @@ def reconcile_demo_exit(
             raise ValueError("Unsupported demo exit category.")
         if len(order_ids) > 11:
             raise ValueError("Demo closing-order budget exhausted.")
+        tpsl_id = row.get("tpslId")
+        if tpsl_id not in (None, ""):
+            if not isinstance(tpsl_id, str) or len(tpsl_id) > 128:
+                raise ValueError("Unreadable demo closing protection identity.")
+            exit_order_protection_ids.append((order_id, tpsl_id))
         if category in {"tp", "sl"}:
             expected = (
                 plan.risk_and_exits.stop.value
@@ -172,15 +194,18 @@ def reconcile_demo_exit(
                 or fill.get("side") != opposite
                 or fill.get("positionSide") != "net"
                 or not fill.get("tradeId")
-                or fill.get("feeCurrency", "USDT") != "USDT"
             ):
                 raise ValueError("Demo closing fill identity mismatch.")
-            fee = Decimal(str(fill.get("fee")))
+            fee_currency = fill.get("feeCurrency")
+            if fee_currency not in (None, "") and (
+                not isinstance(fee_currency, str) or not 0 < len(fee_currency) <= 128
+            ):
+                raise ValueError("Unreadable demo closing fee currency.")
+            fee = Decimal(str(fill["fee"])) if fill.get("fee") not in (None, "") else None
             gross = Decimal(str(fill["fillPnl"])) if fill.get("fillPnl") not in (None, "") else None
             at = _time(fill.get("ts"))
             if (
-                not fee.is_finite()
-                or fee < 0
+                (fee is not None and not fee.is_finite())
                 or (gross is not None and not gross.is_finite())
                 or at < last_entry
             ):
@@ -195,6 +220,7 @@ def reconcile_demo_exit(
                     fee,
                     gross,
                     category,
+                    fee_currency or None,
                 )
             )
         if sum((f.quantity for f in order_fills), Decimal("0")) != filled:
@@ -268,4 +294,7 @@ def reconcile_demo_exit(
         tuple(sorted(fills, key=lambda f: (f.occurred_at, f.order_id, f.trade_id))),
         tuple(protection_ids),
         observed,
+        entry.protection_order_ids,
+        entry.native_tpsl_id,
+        tuple(sorted(exit_order_protection_ids)),
     )

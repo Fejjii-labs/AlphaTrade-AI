@@ -57,7 +57,7 @@ def test_immutable_authored_adapter_is_recognized_without_execution_or_sample_au
     plan, state = inputs(w)
     assert (
         preview_admission(version, plan, state, now=w.now).reason
-        == "authorized_execution_adapter_missing"
+        == "trendpulse_source_or_1r_geometry_mismatch"
     )
     assert not version.runtime_activated
 

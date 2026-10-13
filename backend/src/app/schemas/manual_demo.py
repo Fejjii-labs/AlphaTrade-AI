@@ -150,7 +150,8 @@ class ManualDemoExitFill(CanonicalModel):
     quantity: Decimal
     price: Decimal
     occurred_at: datetime
-    fee: Decimal
+    fee: Decimal | None
+    fee_currency: str | None = None
     fillPnl: Decimal | None  # noqa: N815 — native field; excludes invented net PnL
     category: str
 
@@ -178,7 +179,7 @@ class ManualDemoStatus(CanonicalModel):
     gross_pnl: Decimal | None = None
     funding: Decimal | None = None
     net_pnl: Decimal | None = None
-    fee_convention: Literal["positive_cost_negative_rebate"] = "positive_cost_negative_rebate"
+    fee_convention: Literal["positive_cost_negative_rebate"] | None = None
     execution_status: str = "submission_uncertain"
     position_status: str = "unknown"
     account_status: str = "unknown"

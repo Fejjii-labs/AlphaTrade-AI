@@ -70,6 +70,10 @@ export const trendpulseScreeningsResponse: ValidateFunction<components["schemas"
 export const trendpulseScreeningsError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const trendpulseScreeningDetailResponse: ValidateFunction<components["schemas"]["TrendPulseScreeningDetail"]>;
 export const trendpulseScreeningDetailError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
+export const trendpulseCandidateResponse: ValidateFunction<components["schemas"]["Candidate"]>;
+export const trendpulseCandidateError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
+export const experimentResearchTickResponse: ValidateFunction<components["schemas"]["ExperimentResearchTick"]>;
+export const experimentResearchTickError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const strategyVersionsResponse: ValidateFunction<components["schemas"]["PaginatedUserStrategyVersions"]>;
 export const strategyVersionsError422: ValidateFunction<components["schemas"]["HTTPValidationError"]>;
 export const paperAccountResponse: ValidateFunction<components["schemas"]["PaperAccountStatus"]>;

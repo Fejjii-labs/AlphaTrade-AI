@@ -130,8 +130,11 @@ class CanonicalPaperExecutionService:
         fill: UniqueFillResult,
         revision_id: UUID,
         venue_fill_fee: Decimal | None = None,
+        venue_fill_fee_currency: str | None = None,
         cumulative_fees: Decimal | None = None,
         demo_protection: str | None = None,
+        demo_protection_order_ids: tuple[str, ...] = (),
+        demo_native_tpsl_id: str | None = None,
     ) -> None:
         with self._runtime.bind_session(self._session):
             envelope = self._runtime.plans.get_scoped(
@@ -159,9 +162,14 @@ class CanonicalPaperExecutionService:
             payload["entry_time"] = entry_time.isoformat()
             if demo_protection is not None:
                 payload["demo_protection"] = demo_protection
-            if venue_fill_fee is not None and cumulative_fees is not None:
+                payload["demo_protection_order_ids"] = list(demo_protection_order_ids)
+                payload["demo_native_tpsl_id"] = demo_native_tpsl_id
+            if venue_fill_fee is not None:
                 payload["venue_fill_fee"] = str(venue_fill_fee)
-                payload["fees"] = str(cumulative_fees)
+                payload["fees"] = str(cumulative_fees) if cumulative_fees is not None else None
+                if demo_protection is not None:
+                    payload["venue_fill_fee_currency"] = venue_fill_fee_currency
+                    payload["fee_convention"] = None
             # Phase 1 paper claims do not create legacy Order rows. Command
             # identity is execution_lifecycle_id; linked_order_id stays unset.
             payload["lineage"] = _lineage_payload(envelope, command_id, self._runtime).model_dump(
@@ -194,6 +202,14 @@ class CanonicalPaperExecutionService:
                     ):
                         raise ValidationAppError(
                             "Venue fill fee conflicts with its immutable Journal event."
+                        )
+                    if (
+                        demo_protection is not None
+                        and "venue_fill_fee_currency" in recorded.payload
+                        and recorded.payload["venue_fill_fee_currency"] != venue_fill_fee_currency
+                    ):
+                        raise ValidationAppError(
+                            "Venue fill fee currency conflicts with its immutable Journal event."
                         )
                     payload = dict(recorded.payload)
             event = JournalLifecycleEventInput(

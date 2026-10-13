@@ -63,7 +63,7 @@ export type ManualDemoStatus = {
   position_status?: string;
   account_status?: string;
   protection_history?: { tpsl_id: string; state: string }[];
-  exit_fills?: { identity: string; order_id: string; trade_id: string; quantity: string; price: string; occurred_at: string; fee: string; fillPnl: string | null; category: string }[];
+  exit_fills?: { identity: string; order_id: string; trade_id: string; quantity: string; price: string; occurred_at: string; fee: string | null; fee_currency?: string | null; fillPnl: string | null; category: string }[];
   observed_at?: string | null;
   reconciliation_freshness?: string;
   exit_quantity?: string;
@@ -74,7 +74,7 @@ export type ManualDemoStatus = {
   triggered_protection?: string;
   gross_pnl?: string | null;
   entry_fees?: string | null;
-  fee_convention?: "positive_cost_negative_rebate";
+  fee_convention?: "positive_cost_negative_rebate" | null;
   funding?: string | null;
   net_pnl?: string | null;
   protection_diagnostics?: NonNullable<ManualDemoStatus["reconciliation_diagnostics"]>;

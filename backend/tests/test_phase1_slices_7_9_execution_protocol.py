@@ -85,6 +85,8 @@ def test_execute_paper_plan_creates_stable_identities(session: Session) -> None:
     session.commit()
     assert result.replayed is False
     assert result.outcome is ExecutionCommandOutcome.ALLOW
+    # Internal simulation keeps its defined known-zero accounting contract.
+    assert result.projection.fees == result.projection.funding == Decimal("0")
     assert result.effect is not None
     assert result.reservation is not None
     assert result.projection.state is ExecutionReceiptState.SUBMITTING

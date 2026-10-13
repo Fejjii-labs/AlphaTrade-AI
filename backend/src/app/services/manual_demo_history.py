@@ -32,6 +32,7 @@ from app.schemas.trade_plan import TradePlanRevisionSemantic
 from app.security.tenant import TenantContext
 from app.services.canonical_serialization import canonical_sha256
 from app.services.manual_demo_plan import MANUAL_DEMO_ORIGIN
+from app.services.manual_demo_recovery import recorded_exit_facts
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
 
 
@@ -238,19 +239,24 @@ class ManualDemoHistoryService:
                 or facts.get("plan_content_hash") != command.plan_content_hash
             ):
                 raise NotFoundError("Manual demo native receipt integrity failed.")
-        entry_fee_rows = self.session.scalars(
-            select(AuditLog).where(
-                AuditLog.organization_id == tenant.organization_id,
-                AuditLog.user_id == tenant.user_id,
-                AuditLog.resource_type == "manual_demo_test",
-                AuditLog.resource_id == str(command.id),
-                AuditLog.action == AuditEventType.POSITION_UPDATED,
+        entry_fee_rows = list(
+            self.session.scalars(
+                select(AuditLog).where(
+                    AuditLog.organization_id == tenant.organization_id,
+                    AuditLog.user_id == tenant.user_id,
+                    AuditLog.resource_type == "manual_demo_test",
+                    AuditLog.resource_id == str(command.id),
+                    AuditLog.action == AuditEventType.POSITION_UPDATED,
+                )
             )
         )
         entry_fees_by_id = {
             a.redacted_metadata["fill_identity"]: Decimal(a.redacted_metadata["fee"])
             for a in entry_fee_rows
-            if "fill_identity" in a.redacted_metadata and "fee" in a.redacted_metadata
+            if "fill_identity" in a.redacted_metadata
+            and "fee" in a.redacted_metadata
+            and a.redacted_metadata.get("fee_evidence_contract") == "manual-demo-native-fee/v2"
+            and a.redacted_metadata.get("fee_currency") == plan.instrument_rules.settlement_currency
         }
         entry_fees = (
             sum(entry_fees_by_id.values(), Decimal("0"))
@@ -258,23 +264,7 @@ class ManualDemoHistoryService:
             else None
         )
         life = lifecycle.redacted_metadata if lifecycle else {}
-        exit_receipts = list(
-            self.session.scalars(
-                select(AuditLog).where(
-                    AuditLog.organization_id == tenant.organization_id,
-                    AuditLog.user_id == tenant.user_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == str(command.id),
-                    AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_exit_fill",
-                )
-            )
-        )
-        exit_facts = [a.redacted_metadata["fact"] for a in exit_receipts]
-        if any(
-            canonical_sha256(a.redacted_metadata["fact"]) != a.redacted_metadata["content_hash"]
-            for a in exit_receipts
-        ):
-            raise NotFoundError("Manual demo exit fact integrity failed.")
+        exit_facts = recorded_exit_facts(self.session, command)
         exit_quantity = sum((Decimal(f["quantity"]) for f in exit_facts), Decimal("0"))
         exit_price = (
             sum((Decimal(f["quantity"]) * Decimal(f["price"]) for f in exit_facts), Decimal("0"))
@@ -283,7 +273,14 @@ class ManualDemoHistoryService:
             else None
         )
         exit_fees = (
-            sum((Decimal(f["fee"]) for f in exit_facts), Decimal("0")) if exit_facts else None
+            sum((Decimal(f["fee"]) for f in exit_facts), Decimal("0"))
+            if exit_facts
+            and all(
+                f.get("fee") is not None
+                and f.get("fee_currency") == plan.instrument_rules.settlement_currency
+                for f in exit_facts
+            )
+            else None
         )
         reported_pnl = (
             sum((Decimal(f["fillPnl"]) for f in exit_facts), Decimal("0"))
@@ -362,6 +359,40 @@ class ManualDemoHistoryService:
             else str(facts.get("protection_status", "unverified"))
         )
         missing = []
+        if filled and entry_fees is None:
+            differing = any(
+                a.redacted_metadata.get("fee_evidence_contract") == "manual-demo-native-fee/v2"
+                and a.redacted_metadata.get("fee_currency")
+                not in (None, plan.instrument_rules.settlement_currency)
+                for a in entry_fee_rows
+            )
+            missing.append(
+                "Native entry fee currency differs from settlement currency; "
+                "no conversion is verified."
+                if differing
+                else "Historical entry fee currency is unverified; fee totals are unavailable."
+            )
+        if exit_facts and exit_fees is None:
+            if any(f.get("fee") is None for f in exit_facts):
+                missing.append("Native exit fee is missing; fee totals are unavailable.")
+            if any(f.get("fee_currency") is None for f in exit_facts):
+                missing.append(
+                    "Historical exit fee currency is unverified; fee totals are unavailable."
+                )
+            if any(
+                f.get("fee_currency") not in (None, plan.instrument_rules.settlement_currency)
+                for f in exit_facts
+            ):
+                missing.append(
+                    "Native exit fee currency differs from settlement currency; "
+                    "no conversion is verified."
+                )
+        if filled:
+            missing.append("Native fee sign convention is unverified.")
+        if exit_facts:
+            missing.append(
+                "Native fillPnl fee/funding basis is unverified; gross/net PnL are unknown."
+            )
         if failed:
             missing.append(
                 "Latest venue read failed; previously verified facts are retained."
@@ -420,7 +451,9 @@ class ManualDemoHistoryService:
             filled_quantity=filled,
             remaining_quantity=remaining,
             average_fill_price=projection.weighted_price if projection else None,
-            fees=entry_fees + (exit_fees or Decimal("0")) if entry_fees is not None else None,
+            fees=entry_fees + (exit_fees or Decimal("0"))
+            if entry_fees is not None and (not exit_facts or exit_fees is not None)
+            else None,
             protection=protection,
             historical_protection="configured"
             if facts.get("protection_configured")
@@ -428,7 +461,7 @@ class ManualDemoHistoryService:
             triggered_protection=str(life.get("triggered_protection", "unverified")),
             protection_diagnostics=tuple(life.get("protection_diagnostics", [])),
             entry_fees=entry_fees,
-            gross_pnl=reported_pnl,
+            gross_pnl=None,
             funding=None,
             net_pnl=None,
             journal_trade_id=trade.id if trade else None,

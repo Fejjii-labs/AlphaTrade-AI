@@ -21,6 +21,7 @@ from app.market_contracts.ohlcv import OhlcvBar
 from app.market_contracts.order_flow import OrderFlowObservation
 from app.schemas.common import Timeframe
 from app.signal_fusion.types import ManualLevelRevisionRef
+from app.strategy_brain.trendpulse_1r.contracts import TrendPulseRequest
 
 FIRST_SLICE_TICK_SIZE = Decimal("0.10")
 FIRST_SLICE_SWING_ATR_DISTANCE = Decimal("0.50")
@@ -93,3 +94,4 @@ class FirstSliceEvidenceBundle(CanonicalModel):
     tick_size: PositiveCanonicalDecimal = FIRST_SLICE_TICK_SIZE
     market_intelligence: tuple[DerivativeObservation, ...] = ()
     order_flow: OrderFlowObservation | None = None
+    trendpulse: TrendPulseRequest | None = None

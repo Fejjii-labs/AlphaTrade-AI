@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
 from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -45,6 +46,7 @@ from app.experiments.native_producer import (
     ORIGIN,
     POSITION,
     BloFinNativeOutcomeProducer,
+    NativeProducerDiagnostic,
 )
 from app.experiments.outcomes import BloFinExperimentReads
 from app.experiments.service import ExperimentService
@@ -527,6 +529,9 @@ def test_missing_exit_remains_unavailable_and_diagnostics_deduplicate_after_rest
     assert result.status == "unavailable" and result.reason == "native_entry_receipt_unavailable"
     assert result.proof is None and result.reported_realized_pnl is None
     assert result.fee_cost is None and result.realized_pnl_after_fees_excluding_funding is None
+    assert "native_exit_command_or_protected_parent_lineage_unverified" in result.limitations
+    assert "native_fee_sign_convention_unverified" in result.limitations
+    assert "native_fill_pnl_fee_and_funding_basis_unverified" in result.limitations
     w.session.commit()
     with w.factory() as fresh:
         assert w.make_producer(fresh).reconcile(w.command_row.id) == result
@@ -535,6 +540,60 @@ def test_missing_exit_remains_unavailable_and_diagnostics_deduplicate_after_rest
         r for r in w.operations() if r.redacted_metadata["operation"].startswith(DIAGNOSTIC + ":")
     ]
     assert len(diagnostics) == 1
+    body = w.producer._body(diagnostics[0])
+    assert body["contract_version"] == "experiment-native-producer-diagnostic/v2"
+    assert body["missing_evidence"] == tuple(
+        code
+        for code in result.limitations
+        if code not in type(result).model_fields["limitations"].default
+    )
+
+
+def test_existing_v1_diagnostic_receipt_hash_remains_readable(world):
+    w = world
+    w.register()
+    w.session.commit()
+    w.command()
+    w.bind()
+    origin = next(row for row in w.operations() if row.redacted_metadata["operation"] == ORIGIN)
+    position = next(row for row in w.operations() if row.redacted_metadata["operation"] == POSITION)
+    legacy = NativeProducerDiagnostic(
+        command_id=w.command_row.id,
+        origin_hash=origin.payload_hash,
+        position_hash=position.payload_hash,
+        reason="native_entry_receipt_unavailable",
+    )
+    row = w.producer._store(w.command_row.id, DIAGNOSTIC + ":legacy-fixture", legacy)
+    w.session.commit()
+    with w.factory() as fresh:
+        producer = w.make_producer(fresh)
+        assert producer._body(fresh.get(AuditLog, row.id)) == legacy.model_dump()
+
+
+def test_raw_closing_pointer_and_numbers_cannot_supply_missing_provider_contracts(world):
+    w = world
+    w.register()
+    w.session.commit()
+    w.command()
+    w.bind()
+    # A synthetic diagnostic source only: never store an exit attestation or
+    # claim these raw fields establish native position or monetary semantics.
+    resolution = SimpleNamespace(
+        evidence_payload={
+            "exit_fills": [{"fee": "-0.03", "fee_currency": "USDT", "fillPnl": "1.25"}],
+            "exit_order_protection_ids": [{"order_id": "child", "tpsl_id": "parent"}],
+        }
+    )
+    missing = w.producer._missing_closing_evidence(
+        w.command_row, resolution, "native_exit_parent_unverified"
+    )
+    assert "native_exit_command_or_protected_parent_lineage_unverified" in missing
+    assert "native_complete_position_fill_lineage_unverified" in missing
+    assert "native_fee_sign_convention_unverified" in missing
+    assert "native_fill_pnl_fee_and_funding_basis_unverified" in missing
+    assert "native_historical_entry_fee_currency_unavailable" in missing
+    assert "native_historical_exit_fee_currency_unavailable" not in missing
+    assert "native_exit_fill_pnl_unavailable" not in missing
 
 
 def test_http_reader_is_scoped_database_only_and_sample_admission_stays_closed(world):

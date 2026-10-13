@@ -12829,10 +12829,16 @@
             "type": "integer"
           },
           "fees": {
-            "ge": 0,
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Fees",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees"
           },
           "filled_quantity": {
             "ge": 0,
@@ -12841,9 +12847,16 @@
             "type": "string"
           },
           "funding": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Funding",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding"
           },
           "position_id": {
             "anyOf": [
@@ -14282,6 +14295,36 @@
           "variant_key"
         ],
         "title": "ExperimentPromotion",
+        "type": "object"
+      },
+      "ExperimentResearchTick": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_requested": {
+            "const": false,
+            "default": false,
+            "title": "Execution Requested",
+            "type": "boolean"
+          },
+          "samples_admitted": {
+            "const": 0,
+            "default": 0,
+            "title": "Samples Admitted",
+            "type": "integer"
+          },
+          "screenings": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPulseScreeningRecord"
+            },
+            "maxItems": 2,
+            "title": "Screenings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "screenings"
+        ],
+        "title": "ExperimentResearchTick",
         "type": "object"
       },
       "ExperimentRiskLimits-Input": {
@@ -24296,9 +24339,27 @@
             "type": "string"
           },
           "fee": {
-            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-            "title": "Fee",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "fee_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Currency"
           },
           "fillPnl": {
             "anyOf": [
@@ -24797,10 +24858,16 @@
             "type": "string"
           },
           "fee_convention": {
-            "const": "positive_cost_negative_rebate",
-            "default": "positive_cost_negative_rebate",
-            "title": "Fee Convention",
-            "type": "string"
+            "anyOf": [
+              {
+                "const": "positive_cost_negative_rebate",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Convention"
           },
           "fees": {
             "anyOf": [
@@ -50719,6 +50786,141 @@
         "title": "TrendPulseEvidenceReference",
         "type": "object"
       },
+      "TrendPulseParameters": {
+        "additionalProperties": false,
+        "description": "Fixed baseline. Changing any rule requires a separately reviewed version.",
+        "properties": {
+          "entry_history_bars": {
+            "const": 60,
+            "default": 60,
+            "title": "Entry History Bars",
+            "type": "integer"
+          },
+          "expiry_seconds": {
+            "const": 60,
+            "default": 60,
+            "title": "Expiry Seconds",
+            "type": "integer"
+          },
+          "fast_ema_period": {
+            "const": 20,
+            "default": 20,
+            "title": "Fast Ema Period",
+            "type": "integer"
+          },
+          "maximum_entry_rounding_ratio": {
+            "default": "0.001",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maximum Entry Rounding Ratio",
+            "type": "string"
+          },
+          "maximum_pullback_penetration": {
+            "default": "0.003",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maximum Pullback Penetration",
+            "type": "string"
+          },
+          "maximum_risk_ratio": {
+            "default": "0.02",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maximum Risk Ratio",
+            "type": "string"
+          },
+          "maximum_trigger_open_gap_ratio": {
+            "default": "0.001",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maximum Trigger Open Gap Ratio",
+            "type": "string"
+          },
+          "minimum_risk_ratio": {
+            "default": "0.001",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Minimum Risk Ratio",
+            "type": "string"
+          },
+          "minimum_slope_ratio": {
+            "default": "0.001",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Minimum Slope Ratio",
+            "type": "string"
+          },
+          "pivot_width": {
+            "const": 2,
+            "default": 2,
+            "title": "Pivot Width",
+            "type": "integer"
+          },
+          "provisional": {
+            "const": true,
+            "default": true,
+            "title": "Provisional",
+            "type": "boolean"
+          },
+          "pullback_bars": {
+            "const": 3,
+            "default": 3,
+            "title": "Pullback Bars",
+            "type": "integer"
+          },
+          "pullback_tolerance": {
+            "default": "0.001",
+            "gt": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Pullback Tolerance",
+            "type": "string"
+          },
+          "slope_bars": {
+            "const": 3,
+            "default": 3,
+            "title": "Slope Bars",
+            "type": "integer"
+          },
+          "slow_ema_period": {
+            "const": 50,
+            "default": 50,
+            "title": "Slow Ema Period",
+            "type": "integer"
+          },
+          "stop_buffer_ticks": {
+            "const": 1,
+            "default": 1,
+            "title": "Stop Buffer Ticks",
+            "type": "integer"
+          },
+          "structure_lookback": {
+            "const": 32,
+            "default": 32,
+            "title": "Structure Lookback",
+            "type": "integer"
+          },
+          "trend_history_bars": {
+            "const": 250,
+            "default": 250,
+            "title": "Trend History Bars",
+            "type": "integer"
+          },
+          "trigger": {
+            "const": "closed_break_of_pullback_extreme",
+            "default": "closed_break_of_pullback_extreme",
+            "title": "Trigger",
+            "type": "string"
+          },
+          "version": {
+            "const": "trendpulse-1r-research/v1",
+            "default": "trendpulse-1r-research/v1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "title": "TrendPulseParameters",
+        "type": "object"
+      },
       "TrendPulseScreeningCreate": {
         "additionalProperties": false,
         "properties": {
@@ -51403,6 +51605,63 @@
           "evidence"
         ],
         "title": "TrendPulseSignal",
+        "type": "object"
+      },
+      "TrendPulseSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/TradeDirection"
+          },
+          "kind": {
+            "const": "trendpulse_1r/v1",
+            "default": "trendpulse_1r/v1",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "default": "TrendPulse1R conservative research v1",
+            "title": "Name",
+            "type": "string"
+          },
+          "paper_only": {
+            "const": true,
+            "default": true,
+            "title": "Paper Only",
+            "type": "boolean"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/TrendPulseParameters"
+          },
+          "spec_version": {
+            "const": "strategy-pattern-spec/v1",
+            "default": "strategy-pattern-spec/v1",
+            "title": "Spec Version",
+            "type": "string"
+          },
+          "symbol": {
+            "pattern": "^[A-Z0-9]{2,32}$",
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trend_timeframe": {
+            "const": "15m",
+            "default": "15m",
+            "title": "Trend Timeframe",
+            "type": "string"
+          },
+          "trigger_timeframe": {
+            "const": "5m",
+            "default": "5m",
+            "title": "Trigger Timeframe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "direction"
+        ],
+        "title": "TrendPulseSpec",
         "type": "object"
       },
       "TrendPulseStatus": {
@@ -62639,6 +62898,56 @@
           }
         ],
         "summary": "Create",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/experiments/research/tick": {
+      "post": {
+        "operationId": "research_tick_experiments_research_tick_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "maximum": 2,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResearchTick"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Research Tick",
         "tags": [
           "experiments"
         ]
@@ -75272,6 +75581,54 @@
           }
         ],
         "summary": "Detail",
+        "tags": [
+          "trendpulse-screening"
+        ]
+      }
+    },
+    "/trendpulse-screenings/{record_id}/candidate": {
+      "post": {
+        "operationId": "canonical_candidate_trendpulse_screenings__record_id__candidate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Candidate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Canonical Candidate",
         "tags": [
           "trendpulse-screening"
         ]

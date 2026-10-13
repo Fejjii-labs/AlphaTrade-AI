@@ -51,6 +51,9 @@ class DemoFill:
     price: Decimal
     occurred_at: datetime
     fee: Decimal
+    # Preserve the provider's explicit currency. Instrument settlement does not
+    # prove the currency of an omitted historical fee.
+    fee_currency: str | None = None
 
 
 @dataclass(frozen=True)

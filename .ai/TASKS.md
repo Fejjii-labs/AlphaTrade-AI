@@ -2588,3 +2588,22 @@ durable restart-safe dedupe/rejections and an authenticated application read
 consumer. Coordinate one additive migration with integration. Report honest
 representative replay coverage/counts without threshold tuning. No trade activation,
 orders, deployment, operator/credential changes or full CI.
+
+## AT-122 — Continue trading workflow from reviewed PR249 without release mutation
+
+Status: REVIEW_REQUIRED (isolated feature PR; provider/native acceptance blocked).
+Base: df0a12d3; feature branch codex/trading-workflow-completion. Five requested
+workstreams and exact remaining provider/runtime acceptance are recorded in
+docs/trading_workflow_continuation.md. Reuse canonical strategy/Candidate/plan/
+approval/claim authorities, bounded research selection and existing reconciliation.
+Preserve all operator settings, distinct account sources/samples and release owner.
+Focused simulated transport/disposable PostgreSQL evidence only; no full backend
+CI dispatch, deployment, migration, provider activation, native financial action
+or unsupported monetary values. Native end-to-end acceptance remains explicitly
+blocked on source contracts/access; public CONNECT403 is not a provider response.
+
+PR251 correction: original focused run 38249795179 at 03be2d3 failed case 840
+(Telegram log redaction) before cancellation. A real two-case reproduction isolates
+Alembic CLI logging pollution from the activity migration fixture; repair and exact
+collection evidence are in docs/pr251_focused_ci_repair.md. Shared CI/duration
+changes belong to the PR249 release owner; automated research grants no trades.

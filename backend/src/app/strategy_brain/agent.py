@@ -108,6 +108,35 @@ def read_brain(
             )
         )
     lines.extend(_bounded_lines(definition_lines, 4000))
+    if user_id is not None and re.search(r"alert|notification|telegram|delivery", message, re.I):
+        from app.strategy_brain.notification_diagnostics import read_notification_diagnostics
+
+        diagnostics = read_notification_diagnostics(
+            session, organization_id=organization_id, user_id=user_id, strategies=definitions
+        )
+        lines.append(
+            f"Notification receipt window {diagnostics['window_start']} to "
+            f"{diagnostics['window_end']}; at most {diagnostics['per_stage_row_limit']} "
+            "rows per stage and version."
+        )
+        for scope in diagnostics["scopes"]:
+            latest = scope["deliveries"][0] if scope["deliveries"] else None
+            lines.append(
+                f"Notification diagnostics {scope['family']} {scope['strategy_version_id']} "
+                f"{scope['symbol']} {scope['timeframe']}: "
+                f"scans={scope['scan_status_counts']}, reasons={scope['scan_reasons']}; "
+                f"acquisition={scope['acquisition_status_counts']}, "
+                f"reasons={scope['acquisition_reasons']}; "
+                f"evaluation={scope['evaluation_status_counts']}, "
+                f"reasons={scope['evaluation_reasons']}; "
+                f"detections={scope['detection_states']}, reasons={scope['detection_reasons']}; "
+                f"candidate_links={scope['candidate_links']}; "
+                f"decision_reasons={scope['decision_reasons']}; "
+                f"delivery={scope['delivery_states']}; latest receipt={latest}; "
+                f"missing={scope['missing_evidence']}; truncated={scope['truncated']}."
+            )
+        data["limitations"].extend(diagnostics["limitations"])
+        lines.extend(diagnostics["limitations"])
     if len(definitions) > 8:
         data["limitations"].append("Strategy context includes at most eight selected definitions.")
     if not definitions:

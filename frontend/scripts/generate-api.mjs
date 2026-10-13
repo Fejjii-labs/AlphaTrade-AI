@@ -47,6 +47,8 @@ const pilots = [
   ["trendpulseScreen", "/experiments/{experiment_id}/versions/{version_id}/trendpulse-screenings", "post"],
   ["trendpulseScreenings", "/experiments/{experiment_id}/versions/{version_id}/trendpulse-screenings", "get"],
   ["trendpulseScreeningDetail", "/trendpulse-screenings/{record_id}", "get"],
+  ["trendpulseCandidate", "/trendpulse-screenings/{record_id}/candidate", "post"],
+  ["experimentResearchTick", "/experiments/research/tick", "post"],
   ["strategyVersions", "/strategies/{strategy_id}/versions", "get"],
   ["paperAccount", "/execution/accounts/paper", "get"],
   ["watcherAssignments", "/watcher/assignments", "get"],

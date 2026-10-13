@@ -706,9 +706,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 safety_epochs=self._safety(session),
                 clock=self._clock.now,
             )
-            cumulative_fees = Decimal("0")
+            # These are reported fee amounts, never a normalized cost/net PnL.
+            # Missing historical currency must not become inferred USDT money.
+            fee_currency_verified = all(
+                fact.fee_currency == envelope.plan.instrument_rules.settlement_currency
+                for fact in evidence.fills
+            )
+            cumulative_fees = Decimal("0") if fee_currency_verified else None
             for fact in sorted(evidence.fills, key=lambda item: (item.occurred_at, item.identity)):
-                cumulative_fees += fact.fee
+                if cumulative_fees is not None:
+                    cumulative_fees += fact.fee
                 fill = self._dispatcher(session).apply_unique_fill(
                     command_id=command_id,
                     fill_quantity=fact.quantity,
@@ -725,8 +732,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     fill=fill,
                     revision_id=command.revision_id,
                     venue_fill_fee=fact.fee,
+                    venue_fill_fee_currency=fact.fee_currency,
                     cumulative_fees=cumulative_fees,
                     demo_protection=evidence.protection_status,
+                    demo_protection_order_ids=evidence.protection_order_ids,
+                    demo_native_tpsl_id=evidence.native_tpsl_id,
                 )
             exit_unavailable = False
             if evidence.fills:
@@ -735,7 +745,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         ExecutionProjection.receipt_id == effect.receipt_id
                     )
                 )
-                if projection is not None and projection.fees != cumulative_fees:
+                if (
+                    projection is not None
+                    and cumulative_fees is not None
+                    and projection.fees != cumulative_fees
+                ):
                     projection.fees = cumulative_fees
                     projection.version = int(projection.version) + 1
                 if evidence.status in {"canceled", "cancelled", "expired"}:

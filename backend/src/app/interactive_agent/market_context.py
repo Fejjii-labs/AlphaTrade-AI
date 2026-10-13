@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.market_contracts.context import MarketEvidenceContext
+import re
+
+from app.market_contracts.context import MarketContextObservation, MarketEvidenceContext
 from app.market_contracts.derivatives import DerivativeMetric, require_derivative_observations
 from app.market_contracts.errors import MarketContractError, StaleEvidenceError
 from app.market_contracts.order_book import require_order_book
@@ -20,8 +22,30 @@ def _unusable_state(reported: EvidenceAvailability, exc: Exception) -> str:
     )
 
 
+def _reported_reason(reason: str | None) -> str:
+    # Contract reasons are codes; never echo arbitrary provider bodies into Agent context.
+    return reason if reason and re.fullmatch(r"[A-Za-z0-9_:-]{1,120}", reason) else "unrecorded"
+
+
+def _provenance(item: MarketContextObservation) -> str:
+    identity = item.identity
+    parts = [
+        f"provider={identity.source.provider_name}",
+        f"adapter={identity.source.adapter_version}",
+        f"instrument={identity.instrument.instrument_id}",
+        f"observed_at={item.observed_at.isoformat()}",
+    ]
+    if item.event_time is not None:
+        parts.append(f"event_time={item.event_time.isoformat()}")
+    collected_at = getattr(item, "collected_at", None)
+    if collected_at is not None:
+        parts.append(f"collected_at={collected_at.isoformat()}")
+    parts.append(f"method={item.calculation_method}")
+    return "; ".join(parts)
+
+
 def market_context_text(context: MarketEvidenceContext) -> str:
-    parts: list[str] = []
+    parts: list[str] = [f"Market context evaluated_at={context.evaluated_at.isoformat()}."]
     if not any(item.metric is DerivativeMetric.OPEN_INTEREST for item in context.derivatives):
         parts.append("Open interest: MISSING.")
     for item in context.derivatives:
@@ -38,10 +62,14 @@ def market_context_text(context: MarketEvidenceContext) -> str:
             )
             parts.append(
                 f"{label}: {item.value} {item.units}; single provider record, "
-                "OI change and OI notional unavailable."
+                f"OI change and OI notional unavailable. {_provenance(item)}."
             )
         except (MarketContractError, ValueError) as exc:
-            parts.append(f"{label}: {_unusable_state(item.availability, exc)}; no usable OI value.")
+            parts.append(
+                f"{label}: {_unusable_state(item.availability, exc)}; no usable OI value; "
+                f"reason={_reported_reason(item.reason)}; consumer_check={type(exc).__name__}; "
+                f"{_provenance(item)}."
+            )
     flow = context.order_flow
     if flow is None:
         parts.append("Executed flow and CVD: MISSING.")
@@ -54,12 +82,15 @@ def market_context_text(context: MarketEvidenceContext) -> str:
                 f"{label}: closed 5m buy={last.aggressive_buy_base_volume} "
                 f"sell={last.aggressive_sell_base_volume} {flow.base_units}; "
                 f"10m CVD={flow.rolling_cvd} {flow.cvd_units}, reset to zero at "
-                f"{flow.window_start.isoformat()}; divergence={flow.cvd_divergence or 'none'}."
+                f"{flow.window_start.isoformat()}; divergence={flow.cvd_divergence or 'none'}; "
+                f"coverage={flow.coverage_kind}; window_end={flow.window_end.isoformat()}; "
+                f"{_provenance(flow)}."
             )
         except (MarketContractError, ValueError) as exc:
             parts.append(
                 f"{label}: {_unusable_state(flow.availability, exc)}; "
-                "coverage or freshness unavailable."
+                f"coverage or freshness unavailable; reason={_reported_reason(flow.reason)}; "
+                f"consumer_check={type(exc).__name__}; {_provenance(flow)}."
             )
     book = context.order_book
     if book is None:
@@ -71,11 +102,13 @@ def market_context_text(context: MarketEvidenceContext) -> str:
             parts.append(
                 f"{label}: spread={book.spread} {book.price_units}; "
                 f"snapshot of up to {book.requested_depth} levels per side; "
-                "historical coverage unavailable; RPI excluded."
+                f"historical coverage unavailable; RPI excluded; {_provenance(book)}."
             )
         except (MarketContractError, ValueError) as exc:
             parts.append(
-                f"{label}: {_unusable_state(book.availability, exc)}; no usable liquidity value."
+                f"{label}: {_unusable_state(book.availability, exc)}; no usable liquidity value; "
+                f"reason={_reported_reason(book.reason)}; consumer_check={type(exc).__name__}; "
+                f"{_provenance(book)}."
             )
     if context.cross_venue_components:
         parts.append("Cross-venue context: " + ", ".join(context.cross_venue_components) + ".")
