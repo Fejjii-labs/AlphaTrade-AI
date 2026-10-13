@@ -1,6 +1,6 @@
 # AlphaTrade AI: Cursor handover and delivery roadmap
 
-Snapshot: 12 October 2026, approximately 23:00 Europe/Berlin.
+Snapshot refreshed: 13 October 2026, approximately 10:10 Europe/Berlin.
 Owner: Sofien Fejji.
 Purpose: continue the existing product in Cursor without restarting audits, losing Codex work, or repeating broad tests.
 This is a verified snapshot plus an explicitly proposed continuation plan. Refresh running operations once when resuming.
@@ -13,8 +13,10 @@ PR249 is the release candidate at 43e66531c0f4ed876387ba3b6bbe104ef75a58f6. Its 
 
 PR251 is a separate workflow feature draft at 9928ce9e0b89213e31167cf9526d1273336bda0e. It has substantial focused local evidence but is neither integrated into the current release candidate nor deployed.
 
-Current combined release run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38294470908
-At inspection, frontend, Docker and deployment safety passed; backend remained in progress. Evaluation and browser smoke had not established acceptance. The full workflow has six required jobs. Three passed jobs mean 3/6 release jobs accepted, or 50% of this checklist, not 50% of the product.
+New PR252, cursor/audit-test-ci-cleanup-5016 at65a81739c847d8659c95fa79f593bdb99e91a226, already removes broad backend filename prefix selection. Its reported local selector tests pass31/31. The current branch CI38314136225 is cancelled, with frontend and safety successful, backend cancelled and expensive jobs skipped. This is implemented but not integrated or release accepted. Review this existing correction rather than implementing it again.
+
+Latest combined release run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38294470908
+Final result: cancelled. Frontend, Docker and deployment safety passed; backend was cancelled at 21:03:10 UTC on 12 October. Evaluation and browser smoke were skipped. Artifact inventory contains only the frontend build, with no retained backend diagnostics. The full workflow has six required jobs. Three passed jobs mean 3/6 release jobs accepted, or 50% of this checklist, not 50% of the product.
 
 No defensible aggregate product percentage exists. Use the scoped counts below and separate code completion from runtime acceptance.
 
@@ -26,7 +28,8 @@ Repository: https://github.com/Fejjii/AlphaTrade-AI
 2. Release owner: PR249, codex/interactive-voice-monitoring, 43e66531c0f4ed876387ba3b6bbe104ef75a58f6.
 3. Workflow feature: PR251, codex/trading-workflow-completion, 9928ce9e0b89213e31167cf9526d1273336bda0e.
 4. Canonical operational checkpoint: cursor/experiments-market-handoff, HANDOFF.md. The release owner's last checkpoint was 20:59:25 Berlin.
-5. This migration document: docs/CURSOR_MIGRATION_20261012.md on the handoff branch.
+5. Selector correction: PR252, cursor/audit-test-ci-cleanup-5016, 65a81739c847d8659c95fa79f593bdb99e91a226.
+6. This migration document: docs/CURSOR_MIGRATION_20261012.md on the handoff branch.
 
 The handoff branch is a documentation channel, not an application integration base.
 
@@ -46,8 +49,9 @@ Open PR inventory relevant to the current stack:
 12. PR248: Agent navigation and guarded native experiment integration.
 13. PR249: interactive voice, monitoring, presentation and release corrections.
 14. PR251: bounded workflow completion and evidence preservation.
+15. PR252: narrow focused test selection, based on PR249.
 
-Do not merge this list blindly in numeric order. Several branches are stacked or have overlapping integration ancestry. Inspect merge bases and contained commits before selecting the final integration path. Do not close or delete historical PRs until their work is proved incorporated. PR217 is also open but was not part of this delivery review.
+Do not merge this list blindly in numeric order. Several branches are stacked or have overlapping integration ancestry. Inspect merge bases and contained commits before selecting the final integration path. Do not close or delete historical PRs until their work is proved incorporated. Older open PRs also exist and were not audited for cleanup. No branches or PRs were deleted or closed.
 
 ## 3. Capability progress and evidence limits
 
@@ -74,13 +78,13 @@ A prior assertion failure was isolated to test setup. Another ordering issue inv
 
 Current43e6653 preserves the 120 minute job limit but uses a 105 minute step and 6000 second supervisor budget to leave cleanup time. This improves evidence retention; it does not prove the suite duration or blocking cause is fixed.
 
-Next: inspect the current run once. If failed or cancelled, inspect retained diagnostics, find the first failed or active case, and run the smallest distinguishing reproduction. Do not restart the entire suite as diagnosis.
+Next: reconcile the cancelled run with its backend job and available logs. The artifact inventory has no backend diagnostics, so first determine why the supervisor and upload did not leave evidence. Recover the last active case if available; otherwise isolate a bounded diagnostic window. Do not guess the timeout cause or restart the entire suite as diagnosis.
 
-### Focused test selection is too broad
+### Focused test selection correction is awaiting integration
 
 The selector can map a changed agent.py to all test_agent*.py files. PR251's selection expanded to 75 entries and 1440 ordered cases. Each push can evaluate the cumulative PR diff.
 
-Next: replace accidental broad filename expansion with explicit dependency mapping, keeping relevant security, ownership, migrations and integration coverage. Print selected count and reason before execution. Validate the selector with a small direct regression. Keep this change separate from the frozen release candidate until reviewed.
+PR252 now uses an exact module test filename, retains existing explicit boundary groups and adds exact safety dependencies. Source inspection confirms the prefix glob is removed. Review coverage for the changed cross module paths before integration; exact filenames are not complete dependency analysis. Reuse its31 local passing selector checks when inputs match. Do not duplicate this implementation. Its cancelled CI is not acceptance.
 
 ### Provider and account acceptance
 
@@ -96,7 +100,7 @@ Next: preserve it through approved private storage before deleting that executor
 
 ### Frontend deployment visibility
 
-Render revisions were verified in this session. Vercel's current installed revision was not verified; a prior connector access denial is not evidence of a broken application.
+Render revisions were verified again on 13 October. Vercel inspection returned403 for team scope alphatrade-ai. No Vercel CLI is installed in this review workspace, so there was no authenticated CLI fallback. Current frontend revision and API binding remain unknown; this access denial is not evidence of an application outage.
 
 Next: verify the actual frontend deployment revision and API target through authorized project access. Do not assume a preview or successful build is the production version.
 
@@ -149,7 +153,19 @@ The earlier approximately $42 test budget was a planning target, not a verified 
 
 ## 8. Reviewer improvement ledger
 
-Carry these requirements forward. The current session checked release and workflow evidence, not every reviewer fix line by line.
+The following implementation evidence was checked in the published PR records and current dependency manifests. Earlier PR bodies are historical checkpoints; use the integrated release branch for current behavior. This session did not rerun their tests.
+
+Delivered reviewer work:
+
+1. PR234: immediate acknowledged reply rendering; tenant/user scoped TanStack Query caches; filter offset reset and empty page recovery; actual usage redirects; generated OpenAPI types/client/AJV validation; setup_type HTTP save and reload with tenant isolation.
+2. PR236: official OpenAI SDK adapter; shared turn policy, retrieval and usage accounting; short database phases with blocking provider work moved to worker threads; durable same key recovery and explicit concurrency conflicts.
+3. PR235: transactional indexing intent with normalized SQL content; bounded indexing worker, fencing, generations, retry/delete and truthful pending/ready/failed receipts; scoped shared/private retrieval. Retain Qdrant for now. Production pgvector cutover is deferred.
+4. PR237: integrated typed/spoken Agent recovery, native BloFin activity and Dashboard/Journal presentation. Its historical migration head is a10; PR252 identifies the current source head as a13voicemonitor001. Confirm the integrated candidate head before rollout and never treat the historical a10 package as automatically sufficient for a13.
+5. Current frontend dependencies include TanStack Query, AJV and openapi-typescript. Current backend pins the official OpenAI SDK. Broad TypeScript rewrite and React Compiler remain deferred.
+
+The manual order incident remains undiagnosed. No actual authenticated failing order receipt was captured; successful mocked widget tests do not establish that the live issue was fixed. Next investigation needs a sanitized request ID, error and account context, without placing a new order merely to inspect it.
+
+Remaining acceptance and architectural constraints:
 
 1. One API contract source: preserve generated FastAPI/OpenAPI TypeScript contracts while Python remains. Ensure setup_type survives save and reload. Validate external payloads at runtime; a TypeScript assertion is not validation.
 2. Request state: consolidate duplicated loaders using the chosen maintained query solution, deliberate cache keys, cancellation, freshness and retries.
@@ -177,12 +193,13 @@ Verified configuration inventory from repository examples:
 
 1. Backend infrastructure: DATABASE_URL, REDIS_URL, QDRANT_URL, QDRANT_API_KEY where required, JWT_SECRET, CORS_ORIGINS.
 2. OpenAI: OPENAI_API_KEY, OPENAI_BASE_URL, PROVIDER_MODE, LLM_MODEL, AGENT_REASONING_MODEL, AGENT_REASONING_EFFORT, AGENT_MAX_OUTPUT_TOKENS, LLM_TIER_A_MODEL, LLM_TIER_B_MODEL, EMBEDDINGS_MODEL.
-3. Realtime: the feature enable setting and AGENT_REALTIME_LIMITS_FILE mapping must be confirmed in core Settings. The loader requires a bound key, live provider route, verified nonexpired limits receipt, matching reasoning model and sufficient session budget. Preserve the private receipt; do not invent one to bypass the check.
-4. BloFin: BLOFIN_API_KEY, BLOFIN_API_SECRET, BLOFIN_API_PASSPHRASE, BLOFIN_DEMO_REST_BASE_URL and BLOFIN_DEMO_WS_URL as applicable. Reuse dedicated scoped account bindings and confirm exact demo versus production identity.
-5. Telegram: existing bot credentials and enrollment, TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_ID and TELEGRAM_CHAT_ID as applicable. Read current Settings for the exact credential field; do not rotate a working bot merely for migration.
+3. Realtime: AGENT_REALTIME_ENABLED and AGENT_REALTIME_LIMITS_FILE are confirmed in core Settings. The loader requires a bound key, live provider route, verified nonexpired limits receipt, matching reasoning model and sufficient session budget. Preserve the private receipt; do not invent one to bypass the check.
+4. BloFin: dedicated reads use BLOFIN_READONLY_SYNC_ENABLED, BLOFIN_READONLY_API_KEY, BLOFIN_READONLY_API_SECRET and BLOFIN_READONLY_API_PASSPHRASE. The separate execution/demo path uses BLOFIN_API_KEY, BLOFIN_API_SECRET, BLOFIN_API_PASSPHRASE, BLOFIN_DEMO_REST_BASE_URL and BLOFIN_DEMO_WS_URL as applicable. Reuse dedicated scoped account bindings and confirm exact demo versus production identity.
+5. Telegram: TELEGRAM_BOT_TOKEN, existing enrollment, TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_ID and TELEGRAM_CHAT_ID as applicable. Do not rotate a working bot merely for migration.
 6. Worker: WATCHER_ORCHESTRATION_ENABLED, MARKET_WATCHER_ENABLED, MARKET_WATCHER_BRIDGE_ENABLED and existing Telegram/activation flags. Preserve actual operator settings; blueprint false defaults are not instructions to reset a running installation.
 7. Frontend: NEXT_PUBLIC_API_URL, NEXT_PUBLIC_APP_NAME, NEXT_PUBLIC_EXECUTION_MODE, NEXT_PUBLIC_PROVIDER_MODE. No secret may use the NEXT_PUBLIC prefix.
-8. Test infrastructure: use disposable PostgreSQL and the exact test URL variables declared by CI, including BLOFIN_ACTIVITY_TEST_POSTGRES_URL. Never point migrations or destructive fixtures at staging.
+8. Knowledge indexing: KNOWLEDGE_INDEXING_ENABLED controls the existing worker component. Leaving it disabled keeps new ingestion pending; activation follows compatible schema/code deployment and provider qualification.
+9. Test infrastructure: use disposable PostgreSQL and the exact test URL variables declared by CI, including BLOFIN_ACTIVITY_TEST_POSTGRES_URL. Never point migrations or destructive fixtures at staging.
 
 Infrastructure targets:
 
@@ -193,6 +210,10 @@ Infrastructure targets:
 5. Render workspace: tea-d7hn0fvavr4c73f62c70.
 6. Vercel project: prj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ.
 7. Vercel team: team_LNgcEGBkqntUnTrktNjFzh7a.
+
+For deployment operations, Cursor also needs an approved GitHub session or scoped token, Render access to the named workspace/services, and Vercel access to the exact team/project. These are control plane credentials, distinct from application runtime keys. Use the native integration or CLI credential mechanism; do not assume an arbitrary environment variable is consumed. GitHub Actions secrets do not automatically populate a Cursor terminal, and a platform that can deploy may still be unable to export secret values.
+
+The actual PostgreSQL, Redis and Qdrant provider/account endpoints were not inventoried here. Their exact bindings must come from approved existing configuration or the private continuation package, never guessed. No secret values were read or included in this document.
 
 These identifiers are resource references, not credentials. Verify scoped access once. An inventory permission denial does not prove the underlying service secret is absent. Local infrastructure can support coding while hosted access is blocked.
 
@@ -219,14 +240,14 @@ These identifiers are resource references, not credentials. Verify scoped access
 ### Batch A: release bottleneck and migration continuity
 
 Owner: one Cursor release agent, reasoning High for diagnosis; cheaper model for mechanical documentation if available.
-Acceptance: exact current CI result reconciled; diagnostics retained; smallest repair verified; focused selector bounded; private continuity package preserved or explicitly recorded as missing; no duplicate release run.
+Acceptance: cancelled CI result reconciled; missing diagnostics explained or replaced by a bounded reproduction; smallest repair verified; PR252 selector correction reviewed; private continuity package preserved or explicitly recorded as missing; no duplicate release run.
 
-First action is status inspection, not a fresh full suite. If the running job is complete, inspect its result and artifact before any changes.
+First action is to resume from cancelled run38294470908 and the existing PR252 correction. Do not ask a new agent to rebuild that correction.
 
 ### Batch B: integrate and publish the reviewed baseline
 
 Owner: same release agent.
-Reconcile stacked ancestry and PR251 changes without losing either logger correction. Choose whether PR251 joins the candidate before paying for another final gate. Do not repeatedly certify intermediate candidates without a clear release decision.
+Reconcile stacked ancestry and PR251/PR252 changes without losing either logger correction. Choose whether PR251 joins the candidate before paying for another final gate. Do not repeatedly certify intermediate candidates without a clear release decision.
 
 Acceptance: exact integrated revision, valid required six job evidence, compatible migration plan, coordinated authorized staging rollout, actual deployed revisions and one short hosted smoke. Reuse valid build and restore receipts. Do not claim historical results certify changed source.
 
@@ -256,9 +277,9 @@ Add news, economic events, fear and greed, heatmap and liquidation sources for A
 
 Continue AlphaTrade from the verified migration document and current repository evidence. You are the accountable delivery owner. Use High reasoning for release diagnosis and integration. Read AGENTS.md, applicable Cursor rules, the operational HANDOFF on cursor/experiments-market-handoff, and docs/CURSOR_MIGRATION_20261012.md.
 
-Start from release PR249 at43e66531c0f4ed876387ba3b6bbe104ef75a58f6, refreshing its current head once. Preserve PR251 at9928ce9e0b89213e31167cf9526d1273336bda0e as a separate feature until reviewed integration. Do not start from main alone and miss the unmerged work.
+Start a new Cursor owner chat on release PR249 at43e66531c0f4ed876387ba3b6bbe104ef75a58f6, refreshing its current head once. Preserve PR251 at9928ce9e0b89213e31167cf9526d1273336bda0e as a separate feature until reviewed integration. Do not start from main alone and miss the unmerged work.
 
-Reconcile run38294470908 first. Do not duplicate it or poll continuously. If it failed, inspect retained evidence and reduce to the first failed or active case. Use focused checks only during repair. Correct the overly broad test selector in a separate scoped change with explicit dependency coverage.
+Reconcile cancelled run38294470908 first. Its evaluation/browser jobs were skipped and no backend diagnostic artifact is listed. Do not duplicate it or poll continuously. Recover logs if available and reduce to the first failed or active case; do not invent a timeout cause. Use focused checks only during repair. Review PR252's already implemented selector correction at65a81739c847d8659c95fa79f593bdb99e91a226, retaining explicit dependency coverage. Do not rebuild it.
 
 Preserve existing working settings, generated contracts, decimal calculations, strategy versions, ownership controls and private evidence. Check environment bindings once without printing values. Missing access blocks only its affected operation. Reuse successful restore and image qualification evidence when inputs match.
 
@@ -273,7 +294,7 @@ At a milestone or blocker, update the existing handoff and session checkpoint wi
 Primary release checkpoint: https://github.com/Fejjii/AlphaTrade-AI/blob/cursor/experiments-market-handoff/HANDOFF.md
 Release PR: https://github.com/Fejjii/AlphaTrade-AI/pull/249
 Workflow PR: https://github.com/Fejjii/AlphaTrade-AI/pull/251
-Current release run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38294470908
+Latest cancelled release run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38294470908
 Cancelled previous release run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38271867111
 Cancelled workflow CI: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38261419942
 
@@ -283,4 +304,47 @@ docs/pr251_focused_ci_repair.md
 docs/blofin_workflow_remaining_evidence.md
 docs/workflow_notification_market_evidence.md
 
-This session corrected PR251's stale CI paragraph and published this migration document on the existing handoff branch. It did not run tests, dispatch CI, merge product code, deploy, change secrets, reset settings or perform cleanup. The running CI status is a time bounded observation; Cursor must refresh it on takeover.
+This handover corrected PR251's stale CI paragraph, updated the existing operational checkpoints and published this migration document on the existing handoff branch. It did not run tests, dispatch CI, merge product code, deploy, change secrets, reset settings or perform cleanup. Status is a time bounded observation; Cursor must refresh changed heads or operations once on takeover.
+
+
+## 14. Practical Cursor startup and first session
+
+Use one new Cursor owner chat for release recovery and integration. Select GPT 6.1 Sol with High reasoning if it is available in your Cursor workspace; otherwise use an available strong coding model. Model availability and cost were not verified here. Use the existing PR252 chat only for a specific correction to that PR, not as a second release owner.
+
+1. Open or clone Fejjii/AlphaTrade-AI in Cursor. Inspect uncommitted work before switching branches.
+2. Fetch remote branches. Retrieve this document from cursor/experiments-market-handoff even though the application checkout is on the release branch.
+3. Create an isolated continuation branch from the current PR249 head. Keep PR251 and PR252 as review inputs until integrated.
+4. Read the existing Cursor rules and run the prompt in section12.
+5. Restore only the private bindings needed for the selected batch. Confirm access by a bounded read without printing credentials.
+6. Use Python3.12, the committed uv lock and the CI Node version. Backend declares Python>=3.12. Install locked backend development dependencies and frontend package lock dependencies; do not upgrade libraries as part of takeover.
+7. Provision disposable local test PostgreSQL rather than attaching tests to staging. Match CI PostgreSQL16 when diagnosing CI behavior; prior local PostgreSQL17 evidence is not identical.
+8. First session output should be a precise backend cancellation diagnosis or bounded blocker, PR252 review outcome, integration plan and preserved checkpoints. No new full suite is part of initial setup.
+
+Useful commands, run individually in the indicated directory after checking the working tree:
+
+Repository:
+```sh
+git status
+git fetch origin
+git show origin/cursor/experiments-market-handoff:docs/CURSOR_MIGRATION_20261012.md
+```
+
+Backend:
+```sh
+uv sync --frozen --extra dev
+```
+
+Frontend:
+```sh
+npm ci
+```
+
+Focused verification only when the corresponding code changes:
+```sh
+uv run pytest tests/test_backend_ci_scope.py -x
+```
+
+The selector test command belongs in backend/. It is an example for a changed selector, not an instruction to rerun PR252's unchanged31 cases. Load exact existing runtime configuration through the approved mechanism rather than copying placeholder .env values into hosting.
+
+No delivery date is guaranteed by this handover. Timebox the first diagnosis to20 minutes, then report the evidence and next decision. A remaining runtime dependency should not stop independent feature work.
+
