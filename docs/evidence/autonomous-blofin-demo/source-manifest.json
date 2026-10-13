@@ -1,0 +1,111 @@
+{
+  "reviewed_candidate": "de5c010c7c85dfe5cde1ec8fabf60b6262500fe0",
+  "implementation_commit": "73765026d1b39e3564005a7f16deac838edc4f00",
+  "implementation_tree": "0b9051f8f4305de88843ae4a695e3111194eb73e",
+  "files": [
+    {
+      "path": "backend/src/app/experiments/blofin_source.py",
+      "sha256": "112b9362c4a24068267ac667922fae1a5761f1e7456c2bb01384246672068cac"
+    },
+    {
+      "path": "backend/src/app/experiments/execution_risk.py",
+      "sha256": "9f5a74694e8d35ed1e797d18d613bbced04b5865abf8edbd2b399d2c75ca3052"
+    },
+    {
+      "path": "backend/src/app/experiments/execution_selection.py",
+      "sha256": "bb65200874209a3d582a815e5f44490496b4a00407e43278164dc26431b7538a"
+    },
+    {
+      "path": "backend/src/app/experiments/native_closure.py",
+      "sha256": "df465d1a53880666201a4bd4f58087bf9772bd9439ee396a3b40b9cc3fc3a5c0"
+    },
+    {
+      "path": "backend/src/app/experiments/native_lineage.py",
+      "sha256": "625925662a2a6b6e6d96dd5c424ed779041ffc50948cc54f689ecf556f528f3b"
+    },
+    {
+      "path": "backend/src/app/experiments/native_producer.py",
+      "sha256": "71e989fcee279941b92b184f21184e6aee6696a43d8c913e0260defc6b158338"
+    },
+    {
+      "path": "backend/src/app/experiments/outcome_contract.py",
+      "sha256": "23e45dca9df3b4d3a515bbc4cab7c2529b3579ed12b28689441d86dfcadde24e"
+    },
+    {
+      "path": "backend/src/app/experiments/outcomes.py",
+      "sha256": "e3924e90a0646f825615b9f94e8b076c72e61d8eb576bccc3fb8e4255840a361"
+    },
+    {
+      "path": "backend/src/app/providers/exchange/governed_blofin.py",
+      "sha256": "d4899d6e6b81289045749b03725d5ca802e97a8156dba50d9f0f98d8687c2d05"
+    },
+    {
+      "path": "backend/src/app/providers/exchange/governed_blofin_exit.py",
+      "sha256": "a94cb1be28ef9cae23693b0543000423e7f8558ddc45649f71491d252091386e"
+    },
+    {
+      "path": "backend/src/app/repositories/execution_protocol.py",
+      "sha256": "4a3efba33a82643a65e95aef792b711f9b7cd09d1c09d77bd4e815ac430e6c8a"
+    },
+    {
+      "path": "backend/src/app/services/demo_account_history.py",
+      "sha256": "f9dbfbf64ad500a5c791b2273c56835142bbaef37eea4e01202297568e0cc0e8"
+    },
+    {
+      "path": "backend/src/app/services/demo_lifecycle_resolution.py",
+      "sha256": "20e0fef2ed9de01febe6b6991642ba6a5088bffa792d5116633c288af49dae19"
+    },
+    {
+      "path": "backend/src/app/services/execution_claim.py",
+      "sha256": "360d2ebd4e78ce76e2944da4986dfa20f3783826b905801273b5f528df7697e4"
+    },
+    {
+      "path": "backend/src/app/services/governed_blofin_demo.py",
+      "sha256": "a3ff93a1a3cb43ea846408a2390e6ee60d71fd8395ee986573d1315cfa30f3b4"
+    },
+    {
+      "path": "backend/src/app/services/venue_submit_dispatcher.py",
+      "sha256": "ef95eb25f5733cd6217639443eb136637e7e1695fcfbb227c7b595e08e5af494"
+    },
+    {
+      "path": "backend/src/app/workers/watcher_paper.py",
+      "sha256": "aac5c5430d01e4098085741cdbc20624343d2682f4d5348ee53aadd9836223d2"
+    },
+    {
+      "path": "backend/tests/test_autonomous_blofin_demo_postgres.py",
+      "sha256": "6f2637b25fed216e01e075f13d4e0c49f0bc55f15a1ee9e4b5b14ef36f2a5178"
+    },
+    {
+      "path": "backend/tests/test_governed_demo_exit_evidence.py",
+      "sha256": "676673b6a4f73db7b89a0c45bd1883a22a90afaa43ab4da60d0f102b381e3c08"
+    },
+    {
+      "path": "backend/tests/test_governed_demo_lifecycle.py",
+      "sha256": "b676ebc7d0cf0b355a1ccd6853c70e846a05b9905b7488394fb612dff02dbbf3"
+    },
+    {
+      "path": "frontend/scripts/generate-api.mjs",
+      "sha256": "bb67e6059ff99f890bc788e38cc13ce1dc907a507d984b149d290ced4d15b3e4"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/hashes.json",
+      "sha256": "d4ece2d54f34daf1a40531a9f82f0dfb7eb08a0815dffa076415151087a37e5a"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/openapi.json",
+      "sha256": "eb9f188b454a8eb944705a7eec0d174212e70b2ddc59faef05ef27ef881546a7"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/types.ts",
+      "sha256": "273c8dd956b147ea162fe4a5a10619f97d9f1c95988fc8d7f8da032bb9419735"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/validators.js",
+      "sha256": "dae56919205b7511716cb94cea5e1ac1303565471591020a4785024788963292"
+    },
+    {
+      "path": "frontend/src/lib/api/native-outcomes.test.ts",
+      "sha256": "b9f771b9e8627ce1847e953fee011e3c479ba6d69360f62121cae2a1f3a88951"
+    }
+  ]
+}
