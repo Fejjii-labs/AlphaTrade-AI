@@ -69,7 +69,10 @@ workflow change occurred. Price/access availability and model quality are unveri
 
 ## Focused mocked evidence
 
-Exact final counts/revision are in the PR and checkpoint. Only these files are selected:
+Published [PR257](https://github.com/Fejjii/AlphaTrade-AI/pull/257), implementation
+`0036f88cb3e1939b1478159e1fefa8260fe11056`: **68 backend and 102 frontend mocks
+passed, zero skips**. Targeted Python types (8 files), frontend types, changed
+lint/format, API drift and diff checks passed. Only these files are selected:
 
 ```sh
 # backend
@@ -121,7 +124,8 @@ timestamps, latency, final usage and quota receipts for each item below:
    storage, and Live estimate plus separate Agent/capture/embedding records/holds reconcile.
    Quota exhaustion must refuse before provider connection. Unknown secondary costs remain held.
 
-Fixed implementation checklist (6): official contract; continuous voice/interruption;
+Implementation acceptance: **6/6** for this bounded scope; live microphone acceptance
+**0/6**. Fixed implementation checklist (6): official contract; continuous voice/interruption;
 shared grounding/storage; cleanup/recovery; quota/duration accounting; focused mocked
 checks/reviewable PR. Live microphone acceptance is separate and currently 0/6.
 Mac/iCloud handoff sync is unavailable in this cloud environment.
