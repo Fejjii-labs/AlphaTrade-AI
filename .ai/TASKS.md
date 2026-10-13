@@ -2607,3 +2607,11 @@ PR251 correction: original focused run 38249795179 at 03be2d3 failed case 840
 Alembic CLI logging pollution from the activity migration fixture; repair and exact
 collection evidence are in docs/pr251_focused_ci_repair.md. Shared CI/duration
 changes belong to the PR249 release owner; automated research grants no trades.
+
+## AT-GPT-LIVE — disabled interactive Live integration
+
+Separate branch from reviewed PR249 de5c010c. Reuse Agent, voice, conversations,
+quotas and recovery; verify official provider interface. No workflows/full suite,
+deployment, paid activation or trading. Fixed six-item implementation checklist
+and exact microphone acceptance: `docs/gpt_live_integration.md`. REVIEW_REQUIRED
+following focused mocked checks/publication; activation and live acceptance remain separate.

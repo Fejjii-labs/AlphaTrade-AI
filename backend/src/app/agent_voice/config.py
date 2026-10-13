@@ -111,6 +111,23 @@ class VoiceLimits(StrictModel):
             + embedding
         ) / Decimal(1000000)
 
+    @property
+    def voice_model(self) -> str:
+        return self.realtime.model
+
+    def reserved_tokens(self, settings: Settings) -> int:
+        import math
+
+        return math.ceil(
+            self.maximum_responses
+            * (self.realtime.maximum_input_tokens + self.maximum_output_tokens)
+            + self.maximum_audio_seconds * self.realtime.maximum_audio_input_tokens_per_second
+            + self.maximum_turns
+            * 4
+            * (self.reasoning.maximum_input_tokens + settings.agent_max_output_tokens)
+            + (self.maximum_turns * self.embedding.maximum_input_tokens if self.embedding else 0)
+        )
+
     def receipt_deadline(self) -> datetime:
         return min(
             self.valid_until,

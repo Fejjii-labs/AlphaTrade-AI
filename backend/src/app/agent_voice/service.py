@@ -12,7 +12,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.agent_voice.accounting import VoiceLedger
-from app.agent_voice.config import VoiceUnavailableError
+from app.agent_voice.config import VoiceLimits, VoiceUnavailableError
 from app.agent_voice.contracts import (
     VoiceAudio,
     VoiceCommit,
@@ -23,6 +23,7 @@ from app.agent_voice.contracts import (
     VoiceTruncate,
 )
 from app.agent_voice.grounding import read_grounding
+from app.agent_voice.live_config import LiveLimits
 from app.agent_voice.protocol import TOOL_NAME, checked_audio, create_response, session_update
 from app.agent_voice.retrieval import (
     VoiceEmbeddingsProvider,
@@ -77,6 +78,13 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
         facts = read_grounding(
             session, ledger.settings, tenant.organization_id, tenant.user_id, request.message
         )
+        if isinstance(ledger.limits, LiveLimits):
+            facts += (
+                "\nThis request comes from observed GPT Live transcript fragments at a delegation "
+                "boundary. No provider event proves utterance completeness. Preserve uncertainty "
+                "and corrections; ask for clarification before inferring missing intent. "
+                "Speech is not an explicit confirmation or execution authorization."
+            )
     coordinator = TurnCoordinator(ledger.sessions)
     providers = resolve_providers(ledger.settings)
     provider = VoiceReasoningProvider(providers.llm, ledger)
@@ -125,12 +133,14 @@ class RealtimeSession:
             send,
             turn,
         )
+        assert isinstance(ledger.limits, VoiceLimits)
+        self.limits = ledger.limits
         self.ready = False
         self.response_active = False
         self.response_grounded = False
         self.audio_item: str | None = None
         self.audio_bytes = 0
-        self.context_bytes = len(json.dumps(session_update(ledger.limits)).encode())
+        self.context_bytes = len(json.dumps(session_update(self.limits)).encode())
         self.tool_task: asyncio.Task[None] | None = None
         self.accepts: dict[str, asyncio.Event] = {}
         self.response_finished = asyncio.Event()
@@ -143,7 +153,7 @@ class RealtimeSession:
         self.response_statuses: dict[str, str] = {}
 
     async def start_session(self) -> None:
-        await self._provider_send(session_update(self.ledger.limits))
+        await self._provider_send(session_update(self.limits))
 
     async def _provider_send(self, event: dict[str, Any]) -> None:
         async with self.send_lock:
@@ -156,12 +166,12 @@ class RealtimeSession:
             raise VoiceUnavailableError("overlapping_provider_response")
         # Reserve the whole model output as future context, including tool arguments.
         # Audio output tokenization is not inferred from PCM duration.
-        self.context_bytes += self.ledger.limits.maximum_output_tokens
+        self.context_bytes += self.limits.maximum_output_tokens
         self._context_limit()
         await asyncio.to_thread(self.ledger.response)
         self.response_active, self.response_grounded = True, grounded
         self.response_finished.clear()
-        await self._provider_send(create_response(self.ledger.limits, grounded=grounded))
+        await self._provider_send(create_response(self.limits, grounded=grounded))
 
     async def client(self, event: dict[str, Any]) -> bool:
         kind = event.get("type")
@@ -187,7 +197,7 @@ class RealtimeSession:
                 int(
                     Decimal(len(audio))
                     / Decimal(48000)
-                    * self.ledger.limits.realtime.maximum_audio_input_tokens_per_second
+                    * self.limits.realtime.maximum_audio_input_tokens_per_second
                 )
                 + 1
             )
@@ -211,7 +221,7 @@ class RealtimeSession:
         return True
 
     def _context_limit(self) -> None:
-        if self.context_bytes > self.ledger.limits.realtime.maximum_input_tokens:
+        if self.context_bytes > self.limits.realtime.maximum_input_tokens:
             raise VoiceUnavailableError("voice_realtime_context_cap")
 
     async def interrupt(self, item_id: str | None = None, audio_end_ms: int = 0) -> None:
@@ -238,9 +248,9 @@ class RealtimeSession:
         kind = event.get("type")
         if kind == "session.updated":
             effective = event.get("session", {})
-            if effective.get("model") != self.ledger.limits.realtime.model:
+            if effective.get("model") != self.limits.realtime.model:
                 raise VoiceUnavailableError("provider_session_route_mismatch")
-            if effective.get("max_output_tokens") != self.ledger.limits.maximum_output_tokens:
+            if effective.get("max_output_tokens") != self.limits.maximum_output_tokens:
                 raise VoiceUnavailableError("provider_output_limit_not_confirmed")
             audio = effective.get("audio", {})
             incoming, outgoing = audio.get("input", {}), audio.get("output", {})

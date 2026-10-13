@@ -187,6 +187,8 @@ class Settings(BaseSettings):
     # budget/pricing receipt. These defaults never activate an operator's provider.
     agent_realtime_enabled: bool = False
     agent_realtime_limits_file: str = ""
+    agent_live_enabled: bool = False
+    agent_live_limits_file: str = ""
 
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False

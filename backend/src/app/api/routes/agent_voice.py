@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import VoiceUnavailableError, load_limits
 from app.agent_voice.contracts import VoiceConfig, VoiceStart
+from app.agent_voice.live_config import load_live_limits
+from app.agent_voice.live_socket import live_voice
 from app.agent_voice.service import RealtimeSession
 from app.core.config import get_settings
 from app.core.dependencies import SettingsDep
@@ -26,14 +28,26 @@ router = APIRouter(prefix="/agent/voice", tags=["agent-voice"])
 @router.get("/config", response_model=VoiceConfig)
 def voice_config(tenant: TraderDep, settings: SettingsDep) -> VoiceConfig:
     try:
-        limits = load_limits(settings)
+        limits = (
+            load_live_limits(settings) if settings.agent_live_enabled else load_limits(settings)
+        )
         if limits.organization_id != str(tenant.organization_id):
             raise VoiceUnavailableError("voice_budget_tenant_mismatch")
     except VoiceUnavailableError as exc:
-        return VoiceConfig(available=False, reason=str(exc))
+        return VoiceConfig(
+            available=False,
+            reason=str(exc),
+            provider="gpt_live" if settings.agent_live_enabled else "realtime",
+        )
     return VoiceConfig(
-        available=True, maximum_seconds=limits.maximum_seconds, maximum_turns=limits.maximum_turns
+        available=True,
+        maximum_seconds=limits.maximum_seconds,
+        maximum_turns=limits.maximum_turns,
+        provider="gpt_live" if settings.agent_live_enabled else "realtime",
     )
+
+
+router.add_api_websocket_route("/live", live_voice)
 
 
 @router.websocket("/realtime")

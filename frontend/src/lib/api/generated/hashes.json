@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "da960192a22014d6d443b56add2d85c7fcba4d1842032b618a51022406278577",
-  "pilot_sha256": "7e7d5378f29fc4f9a57f8a22fc9d417a2ad49c60c6a79c390209bb933c5c50fb",
+  "openapi_sha256": "a5cab5c52986b8c344ea58e174b35bc9ab4e493c721bf3753c9a10d267c05b5c",
+  "pilot_sha256": "1331f6c114ba7adae071fd63d7ef7d63fdbd4a151a02f882d913c75a14b7d59a",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -198,7 +198,7 @@
     "ValidationError": "ca285d0c0e64c42844efd2e860edb239e77cc49d87f065c5ccb7d2f55331b862",
     "VenueId": "a3682fd8840cca2347fb22b0c843b6f2ce0504446b76c3b89adcf4b01c89d001",
     "VersionedDerivation": "f5e972412aa1b7ac4a4bfffcf6192fe075b18ca4e8f9e22d70f6afc9e443ab04",
-    "VoiceConfig": "081ae00a57a22455609107f79abb63a41563bb78753103bf8a41eaeb0b710b8a",
+    "VoiceConfig": "921e3b761c8836d614a95c73b52ad36b6e8cb761f4a66a2c007abadf905d6711",
     "VoiceIoContract": "e50d25f903b026c3b977eee6b83553345379df9d9ced42c5e23af4afd243041f",
     "WatcherAssignmentObservation": "983021082543576b73f43af994db073b8d009e1e15beb044ecca035e903c2227",
     "WatcherAssignmentRead": "a68b77797fe595efa5d6da6b38ed1de65a757cd35f9d538707588f992191c486",
