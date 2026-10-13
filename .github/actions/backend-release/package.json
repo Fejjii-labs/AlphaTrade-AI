@@ -1,0 +1,9 @@
+{
+  "name": "alphatrade-backend-release-evidence",
+  "private": true,
+  "version": "1.0.0",
+  "description": "GitHub artifact transport for bounded backend release checkpoints",
+  "dependencies": {
+    "@actions/artifact": "6.3.1"
+  }
+}
