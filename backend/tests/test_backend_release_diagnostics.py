@@ -2,8 +2,15 @@
 
 import importlib.util
 import json
+import os
+import signal
+import subprocess
 import sys
+import time
+from contextlib import suppress
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -94,3 +101,65 @@ def test_real_pytest_keeps_collection_and_first_failure_without_running_later_ca
     assert json.loads((diagnostics / "collection.json").read_text())["count"] == 2
     assert len((diagnostics / "ordered-nodeids.txt").read_text().splitlines()) == 2
     assert "specific failure" in (diagnostics / "failures.txt").read_text()
+
+
+@pytest.mark.parametrize(
+    "mode,ignore_interrupt",
+    [("blocked_snapshot", False), ("cancel_SIGINT", False), ("cancel_SIGTERM", True)],
+)
+def test_supervisor_retains_evidence_when_diagnostics_block_or_runner_cancels(
+    tmp_path, mode, ignore_interrupt
+):
+    """The supervisor must finish within its own budget, including cancellation."""
+    child_pid = tmp_path / "child.pid"
+    interrupt_handler = "signal.SIG_IGN" if ignore_interrupt else "signal.default_int_handler"
+    child = (
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGUSR1, lambda *_: None); "
+        f"signal.signal(signal.SIGINT, {interrupt_handler}); "
+        f"Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
+    )
+    runner = str(ROOT / "scripts/run_backend_release.py")
+    budget = 0.5 if mode == "blocked_snapshot" else 30
+    program = f"""
+import importlib.util,sys,time
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('release', {runner!r})
+release=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+def snapshot():
+    {"time.sleep(30)" if mode == "blocked_snapshot" else "pass"}
+    return {{'available': False}}
+release.postgres_snapshot=snapshot
+raise SystemExit(release.run([sys.executable, '-c', {child!r}], Path({str(tmp_path)!r}),
+                            phase_seconds=10, run_seconds={budget}))
+"""
+    proc = subprocess.Popen([sys.executable, "-c", program], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 3
+        while not child_pid.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert child_pid.exists(), "test child did not start"
+        if mode.startswith("cancel_"):
+            # Child PID proves run() entered; allow the first monitor iteration.
+            time.sleep(0.25)
+            proc.send_signal(getattr(signal, mode.removeprefix("cancel_")))
+        code = proc.wait(timeout=4)
+        result = json.loads((tmp_path / "result.json").read_text())
+        before = json.loads((tmp_path / "before-cancellation.json").read_text())
+        expected_code = 124
+        if mode.startswith("cancel_"):
+            expected_code = 128 + getattr(signal, mode.removeprefix("cancel_"))
+        assert code == expected_code
+        assert result["reason"] == (
+            "run_deadline" if mode == "blocked_snapshot" else mode.replace("cancel_", "signal_")
+        )
+        assert result["diagnostics_saved_before_cancellation"]
+        assert before["reason"] == result["reason"]
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=2)
+        if child_pid.exists():
+            with suppress(ProcessLookupError):
+                os.killpg(int(child_pid.read_text()), signal.SIGKILL)

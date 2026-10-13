@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -47,6 +48,59 @@ def _save(root: Path, name: str, value: object) -> None:
     temporary.replace(root / name)
 
 
+class _SnapshotReader:
+    """A stalled diagnostic connection must never stall the watchdog itself."""
+
+    def __init__(self) -> None:
+        self.latest: dict[str, object] = {
+            "available": False,
+            "reason": "diagnostic_pending",
+        }
+        self.thread: threading.Thread | None = None
+        self.completed_at: float | None = None
+
+    def request(self) -> None:
+        if self.thread is not None and self.thread.is_alive():
+            return
+
+        def sample() -> None:
+            try:
+                self.latest = postgres_snapshot()
+            except Exception as error:
+                self.latest = {"available": False, "error_type": type(error).__name__}
+            self.completed_at = time.time()
+
+        self.thread = threading.Thread(target=sample, daemon=True)
+        self.thread.start()
+
+
+def _active_phase(root: Path) -> dict[str, object]:
+    try:
+        value = json.loads((root / "active.json").read_text())
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    try:
+        os.kill(proc.pid, signal.SIGUSR1)
+        time.sleep(0.2)
+        os.killpg(proc.pid, signal.SIGINT)
+    except ProcessLookupError:
+        pass
+    try:
+        # Finish before the runner escalates cancellation to an uncatchable kill.
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        # The leader may exit while one of its children ignores SIGINT.
+        with suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=2)
+
+
 def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: float) -> int:
     root.mkdir(parents=True, exist_ok=True)
     env = dict(
@@ -75,42 +129,58 @@ def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: fl
 
     output = threading.Thread(target=stream, daemon=True)
     output.start()
+    snapshots = _SnapshotReader()
+    snapshots.request()
     last_snapshot = 0.0
     reason = None
-    while proc.poll() is None:
-        time.sleep(0.2)
-        active_path = root / "active.json"
-        active = json.loads(active_path.read_text()) if active_path.exists() else {}
-        elapsed = time.time() - active.get("started", time.time())
-        expired = elapsed >= phase_seconds or time.monotonic() - started >= run_seconds
-        if expired or time.monotonic() - last_snapshot >= 10:
-            last_snapshot = time.monotonic()
-            snapshot = {
-                "time": time.time(),
-                "active": active,
-                "postgres": postgres_snapshot(),
-            }
-            with (root / "postgres.jsonl").open("a") as handle:
-                handle.write(json.dumps(snapshot, default=str) + "\n")
-        if expired:
-            if proc.poll() is not None:
+    received_signal = 0
+    previous_handlers = {}
+
+    def cancelled(signum, _frame) -> None:
+        nonlocal received_signal
+        received_signal = received_signal or signum
+
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, cancelled)
+    try:
+        while proc.poll() is None:
+            time.sleep(0.2)
+            active = _active_phase(root)
+            phase_start = active.get("started")
+            elapsed = time.time() - phase_start if isinstance(phase_start, (int, float)) else 0
+            expired = elapsed >= phase_seconds or time.monotonic() - started >= run_seconds
+            stopping = expired or received_signal
+            if stopping or time.monotonic() - last_snapshot >= 10:
+                last_snapshot = time.monotonic()
+                snapshot = {
+                    "time": time.time(),
+                    "active": active,
+                    "postgres": snapshots.latest,
+                    "postgres_sampled_at": snapshots.completed_at,
+                }
+                with (root / "postgres.jsonl").open("a") as handle:
+                    handle.write(json.dumps(snapshot, default=str) + "\n")
+                if not stopping:
+                    snapshots.request()
+            if stopping:
+                reason = (
+                    f"signal_{signal.Signals(received_signal).name}"
+                    if received_signal
+                    else "phase_deadline"
+                    if elapsed >= phase_seconds
+                    else "run_deadline"
+                )
+                _save(root, "before-cancellation.json", {"reason": reason, **snapshot})
+                _stop(proc)
                 break
-            reason = "phase_deadline" if elapsed >= phase_seconds else "run_deadline"
-            _save(root, "before-cancellation.json", {"reason": reason, **snapshot})
-            try:
-                os.kill(proc.pid, signal.SIGUSR1)
-                time.sleep(0.2)
-                os.killpg(proc.pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
-            break
+    finally:
+        if proc.poll() is None:
+            _stop(proc)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     output.join(timeout=3)
-    code = 124 if reason else proc.returncode
+    code = 128 + received_signal if received_signal else 124 if reason else proc.returncode
     _save(
         root,
         "result.json",
