@@ -1,0 +1,48 @@
+name: Backend launch proof
+
+on:
+  pull_request:
+    paths:
+      - scripts/run_backend_launch.py
+      - scripts/run_backend_release.py
+      - backend/tests/test_backend_launch.py
+      - .github/workflows/ci.yml
+      - .github/workflows/backend-launch-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-launch-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  launch-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source before launching tools
+        run: python3 scripts/run_backend_launch.py --output backend-launch-proof --prepare-only
+      - name: Retain early source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-launch-source-${{ github.run_id }}
+          path: backend-launch-proof/provenance.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: astral-sh/setup-uv@v5
+      - name: Exercise real launch failure timeout and cancellation
+        timeout-minutes: 1
+        env:
+          BACKEND_LAUNCH_PROOF_DIR: ${{ github.workspace }}/backend-launch-proof/cases
+        run: python3 backend/tests/test_backend_launch.py -v
+      - name: Retain diagnostic proof results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-launch-results-${{ github.run_id }}
+          path: backend-launch-proof/
+          if-no-files-found: error
+          retention-days: 7

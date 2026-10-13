@@ -82,11 +82,14 @@ def _active_phase(root: Path) -> dict[str, object]:
         return {}
 
 
-def _stop(proc: subprocess.Popen) -> None:
+def _stop(proc: subprocess.Popen, *, owns_group: bool = True) -> None:
     try:
         os.kill(proc.pid, signal.SIGUSR1)
         time.sleep(0.2)
-        os.killpg(proc.pid, signal.SIGINT)
+        if owns_group:
+            os.killpg(proc.pid, signal.SIGINT)
+        else:
+            proc.send_signal(signal.SIGINT)
     except ProcessLookupError:
         pass
     try:
@@ -97,7 +100,10 @@ def _stop(proc: subprocess.Popen) -> None:
     finally:
         # The leader may exit while one of its children ignores SIGINT.
         with suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
+            if owns_group:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
         proc.wait(timeout=2)
 
 
@@ -109,6 +115,7 @@ def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: fl
         PYTHONUNBUFFERED="1",
     )
     started = time.monotonic()
+    owns_group = os.environ.get("BACKEND_RELEASE_SHARED_GROUP") != "1"
     proc = subprocess.Popen(
         command,
         env=env,
@@ -116,7 +123,7 @@ def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: fl
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        start_new_session=True,
+        start_new_session=owns_group,
     )
 
     def stream() -> None:
@@ -172,11 +179,11 @@ def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: fl
                     else "run_deadline"
                 )
                 _save(root, "before-cancellation.json", {"reason": reason, **snapshot})
-                _stop(proc)
+                _stop(proc, owns_group=owns_group)
                 break
     finally:
         if proc.poll() is None:
-            _stop(proc)
+            _stop(proc, owns_group=owns_group)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
     output.join(timeout=3)

@@ -85,7 +85,11 @@ def test_explicit_dependencies_match_exact_paths_and_real_files():
     assert len(sources) == len(set(sources))
     for source, tests in scope.EXPLICIT_DEPENDENCIES:
         assert (ROOT / source).is_file()
-        assert source.startswith("backend/src/app/") and source.endswith(".py")
+        assert source.endswith(".py")
+        assert source.startswith("backend/src/app/") or source in {
+            "scripts/run_backend_launch.py",
+            "scripts/run_backend_release.py",
+        }
         assert tests
         for test in tests:
             assert (backend / test).is_file()
@@ -93,10 +97,21 @@ def test_explicit_dependencies_match_exact_paths_and_real_files():
         [
             "backend/src/app/core/config_extra.py",
             "backend/src/app/core/paper_safety_notes.py",
+            "scripts/run_backend_launch_extra.py",
         ],
         backend,
     )
     assert near_miss == sorted(scope.BASE_TESTS)
+
+
+def test_release_infrastructure_selects_only_its_process_regressions():
+    assert scope.select_tests(["scripts/run_backend_launch.py"], ROOT / "backend") == sorted(
+        {
+            *scope.BASE_TESTS,
+            "tests/test_backend_launch.py",
+            "tests/test_backend_release_diagnostics.py",
+        }
+    )
 
 
 def test_missing_tests_and_paths_outside_tests_cannot_expand_selection():
@@ -194,14 +209,17 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == (
         "uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py "
-        "../scripts/run_backend_release.py"
+        "../scripts/run_backend_release.py ../scripts/run_backend_launch.py"
     )
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py "
-        "../scripts/run_frontend_focused.py ../scripts/run_backend_release.py"
+        "../scripts/run_frontend_focused.py ../scripts/run_backend_release.py "
+        "../scripts/run_backend_launch.py"
     )
     assert steps["Complete backend release acceptance"]["run"] == (
-        "uv run python ../scripts/run_backend_release.py --run-seconds 6000"
+        "python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics "
+        "--stage release --seconds 6060 -- uv run python "
+        "../scripts/run_backend_release.py --run-seconds 6000"
     )
     # A job timeout skips cleanup steps; the acceptance step must finish earlier.
     assert steps["Complete backend release acceptance"]["timeout-minutes"] == "105"
