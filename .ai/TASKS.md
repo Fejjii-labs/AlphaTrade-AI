@@ -2615,3 +2615,10 @@ quotas and recovery; verify official provider interface. No workflows/full suite
 deployment, paid activation or trading. Fixed six-item implementation checklist
 and exact microphone acceptance: `docs/gpt_live_integration.md`. REVIEW_REQUIRED
 following focused mocked checks/publication; activation and live acceptance remain separate.
+
+AT-GPT-LIVE PostgreSQL continuation: four verification items accepted 4/4. Seven
+formerly skipped quota cases plus eleven missing LiveLedger cases passed on
+disposable PostgreSQL 16.15 (18 passed/zero skips); 13 affected mocked checks passed.
+Corrected final receipt identity/reason replay and atomic close/hold classification.
+Exact receipts: docs/evidence/pr257-postgres/. Reused unaffected mocked evidence.
+Disposable schemas/container removed; activation and microphone acceptance remain separate.

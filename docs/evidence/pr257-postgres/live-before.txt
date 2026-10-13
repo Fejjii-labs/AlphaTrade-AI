@@ -1,0 +1,90 @@
+.....FFF...                                                              [100%]
+=================================== FAILURES ===================================
+_______ test_final_replay_requires_original_session_and_reason[session] ________
+
+live_database = namespace(sessions=sessionmaker(class_='Session', bind=Engine(postgresql+psycopg://postgres:***@127.0.0.1:32768/pr257_...b7aa'), user_id=UUID('49e02098-542e-4e31-b294-73cbbe3677af'), schema='voice_evidence_ca802f475c7f4e50a15a4f8c4772d59b')
+conflict = 'session'
+
+    @pytest.mark.parametrize("conflict", ["session", "reason"])
+    def test_final_replay_requires_original_session_and_reason(live_database, conflict):
+        original = started_ledger(live_database)
+        original.usage(final_receipt(original), final=True)
+        replay = final_receipt(original)
+        if conflict == "session":
+            replay["session"]["id"] = "live_another_session"
+        else:
+            replay["reason"] = "connection_lost"
+>       with pytest.raises(VoiceUnavailableError, match="mismatch|conflict"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'app.agent_voice.config.VoiceUnavailableError'>
+
+tests/test_agent_live_postgres.py:199: Failed
+________ test_final_replay_requires_original_session_and_reason[reason] ________
+
+live_database = namespace(sessions=sessionmaker(class_='Session', bind=Engine(postgresql+psycopg://postgres:***@127.0.0.1:32768/pr257_...42d7'), user_id=UUID('092de2e9-f2c0-42ec-b9cd-759da240b0a5'), schema='voice_evidence_c1c42967aaa54b2499205533c6e3cbc0')
+conflict = 'reason'
+
+    @pytest.mark.parametrize("conflict", ["session", "reason"])
+    def test_final_replay_requires_original_session_and_reason(live_database, conflict):
+        original = started_ledger(live_database)
+        original.usage(final_receipt(original), final=True)
+        replay = final_receipt(original)
+        if conflict == "session":
+            replay["session"]["id"] = "live_another_session"
+        else:
+            replay["reason"] = "connection_lost"
+>       with pytest.raises(VoiceUnavailableError, match="mismatch|conflict"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'app.agent_voice.config.VoiceUnavailableError'>
+
+tests/test_agent_live_postgres.py:199: Failed
+_________ test_unconfirmed_silent_close_never_commits_a_released_hold __________
+
+live_database = namespace(sessions=sessionmaker(class_='Session', bind=Engine(postgresql+psycopg://postgres:***@127.0.0.1:32768/pr257_...9abd'), user_id=UUID('c29ebf5e-4c8f-438c-82c5-c1194b9ee940'), schema='voice_evidence_e3d9b1b167144ecba066d523867c8e14')
+
+    def test_unconfirmed_silent_close_never_commits_a_released_hold(live_database):
+        database = live_database
+        original = started_ledger(database)
+        observed = []
+
+        def inspect_committed_state(_session):
+            # A fresh physical connection observes every committed state during
+            # cleanup, just as an ordinary independent quota request could.
+            with database.sessions() as fresh:
+                row = fresh.get(VoiceSessionReservation, original.id)
+                quota = QuotaService(fresh).get_status(database.organization_id).usage
+                observed.append(
+                    (row.status, row.ledger["live"]["finalized"], quota.monthly_cost_reserved)
+                )
+
+        @contextmanager
+        def observed_sessions():
+            with database.sessions() as session:
+                event.listen(session, "after_commit", inspect_committed_state)
+                yield session
+
+        independent_handle(database, original, sessions=observed_sessions).close()
+        assert observed
+>       assert all(
+            not finalized and cost == original.limits.reservation(original.settings)
+            for _status, finalized, cost in observed
+        )
+E       assert False
+E        +  where False = all(<generator object test_unconfirmed_silent_close_never_commits_a_released_hold.<locals>.<genexpr> at 0x7faac1ce1300>)
+
+tests/test_agent_live_postgres.py:230: AssertionError
+==================================== PASSES ====================================
+_ test_competing_live_reservations_respect_committed_budget_and_quota[budget] __
+=========================== short test summary info ============================
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[budget]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_cost]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_tokens]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[both_fit]
+PASSED tests/test_agent_live_postgres.py::test_concurrent_usage_and_final_receipt_replays_update_one_duration_event
+PASSED tests/test_agent_live_postgres.py::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[before_cleanup]
+PASSED tests/test_agent_live_postgres.py::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[after_cleanup]
+PASSED tests/test_agent_live_postgres.py::test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session
+FAILED tests/test_agent_live_postgres.py::test_final_replay_requires_original_session_and_reason[session]
+FAILED tests/test_agent_live_postgres.py::test_final_replay_requires_original_session_and_reason[reason]
+FAILED tests/test_agent_live_postgres.py::test_unconfirmed_silent_close_never_commits_a_released_hold
+3 failed, 8 passed in 14.55s

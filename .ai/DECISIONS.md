@@ -3177,3 +3177,9 @@ Interrupt is immediate local mute with explicit resume; obsolete results are not
 injected into Live. One reader drains bounded final usage after end/disconnect/revoked
 authorization. Preserve unknown-cost holds. Evidence: `docs/gpt_live_provider_contract.md`
 and `docs/gpt_live_integration.md`.
+
+AT-GPT-LIVE PostgreSQL evidence: verified against independent NullPool sessions.
+Equal-duration final replay must retain provider session identity and close reason.
+Classify Live close in one locked commit; a silent unconfirmed session must never
+publish an interim closed/zero hold. Before/after evidence and bounded concurrent
+budget/quota/usage cases: docs/evidence/pr257-postgres/.

@@ -109,10 +109,6 @@ class LiveLedger(VoiceLedger):
             previous = live.get("seconds")
             if previous is not None and seconds < Decimal(previous):
                 raise VoiceUnavailableError("live_usage_regressed")
-            if live["finalized"]:
-                if final and seconds == Decimal(previous):
-                    return
-                raise VoiceUnavailableError("live_usage_after_finalization")
             if final and event.get("session", {}).get("id") != live["provider_session_id"]:
                 raise VoiceUnavailableError("live_final_session_mismatch")
             if final and event.get("reason") not in {
@@ -123,6 +119,12 @@ class LiveLedger(VoiceLedger):
                 "connection_lost",
             }:
                 raise VoiceUnavailableError("invalid_live_final_reason")
+            if live["finalized"]:
+                if final and seconds == Decimal(previous):
+                    if event["reason"] != live["reason"]:
+                        raise VoiceUnavailableError("live_final_receipt_conflict")
+                    return
+                raise VoiceUnavailableError("live_usage_after_finalization")
             live.update(
                 seconds=str(seconds), finalized=final, reason=event.get("reason") if final else None
             )
@@ -158,7 +160,8 @@ class LiveLedger(VoiceLedger):
             raise VoiceUnavailableError("live_duration_outside_reservation")
 
     def close(self) -> None:
-        super().close()
+        # Classify and settle in one locked transaction. Realtime's separate
+        # close would temporarily release a silent, unconfirmed Live hold.
         with self.sessions() as session:
             row = session.scalar(
                 select(VoiceSessionReservation)

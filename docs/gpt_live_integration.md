@@ -59,7 +59,10 @@ maximum duration +10 seconds close +4 seconds authorization/guard/transport marg
 secondary attempts. Receipts must cover that whole period. No second quota/billing system
 or price catalog is introduced. Known final voice-only duration can settle its hold;
 missing/invalid/regressed final usage and unresolved secondary costs keep conservative
-reservations. The approved budget-reference debit is never erased at close.
+reservations. The approved budget-reference debit is never erased at close. Closing now
+classifies and settles under one row lock/commit, preventing a temporary released
+hold for unconfirmed silence. Exact final receipt replay also validates the
+original provider session and terminal reason before accepting equal duration.
 
 `openai[realtime]==3.28.0` preserves the SDK version and resolves WebSockets 15.0.1 within
 its declared `<16` range. HTTP schema/types/validators were regenerated for the provider
@@ -88,8 +91,13 @@ and diff checks accompany the mocks. In-memory SDK sockets and disposable SQLite
 protocol, shared canonical history/usage/replay and boundaries; they do not prove actual
 microphones, model quality or PostgreSQL concurrency. The async fixtures need the managed
 executor network namespace for worker-thread event-loop wakeups, but use only fake/local
-transports. An exploratory PostgreSQL-only quota file had seven explicit skips without a
-disposable PostgreSQL URL; those are excluded from the final mocked selection.
+transports. The PostgreSQL continuation closed that gap on a disposable PostgreSQL 16.15
+instance: **all seven formerly skipped quota cases plus eleven new LiveLedger
+cases passed (18/18, zero skips)**. Two finalization corrections were verified by
+**13 affected mocked checks (zero skips, 10 intentionally deselected)**; unchanged
+mocked checks above are retained at their original recorded revision. Exact
+JUnit/stdout receipts, source hashes, before/after failures and cleanup evidence:
+[PostgreSQL receipts](evidence/pr257-postgres/README.md).
 
 ## Exact live microphone acceptance still required
 
