@@ -18,11 +18,13 @@ from tests.test_agent_paper_execution_v4 import (
     interactive_service,
 )
 from tests.test_agent_paper_execution_v4 import interactive_world as execution_world
+from tests.test_agent_paper_execution_v4 import paper_database as execution_paper_database
 from tests.test_agent_paper_execution_v4 import paper_world as execution_paper_world
 from tests.test_interactive_agent_foundation import ORG_A, USER_A
 from tests.test_interactive_agent_foundation import agent_db as foundation_agent_db
 
 # Register dependencies locally even when their source modules are also collected.
+paper_database = execution_paper_database
 paper_world = execution_paper_world
 interactive_world = execution_world
 agent_db = foundation_agent_db
