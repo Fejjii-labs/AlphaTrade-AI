@@ -54,10 +54,7 @@ def snapshot(root: Path, destination: Path, sequence: int) -> list[str]:
         (destination / target).write_bytes(data)
         manifest[name] = {"file": target, "bytes": len(data), "truncated": truncated}
     (destination / "checkpoint.json").write_text(
-        json.dumps(
-            {"sequence": sequence, "captured_at": time.time(), "files": manifest}
-        )
-        + "\n"
+        json.dumps({"sequence": sequence, "captured_at": time.time(), "files": manifest}) + "\n"
     )
     return sorted(p.name for p in destination.iterdir())
 
@@ -100,9 +97,7 @@ def _worker(value: dict) -> int:
         _message({"phase": "ledger"})
         path = root / "checkpoint-uploads.json"
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps({"failure": failure, "artifacts": artifacts}) + "\n"
-        )
+        temporary.write_text(json.dumps({"failure": failure, "artifacts": artifacts}) + "\n")
         temporary.replace(path)
     except OSError:
         failure = "checkpoint_launch_failed"
@@ -206,9 +201,7 @@ class CheckpointPublisher:
                 self.failure = "checkpoint_upload_timeout"
                 self._stop()
             elif code:
-                self.failure = (self._result or {}).get(
-                    "failure"
-                ) or "checkpoint_upload_failed"
+                self.failure = (self._result or {}).get("failure") or "checkpoint_upload_failed"
                 self._reap()
             else:
                 self._reap()
@@ -220,9 +213,7 @@ class CheckpointPublisher:
                     artifact_id = value["artifact_id"]
                     if type(artifact_id) is not int or artifact_id <= 0:
                         raise ValueError("missing artifact identity")
-                    self.artifacts.append(
-                        {"sequence": self.sequence, "artifact_id": artifact_id}
-                    )
+                    self.artifacts.append({"sequence": self.sequence, "artifact_id": artifact_id})
                 except (OSError, ValueError, KeyError, TypeError):
                     self.failure = "checkpoint_receipt_missing"
         if self.failure:

@@ -113,9 +113,7 @@ def run(
             # Verify off-runner storage before spending time on the actual suite.
             publisher.tick()
             while (
-                publisher.proc is not None
-                and not received
-                and time.monotonic() - started < seconds
+                publisher.proc is not None and not received and time.monotonic() - started < seconds
             ):
                 publisher.tick(start=False)
                 time.sleep(0.05)
@@ -145,11 +143,7 @@ def run(
             f"{stage}-launch.json",
             {"state": "running", "budget_seconds": seconds},
         )
-        while (
-            proc.poll() is None
-            and not received
-            and time.monotonic() - started < seconds
-        ):
+        while proc.poll() is None and not received and time.monotonic() - started < seconds:
             if publisher is not None:
                 publisher.tick()
                 if publisher.failure:
@@ -204,9 +198,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=60)
-    parser.add_argument(
-        "--stage", choices=("collection", "release", "probe"), default="release"
-    )
+    parser.add_argument("--stage", choices=("collection", "release", "probe"), default="release")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--upload-checkpoints", action="store_true")
     parser.add_argument("--checkpoint-seconds", type=float, default=900)
