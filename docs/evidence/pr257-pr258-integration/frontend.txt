@@ -1,0 +1,9 @@
+
+ RUN  v4.1.8 /workspace/AlphaTrade-integration/frontend
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  08:17:30
+   Duration  6.08s (transform 5.99s, setup 351ms, import 6.44s, tests 60ms, environment 4.77s)
+

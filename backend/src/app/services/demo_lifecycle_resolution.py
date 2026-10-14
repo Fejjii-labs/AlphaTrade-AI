@@ -156,9 +156,13 @@ def resolve_verified_demo_exit(
         select(VenueSubmitEffect)
         .where(VenueSubmitEffect.command_id == command.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     reservation = session.scalar(
-        select(RiskReservation).where(RiskReservation.command_id == command.id).with_for_update()
+        select(RiskReservation)
+        .where(RiskReservation.command_id == command.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     fills = list(
         session.scalars(

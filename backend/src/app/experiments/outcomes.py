@@ -112,7 +112,7 @@ class BloFinExperimentReads:
             )
             outcomes.append(outcome)
             if (
-                outcome.status == "available"
+                (outcome.status == "available" or outcome.closure_verified)
                 and outcome.proof is not None
                 and sample.source == ExperimentSource.BLOFIN_DEMO.value
                 and sample.kind == "closed_trade"
@@ -124,6 +124,25 @@ class BloFinExperimentReads:
             ):
                 valid.append(outcome)
         base.update(sample_count=len(valid), outcomes=tuple(outcomes))
+        price_outcomes = [o for o in valid if o.closure_verified]
+        if len(price_outcomes) >= config.sample_target.minimum and len(price_outcomes) == len(
+            samples
+        ):
+            with localcontext() as context:
+                context.prec = 80
+                values = [
+                    parse_canonical_decimal(o.price_pnl_excluding_fees_and_funding)
+                    for o in price_outcomes
+                ]
+                base.update(
+                    price_pnl_sample_count=len(values),
+                    price_pnl_currency=price_outcomes[0].currency,
+                    price_pnl_methodology="verified-linear-fill-prices/v1",
+                    price_pnl_excluding_fees_and_funding=rounded(sum(values, Decimal(0))),
+                    price_pnl_win_rate=rounded(
+                        Decimal(sum(v > 0 for v in values)) / Decimal(len(values))
+                    ),
+                )
         reason = None
         if len(valid) != len(samples):
             reason = "sample_outcome_unavailable_or_changed"
@@ -131,6 +150,8 @@ class BloFinExperimentReads:
             reason = "insufficient_samples"
         elif len({o.currency for o in valid}) != 1:
             reason = "outcome_currency_mismatch"
+        elif any(o.status != "available" for o in valid):
+            reason = "native_monetary_semantics_unverified"
         if reason:
             return ExperimentPerformance(**base, status="unavailable", reason=reason)
         with localcontext() as context:

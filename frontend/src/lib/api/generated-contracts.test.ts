@@ -9,6 +9,14 @@ vi.mock("./client", async (importOriginal) => {
 });
 
 describe("generated HTTP boundaries", () => {
+  it("retains the GPT Live provider selector alongside native outcome contracts", () => {
+    for (const provider of ["realtime", "gpt_live"]) {
+      expect(validators.agentVoiceConfigResponse({ available: false, provider, reason: "disabled" })).toBe(true);
+    }
+    expect(validators.agentVoiceConfigResponse({ available: false, provider: "unknown" })).toBe(false);
+    expect(validators.experimentNativeOutcomeResponse).toBeTypeOf("function");
+    expect(validators.experimentNativePerformanceResponse).toBeTypeOf("function");
+  });
   it("rejects overlong requests before transport and accepts the schema boundary", async () => {
     vi.mocked(apiFetch).mockClear().mockResolvedValue(agentTurnFixture);
     await expect(api.agent.turn({ message: "x".repeat(8001) })).rejects.toMatchObject({

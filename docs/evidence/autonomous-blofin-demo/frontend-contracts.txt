@@ -1,0 +1,9 @@
+
+ RUN  v4.1.8 /workspace/alphatrade-blofin-demo/frontend
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  19:16:13
+   Duration  3.90s (transform 2.72s, setup 96ms, import 2.85s, tests 18ms, environment 683ms)
+

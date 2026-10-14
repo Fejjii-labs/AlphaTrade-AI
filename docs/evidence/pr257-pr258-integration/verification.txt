@@ -1,0 +1,5 @@
+Feature source equality: {'257': 20, '258': 22}
+Frozen base corrections preserved: 5
+Feature artifact hashes verified: 22
+Live raw gzip receipts and BloFin original source manifest verified
+All frozen CI/workflow/release scripts byte-identical

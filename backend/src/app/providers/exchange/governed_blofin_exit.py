@@ -20,6 +20,10 @@ from app.providers.exchange.governed_blofin import (
 from app.schemas.trade_plan import EntrySide, TradePlanRevision
 
 
+class DemoPositionLineageError(ValueError):
+    """Account inventory cannot be explained by this exclusive owned entry."""
+
+
 @dataclass(frozen=True)
 class DemoExitFill:
     order_id: str
@@ -46,11 +50,13 @@ class VerifiedDemoExit:
     native_entry_tpsl_id: str | None = None
     # Raw provider pointers are retained without assuming an undocumented edge.
     exit_order_protection_ids: tuple[tuple[str, str], ...] = ()
+    native_account_uid: str | None = None
 
     def facts(self) -> dict[str, Any]:
         """Stable economic evidence; receipt clock is persisted separately."""
         return {
             "entry_order_id": self.entry_order_id,
+            "native_account_uid": self.native_account_uid,
             "entry_client_order_id": self.entry_client_order_id,
             "entry_fill_identities": list(self.entry_fill_identities),
             "entry_quantity": str(self.entry_quantity),
@@ -96,12 +102,27 @@ def reconcile_demo_exit(
     if not entry.fills or entry.status not in {"filled", "canceled", "cancelled", "expired"}:
         return None  # A live entry remainder can still add exposure.
     positions = _account_rows(client.request("GET", "/api/v1/account/positions", signed=True))
+    open_positions = []
     for row in positions:
         quantity = Decimal(str(row.get("positions")))
         if not quantity.is_finite():
             raise ValueError("Unreadable demo position during exit reconciliation.")
         if quantity != 0:
-            return None
+            open_positions.append((row, quantity))
+    if open_positions:
+        entry_quantity = sum((f.quantity for f in entry.fills), Decimal(0))
+        if len(open_positions) != 1:
+            raise DemoPositionLineageError("Unrelated demo account inventory.")
+        row, quantity = open_positions[0]
+        signed_quantity = quantity if plan.side is EntrySide.BUY else -quantity
+        if (
+            row.get("instId") != plan.execution_instrument
+            or row.get("positionSide") != "net"
+            or row.get("marginMode") != "cross"
+            or not 0 < signed_quantity <= entry_quantity
+        ):
+            raise DemoPositionLineageError("Demo position exceeds or differs from owned fills.")
+        return None  # Partial exits retain capacity until all closing facts arrive.
     for endpoint in ("orders-pending", "orders-tpsl-pending"):
         if _account_rows(
             client.request("GET", f"/api/v1/trade/{endpoint}", params={"limit": "100"}, signed=True)
@@ -297,4 +318,5 @@ def reconcile_demo_exit(
         entry.protection_order_ids,
         entry.native_tpsl_id,
         tuple(sorted(exit_order_protection_ids)),
+        entry.native_account_uid,
     )

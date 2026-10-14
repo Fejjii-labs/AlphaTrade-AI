@@ -1,0 +1,223 @@
+{
+  "base": "0fbeaa492331dcb14011ed33b357da4ca4ee19b2",
+  "heads": {
+    "257": "b2a41ad88bc0fd306465e91d8709b9bf259fe09a",
+    "258": "2b94439ffc33e75c631f04d297cb18956e1c4893"
+  },
+  "unchanged_feature_sources": {
+    "257": [
+      {
+        "path": "backend/pyproject.toml",
+        "sha256": "4c29f9b5ed3c4dca077f6c7565ad4da7c4ce16dcde3129c64ac5dd98c88650bb"
+      },
+      {
+        "path": "backend/src/app/agent_voice/accounting.py",
+        "sha256": "2b5d0e3a692d1c39151551cdd2141792c4237162358e8c0c3ff16992ae830c0a"
+      },
+      {
+        "path": "backend/src/app/agent_voice/config.py",
+        "sha256": "b0ac42bf10186f8a2e3116e302286091ffc8f34a0721c479372d22c46534e411"
+      },
+      {
+        "path": "backend/src/app/agent_voice/contracts.py",
+        "sha256": "d79fbe9544660986ac768a0e14a766b6ff63b519bc3dd93d70b9dae39154ce96"
+      },
+      {
+        "path": "backend/src/app/agent_voice/live_accounting.py",
+        "sha256": "e9c7473e170cd4e7e0d64524d0928fd4a0d5f44a097c6abad5be102715cf9fb5"
+      },
+      {
+        "path": "backend/src/app/agent_voice/live_config.py",
+        "sha256": "b6f3e9402dda88c47cc5257601d1f241c33a536a70543c18eee342616d9fc442"
+      },
+      {
+        "path": "backend/src/app/agent_voice/live_protocol.py",
+        "sha256": "7e620a9b0eb5f39cf4b50a13b1e867be991fdfc1134b6c8fd4bece8d50bffe01"
+      },
+      {
+        "path": "backend/src/app/agent_voice/live_service.py",
+        "sha256": "44fadbeeaa67866a82ec35b0fbe508e2e23bf82d57ec2278769cfb7ec6b91e2c"
+      },
+      {
+        "path": "backend/src/app/agent_voice/live_socket.py",
+        "sha256": "e8b951b4b760965c0e6dcb65ac32cd126f76e0c3111ad77e1331e8ae73216341"
+      },
+      {
+        "path": "backend/src/app/agent_voice/service.py",
+        "sha256": "aac844d33ff197a9af0b84de4874cd91680a5a19962a1fcff4336432c528cb07"
+      },
+      {
+        "path": "backend/src/app/api/routes/agent_voice.py",
+        "sha256": "2d0bc3d93528fe15181984709c37390f937f6822d4a06c7174b80e380d7454d5"
+      },
+      {
+        "path": "backend/src/app/core/config.py",
+        "sha256": "2dfb4842cac309d597bf2d3bec96bb24ef0da2cd1d7e71d43bf025415887aa04"
+      },
+      {
+        "path": "backend/tests/test_agent_live_contract.py",
+        "sha256": "94ba44b1d9c2280b16f10ae4966b462484e89c68f36f22336091b60e5ff43bd6"
+      },
+      {
+        "path": "backend/tests/test_agent_live_integration.py",
+        "sha256": "fcda7722da6f892fbe3f64abb46097b5802bc74fbed44056e6c0df8659b66bb2"
+      },
+      {
+        "path": "backend/tests/test_agent_live_postgres.py",
+        "sha256": "4ec570c7184a4cc3651f6e621aa1c5ee1655548526c3299827d7b7d0e95109a7"
+      },
+      {
+        "path": "backend/uv.lock",
+        "sha256": "e82b88019647f3b6a60bfa572569afbd2ed1d21772ab98d80deaeacf37ab9ff2"
+      },
+      {
+        "path": "frontend/src/components/agent/RealtimeVoiceControls.test.tsx",
+        "sha256": "022af6284cc49ce0ba9fcf84cc988ebda87f17b8d7ed2463fb871eb249f47f20"
+      },
+      {
+        "path": "frontend/src/components/agent/RealtimeVoiceControls.tsx",
+        "sha256": "213f5ac9f9bcb0909044bf4f441232551d75f23063b6019633eb553133c93844"
+      },
+      {
+        "path": "frontend/src/lib/voice/realtime-controller.test.ts",
+        "sha256": "3061d083d553219d52f9deb39ec04f78ead6e27275c97db64f33e345bfe98065"
+      },
+      {
+        "path": "frontend/src/lib/voice/realtime-controller.ts",
+        "sha256": "71a5790804f85431c862a2ac34cbd4212cec6d3bc1a9489f8218d0ce8b34d09e"
+      }
+    ],
+    "258": [
+      {
+        "path": "backend/src/app/experiments/blofin_source.py",
+        "sha256": "112b9362c4a24068267ac667922fae1a5761f1e7456c2bb01384246672068cac"
+      },
+      {
+        "path": "backend/src/app/experiments/execution_risk.py",
+        "sha256": "9f5a74694e8d35ed1e797d18d613bbced04b5865abf8edbd2b399d2c75ca3052"
+      },
+      {
+        "path": "backend/src/app/experiments/execution_selection.py",
+        "sha256": "bb65200874209a3d582a815e5f44490496b4a00407e43278164dc26431b7538a"
+      },
+      {
+        "path": "backend/src/app/experiments/native_closure.py",
+        "sha256": "df465d1a53880666201a4bd4f58087bf9772bd9439ee396a3b40b9cc3fc3a5c0"
+      },
+      {
+        "path": "backend/src/app/experiments/native_lineage.py",
+        "sha256": "625925662a2a6b6e6d96dd5c424ed779041ffc50948cc54f689ecf556f528f3b"
+      },
+      {
+        "path": "backend/src/app/experiments/native_producer.py",
+        "sha256": "71e989fcee279941b92b184f21184e6aee6696a43d8c913e0260defc6b158338"
+      },
+      {
+        "path": "backend/src/app/experiments/outcome_contract.py",
+        "sha256": "23e45dca9df3b4d3a515bbc4cab7c2529b3579ed12b28689441d86dfcadde24e"
+      },
+      {
+        "path": "backend/src/app/experiments/outcomes.py",
+        "sha256": "e3924e90a0646f825615b9f94e8b076c72e61d8eb576bccc3fb8e4255840a361"
+      },
+      {
+        "path": "backend/src/app/providers/exchange/governed_blofin.py",
+        "sha256": "d4899d6e6b81289045749b03725d5ca802e97a8156dba50d9f0f98d8687c2d05"
+      },
+      {
+        "path": "backend/src/app/providers/exchange/governed_blofin_exit.py",
+        "sha256": "a94cb1be28ef9cae23693b0543000423e7f8558ddc45649f71491d252091386e"
+      },
+      {
+        "path": "backend/src/app/repositories/execution_protocol.py",
+        "sha256": "4a3efba33a82643a65e95aef792b711f9b7cd09d1c09d77bd4e815ac430e6c8a"
+      },
+      {
+        "path": "backend/src/app/services/demo_account_history.py",
+        "sha256": "f9dbfbf64ad500a5c791b2273c56835142bbaef37eea4e01202297568e0cc0e8"
+      },
+      {
+        "path": "backend/src/app/services/demo_lifecycle_resolution.py",
+        "sha256": "20e0fef2ed9de01febe6b6991642ba6a5088bffa792d5116633c288af49dae19"
+      },
+      {
+        "path": "backend/src/app/services/execution_claim.py",
+        "sha256": "360d2ebd4e78ce76e2944da4986dfa20f3783826b905801273b5f528df7697e4"
+      },
+      {
+        "path": "backend/src/app/services/governed_blofin_demo.py",
+        "sha256": "a3ff93a1a3cb43ea846408a2390e6ee60d71fd8395ee986573d1315cfa30f3b4"
+      },
+      {
+        "path": "backend/src/app/services/venue_submit_dispatcher.py",
+        "sha256": "ef95eb25f5733cd6217639443eb136637e7e1695fcfbb227c7b595e08e5af494"
+      },
+      {
+        "path": "backend/src/app/workers/watcher_paper.py",
+        "sha256": "aac5c5430d01e4098085741cdbc20624343d2682f4d5348ee53aadd9836223d2"
+      },
+      {
+        "path": "backend/tests/test_autonomous_blofin_demo_postgres.py",
+        "sha256": "6f2637b25fed216e01e075f13d4e0c49f0bc55f15a1ee9e4b5b14ef36f2a5178"
+      },
+      {
+        "path": "backend/tests/test_governed_demo_exit_evidence.py",
+        "sha256": "676673b6a4f73db7b89a0c45bd1883a22a90afaa43ab4da60d0f102b381e3c08"
+      },
+      {
+        "path": "backend/tests/test_governed_demo_lifecycle.py",
+        "sha256": "b676ebc7d0cf0b355a1ccd6853c70e846a05b9905b7488394fb612dff02dbbf3"
+      },
+      {
+        "path": "frontend/scripts/generate-api.mjs",
+        "sha256": "bb67e6059ff99f890bc788e38cc13ce1dc907a507d984b149d290ced4d15b3e4"
+      },
+      {
+        "path": "frontend/src/lib/api/native-outcomes.test.ts",
+        "sha256": "b9f771b9e8627ce1847e953fee011e3c479ba6d69360f62121cae2a1f3a88951"
+      }
+    ]
+  },
+  "preserved_base_corrections": [
+    ".github/workflows/ci.yml",
+    "backend/tests/support/postgres_persistence.py",
+    "backend/tests/test_agent_paper_execution_v4.py",
+    "backend/tests/test_backend_launch.py",
+    "backend/tests/test_postgres_fixture_reset.py"
+  ],
+  "receipt_checks": [
+    "pr257/README.md",
+    "pr257/affected-mocks.txt",
+    "pr257/affected-mocks.txt.gz",
+    "pr257/affected-mocks.xml.gz",
+    "pr257/live-before.txt",
+    "pr257/live-before.txt.gz",
+    "pr257/live-before.xml.gz",
+    "pr257/postgres-after.txt",
+    "pr257/postgres-after.txt.gz",
+    "pr257/postgres-after.xml.gz",
+    "pr257/quota-before.txt",
+    "pr257/quota-before.txt.gz",
+    "pr257/quota-before.xml.gz",
+    "pr258/api-drift.txt",
+    "pr258/backend-native-manual-mirroring.txt",
+    "pr258/backend-reservations-native-lifecycle.txt",
+    "pr258/checks.txt",
+    "pr258/frontend-contracts.txt",
+    "pr258/frontend-typecheck.txt",
+    "pr258/python-format.txt",
+    "pr258/python-typecheck.txt",
+    "pr258/source-manifest.json"
+  ],
+  "ci_and_release_scripts_unchanged": true,
+  "live_raw_receipts_verified": true,
+  "blofin_original_source_manifest_verified": true,
+  "regenerated_contracts": {
+    "validators.js": "52464d06a9070947a4e9e39078821d43fe7bb8ed834d37e3cefccc94279c7fd5",
+    "types.ts": "1edcc28525df67cf8db95cf49f20f0f7b991576c29a2b53c61c806c8eed648fb",
+    "validators.d.ts": "9b311e7bc5583afbbdc414bea85749ab19885809da76d57484200331b7a303a8",
+    "openapi.json": "6a84f380af5bf8f2a3c0e90ba238840d223c263c21f979e5aaa9b28ea90725a3",
+    "client.ts": "dd5aea0aa0d4b2c67a468e24923be4f0d145f0983a2e3040f193d9ba5672916a",
+    "hashes.json": "e793e557f05e91f899d722deeddd7751ed28a4a452740c6e53528a2bc31ee0aa"
+  }
+}

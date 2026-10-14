@@ -1,0 +1,12 @@
+Implementation commit: 73765026d1b39e3564005a7f16deac838edc4f00
+Implementation tree: 0b9051f8f4305de88843ae4a695e3111194eb73e
+Changed Python Ruff check: exit 0; all checks passed.
+Changed Python format: exit 0; 20 files already formatted.
+Mypy --follow-imports=silent: exit 0; 8 named source files.
+Frontend native contract tests: exit 0; 5 passed.
+Frontend tsc --noEmit: exit 0.
+API drift check: exit 0.
+Git diff --check: exit 0.
+PostgreSQL: 17.11, disposable postgres:17-alpine, bound to 127.0.0.1:55432 only.
+Image digest: sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+No full CI, deployment, settings changes, exchange requests/orders, paid model calls or voice/workflow edits.
