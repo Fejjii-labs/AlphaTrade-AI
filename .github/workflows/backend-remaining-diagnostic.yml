@@ -1,0 +1,117 @@
+{
+  "name": "Remaining backend diagnostic",
+  "on": {
+    "push": {
+      "branches": [
+        "codex/pr249-remaining-backend-20261014"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "remaining": {
+      "name": "${{ matrix.batch }}",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 20,
+      "strategy": {
+        "fail-fast": false,
+        "max-parallel": 3,
+        "matrix": {
+          "batch": [
+            "boundary",
+            "tail-01",
+            "tail-02",
+            "tail-03",
+            "tail-04",
+            "tail-05",
+            "tail-06",
+            "tail-07",
+            "tail-08",
+            "tail-09",
+            "tail-10",
+            "tail-11",
+            "tail-12",
+            "tail-13",
+            "tail-14"
+          ]
+        }
+      },
+      "services": {
+        "postgres": {
+          "image": "postgres:16-alpine",
+          "env": {
+            "POSTGRES_USER": "alphatrade",
+            "POSTGRES_PASSWORD": "alphatrade",
+            "POSTGRES_DB": "alphatrade_test"
+          },
+          "ports": [
+            "5432:5432"
+          ],
+          "options": "--health-cmd \"pg_isready -U alphatrade -d alphatrade_test\" --health-interval 5s --health-timeout 5s --health-retries 10"
+        }
+      },
+      "env": {
+        "PHASE1_POSTGRES_URL": "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
+        "AT028_POSTGRES_URL": "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
+        "BLOFIN_ACTIVITY_TEST_POSTGRES_URL": "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
+        "EXPERIMENT_TEST_POSTGRES_URL": "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
+        "BATCH_ID": "${{ matrix.batch }}",
+        "CI": "true",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": "${{ github.workspace }}:${{ github.workspace }}/backend:${{ github.workspace }}/backend/src",
+        "BACKEND_RELEASE_DIAGNOSTICS": "${{ github.workspace }}/batch-evidence"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 0
+          }
+        },
+        {
+          "name": "Record exact selection before testing",
+          "run": "mkdir -p \"$GITHUB_WORKSPACE/batch-evidence\"\npython3 - <<'PYCODE'\nimport json,os,subprocess,pathlib\nroot=pathlib.Path(os.environ['GITHUB_WORKSPACE'])\nm=json.loads((root/'docs/release_evidence/pr249/remaining_batches_20261014.json').read_text())\nb=next(b for b in m['batches'] if b['id']==os.environ['BATCH_ID'])\nactual=subprocess.check_output(['git','diff','--name-only',m['candidate'],'HEAD'],text=True).splitlines()\nallowed={'.github/workflows/backend-remaining-diagnostic.yml','docs/release_evidence/pr249/remaining_batches_20261014.json'}\nassert set(actual)<=allowed,actual\n(root/'batch-evidence/selection.txt').write_text('\\n'.join(b['selectors'])+'\\n')\n(root/'batch-evidence/provenance.json').write_text(json.dumps({'candidate':m['candidate'],'diagnostic_sha':os.environ['GITHUB_SHA'],'batch':b,'source_run':m['source_run'],'python':subprocess.check_output(['python3','--version'],text=True).strip()},indent=2))\nPYCODE"
+        },
+        {
+          "name": "Upload initial selection",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "remaining-${{ matrix.batch }}-selection",
+            "path": "batch-evidence",
+            "if-no-files-found": "error",
+            "retention-days": 7
+          }
+        },
+        {
+          "uses": "astral-sh/setup-uv@v5",
+          "with": {
+            "enable-cache": true
+          }
+        },
+        {
+          "name": "Install locked backend dependencies",
+          "working-directory": "backend",
+          "run": "uv sync --frozen --extra dev --python /usr/bin/python3"
+        },
+        {
+          "name": "Run only the selected unfinished tests",
+          "working-directory": "backend",
+          "run": "set +e\nmkdir -p \"$BACKEND_RELEASE_DIAGNOSTICS\"\n(\n  while true; do\n    date -u +%FT%TZ\n    ps -eo pid,ppid,rss,pcpu,stat,comm --sort=-rss | head -15\n    cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max 2>/dev/null\n    sleep 10\n  done\n) > \"$BACKEND_RELEASE_DIAGNOSTICS/resources.log\" 2>&1 &\nmonitor_pid=$!\ntrap 'kill \"$monitor_pid\" 2>/dev/null || true' EXIT\nuv run python -c 'import sys; print(sys.version); assert sys.version_info[:3] == (3, 12, 3), \"Hosted Python differs from failed run\"' > \"$BACKEND_RELEASE_DIAGNOSTICS/runtime.txt\" 2>&1\nruntime_status=$?\nif [ \"$runtime_status\" -ne 0 ]; then cat \"$BACKEND_RELEASE_DIAGNOSTICS/runtime.txt\"; exit \"$runtime_status\"; fi\n/usr/bin/time -v -o \"$BACKEND_RELEASE_DIAGNOSTICS/time.txt\" timeout --signal=INT --kill-after=15s 900s uv run python -u -m pytest @../batch-evidence/selection.txt -p tests.support.release_diagnostics -vv -o faulthandler_timeout=60 --tb=short --durations=10 --junitxml=../batch-evidence/junit.xml > \"$BACKEND_RELEASE_DIAGNOSTICS/pytest.log\" 2>&1\nresult=$?\nprintf '%s\\n' \"$result\" > \"$BACKEND_RELEASE_DIAGNOSTICS/exit-code.txt\"\nkill \"$monitor_pid\" 2>/dev/null || true\nwait \"$monitor_pid\" 2>/dev/null || true\npython - <<'PYCODE'\nimport json,os,pathlib,sys\np=pathlib.Path(os.environ['BACKEND_RELEASE_DIAGNOSTICS'])\nb=json.loads((p/'provenance.json').read_text())['batch']\nc=json.loads((p/'collection.json').read_text()) if (p/'collection.json').exists() else {}\nprint('Batch:',b['id'],'Expected:',b['expected_count'],'Collected:',c.get('count'),'Exit:',(p/'exit-code.txt').read_text().strip())\nassert c.get('count') == b['expected_count'], 'Selected collection differs from retained manifest'\nPYCODE\nselection_status=$?\ntail -c 12000 \"$BACKEND_RELEASE_DIAGNOSTICS/pytest.log\"\nif [ \"$selection_status\" -ne 0 ]; then exit \"$selection_status\"; fi\nexit \"$result\""
+        },
+        {
+          "name": "Retain batch result even on failure",
+          "if": "always()",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "remaining-${{ matrix.batch }}-result",
+            "path": "batch-evidence",
+            "if-no-files-found": "error",
+            "retention-days": 7
+          }
+        }
+      ]
+    }
+  }
+}

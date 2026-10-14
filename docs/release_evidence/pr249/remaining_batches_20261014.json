@@ -1,0 +1,259 @@
+{
+  "candidate": "0e7a7fcb2b5ad9dfc5d3ba32f71262fb5afd3205",
+  "source_run": 38559997851,
+  "collection_count": 5780,
+  "first_index_zero_based": 3315,
+  "total_remaining": 2465,
+  "first_unconfirmed": "tests/test_paper_worker_memory.py::test_repeated_reduction_does_not_grow_rss",
+  "prefix_log_passes": 2832,
+  "prefix_without_retained_outcome": 483,
+  "prefix_claim": "Excluded from this diagnostic continuation, not newly accepted. Truncated checkpoints do not retain every earlier outcome.",
+  "source_artifact_sha256": {
+    "collection.zip": "1d781704ed9d6c80787eaf92e90a69297b56ed111e016c141a34287059ff79b7",
+    "progress2.zip": "967da267094f05443c6f24b1325549899e8204584210416ec09781af9d6965be",
+    "progress3.zip": "c3361fbba7ab4c4318f8788a4b92130978eea45a8ed46c76e7c7cd389d758a0c",
+    "progress4.zip": "59d20d30c5e05078230ccee9611754ddb16209265d7289b5f9f6d1d4f3cfbb32",
+    "progress5.zip": "e1819820d5c21e8686edb11ea5a03bf5a60e71a49c39dec2da27d56a61f93e54"
+  },
+  "batches": [
+    {
+      "id": "boundary",
+      "expected_count": 3,
+      "selectors": [
+        "tests/test_paper_worker_memory.py::test_repeated_reduction_does_not_grow_rss",
+        "tests/test_paper_worker_memory.py::test_memory_status_is_numeric_and_real_trading_stays_off",
+        "tests/test_paper_worker_memory.py::test_chunk_span_constant_is_under_one_hour"
+      ]
+    },
+    {
+      "id": "tail-01",
+      "expected_count": 152,
+      "selectors": [
+        "tests/test_paper_worker_supervisor.py",
+        "tests/test_performance.py",
+        "tests/test_phase1_quote_exposure.py",
+        "tests/test_phase1_slice10_postgres_concurrency.py",
+        "tests/test_phase1_slices_7_9_execution_protocol.py",
+        "tests/test_phase1_wave1b_plan_authorization.py",
+        "tests/test_phase1_wave1b_public_boundary.py",
+        "tests/test_phase1a_intent_decision.py",
+        "tests/test_phase1a_paper_mode_invariant.py",
+        "tests/test_phase1a_readonly_non_interference.py",
+        "tests/test_phase1a_tool_fail_closed.py",
+        "tests/test_phase2_4_alembic_postgres.py"
+      ]
+    },
+    {
+      "id": "tail-02",
+      "expected_count": 199,
+      "selectors": [
+        "tests/test_phase2_model_router.py",
+        "tests/test_phase3_postgres_immutability.py",
+        "tests/test_phase3_strategy_immutability.py",
+        "tests/test_phase4_canonical_journal.py",
+        "tests/test_phase4_postgres_journal_concurrency.py",
+        "tests/test_phase5_aggtrade_retrieval.py",
+        "tests/test_phase5_cvd_flow.py",
+        "tests/test_phase5_market_contracts.py",
+        "tests/test_phase5_perpetual_adapter.py"
+      ]
+    },
+    {
+      "id": "tail-03",
+      "expected_count": 197,
+      "selectors": [
+        "tests/test_phase5_trade_stream.py",
+        "tests/test_phase6_action_eligibility.py",
+        "tests/test_phase6_action_eligibility_adversarial.py",
+        "tests/test_phase6_candidate_lifecycle.py",
+        "tests/test_phase6_candidate_postgres.py",
+        "tests/test_phase6_candidate_telegram_alerts.py",
+        "tests/test_phase6_contract_hardening.py",
+        "tests/test_phase6_evaluator_candidate_flow.py",
+        "tests/test_phase6_first_slice_fixture_corpus.py"
+      ]
+    },
+    {
+      "id": "tail-04",
+      "expected_count": 199,
+      "selectors": [
+        "tests/test_phase6_fusion_evaluator.py",
+        "tests/test_phase6_signal_fusion_contracts.py",
+        "tests/test_phase7_canonical_trade_plan.py",
+        "tests/test_phase7_eligibility_postgres.py",
+        "tests/test_phase7_trade_plan_postgres.py",
+        "tests/test_phase8_backend_hardening.py",
+        "tests/test_phase8_canonical_paper_execution.py",
+        "tests/test_phase8_canonical_workflow.py",
+        "tests/test_phase8_learning_persistence.py",
+        "tests/test_phase8_runtime_composition.py",
+        "tests/test_planned_reward_risk.py",
+        "tests/test_planned_reward_risk_postgres.py",
+        "tests/test_position_side.py",
+        "tests/test_postgres_fixture_reset.py",
+        "tests/test_pr232_review_regressions.py",
+        "tests/test_pr237_migration_aware_rollback.py",
+        "tests/test_process_memory.py",
+        "tests/test_provider_integration.py",
+        "tests/test_providers_status.py"
+      ]
+    },
+    {
+      "id": "tail-05",
+      "expected_count": 195,
+      "selectors": [
+        "tests/test_public_market_evidence_foundation.py",
+        "tests/test_qdrant_dimensions.py",
+        "tests/test_rag.py",
+        "tests/test_rate_limit.py",
+        "tests/test_rbac.py",
+        "tests/test_release_wave002_agent_finalization.py",
+        "tests/test_release_wave002_migrations.py",
+        "tests/test_required_derivative_acquisition.py",
+        "tests/test_research_authoring_integration.py",
+        "tests/test_reviewer_integration_postgres.py",
+        "tests/test_risk_engine.py",
+        "tests/test_risk_settings_slice_45.py",
+        "tests/test_schemas.py"
+      ]
+    },
+    {
+      "id": "tail-06",
+      "expected_count": 171,
+      "selectors": [
+        "tests/test_setup_alert_draft_slice_78.py",
+        "tests/test_setup_alert_review_slice_77.py",
+        "tests/test_setup_lifetime_postgres.py",
+        "tests/test_setup_lifetime_stale_pin.py",
+        "tests/test_sfp_detector.py",
+        "tests/test_sfp_receipt_reuse.py",
+        "tests/test_sfp_replay_adapter_001.py"
+      ]
+    },
+    {
+      "id": "tail-07",
+      "expected_count": 191,
+      "selectors": [
+        "tests/test_sfp_strategy_brain_runtime.py",
+        "tests/test_sfp_telegram_policy_integration.py",
+        "tests/test_shared_turn_policy.py",
+        "tests/test_smoke_flow.py",
+        "tests/test_strategies.py",
+        "tests/test_strategy_analytics_api_v2.py",
+        "tests/test_strategy_analytics_foundation.py",
+        "tests/test_strategy_brain_nested.py",
+        "tests/test_strategy_conversation_foundation.py",
+        "tests/test_strategy_conversation_postgres.py"
+      ]
+    },
+    {
+      "id": "tail-08",
+      "expected_count": 189,
+      "selectors": [
+        "tests/test_strategy_quality_slice_89.py",
+        "tests/test_strategy_replay_001.py",
+        "tests/test_strategy_slice_33.py",
+        "tests/test_strategy_slice_34.py",
+        "tests/test_strategy_slice_35.py",
+        "tests/test_strategy_slice_36.py",
+        "tests/test_strategy_slice_37.py",
+        "tests/test_strategy_slice_38.py",
+        "tests/test_strategy_slice_39.py",
+        "tests/test_strategy_slice_40.py",
+        "tests/test_strategy_slice_40c.py",
+        "tests/test_strategy_slice_40d.py",
+        "tests/test_strategy_slice_41.py",
+        "tests/test_strategy_slice_42.py"
+      ]
+    },
+    {
+      "id": "tail-09",
+      "expected_count": 199,
+      "selectors": [
+        "tests/test_telegram_alert_delivery.py",
+        "tests/test_telegram_automatic_delivery.py",
+        "tests/test_telegram_bot_identity.py",
+        "tests/test_telegram_enrollment_intake.py",
+        "tests/test_telegram_enrollment_kill_switch_scope.py",
+        "tests/test_telegram_evaluation_integration.py",
+        "tests/test_telegram_notification_policy_v2.py",
+        "tests/test_telegram_paper_activation.py",
+        "tests/test_telegram_paper_activation_postgres.py",
+        "tests/test_telegram_paper_agent.py",
+        "tests/test_telegram_paper_agent_postgres.py"
+      ]
+    },
+    {
+      "id": "tail-10",
+      "expected_count": 132,
+      "selectors": [
+        "tests/test_telegram_postgres_store.py",
+        "tests/test_telegram_security_protocol.py",
+        "tests/test_telegram_test_alert.py",
+        "tests/test_token_denylist.py",
+        "tests/test_tool_registry.py",
+        "tests/test_trading_analytics.py",
+        "tests/test_trading_workflow.py"
+      ]
+    },
+    {
+      "id": "tail-11",
+      "expected_count": 191,
+      "selectors": [
+        "tests/test_trendpulse_1r_adapter.py",
+        "tests/test_trendpulse_1r_domain.py",
+        "tests/test_trendpulse_1r_experiment_contract.py",
+        "tests/test_trendpulse_screening.py",
+        "tests/test_trendpulse_screening_acquisition.py",
+        "tests/test_trendpulse_screening_api.py",
+        "tests/test_trendpulse_screening_migration.py",
+        "tests/test_turn_coordinator_postgres.py"
+      ]
+    },
+    {
+      "id": "tail-12",
+      "expected_count": 188,
+      "selectors": [
+        "tests/test_usage_quota.py",
+        "tests/test_validation_priority_slice_85.py",
+        "tests/test_venue_diagnostics.py",
+        "tests/test_voice_reservations_quota.py",
+        "tests/test_watcher_assignment_agent_postgres.py",
+        "tests/test_watcher_assignment_transition_postgres.py",
+        "tests/test_watcher_assignments_postgres.py",
+        "tests/test_watcher_bybit_continuity.py",
+        "tests/test_watcher_five_symbol_watchlist.py",
+        "tests/test_watcher_freshness_clocks.py",
+        "tests/test_watcher_monitoring.py",
+        "tests/test_watcher_monitoring_state.py"
+      ]
+    },
+    {
+      "id": "tail-13",
+      "expected_count": 177,
+      "selectors": [
+        "tests/test_watcher_orchestration_foundation.py",
+        "tests/test_watcher_paper_activation.py",
+        "tests/test_watcher_paper_runtime.py",
+        "tests/test_watcher_phase6_fusion_wiring.py",
+        "tests/test_watcher_postgres_store.py",
+        "tests/test_watcher_product_proof_postgres.py",
+        "tests/test_watcher_source_gate.py",
+        "tests/test_watcher_stack_integration.py"
+      ]
+    },
+    {
+      "id": "tail-14",
+      "expected_count": 82,
+      "selectors": [
+        "tests/test_watcher_tenant_watchlist.py",
+        "tests/test_watcher_watchlist_migration.py",
+        "tests/test_watcher_worker_ownership.py",
+        "tests/test_worker.py",
+        "tests/test_worker_memory_diagnostics.py",
+        "tests/test_worker_notifier.py",
+        "tests/test_workflows.py"
+      ]
+    }
+  ]
+}
