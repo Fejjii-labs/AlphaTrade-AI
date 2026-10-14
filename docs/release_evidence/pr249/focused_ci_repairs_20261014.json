@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-10-14T16:30:52.841588+00:00",
+  "generated_at_utc": "2026-10-14T16:38:47.539709+00:00",
   "source_candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
   "parent": "55dfc184d232fdbe9819fb686ec004d88d066a3c",
   "tree": "79506e0c4b0ced069e9acb85b524648e42bfecfd",
@@ -81,9 +81,172 @@
       "conclusion": "success",
       "checks_passed": 13,
       "timeout_artifact_retrieval_passed": true,
-      "fixture_profile": "intentionally skipped onpull_request"
+      "fixture_profile": "intentionally skipped on pull_request"
     },
-    "backend_focused": "in_progress"
+    "backend_focused": {
+      "passed": 1317,
+      "failed": 0,
+      "skipped": 0,
+      "batches": [
+        {
+          "batch_index": 0,
+          "artifact_id": 11912496833,
+          "selection_tokens": 26,
+          "selected_files": 25,
+          "passed": 477,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "pytest_seconds": 790.006,
+          "supervisor_seconds": 811.804424643,
+          "outer_seconds": 811.948802035,
+          "all_three_phases_passed": true,
+          "postgres_samples": 82,
+          "stack_bytes": 0,
+          "terminal_receipts_verified": true,
+          "ordered_nodeids_sha256": "ce0ca81cbe1b2e2de7e3178d2129225bdbedd4e8d9023e9f5c1b77d737ecdac8",
+          "reports_sha256": "f54e6b78b9bc4da514292a36a7115433b6b0b44a6896eb2e953f24dc8083f14e",
+          "junit_sha256": "3ca71f586426cbb330ccebbb6f519b8c0ae43fb858467c07361075bd730f945a"
+        },
+        {
+          "batch_index": 1,
+          "artifact_id": 11911338574,
+          "selection_tokens": 24,
+          "selected_files": 24,
+          "passed": 331,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "pytest_seconds": 752.883,
+          "supervisor_seconds": 774.394433651,
+          "outer_seconds": 774.497664888,
+          "all_three_phases_passed": true,
+          "postgres_samples": 78,
+          "stack_bytes": 0,
+          "terminal_receipts_verified": true,
+          "ordered_nodeids_sha256": "d4dd8dd1dca89d0299c7e850817b6a5b19f954ce92d093bfb6867c7cb063cc47",
+          "reports_sha256": "48b555c786ab9aa75a74fe43331c553f0a5fe83dfe2376534f62320a51610b02",
+          "junit_sha256": "3baf81040c8716ea130e3bd7dc50fe82b50c13939f9841a5187a0739151e0d9a"
+        },
+        {
+          "batch_index": 2,
+          "artifact_id": 11910689042,
+          "selection_tokens": 24,
+          "selected_files": 24,
+          "passed": 509,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "pytest_seconds": 785.722,
+          "supervisor_seconds": 806.367156983,
+          "outer_seconds": 806.4938806810001,
+          "all_three_phases_passed": true,
+          "postgres_samples": 81,
+          "stack_bytes": 0,
+          "terminal_receipts_verified": true,
+          "ordered_nodeids_sha256": "1793a83eca29c25e84d4a0aaf1a6933d397fce880db8e737b884b0a56f75adc9",
+          "reports_sha256": "50933ccad89d90c241d517b17f07de4ecad065f45ecd62750cc9d1d7597b729d",
+          "junit_sha256": "2fdb794933fffcf3fabb39f33d040a17c6e11514bc50b6f1035ccf55f3c739d1"
+        }
+      ],
+      "exact_selection_union_verified": true,
+      "no_cross_batch_file_or_node_overlap": true
+    },
+    "jobs": {
+      "38597215634": [
+        {
+          "id": 115966922971,
+          "name": "deployment-safety",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:21Z",
+          "completed_at": "2026-10-14T16:20:50Z"
+        },
+        {
+          "id": 115966923400,
+          "name": "backend-focused (batch 1)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:21Z",
+          "completed_at": "2026-10-14T16:33:40Z"
+        },
+        {
+          "id": 115966923518,
+          "name": "backend-focused (batch 0)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:21Z",
+          "completed_at": "2026-10-14T16:34:12Z"
+        },
+        {
+          "id": 115966923543,
+          "name": "backend-focused (batch 2)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:21Z",
+          "completed_at": "2026-10-14T16:34:15Z"
+        },
+        {
+          "id": 115966923657,
+          "name": "frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:22Z",
+          "completed_at": "2026-10-14T16:22:21Z"
+        },
+        {
+          "id": 115966926243,
+          "name": "docker-build",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-10-14T16:20:19Z",
+          "completed_at": "2026-10-14T16:20:19Z"
+        },
+        {
+          "id": 115973731673,
+          "name": "backend",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:34:18Z",
+          "completed_at": "2026-10-14T16:34:46Z"
+        },
+        {
+          "id": 115973986340,
+          "name": "e2e-smoke",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-10-14T16:34:46Z",
+          "completed_at": "2026-10-14T16:34:46Z"
+        },
+        {
+          "id": 115973987812,
+          "name": "evaluation",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-10-14T16:34:47Z",
+          "completed_at": "2026-10-14T16:34:46Z"
+        }
+      ],
+      "38597215595": [
+        {
+          "id": 115966921982,
+          "name": "launch-proof",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-14T16:20:21Z",
+          "completed_at": "2026-10-14T16:21:12Z"
+        },
+        {
+          "id": 115966924192,
+          "name": "fixture-profile",
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": "2026-10-14T16:20:19Z",
+          "completed_at": "2026-10-14T16:20:18Z"
+        }
+      ]
+    },
+    "ci_conclusion": "success"
   },
   "artifact_receipts": [
     {
@@ -127,11 +290,32 @@
       "name": "backend-timeout-results-38597215595",
       "bytes": 8400,
       "zip_sha256": "5d16702d93b5b734e3a23a45bb4acc483e39479234e0a8caabf5803dfb4c42a3"
+    },
+    {
+      "id": 11912496833,
+      "run_id": 38597215634,
+      "name": "backend-focused-2473b3d0b98491bac603f6e22771a4e609919639-0",
+      "bytes": 68428,
+      "zip_sha256": "843b743ffb5b36382007bd058f917d37161509e15edea8ee970a5bebdbe232ea"
+    },
+    {
+      "id": 11911338574,
+      "run_id": 38597215634,
+      "name": "backend-focused-2473b3d0b98491bac603f6e22771a4e609919639-1",
+      "bytes": 51109,
+      "zip_sha256": "edb4962097eed4ff74e4f72077c6821557fc6057fff774bae2d87f0855c5ab65"
+    },
+    {
+      "id": 11910689042,
+      "run_id": 38597215634,
+      "name": "backend-focused-2473b3d0b98491bac603f6e22771a4e609919639-2",
+      "bytes": 71183,
+      "zip_sha256": "9f59c3a4ea3f5fd2f018349446e400397242a8f8198f799b38f4c75248b72f1a"
     }
   ],
   "historical_timeout_cause_established": false,
   "full_or_combined_validation_dispatched": false,
   "deployment_or_activation": false,
-  "stable_criteria_completed": 2,
+  "stable_criteria_completed": 3,
   "stable_criteria_total": 3
 }
