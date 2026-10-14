@@ -1,6 +1,4 @@
-Status: IN_PROGRESS
+Status: READY
 Task: AT-PR249-REMAINING-BACKEND
-Run: https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38586707974
-Diagnostic source: 5d793c57bce0f53db70ee5a7e6bbe440dc938e8e
-Candidate unchanged: 0e7a7fcb2b5ad9dfc5d3ba32f71262fb5afd3205
-Reconstructed2465 remaining cases, checked selectors against archived source order, published15 isolated hosted batches with3 concurrent workers. No full CI, frontend or deployment. Results pending.
+
+Completed 2465 remaining tests with retained per-batch evidence: 2463 passed, 2 failed, 0 skipped. Fixed missing paper_database fixture and shared SQLite connection race. Hosted affected checks: 3 + 21 passed, no skips. Integrated only two test files into PR249 as 55dfc184d232fdbe9819fb686ec004d88d066a3c. Ruff checks passed. No full rerun/deployment. Historical timeout cause remains unproved; broader release acceptance pending. See HANDOFF.md and the evidence JSON.

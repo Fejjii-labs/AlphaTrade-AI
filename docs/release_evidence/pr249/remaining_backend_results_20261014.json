@@ -1,0 +1,174 @@
+{
+  "source_candidate": "0e7a7fcb2b5ad9dfc5d3ba32f71262fb5afd3205",
+  "integrated_candidate": "55dfc184d232fdbe9819fb686ec004d88d066a3c",
+  "continuation_run": 38586707974,
+  "fixture_fix_run": 38587553285,
+  "concurrency_fix_run": 38588399243,
+  "original_outcomes": {
+    "passed": 2463,
+    "failed": 1,
+    "setup_error": 1,
+    "skipped": 0
+  },
+  "focused_fix_outcomes": {
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0
+  },
+  "limitation": "Batch isolation does not establish original long-run timeout cause or complete release acceptance. Earlier 483 bounded log outcomes remain unavailable.",
+  "batches": [
+    {
+      "batch": "remaining-boundary-result",
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 23.618,
+      "zip_sha256": "32d196237e91214999e213d061f194fb705d16fae93ef5dfe0aa3fc180c5c41c"
+    },
+    {
+      "batch": "remaining-concurrency-fix-result",
+      "tests": 21,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 79.864,
+      "zip_sha256": "d81098f5f42282c18f26e30ce281700513d469ed6859ee3a44aec1850581b365"
+    },
+    {
+      "batch": "remaining-fixture-fix-result",
+      "tests": 3,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 3.518,
+      "zip_sha256": "78edcc501f70b7d68711104d9623ef761d18adbd4d05b7c1b0a284673e7ae472"
+    },
+    {
+      "batch": "remaining-tail-01-result",
+      "tests": 152,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 88.933,
+      "zip_sha256": "a829f1cbbc9452c87adb2a72cbd73a95fca5e9075770b7c3999ce5b4c5a5ab0e"
+    },
+    {
+      "batch": "remaining-tail-02-result",
+      "tests": 199,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 66.307,
+      "zip_sha256": "42bb7d5bc77a02ceb642edcb56a8941ac10f4fa8a94ba32b12162f19313fa8bb"
+    },
+    {
+      "batch": "remaining-tail-03-result",
+      "tests": 197,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 11.968,
+      "zip_sha256": "55197d7e1650075543f10f762804ade38ad98220d84e46191e3dd20cdfb92209"
+    },
+    {
+      "batch": "remaining-tail-04-result",
+      "tests": 199,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 212.687,
+      "zip_sha256": "9d9daa9909f5d181952d5563fa24a897f43fb84208bcb554f3449acae88a4133"
+    },
+    {
+      "batch": "remaining-tail-05-result",
+      "tests": 195,
+      "errors": 1,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 74.921,
+      "zip_sha256": "103144b271b35fb89356fd2e9375a3481d239c7f1ae95d57deb7e09be5522f3b"
+    },
+    {
+      "batch": "remaining-tail-06-result",
+      "tests": 171,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 180.704,
+      "zip_sha256": "fc4829bbd1151d13e44e0db6394318fa1ac065ddc89d364d6b2e026e1c970940"
+    },
+    {
+      "batch": "remaining-tail-07-result",
+      "tests": 191,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "seconds": 305.301,
+      "zip_sha256": "4b0c02953507a80bbda977875ec79f648497c0b9cb0e05c857e69ccd69eb3e2f"
+    },
+    {
+      "batch": "remaining-tail-08-result",
+      "tests": 189,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 196.543,
+      "zip_sha256": "0410e53f67912d8183908cd195ea70e2adbc0e0d184005ccb4556c7f6a5aca56"
+    },
+    {
+      "batch": "remaining-tail-09-result",
+      "tests": 199,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 71.66,
+      "zip_sha256": "523e9ec1b53f3062fb1a3db72d39b146d6172258d6032ea3a2c87c37ba77e484"
+    },
+    {
+      "batch": "remaining-tail-10-result",
+      "tests": 132,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 77.173,
+      "zip_sha256": "7f0a3fa2095e0a918f57c7415c4eacb503c7fe565c185de60f1e596d7a0bb464"
+    },
+    {
+      "batch": "remaining-tail-11-result",
+      "tests": 191,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 61.638,
+      "zip_sha256": "28414eb6227cc4e63ff5a85ffa467f59140cd605d4297baa80e79073d936c092"
+    },
+    {
+      "batch": "remaining-tail-12-result",
+      "tests": 188,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 218.571,
+      "zip_sha256": "9d560cf00d058a4004329630f6b5d2266de0240d85e3412128aa4fa16b789afb"
+    },
+    {
+      "batch": "remaining-tail-13-result",
+      "tests": 177,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 35.126,
+      "zip_sha256": "51516fceac9e672eea83e6161e4e1b1386db486965ae31927cec216042884b9d"
+    },
+    {
+      "batch": "remaining-tail-14-result",
+      "tests": 82,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 65.904,
+      "zip_sha256": "7ee24e79447ea0142088dc95ced28b3fb33263913d0a9501d3370fab6cf79fce"
+    }
+  ]
+}
