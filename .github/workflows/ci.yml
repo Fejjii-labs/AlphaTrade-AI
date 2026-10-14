@@ -25,7 +25,72 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  backend-focused:
+    if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
+    name: backend-focused (batch ${{ matrix.batch }})
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alphatrade
+          POSTGRES_PASSWORD: alphatrade
+          POSTGRES_DB: alphatrade_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alphatrade -d alphatrade_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHASE1_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      AT028_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      BLOFIN_ACTIVITY_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      EXPERIMENT_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install locked focused dependencies
+        timeout-minutes: 5
+        run: uv sync --frozen --extra dev
+      - name: Focused backend development batch
+        timeout-minutes: 18
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 ../scripts/run_backend_launch.py
+          --output ../backend-focused-${{ matrix.batch }}
+          --stage probe --seconds 1020 --
+          uv run python ../scripts/run_backend_focused.py
+          --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
+          --batch-index ${{ matrix.batch }} --batch-count 3
+          --output ../backend-focused-${{ matrix.batch }}
+      - name: Retain focused batch selection and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-focused-${{ github.sha }}-${{ matrix.batch }}
+          path: backend-focused-${{ matrix.batch }}/
+          if-no-files-found: error
+          retention-days: 7
+
   backend:
+    needs: [backend-focused]
+    if: always() && !cancelled()
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.full_backend && 120 || 20 }}
     runs-on: ubuntu-latest
     services:
@@ -79,9 +144,8 @@ jobs:
       - name: Focused backend development tests
         if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
         env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
+          BACKEND_FOCUSED_RESULT: ${{ needs.backend-focused.result }}
+        run: test "$BACKEND_FOCUSED_RESULT" = success
       - name: Collect backend release nodes within a startup budget
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
         timeout-minutes: 4

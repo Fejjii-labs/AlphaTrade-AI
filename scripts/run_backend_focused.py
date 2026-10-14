@@ -10,9 +10,12 @@ file exists, plus explicit path mappings. Filename prefixes such as
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 BASE_TESTS = (
@@ -196,27 +199,91 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     return subprocess.check_output(command, cwd=root, text=True).splitlines()
 
 
+def batch_selection(selection: list[str], index: int, count: int) -> list[str]:
+    """Partition whole files; overlapping file/node arguments stay together."""
+    if count < 1 or not 0 <= index < count:
+        raise ValueError("Batch index must be within a positive batch count.")
+    files = sorted({node.split("::", 1)[0] for node in selection})
+    owners = {file: position % count for position, file in enumerate(files)}
+    return [node for node in selection if owners[node.split("::", 1)[0]] == index]
+
+
+def run_batch(command: list[str], output: Path) -> int:
+    # Reuse the existing diagnostic supervisor; the workflow bounds uv startup
+    # and this runner separately with the existing outer launcher.
+    from run_backend_release import run
+
+    previous = Path.cwd()
+    try:
+        os.chdir(Path(__file__).resolve().parents[1] / "backend")
+        return run(command, output, phase_seconds=180, run_seconds=960)
+    finally:
+        os.chdir(previous)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="")
     parser.add_argument("--head", required=True)
     parser.add_argument("--list-only", action="store_true")
+    parser.add_argument("--batch-index", type=int, default=0)
+    parser.add_argument("--batch-count", type=int, default=1)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.batch_count < 1 or not 0 <= args.batch_index < args.batch_count:
+        parser.error("Batch index must be within a positive batch count.")
     root = Path(__file__).resolve().parents[1]
     selection = select_tests(changed_paths(root, args.base, args.head), root / "backend")
     if not selection:
         raise ValueError("Focused selection must not be empty.")
+    selected = batch_selection(selection, args.batch_index, args.batch_count)
+    if not selected:
+        raise ValueError("Focused batch must not be empty.")
     message = "Focused backend development checks; full backend release acceptance is pending."
     print(message, flush=True)
-    print("\n".join(selection), flush=True)
+    print("\n".join(selected), flush=True)
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(summary).open("a") as output:
-            output.write(f"{message}\n\nSelected {len(selection)} test files/nodes.\n")
+            output.write(
+                f"{message}\n\nBatch {args.batch_index + 1}/{args.batch_count}: "
+                f"{len(selected)} of {len(selection)} selected test files/nodes.\n"
+            )
+    receipt = {
+        "base": args.base,
+        "head": args.head,
+        "batch_index": args.batch_index,
+        "batch_count": args.batch_count,
+        "selection": selected,
+        "full_selection": selection,
+    }
+    if args.output:
+        args.output = args.output.resolve()
+        args.output.mkdir(parents=True, exist_ok=True)
+        (args.output / "selection.json").write_text(json.dumps(receipt, indent=2) + "\n")
     if args.list_only:
         return 0
-    return subprocess.run(
-        ["uv", "run", "pytest", *selection], cwd=root / "backend", check=False
-    ).returncode
+    started = time.monotonic()
+    command = ["uv", "run", "pytest", *selected]
+    if args.output:
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.support.release_diagnostics",
+            "-vv",
+            "-o",
+            "faulthandler_timeout=60",
+            *selected,
+            f"--junitxml={(args.output / 'junit.xml').resolve()}",
+        ]
+        code = run_batch(command, args.output)
+    else:
+        code = subprocess.run(command, cwd=root / "backend", check=False).returncode
+    if args.output:
+        receipt.update(exitcode=code, seconds=time.monotonic() - started)
+        (args.output / "selection.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return code
 
 
 if __name__ == "__main__":

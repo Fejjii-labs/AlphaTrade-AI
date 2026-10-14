@@ -32,8 +32,17 @@ Backend pytest runs `scripts/run_backend_focused.py`: a small config/deployment/
 workflow baseline, changed backend test files, the exact `tests/test_<module>.py`
 file when it exists, and explicit source mappings (safety modules, the
 SFP/receipt/logging group, reviewer boundaries, and native-activity boundaries).
-Filename prefixes such as `test_agent*.py` are not used. This is a development
-selection, not exhaustive dependency analysis. For other cross-module changes,
+Filename prefixes such as `test_agent*.py` are not used.
+
+Development CI partitions that exact selection into three whole-file batches, each on its
+own PostgreSQL service. The required `backend` check keeps Ruff and requires all batches
+to succeed. Existing diagnostics retain each selection, test identity/phase, log, JUnit and
+exit receipt. Each batch has a 16-minute inner budget, 17-minute launcher budget and
+18-minute step within the existing 20-minute job limit. Full release execution retains
+its separate unfiltered command, deadlines and checkpoint uploads. Unchanged fixture
+profiling remains available by explicit workflow dispatch and is skipped on ordinary PRs.
+
+This is a development selection, not exhaustive dependency analysis. For other cross-module changes,
 include their focused tests explicitly in the PR; the complete gate below remains
 required. A successful focused run is **not complete backend acceptance**.
 Native activity/schema/client changes include scoped provider, account and migration

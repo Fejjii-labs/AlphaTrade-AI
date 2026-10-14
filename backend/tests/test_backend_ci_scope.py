@@ -1,9 +1,13 @@
 """Development scope cannot replace the explicit complete release acceptance gate."""
 
 import importlib.util
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 import yaml
@@ -188,6 +192,114 @@ def test_focused_command_preserves_pytest_failure_and_reports_incomplete_accepta
     assert "full backend release acceptance is pending" in summary.read_text()
 
 
+def test_batches_partition_exact_selection_and_keep_overlapping_file_nodes_together():
+    selected = [
+        "tests/test_a.py",
+        "tests/test_a.py::test_one",
+        "tests/test_b.py",
+        "tests/test_c.py",
+        "tests/test_d.py",
+    ]
+    batches = [scope.batch_selection(selected, index, 3) for index in range(3)]
+    assert sorted(node for batch in batches for node in batch) == selected
+    assert sum(len(batch) for batch in batches) == len(set(selected))
+    assert batches[0][:2] == selected[:2]
+    assert scope.batch_selection(selected, 0, 1) == selected
+    assert all(batch == sorted(batch) for batch in batches)
+
+
+@pytest.mark.parametrize("index,count", [(-1, 3), (3, 3), (0, 0)])
+def test_invalid_batch_arguments_fail_before_selection(index, count, monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["runner", "--head", "a" * 40, "--batch-index", str(index), "--batch-count", str(count)],
+    )
+    with patch.object(scope, "changed_paths") as changed, pytest.raises(SystemExit) as error:
+        scope.main()
+    assert error.value.code == 2
+    changed.assert_not_called()
+
+
+@pytest.mark.parametrize("code", [1, 124, -9])
+def test_batch_command_preserves_failure_timeout_and_signal_receipts(code, monkeypatch, tmp_path):
+    output = tmp_path / "batch"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner",
+            "--base",
+            "b" * 40,
+            "--head",
+            "a" * 40,
+            "--batch-index",
+            "1",
+            "--batch-count",
+            "2",
+            "--output",
+            str(output),
+        ],
+    )
+    with (
+        patch.object(scope, "changed_paths", return_value=[]),
+        patch.object(scope, "run_batch") as run,
+    ):
+        run.return_value = code
+        assert scope.main() == code
+    selected = scope.batch_selection(sorted(scope.BASE_TESTS), 1, 2)
+    assert run.call_args.args == (
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.support.release_diagnostics",
+            "-vv",
+            "-o",
+            "faulthandler_timeout=60",
+            *selected,
+            f"--junitxml={output / 'junit.xml'}",
+        ],
+        output,
+    )
+    assert "-x" not in run.call_args.args[0]
+    receipt = json.loads((output / "selection.json").read_text())
+    assert receipt["selection"] == selected
+    assert receipt["full_selection"] == sorted(scope.BASE_TESTS)
+    assert receipt["base"] == "b" * 40 and receipt["head"] == "a" * 40
+    assert receipt["exitcode"] == code
+
+
+def test_supervised_batch_reuses_phase_bounds_and_preserves_terminal_exit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def check_directory(*_args, **_kwargs):
+        assert Path.cwd() == ROOT / "backend"
+        return 124
+
+    supervised = Mock(side_effect=check_directory)
+    command = [sys.executable, "-m", "pytest", "tests/test_config.py"]
+    with patch.dict("sys.modules", {"run_backend_release": SimpleNamespace(run=supervised)}):
+        assert scope.run_batch(command, tmp_path) == 124
+    supervised.assert_called_once_with(command, tmp_path, phase_seconds=180, run_seconds=960)
+    assert Path.cwd() == tmp_path
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
+def test_backend_aggregate_requires_every_batch_and_stops_after_workflow_cancellation(result):
+    workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["backend"]
+    assert job["needs"] == ["backend-focused"]
+    assert evaluate_event_condition(job["if"], "pull_request", False, False)
+    assert not evaluate_event_condition(job["if"], "pull_request", False, False, cancelled=True)
+    step = next(s for s in job["steps"] if s.get("name") == "Focused backend development tests")
+    command = subprocess.run(
+        ["bash", "-c", step["run"]],
+        env={"BACKEND_FOCUSED_RESULT": result},
+        check=False,
+    )
+    assert (command.returncode == 0) == (result == "success")
+
+
 def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
     workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
     trigger = workflow["on"]
@@ -207,6 +319,7 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
         "evaluation",
         "docker-build",
         "e2e-smoke",
+        "backend-focused",
     }
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == (
@@ -245,7 +358,29 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
     assert steps["Focused backend development tests"]["if"] == (
         "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
     )
-    assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
+    focused = jobs["backend-focused"]
+    assert focused["strategy"] == {"fail-fast": "false", "matrix": {"batch": ["0", "1", "2"]}}
+    assert focused["services"] == jobs["backend"]["services"]
+    assert focused["env"] == jobs["backend"]["env"]
+    batch_steps = {step.get("name"): step for step in focused["steps"]}
+    batch = batch_steps["Focused backend development batch"]
+    assert "run_backend_focused.py" in batch["run"]
+    assert '--base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"' in batch["run"]
+    assert "--batch-index ${{ matrix.batch }} --batch-count 3" in batch["run"]
+    assert "run_backend_launch.py" in batch["run"]
+    assert "--stage probe --seconds 1020" in batch["run"]
+    assert batch["timeout-minutes"] == "18"
+    assert batch_steps["Retain focused batch selection and results"]["with"]["path"] == (
+        "backend-focused-${{ matrix.batch }}/"
+    )
+    assert batch["env"] == {
+        "CI_BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
+        "CI_HEAD_SHA": "${{ github.event.pull_request.head.sha || github.sha }}",
+    }
+    assert (
+        batch_steps["Install locked focused dependencies"]["run"] == "uv sync --frozen --extra dev"
+    )
+    assert batch_steps["Retain focused batch selection and results"]["if"] == "always()"
     assert jobs["evaluation"]["needs"] == ["backend"]
     assert jobs["e2e-smoke"]["needs"] == ["backend", "frontend"]
     assert trigger["workflow_dispatch"]["inputs"]["combined_validation"]["default"] == "false"
@@ -263,8 +398,12 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
         assert "continue-on-error" not in job
         if name != "backend":
             assert int(job["timeout-minutes"]) <= 20
-        if name in {"backend", "frontend", "deployment-safety"}:
+        if name in {"frontend", "deployment-safety"}:
             assert "if" not in job
+        elif name == "backend":
+            assert job["if"] == "always() && !cancelled()"
+        elif name == "backend-focused":
+            assert job["if"] == "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
         else:
             assert (
                 job["if"] == "github.event_name == 'workflow_dispatch' && "
@@ -273,18 +412,19 @@ def test_workflow_keeps_quality_checks_and_explicit_combined_release_gates():
         assert all("continue-on-error" not in step for step in job["steps"])
 
 
-def evaluate_event_value(expression, event, combined, full):
+def evaluate_event_value(expression, event, combined, full, cancelled=False):
     expression = expression.replace("${{", "").replace("}}", "")
     expression = expression.replace("github.event_name", repr(event))
     expression = expression.replace("inputs.combined_validation", str(combined))
     expression = expression.replace("inputs.full_backend", str(full))
+    expression = expression.replace("always()", "True").replace("cancelled()", str(cancelled))
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"!(?!=)", "not ", expression)
     return eval(expression.strip(), {"__builtins__": {}}, {})
 
 
-def evaluate_event_condition(expression, event, combined, full):
-    return bool(evaluate_event_value(expression, event, combined, full))
+def evaluate_event_condition(expression, event, combined, full, cancelled=False):
+    return bool(evaluate_event_value(expression, event, combined, full, cancelled))
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
@@ -298,6 +438,10 @@ def test_actual_event_conditions_never_start_expensive_or_full_checks_implicitly
     jobs = workflow["jobs"]
     is_combined = event == "workflow_dispatch" and (combined or full)
     is_full = event == "workflow_dispatch" and full
+    assert evaluate_event_condition(jobs["backend-focused"]["if"], event, combined, full) == (
+        not is_full
+    )
+    assert evaluate_event_condition(jobs["backend"]["if"], event, combined, full)
     assert evaluate_event_value(jobs["backend"]["timeout-minutes"], event, combined, full) == (
         120 if is_full else 20
     )
