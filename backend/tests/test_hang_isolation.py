@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -140,6 +142,32 @@ def test_socket_guard_blocks_outbound_and_allows_loopback():
         server.close()
     finally:
         _remove_restrictions()
+
+
+def test_hang_isolation_plugin_registers_with_pytest_sessionstart():
+    env = os.environ.copy()
+    env.update(_PAPER_ENV)
+    for name in ("OPENAI_API_KEY", "BLOFIN_API_KEY", "BLOFIN_API_SECRET", "BROKER_API_KEY"):
+        env.pop(name, None)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.support.hang_isolation",
+            "--collect-only",
+            "-q",
+            "tests/test_hang_isolation.py::test_postgres_url_is_not_a_broker_credential_and_keys_are_names_only",
+        ],
+        cwd=ROOT / "backend",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "PluginValidationError" not in completed.stderr
 
 
 def test_hang_isolation_workflow_publishes_evidence_before_the_job_timeout():

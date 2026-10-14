@@ -75,8 +75,12 @@ def assert_hang_isolation_safety() -> None:
         )
 
 
-def pytest_sessionstart(_session: pytest.Session) -> None:
-    """Stop the diagnostic session once, before a test can open a socket."""
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Stop the diagnostic session once, before a test can open a socket.
+
+    The argument name is part of pytest's hook spec and cannot be renamed.
+    """
+    assert session.config is not None
     assert_hang_isolation_safety()
 
 
