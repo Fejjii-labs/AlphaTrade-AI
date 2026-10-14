@@ -1,5 +1,5 @@
 {
-  "name": "Backend fixture repair verification",
+  "name": "Backend concurrency fixture verification",
   "on": {
     "push": {
       "branches": [
@@ -20,7 +20,7 @@
         "max-parallel": 3,
         "matrix": {
           "batch": [
-            "fixture-fix"
+            "concurrency-fix"
           ]
         }
       },
@@ -58,7 +58,7 @@
         },
         {
           "name": "Record exact selection before testing",
-          "run": "mkdir -p \"$GITHUB_WORKSPACE/batch-evidence\"\npython3 - <<'PYCODE'\nimport json,os,subprocess,pathlib\nroot=pathlib.Path(os.environ['GITHUB_WORKSPACE'])\nm=json.loads((root/'docs/release_evidence/pr249/remaining_batches_20261014.json').read_text())\nb=next(b for b in m['batches'] if b['id']==os.environ['BATCH_ID'])\nactual=subprocess.check_output(['git','diff','--name-only',m['candidate'],'HEAD'],text=True).splitlines()\nallowed={'backend/tests/test_release_wave002_agent_finalization.py','.github/workflows/backend-remaining-diagnostic.yml','docs/release_evidence/pr249/remaining_batches_20261014.json'}\nassert set(actual)<=allowed,actual\n(root/'batch-evidence/selection.txt').write_text('\\n'.join(b['selectors'])+'\\n')\n(root/'batch-evidence/provenance.json').write_text(json.dumps({'candidate':m['candidate'],'diagnostic_sha':os.environ['GITHUB_SHA'],'batch':b,'source_run':m['source_run'],'python':subprocess.check_output(['python3','--version'],text=True).strip()},indent=2))\nPYCODE"
+          "run": "mkdir -p \"$GITHUB_WORKSPACE/batch-evidence\"\npython3 - <<'PYCODE'\nimport json,os,subprocess,pathlib\nroot=pathlib.Path(os.environ['GITHUB_WORKSPACE'])\nm=json.loads((root/'docs/release_evidence/pr249/remaining_batches_20261014.json').read_text())\nb=next(b for b in m['batches'] if b['id']==os.environ['BATCH_ID'])\nactual=subprocess.check_output(['git','diff','--name-only',m['candidate'],'HEAD'],text=True).splitlines()\nallowed={'backend/tests/test_strategy_conversation_foundation.py','backend/tests/test_release_wave002_agent_finalization.py','.github/workflows/backend-remaining-diagnostic.yml','docs/release_evidence/pr249/remaining_batches_20261014.json'}\nassert set(actual)<=allowed,actual\n(root/'batch-evidence/selection.txt').write_text('\\n'.join(b['selectors'])+'\\n')\n(root/'batch-evidence/provenance.json').write_text(json.dumps({'candidate':m['candidate'],'diagnostic_sha':os.environ['GITHUB_SHA'],'batch':b,'source_run':m['source_run'],'python':subprocess.check_output(['python3','--version'],text=True).strip()},indent=2))\nPYCODE"
         },
         {
           "name": "Upload initial selection",

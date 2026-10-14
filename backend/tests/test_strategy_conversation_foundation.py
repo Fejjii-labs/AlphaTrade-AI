@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.agents.mutation_policy import (
     confirmation_authorizes_mutation,
@@ -118,11 +118,11 @@ def _settings() -> Settings:
 
 
 @pytest.fixture
-def conv_env() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
+def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
+    # Concurrent requests need separate connections and independent transactions.
     engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
+        f"sqlite+pysqlite:///{tmp_path / 'conversations.db'}",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
 
     @event.listens_for(engine, "connect")
@@ -168,6 +168,7 @@ def conv_env() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     with TestClient(app) as client:
         yield client, factory
     app.dependency_overrides.clear()
+    engine.dispose()
 
 
 def _auth(client: TestClient, email: str) -> None:
@@ -739,7 +740,7 @@ def test_concurrent_confirmation_converges_to_one_version(
         worker.start()
     for worker in workers:
         worker.join()
-    assert results
+    assert len(results) == 2
     bodies = []
     for item in results:
         assert item.status_code == 200  # type: ignore[attr-defined]

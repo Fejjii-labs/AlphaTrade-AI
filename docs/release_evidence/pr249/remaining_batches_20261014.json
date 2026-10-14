@@ -2,13 +2,14 @@
   "candidate": "0e7a7fcb2b5ad9dfc5d3ba32f71262fb5afd3205",
   "batches": [
     {
-      "id": "fixture-fix",
-      "expected_count": 3,
+      "id": "concurrency-fix",
+      "expected_count": 21,
       "selectors": [
-        "tests/test_release_wave002_agent_finalization.py"
+        "tests/test_strategy_conversation_foundation.py",
+        "tests/test_strategy_conversation_postgres.py"
       ]
     }
   ],
   "source_run": 38586707974,
-  "purpose": "Verify missing paper_database fixture registration; three cases in the affected file only."
+  "purpose": "Verify independent SQLite transactions and PostgreSQL concurrent confirmation"
 }
