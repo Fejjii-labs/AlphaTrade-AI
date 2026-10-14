@@ -1,0 +1,137 @@
+{
+  "generated_at_utc": "2026-10-14T16:30:52.841588+00:00",
+  "source_candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+  "parent": "55dfc184d232fdbe9819fb686ec004d88d066a3c",
+  "tree": "79506e0c4b0ced069e9acb85b524648e42bfecfd",
+  "tested_merge_tree": {
+    "checkout_sha": "2473b3d0b98491bac603f6e22771a4e609919639",
+    "published_candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+    "tree": "79506e0c4b0ced069e9acb85b524648e42bfecfd",
+    "tree_equal": true
+  },
+  "source_files": {
+    ".ai/RELEASE.md": "794ec47f6ae8b8ec2e7cb94f2dc8dbae4458b966e260d07304ea12b9ef2ea86e",
+    ".github/workflows/backend-launch-proof.yml": "3e53eed80c1bf2b299114f41b5b54cd2f0e4eabe29b5c2949467c93a2f58ffcb",
+    ".github/workflows/ci.yml": "98229870c856778a5cea723dc628b4be0387ff215fa6f966d561c8dfbe0a24ec",
+    "backend/tests/test_backend_ci_scope.py": "24ae756b9e868e92e312ff277a72e4a12fa33d1dbf6b4ae803fdf6714d605b8f",
+    "frontend/src/app/(app)/journal/page.test.tsx": "c775813b86bef81bdd01ca1789f68f966ea098d6fb377aec58fb2e592ce0c510",
+    "frontend/src/components/journal/JournalQuickEntry.tsx": "57c6c8cb31930f8c1483e2c18af514db04d68f86e9df59e023f3c6ee10ed185f",
+    "scripts/run_backend_focused.py": "c7ef75c3ffbe9aac7cb1a37737c8d7505bff7443ab908901544b84f9aa6675b7"
+  },
+  "repairs": [
+    "Journal passive prefill reset erased input entered at warning commit; two reset effects useLayoutEffect; original stale-ID regression strengthened without sleeps",
+    "Launch proof installed production dependencies without pytest; frozen dev extras and owned uv interpreter",
+    "Focused selection reached20min cancellation at936displayedpasses/71%; exactselection partitioned across3 independentPostgreSQL jobs and requiredbackendaggregate"
+  ],
+  "local_checks": {
+    "journal_original_component": {
+      "passed": 0,
+      "failed": 1,
+      "skipped_by_name": 22,
+      "seconds": 4.361825
+    },
+    "journal_corrected_and_adjacent": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 4.333677
+    },
+    "launch_collection_regression": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 1.625
+    },
+    "ci_guards": {
+      "unique_passed": 44,
+      "failed": 0,
+      "skipped": 0,
+      "unchanged_reused": 23
+    },
+    "eslint": {
+      "exitcode": 0,
+      "seconds": 2.124264
+    },
+    "typecheck": {
+      "exitcode": 0,
+      "seconds": 13.129818
+    }
+  },
+  "reused_backend_fix_checks": {
+    "runs": [
+      38587553285,
+      38588399243
+    ],
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0
+  },
+  "automatic_runs": {
+    "ci": 38597215634,
+    "launch_proof": 38597215595
+  },
+  "hosted_results": {
+    "frontend": {
+      "passed": 650,
+      "failed": 0,
+      "skipped": 0,
+      "files_passed": 84
+    },
+    "launch_proof": {
+      "conclusion": "success",
+      "checks_passed": 13,
+      "timeout_artifact_retrieval_passed": true,
+      "fixture_profile": "intentionally skipped onpull_request"
+    },
+    "backend_focused": "in_progress"
+  },
+  "artifact_receipts": [
+    {
+      "id": 11911875585,
+      "run_id": 38597215595,
+      "name": "backend-launch-results-38597215595",
+      "bytes": 13620,
+      "zip_sha256": "9120c3d5452001fa2f07e177b8d6dfe42a9247a563f19182085995e45c17db61"
+    },
+    {
+      "id": 11910931065,
+      "run_id": 38597215595,
+      "name": "backend-timeout-progress-38597215595-1-1",
+      "bytes": 1385,
+      "zip_sha256": "f38f70a6031d7dcb9040a0e243a28cec96a1fc45c2a45c603c7b616fd3a2533b"
+    },
+    {
+      "id": 11910741262,
+      "run_id": 38597215595,
+      "name": "backend-timeout-progress-38597215595-1-2",
+      "bytes": 2014,
+      "zip_sha256": "da862f37e6c9cf0525f3d54553532d3e2113a129c94906865723f504eba4c505"
+    },
+    {
+      "id": 11910726281,
+      "run_id": 38597215595,
+      "name": "backend-timeout-progress-38597215595-1-3",
+      "bytes": 2029,
+      "zip_sha256": "fde8bbe9c1da997a594d3464f5357c788aa5545a1cb96c101f1e5126b362f653"
+    },
+    {
+      "id": 11910611193,
+      "run_id": 38597215595,
+      "name": "backend-launch-source-38597215595",
+      "bytes": 951,
+      "zip_sha256": "5ab95b8ae650816341ebb2c5e33409d74b63fb382cb1a3925583b493fd4a78f5"
+    },
+    {
+      "id": 11909499620,
+      "run_id": 38597215595,
+      "name": "backend-timeout-results-38597215595",
+      "bytes": 8400,
+      "zip_sha256": "5d16702d93b5b734e3a23a45bb4acc483e39479234e0a8caabf5803dfb4c42a3"
+    }
+  ],
+  "historical_timeout_cause_established": false,
+  "full_or_combined_validation_dispatched": false,
+  "deployment_or_activation": false,
+  "stable_criteria_completed": 2,
+  "stable_criteria_total": 3
+}
