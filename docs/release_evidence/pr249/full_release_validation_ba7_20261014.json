@@ -1,0 +1,79 @@
+{
+  "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+  "tree": "79506e0c4b0ced069e9acb85b524648e42bfecfd",
+  "run_id": 38609456149,
+  "run_url": "https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38609456149",
+  "run_attempt": 1,
+  "inputs": {
+    "full_backend": true
+  },
+  "state": "IN_PROGRESS",
+  "criteria_accepted": 2,
+  "criteria_total": 3,
+  "dispatch_count": 1,
+  "required_jobs": {
+    "backend": "in_progress",
+    "frontend": {
+      "result": "success",
+      "passed": 1712,
+      "failed": 0,
+      "skipped": 0,
+      "files": 255,
+      "seconds": 184.81,
+      "build": "success"
+    },
+    "deployment-safety": {
+      "result": "success",
+      "passed": 108,
+      "failed": 0,
+      "skipped": 0,
+      "self_checks": "success"
+    },
+    "docker-build": "success",
+    "evaluation": "waiting",
+    "e2e-smoke": "waiting"
+  },
+  "checkpoint_02": {
+    "sequence": 2,
+    "artifact_id": 11918920768,
+    "captured_at_utc": "2026-10-14T18:02:13.515203+00:00",
+    "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+    "active": {
+      "nodeid": "tests/test_blofin_activity_postgres.py::test_rate_limit_backoff_persists_and_stops_network",
+      "started": 1792000933.0534408,
+      "phase": "setup"
+    },
+    "active_age_seconds": 0.4617619514465332,
+    "active_node_index": 1054,
+    "node_count": 5792,
+    "stdout_status_counts": {
+      "PASSED": 1053,
+      "FAILED": 0,
+      "SKIPPED": 0,
+      "ERROR": 0
+    },
+    "pytest_stdout_truncated": false,
+    "reports_tail_truncated": true,
+    "postgres_samples": 90,
+    "stack_bytes": 0,
+    "upload_receipt": {
+      "failure": null,
+      "artifacts": [
+        {
+          "sequence": 1,
+          "artifact_id": 11916373802
+        }
+      ]
+    },
+    "culprit_established": false,
+    "terminal_execution_receipt_present": false
+  },
+  "staging_packet_prepared": true,
+  "private_helper_gate_guards": {
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0
+  },
+  "no_deployment_or_activation": true,
+  "historical_timeout_cause_established": false
+}
