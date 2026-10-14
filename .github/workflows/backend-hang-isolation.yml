@@ -1,0 +1,130 @@
+name: Backend hang isolation
+
+on:
+  push:
+    branches: [ci/hang-isolation-pr249]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-hang-isolation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    name: Complete backend suite (hang isolation)
+    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alphatrade
+          POSTGRES_PASSWORD: alphatrade
+          POSTGRES_DB: alphatrade_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alphatrade -d alphatrade_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHASE1_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      AT028_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      BLOFIN_ACTIVITY_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      EXPERIMENT_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      EXECUTION_MODE: paper
+      ENABLE_REAL_TRADING: "false"
+      PROVIDER_MODE: mock
+      MARKET_DATA_PROVIDER: mock
+      BACKEND_HANG_ISOLATION: "1"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: uv sync --extra dev
+      - name: Complete backend hang isolation
+        timeout-minutes: 100
+        run: |
+          set -o pipefail
+          mkdir -p ../backend-ci-diagnostics
+          uv run python ../scripts/run_backend_release.py \
+            --diagnostic \
+            --output ../backend-ci-diagnostics \
+            --phase-seconds 420 \
+            --run-seconds 5700 \
+            2>&1 | tee -a ../backend-ci-diagnostics/runner.log
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-isolation-pytest-log-${{ github.sha }}
+          path: |
+            backend-ci-diagnostics/pytest.log
+            backend-ci-diagnostics/runner.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload junit xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-isolation-junit-${{ github.sha }}
+          path: backend-ci-diagnostics/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload faulthandler dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-isolation-faulthandler-${{ github.sha }}
+          path: backend-ci-diagnostics/stacks.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload backend diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-isolation-diagnostics-${{ github.sha }}
+          path: backend-ci-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summarize timeouts, socket blocks, and slowest tests
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          log_path = Path("../backend-ci-diagnostics/pytest.log")
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          lines = log_path.read_text(errors="replace").splitlines() if log_path.is_file() else []
+          picked: list[str] = []
+          capture = False
+          tokens = (
+              "Timeout",
+              "SocketConnectBlockedError",
+              "SocketBlockedError",
+              "FAILED",
+              "ERROR",
+          )
+          for line in lines:
+              if "slowest" in line and "duration" in line:
+                  capture = True
+              if capture:
+                  picked.append(line)
+                  if line.startswith("=") and "slowest" not in line and len(picked) > 1:
+                      capture = False
+                  continue
+              if any(token in line for token in tokens):
+                  picked.append(line)
+          text = "\n".join(picked[:500]) or "(no pytest.log lines matched)"
+          summary.write_text("## Hang isolation excerpts\n\n```\n" + text[:60000] + "\n```\n")
+          PY

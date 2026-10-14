@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run the unfiltered backend gate with bounded, retained failure diagnostics."""
+"""Run the unfiltered backend gate with bounded, retained failure diagnostics.
+
+``--diagnostic`` is hang isolation: no fail-fast, a 300s per-test timeout, the
+slowest durations, and outbound sockets limited to local Postgres. The child
+output is teed, line by line, into ``pytest.log``.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +16,21 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
+
+# pytest-timeout must be allowed to fail one test before the phase watchdog
+# stops the whole process. 420s leaves room after the 300s per-test limit.
+PER_TEST_TIMEOUT_SECONDS = 300
+DIAGNOSTIC_PHASE_SECONDS = 420
+DIAGNOSTIC_ENV = {
+    "BACKEND_HANG_ISOLATION": "1",
+    "EXECUTION_MODE": "paper",
+    "ENABLE_REAL_TRADING": "false",
+    "PROVIDER_MODE": "mock",
+    "MARKET_DATA_PROVIDER": "mock",
+}
 
 
 def postgres_snapshot() -> dict[str, object]:
@@ -107,13 +125,59 @@ def _stop(proc: subprocess.Popen, *, owns_group: bool = True) -> None:
         proc.wait(timeout=2)
 
 
-def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: float) -> int:
+def pytest_command(output: Path, *, diagnostic: bool) -> list[str]:
+    """Build the release pytest command. Diagnostic runs collect every failure."""
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-p",
+        "tests.support.release_diagnostics",
+        "-o",
+        "faulthandler_timeout=60",
+        "--tb=short",
+        f"--junitxml={output.resolve() / 'junit.xml'}",
+    ]
+    if diagnostic:
+        return [
+            *command,
+            "-p",
+            "tests.support.hang_isolation",
+            "-v",
+            "-rA",
+            "--durations=50",
+            f"--timeout={PER_TEST_TIMEOUT_SECONDS}",
+            "--timeout-method=thread",
+            "--disable-socket",
+            "--allow-unix-socket",
+            "--allow-hosts=localhost,127.0.0.1,::1",
+        ]
+    return [*command, "-x", "-vv", "--durations=20"]
+
+
+def phase_budget(phase_seconds: float, *, diagnostic: bool) -> float:
+    """Keep the phase watchdog behind the per-test timeout during hang isolation."""
+    if diagnostic and phase_seconds <= PER_TEST_TIMEOUT_SECONDS:
+        return float(DIAGNOSTIC_PHASE_SECONDS)
+    return phase_seconds
+
+
+def run(
+    command: list[str],
+    root: Path,
+    *,
+    phase_seconds: float,
+    run_seconds: float,
+    extra_env: Mapping[str, str] | None = None,
+) -> int:
     root.mkdir(parents=True, exist_ok=True)
     env = dict(
         os.environ,
         BACKEND_RELEASE_DIAGNOSTICS=str(root.resolve()),
         PYTHONUNBUFFERED="1",
     )
+    if extra_env:
+        env.update(extra_env)
     started = time.monotonic()
     owns_group = os.environ.get("BACKEND_RELEASE_SHARED_GROUP") != "1"
     proc = subprocess.Popen(
@@ -127,6 +191,7 @@ def run(command: list[str], root: Path, *, phase_seconds: float, run_seconds: fl
     )
 
     def stream() -> None:
+        # Line-buffered tee: pytest's stdout/stderr land in pytest.log and the runner log.
         assert proc.stdout is not None
         with (root / "pytest.log").open("w") as log:
             for line in proc.stdout:
@@ -206,27 +271,20 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("../backend-ci-diagnostics"))
     parser.add_argument("--phase-seconds", type=float, default=180)
     parser.add_argument("--run-seconds", type=float, default=6900)
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="Collect every failure with a per-test timeout and local sockets only.",
+    )
     args = parser.parse_args()
     if args.phase_seconds <= 0 or args.run_seconds <= 0:
         parser.error("deadlines must be positive")
     return run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "tests.support.release_diagnostics",
-            "-x",
-            "-vv",
-            "-o",
-            "faulthandler_timeout=60",
-            "--durations=20",
-            "--tb=short",
-            f"--junitxml={args.output.resolve() / 'junit.xml'}",
-        ],
+        pytest_command(args.output, diagnostic=args.diagnostic),
         args.output,
-        phase_seconds=args.phase_seconds,
+        phase_seconds=phase_budget(args.phase_seconds, diagnostic=args.diagnostic),
         run_seconds=args.run_seconds,
+        extra_env=DIAGNOSTIC_ENV if args.diagnostic else None,
     )
 
 

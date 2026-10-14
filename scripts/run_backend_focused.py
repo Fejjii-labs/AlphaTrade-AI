@@ -103,6 +103,7 @@ EXPLICIT_DEPENDENCIES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tests/test_backend_launch.py",
             "tests/test_backend_release_diagnostics.py",
             "tests/test_backend_checkpoints.py",
+            "tests/test_hang_isolation.py",
         ),
     ),
     (
