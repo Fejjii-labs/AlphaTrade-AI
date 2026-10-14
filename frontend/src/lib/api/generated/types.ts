@@ -5369,6 +5369,12 @@ export interface components {
             maximum_seconds?: number | null;
             /** Maximum Turns */
             maximum_turns?: number | null;
+            /**
+             * Provider
+             * @default realtime
+             * @enum {string}
+             */
+            provider?: "realtime" | "gpt_live";
             /** Reason */
             reason?: string | null;
             /**

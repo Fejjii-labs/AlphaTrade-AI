@@ -1,0 +1,15 @@
+.......                                                                  [100%]
+==================================== PASSES ====================================
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed] _
+=========================== short test summary info ============================
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed]
+PASSED tests/test_voice_reservations_quota.py::test_uncertain_reservation_survives_month_boundary_and_does_not_affect_other_tenant
+PASSED tests/test_voice_reservations_quota.py::test_partial_accounting_cannot_release_an_active_reservation
+PASSED tests/test_voice_reservations_quota.py::test_verified_closed_reservation_releases_hold_without_claiming_measured_usage
+7 passed in 1.95s

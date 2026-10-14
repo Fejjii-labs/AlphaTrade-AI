@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -15,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agent_voice.config import VoiceLimits, VoiceUnavailableError
+from app.agent_voice.live_config import LiveLimits
 from app.core.config import Settings
 from app.db.models import Organization, OrganizationQuota, UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
@@ -33,7 +33,7 @@ class VoiceLedger:
         self,
         sessions: Callable[[], Session],
         settings: Settings,
-        limits: VoiceLimits,
+        limits: VoiceLimits | LiveLimits,
         token: str,
         conversation_id: UUID,
     ):
@@ -65,20 +65,7 @@ class VoiceLedger:
     def reserve(self) -> None:
         now = datetime.now(UTC)
         maximum = self.limits.reservation(self.settings)
-        tokens = math.ceil(
-            self.limits.maximum_responses
-            * (self.limits.realtime.maximum_input_tokens + self.limits.maximum_output_tokens)
-            + self.limits.maximum_audio_seconds
-            * self.limits.realtime.maximum_audio_input_tokens_per_second
-            + self.limits.maximum_turns
-            * 4
-            * (self.limits.reasoning.maximum_input_tokens + self.settings.agent_max_output_tokens)
-            + (
-                self.limits.maximum_turns * self.limits.embedding.maximum_input_tokens
-                if self.limits.embedding
-                else 0
-            )
-        )
+        tokens = self.limits.reserved_tokens(self.settings)
         with self.sessions() as session:
             tenant = self.principal(session)
             session.scalar(
@@ -155,7 +142,7 @@ class VoiceLedger:
                     user_id=tenant.user_id,
                     conversation_id=self.conversation_id,
                     budget_reference=self.limits.budget_reference,
-                    model=self.limits.realtime.model,
+                    model=self.limits.voice_model,
                     status="pending",
                     reserved_cost=maximum,
                     reserved_tokens=tokens,
@@ -213,8 +200,11 @@ class VoiceLedger:
         self.update(admit)
 
     def response(self) -> str:
+        limits = self.limits
+        assert isinstance(limits, VoiceLimits)
+
         def admit(row: VoiceSessionReservation, data: dict[str, Any]) -> str:
-            if row.response_count >= self.limits.maximum_responses:
+            if row.response_count >= limits.maximum_responses:
                 raise VoiceUnavailableError("voice_response_cap_exhausted")
             key = str(uuid4())
             row.response_count += 1
@@ -233,6 +223,7 @@ class VoiceLedger:
         self.update(bind)
 
     def response_done(self, response: dict[str, Any]) -> None:
+        assert isinstance(self.limits, VoiceLimits)
         # Never called with a client event. Only the authenticated upstream WS is trusted.
         response_id = str(response.get("id", ""))
         usage = response.get("usage")
@@ -292,7 +283,7 @@ class VoiceLedger:
                         request_id=str(self.id),
                         feature="agent_voice_realtime",
                         provider="openai",
-                        model=self.limits.realtime.model,
+                        model=self.limits.voice_model,
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         total_tokens=input_tokens + output_tokens,

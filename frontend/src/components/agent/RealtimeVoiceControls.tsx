@@ -46,7 +46,7 @@ export function RealtimeVoiceControls(props: Props) {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();
   }, [props.authenticated, props.conversationId]);
-  return <div aria-label="Interactive voice" className="space-y-2">
+  return <div aria-label={state.provider === "gpt_live" ? "GPT Live voice" : "Interactive voice"} className="space-y-2">
     <div className="flex flex-wrap items-center gap-2">
       <Button type="button" variant="secondary"
         disabled={!state.active && (props.disabled || !props.authenticated)}
@@ -54,11 +54,19 @@ export function RealtimeVoiceControls(props: Props) {
         {state.active ? "End voice" : "Talk to Agent"}
       </Button>
       {state.active && <Button type="button" variant="secondary" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
+      {state.active && state.outputMuted && <Button type="button" variant="secondary" onClick={() => controller.current?.resume()}>Resume audio</Button>}
       {state.active && <span role="status" className="text-sm text-text-muted">
+        {state.provider === "gpt_live" && "GPT Live · "}
+        {state.outputMuted && "Audio muted · "}
         {state.state === "connecting" ? "Connecting…" : state.state === "thinking" ? "Thinking…" : state.state === "speaking" ? "Speaking" : "Listening"}
       </span>}
     </div>
     {state.transcript && <details className="text-sm text-text-muted"><summary className="min-h-11 cursor-pointer content-center">Heard request</summary><p className="mt-1 whitespace-pre-wrap">{state.transcript}</p></details>}
+    {(state.inputCaption || state.replyCaption) && <details className="text-sm text-text-muted">
+      <summary className="min-h-11 cursor-pointer content-center">Live captions</summary>
+      {state.inputCaption && <p aria-label="Your speech caption" className="mt-1 whitespace-pre-wrap">{state.inputCaption}</p>}
+      {state.replyCaption && <p aria-label="Agent speech caption" className="mt-1 whitespace-pre-wrap">{state.replyCaption}</p>}
+    </details>}
     {state.error && <p role="alert" className="text-sm text-danger">{state.error}</p>}
   </div>;
 }

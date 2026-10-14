@@ -1,0 +1,151 @@
+{
+  "task": "PR257 PostgreSQL verification gap only",
+  "baseline_commit": "0132ef2ae15992f39b2f05bc921e06a8dc537c8e",
+  "database": "PostgreSQL 16.15 (official postgres:16-alpine), read committed",
+  "image_digest": "sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea",
+  "isolation": "Loopback-only disposable container; tmpfs data; per-case schemas; NullPool independent sessions; two real transactions synchronized before production locks.",
+  "baseline_ledger_sha256": "1b84e124fb804c75c3c2156797be3ad19f955770dafa1023738d022cec72672c",
+  "verified_source_sha256": {
+    "backend/src/app/agent_voice/live_accounting.py": "e9c7473e170cd4e7e0d64524d0928fd4a0d5f44a097c6abad5be102715cf9fb5",
+    "backend/tests/test_agent_live_postgres.py": "4ec570c7184a4cc3651f6e621aa1c5ee1655548526c3299827d7b7d0e95109a7"
+  },
+  "results": [
+    {
+      "run": "quota-before",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "elapsed_seconds": "1.949",
+      "started_at_utc": "2026-10-13T20:55:46.811813+00:00",
+      "nodes": [
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed]",
+        "tests.test_voice_reservations_quota::test_uncertain_reservation_survives_month_boundary_and_does_not_affect_other_tenant",
+        "tests.test_voice_reservations_quota::test_partial_accounting_cannot_release_an_active_reservation",
+        "tests.test_voice_reservations_quota::test_verified_closed_reservation_releases_hold_without_claiming_measured_usage"
+      ]
+    },
+    {
+      "run": "live-before",
+      "tests": 11,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0,
+      "elapsed_seconds": "14.550",
+      "started_at_utc": "2026-10-13T20:57:44.138055+00:00",
+      "nodes": [
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[budget]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_cost]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_tokens]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[both_fit]",
+        "tests.test_agent_live_postgres::test_concurrent_usage_and_final_receipt_replays_update_one_duration_event",
+        "tests.test_agent_live_postgres::test_final_replay_requires_original_session_and_reason[session]",
+        "tests.test_agent_live_postgres::test_final_replay_requires_original_session_and_reason[reason]",
+        "tests.test_agent_live_postgres::test_unconfirmed_silent_close_never_commits_a_released_hold",
+        "tests.test_agent_live_postgres::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[before_cleanup]",
+        "tests.test_agent_live_postgres::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[after_cleanup]",
+        "tests.test_agent_live_postgres::test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session"
+      ]
+    },
+    {
+      "run": "postgres-after",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "elapsed_seconds": "16.183",
+      "started_at_utc": "2026-10-13T20:58:58.071767+00:00",
+      "nodes": [
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain]",
+        "tests.test_voice_reservations_quota::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed]",
+        "tests.test_voice_reservations_quota::test_uncertain_reservation_survives_month_boundary_and_does_not_affect_other_tenant",
+        "tests.test_voice_reservations_quota::test_partial_accounting_cannot_release_an_active_reservation",
+        "tests.test_voice_reservations_quota::test_verified_closed_reservation_releases_hold_without_claiming_measured_usage",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[budget]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_cost]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_tokens]",
+        "tests.test_agent_live_postgres::test_competing_live_reservations_respect_committed_budget_and_quota[both_fit]",
+        "tests.test_agent_live_postgres::test_concurrent_usage_and_final_receipt_replays_update_one_duration_event",
+        "tests.test_agent_live_postgres::test_final_replay_requires_original_session_and_reason[session]",
+        "tests.test_agent_live_postgres::test_final_replay_requires_original_session_and_reason[reason]",
+        "tests.test_agent_live_postgres::test_unconfirmed_silent_close_never_commits_a_released_hold",
+        "tests.test_agent_live_postgres::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[before_cleanup]",
+        "tests.test_agent_live_postgres::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[after_cleanup]",
+        "tests.test_agent_live_postgres::test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session"
+      ]
+    },
+    {
+      "run": "affected-mocks",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "elapsed_seconds": "4.021",
+      "started_at_utc": "2026-10-13T20:59:04.141538+00:00",
+      "nodes": [
+        "tests.test_agent_live_integration::test_cumulative_usage_once_finalized_and_caption_replay_once",
+        "tests.test_agent_live_integration::test_invalid_usage_never_releases_reserved_budget[True]",
+        "tests.test_agent_live_integration::test_invalid_usage_never_releases_reserved_budget[-1]",
+        "tests.test_agent_live_integration::test_invalid_usage_never_releases_reserved_budget[nan]",
+        "tests.test_agent_live_integration::test_invalid_usage_never_releases_reserved_budget[inf]",
+        "tests.test_agent_live_integration::test_invalid_usage_never_releases_reserved_budget[1]",
+        "tests.test_agent_live_integration::test_regression_foreign_final_and_missing_finalization_keep_hold",
+        "tests.test_agent_live_integration::test_existing_quota_and_current_membership_block_live",
+        "tests.test_agent_live_integration::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[end]",
+        "tests.test_agent_live_integration::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[disconnect]",
+        "tests.test_agent_live_integration::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[authorization]",
+        "tests.test_agent_live_integration::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[provider_error]",
+        "tests.test_agent_live_integration::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[missing_final]"
+      ]
+    }
+  ],
+  "reused_checks": {
+    "source_commit": "0036f88cb3e1939b1478159e1fefa8260fe11056",
+    "original_backend_mocks": 68,
+    "frontend_mocks": 102,
+    "note": "Only thirteen mocks affected by ledger corrections rerun; frontend, protocol, shared Agent behavior and generated contracts are unchanged."
+  },
+  "checks": {
+    "changed_python_lint": "passed",
+    "changed_python_format": "passed",
+    "targeted_mypy_live_accounting": "passed",
+    "diff_check": "passed"
+  },
+  "cleanup": {
+    "remaining_test_schemas": 0,
+    "container": "alphatrade-pr257-pg16-20261013",
+    "status": "stopped and automatically removed; tmpfs discarded"
+  },
+  "scope": "No provider/trading actions, activation, deployment, workflow edits or full CI.",
+  "artifact_sha256": {
+    "README.md": "f901bafc62b7de4084aac0969ca33ac253b8ccbb9ff20429acf44f2c20757140",
+    "affected-mocks.txt": "b06f0b235d0cccd54be5cbb3f8f7ba50f700462a40e66f404302bb37c03b44b7",
+    "affected-mocks.txt.gz": "f7025a52bce96e730af640910b367a7e25e5ce640015110737ad66fd3905e4bd",
+    "affected-mocks.xml.gz": "c51d5ce467df2e48be7082c4060779cadc5348611cf19e117ef3541996ecc97f",
+    "live-before.txt": "c16c626f7e798facec313de63fc8229aa1c019577145b0922f49928dca1102c6",
+    "live-before.txt.gz": "7a21b26ba0c98626d75ff78672d45bc311cd386321bdc8347db2528bf3dfafba",
+    "live-before.xml.gz": "248a5ae4c1a19d1c0eb5e6c90e53720af746e431fa1455bc854f366396a92bca",
+    "postgres-after.txt": "dad22f09edf48bf68e5c4c48c68d3efa805ba42729fa1d6b76bf6422fd8b0c4f",
+    "postgres-after.txt.gz": "a903a57b37e06367a8004939f294f3ed4e73ee1ca2e33c1ef2313a7931fb1e52",
+    "postgres-after.xml.gz": "10c401ef9a5432f101ffb302adb9c0b4ede21d76734920c7d0524d6fc5e24d05",
+    "quota-before.txt": "86bc78f7eb739ec8cbe5ddb3fbceb96ceca21a9dfa7a31eabba0c7984f8a71de",
+    "quota-before.txt.gz": "194932858c6309075162fbcffd8b8d79c8fde6064fb135ca7d30f2e024adf54b",
+    "quota-before.xml.gz": "3eca8bdd632baccbade4e2e0664d81b847379239859df6c5c005af193914f666"
+  },
+  "raw_receipt_sha256": {
+    "quota-before.xml": "007f449cd57dd13e94a7488c9a16715536c7e5536b17cca4a2e2ef94cae95740",
+    "quota-before.txt": "86bc78f7eb739ec8cbe5ddb3fbceb96ceca21a9dfa7a31eabba0c7984f8a71de",
+    "live-before.xml": "1c84d0bdc1471d1a40ab163502f0e99dd77f3305e57b232312bc05d5457f27e8",
+    "live-before.txt": "c89c2011961da2a6ba067f01377e6c5cf836e8062abc52caae0cff0e6d0125cb",
+    "postgres-after.xml": "9583d6ff51f6970f773765e87407709d92ab0104a47c9b7c4bd5f1c36b6add4f",
+    "postgres-after.txt": "dad22f09edf48bf68e5c4c48c68d3efa805ba42729fa1d6b76bf6422fd8b0c4f",
+    "affected-mocks.xml": "6b8cfae11698aa4a1ed8c8e919ef98b551cbad1bda55e3073e416fac223dc2c9",
+    "affected-mocks.txt": "b06f0b235d0cccd54be5cbb3f8f7ba50f700462a40e66f404302bb37c03b44b7"
+  },
+  "verified_correction_commit": "a48f47cf870d7e4ccbb921a84ed4c1988c0d735d"
+}

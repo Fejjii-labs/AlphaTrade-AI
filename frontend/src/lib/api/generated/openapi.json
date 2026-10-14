@@ -53589,6 +53589,15 @@
             ],
             "title": "Maximum Turns"
           },
+          "provider": {
+            "default": "realtime",
+            "enum": [
+              "realtime",
+              "gpt_live"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
           "reason": {
             "anyOf": [
               {

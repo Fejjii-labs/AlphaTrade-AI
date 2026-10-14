@@ -1,0 +1,27 @@
+..................                                                       [100%]
+==================================== PASSES ====================================
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain] _
+_ test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed] _
+_ test_competing_live_reservations_respect_committed_budget_and_quota[budget] __
+=========================== short test summary info ============================
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[pending]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[active]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[uncertain]
+PASSED tests/test_voice_reservations_quota.py::test_ordinary_request_is_blocked_by_unresolved_reservation_after_fresh_session[closed]
+PASSED tests/test_voice_reservations_quota.py::test_uncertain_reservation_survives_month_boundary_and_does_not_affect_other_tenant
+PASSED tests/test_voice_reservations_quota.py::test_partial_accounting_cannot_release_an_active_reservation
+PASSED tests/test_voice_reservations_quota.py::test_verified_closed_reservation_releases_hold_without_claiming_measured_usage
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[budget]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_cost]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[monthly_tokens]
+PASSED tests/test_agent_live_postgres.py::test_competing_live_reservations_respect_committed_budget_and_quota[both_fit]
+PASSED tests/test_agent_live_postgres.py::test_concurrent_usage_and_final_receipt_replays_update_one_duration_event
+PASSED tests/test_agent_live_postgres.py::test_final_replay_requires_original_session_and_reason[session]
+PASSED tests/test_agent_live_postgres.py::test_final_replay_requires_original_session_and_reason[reason]
+PASSED tests/test_agent_live_postgres.py::test_unconfirmed_silent_close_never_commits_a_released_hold
+PASSED tests/test_agent_live_postgres.py::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[before_cleanup]
+PASSED tests/test_agent_live_postgres.py::test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions[after_cleanup]
+PASSED tests/test_agent_live_postgres.py::test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session
+18 passed in 16.18s

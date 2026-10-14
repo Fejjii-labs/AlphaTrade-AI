@@ -1,0 +1,18 @@
+.............                                                            [100%]
+==================================== PASSES ====================================
+_________ test_cumulative_usage_once_finalized_and_caption_replay_once _________
+=========================== short test summary info ============================
+PASSED tests/test_agent_live_integration.py::test_cumulative_usage_once_finalized_and_caption_replay_once
+PASSED tests/test_agent_live_integration.py::test_invalid_usage_never_releases_reserved_budget[True]
+PASSED tests/test_agent_live_integration.py::test_invalid_usage_never_releases_reserved_budget[-1]
+PASSED tests/test_agent_live_integration.py::test_invalid_usage_never_releases_reserved_budget[nan]
+PASSED tests/test_agent_live_integration.py::test_invalid_usage_never_releases_reserved_budget[inf]
+PASSED tests/test_agent_live_integration.py::test_invalid_usage_never_releases_reserved_budget[1]
+PASSED tests/test_agent_live_integration.py::test_regression_foreign_final_and_missing_finalization_keep_hold
+PASSED tests/test_agent_live_integration.py::test_existing_quota_and_current_membership_block_live
+PASSED tests/test_agent_live_integration.py::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[end]
+PASSED tests/test_agent_live_integration.py::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[disconnect]
+PASSED tests/test_agent_live_integration.py::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[authorization]
+PASSED tests/test_agent_live_integration.py::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[provider_error]
+PASSED tests/test_agent_live_integration.py::test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_error[missing_final]
+13 passed, 10 deselected in 4.02s
