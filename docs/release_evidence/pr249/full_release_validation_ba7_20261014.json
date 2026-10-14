@@ -7,7 +7,7 @@
   "inputs": {
     "full_backend": true
   },
-  "state": "IN_PROGRESS",
+  "state": "IN_PROGRESS_WITH_DIAGNOSTIC_GAP",
   "criteria_accepted": 2,
   "criteria_total": 3,
   "dispatch_count": 1,
@@ -75,5 +75,380 @@
     "skipped": 0
   },
   "no_deployment_or_activation": true,
-  "historical_timeout_cause_established": false
+  "historical_timeout_cause_established": false,
+  "diagnostic_gap": {
+    "observed_at_utc": "2026-10-14T19:30:40+00:00",
+    "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+    "run_id": 38609456149,
+    "backend_job": 116008750228,
+    "backend_step": {
+      "name": "Complete backend release acceptance",
+      "status": "in_progress",
+      "conclusion": null,
+      "number": 14,
+      "started_at": "2026-10-14T17:47:13Z",
+      "completed_at": null
+    },
+    "last_retained_checkpoint": 6,
+    "last_capture_utc": "2026-10-14T19:02:13.594874Z",
+    "sampled_node_index": 5438,
+    "sampled_phase_age_seconds": 1.0123,
+    "checkpoint_07_expected_utc": "2026-10-14T19:17:13Z",
+    "checkpoint_07_present": false,
+    "terminal_receipt_retained": false,
+    "deadline_configuration": {
+      "inner_seconds": 6000,
+      "outer_seconds": 6060,
+      "step_minutes": 105,
+      "job_minutes": 120,
+      "checkpoint_worker_seconds": 30
+    },
+    "cause_established": false,
+    "sampled_test_culprit_established": false,
+    "assertion_failure_established": false,
+    "resource_exhaustion_established": false,
+    "runner_communication_loss_established": false,
+    "full_ci_dispatch_count": 1,
+    "ci_retry": false
+  },
+  "checkpoints": [
+    {
+      "sequence": 2,
+      "artifact_id": 11918920768,
+      "captured_at_utc": "2026-10-14T18:02:13.515203+00:00",
+      "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
+      "active": {
+        "nodeid": "tests/test_blofin_activity_postgres.py::test_rate_limit_backoff_persists_and_stops_network",
+        "started": 1792000933.0534408,
+        "phase": "setup"
+      },
+      "active_age_seconds": 0.4617619514465332,
+      "active_node_index": 1054,
+      "node_count": 5792,
+      "stdout_status_counts": {
+        "PASSED": 1053,
+        "FAILED": 0,
+        "SKIPPED": 0,
+        "ERROR": 0
+      },
+      "pytest_stdout_truncated": false,
+      "reports_tail_truncated": true,
+      "postgres_samples": 90,
+      "stack_bytes": 0,
+      "upload_receipt": {
+        "failure": null,
+        "artifacts": [
+          {
+            "sequence": 1,
+            "artifact_id": 11916373802
+          }
+        ]
+      },
+      "culprit_established": false,
+      "terminal_execution_receipt_present": false
+    },
+    {
+      "sequence": 3,
+      "artifact_id": 11918263664,
+      "captured_at_utc": "2026-10-14T18:17:13.520996+00:00",
+      "active": {
+        "nodeid": "tests/test_intelligence_integration_fixture.py::test_paper_bot_scan_without_approved_lineage_creates_no_trade",
+        "started": 1792001833.421225,
+        "phase": "call"
+      },
+      "active_age_seconds": 0.09977126121520996,
+      "active_node_index": 2331,
+      "node_count": 5792,
+      "stdout_visible_status_counts": {
+        "PASSED": 2070,
+        "FAILED": 0,
+        "SKIPPED": 0,
+        "ERROR": 0
+      },
+      "stdout_truncated": true,
+      "stdout_file": "pytest.log.tail",
+      "stdout_available": true,
+      "report_tail_truncated": true,
+      "stack_bytes": 0,
+      "upload_receipt": {
+        "failure": null,
+        "artifacts": [
+          {
+            "sequence": 1,
+            "artifact_id": 11916373802
+          },
+          {
+            "sequence": 2,
+            "artifact_id": 11918920768
+          }
+        ]
+      },
+      "culprit_established": false,
+      "postgres_samples": 180,
+      "latest_postgres": {
+        "time": 1792001827.7640893,
+        "active": {
+          "nodeid": "tests/test_intelligence_integration_fixture.py::test_fixture_discussion_preview_confirm_compile_approve_evidence",
+          "started": 1792001827.6916645,
+          "phase": "setup"
+        },
+        "postgres": {
+          "available": true,
+          "rows": []
+        },
+        "postgres_sampled_at": 1792001817.7574942
+      }
+    },
+    {
+      "sequence": 4,
+      "artifact_id": 11920326062,
+      "captured_at_utc": "2026-10-14T18:32:13.553117+00:00",
+      "active": {
+        "nodeid": "tests/test_paper_validation_candidate_slice_80.py::test_cannot_queue_draft_not_ready",
+        "started": 1792002732.0882215,
+        "phase": "setup"
+      },
+      "active_age_seconds": 1.4648957252502441,
+      "active_node_index": 3268,
+      "node_count": 5792,
+      "stdout_visible_status_counts": {
+        "PASSED": 867,
+        "FAILED": 0,
+        "SKIPPED": 0,
+        "ERROR": 0
+      },
+      "stdout_truncated": true,
+      "stdout_file": "pytest.log.tail",
+      "stdout_available": true,
+      "report_tail_truncated": true,
+      "stack_bytes": 0,
+      "upload_receipt": {
+        "failure": null,
+        "artifacts": [
+          {
+            "sequence": 1,
+            "artifact_id": 11916373802
+          },
+          {
+            "sequence": 2,
+            "artifact_id": 11918920768
+          },
+          {
+            "sequence": 3,
+            "artifact_id": 11918263664
+          }
+        ]
+      },
+      "culprit_established": false,
+      "postgres_samples": 270,
+      "latest_postgres": {
+        "time": 1792002729.0559971,
+        "active": {
+          "nodeid": "tests/test_paper_stats_mvp.py::test_close_before_fill_is_refused",
+          "started": 1792002728.6521075,
+          "phase": "call"
+        },
+        "postgres": {
+          "available": true,
+          "rows": []
+        },
+        "postgres_sampled_at": 1792002719.0542915
+      }
+    },
+    {
+      "sequence": 5,
+      "artifact_id": 11919734295,
+      "captured_at_utc": "2026-10-14T18:47:13.581903+00:00",
+      "active": {
+        "nodeid": "tests/test_setup_alert_draft_slice_78.py::test_non_market_watcher_alert_rejected",
+        "started": 1792003628.3439844,
+        "phase": "setup"
+      },
+      "active_age_seconds": 5.237918376922607,
+      "active_node_index": 4278,
+      "node_count": 5792,
+      "stdout_visible_status_counts": {
+        "PASSED": 1876,
+        "FAILED": 0,
+        "SKIPPED": 0,
+        "ERROR": 0
+      },
+      "stdout_truncated": true,
+      "stdout_file": "pytest.log.tail",
+      "stdout_available": true,
+      "report_tail_truncated": true,
+      "stack_bytes": 0,
+      "upload_receipt": {
+        "failure": null,
+        "artifacts": [
+          {
+            "sequence": 1,
+            "artifact_id": 11916373802
+          },
+          {
+            "sequence": 2,
+            "artifact_id": 11918920768
+          },
+          {
+            "sequence": 3,
+            "artifact_id": 11918263664
+          },
+          {
+            "sequence": 4,
+            "artifact_id": 11920326062
+          }
+        ]
+      },
+      "culprit_established": false,
+      "postgres_samples": 360,
+      "latest_postgres": {
+        "time": 1792003630.4265313,
+        "active": {
+          "nodeid": "tests/test_setup_alert_draft_slice_78.py::test_non_market_watcher_alert_rejected",
+          "started": 1792003628.3439844,
+          "phase": "setup"
+        },
+        "postgres": {
+          "available": true,
+          "rows": []
+        },
+        "postgres_sampled_at": 1792003620.423484
+      }
+    },
+    {
+      "sequence": 6,
+      "artifact_id": 11921721467,
+      "captured_at_utc": "2026-10-14T19:02:13.594874+00:00",
+      "active": {
+        "nodeid": "tests/test_watcher_assignments_postgres.py::test_assigned_expiry_retains_evidence_and_uses_existing_notification_policy[nested]",
+        "started": 1792004532.5825546,
+        "phase": "setup"
+      },
+      "active_age_seconds": 1.012319564819336,
+      "active_node_index": 5438,
+      "node_count": 5792,
+      "stdout_visible_status_counts": {
+        "PASSED": 1791,
+        "FAILED": 0,
+        "SKIPPED": 0,
+        "ERROR": 0
+      },
+      "stdout_truncated": true,
+      "stdout_file": "pytest.log.tail",
+      "stdout_available": true,
+      "report_tail_truncated": true,
+      "stack_bytes": 0,
+      "upload_receipt": {
+        "failure": null,
+        "artifacts": [
+          {
+            "sequence": 1,
+            "artifact_id": 11916373802
+          },
+          {
+            "sequence": 2,
+            "artifact_id": 11918920768
+          },
+          {
+            "sequence": 3,
+            "artifact_id": 11918263664
+          },
+          {
+            "sequence": 4,
+            "artifact_id": 11920326062
+          },
+          {
+            "sequence": 5,
+            "artifact_id": 11919734295
+          }
+        ]
+      },
+      "culprit_established": false,
+      "postgres_samples": 450,
+      "latest_postgres": {
+        "time": 1792004531.792798,
+        "active": {
+          "nodeid": "tests/test_watcher_assignments_postgres.py::test_publish_lock_allows_own_research_fk_and_serializes_concurrent_pause",
+          "started": 1792004531.6691203,
+          "phase": "teardown"
+        },
+        "postgres": {
+          "available": true,
+          "rows": [
+            [
+              22258,
+              "active",
+              null,
+              null,
+              [],
+              "0.433584",
+              "0.433308",
+              "DROP SCHEMA"
+            ],
+            [
+              22269,
+              "active",
+              null,
+              null,
+              [],
+              "0.424683",
+              "0.424683",
+              "other"
+            ]
+          ]
+        },
+        "postgres_sampled_at": 1792004521.8039289
+      }
+    }
+  ],
+  "retained_diagnostic_artifacts": [
+    {
+      "artifact_id": 11916933471,
+      "name": "backend-release-source-ba7ad23fafba283f2674959d7605a40d5868ea3e",
+      "bytes": 964,
+      "zip_sha256": "bed15dc7c629c21869c7c021baa82c65da3ccbdbbf262998b18063163b842b5a"
+    },
+    {
+      "artifact_id": 11916673833,
+      "name": "backend-release-collection-ba7ad23fafba283f2674959d7605a40d5868ea3e",
+      "bytes": 104237,
+      "zip_sha256": "53a50b6f1f0e5c1cffb098bdf16d1a0ffcf727a5e312f64e7e56a2622a027884"
+    },
+    {
+      "artifact_id": 11916373802,
+      "name": "backend-release-progress-38609456149-1-1",
+      "bytes": 1879,
+      "zip_sha256": "e629afbab5984e0c112096bcb12af374a31baae330d19e1d5ec8c2e0835140a4"
+    },
+    {
+      "artifact_id": 11918920768,
+      "name": "backend-release-progress-38609456149-1-2",
+      "bytes": 58877,
+      "zip_sha256": "a17634e78a5386ed3766f9704e293e69437558cff2e27101a0e98e895fb68ea6"
+    },
+    {
+      "artifact_id": 11918263664,
+      "name": "backend-release-progress-38609456149-1-3",
+      "bytes": 75145,
+      "zip_sha256": "cd9433e14e9a2e32cff47a8d284a61b3957b202f4138ce896bc40cf37033faf5"
+    },
+    {
+      "artifact_id": 11920326062,
+      "name": "backend-release-progress-38609456149-1-4",
+      "bytes": 63757,
+      "zip_sha256": "1ada916b02dd7ddcc803cf0f7843fec0aabde77a2f9b9d6a206de26f53df735c"
+    },
+    {
+      "artifact_id": 11919734295,
+      "name": "backend-release-progress-38609456149-1-5",
+      "bytes": 85413,
+      "zip_sha256": "3b031f916fbc872e14ab1f2546fad382b25faf7dc10dd291f69c150b6175c401"
+    },
+    {
+      "artifact_id": 11921721467,
+      "name": "backend-release-progress-38609456149-1-6",
+      "bytes": 86325,
+      "zip_sha256": "348ee66916358a70a315ff06ece9963809c795e041c09865dcdc00af045074c9"
+    }
+  ]
 }
