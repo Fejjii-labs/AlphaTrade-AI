@@ -1,0 +1,47 @@
+{
+  "source_commit": "0e7a7fcb2b5ad9dfc5d3ba32f71262fb5afd3205",
+  "source_tree": "d59ad086c4fd7e240dba6c619a5f2b9974587084",
+  "parent_commit": "7feaef986cd21e40dacaa389c88c0eb328c78cfb",
+  "local_qualified_commit": "375bf00f35182aed677c032afe5494b8a0ff6806",
+  "same_tree_as_local": true,
+  "ruff_version": "0.15.15",
+  "configuration": "backend/pyproject.toml",
+  "working_directory": "backend",
+  "equivalence": {
+    "scripts/backend_checkpoints.py": {
+      "ast_equivalent": true,
+      "comments_equivalent": true,
+      "before_sha256": "a654d8df136214dcc87a61b48def9569dbd998090232bd2451b4d8bf3a68daab",
+      "after_sha256": "badb14ca57be1c45dcc5eb97f87269266ea2c1bdd2887018d23b3194b96ed85f"
+    },
+    "scripts/run_backend_launch.py": {
+      "ast_equivalent": true,
+      "comments_equivalent": true,
+      "before_sha256": "153c7052847b4ab257c7041921021043cc8fe0d95422ee14832e4b69360c28ea",
+      "after_sha256": "026b2e64fedb9d5d7851d26aaf7c1e1a5b65c86bc559062b8fb7c218b00f55c9"
+    }
+  },
+  "checks": [
+    {
+      "name": "ci_ruff_lint",
+      "exit_code": 0,
+      "result": "All checks passed",
+      "seconds": 0.121
+    },
+    {
+      "name": "ci_ruff_format",
+      "exit_code": 0,
+      "result": "1301 files already formatted",
+      "seconds": 0.111
+    },
+    {
+      "name": "git_diff_check",
+      "exit_code": 0
+    }
+  ],
+  "remote_file_bytes_verified": true,
+  "behavior_tests_repeated": false,
+  "full_ci_dispatched": false,
+  "accepted_criteria": 3,
+  "total_criteria": 3
+}
