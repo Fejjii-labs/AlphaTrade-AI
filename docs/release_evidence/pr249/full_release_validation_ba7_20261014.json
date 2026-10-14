@@ -4,404 +4,138 @@
   "run_id": 38609456149,
   "run_url": "https://github.com/Fejjii/AlphaTrade-AI/actions/runs/38609456149",
   "run_attempt": 1,
-  "inputs": {
-    "full_backend": true
+  "conclusion": "cancelled",
+  "verdict": "BLOCKED",
+  "full_dispatch_count": 1,
+  "full_rerun_count": 0,
+  "required_jobs_passed": 3,
+  "required_jobs_total": 6,
+  "jobs": [
+    {
+      "id": 116008749497,
+      "name": "frontend",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-14T17:46:14Z",
+      "completed_at": "2026-10-14T17:52:14Z"
+    },
+    {
+      "id": 116008750019,
+      "name": "deployment-safety",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-14T17:46:14Z",
+      "completed_at": "2026-10-14T17:46:41Z"
+    },
+    {
+      "id": 116008750168,
+      "name": "docker-build",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-14T17:46:14Z",
+      "completed_at": "2026-10-14T17:46:47Z"
+    },
+    {
+      "id": 116008750228,
+      "name": "backend",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "started_at": "2026-10-14T17:46:14Z",
+      "completed_at": "2026-10-14T19:51:14Z"
+    },
+    {
+      "id": 116008751802,
+      "name": "backend-focused (batch ${{ matrix.batch }})",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-10-14T17:46:12Z",
+      "completed_at": "2026-10-14T17:46:12Z"
+    },
+    {
+      "id": 116069048830,
+      "name": "evaluation",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-10-14T19:51:14Z",
+      "completed_at": "2026-10-14T19:51:14Z"
+    },
+    {
+      "id": 116069049002,
+      "name": "e2e-smoke",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-10-14T19:51:15Z",
+      "completed_at": "2026-10-14T19:51:14Z"
+    }
+  ],
+  "backend": {
+    "job_id": 116008750228,
+    "conclusion": "cancelled",
+    "platform_annotation": "The job has exceeded the maximum execution time of 2h0m0s",
+    "job_elapsed_seconds": 7500,
+    "phase": "Complete backend release acceptance (last reported step remains in_progress despite completed cancelled job)",
+    "collected": 5792,
+    "execution_counts_known": false,
+    "passed": null,
+    "failed": null,
+    "skipped": null,
+    "retained_displayed_pass_outcomes": 5367,
+    "retained_displayed_fail_outcomes": 0,
+    "last_checkpoint_sequence": 6,
+    "last_checkpoint_node_index": 5438,
+    "last_checkpoint_sample_age_seconds": 1.0123,
+    "last_checkpoint_utc": "2026-10-14T19:02:13.594874Z",
+    "missing_checkpoint": 7,
+    "missing_terminal_receipts": true,
+    "job_log_error": "GitHub API404 BlobNotFound",
+    "workflow_archive_alternate_attempt": "Forbidden; no retry",
+    "assertion_failure_identified": false,
+    "test_culprit_identified": false,
+    "cause_identified": false,
+    "termination_signal_known": false,
+    "resource_oom_evidence_available": false
   },
-  "state": "IN_PROGRESS_WITH_DIAGNOSTIC_GAP",
-  "criteria_accepted": 2,
-  "criteria_total": 3,
-  "dispatch_count": 1,
-  "required_jobs": {
-    "backend": "in_progress",
-    "frontend": {
-      "result": "success",
-      "passed": 1712,
-      "failed": 0,
-      "skipped": 0,
-      "files": 255,
-      "seconds": 184.81,
-      "build": "success"
-    },
-    "deployment-safety": {
-      "result": "success",
-      "passed": 108,
-      "failed": 0,
-      "skipped": 0,
-      "self_checks": "success"
-    },
-    "docker-build": "success",
-    "evaluation": "waiting",
-    "e2e-smoke": "waiting"
+  "frontend": {
+    "passed": 1712,
+    "failed": 0,
+    "skipped": 0,
+    "test_files_passed": 255,
+    "build": "success",
+    "lint_type_api_drift": "success"
   },
-  "checkpoint_02": {
-    "sequence": 2,
-    "artifact_id": 11918920768,
-    "captured_at_utc": "2026-10-14T18:02:13.515203+00:00",
-    "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
-    "active": {
-      "nodeid": "tests/test_blofin_activity_postgres.py::test_rate_limit_backoff_persists_and_stops_network",
-      "started": 1792000933.0534408,
-      "phase": "setup"
-    },
-    "active_age_seconds": 0.4617619514465332,
-    "active_node_index": 1054,
-    "node_count": 5792,
-    "stdout_status_counts": {
-      "PASSED": 1053,
-      "FAILED": 0,
-      "SKIPPED": 0,
-      "ERROR": 0
-    },
-    "pytest_stdout_truncated": false,
-    "reports_tail_truncated": true,
-    "postgres_samples": 90,
-    "stack_bytes": 0,
-    "upload_receipt": {
-      "failure": null,
-      "artifacts": [
-        {
-          "sequence": 1,
-          "artifact_id": 11916373802
-        }
-      ]
-    },
-    "culprit_established": false,
-    "terminal_execution_receipt_present": false
+  "deployment_safety": {
+    "passed": 108,
+    "failed": 0,
+    "skipped": 0,
+    "script_self_checks": "success"
   },
-  "staging_packet_prepared": true,
-  "private_helper_gate_guards": {
+  "docker_build": {
+    "images_built": 1,
+    "test_count": null,
+    "result": "success"
+  },
+  "evaluation": {
+    "result": "skipped",
+    "executed_cases": 0,
+    "reason": "backend dependency cancelled"
+  },
+  "e2e_smoke": {
+    "result": "skipped",
+    "executed_tests": 0,
+    "reason": "backend dependency cancelled"
+  },
+  "diagnostic_archives_retained": 8,
+  "staging_acceptance_packet_prepared": true,
+  "staging_helper_guards": {
     "passed": 7,
     "failed": 0,
     "skipped": 0
   },
-  "no_deployment_or_activation": true,
+  "source_changed": false,
+  "full_backend_or_preliminary_tests_repeated": false,
+  "deployment_or_activation": false,
   "historical_timeout_cause_established": false,
-  "diagnostic_gap": {
-    "observed_at_utc": "2026-10-14T19:30:40+00:00",
-    "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
-    "run_id": 38609456149,
-    "backend_job": 116008750228,
-    "backend_step": {
-      "name": "Complete backend release acceptance",
-      "status": "in_progress",
-      "conclusion": null,
-      "number": 14,
-      "started_at": "2026-10-14T17:47:13Z",
-      "completed_at": null
-    },
-    "last_retained_checkpoint": 6,
-    "last_capture_utc": "2026-10-14T19:02:13.594874Z",
-    "sampled_node_index": 5438,
-    "sampled_phase_age_seconds": 1.0123,
-    "checkpoint_07_expected_utc": "2026-10-14T19:17:13Z",
-    "checkpoint_07_present": false,
-    "terminal_receipt_retained": false,
-    "deadline_configuration": {
-      "inner_seconds": 6000,
-      "outer_seconds": 6060,
-      "step_minutes": 105,
-      "job_minutes": 120,
-      "checkpoint_worker_seconds": 30
-    },
-    "cause_established": false,
-    "sampled_test_culprit_established": false,
-    "assertion_failure_established": false,
-    "resource_exhaustion_established": false,
-    "runner_communication_loss_established": false,
-    "full_ci_dispatch_count": 1,
-    "ci_retry": false
-  },
-  "checkpoints": [
-    {
-      "sequence": 2,
-      "artifact_id": 11918920768,
-      "captured_at_utc": "2026-10-14T18:02:13.515203+00:00",
-      "candidate": "ba7ad23fafba283f2674959d7605a40d5868ea3e",
-      "active": {
-        "nodeid": "tests/test_blofin_activity_postgres.py::test_rate_limit_backoff_persists_and_stops_network",
-        "started": 1792000933.0534408,
-        "phase": "setup"
-      },
-      "active_age_seconds": 0.4617619514465332,
-      "active_node_index": 1054,
-      "node_count": 5792,
-      "stdout_status_counts": {
-        "PASSED": 1053,
-        "FAILED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0
-      },
-      "pytest_stdout_truncated": false,
-      "reports_tail_truncated": true,
-      "postgres_samples": 90,
-      "stack_bytes": 0,
-      "upload_receipt": {
-        "failure": null,
-        "artifacts": [
-          {
-            "sequence": 1,
-            "artifact_id": 11916373802
-          }
-        ]
-      },
-      "culprit_established": false,
-      "terminal_execution_receipt_present": false
-    },
-    {
-      "sequence": 3,
-      "artifact_id": 11918263664,
-      "captured_at_utc": "2026-10-14T18:17:13.520996+00:00",
-      "active": {
-        "nodeid": "tests/test_intelligence_integration_fixture.py::test_paper_bot_scan_without_approved_lineage_creates_no_trade",
-        "started": 1792001833.421225,
-        "phase": "call"
-      },
-      "active_age_seconds": 0.09977126121520996,
-      "active_node_index": 2331,
-      "node_count": 5792,
-      "stdout_visible_status_counts": {
-        "PASSED": 2070,
-        "FAILED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0
-      },
-      "stdout_truncated": true,
-      "stdout_file": "pytest.log.tail",
-      "stdout_available": true,
-      "report_tail_truncated": true,
-      "stack_bytes": 0,
-      "upload_receipt": {
-        "failure": null,
-        "artifacts": [
-          {
-            "sequence": 1,
-            "artifact_id": 11916373802
-          },
-          {
-            "sequence": 2,
-            "artifact_id": 11918920768
-          }
-        ]
-      },
-      "culprit_established": false,
-      "postgres_samples": 180,
-      "latest_postgres": {
-        "time": 1792001827.7640893,
-        "active": {
-          "nodeid": "tests/test_intelligence_integration_fixture.py::test_fixture_discussion_preview_confirm_compile_approve_evidence",
-          "started": 1792001827.6916645,
-          "phase": "setup"
-        },
-        "postgres": {
-          "available": true,
-          "rows": []
-        },
-        "postgres_sampled_at": 1792001817.7574942
-      }
-    },
-    {
-      "sequence": 4,
-      "artifact_id": 11920326062,
-      "captured_at_utc": "2026-10-14T18:32:13.553117+00:00",
-      "active": {
-        "nodeid": "tests/test_paper_validation_candidate_slice_80.py::test_cannot_queue_draft_not_ready",
-        "started": 1792002732.0882215,
-        "phase": "setup"
-      },
-      "active_age_seconds": 1.4648957252502441,
-      "active_node_index": 3268,
-      "node_count": 5792,
-      "stdout_visible_status_counts": {
-        "PASSED": 867,
-        "FAILED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0
-      },
-      "stdout_truncated": true,
-      "stdout_file": "pytest.log.tail",
-      "stdout_available": true,
-      "report_tail_truncated": true,
-      "stack_bytes": 0,
-      "upload_receipt": {
-        "failure": null,
-        "artifacts": [
-          {
-            "sequence": 1,
-            "artifact_id": 11916373802
-          },
-          {
-            "sequence": 2,
-            "artifact_id": 11918920768
-          },
-          {
-            "sequence": 3,
-            "artifact_id": 11918263664
-          }
-        ]
-      },
-      "culprit_established": false,
-      "postgres_samples": 270,
-      "latest_postgres": {
-        "time": 1792002729.0559971,
-        "active": {
-          "nodeid": "tests/test_paper_stats_mvp.py::test_close_before_fill_is_refused",
-          "started": 1792002728.6521075,
-          "phase": "call"
-        },
-        "postgres": {
-          "available": true,
-          "rows": []
-        },
-        "postgres_sampled_at": 1792002719.0542915
-      }
-    },
-    {
-      "sequence": 5,
-      "artifact_id": 11919734295,
-      "captured_at_utc": "2026-10-14T18:47:13.581903+00:00",
-      "active": {
-        "nodeid": "tests/test_setup_alert_draft_slice_78.py::test_non_market_watcher_alert_rejected",
-        "started": 1792003628.3439844,
-        "phase": "setup"
-      },
-      "active_age_seconds": 5.237918376922607,
-      "active_node_index": 4278,
-      "node_count": 5792,
-      "stdout_visible_status_counts": {
-        "PASSED": 1876,
-        "FAILED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0
-      },
-      "stdout_truncated": true,
-      "stdout_file": "pytest.log.tail",
-      "stdout_available": true,
-      "report_tail_truncated": true,
-      "stack_bytes": 0,
-      "upload_receipt": {
-        "failure": null,
-        "artifacts": [
-          {
-            "sequence": 1,
-            "artifact_id": 11916373802
-          },
-          {
-            "sequence": 2,
-            "artifact_id": 11918920768
-          },
-          {
-            "sequence": 3,
-            "artifact_id": 11918263664
-          },
-          {
-            "sequence": 4,
-            "artifact_id": 11920326062
-          }
-        ]
-      },
-      "culprit_established": false,
-      "postgres_samples": 360,
-      "latest_postgres": {
-        "time": 1792003630.4265313,
-        "active": {
-          "nodeid": "tests/test_setup_alert_draft_slice_78.py::test_non_market_watcher_alert_rejected",
-          "started": 1792003628.3439844,
-          "phase": "setup"
-        },
-        "postgres": {
-          "available": true,
-          "rows": []
-        },
-        "postgres_sampled_at": 1792003620.423484
-      }
-    },
-    {
-      "sequence": 6,
-      "artifact_id": 11921721467,
-      "captured_at_utc": "2026-10-14T19:02:13.594874+00:00",
-      "active": {
-        "nodeid": "tests/test_watcher_assignments_postgres.py::test_assigned_expiry_retains_evidence_and_uses_existing_notification_policy[nested]",
-        "started": 1792004532.5825546,
-        "phase": "setup"
-      },
-      "active_age_seconds": 1.012319564819336,
-      "active_node_index": 5438,
-      "node_count": 5792,
-      "stdout_visible_status_counts": {
-        "PASSED": 1791,
-        "FAILED": 0,
-        "SKIPPED": 0,
-        "ERROR": 0
-      },
-      "stdout_truncated": true,
-      "stdout_file": "pytest.log.tail",
-      "stdout_available": true,
-      "report_tail_truncated": true,
-      "stack_bytes": 0,
-      "upload_receipt": {
-        "failure": null,
-        "artifacts": [
-          {
-            "sequence": 1,
-            "artifact_id": 11916373802
-          },
-          {
-            "sequence": 2,
-            "artifact_id": 11918920768
-          },
-          {
-            "sequence": 3,
-            "artifact_id": 11918263664
-          },
-          {
-            "sequence": 4,
-            "artifact_id": 11920326062
-          },
-          {
-            "sequence": 5,
-            "artifact_id": 11919734295
-          }
-        ]
-      },
-      "culprit_established": false,
-      "postgres_samples": 450,
-      "latest_postgres": {
-        "time": 1792004531.792798,
-        "active": {
-          "nodeid": "tests/test_watcher_assignments_postgres.py::test_publish_lock_allows_own_research_fk_and_serializes_concurrent_pause",
-          "started": 1792004531.6691203,
-          "phase": "teardown"
-        },
-        "postgres": {
-          "available": true,
-          "rows": [
-            [
-              22258,
-              "active",
-              null,
-              null,
-              [],
-              "0.433584",
-              "0.433308",
-              "DROP SCHEMA"
-            ],
-            [
-              22269,
-              "active",
-              null,
-              null,
-              [],
-              "0.424683",
-              "0.424683",
-              "other"
-            ]
-          ]
-        },
-        "postgres_sampled_at": 1792004521.8039289
-      }
-    }
-  ],
-  "retained_diagnostic_artifacts": [
+  "retained_artifact_receipts": [
     {
       "artifact_id": 11916933471,
       "name": "backend-release-source-ba7ad23fafba283f2674959d7605a40d5868ea3e",
@@ -450,5 +184,31 @@
       "bytes": 86325,
       "zip_sha256": "348ee66916358a70a315ff06ece9963809c795e041c09865dcdc00af045074c9"
     }
-  ]
+  ],
+  "partial_execution_evidence": {
+    "collected": 5792,
+    "unique_retained_raw_stdout_outcomes": {
+      "PASSED": 5367,
+      "FAILED": 0,
+      "SKIPPED": 0,
+      "ERROR": 0
+    },
+    "observed_stdout_identities": 5367,
+    "all_three_passed_phases_retained": 2332,
+    "full_execution_counts_known": false,
+    "terminal_receipt_present": false,
+    "scope": "Union of checkpoint execution snapshots; partial displayed evidence, not complete acceptance",
+    "collection_execution_raw_identity_mismatches": 4,
+    "mismatch_families": [
+      "tests/test_agent_imported_document_retrieval.py::test_imported_formats_reach_agent_with_substantive_passages_and_source_refs",
+      "tests/test_agent_paper_execution_v4.py::test_ambiguous_confirmation_is_not_authority",
+      "tests/test_knowledge_file_import.py::test_malformed_unsupported_empty_and_oversize_files_fail_clearly",
+      "tests/test_manual_blofin_demo.py::test_unsafe_posture_or_wrong_account_refuses_before_io"
+    ],
+    "analysis_attempt": "Initial collection-equality assertion failed on generated DOCX ZIP-byte parameter IDs; corrected counting uses actual raw execution identities without relabeling or collapsing coverage. No tests or source changes."
+  },
+  "criteria_accepted": 2,
+  "criteria_total": 3,
+  "provider_diagnostic_request_prepared": true,
+  "provider_request_sent": false
 }
