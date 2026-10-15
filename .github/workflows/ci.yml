@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    # 02:00 UTC. GitHub runs scheduled workflows from the default branch only.
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       full_backend:
@@ -15,6 +18,7 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     services:
       postgres:
         image: postgres:16-alpine
@@ -48,14 +52,24 @@ jobs:
       - name: Ruff format
         run: uv run ruff format --check . ../scripts/run_backend_focused.py
       - name: Focused backend development tests
-        if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
+        if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || !inputs.full_backend)
         env:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
-        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        run: uv run pytest
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend)
+        timeout-minutes: 140
+        run: uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rA --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+      - name: Upload full backend pytest artifacts
+        if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend))
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-backend-pytest
+          path: |
+            backend/full-backend-junit.xml
+            backend/full-backend-pytest.log
+          if-no-files-found: warn
 
   deployment-safety:
     runs-on: ubuntu-latest

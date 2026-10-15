@@ -2,6 +2,19 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-098 — Full backend gate keeps diagnostics and a nightly run
+
+- Date: 2026-10-15
+- Decision: Owner Sofien approved hardening only the complete backend gate.
+  Focused push/PR selection stays as it is. `workflow_dispatch` with
+  `full_backend=true`, and the default-branch schedule at 02:00 UTC, run the
+  full suite with a 300s thread timeout, `-rA`, the 50 slowest durations, junit
+  and pytest log artifacts, and a 150 minute backend job timeout.
+- Limit: The nightly schedule does not run until this workflow is on the default
+  branch. It is not release acceptance by itself. No merge, deploy, secret,
+  Render, or branch-protection change is authorized by this decision.
+- Reference: `.github/workflows/ci.yml`; approved 2026-10-15 15:51 CEST.
+
 ## AT-ADR-097 — Separate native closure from protection attribution
 
 - Date: 2026-10-09

@@ -89,11 +89,13 @@ manual dispatch. Ordinary push/PR events always use development mode. A manual f
 value without `combined_validation=true` requests development checks only. Do not dispatch a full run during routine
 implementation or call a focused green check the complete release gate.
 
-The full dispatch runs unfiltered `uv run pytest` with PostgreSQL and all existing
-Ruff, frontend lint/type/unit/build, deployment-safety, Docker build, deterministic
-Agent/RAG/guardrail evaluation and Playwright browser smoke checks. Record the run
-URL, exact `head_sha`, full backend counts/skips and successful results for all
-six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
+The full dispatch runs the complete backend suite (`pytest` with a 300s per-test
+thread timeout, `-rA`, durations, and junit/log artifacts) with PostgreSQL and all
+existing Ruff, frontend lint/type/unit/build, deployment-safety, Docker build,
+deterministic Agent/RAG/guardrail evaluation and Playwright browser smoke checks.
+The same full backend gate is scheduled at 02:00 UTC on the default branch. Record
+the run URL, exact `head_sha`, full backend counts/skips and successful results for
+all six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
 acceptance. Investigate skips and do not attribute counts from another commit.
 If the reviewed commit changes, its earlier full result is not final acceptance.
 If the run fails, diagnose and repair the specific failures with focused verification. Rerun
