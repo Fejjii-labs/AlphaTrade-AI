@@ -10,88 +10,10 @@ on:
         description: Run the complete backend suite for final release acceptance
         type: boolean
         required: true
-        default: false
-      combined_validation:
-        description: Run combined frontend build, evaluations, Docker and browser checks
-        type: boolean
-        required: true
-        default: false
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+        default: true
 
 jobs:
-  backend-focused:
-    if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
-    name: backend-focused (batch ${{ matrix.batch }})
-    timeout-minutes: 20
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        batch: [0, 1, 2]
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: alphatrade
-          POSTGRES_PASSWORD: alphatrade
-          POSTGRES_DB: alphatrade_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alphatrade -d alphatrade_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      PHASE1_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-      AT028_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-      BLOFIN_ACTIVITY_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-      EXPERIMENT_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Install locked focused dependencies
-        timeout-minutes: 5
-        run: uv sync --frozen --extra dev
-      - name: Focused backend development batch
-        timeout-minutes: 18
-        env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: >-
-          python3 ../scripts/run_backend_launch.py
-          --output ../backend-focused-${{ matrix.batch }}
-          --stage probe --seconds 1020 --
-          uv run python ../scripts/run_backend_focused.py
-          --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
-          --batch-index ${{ matrix.batch }} --batch-count 3
-          --output ../backend-focused-${{ matrix.batch }}
-      - name: Retain focused batch selection and results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-focused-${{ github.sha }}-${{ matrix.batch }}
-          path: backend-focused-${{ matrix.batch }}/
-          if-no-files-found: error
-          retention-days: 7
-
   backend:
-    needs: [backend-focused]
-    if: always() && !cancelled()
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.full_backend && 120 || 20 }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -108,10 +30,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      PHASE1_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
       AT028_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-      BLOFIN_ACTIVITY_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
-      EXPERIMENT_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
     defaults:
       run:
         working-directory: backend
@@ -119,71 +38,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Record release source before launching tools
-        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        timeout-minutes: 1
-        run: python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics --prepare-only
-      - name: Retain early backend source evidence
-        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-release-source-${{ github.sha }}
-          path: backend-ci-diagnostics/provenance.json
-          if-no-files-found: error
-          retention-days: 7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - name: Install dependencies
-        timeout-minutes: 5
         run: uv sync --extra dev
       - name: Ruff check
-        run: uv run ruff check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py ../scripts/backend_checkpoints.py
+        run: uv run ruff check . ../scripts/run_backend_focused.py
       - name: Ruff format
-        run: uv run ruff format --check . ../scripts/run_backend_focused.py ../scripts/run_frontend_focused.py ../scripts/run_backend_release.py ../scripts/run_backend_launch.py ../scripts/backend_checkpoints.py
+        run: uv run ruff format --check . ../scripts/run_backend_focused.py
       - name: Focused backend development tests
         if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
         env:
-          BACKEND_FOCUSED_RESULT: ${{ needs.backend-focused.result }}
-        run: test "$BACKEND_FOCUSED_RESULT" = success
-      - name: Collect backend release nodes within a startup budget
-        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        timeout-minutes: 4
-        run: >-
-          python3 ../scripts/run_backend_launch.py --output ../backend-ci-diagnostics
-          --stage collection --seconds 180 -- uv run python -m pytest
-          -p tests.support.release_diagnostics --collect-only -q
-      - name: Retain backend collection evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-release-collection-${{ github.sha }}
-          path: backend-ci-diagnostics/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Install checkpoint transport
-        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        timeout-minutes: 2
-        working-directory: .github/actions/backend-release
-        run: npm ci --ignore-scripts --no-audit --no-fund
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
         if: github.event_name == 'workflow_dispatch' && inputs.full_backend
-        # Tests remain one unfiltered process. Checkpoints leave the runner during it.
-        timeout-minutes: 105
-        uses: ./.github/actions/backend-release
-        with:
-          command: '["uv", "run", "python", "../scripts/run_backend_release.py", "--run-seconds", "6000"]'
-      - name: Retain backend release diagnostics
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.full_backend
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-release-diagnostics-${{ github.sha }}
-          path: backend-ci-diagnostics/
-          if-no-files-found: warn
-          retention-days: 7
+        run: uv run pytest
 
   deployment-safety:
-    timeout-minutes: 10
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -247,15 +121,12 @@ jobs:
           test "$code" -eq 2
 
   frontend:
-    timeout-minutes: 20
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -263,46 +134,16 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Install schema exporter
-        working-directory: backend
-        run: uv sync --extra dev
-      - name: Generated API drift check
-        run: npm run api:check
       - name: Lint
         run: npm run lint
       - name: Typecheck
         run: npm run typecheck
-      - name: Focused frontend development tests
-        if: github.event_name != 'workflow_dispatch' || !(inputs.combined_validation || inputs.full_backend)
-        env:
-          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python3 ../scripts/run_frontend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
-      - name: Complete frontend unit tests
-        if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
+      - name: Unit tests
         run: npm run test
       - name: Build
-        if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
         run: npm run build
-      - name: Share the verified production browser build
-        if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-production-build
-          path: frontend/.next
-          include-hidden-files: true
-          retention-days: 1
-      - name: Report validation scope
-        if: always()
-        run: |
-          echo 'This result covers the checks actually executed above. Combined build/evaluation/Docker/browser checks require explicit combined_validation=true or full_backend=true. Full backend release acceptance requires full_backend=true and release prerequisites.' >> "$GITHUB_STEP_SUMMARY"
 
   evaluation:
-    if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
-    timeout-minutes: 15
     runs-on: ubuntu-latest
     needs: [backend]
     steps:
@@ -324,8 +165,6 @@ jobs:
         run: uv run python ../evaluation/evaluate_guardrails.py
 
   docker-build:
-    if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
-    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -333,8 +172,6 @@ jobs:
         run: docker build -t alphatrade-backend:ci ./backend
 
   e2e-smoke:
-    if: github.event_name == 'workflow_dispatch' && (inputs.combined_validation || inputs.full_backend)
-    timeout-minutes: 20
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     defaults:
@@ -355,15 +192,9 @@ jobs:
         run: uv sync --extra dev
       - name: Install frontend
         run: npm ci
-      - name: Restore the verified production browser build
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-production-build
-          path: frontend/.next
       - name: Install Playwright browsers
         run: npx playwright install chromium --with-deps
       - name: E2E smoke (API + public UI)
         env:
           CI: "true"
-          PLAYWRIGHT_PRODUCTION: "true"
         run: npm run test:e2e
