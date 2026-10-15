@@ -76,3 +76,13 @@ it("shows a stored CONFIRMED setup as EXPIRED once its expiry has passed", async
     await screen.findByRole("heading", { name: "SFP confirmed_sfp · EXPIRED" }),
   ).toBeInTheDocument();
 });
+
+it("shows a stored CONFIRMED setup as EXPIRED at the exact expires_at instant", async () => {
+  // displayedBrainSetup uses now >= expires_at, so the boundary itself is expired.
+  vi.setSystemTime(new Date("2026-10-10T00:00:00Z"));
+  mocks.setup.mockResolvedValue(setup);
+  render(<BrainSetupPage />);
+  expect(
+    await screen.findByRole("heading", { name: "SFP confirmed_sfp · EXPIRED" }),
+  ).toBeInTheDocument();
+});
