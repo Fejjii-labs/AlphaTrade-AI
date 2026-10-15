@@ -90,7 +90,7 @@ value without `combined_validation=true` requests development checks only. Do no
 implementation or call a focused green check the complete release gate.
 
 The full dispatch runs the complete backend suite (`pytest` with a 300s per-test
-thread timeout, `-rA`, durations, and junit/log artifacts) with PostgreSQL and all
+thread timeout, `-rfE`, durations, and junit/log artifacts) with PostgreSQL and all
 existing Ruff, frontend lint/type/unit/build, deployment-safety, Docker build,
 deterministic Agent/RAG/guardrail evaluation and Playwright browser smoke checks.
 The same full backend gate is scheduled at 02:00 UTC on the default branch. Record

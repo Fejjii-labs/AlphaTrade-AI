@@ -2,6 +2,20 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-099 — Full backend report lists failures, not every pass
+
+- Date: 2026-10-15
+- Decision: The complete backend gate keeps the 300s thread timeout, the 50
+  slowest durations, and the junit/log artifacts. It reports failures and errors
+  (`-rfE`) instead of every passed test (`-rA`). Run 38765481172 reached 100%
+  of 4848 collected tests in about 70 minutes, then the all-pass captured-output
+  report was still running when the 150 minute job was cancelled, so no junit
+  artifact was uploaded.
+- Limit: This does not skip tests and does not change assertions. The known
+  analytics-filter 422 failure stays a real failure. No merge or dispatch is
+  authorized by this decision.
+- Reference: `.github/workflows/ci.yml`; run 38765481172.
+
 ## AT-ADR-098 — Full backend gate keeps diagnostics and a nightly run
 
 - Date: 2026-10-15

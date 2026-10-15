@@ -19,7 +19,6 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
-from app.db.base import Base
 from app.db.models import Membership, Organization, TradeJournal, User
 from app.interactive_agent import proposals as proposal_mod
 from app.interactive_agent.contracts import (
@@ -31,7 +30,7 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.proposals import find_proposal
 from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import MembershipRole
-from tests.support.postgres_persistence import reset_public_schema
+from tests.support.postgres_template import refresh_database
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -76,9 +75,7 @@ def _settings() -> Settings:
 
 @pytest.fixture
 def pg_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool)
-    reset_public_schema(engine)
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     settings = _settings()
     with factory() as session:

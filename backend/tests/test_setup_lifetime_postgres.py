@@ -8,11 +8,8 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import NullPool
 
-from app.db.base import Base
 from app.db.models import Organization
 from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler
 from app.evidence_pipeline.setup_lifetime import (
@@ -31,14 +28,11 @@ from app.signal_fusion.first_slice_types import FIRST_SLICE_EXPIRY_BARS
 from tests.support.phase6_evaluator import subsequent_bars
 from tests.support.phase6_fusion import ORG_ID, fusion_policy
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
+from tests.support.postgres_template import refresh_database
 
 
 def _engine() -> sessionmaker[Session]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     return sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 
 
