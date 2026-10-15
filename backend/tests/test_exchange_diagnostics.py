@@ -53,8 +53,6 @@ _DEMO_SETTINGS = {
     "blofin_api_passphrase": "demo-pass",
     "blofin_demo_rest_base_url": "https://demo-trading-openapi.blofin.com",
     "blofin_max_retries": 1,
-    # Health "ready" needs the verified key scope; the probe runs on MockTransport.
-    "exchange_demo_startup_scope_probe_enabled": True,
 }
 
 _INSTRUMENTS = [

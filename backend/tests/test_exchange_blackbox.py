@@ -46,8 +46,6 @@ _DEMO_OK = {
     "blofin_api_secret": "demo-secret",
     "blofin_api_passphrase": "demo-pass",
     "blofin_demo_rest_base_url": _DEMO_REST,
-    # These tests exercise the startup scope probe with stub/mock providers.
-    "exchange_demo_startup_scope_probe_enabled": True,
 }
 
 

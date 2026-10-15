@@ -185,9 +185,7 @@ def build_default_registry(settings: Settings) -> ProviderRegistry:
     registry.register(_PerpetualEvidenceAdapter(perpetual_evidence))
 
     # Exchange: mock by default; BloFin demo (read-only) when explicitly enabled.
-    resolved_exchange = resolve_exchange_provider(
-        settings, verify_scope=settings.exchange_demo_startup_scope_probe_required
-    )
+    resolved_exchange = resolve_exchange_provider(settings)
     registry.register(resolved_exchange.status_provider)
     if resolved_exchange.market_data is not None:
         registry.register(_MarketDataProviderAdapter(resolved_exchange.market_data))
