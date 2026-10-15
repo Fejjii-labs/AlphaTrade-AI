@@ -29,6 +29,7 @@ from app.services.exchange_diagnostics_service import (
     LeverageProbe,
     compute_readiness,
 )
+from tests.support.network_guard import block_outbound_network
 
 _BASE = {
     "environment": "local",
@@ -127,6 +128,13 @@ def _demo_handler(
     if "/trade/order" in path and request.method == "GET":
         return httpx.Response(200, json={"code": "0", "data": [_ORDER]})
     return httpx.Response(200, json={"code": "0", "data": []})
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network() -> Iterator[None]:
+    with block_outbound_network() as attempts:
+        yield
+    assert not attempts, f"test reached a real network host: {attempts}"
 
 
 @pytest.fixture(autouse=True)

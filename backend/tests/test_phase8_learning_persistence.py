@@ -39,6 +39,7 @@ from app.learning_attribution.errors import (
 from app.learning_attribution.query import LearningQueryService
 from app.persistence.attribution_postgres import PostgresAttributionStore
 from app.schemas.common import JournalLifecycleEventType, TradeResult
+from tests.support.alembic_heads import alembic_ancestry, single_alembic_head
 from tests.support.learning_attribution import (
     ACCOUNT_ID,
     ORG_ID,
@@ -63,7 +64,6 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src/app/learning_attributi
 PERSISTENCE_MODULE = (
     Path(__file__).resolve().parents[1] / "src/app/persistence/attribution_postgres.py"
 )
-HEAD = "a8agentcapture001"
 WATCHER_TENANT_WATCHLIST = "b6f2d9a10e73"
 PHASE8_REVISION = "d4f7a2c8e901"
 PREVIOUS_HEAD = "c9e2b4a1d078"
@@ -478,8 +478,7 @@ def test_learning_does_not_write_historical_candles(
 
 def test_alembic_single_head_includes_phase8() -> None:
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [HEAD]
-    ancestry = {revision.revision for revision in script.walk_revisions(base="base", head=HEAD)}
+    ancestry = alembic_ancestry(single_alembic_head(script))
     assert WATCHER_TENANT_WATCHLIST in ancestry
     assert PHASE8_REVISION in ancestry
     assert script.get_revision(PHASE8_REVISION).down_revision == PREVIOUS_HEAD
@@ -498,7 +497,7 @@ def test_phase8_alembic_upgrade_downgrade_reupgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == HEAD
+        assert version == single_alembic_head()
         for table_name in (
             "learning_attribution_records",
             "learning_attribution_events",
@@ -571,7 +570,7 @@ def test_phase8_alembic_upgrade_downgrade_reupgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == HEAD
+        assert version == single_alembic_head()
     engine.dispose()
 
 

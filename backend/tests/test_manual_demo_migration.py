@@ -15,6 +15,7 @@ from sqlalchemy.pool import NullPool
 
 from app.db.base import Base
 from app.db.models import TradePlanRevision
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.phase7_postgres import postgres_plan_world
 from tests.support.phase7_trade_plan import plan_command
 from tests.support.postgres_persistence import (
@@ -32,7 +33,8 @@ def test_single_head_extends_verified_demo_lifecycle():
         "script_location", str(Path(__file__).parents[1] / "src/app/db/migrations")
     )
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["a8agentcapture001"]
+    single_alembic_head(scripts)
+    assert scripts.get_revision("a8agentcapture001").down_revision == "a7manualrecovery001"
     assert scripts.get_revision("a7manualrecovery001").down_revision == "a6manualdemo001"
     assert scripts.get_revision("a6manualdemo001").down_revision == "a5demolifecycle001"
 
@@ -134,7 +136,7 @@ def test_real_alembic_a6_to_head_preserves_plan_and_enables_recovery_reads(monke
         command.upgrade(config, "head")  # API entrypoint repeats Render's pre-deploy upgrade.
         with factory() as session:
             assert session.scalar(text("SELECT version_num FROM alembic_version")) == (
-                "a8agentcapture001"
+                single_alembic_head()
             )
             preserved = session.get(TradePlanRevision, plan.revision_id)
             assert preserved.semantic_payload == before

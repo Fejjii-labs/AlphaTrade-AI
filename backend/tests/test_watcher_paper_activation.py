@@ -41,6 +41,7 @@ from app.workers.watcher_paper import (
     resolve_runtime_enabled,
 )
 from app.workers.watcher_paper_targets import PaperScanTarget, lineage_targets_are_valid
+from tests.support.alembic_heads import single_alembic_head
 
 _STAGING = {
     "environment": "staging",
@@ -402,7 +403,7 @@ def test_migration_reader_fails_closed_without_one_revision() -> None:
         session.execute(text("INSERT INTO alembic_version (version_num) VALUES ('other')"))
         session.commit()
         assert read_migration_revision(session) is None
-    assert expected_migration_head() == "a8agentcapture001"
+    assert expected_migration_head() == single_alembic_head()
 
 
 @pytest.mark.parametrize(
@@ -508,4 +509,4 @@ def test_expected_migration_head_is_independent_of_process_working_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert expected_migration_head() == "a8agentcapture001"
+    assert expected_migration_head() == single_alembic_head()
