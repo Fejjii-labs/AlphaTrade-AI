@@ -356,7 +356,7 @@ function JournalWorkspaceContent() {
       </nav>
       {savedId || documentId ? <JournalReturnLink /> : null}
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
-      {!savedId && !documentId ? <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
+      <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
         <Input
           aria-label="Search entries"
           placeholder="Search"
@@ -387,7 +387,7 @@ function JournalWorkspaceContent() {
         >
           Refresh
         </Button>
-      </div> : null}
+      </div>
       {loading ? (
         <p role="status">Loading entries…</p>
       ) : (
