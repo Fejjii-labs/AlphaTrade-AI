@@ -22,7 +22,7 @@ describe("saved conversation receipts", () => {
     const record = entry(category);
     render(<SavedReceipt conversationId="private-conversation" capture={{ saved_entries: [record], status: "saved" }} />);
     expect(screen.getByText(`Saved to ${ENTRY_LABELS[category]}`)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: `Open ${record.title} in ${ENTRY_LABELS[category]}` });
+    const link = screen.getByRole("link", { name: "Open", exact: true });
     expect(link).toHaveAttribute("href", category === "journal"
       ? "/journal?saved=private-record"
       : `/journal?tab=knowledge&category=${category}&saved=private-record`);
@@ -41,6 +41,6 @@ describe("saved conversation receipts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reclassify" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Reclassify saved entry" }), { target: { value: "lessons" } });
     await waitFor(() => expect(savedEntries.update).toHaveBeenCalledWith(record.id, { expected_revision: 3, category: "lessons" }));
-    expect(await screen.findByRole("link", { name: `Open ${record.title} in Lessons` })).toHaveAttribute("href", "/journal?tab=knowledge&category=lessons&saved=private-record");
+    expect(await screen.findByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "/journal?tab=knowledge&category=lessons&saved=private-record");
   });
 });

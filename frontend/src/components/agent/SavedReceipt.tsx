@@ -90,7 +90,6 @@ export function SavedReceipt({
               href={e.category === "journal"
                 ? `/journal?saved=${encodeURIComponent(e.id)}`
                 : `/journal?tab=knowledge&category=${e.category}&saved=${encodeURIComponent(e.id)}`}
-              aria-label={`Open ${e.title} in ${ENTRY_LABELS[e.category]}`}
               className="text-accent"
             >Open</Link>}
           </div>
