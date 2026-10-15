@@ -55,12 +55,19 @@ def test_model_context_keeps_both_families_after_a_long_user_message(agent_db, m
     class Router:
         def complete(self, request, messages):
             captured.extend(messages)
+            # Mirror the ModelTaskResult usage fields the responder records
+            # (input/output tokens, latency, cost) since b1e21c89.
             return SimpleNamespace(
                 content="Both families need confirmed setup evidence.",
                 unavailable=False,
                 mutation_allowed=False,
                 fallback_used=False,
                 resolved_model="simulated-model",
+                input_tokens=12,
+                output_tokens=30,
+                total_latency_ms=15,
+                total_cost=0,
+                cost_source=SimpleNamespace(value="unavailable"),
                 decision=SimpleNamespace(selected_model="simulated-model"),
             )
 
