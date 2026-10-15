@@ -125,7 +125,7 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert acceptance["timeout-minutes"] == "140"
     assert acceptance["run"] == (
         "uv run pytest -o addopts= --timeout=300 --timeout-method=thread "
-        "-rA --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log"
+        "-rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log"
     )
     assert steps["Focused backend development tests"]["if"] == (
         "github.event_name != 'schedule' && "

@@ -60,7 +60,7 @@ jobs:
       - name: Complete backend release acceptance
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend)
         timeout-minutes: 140
-        run: uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rA --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+        run: uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
       - name: Upload full backend pytest artifacts
         if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend))
         uses: actions/upload-artifact@v4
