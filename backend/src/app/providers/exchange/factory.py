@@ -81,11 +81,16 @@ def _mock_exchange(settings: Settings) -> ResolvedExchange:
 
 
 def resolve_exchange_provider(
-    settings: Settings, *, transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    verify_scope: bool = True,
 ) -> ResolvedExchange:
     """Return the mock exchange unless BloFin demo is fully configured.
 
     Raises ``ValueError`` if the demo API key carries money-movement scope.
+    ``verify_scope=False`` skips only the network key-scope probe; it is used by
+    the app composition root when a local environment disabled the startup probe.
     """
     assert_permanent_paper_mode(settings)
     if not blofin_execution_authorized(settings):
@@ -101,7 +106,8 @@ def resolve_exchange_provider(
         exchange_demo_active=settings.exchange_demo_active,
     )
 
-    _verify_no_money_movement(account)
+    if verify_scope:
+        _verify_no_money_movement(account)
 
     return ResolvedExchange(
         status_provider=account,

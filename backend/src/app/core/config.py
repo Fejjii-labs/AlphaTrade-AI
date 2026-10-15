@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     blofin_request_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
     blofin_max_retries: int = Field(default=2, ge=0, le=5)
     blofin_rate_limit_requests_per_second: int = Field(default=5, ge=1, le=50)
+    # Startup BloFin key-scope probe (signed request to the demo host). Always on
+    # for staging/production; only ``environment=local`` may switch it off, which
+    # the test suite does so app construction never reaches a real exchange host.
+    exchange_demo_startup_scope_probe_enabled: bool = True
 
     # --- Background worker (Slice 59 — disabled by default) ---
     worker_enabled: bool = False
@@ -671,6 +675,14 @@ class Settings(BaseSettings):
             self.blofin_readonly_api_key.strip()
             and self.blofin_readonly_api_secret.strip()
             and self.blofin_readonly_api_passphrase.strip()
+        )
+
+    @property
+    def exchange_demo_startup_scope_probe_required(self) -> bool:
+        """True unless a local environment explicitly disabled the startup probe."""
+        return (
+            self.exchange_demo_startup_scope_probe_enabled
+            or self.environment is not Environment.LOCAL
         )
 
     @property

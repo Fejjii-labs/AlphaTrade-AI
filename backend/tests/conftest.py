@@ -6,6 +6,7 @@ depend on a developer's local ``.env`` or environment.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -14,6 +15,10 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 from app.security.rate_limit import reset_rate_limiter
+
+# Tests never send the startup BloFin key-scope probe to a real host. Tests that
+# exercise the probe opt in explicitly with a mock transport or stub provider.
+os.environ.setdefault("EXCHANGE_DEMO_STARTUP_SCOPE_PROBE_ENABLED", "false")
 
 pytest_plugins = (
     "tests.test_workflows",

@@ -120,6 +120,12 @@ def run_exchange_demo_startup_check(settings: Settings, registry: ProviderRegist
     if ws_url and not is_allowlisted_demo_host(ws_url):
         raise ValueError("exchange demo readiness: demo WS host must be allowlisted over WSS")
 
+    if not settings.exchange_demo_startup_scope_probe_required:
+        # Local/test only: skip the network key-scope probe. Staging and
+        # production ignore this flag and always probe.
+        logger.warning("exchange_demo_scope_probe_skipped", reason="disabled_for_local")
+        return
+
     account = _find_blofin_account(registry)
     if account is not None:
         _verify_demo_key_scope(account)

@@ -29,6 +29,7 @@ from app.services.exchange_diagnostics_service import (
     LeverageProbe,
     compute_readiness,
 )
+from tests.support.network_guard import block_outbound_network
 
 _BASE = {
     "environment": "local",
@@ -52,6 +53,8 @@ _DEMO_SETTINGS = {
     "blofin_api_passphrase": "demo-pass",
     "blofin_demo_rest_base_url": "https://demo-trading-openapi.blofin.com",
     "blofin_max_retries": 1,
+    # Health "ready" needs the verified key scope; the probe runs on MockTransport.
+    "exchange_demo_startup_scope_probe_enabled": True,
 }
 
 _INSTRUMENTS = [
@@ -127,6 +130,13 @@ def _demo_handler(
     if "/trade/order" in path and request.method == "GET":
         return httpx.Response(200, json={"code": "0", "data": [_ORDER]})
     return httpx.Response(200, json={"code": "0", "data": []})
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network() -> Iterator[None]:
+    with block_outbound_network() as attempts:
+        yield
+    assert not attempts, f"test reached a real network host: {attempts}"
 
 
 @pytest.fixture(autouse=True)
