@@ -123,10 +123,17 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     acceptance = steps["Complete backend release acceptance"]
     assert acceptance["if"] == full_gate
     assert acceptance["timeout-minutes"] == "140"
+    assert acceptance["shell"] == "bash -eo pipefail {0}"
     assert acceptance["run"] == (
         "uv run pytest -o addopts= --timeout=300 --timeout-method=thread "
         "-rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log"
     )
+    for job in jobs.values():
+        for step in job["steps"]:
+            script = step.get("run") or ""
+            if "| tee" not in script:
+                continue
+            assert "pipefail" in (step.get("shell") or ""), step.get("name")
     assert steps["Focused backend development tests"]["if"] == (
         "github.event_name != 'schedule' && "
         "(github.event_name != 'workflow_dispatch' || !inputs.full_backend)"
