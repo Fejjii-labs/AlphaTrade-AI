@@ -7,6 +7,7 @@ from alembic import command
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 from tests.test_phase2_4_alembic_postgres import _alembic_config
 
@@ -35,7 +36,8 @@ def test_accepted_branch_upgrade_merge_downgrade_reupgrade(source_head: str) -> 
         command.upgrade(config, "head")
         with engine.connect() as conn:
             assert (
-                conn.scalar(text("SELECT version_num FROM alembic_version")) == "a8agentcapture001"
+                conn.scalar(text("SELECT version_num FROM alembic_version"))
+                == single_alembic_head()
             )
             assert "public_market_observations" in inspect(conn).get_table_names()
             assert "telegram_policy" in {
@@ -71,7 +73,8 @@ def test_accepted_branch_upgrade_merge_downgrade_reupgrade(source_head: str) -> 
         command.upgrade(config, "head")
         with engine.connect() as conn:
             assert (
-                conn.scalar(text("SELECT version_num FROM alembic_version")) == "a8agentcapture001"
+                conn.scalar(text("SELECT version_num FROM alembic_version"))
+                == single_alembic_head()
             )
     finally:
         engine.dispose()
