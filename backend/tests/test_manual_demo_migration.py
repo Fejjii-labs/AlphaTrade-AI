@@ -15,7 +15,7 @@ from sqlalchemy.pool import NullPool
 
 from app.db.base import Base
 from app.db.models import TradePlanRevision
-from tests.support.alembic_heads import alembic_ancestry, single_alembic_head
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.phase7_postgres import postgres_plan_world
 from tests.support.phase7_trade_plan import plan_command
 from tests.support.postgres_persistence import (
@@ -33,8 +33,8 @@ def test_single_head_extends_verified_demo_lifecycle():
         "script_location", str(Path(__file__).parents[1] / "src/app/db/migrations")
     )
     scripts = ScriptDirectory.from_config(config)
-    head = single_alembic_head(scripts)
-    assert "a6manualdemo001" in alembic_ancestry(head)
+    single_alembic_head(scripts)
+    assert scripts.get_revision("a8agentcapture001").down_revision == "a7manualrecovery001"
     assert scripts.get_revision("a7manualrecovery001").down_revision == "a6manualdemo001"
     assert scripts.get_revision("a6manualdemo001").down_revision == "a5demolifecycle001"
 

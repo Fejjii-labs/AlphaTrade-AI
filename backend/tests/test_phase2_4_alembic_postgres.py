@@ -12,7 +12,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
-from tests.support.alembic_heads import alembic_ancestry, single_alembic_head
+from tests.support.alembic_heads import single_alembic_head
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -194,7 +194,7 @@ def test_alembic_single_head() -> None:
     config = _alembic_config()
     script = ScriptDirectory.from_config(config)
     current_head = single_alembic_head(script)
-    assert "a7manualrecovery001" in alembic_ancestry(current_head)
+    assert script.get_revision("a8agentcapture001").down_revision == "a7manualrecovery001"
     assert script.get_revision("a7manualrecovery001").down_revision == "a6manualdemo001"
     assert script.get_revision("a6manualdemo001").down_revision == "a5demolifecycle001"
     assert script.get_revision("a5demolifecycle001").down_revision == "a4knowledge001"
