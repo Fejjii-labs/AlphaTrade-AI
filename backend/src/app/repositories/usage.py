@@ -7,6 +7,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import case, func, select
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.models import UsageEvent as UsageEventModel
 from app.repositories.base import SQLAlchemyRepository
@@ -233,6 +235,42 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
             stmt = stmt.where(UsageEventModel.feature == feature)
         return int(self._session.scalar(stmt) or 0)
 
+    def count_requests_since(
+        self, *, organization_id: uuid.UUID, since: datetime, feature: str | None = None
+    ) -> int:
+        """Count admissions; retain every attempt in token/cost/event aggregates.
+
+        Only a server-written admission covers correlated provider/tool events.
+        Arbitrary repeated request IDs on legacy events cannot bypass quotas.
+        Indexing batches are internal work, separately metered as rag_indexing.
+        """
+        admission = aliased(UsageEventModel)
+        covered = (
+            select(admission.id)
+            .where(
+                admission.provider == "agent_turn_admission",
+                admission.feature == "agent_chat",
+                admission.organization_id == UsageEventModel.organization_id,
+                admission.user_id == UsageEventModel.user_id,
+                admission.request_id == UsageEventModel.request_id,
+                admission.id != UsageEventModel.id,
+            )
+            .exists()
+        )
+        stmt = (
+            select(func.count())
+            .select_from(UsageEventModel)
+            .where(
+                UsageEventModel.organization_id == organization_id,
+                UsageEventModel.event_at >= since,
+                UsageEventModel.feature != "rag_indexing",
+                ~covered,
+            )
+        )
+        if feature is not None:
+            stmt = stmt.where(UsageEventModel.feature == feature)
+        return int(self._session.scalar(stmt) or 0)
+
     @staticmethod
     def _filters(
         *,
@@ -242,7 +280,7 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
         feature: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
-    ) -> list:
+    ) -> list[ColumnElement[bool]]:
         filters = []
         if organization_id is not None:
             filters.append(UsageEventModel.organization_id == organization_id)

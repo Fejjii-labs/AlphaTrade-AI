@@ -1,3 +1,4 @@
+import { agentTurnFixture } from "../src/test/pilot-fixtures";
 import { expect, test, type Page } from "@playwright/test";
 import { installSmokeSession } from "./helpers/staging-smoke-auth";
 import { makeWatcherMonitoringSnapshot } from "../src/lib/watcher-monitoring-fixtures";
@@ -5,13 +6,13 @@ import { makeWatcherMonitoringSnapshot } from "../src/lib/watcher-monitoring-fix
 // All data and mutations in this spec are synthetic, including Saved receipts.
 const tradeId = "00000000-0000-4000-8000-000000000020";
 const note = {
-  id: "fixture-note",
+  id: "44444444-4444-4444-8444-444444444444",
   category: "rules",
   title: "Wait for the close",
   summary: "I wait for a closed confirmation before entry.",
   original_text: "My rule: wait for a closed confirmation before entry.",
-  conversation_id: "fixture-conversation",
-  source_message_ids: ["fixture-message"],
+  conversation_id: "11111111-1111-4111-8111-111111111111",
+  source_message_ids: ["22222222-2222-4222-8222-222222222222"],
   source_document_id: null,
   trade_id: null,
   tags: ["BTCUSDT"],
@@ -23,7 +24,7 @@ const note = {
 };
 const draft = {
   ...note,
-  id: "fixture-draft",
+  id: "55555555-5555-4555-8555-555555555555",
   category: "strategies",
   title: "BTC SFP confirmation",
   summary:
@@ -284,7 +285,7 @@ async function fixtures(page: Page) {
         );
         return send({ items, total: items.length });
       }
-      if (path === "/agent/saved/fixture-note") {
+      if (path === "/agent/saved/44444444-4444-4444-8444-444444444444") {
         if (method === "PATCH") {
           const body = route.request().postDataJSON();
           stored = {
@@ -304,7 +305,7 @@ async function fixtures(page: Page) {
         return send({
           items: [
             {
-              id: "fixture-conversation",
+              id: "11111111-1111-4111-8111-111111111111",
               title: "Confirmation discussion",
               updated_at: "2026-10-09T12:00:00Z",
             },
@@ -313,17 +314,17 @@ async function fixtures(page: Page) {
           limit: 30,
           offset: 0,
         });
-      if (path === "/conversations/fixture-conversation/messages")
+      if (path === "/conversations/11111111-1111-4111-8111-111111111111/messages")
         return send({
           items: [
             {
-              id: "fixture-user-message",
+              id: "22222222-2222-4222-8222-222222222222",
               role: "user",
               content: note.original_text,
               created_at: note.created_at,
             },
             {
-              id: "fixture-assistant",
+              id: "33333333-3333-4333-8333-333333333333",
               role: "assistant",
               content: "You want confirmation on close before entry.",
               created_at: note.created_at,
@@ -334,7 +335,7 @@ async function fixtures(page: Page) {
                   capture: {
                     saved_entries: [stored],
                     status: "saved",
-                    source_message_id: "fixture-user-message",
+                    source_message_id: "22222222-2222-4222-8222-222222222222",
                   },
                 },
               },
@@ -346,15 +347,16 @@ async function fixtures(page: Page) {
         });
       if (path === "/agent/turns")
         return send({
-          conversation_id: "fixture-conversation",
-          assistant_message_id: "fixture-assistant",
-          user_message_id: "fixture-user-message",
+          ...agentTurnFixture,
+          conversation_id: "11111111-1111-4111-8111-111111111111",
+          assistant_message_id: "33333333-3333-4333-8333-333333333333",
+          user_message_id: "22222222-2222-4222-8222-222222222222",
           reply: "You want confirmation on close before entry.",
           recorded_evidence: "User-supplied note; unverified.",
           proposals: [],
           saved_entries: [stored],
           capture_status: "saved",
-          capture_source_message_id: "fixture-user-message",
+          capture_source_message_id: "22222222-2222-4222-8222-222222222222",
           operation: "read",
           capability: "general_conversation",
           authority_mutated: false,
@@ -454,7 +456,7 @@ for (const width of [1280, 390]) {
     ).toBeVisible();
     await expect(
       page.getByRole("link", { name: "Original conversation" }),
-    ).toHaveAttribute("href", "/agent?conversation=fixture-conversation");
+    ).toHaveAttribute("href", "/agent?conversation=11111111-1111-4111-8111-111111111111");
     await page.goto("/journal?tab=knowledge&category=rules&q=close");
     await expect(page.getByLabel("Knowledge category")).toHaveValue("rules");
     await screenshot("knowledge");

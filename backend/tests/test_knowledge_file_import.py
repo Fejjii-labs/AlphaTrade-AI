@@ -45,6 +45,7 @@ from app.security.tenant import TenantContext
 from app.services import knowledge_file_import as file_service
 from app.services.knowledge_file_import import preview_file, verify_file_save
 from app.services.rag_service import RagService
+from tests.support.knowledge_indexing import drain_indexing
 
 ORG_A, ORG_B, USER_A, USER_A2, USER_B = (uuid4() for _ in range(5))
 TEXT = "SYNTHETIC IMPORT\n\nWait for confirmed evidence. Risk BLOCK remains authoritative."
@@ -362,8 +363,8 @@ def test_canonical_storage_duplicates_and_retrieval_have_principal_and_source_li
     other_org = ingest_file(service, user=USER_B, org=ORG_B)
     assert repeat.duplicate and repeat.document_id == first.document_id
     assert len({first.document_id, other_user.document_id, other_org.document_id}) == 3
-    assert repeat.vector_index_status == "upsert_acknowledged"
-    assert repeat.vector_backend == "in-memory-vector" and repeat.fallback_used
+    assert repeat.vector_index_status == "pending"
+    assert repeat.vector_backend is None and not repeat.fallback_used
     assert session.scalar(select(func.count()).select_from(Document)) == 3
     assert session.scalar(select(func.count()).select_from(UserStrategy)) == 0
     document = session.get(Document, first.document_id)
@@ -373,6 +374,7 @@ def test_canonical_storage_duplicates_and_retrieval_have_principal_and_source_li
         document.ingestion_metadata["file"]["raw_content_hash"]
         == hashlib.sha256(TEXT.encode()).hexdigest()
     )
+    assert drain_indexing(service) == ["ready"] * 3
     result = service.search(RagQuery(query="Risk BLOCK", organization_id=ORG_A, user_id=USER_A))
     assert result.chunks and result.citations
     assert {chunk.document_id for chunk in result.chunks} == {first.document_id}
@@ -409,17 +411,18 @@ def test_same_owner_legacy_paste_duplicate_remains_compatible_but_other_user_is_
     assert not second.duplicate and second.document_id != original.document_id
 
 
-def test_failed_vector_index_does_not_claim_or_leave_sql_storage(knowledge_db, monkeypatch):
+def test_failed_vector_index_preserves_pending_sql_storage(knowledge_db, monkeypatch):
     session, service, vectors = knowledge_db
 
     def failed(*args):
         raise ServiceUnavailableError("Synthetic vector outage")
 
     monkeypatch.setattr(vectors, "upsert", failed)
-    with pytest.raises(ServiceUnavailableError):
-        ingest_file(service)
-    assert session.scalar(select(func.count()).select_from(Document)) == 0
-    assert session.scalar(select(func.count()).select_from(Chunk)) == 0
+    result = ingest_file(service)
+    assert result.vector_index_status == "pending"
+    assert drain_indexing(service) == ["pending"]
+    assert session.scalar(select(func.count()).select_from(Document)) == 1
+    assert session.scalar(select(func.count()).select_from(Chunk)) >= 1
 
 
 @pytest.fixture
@@ -452,7 +455,7 @@ def knowledge_api(knowledge_db):
         yield client, session
 
 
-def test_http_preview_save_duplicate_and_sql_source_refs(knowledge_api):
+def test_http_preview_save_duplicate_and_sql_source_refs(knowledge_api, knowledge_db):
     client, session = knowledge_api
     form = {"title": "Uploaded note", "source_type": "general_note"}
     upload = {"file": ("note.txt", TEXT.encode(), "text/plain")}
@@ -472,10 +475,7 @@ def test_http_preview_save_duplicate_and_sql_source_refs(knowledge_api):
         "/knowledge/files/import", data=confirmed, files=upload, headers={"Authorization": "first"}
     )
     assert saved.status_code == 200, saved.text
-    assert (
-        saved.json()["sql_chunks_stored"]
-        and saved.json()["vector_index_status"] == "upsert_acknowledged"
-    )
+    assert saved.json()["sql_chunks_stored"] and saved.json()["vector_index_status"] == "pending"
     repeat = client.post(
         "/knowledge/files/import", data=confirmed, files=upload, headers={"Authorization": "first"}
     )
@@ -487,6 +487,7 @@ def test_http_preview_save_duplicate_and_sql_source_refs(knowledge_api):
     assert (
         client.get("/knowledge/documents", headers={"Authorization": "second"}).json()["total"] == 0
     )
+    assert drain_indexing(knowledge_db[1]) == ["ready"]
     searched = client.post(
         "/knowledge/search", json={"query": "Risk BLOCK"}, headers={"Authorization": "first"}
     )

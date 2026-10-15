@@ -32,7 +32,7 @@ describe("StrategyLabPage", () => {
     expect(screen.getByText("Strategy Lab")).toBeInTheDocument();
     expect(screen.getByTestId("watcher-monitoring-card")).toBeInTheDocument();
     expect(screen.getByTestId("watcher-monitoring-status-row")).toHaveTextContent("STOPPED");
-    expect(screen.getByText("Create strategy")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Discuss a strategy with Agent" })).toHaveAttribute("href", "/agent?intent=strategy");
     expect(screen.getByText("Pullback")).toBeInTheDocument();
   });
 

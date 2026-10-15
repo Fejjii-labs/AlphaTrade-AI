@@ -22,6 +22,7 @@ from app.interactive_agent.recorded_trade import read_recorded_trade, route_reco
 from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeDirection
 from app.schemas.manual_demo import ManualDemoPreviewRequest
+from app.services.manual_demo_history import ManualDemoHistoryService
 from app.services.manual_demo_service import ManualDemoService
 from tests.support.postgres_persistence import requires_postgres
 from tests.test_manual_blofin_demo import confirmation
@@ -93,6 +94,9 @@ def native(world, monkeypatch):
                         "fillSize": "0.100000000000000000",
                         "fillPnl": "0.000000000000000000",
                         "fee": "0.004973640000000000",
+                        # Explicit synthetic currency qualifies reported sums;
+                        # this is not evidence that an actual omitted fee is USDT.
+                        "feeCurrency": "USDT",
                         "ts": LIVE_TS,
                         **changes["fill"],
                     }
@@ -223,6 +227,83 @@ def test_signed_native_fees_are_preserved_without_absolute_value_or_pnl(native, 
     with world[0]() as session:
         trade = session.get(JournalTrade, result.journal_trade_id)
         assert trade.fees == Decimal(fee) and trade.net_pnl is None
+
+
+@pytest.mark.parametrize("currency", [None, "", "BTC"])
+def test_unknown_entry_settlement_fee_preserves_raw_signed_fee_and_currency(native, currency):
+    world, changes = native
+    changes["fill"].update(fee="-0.00497364", feeCurrency=currency)
+    _, result = _submit(native)
+    assert result.status == "filled_protected"
+    assert result.fees is result.entry_fees is result.fee_convention is None
+    with world[0]() as session:
+        trade = session.get(JournalTrade, result.journal_trade_id)
+        assert trade.fees is trade.net_pnl is trade.gross_pnl is None
+        raw = session.scalar(
+            select(AuditLog).where(
+                AuditLog.resource_id == str(result.command_id),
+                AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_actual_fill",
+            )
+        )
+        assert Decimal(raw.redacted_metadata["fee"]) == Decimal("-0.00497364")
+        assert raw.redacted_metadata["fee_currency"] == (currency or None)
+        assert raw.redacted_metadata["fee_evidence_contract"] == "manual-demo-native-fee/v2"
+        read = ManualDemoHistoryService(session).get(world[1], result.command_id).evidence
+        assert read.fees is read.entry_fees is read.fee_convention is None
+        assert any("entry fee currency" in reason for reason in read.missing_evidence)
+    assert world[3].post_count == 1
+
+
+def test_legacy_assumed_entry_currency_is_unavailable_until_actual_refresh(native, monkeypatch):
+    world, _changes = native
+    original = ManualDemoService._audit
+
+    def legacy_entry(self, tenant, event, resource, action, metadata):
+        if action == "manual_demo_actual_fill":
+            metadata = dict(metadata)
+            metadata.pop("fee_evidence_contract")
+            metadata["fee_currency"] = "USDT"  # Legacy assumption, not native provenance.
+        return original(self, tenant, event, resource, action, metadata)
+
+    with monkeypatch.context() as scope:
+        scope.setattr(ManualDemoService, "_audit", legacy_entry)
+        _, first = _submit(native)
+    assert first.entry_fees is first.fees is None
+    with world[0]() as session:
+        old = session.scalar(
+            select(AuditLog).where(
+                AuditLog.resource_id == str(first.command_id),
+                AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_actual_fill",
+            )
+        )
+        old_id, old_metadata, old_hash = old.id, dict(old.redacted_metadata), old.payload_hash
+        refreshed = _service(world, session).reconcile(world[1], first.command_id)
+        assert refreshed.entry_fees == refreshed.fees == Decimal(".00497364")
+        assert refreshed.fee_convention is None
+        session.expire_all()
+        preserved = session.get(AuditLog, old_id)
+        assert preserved.redacted_metadata == old_metadata and preserved.payload_hash == old_hash
+        assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 1
+    assert world[3].post_count == 1
+
+
+def test_native_entry_currency_change_cannot_overwrite_original_fee_receipt(native):
+    world, changes = native
+    _, first = _submit(native)
+    changes["fill"]["feeCurrency"] = None
+    with pytest.raises(TradingPolicyError, match="fee currency conflicts"):
+        _refresh(world, first.command_id)
+    with world[0]() as session:
+        stored = session.scalar(
+            select(AuditLog).where(
+                AuditLog.resource_id == str(first.command_id),
+                AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_actual_fill",
+            )
+        )
+        assert stored.redacted_metadata["fee_currency"] == "USDT"
+        assert session.get(JournalTrade, first.journal_trade_id).fees == Decimal(".00497364")
+        assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 1
+    assert world[3].post_count == 1
 
 
 @pytest.mark.parametrize(
@@ -416,6 +497,7 @@ def test_native_partial_fills_smaller_than_submission_lot_converge_without_dupli
         "fillPrice": "82894",
         "fillSize": "0.05",
         "fee": "0.00248682",
+        "feeCurrency": "USDT",
         "ts": LIVE_TS,
     }
     changes["response"]["/api/v1/trade/fills-history"] = [

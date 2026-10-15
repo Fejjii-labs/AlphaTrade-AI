@@ -261,7 +261,8 @@ def overview(
         "setups": [setup_view(session, row, now=now) for row in rows],
         "limitations": [
             "Stored observations only; no current conditions inferred.",
-            "CVD, order flow, open interest and funding are unsupported.",
+            "Stored setup evidence retains its recorded availability; optional current OI, "
+            "flow, CVD and book context uses the existing canonical Agent market reader.",
             "Provisional operational proxy; insufficient history; "
             "no Elliott or profitability claim.",
         ],

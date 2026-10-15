@@ -10,6 +10,7 @@ import type { DailyReview, ReviewItem } from "@/lib/api/daily-review-types";
 
 const dailyReview = vi.fn();
 vi.mock("@/lib/api", () => ({ api: { dashboard: { dailyReview: (...args: unknown[]) => dailyReview(...args) } } }));
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: null, organization: null }) }));
 
 const source = {
   record_type: "journal_trades", record_id: "trade-1", occurred_at: "2026-10-01T12:00:00Z",

@@ -42,6 +42,7 @@ ALLOWED_PATHS = frozenset(
         "/fapi/v1/aggTrades",
         "/fapi/v1/openInterest",
         "/fapi/v1/fundingRate",
+        "/fapi/v1/depth",
     }
 )
 APPROVED_BINANCE_USDM_REST_HOSTS = frozenset({"fapi.binance.com"})

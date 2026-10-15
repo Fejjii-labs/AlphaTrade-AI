@@ -2,7 +2,9 @@
 
 import hashlib
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -11,10 +13,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent_capture.contracts import CapturePlan, CaptureStatus, SavedEntry
-from app.agent_capture.model import CaptureModel
+from app.agent_capture.model import CaptureModel as CaptureModel
 from app.agent_capture.store import entry_record, list_entries, require_entry, snapshot
 from app.core.config import Settings
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.db.models import (
     AgentCaptureSource,
     AgentSavedEntry,
@@ -112,12 +114,26 @@ def matching_entries(
     ][:8]
 
 
+@dataclass
+class CaptureSnapshot:
+    organization_id: UUID
+    user_id: UUID
+    conversation_id: UUID
+    message_id: UUID
+    document_id: UUID | None
+    current: str
+    digest: str
+    history: list[ConversationMessage]
+    revisions: dict[UUID, int]
+    content: dict[str, Any]
+
+
 class CaptureService:
     def __init__(self, session: Session, settings: Settings, *, model: CaptureModel | None = None):
         self.session = session
         self.model = model or CaptureModel(settings)
 
-    def capture(
+    def prepare(
         self,
         *,
         organization_id: UUID,
@@ -125,7 +141,7 @@ class CaptureService:
         conversation_id: UUID,
         message_id: UUID,
         source_document_id: UUID | None = None,
-    ) -> tuple[list[SavedEntry], CaptureStatus, str | None]:
+    ) -> CaptureSnapshot | tuple[list[SavedEntry], CaptureStatus, str | None]:
         conversation = ConversationService(self.session).require(
             conversation_id, organization_id=organization_id, user_id=user_id
         )
@@ -147,10 +163,6 @@ class CaptureService:
         )
         current = f"{message.content}\n{document}".strip()
         digest = hashlib.sha256(" ".join(current.split()).encode()).hexdigest()
-        # Only serialize private note capture, never trading state. Locks span dedupe/write.
-        self.session.scalar(
-            select(User.id).where(User.id == user_id).with_for_update(key_share=True)
-        )  # PostgreSQL NO KEY UPDATE permits unrelated foreign-key references.
         prior = self.session.scalar(
             select(AgentCaptureSource).where(
                 AgentCaptureSource.organization_id == organization_id,
@@ -200,32 +212,104 @@ class CaptureService:
                 for e in candidates
             ],
         }
-        plan = self.model.plan(
-            organization_id=organization_id,
-            user_id=user_id,
-            conversation_id=conversation.id,
-            content=content,
-        )
-        logger.info("agent_capture_model_call", **self.model.last_usage)
-        if plan.clarification or any(e.confidence < 0.8 for e in plan.entries):
-            return (
-                [],
-                "clarification",
-                plan.clarification or "Which destination best fits this contribution?",
-            )
-        if not plan.entries:
-            return [], "not_needed", None
-        self._validate(plan, current, history, {e.id for e in candidates})
-        return self._persist(
-            plan,
-            conversation.id,
+        return CaptureSnapshot(
             organization_id,
             user_id,
+            conversation.id,
             message.id,
             source_document_id,
             current,
             digest,
             history,
+            {e.id: e.revision for e in candidates},
+            content,
+        )
+
+    def capture(self, **kwargs: Any) -> tuple[list[SavedEntry], CaptureStatus, str | None]:
+        """Compatibility for pure injected planners; live reasoning uses separate phases.
+
+        A caller-owned transaction cannot be ended here without risking unrelated
+        writes. Production callers use prepare, close, model.plan, then apply.
+        """
+        from app.agent_capture.model import CaptureModel as ReasoningCaptureModel
+        from app.agent_capture.model import CaptureUnavailableError
+
+        prepared = self.prepare(**kwargs)
+        if not isinstance(prepared, CaptureSnapshot):
+            return prepared
+        if isinstance(self.model, ReasoningCaptureModel):
+            raise CaptureUnavailableError(
+                "Capture is unavailable through a transaction-bound planner; use separate phases."
+            )
+        plan = self.model.plan(
+            organization_id=prepared.organization_id,
+            user_id=prepared.user_id,
+            conversation_id=prepared.conversation_id,
+            content=prepared.content,
+        )
+        return self.apply(prepared, plan)
+
+    def apply(
+        self, prepared: CaptureSnapshot, plan: CapturePlan
+    ) -> tuple[list[SavedEntry], CaptureStatus, str | None]:
+        ConversationService(self.session).require(
+            prepared.conversation_id,
+            organization_id=prepared.organization_id,
+            user_id=prepared.user_id,
+        )
+        # Lock only the short dedupe/write phase; never the reasoning request.
+        self.session.scalar(
+            select(User.id).where(User.id == prepared.user_id).with_for_update(key_share=True)
+        )
+        prior = self.session.scalar(
+            select(AgentCaptureSource).where(
+                AgentCaptureSource.organization_id == prepared.organization_id,
+                AgentCaptureSource.user_id == prepared.user_id,
+                AgentCaptureSource.source_hash == prepared.digest,
+            )
+        )
+        if prior:
+            rows = [
+                require_entry(self.session, UUID(i), prepared.organization_id, prepared.user_id)
+                for i in prior.entry_ids
+            ]
+            return (
+                [entry_record(r) for r in rows if not r.undone],
+                ("saved" if any(not r.undone for r in rows) else "not_needed"),
+                None,
+            )
+        if plan.clarification or any(e.confidence < 0.8 for e in plan.entries):
+            return (
+                [],
+                "clarification",
+                plan.clarification or "Which destination fits this contribution?",
+            )
+        if not plan.entries:
+            return [], "not_needed", None
+        self._validate(plan, prepared.current, prepared.history, set(prepared.revisions))
+        for item in plan.entries:
+            if item.target_entry_id:
+                row = require_entry(
+                    self.session,
+                    item.target_entry_id,
+                    prepared.organization_id,
+                    prepared.user_id,
+                    lock=True,
+                )
+                if row.undone or row.revision != prepared.revisions[item.target_entry_id]:
+                    raise ConflictError(
+                        "Saved entry changed during capture; retry from current context."
+                    )
+        return self._persist(
+            plan,
+            prepared.conversation_id,
+            prepared.organization_id,
+            prepared.user_id,
+            prepared.message_id,
+            prepared.document_id,
+            prepared.current,
+            prepared.digest,
+            prepared.history,
         )
 
     def _validate(
@@ -236,7 +320,17 @@ class CaptureService:
         candidates: set[UUID],
     ) -> None:
         allowed = "\n".join([current, *(m.content for m in history)])
+        seen_suggestions: set[str] = set()
+        seen_targets: set[UUID] = set()
         for suggestion in plan.entries:
+            fingerprint = suggestion.model_dump_json(exclude={"confidence"})
+            if fingerprint in seen_suggestions:
+                raise ValidationAppError("Capture contains a duplicate suggestion.")
+            seen_suggestions.add(fingerprint)
+            if suggestion.target_entry_id is not None:
+                if suggestion.target_entry_id in seen_targets:
+                    raise ValidationAppError("Capture cannot revise the same entry more than once.")
+                seen_targets.add(suggestion.target_entry_id)
             if not all(q.strip() and q in allowed for q in suggestion.evidence_quotes):
                 raise ValidationAppError("Capture quotes do not match the source.")
             if not any(q in current for q in suggestion.evidence_quotes):

@@ -83,6 +83,21 @@ class ModelCallTelemetryService:
         self._isolated = isolated
 
     def record(self, attempt: ModelCallAttempt, *, feature: str) -> ModelCallAttempt:
+        from app.services.turn_context import current_turn
+
+        turn = current_turn()
+        if turn is not None:
+            # Every coordinated attempt owns an independent session and commit.
+            with turn.sessions() as persist_session:
+                try:
+                    stored = self._persist(persist_session, attempt, feature=feature)
+                    persist_session.commit()
+                    return stored
+                except Exception as exc:
+                    persist_session.rollback()
+                    raise ModelTelemetryPersistenceError(
+                        "Model call telemetry could not be persisted.", attempt=attempt
+                    ) from exc
         if self._session is None:
             return attempt.model_copy(update={"persisted": False, "telemetry_durable": False})
 
@@ -92,7 +107,9 @@ class ModelCallTelemetryService:
                 "Model telemetry session has no bind.",
                 attempt=attempt,
             )
-        persist_session = Session(bind=bind) if self._isolated else self._session
+        # Never borrow an outer Connection: an isolated rollback must not undo it.
+        isolated_bind = getattr(bind, "engine", bind)
+        persist_session = Session(bind=isolated_bind) if self._isolated else self._session
         try:
             stored = self._persist(persist_session, attempt, feature=feature)
             if self._isolated:

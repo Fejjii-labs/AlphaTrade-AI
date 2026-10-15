@@ -50,6 +50,7 @@ export function TabsRoot({ children, value, onChange, idPrefix }: TabsRootProps)
 
 export interface TabsProps {
   items: TabItem[];
+  onIntent?: (id: string) => void;
   className?: string;
   "aria-label"?: string;
 }
@@ -85,7 +86,7 @@ function resolveRovingTabId(
 }
 
 /** Lightweight accessible tabs (no Radix dependency). Manual activation + arrow keys. */
-export function Tabs({ items, className, "aria-label": ariaLabel }: TabsProps) {
+export function Tabs({ items, onIntent, className, "aria-label": ariaLabel }: TabsProps) {
   const { idPrefix: prefix, value, onChange } = useTabsContext("Tabs");
   const [focusedId, setFocusedId] = React.useState<string | null>(value);
   const tabRefs = React.useRef(new Map<string, HTMLButtonElement>());
@@ -183,8 +184,9 @@ export function Tabs({ items, className, "aria-label": ariaLabel }: TabsProps) {
               onChange(item.id);
             }}
             onFocus={() => {
-              if (!item.disabled) setFocusedId(item.id);
+              if (!item.disabled) { setFocusedId(item.id); onIntent?.(item.id); }
             }}
+            onMouseEnter={() => { if (!item.disabled) onIntent?.(item.id); }}
           >
             {item.label}
           </button>

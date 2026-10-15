@@ -33,7 +33,7 @@ from tests.support.phase5_market import EVALUATED_AT
 from tests.support.phase6_fusion import ACCOUNT_ID, ORG_ID, USER_ID
 from tests.support.phase7_postgres import postgres_plan_world
 from tests.support.phase8_runtime import phase8_settings
-from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
+from tests.support.postgres_persistence import ReusablePhase7Database, requires_postgres
 
 
 @dataclass
@@ -74,9 +74,16 @@ class CanonicalQuotes:
         )
 
 
+@pytest.fixture(scope="module")
+def paper_database():
+    database = ReusablePhase7Database()
+    yield database
+    database.dispose()
+
+
 @pytest.fixture
-def paper_world():
-    factory = phase7_plan_session_factory()
+def paper_world(paper_database):
+    factory = paper_database.session_factory()
     world = postgres_plan_world(factory)
     clock = MutableClock()
     settings = phase8_settings().model_copy(
@@ -102,7 +109,6 @@ def paper_world():
         settings=settings,
     )
     session.close()
-    factory.kw["bind"].dispose()
 
 
 def details(w, **updates):

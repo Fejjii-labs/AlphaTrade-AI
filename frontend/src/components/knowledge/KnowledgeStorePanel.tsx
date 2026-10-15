@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import type { FileImportPreview, IngestDocumentResponse } from "@/lib/api/types";
+import type { FileImportPreview, IngestDocumentResponse, DocumentSourceType } from "@/lib/api/types";
 
 type KnowledgeStorePanelProps = {
   onStored?: () => void;
@@ -16,6 +16,9 @@ type KnowledgeStorePanelProps = {
 
 function storageMessage(result: IngestDocumentResponse): string {
   const saved = `${result.duplicate ? "Already stored" : "Stored"} document ${result.document_id} (${result.chunk_count} chunks).`;
+  if (result.vector_index_status === "pending") return `${saved} Search indexing is pending.`;
+  if (result.vector_index_status === "failed") return `${saved} Search indexing failed. Retry indexing from the document.`;
+  if (result.vector_index_status === "ready") return `${saved} Search indexing is ready.`;
   if (result.vector_index_status !== "upsert_acknowledged") {
     return `${saved} Search indexing status is unverified.`;
   }
@@ -32,7 +35,7 @@ export function KnowledgeStorePanel({
   initialMode = "paste",
 }: KnowledgeStorePanelProps) {
   const [title, setTitle] = useState("");
-  const [sourceType, setSourceType] = useState<string>(initialSourceType);
+  const [sourceType, setSourceType] = useState<DocumentSourceType>(initialSourceType);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<"paste" | "file">(initialMode);
   const [file, setFile] = useState<File | null>(null);
@@ -153,7 +156,8 @@ export function KnowledgeStorePanel({
               value={sourceType}
               disabled={busy}
               onChange={(event) => {
-                setSourceType(event.target.value);
+                if (["risk_policy", "trading_playbook", "general_note"].includes(event.target.value))
+                  setSourceType(event.target.value as DocumentSourceType);
                 invalidatePreview();
               }}
             >

@@ -19,12 +19,19 @@ class DocumentRepository(SQLAlchemyRepository[Document]):
         *,
         organization_id: uuid.UUID | None,
         source_uri: str,
+        user_id: uuid.UUID | None = None,
+        for_update: bool = False,
     ) -> Document | None:
         stmt = select(Document).where(Document.uri == source_uri)
         if organization_id is None:
             stmt = stmt.where(Document.organization_id.is_(None))
         else:
             stmt = stmt.where(Document.organization_id == organization_id)
+        stmt = stmt.where(
+            Document.user_id.is_(None) if user_id is None else Document.user_id == user_id
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
         return self._session.scalar(stmt)
 
     def get_by_source_hash(

@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
 import { WatcherWatchlistSection } from "@/components/WatcherWatchlistSection";
+import { WatcherAssignmentsSection } from "@/components/WatcherAssignmentsSection";
 import { NotificationSettingsPanel } from "@/components/NotificationSettingsPanel";
 import { PaperAccountSetup } from "@/components/settings/PaperAccountSetup";
 import { SettingsReadout } from "@/components/settings/SettingsReadout";
@@ -12,8 +13,19 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { useWatcherMonitoring } from "@/hooks/useWatcherMonitoring";
 import { formatDateTime } from "@/lib/format";
+import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 export default function SettingsPage() {
+  const { user, organization } = useAuth();
+  const [session, setSession] = useState(sessionGeneration);
+  useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
+  if (!user || !organization) return null;
+  return (
+    <SettingsWorkspace key={JSON.stringify([organization.id, user.id, session])} />
+  );
+}
+
+function SettingsWorkspace() {
   const { user, organization } = useAuth();
   const { health, providers, refreshStatus, loading } = useAppContext();
   const monitoring = useWatcherMonitoring();
@@ -29,7 +41,7 @@ export default function SettingsPage() {
     return () => window.removeEventListener("hashchange", openAnchor);
   }, []);
   return (
-    <div className="space-y-4" data-testid="settings-workspace">
+    <div className="space-y-4 [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
       <h1 className="text-2xl font-semibold">Settings</h1>
       <details
         className="rounded-card border border-border-subtle bg-surface-1 p-4"
@@ -40,6 +52,7 @@ export default function SettingsPage() {
         </summary>
         <div className="space-y-4 pt-4">
           <WatcherWatchlistSection />
+          <WatcherAssignmentsSection />
           <SettingsReadout
             rows={[
               [

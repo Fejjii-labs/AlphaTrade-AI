@@ -60,7 +60,7 @@ def test_account_performance_uses_exact_closed_lifecycle_and_retains_unknown_fun
         _service(world, session).reconcile(world[1], first.command_id)
         performance = account_view(world, session).performance
         assert performance.status == "partial" and performance.currency == "USDT"
-        assert performance.gross_pnl == Decimal("0.0106")
+        assert performance.gross_pnl is None
         assert performance.fees == Decimal("0.00497364") + Decimal("-0.00498")
         assert performance.funding is None and performance.net_pnl is None
         assert performance.verified_closed_trades == 1 and performance.manual_test_trades == 1
@@ -143,7 +143,9 @@ def test_manual_agent_has_one_concise_reply_and_separate_exact_evidence(native, 
                 "Closure verified" in response.reply
                 and "net PnL remain unverified" in response.reply
             )
-            assert "0.0106 USDT" in response.reply
+            assert "Reported closing PnL: 0.0106" in response.reply
+            assert "fee/funding basis unverified" in response.reply
+            assert "Gross trading PnL:" not in response.reply
         else:
             assert "was flat at the snapshot" in response.reply
             assert "exit remains unverified" in response.reply

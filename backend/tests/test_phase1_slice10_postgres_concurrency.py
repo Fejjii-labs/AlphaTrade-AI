@@ -51,6 +51,7 @@ from tests.support.phase1_plan_fixtures import (
     plan_request,
     prepared_authorized_plan,
 )
+from tests.support.postgres_persistence import reset_public_schema
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -80,7 +81,7 @@ requires_postgres = pytest.mark.skipif(
 
 def _factory() -> tuple[sessionmaker[Session], str]:
     engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    Base.metadata.drop_all(engine)
+    reset_public_schema(engine)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False), POSTGRES_URL
 

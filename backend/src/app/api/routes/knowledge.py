@@ -183,6 +183,29 @@ async def list_documents(
     return PaginatedRagDocuments(items=items, total=total, limit=limit, offset=offset)
 
 
+@router.delete(
+    "/documents/{document_id}", status_code=204, summary="Delete your knowledge document"
+)
+def delete_document(document_id: uuid.UUID, tenant: TraderDep, rag_service: RagServiceDep) -> None:
+    rag_service.delete_document(
+        document_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
+
+
+@router.post(
+    "/documents/{document_id}/retry-indexing",
+    response_model=IngestDocumentResponse,
+    dependencies=[_KNOWLEDGE_INGEST_RATE_LIMIT],
+    summary="Retry failed indexing of your document",
+)
+def retry_indexing(
+    document_id: uuid.UUID, tenant: TraderDep, rag_service: RagServiceDep
+) -> IngestDocumentResponse:
+    return rag_service.retry_indexing(
+        document_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
+
+
 @router.get(
     "/chunks",
     response_model=PaginatedRagChunks,

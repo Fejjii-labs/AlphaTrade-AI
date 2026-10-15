@@ -14,10 +14,12 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
+from app.core.blofin_identity import connection_binding, native_uid
 from app.core.blofin_readonly_access import get_readonly_account_provider
 from app.core.config import Settings, get_settings
 from app.core.errors import NotFoundError
 from app.core.exchange_demo_access import ensure_demo_exchange_access, get_demo_account_provider
+from app.db.blofin_activity import BloFinActivityAccount
 from app.db.models import BloFinDemoSyncSnapshot as SnapshotModel
 from app.guardrails.redaction import redact_text
 from app.providers.base import ProviderHealth
@@ -39,6 +41,7 @@ from app.schemas.common import (
     BloFinSyncHealthStatus,
 )
 from app.services.audit_service import AuditService
+from app.services.blofin_activity_config import get_activity_settings
 from app.services.dashboard.demo_performance import configured_demo_account
 
 logger = structlog.get_logger(__name__)
@@ -92,6 +95,10 @@ class BloFinSyncService:
             provenance["configured_execution_account_id"] = str(configured.id)
 
         try:
+            binding = connection_binding(
+                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
+            )
+            provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
             if self._settings.blofin_readonly_sync_enabled:
                 provider = get_readonly_account_provider(self._settings)
@@ -103,6 +110,18 @@ class BloFinSyncService:
                 raise ValueError("Dedicated BloFin sync key must be read-only.")
             if permissions.can_withdraw or permissions.can_transfer or not permissions.can_read:
                 raise ValueError("BloFin sync requires read access without money-movement scopes.")
+            uid = getattr(provider, "native_account_uid", None)
+            if native_uid({"uid": uid}) is None:
+                raise ValueError("BloFin sync native account UID is unverified.")
+            config = get_activity_settings()
+            if (
+                self._settings.blofin_readonly_sync_enabled
+                and config.organization_id == organization_id
+                and config.expected_uid
+                and config.expected_uid != uid
+            ):
+                raise ValueError("BloFin sync native account UID does not match connection pin.")
+            provenance.update(native_account_uid=uid, identity_status="verified")
             balances = provider.get_balances()
             open_positions = provider.get_positions()
             metadata: dict[str, dict[str, str]] = {}
@@ -209,6 +228,8 @@ class BloFinSyncService:
                 error_summary = redact_text(f"{type(exc).__name__}: sync unavailable")[:200]
             health = BloFinSyncHealthStatus.UNAVAILABLE
             provenance["error_type"] = type(exc).__name__
+            account, positions, market = {}, {"items": []}, {"symbols": []}
+            position_count = balance_count = 0
 
         row = SnapshotModel(
             organization_id=organization_id,
@@ -260,7 +281,34 @@ class BloFinSyncService:
         organization_id: uuid.UUID,
         successful_only: bool = False,
     ) -> BloFinSyncSnapshotItem:
-        row = self._snapshots.latest_for_org(organization_id, successful_only=successful_only)
+        try:
+            binding = connection_binding(
+                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
+            )
+        except Exception:
+            raise NotFoundError("Current BloFin connection is unverified.") from None
+        uid = self._snapshots.verified_uid_for_binding(organization_id, binding)
+        if self._settings.blofin_readonly_sync_enabled:
+            config = get_activity_settings()
+            if config.organization_id == organization_id and config.expected_uid:
+                proof = self._session.get(
+                    BloFinActivityAccount, (organization_id, "demo", config.expected_uid)
+                )
+                if (
+                    proof is not None
+                    and proof.credential_binding == binding
+                    and proof.identity_verified_at is not None
+                    and not proof.identity_error
+                ):
+                    uid = config.expected_uid
+                elif uid != config.expected_uid or (proof is not None and proof.identity_error):
+                    uid = None
+        if native_uid({"uid": uid}) is None:
+            raise NotFoundError("Current BloFin connection is unverified.")
+        assert uid is not None
+        row = self._snapshots.latest_for_connection(
+            organization_id, native_uid=uid, binding=binding, successful_only=successful_only
+        )
         if row is None:
             raise NotFoundError("No BloFin demo sync snapshot found for this organization.")
         return self._to_item(row, mark_stale=True)
@@ -301,7 +349,11 @@ class BloFinSyncService:
                 row.positions_snapshot if isinstance(row.positions_snapshot, dict) else {}
             ),
             market_context=row.market_context if isinstance(row.market_context, dict) else {},
-            provenance=row.provenance if isinstance(row.provenance, dict) else {},
+            provenance=(
+                {key: value for key, value in row.provenance.items() if key != "connection_binding"}
+                if isinstance(row.provenance, dict)
+                else {}
+            ),
             is_stale=is_stale,
             stale_reason=stale_reason,
             error_summary=row.error_summary,

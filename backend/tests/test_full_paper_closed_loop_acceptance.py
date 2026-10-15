@@ -119,14 +119,18 @@ def propose(world):
     assert eligibility.eligibility.state is ActionEligibilityState.ELIGIBLE
     assert eligibility.paper_actionable and not eligibility.live_executable
     session = world.factory()
-    service = world.agent(session)
-    proposal = agent_turn(service, world.prepare_message(scan))
-    assert proposal.paper_execution is not None, proposal.reply
-    assert proposal.paper_execution.stage == "proposed", proposal.reply
-    assert proposal.approval_required
-    assert count(session, ApprovalAuthorization) == 0
-    assert count(session, ExecutionCommand) == count(session, ExecutionFillFact) == 0
-    assert count(session, JournalTrade) == 0
+    try:
+        service = world.agent(session)
+        proposal = agent_turn(service, world.prepare_message(scan))
+        assert proposal.paper_execution is not None, proposal.reply
+        assert proposal.paper_execution.stage == "proposed", proposal.reply
+        assert proposal.approval_required
+        assert count(session, ApprovalAuthorization) == 0
+        assert count(session, ExecutionCommand) == count(session, ExecutionFillFact) == 0
+        assert count(session, JournalTrade) == 0
+    except BaseException:
+        session.close()
+        raise
     return scan, eligibility, session, service, proposal
 
 

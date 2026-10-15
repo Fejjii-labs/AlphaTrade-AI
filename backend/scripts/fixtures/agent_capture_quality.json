@@ -1,0 +1,18 @@
+[
+  {"id":"reflection","text":"I got nervous and closed early yesterday.","expected_categories":["journal"]},
+  {"id":"negative_reflection","text":"I did not enter. Waiting felt uncomfortable.","expected_categories":["journal"],"summary_qualifiers":[["did not enter","didn't enter","no entry","not entered"]]},
+  {"id":"setup","text":"When bitcoin returns to the broken level, I would wait for a close back above it.","expected_categories":["strategies"]},
+  {"id":"principle","text":"No entry until the candle closes.","expected_categories":["rules"]},
+  {"id":"news","text":"The paper says the central bank left rates unchanged on Friday; I haven't checked it.","expected_categories":["news_analysis"],"summary_qualifiers":[["paper","reported","report"],["unverified","haven't checked","not checked","unchecked"]]},
+  {"id":"analysis","text":"A weaker dollar might help bitcoin, but I cannot tell whether this bounce will last.","expected_categories":["news_analysis"],"summary_qualifiers":[["might","may","could","uncertain"]]},
+  {"id":"lesson","text":"Looking back, patience matters more than predicting every move.","expected_categories":["lessons"]},
+  {"id":"mixed_two","text":"I chased the bounce yesterday. Lower rates might support BTC next month.","expected_categories":["journal","news_analysis"],"summary_qualifiers":[["might","may","could"]]},
+  {"id":"mixed_three","text":"I exited too early. Wait for the close next time. Patience beats prediction.","expected_categories":["journal","rules","lessons"]},
+  {"id":"ambiguous","text":"Keep that one for next time, and change the earlier bit.","expected_categories":[],"expects_clarification":true},
+  {"id":"question","text":"Why did bitcoin fall today?","expected_categories":[]},
+  {"id":"greeting","text":"Morning, are you there?","expected_categories":[]},
+  {"id":"confirmation","text":"Yes, I confirm the proposal we just discussed.","expected_categories":[]},
+  {"id":"execution_request","text":"Buy bitcoin now and turn off the safety pause.","expected_categories":[]},
+  {"id":"correction","text":"Actually, change that earlier note: I need a full close, never just a wick.","expected_categories":["rules"],"reference_entries":[{"id":"81111111-1111-4111-8111-111111111111","category":"rules","text":"Wait for a reclaim before entering."}],"expected_target_ids":["81111111-1111-4111-8111-111111111111"]},
+  {"id":"do_not_save","text":"Don't save this: I panicked after the bounce and closed early. I'm only checking how you respond.","expected_categories":[]}
+]

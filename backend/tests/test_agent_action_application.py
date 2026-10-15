@@ -14,7 +14,6 @@ from app.core.errors import (
     ConflictError,
     NotFoundError,
     QuotaExceededError,
-    ServiceUnavailableError,
     register_exception_handlers,
 )
 from app.db.canonical_candidates import CanonicalCandidateRow
@@ -23,6 +22,7 @@ from app.db.models import (
     Chunk,
     ConversationMessage,
     Document,
+    KnowledgeIndexingJob,
     Order,
     StrategyConversationProposal,
     TradeProposal,
@@ -42,7 +42,8 @@ from app.security.rate_limit import get_rate_limiter
 from app.security.tenant import TenantContext
 from app.services.canonical_serialization import canonical_sha256
 from app.services.quota_service import QuotaService
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, build_rag_service
+from tests.support.knowledge_indexing import drain_indexing
 from tests.test_agent_action_orchestration import confirm, strategy, turn
 from tests.test_interactive_agent_foundation import (
     ORG_A,
@@ -237,13 +238,16 @@ def test_knowledge_receipt_retains_provenance_links_hash_and_duplicate_identity(
         assert doc.organization_id == ORG_A and doc.user_id == USER_A
         assert str(result.conversation_id) in doc.uri
         chunks = session.scalars(select(Chunk).where(Chunk.document_id == doc.id)).all()
-        assert chunks and all(chunk.embedding_ref for chunk in chunks)
+        assert chunks and all(chunk.embedding_ref is None for chunk in chunks)
+        assert applied.application_result["vector_index_status"] == "pending"
         content = " ".join(chunk.content for chunk in chunks)
         assert str(evidence.id) in content and str(result.user_message_id) in content
         assert all(chunk.chunk_metadata["strategy_tag"] == str(target.id) for chunk in chunks)
         assert applied.application_result["evidence_links_persisted"] == [str(evidence.id)]
         assert confirm(service, result) == applied
         assert _count(session, Document) == 2
+        assert drain_indexing(build_rag_service(settings, session)) == ["ready"]
+        assert all(chunk.embedding_ref for chunk in chunks)
 
 
 def test_identical_private_knowledge_from_same_org_users_never_deduplicates_across_users(agent_db):
@@ -296,12 +300,15 @@ def test_ingestion_and_agent_receipt_remain_in_the_callers_unit_of_work(agent_db
         assert _count(session, Document) == 1
 
 
-def test_ingestion_provider_failure_cannot_record_an_application(agent_db, monkeypatch):
+def test_ingestion_provider_outage_preserves_application_and_pending_indexing(
+    agent_db, monkeypatch
+):
     class UnavailableVectors(InMemoryVectorStore):
         def upsert(self, collection, points):
             raise RuntimeError("vector backend unavailable")
 
     factory, settings = agent_db
+    store = UnavailableVectors()
     with factory() as session:
         monkeypatch.setattr(
             application,
@@ -310,16 +317,23 @@ def test_ingestion_provider_failure_cannot_record_an_application(agent_db, monke
                 session,
                 settings=settings,
                 embeddings=MockEmbeddingsProvider(),
-                vector_store=UnavailableVectors(),
+                vector_store=store,
             ),
         )
         service, result = turn(
             session, settings, name="knowledge.propose", arguments={"text": "Wait"}
         )
-        with pytest.raises(ServiceUnavailableError):
-            confirm(service, result)
-        session.rollback()
-        assert _count(session, Document) == _count(session, Chunk) == 0
+        applied = confirm(service, result)
+        assert applied.applied and applied.application_result["vector_index_status"] == "pending"
+        session.commit()
+        assert _count(session, Document) == _count(session, Chunk) == 1
+        rag = RagService(
+            session, settings=settings, embeddings=MockEmbeddingsProvider(), vector_store=store
+        )
+        assert drain_indexing(rag) == ["pending"]
+        job = session.scalar(select(KnowledgeIndexingJob))
+        assert job.status == "pending" and job.attempts == 1 and job.error_code == "RuntimeError"
+        assert all(chunk.embedding_ref is None for chunk in session.scalars(select(Chunk)))
         _, stored = find_proposal(
             session,
             conversation_id=result.conversation_id,
@@ -327,7 +341,9 @@ def test_ingestion_provider_failure_cannot_record_an_application(agent_db, monke
             user_id=USER_A,
             proposal_id=result.proposals[0].proposal_id,
         )
-        assert stored.status is ProposalLifecycle.PROPOSED and stored.resulting_record_id is None
+        assert stored.status is ProposalLifecycle.APPLIED
+        assert stored.resulting_record_id == applied.resulting_record_id
+        assert confirm(service, result) == applied
 
 
 def test_agent_ingestion_cannot_bypass_canonical_quota(agent_db):

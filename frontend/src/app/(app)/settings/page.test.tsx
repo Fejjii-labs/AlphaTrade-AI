@@ -22,11 +22,12 @@ const runtime = {
   loading: false,
   refreshStatus: vi.fn(),
 };
+let identity = {
+  user: { id: "user-1", email: "owner@example.com", email_verified: true },
+  organization: { id: "org-1", name: "Alpha Org" },
+};
 vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({
-    user: { email: "owner@example.com", email_verified: true },
-    organization: { name: "Alpha Org" },
-  }),
+  useAuth: () => identity,
 }));
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => runtime,
@@ -89,6 +90,10 @@ const slots = [
 ];
 
 beforeEach(() => {
+  identity = {
+    user: { id: "user-1", email: "owner@example.com", email_verified: true },
+    organization: { id: "org-1", name: "Alpha Org" },
+  };
   vi.restoreAllMocks();
   runtime.health = {
     execution_mode: "paper",
@@ -284,4 +289,23 @@ it("keeps unknown system values unavailable", async () => {
   render(<SettingsPage />);
   openGroup("Account & System");
   expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+});
+
+it("clears monitoring and account state before an authenticated account change reloads", async () => {
+  const { rerender } = render(<SettingsPage />);
+  openGroup("Market Monitoring");
+  await screen.findByText("STOPPED");
+  vi.mocked(api.marketWatcher.monitoring).mockImplementation(() => new Promise(() => {}));
+  identity = {
+    user: { id: "user-2", email: "reader@example.com", email_verified: true },
+    organization: { id: "org-2", name: "Other Org" },
+  };
+  rerender(<SettingsPage />);
+  openGroup("Market Monitoring");
+  expect(screen.queryByText("STOPPED")).not.toBeInTheDocument();
+  openGroup("Account & System");
+  expect(screen.getByText("reader@example.com")).toBeInTheDocument();
+  expect(screen.queryByText("owner@example.com")).not.toBeInTheDocument();
+  expect(api.risk.updateSettings).not.toHaveBeenCalled();
+  expect(api.notifications.updatePreferences).not.toHaveBeenCalled();
 });

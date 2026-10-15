@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 from app.core.config import Settings
@@ -75,45 +75,32 @@ def test_openai_fallback_mock_matches_dimensions() -> None:
     assert len(result.vectors[0]) == 1536
 
 
-def test_openai_request_includes_dimensions_for_v3_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+def _sdk(monkeypatch, payload):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.embeddings.create.return_value.model_dump.return_value = payload
+    monkeypatch.setattr("app.providers.embeddings.OpenAI", lambda **kwargs: client)
+    return client
 
-    class _Resp:
-        def raise_for_status(self) -> None:
-            return None
 
-        def json(self) -> dict[str, object]:
-            return {
-                "model": "text-embedding-3-small",
-                "data": [{"index": 0, "embedding": [0.1] * 512}],
-                "usage": {"prompt_tokens": 3},
-            }
-
-    class _Client:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> _Resp:
-            captured["url"] = url
-            captured["json"] = json
-            return _Resp()
-
-    monkeypatch.setattr(httpx, "Client", _Client)
+def test_openai_request_includes_dimensions_for_v3_models(monkeypatch):
+    client = _sdk(
+        monkeypatch,
+        {
+            "model": "text-embedding-3-small",
+            "data": [{"index": 0, "embedding": [0.1] * 512}],
+            "usage": {"prompt_tokens": 3},
+        },
+    )
     provider = OpenAIEmbeddingsProvider(
         model="text-embedding-3-small",
-        api_key="sk-test",
-        base_url="https://api.openai.com/v1",
+        api_key="fixture",
+        base_url="https://fixture.invalid/v1",
         dimensions=512,
     )
     result = provider.embed_with_metadata(["hello"])
-    assert result.fallback_used is False
-    assert captured["json"] == {
+    assert not result.fallback_used
+    assert client.embeddings.create.call_args.kwargs == {
         "model": "text-embedding-3-small",
         "input": ["hello"],
         "dimensions": 512,
@@ -121,41 +108,16 @@ def test_openai_request_includes_dimensions_for_v3_models(monkeypatch: pytest.Mo
     assert len(result.vectors[0]) == 512
 
 
-def test_openai_dimension_mismatch_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Resp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {
-                "model": "text-embedding-3-small",
-                "data": [{"index": 0, "embedding": [0.1] * 8}],
-                "usage": {"prompt_tokens": 1},
-            }
-
-    class _Client:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def post(self, *args: object, **kwargs: object) -> _Resp:
-            return _Resp()
-
-    monkeypatch.setattr(httpx, "Client", _Client)
+def test_openai_dimension_mismatch_falls_back(monkeypatch):
+    _sdk(monkeypatch, {"data": [{"index": 0, "embedding": [0.1] * 8}]})
     provider = OpenAIEmbeddingsProvider(
         model="text-embedding-3-small",
-        api_key="sk-test",
-        base_url="https://api.openai.com/v1",
+        api_key="fixture",
+        base_url="https://fixture.invalid/v1",
         dimensions=1536,
     )
     result = provider.embed_with_metadata(["hello"])
-    assert result.fallback_used is True
-    assert len(result.vectors[0]) == 1536
+    assert result.fallback_used and len(result.vectors[0]) == 1536
 
 
 def test_model_supports_dimensions_param() -> None:

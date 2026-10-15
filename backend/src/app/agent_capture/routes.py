@@ -1,10 +1,9 @@
 """Authenticated private capture API. A receipt is returned after outer commit."""
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
-import structlog
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 from sqlalchemy import select
 
 from app.agent_capture.contracts import (
@@ -14,72 +13,16 @@ from app.agent_capture.contracts import (
     SavedEntry,
     SavedEntryUpdate,
 )
-from app.agent_capture.service import CaptureService
 from app.agent_capture.store import entry_record, list_entries, require_entry, update_entry
 from app.core.dependencies import SessionDep, SettingsDep
 from app.db.models import ConversationMessage
-from app.interactive_agent.contracts import (
-    PAYLOAD_KEY,
-    AgentTurnRequest,
-    AgentTurnResult,
-    TurnOperation,
-)
+from app.interactive_agent.contracts import PAYLOAD_KEY
+from app.interactive_agent.turn_contracts import TURN_CONFLICT_RESPONSES
 from app.security.rbac import TraderDep
+from app.services.turn_coordinator import TurnReservation
+from app.services.turn_policy import TURN_DEPENDENCIES
 
 router = APIRouter(prefix="/agent/saved", tags=["agent"])
-logger = structlog.get_logger(__name__)
-
-
-def capture_result(
-    session: SessionDep,
-    settings: SettingsDep,
-    organization_id: UUID,
-    user_id: UUID,
-    result: AgentTurnResult,
-    request: AgentTurnRequest,
-) -> None:
-    if result.operation is TurnOperation.REFUSE or request.action is not None:
-        return
-    result.capture_source_message_id = result.user_message_id
-    capture = None
-    try:
-        with session.begin_nested():
-            capture = CaptureService(session, settings)
-            entries, status, clarification = capture.capture(
-                organization_id=organization_id,
-                user_id=user_id,
-                conversation_id=result.conversation_id,
-                message_id=result.user_message_id,
-                source_document_id=request.source_document_id,
-            )
-            result.saved_entries = entries
-            result.capture_status = status
-            result.capture_clarification = clarification
-    except Exception as exc:
-        logger.warning("agent_capture_failed", error=type(exc).__name__)
-        result.saved_entries = []
-        result.capture_status = "failed"
-        result.capture_error = (
-            "Your message is retained in this conversation. Capture could not be saved; "
-            "retry when the provider or storage is available."
-        )
-    if capture is not None and capture.model.last_usage:
-        result.model_usage.append(capture.model.last_usage)
-    assistant = session.get(ConversationMessage, result.assistant_message_id)
-    if assistant is not None:
-        payload = dict(assistant.payload or {})
-        detail = dict(payload.get(PAYLOAD_KEY) or {})
-        detail["model_usage"] = result.model_usage
-        detail["capture"] = {
-            "saved_entries": [e.model_dump(mode="json") for e in result.saved_entries],
-            "status": result.capture_status,
-            "error": result.capture_error,
-            "clarification": result.capture_clarification,
-            "source_message_id": str(result.user_message_id),
-            "model_usage": result.model_usage,
-        }
-        payload[PAYLOAD_KEY] = detail
-        assistant.payload = payload
 
 
 @router.get("", response_model=SavedEntriesPage)
@@ -104,56 +47,103 @@ async def saved_list(
     )
 
 
-@router.post("/retry", response_model=SavedEntriesPage)
+@router.post(
+    "/retry",
+    response_model=SavedEntriesPage,
+    dependencies=TURN_DEPENDENCIES,
+    responses=TURN_CONFLICT_RESPONSES,
+)
 async def retry_capture(
-    body: CaptureRetry, tenant: TraderDep, session: SessionDep, settings: SettingsDep
+    body: CaptureRetry,
+    tenant: TraderDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    idempotency_key: str | None = Header(
+        default=None, description="Stable UUID for capture recovery."
+    ),
 ) -> SavedEntriesPage:
-    from app.core.errors import NotFoundError
+    from functools import partial
 
-    message = session.scalar(
-        select(ConversationMessage).where(
-            ConversationMessage.id == body.source_message_id,
-            ConversationMessage.conversation_id == body.conversation_id,
-            ConversationMessage.organization_id == tenant.organization_id,
-            ConversationMessage.user_id == tenant.user_id,
-        )
-    )
-    if message is None:
-        raise NotFoundError("Source message not found.")
-    source = (message.payload.get(PAYLOAD_KEY) or {}).get("source_document_id")
-    entries, status, clarification = CaptureService(session, settings).capture(
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-        conversation_id=body.conversation_id,
-        message_id=body.source_message_id,
-        source_document_id=UUID(source) if source else None,
-    )
-    if status == "clarification":
-        from app.core.errors import ValidationAppError
+    from starlette.concurrency import run_in_threadpool
 
-        raise ValidationAppError(clarification or "Capture needs clarification.")
-    for assistant in session.scalars(
-        select(ConversationMessage).where(
-            ConversationMessage.conversation_id == body.conversation_id,
-            ConversationMessage.organization_id == tenant.organization_id,
-            ConversationMessage.user_id == tenant.user_id,
+    from app.core.errors import NotFoundError, ValidationAppError
+    from app.interactive_agent.turn_runtime import capture_in_phases
+    from app.services.turn_coordinator import TurnCoordinator, request_key
+
+    coordinator = TurnCoordinator.from_request_session(session)
+
+    def work(reservation: TurnReservation) -> dict[str, Any]:
+        with coordinator.sessions() as phase_session:
+            coordinator.guard(phase_session, reservation)
+            message = phase_session.get(ConversationMessage, body.source_message_id)
+            if (
+                message is None
+                or message.conversation_id != body.conversation_id
+                or message.organization_id != tenant.organization_id
+                or message.user_id != tenant.user_id
+            ):
+                raise NotFoundError("Source message not found.")
+            source = (message.payload.get(PAYLOAD_KEY) or {}).get("source_document_id")
+        entries, status, clarification, usage = capture_in_phases(
+            coordinator.sessions,
+            settings,
+            reservation,
+            body.source_message_id,
+            UUID(source) if source else None,
         )
-    ):
-        payload = dict(assistant.payload or {})
-        detail = dict(payload.get(PAYLOAD_KEY) or {})
-        receipt = detail.get("capture") or {}
-        if receipt.get("source_message_id") == str(body.source_message_id):
-            detail["capture"] = {
-                **receipt,
-                "saved_entries": [e.model_dump(mode="json") for e in entries],
-                "status": status,
-                "error": None,
-                "clarification": None,
+        if status == "clarification":
+            raise ValidationAppError(clarification or "Capture needs clarification.")
+        with coordinator.sessions() as phase_session:
+            reservation_row = coordinator.guard(phase_session, reservation)
+            for assistant in phase_session.scalars(
+                select(ConversationMessage).where(
+                    ConversationMessage.conversation_id == body.conversation_id,
+                    ConversationMessage.organization_id == tenant.organization_id,
+                    ConversationMessage.user_id == tenant.user_id,
+                )
+            ):
+                payload = dict(assistant.payload or {})
+                detail = dict(payload.get(PAYLOAD_KEY) or {})
+                receipt = detail.get("capture") or {}
+                if receipt.get("source_message_id") == str(body.source_message_id):
+                    usage_rows = [*receipt.get("model_usage", []), *([usage] if usage else [])]
+                    detail["model_usage"] = usage_rows
+                    detail["capture"] = {
+                        **receipt,
+                        "saved_entries": [e.model_dump(mode="json") for e in entries],
+                        "status": status,
+                        "error": None,
+                        "clarification": None,
+                        "model_usage": usage_rows,
+                    }
+                    assistant.payload = {**payload, PAYLOAD_KEY: detail}
+            response = SavedEntriesPage(items=entries, total=len(entries)).model_dump(mode="json")
+            from app.services.turn_coordinator import RESERVATION
+
+            reservation_row.payload = {
+                **reservation_row.payload,
+                RESERVATION: {
+                    **reservation_row.payload[RESERVATION],
+                    "state": "completed",
+                    "response": response,
+                },
             }
-            payload[PAYLOAD_KEY] = detail
-            assistant.payload = payload
-    session.commit()
-    return SavedEntriesPage(items=entries, total=len(entries))
+            phase_session.commit()
+        return response
+
+    result = await run_in_threadpool(
+        partial(
+            coordinator.run,
+            channel="capture_retry",
+            key=request_key(idempotency_key),
+            body=body.model_dump(mode="json"),
+            organization_id=tenant.organization_id,
+            user_id=tenant.user_id,
+            conversation_id=body.conversation_id,
+            work=work,
+        )
+    )
+    return SavedEntriesPage.model_validate(result)
 
 
 @router.get("/{entry_id}", response_model=SavedEntry)

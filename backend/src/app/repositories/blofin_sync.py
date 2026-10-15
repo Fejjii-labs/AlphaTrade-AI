@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import BloFinDemoSyncSnapshot as SnapshotModel
@@ -19,13 +19,46 @@ class BloFinSyncRepository:
         self._session.flush()
         return row
 
-    def latest_for_org(
-        self, organization_id: uuid.UUID, *, successful_only: bool = False
+    def verified_uid_for_binding(self, organization_id: uuid.UUID, binding: str) -> str | None:
+        return self._session.scalar(
+            select(SnapshotModel.provenance["native_account_uid"].as_string())
+            .where(
+                SnapshotModel.organization_id == organization_id,
+                SnapshotModel.provenance["connection_binding"].as_string() == binding,
+                SnapshotModel.provenance["identity_status"].as_string() == "verified",
+                SnapshotModel.provenance["environment"].as_string() == "demo",
+            )
+            .order_by(SnapshotModel.synced_at.desc(), SnapshotModel.id.desc())
+            .limit(1)
+        )
+
+    def latest_for_connection(
+        self,
+        organization_id: uuid.UUID,
+        *,
+        native_uid: str,
+        binding: str,
+        successful_only: bool = False,
     ) -> SnapshotModel | None:
         stmt = (
             select(SnapshotModel)
-            .where(SnapshotModel.organization_id == organization_id)
-            .order_by(SnapshotModel.synced_at.desc())
+            .where(
+                SnapshotModel.organization_id == organization_id,
+                SnapshotModel.provenance["environment"].as_string() == "demo",
+                or_(
+                    and_(
+                        SnapshotModel.provenance["native_account_uid"].as_string() == native_uid,
+                        SnapshotModel.provenance["identity_status"].as_string() == "verified",
+                    ),
+                    and_(
+                        SnapshotModel.health_status == "unavailable",
+                        SnapshotModel.provenance["connection_binding"].as_string() == binding,
+                        SnapshotModel.balance_count == 0,
+                        SnapshotModel.position_count == 0,
+                    ),
+                ),
+            )
+            .order_by(SnapshotModel.synced_at.desc(), SnapshotModel.id.desc())
             .limit(1)
         )
         if successful_only:

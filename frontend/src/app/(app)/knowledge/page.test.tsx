@@ -90,7 +90,7 @@ it("consolidates Knowledge categories and keeps original evidence on demand", as
   );
   expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
     "href",
-    "/journal?tab=knowledge&saved=note",
+    "/journal?tab=knowledge&category=rules&saved=note",
   );
   expect(screen.queryByText(entry.original_text)).not.toBeInTheDocument();
   expect(api.knowledge.listChunks).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ it("retrieves an exact linked document without substituting another source", asy
     }),
   );
   expect(
-    await screen.findByRole("link", { name: /Back to Journal/ }),
+    await screen.findByRole("link", { name: /Back to Knowledge/ }),
   ).toBeInTheDocument();
   expect(screen.queryByText("Confirmation rule")).not.toBeInTheDocument();
   fireEvent.click(
@@ -198,6 +198,34 @@ it("retrieves an exact linked document without substituting another source", asy
     "/knowledge?document_id=exact-document&chunk_page=1",
     { scroll: false },
   );
+});
+it("keeps a Back path to Knowledge when an exact saved entry is unavailable", async () => {
+  state.params.set("saved", "missing");
+  vi.mocked(savedEntries.get).mockRejectedValue(new Error("Missing"));
+  render(<Page />);
+  await screen.findByText("Saved entry unavailable.");
+  expect(screen.getByRole("link", { name: /Back to Knowledge/ })).toHaveAttribute("href", "/journal?tab=knowledge");
+});
+it("restores the stored filtered list from an unavailable saved entry", async () => {
+  state.params.set("saved", "missing");
+  sessionStorage.setItem("alphatrade.journal.return:o:u", JSON.stringify({ href: "/journal?tab=knowledge&category=rules&q=close", scroll: 480 }));
+  vi.mocked(savedEntries.get).mockRejectedValue(new Error("Missing"));
+  render(<Page />);
+  await screen.findByText("Saved entry unavailable.");
+  expect(screen.getByRole("link", { name: /Back to Knowledge/ })).toHaveAttribute("href", "/journal?tab=knowledge&category=rules&q=close");
+});
+it("resolves an unavailable exact document independently of stalled library lists", async () => {
+  state.params.set("document", "missing-for-readiness");
+  vi.mocked(savedEntries.list).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.knowledge.listDocuments).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(api.knowledge.listChunks).mockRejectedValue(new Error("Document unavailable"));
+  render(<Page />);
+  expect(await screen.findByTestId("knowledge-document-stale")).toBeVisible();
+  expect(savedEntries.list).not.toHaveBeenCalled();
+  expect(api.knowledge.listDocuments).not.toHaveBeenCalled();
+  expect(api.knowledge.listChunks).toHaveBeenCalledWith({
+    document_id: "missing-for-readiness", limit: 50, offset: 0,
+  });
 });
 it("paginates preserved notes and sources without silently truncating history", async () => {
   vi.mocked(savedEntries.list).mockResolvedValue({ items: [entry], total: 80 });
@@ -281,4 +309,25 @@ it("requires execution lifecycle provenance for default exchange activity", asyn
   expect(
     screen.getAllByRole("link", { name: "Open exact trade" }),
   ).toHaveLength(1);
+});
+
+it("hides pagination for empty or single-page libraries", async () => {
+  render(<Page />);
+  await screen.findByText("Confirmation rule");
+  expect(screen.queryByRole("navigation", { name: "Saved notes pages" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("navigation", { name: "Documents pages" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("knowledge-filters")).toContainElement(screen.getByLabelText("Knowledge category"));
+});
+it("retains independent document paging and a way back from a stale empty page", async () => {
+  state.params.set("page", "1");
+  vi.mocked(savedEntries.list).mockResolvedValue({ items: [], total: 0 });
+  vi.mocked(api.knowledge.listDocuments).mockResolvedValue({ items: [], total: 80, limit: 50, offset: 0 });
+  render(<Page />);
+  const documents = await screen.findByRole("navigation", { name: "Documents pages" });
+  fireEvent.click(within(documents).getByRole("button", { name: "Next" }));
+  expect(state.replace).toHaveBeenCalledWith("/knowledge?page=1&source_page=1", { scroll: false });
+  const notes = screen.getByRole("navigation", { name: "Saved notes pages" });
+  expect(within(notes).getByRole("button", { name: "Next" })).toBeDisabled();
+  fireEvent.click(within(notes).getByRole("button", { name: "Previous" }));
+  expect(state.replace).toHaveBeenCalledWith("/knowledge?page=0", { scroll: false });
 });

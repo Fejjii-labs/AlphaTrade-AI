@@ -23,7 +23,6 @@ from app.providers.factory import resolve_providers
 from app.providers.qdrant import (
     InMemoryVectorStore,
     QdrantVectorStore,
-    VectorPoint,
     VectorSearchFilters,
     VectorStore,
 )
@@ -43,7 +42,6 @@ from app.schemas.rag import (
     DocumentCreateRequest,
     DocumentIngestionMetadata,
     FileProvenance,
-    IndexingObservation,
     IngestDocumentRequest,
     IngestDocumentResponse,
     RagChunk,
@@ -67,6 +65,9 @@ class RagService:
     RAG provides rules, explanations, and journal lessons only — never direct
     trading signals or order instructions.
     """
+
+    # search supports authenticated own/private plus organization-shared scope.
+    supports_shared_search = True
 
     def __init__(
         self,
@@ -116,11 +117,7 @@ class RagService:
         commit: bool = True,
         file_provenance: FileProvenance | None = None,
     ) -> IngestDocumentResponse:
-        """Normalize, chunk, embed, and persist a text document.
-
-        Composing authorities can retain their row locks by owning the commit.
-        Vector upserts remain the existing external, non-transactional operation.
-        """
+        """Store normalized content and an indexing intent in one SQL transaction."""
         if self._documents is None or self._chunks is None or self._session is None:
             raise RuntimeError("Database session required for ingestion.")
 
@@ -159,7 +156,7 @@ class RagService:
                 ),
             )
         if existing is not None:
-            return self._duplicate_result(existing)
+            return self._duplicate_result(existing).model_copy(update={"sql_chunks_stored": commit})
 
         now = datetime.now(UTC)
         document_id = uuid.uuid4()
@@ -189,29 +186,29 @@ class RagService:
             )
             if existing is None:
                 raise
-            return self._duplicate_result(existing)
-        try:
-            embed_result = self._embeddings.embed_with_metadata(text_chunks)
-        except ServiceUnavailableError:
-            self._session.rollback()
-            raise
-        vectors = embed_result.vectors
-        self._assert_ingest_embeddings_allowed(embed_result.fallback_used)
-        self._record_embedding_usage(
-            organization_id=data.organization_id,
-            user_id=data.user_id,
-            text_count=len(text_chunks),
-            feature="rag_ingest",
-            provider=embed_result.provider,
-            input_tokens=embed_result.input_tokens,
-            fallback_used=embed_result.fallback_used,
-            latency_ms=embed_result.latency_ms,
+            return self._duplicate_result(existing).model_copy(update={"sql_chunks_stored": commit})
+        return self._store_chunks(
+            document, data, text_chunks, commit=commit, file_provenance=file_provenance
         )
 
-        vector_points: list[VectorPoint] = []
-        for ordinal, (content, vector) in enumerate(zip(text_chunks, vectors, strict=True)):
+    def _store_chunks(
+        self,
+        document: DocumentModel,
+        data: IngestDocumentRequest,
+        text_chunks: list[str],
+        *,
+        commit: bool,
+        file_provenance: FileProvenance | None = None,
+    ) -> IngestDocumentResponse:
+        from app.rag.indexing import enqueue_indexing
+
+        assert self._session is not None and self._chunks is not None
+        now = datetime.now(UTC)
+        if len(text_chunks) > 2048:
+            raise ValidationAppError("A document exceeds the bounded indexing chunk budget.")
+        for ordinal, content in enumerate(text_chunks):
             text_hash = compute_text_hash(content)
-            chunk_id = stable_chunk_id(document_id, ordinal, text_hash)
+            chunk_id = stable_chunk_id(document.id, ordinal, text_hash)
             metadata = ChunkMetadata(
                 title=data.title,
                 section_title=_infer_section_title(content),
@@ -222,78 +219,43 @@ class RagService:
                 risk_tag=data.risk_tag,
                 source_filename=file_provenance.filename if file_provenance else None,
             )
-            chunk = ChunkModel(
-                id=chunk_id,
-                document_id=document_id,
-                organization_id=data.organization_id,
-                user_id=data.user_id,
-                ordinal=ordinal,
-                content=content,
-                token_count=estimate_token_count(content),
-                text_hash=text_hash,
-                embedding_ref=str(chunk_id),
-                chunk_metadata=metadata.model_dump(mode="json"),
-                created_at=now,
-                updated_at=now,
-            )
-            self._chunks.add(chunk)
-            vector_points.append(
-                VectorPoint(
-                    point_id=str(chunk_id),
-                    vector=vector,
-                    payload=_vector_payload(
-                        chunk_id=chunk_id,
-                        document_id=document_id,
-                        organization_id=data.organization_id,
-                        user_id=data.user_id,
-                        metadata=metadata,
-                    ),
+            self._chunks.add(
+                ChunkModel(
+                    id=chunk_id,
+                    document_id=document.id,
+                    organization_id=document.organization_id,
+                    user_id=document.user_id,
+                    ordinal=ordinal,
+                    content=content,
+                    token_count=estimate_token_count(content),
+                    text_hash=text_hash,
+                    embedding_ref=None,
+                    chunk_metadata=metadata.model_dump(mode="json"),
+                    created_at=now,
+                    updated_at=now,
                 )
             )
-
-        try:
-            self._assert_vector_backend_for_ingest()
-            self._vector_store.upsert(RAG_COLLECTION, vector_points)
-        except ServiceUnavailableError:
-            self._session.rollback()
-            raise
-        except Exception as exc:
-            self._session.rollback()
-            raise ServiceUnavailableError(
-                "Knowledge ingestion failed: vector store unavailable.",
-                details={"reason": "vector_upsert_failed"},
-            ) from exc
-        vector_status = self._vector_store.status()
-        fallback_used = embed_result.fallback_used or vector_status.using_fallback
-        document.ingestion_metadata = DocumentIngestionMetadata(
-            file=file_provenance,
-            indexing=IndexingObservation(
-                sql_chunk_count=len(text_chunks),
-                vector_backend=self._vector_store.name,
-                fallback_used=fallback_used,
-                observed_at=datetime.now(UTC),
-            ),
-        ).model_dump(mode="json")
+        document.ingestion_metadata = DocumentIngestionMetadata(file=file_provenance).model_dump(
+            mode="json"
+        )
+        job = enqueue_indexing(self._session, document)
+        # Admission remains metered even while remote indexing is pending.
+        UsageService(self._session, strict_mode=True).record(
+            UsageEventCreate(
+                usage_event_id=uuid.uuid5(job.id, "content-stored"),
+                request_id=f"knowledge-store:{job.id}",
+                feature="rag_ingest",
+                organization_id=document.organization_id,
+                user_id=document.user_id,
+                provider="indexing_outbox",
+            )
+        )
         if commit:
             self._session.commit()
         else:
             self._session.flush()
-        logger.info(
-            "rag_ingest_complete",
-            document_id=str(document_id),
-            chunk_count=len(text_chunks),
-            source_type=data.source_type.value,
-        )
-        return IngestDocumentResponse(
-            document_id=document_id,
-            source_hash=source_hash,
-            chunk_count=len(text_chunks),
-            duplicate=False,
-            version=data.version,
-            vector_backend=self._vector_store.name,
-            fallback_used=fallback_used,
-            vector_index_status="upsert_acknowledged",
-        )
+        result = self._duplicate_result(document)
+        return result.model_copy(update={"duplicate": False, "sql_chunks_stored": commit})
 
     def _duplicate_result(self, existing: DocumentModel) -> IngestDocumentResponse:
         if self._chunks is None:
@@ -308,7 +270,7 @@ class RagService:
             version=existing.version,
             vector_backend=observation.vector_backend if observation else None,
             fallback_used=observation.fallback_used if observation else False,
-            vector_index_status="upsert_acknowledged" if observation else "unknown",
+            vector_index_status=observation.vector_index_status if observation else "unknown",
         )
 
     def upsert_linked_document(self, data: IngestDocumentRequest) -> IngestDocumentResponse:
@@ -317,6 +279,13 @@ class RagService:
             raise RuntimeError("Database session required for ingestion.")
         if not data.source_uri:
             return self.ingest(data)
+
+        if self._session.get_bind().dialect.name == "postgresql":
+            from sqlalchemy import text
+
+            scope = f"{data.organization_id}|{data.user_id}|{data.source_uri}".encode()
+            key = int.from_bytes(hashlib.sha256(scope).digest()[:8], "big", signed=True)
+            self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
         source_hash = compute_source_hash(
             title=data.title,
@@ -328,20 +297,18 @@ class RagService:
         existing = self._documents.get_by_source_uri(
             organization_id=data.organization_id,
             source_uri=data.source_uri,
+            user_id=data.user_id,
+            for_update=True,
         )
         if existing is not None and existing.source_hash == source_hash:
-            chunk_count = len(self._chunks.list_by_document(existing.id))
-            return IngestDocumentResponse(
-                document_id=existing.id,
-                source_hash=source_hash,
-                chunk_count=chunk_count,
-                duplicate=True,
-                version=existing.version,
-            )
+            self._session.commit()
+            return self._duplicate_result(existing)
 
         if existing is not None:
             for chunk in self._chunks.list_by_document(existing.id):
                 self._session.delete(chunk)
+            self._session.flush()
+            existing.source_type = data.source_type
             existing.title = data.title
             existing.source_hash = source_hash
             existing.version = existing.version + 1
@@ -362,92 +329,72 @@ class RagService:
         if self._documents is None or self._chunks is None or self._session is None:
             raise RuntimeError("Database session required for ingestion.")
 
-        now = datetime.now(UTC)
-        text_chunks = chunk_text(data.text)
-        try:
-            embed_result = self._embeddings.embed_with_metadata(text_chunks)
-        except ServiceUnavailableError:
-            self._session.rollback()
-            raise
-        vectors = embed_result.vectors
-        self._assert_ingest_embeddings_allowed(embed_result.fallback_used)
-        self._record_embedding_usage(
-            organization_id=data.organization_id,
-            user_id=data.user_id,
-            text_count=len(text_chunks),
-            feature="rag_ingest",
-            provider=embed_result.provider,
-            input_tokens=embed_result.input_tokens,
-            fallback_used=embed_result.fallback_used,
-            latency_ms=embed_result.latency_ms,
-        )
-
-        vector_points: list[VectorPoint] = []
-        for ordinal, (content, vector) in enumerate(zip(text_chunks, vectors, strict=True)):
-            text_hash = compute_text_hash(content)
-            chunk_id = stable_chunk_id(document_id, ordinal, text_hash)
-            metadata = ChunkMetadata(
-                title=data.title,
-                section_title=_infer_section_title(content),
-                source_type=data.source_type,
-                strategy_tag=data.strategy_tag,
-                symbol_tag=data.symbol_tag,
-                timeframe_tag=data.timeframe_tag,
-                risk_tag=data.risk_tag,
-            )
-            chunk = ChunkModel(
-                id=chunk_id,
-                document_id=document_id,
-                organization_id=data.organization_id,
-                user_id=data.user_id,
-                ordinal=ordinal,
-                content=content,
-                token_count=estimate_token_count(content),
-                text_hash=text_hash,
-                embedding_ref=str(chunk_id),
-                chunk_metadata=metadata.model_dump(mode="json"),
-                created_at=now,
-                updated_at=now,
-            )
-            self._chunks.add(chunk)
-            vector_points.append(
-                VectorPoint(
-                    point_id=str(chunk_id),
-                    vector=vector,
-                    payload=_vector_payload(
-                        chunk_id=chunk_id,
-                        document_id=document_id,
-                        organization_id=data.organization_id,
-                        user_id=data.user_id,
-                        metadata=metadata,
-                    ),
-                )
-            )
-
-        try:
-            self._assert_vector_backend_for_ingest()
-            self._vector_store.upsert(RAG_COLLECTION, vector_points)
-        except ServiceUnavailableError:
-            self._session.rollback()
-            raise
-        except Exception as exc:
-            self._session.rollback()
-            raise ServiceUnavailableError(
-                "Knowledge ingestion failed: vector store unavailable.",
-                details={"reason": "vector_upsert_failed"},
-            ) from exc
-        self._session.commit()
         document = self._documents.get(document_id)
-        version = document.version if document is not None else data.version
-        return IngestDocumentResponse(
-            document_id=document_id,
-            source_hash=source_hash,
-            chunk_count=len(text_chunks),
-            duplicate=False,
-            version=version,
-            vector_backend=self._vector_store.name,
-            fallback_used=embed_result.fallback_used,
+        if document is None:
+            raise RuntimeError("Linked document vanished.")
+        text_chunks = chunk_text(data.text)
+        if not text_chunks:
+            raise ValidationAppError("A document must contain readable text.")
+        return self._store_chunks(document, data, text_chunks, commit=True)
+
+    def delete_document(self, document_id: UUID, *, organization_id: UUID, user_id: UUID) -> None:
+        from sqlalchemy import select
+
+        from app.core.errors import NotFoundError
+        from app.rag.indexing import enqueue_indexing
+
+        assert self._session is not None and self._chunks is not None
+        document = self._session.scalar(
+            select(DocumentModel)
+            .where(
+                DocumentModel.id == document_id,
+                DocumentModel.organization_id == organization_id,
+                DocumentModel.user_id == user_id,
+            )
+            .with_for_update()
         )
+        if document is None:
+            raise NotFoundError("Knowledge document not found in your scope.")
+        enqueue_indexing(self._session, document, operation="delete")
+        for chunk in self._chunks.list_by_document(document.id):
+            self._session.delete(chunk)
+        self._session.delete(document)
+        self._session.commit()
+
+    def retry_indexing(
+        self, document_id: UUID, *, organization_id: UUID, user_id: UUID
+    ) -> IngestDocumentResponse:
+        from sqlalchemy import select
+
+        from app.core.errors import NotFoundError
+        from app.db.models import KnowledgeIndexingJob
+        from app.rag.indexing import enqueue_indexing, indexing_observation
+
+        assert self._session is not None and self._chunks is not None
+        document = self._session.scalar(
+            select(DocumentModel)
+            .where(
+                DocumentModel.id == document_id,
+                DocumentModel.organization_id == organization_id,
+                DocumentModel.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        if document is None:
+            raise NotFoundError("Knowledge document not found in your scope.")
+        job = (
+            self._session.get(KnowledgeIndexingJob, document.indexing_generation)
+            if document.indexing_generation
+            else None
+        )
+        if job is not None and job.status in {"pending", "processing", "ready"}:
+            return self._duplicate_result(document)
+        job = enqueue_indexing(self._session, document)
+        job.status, job.attempts, job.error_code = "pending", 0, None
+        job.available_at, job.claim_token, job.claimed_until = datetime.now(UTC), None, None
+        indexing_observation(document, job, len(self._chunks.list_by_document(document.id)))
+        self._session.commit()
+        return self._duplicate_result(document)
 
     def search(self, query: RagQuery, *, request_id: str | None = None) -> RagSearchResponse:
         """Retrieve ranked chunks with citation metadata."""
@@ -473,6 +420,7 @@ class RagService:
         filters = VectorSearchFilters(
             organization_id=query.organization_id,
             user_id=query.user_id,
+            include_shared=query.include_shared,
             source_types=tuple(st.value for st in query.source_types),
             strategy_tag=query.strategy_tag,
             symbol_tag=query.symbol_tag,
@@ -496,7 +444,13 @@ class RagService:
                 ) from exc
             raise
 
-        chunk_ids = [UUID(hit.point_id) for hit in hits]
+        def hit_chunk_id(hit: Any) -> UUID | None:
+            try:
+                return UUID(str(hit.payload.get("chunk_id", hit.point_id)))
+            except (ValueError, TypeError):
+                return None
+
+        chunk_ids = [identifier for hit in hits if (identifier := hit_chunk_id(hit)) is not None]
         chunk_map: dict[UUID, ChunkModel] = {}
         if self._chunks is not None and chunk_ids:
             for loaded_chunk in self._chunks.get_many(chunk_ids):
@@ -505,15 +459,53 @@ class RagService:
         retrieved: list[RetrievedChunk] = []
         citations: list[Citation] = []
         for hit in hits:
-            chunk_id = UUID(hit.point_id)
+            chunk_id = hit_chunk_id(hit)
+            if chunk_id is None:
+                continue
             chunk = chunk_map.get(chunk_id)
             if chunk is None:
                 continue
-            if (
-                query.organization_id is not None and chunk.organization_id != query.organization_id
-            ) or (query.user_id is not None and chunk.user_id != query.user_id):
+            if chunk.organization_id != query.organization_id:
                 continue
+            if chunk.user_id != query.user_id and not (
+                query.include_shared and query.organization_id is not None and chunk.user_id is None
+            ):
+                continue
+            # Repository reads support detached callers. Never require an ambient
+            # Session across embedding/vector network work to verify the parent.
+            document = self._documents.get(chunk.document_id) if self._documents else None
+            if (
+                document is None
+                or document.organization_id != chunk.organization_id
+                or document.user_id != chunk.user_id
+                or (
+                    hit.payload.get("document_id") is not None
+                    and hit.payload["document_id"] != str(document.id)
+                )
+            ):
+                continue
+            if document.indexing_generation is not None:
+                observation = (document.ingestion_metadata or {}).get("indexing") or {}
+                if (
+                    observation.get("vector_index_status") != "ready"
+                    or hit.payload.get("generation") != str(document.indexing_generation)
+                    or (
+                        hit.payload.get("document_version") != document.version
+                        or hit.payload.get("source_hash") != document.source_hash
+                    )
+                ):
+                    continue
             metadata = _chunk_metadata_from_row(chunk)
+            if metadata.source_type != document.source_type or (
+                query.source_types and metadata.source_type not in query.source_types
+            ):
+                continue
+            if any(
+                getattr(query, field) is not None
+                and getattr(metadata, field) != getattr(query, field)
+                for field in ("strategy_tag", "symbol_tag", "timeframe_tag", "risk_tag")
+            ):
+                continue
             retrieved.append(
                 RetrievedChunk(
                     chunk_id=chunk.id,
@@ -531,10 +523,12 @@ class RagService:
             citations.append(_citation_from_chunk(chunk, metadata, score=hit.score))
 
         vector_status = self._vector_store.status()
+        unverified_hits = len(retrieved) != len(hits)
         degraded = bool(
             embed_result.fallback_used
             or vector_status.using_fallback
             or vector_status.health.value != "healthy"
+            or unverified_hits
         )
         return RagSearchResponse(
             query=query.query,
@@ -543,7 +537,13 @@ class RagService:
             degraded=degraded,
             fallback_used=embed_result.fallback_used or vector_status.using_fallback,
             vector_backend=self._vector_store.name,
-            detail=vector_status.detail if degraded else None,
+            detail=(
+                "Some vector hits could not be verified against current scoped SQL content."
+                if unverified_hits
+                else vector_status.detail
+                if degraded
+                else None
+            ),
         )
 
     def _assert_ingest_embeddings_allowed(self, fallback_used: bool) -> None:
@@ -589,8 +589,10 @@ class RagService:
                 query=query,
                 organization_id=organization_id,
                 user_id=user_id,
+                include_shared=True,
                 top_k=top_k,
                 source_types=[
+                    DocumentSourceType.STRATEGY_TEMPLATE,
                     DocumentSourceType.TRADING_PLAYBOOK,
                     DocumentSourceType.RISK_POLICY,
                     DocumentSourceType.TRADE_JOURNAL,

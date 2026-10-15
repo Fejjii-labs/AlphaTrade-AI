@@ -231,7 +231,7 @@ export function createBrowserVoiceProvider(): VoiceProvider {
       }
       return { stop: cancel, cancel };
     },
-    listen(callbacks) {
+    listen(callbacks, options) {
       cancelCapture?.();
       cancelInput?.();
       cancelOutput?.();
@@ -303,7 +303,7 @@ export function createBrowserVoiceProvider(): VoiceProvider {
       };
       cancelInput = abort;
       recognition.lang = browser?.navigator.language || "en-US";
-      recognition.continuous = true;
+      recognition.continuous = options?.turnCompletion !== "utterance";
       recognition.interimResults = true;
       recognition.onstart = () => {
         if (!active || stopping) return;
@@ -347,6 +347,8 @@ export function createBrowserVoiceProvider(): VoiceProvider {
       return { stop, cancel: abort };
     },
     speak(text, callbacks) {
+      cancelCapture?.();
+      cancelInput?.();
       cancelOutput?.();
       const noop: VoiceSession = { stop() {}, cancel() {} };
       if (!output || !synthesis || !browser || !Utterance) {
@@ -366,6 +368,7 @@ export function createBrowserVoiceProvider(): VoiceProvider {
         utterance.onstart = utterance.onend = utterance.onerror = null;
       };
       const cancel = () => {
+        if (!active) return;
         cleanup();
         synthesis.cancel();
       };

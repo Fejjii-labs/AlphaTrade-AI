@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import Field
 
 from app.market_contracts.derivatives import DerivativeObservation
+from app.market_contracts.order_book import OrderBookObservation
 from app.market_contracts.order_flow import OrderFlowObservation
 from app.schemas.common import StrictModel
 
@@ -84,3 +85,4 @@ class CanonicalEvidenceRead(StrictModel):
     unavailable_reason: str | None = None
     market_intelligence: tuple[DerivativeObservation, ...] = ()
     order_flow: OrderFlowObservation | None = None
+    order_book: OrderBookObservation | None = None

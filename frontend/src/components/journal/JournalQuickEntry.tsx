@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import {
   hasPrefillContext,
@@ -133,7 +133,9 @@ export function JournalQuickEntry({
   const showValidationLink = relatedSession.status === "ready";
   const showRelatedLinks = showProposalLink || showPositionLink || showValidationLink;
 
-  useEffect(() => {
+  // Finish prefill resets before the new context can accept manual input.
+  // A passive reset can erase input entered as the invalid warning appears.
+  useLayoutEffect(() => {
     setLinkedProposalId(undefined);
     setLinkedPositionId(undefined);
     if (activePrefillContext) {
@@ -147,7 +149,7 @@ export function JournalQuickEntry({
     }
   }, [contextKey, activePrefillContext]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (prefill.status === "loading" || prefill.status === "invalid") {
       setLinkedProposalId(undefined);
       setLinkedPositionId(undefined);

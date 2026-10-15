@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from app.core.config import Settings
 from app.market_contracts.adapters.aggtrade_cache import ClosedAggTradeCache, TtlValueCache
+from app.market_contracts.adapters.observation_cache import CausalObservationCache
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget
 
 
@@ -28,6 +29,7 @@ class BinanceEvidencePool:
     """Shared request-weight budget and closed-window cache."""
 
     def __init__(self, key: _PoolKey) -> None:
+        self.observations = CausalObservationCache()
         self.budget = SlidingWeightBudget(
             limit=key.weight_per_minute,
             max_wait_seconds=max(key.max_backoff_seconds, 60.0),

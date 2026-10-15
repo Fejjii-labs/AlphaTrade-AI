@@ -94,7 +94,7 @@ const AGENT_PREFIXES = ["/agent"] as const;
 export const SECONDARY_NAV: readonly SecondaryNavGroup[] = [
   {
     destinationId: "settings",
-    items: [{ href: "/settings", label: "Workspace", icon: Settings }],
+    items: [{ href: "/settings", label: "Back to Settings", icon: Settings }],
   },
 ] as const;
 

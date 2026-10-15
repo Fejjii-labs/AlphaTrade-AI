@@ -194,6 +194,7 @@ class JournalService:
 def _rag_synced(session_repo: DocumentRepository, row: JournalModel) -> bool:
     doc = session_repo.get_by_source_uri(
         organization_id=row.organization_id,
+        user_id=row.user_id,
         source_uri=f"journal://{row.id}",
     )
     return doc is not None

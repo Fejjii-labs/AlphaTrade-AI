@@ -8,8 +8,16 @@ alwaysApply: false
 
 - Add/update tests for meaningful changes; focus on behavior and failure paths.
 - Keep tests deterministic; no reliance on real external providers by default.
-- Backend gate (from `backend/`): `uv run ruff check .` · `uv run ruff format --check .` ·
-  `uv run pytest`. Frontend: `npm run lint && npm run typecheck && npm run test && npm run build`.
+- Development checks: changed-file Ruff/lint/format, relevant type checks, affected pytest/
+  Vitest modules and reachable API/browser checks for changed journeys. Expand only for a
+  concrete adjacent risk or required gate; do not run complete suites after individual fixes.
+- Batch related fixes and publication; reuse green evidence only for equivalent relevant
+  revision/configuration/dependency/input scope. Preserve meaningful required PR checks.
+- Full backend acceptance and combined validation follow `.ai/RELEASE.md`: freeze the
+  reviewed candidate, satisfy coordinated staging and fresh SFP prerequisites, then perform
+  the single explicitly requested `full_backend=true` gate. No full CI during repairs.
 - Evaluation harness (deterministic/mock): `evaluate_agent.py`, `evaluate_rag.py`,
   `evaluate_guardrails.py`. Real-provider evals must be env-guarded and isolated.
 - Do not lower coverage of safety, refusal, or approval-gating paths.
+- Record exact tested SHA, executed counts, failures and skips. Component/mock, integrated,
+  deployed and live-accepted results are different evidence levels; a merge is not deployment.

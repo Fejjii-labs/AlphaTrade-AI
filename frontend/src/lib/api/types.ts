@@ -1247,44 +1247,8 @@ export interface RagSearchResponse {
   detail?: string | null;
 }
 
-export interface RagDocument {
-  id: string;
-  organization_id?: string | null;
-  user_id?: string | null;
-  source_type: DocumentSourceType | string;
-  title: string;
-  source_uri?: string | null;
-  source_hash?: string | null;
-  ingestion_metadata?: {
-    file?: {
-      filename: string;
-      media_type: string;
-      raw_content_hash: string;
-      byte_size: number;
-      extracted_text_hash: string;
-      extracted_characters: number;
-      parser_version: string;
-      confirmed_at: string;
-    } | null;
-    indexing?: {
-      sql_chunk_count: number;
-      vector_backend: string;
-      vector_index_status: "upsert_acknowledged";
-      fallback_used: boolean;
-      observed_at: string;
-    } | null;
-  } | null;
-  version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PaginatedRagDocuments {
-  items: RagDocument[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+export type RagDocument = import("./generated/types").components["schemas"]["RagDocument"];
+export type PaginatedRagDocuments = import("./generated/types").components["schemas"]["PaginatedRagDocuments"];
 
 export interface ChunkMetadata {
   title?: string | null;
@@ -1322,17 +1286,7 @@ export interface PaginatedRagChunks {
   offset: number;
 }
 
-export interface IngestDocumentResponse {
-  document_id: string;
-  source_hash: string;
-  chunk_count: number;
-  duplicate: boolean;
-  version: number;
-  vector_backend?: string | null;
-  fallback_used?: boolean;
-  sql_chunks_stored?: boolean;
-  vector_index_status?: "upsert_acknowledged" | "unknown";
-}
+export type IngestDocumentResponse = import("./generated/types").components["schemas"]["IngestDocumentResponse"];
 
 export interface FileImportPreview {
   filename: string;
@@ -1575,110 +1529,18 @@ export interface ToolOutput {
   latency_ms?: number | null;
 }
 
-export interface TradingAnalysisDetail {
-  summary: string;
-  setup_type?: string | null;
-  evidence: string[];
-  risk_level?: RiskSeverity | null;
-  confidence?: number | null;
-  invalidation?: string | null;
-  stop_loss_or_no_trade_reason: string;
-  approval_status: string;
-  next_decision_point?: string | null;
-  paper_mode_disclaimer?: string | null;
-  market_data_quality: string;
-}
+export type TradingAnalysisDetail = import("./generated/types").components["schemas"]["TradingAnalysisDetail"];
 
-export interface TradingNarrativeDetail {
-  summary: string;
-  setup_interpretation: string;
-  evidence_explanation: string;
-  risk_explanation: string;
-  invalidation_explanation: string;
-  next_decision_point: string;
-  caution_notes: string[];
-  limitations: string[];
-  paper_mode_disclaimer: string;
-  citations_used: string[];
-}
+export type TradingNarrativeDetail = import("./generated/types").components["schemas"]["TradingNarrativeDetail"];
 
-export interface NarrativeMetadata {
-  source: string;
-  provider: string;
-  model: string;
-  fallback_used: boolean;
-  validation_passed: boolean;
-  latency_ms?: number | null;
-}
+export type NarrativeMetadata = import("./generated/types").components["schemas"]["NarrativeMetadata"];
 
-export interface AgentMessageResponse {
-  conversation_id: string;
-  request_id: string;
-  reply: string;
-  risk_level?: RiskSeverity | null;
-  confidence?: number | null;
-  approval_required: boolean;
-  approval_status: string;
-  approval_reason?: string | null;
-  proposal_id?: string | null;
-  approval_id?: string | null;
-  citations: Citation[];
-  tool_outputs: ToolOutput[];
-  risk_result?: RiskCheckResult | null;
-  limitations: string[];
-  usage?: UsageEvent | null;
-  analysis?: TradingAnalysisDetail | null;
-  narrative?: TradingNarrativeDetail | null;
-  narrative_meta?: NarrativeMetadata | null;
-  pending_proposal?: StrategyProposalRecord | null;
-  history_injected?: number;
-}
+export type AgentMessageResponse = import("./generated/types").components["schemas"]["AgentMessageResponse"];
 
-export interface AgentStructuredProposal {
-  proposal_id: string;
-  conversation_id: string;
-  kind: string;
-  artifact_kind: string;
-  status: "proposed" | "confirmed_unapplied" | "applied" | "rejected" | "refused" | string;
-  summary: string;
-  content_hash: string;
-  applied: boolean;
-  authority_mutated: boolean;
-  resulting_record_id?: string | null;
-}
-
-export interface AgentTurnResult {
-  model_usage?: Record<string, unknown>[];
-  saved_entries?: import("./saved-entries").SavedEntry[];
-  assistant_message_id?: string;
-  user_message_id?: string;
-  capture_status?:
-    "not_needed" | "saved" | "failed" | "clarification" | "unavailable";
-  capture_error?: string | null;
-  capture_source_message_id?: string | null;
-  capture_clarification?: string | null;
-  conversation_id: string;
-  reply: string;
-  recorded_evidence?: string | null;
-  full_reply?: string | null;
-  connections?: { record_id: string; title: string }[];
-  capability: string;
-  operation: string;
-  proposals: AgentStructuredProposal[];
-  limitations: string[];
-  market_quote?: {
-    symbol: string;
-    last_price: string;
-    source: string;
-    is_live: boolean;
-    is_stale: boolean;
-    fallback_used: boolean;
-    provider_name: string;
-  } | null;
-  authority_mutated: false;
-  execution_attempted: false;
-  real_trading_enabled: false;
-}
+export type AgentStructuredProposal = import("./generated/types").components["schemas"]["StructuredActionProposal"];
+export type AgentTurnRequest = import("./generated/types").components["schemas"]["AgentTurnRequest"];
+export type AgentTurnResult = import("./generated/types").components["schemas"]["AgentTurnResult"];
+export type UserStrategyUpdate = import("./generated/types").components["schemas"]["UserStrategyUpdate"];
 
 export type ConversationStatus = "active" | "archived";
 export type ConversationMessageRole = "user" | "assistant" | "system";
@@ -1722,34 +1584,7 @@ export interface PaginatedConversationMessages {
   offset: number;
 }
 
-export interface StrategyProposalRecord {
-  id: string;
-  conversation_id: string;
-  organization_id: string;
-  user_id: string;
-  source_message_id?: string | null;
-  target_strategy_id?: string | null;
-  parent_version_id?: string | null;
-  status: StrategyProposalStatus;
-  proposed_structured_rules?: Record<string, unknown> | null;
-  proposed_pattern_spec?: Record<string, unknown> | null;
-  proposed_card?: Record<string, unknown> | null;
-  validation: { valid: boolean; errors: string[]; warnings: string[] };
-  limitations: string[];
-  challenge_notes: string[];
-  context_refs?: Record<string, unknown>;
-  content_hash?: string | null;
-  resulting_strategy_id?: string | null;
-  resulting_version_id?: string | null;
-  resulting_content_hash?: string | null;
-  confirmation_request_id?: string | null;
-  confirmed_at?: string | null;
-  rejected_at?: string | null;
-  created_at: string;
-  updated_at: string;
-  is_preview: boolean;
-  mutates_strategy_authority: boolean;
-}
+export type StrategyProposalRecord = import("./generated/types").components["schemas"]["StrategyProposalRecord"];
 
 export interface PaginatedStrategyProposals {
   items: StrategyProposalRecord[];

@@ -23,6 +23,7 @@ from app.schemas.common import MembershipRole, StrategyId
 from app.schemas.strategy_library import StrategyCard, UserStrategyCreate
 from app.schemas.strategy_pattern_spec import FIRST_SLICE_NAME
 from app.services.strategy_library_service import StrategyLibraryService
+from tests.support.postgres_persistence import reset_public_schema
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -52,7 +53,7 @@ requires_postgres = pytest.mark.skipif(
 
 def _factory() -> sessionmaker[Session]:
     engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    Base.metadata.drop_all(engine)
+    reset_public_schema(engine)
     Base.metadata.create_all(engine)
     install_persistence_firewall()
     return sessionmaker(bind=engine, expire_on_commit=False)

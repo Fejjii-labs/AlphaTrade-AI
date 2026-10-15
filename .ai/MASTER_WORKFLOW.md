@@ -1,7 +1,7 @@
 # AlphaTrade AI Master Workflow and Handoff Standard
 
-**Version:** 2.0  
-**Recommended Cursor model for installation:** Opus 4.8  
+**Version:** 2.1 (Autonomous AI Delivery Playbook v1.1 reconciliation)
+
 **Project:** AlphaTrade AI  
 **Project slug:** `alphatrade-ai`  
 **Task prefix:** `AT`  
@@ -12,7 +12,7 @@
 
 ## 1. Purpose
 
-This document is the single master standard for the AlphaTrade AI collaboration workflow between ChatGPT, Cursor, the local repository, and the mobile iCloud handoff.
+This document is the existing operating standard for AlphaTrade AI's accountable delivery owner, repository and mobile handoff. The Autonomous AI Delivery Playbook v1.1 is adopted here as process guidance, preserving current work, authority and platform controls. It grants no credentials, spending, deployment or exchange permission.
 
 It replaces and supersedes:
 
@@ -29,9 +29,11 @@ It defines:
 - repository and Git safety;
 - trading and broker/exchange safety;
 - what is tracked, ignored, retained, regenerated, archived, or deleted;
-- how Cursor must finish every task before ChatGPT continues planning.
+- how the owner continues a complete milestone and reports exact acceptance and blockers.
 
 This document is not product code. Installing or updating this workflow must not alter AlphaTrade AI application behavior unless a later task explicitly authorizes implementation work.
+
+The routine approval, per-edit publication and manual ChatGPT ↔ Cursor relay requirements in the former installation workflow are superseded by §§8–12 and §§20–24 below. Existing authorized implementation continues; adopting process guidance is not a new audit or installation project.
 
 ---
 
@@ -45,24 +47,19 @@ This document is not product code. Installing or updating this workflow must not
 6. **Every claim must be based on verified repository, test, deployment, or runtime evidence.**
 7. **Unknown or unverified facts must be marked explicitly.**
 8. **Safety rules take precedence over speed, convenience, and feature completion.**
-9. **A blocker must be synchronized immediately rather than waiting for task completion.**
+9. **Record blockers promptly; pause the affected operation and continue independent authorized milestone work.**
 10. **Real trading remains disabled unless a separate, explicit, safety-reviewed future task authorizes a controlled change.**
+11. **One owner implements and integrates; up to two workers may handle independent scoped work.**
+12. **Fix named acceptance criteria before implementation and separate implemented, integrated, deployed and live-accepted evidence.**
+13. **Reuse valid evidence, batch related publication and preserve the single final reviewed release gate.**
 
 ---
 
 ## 3. Source-of-truth precedence
 
-When information conflicts, use this order:
+For authority, platform controls and applicable safety constraints remain binding. Apply the user's current task and standing grants within those boundaries; local process guidance cannot revoke an already authorized routine step or create new permissions. Preserve explicit scope and safety limits when reconciling obsolete ceremony.
 
-1. Safety and security constraints in tracked project rules
-2. Current repository code and configuration
-3. Automated test and validation evidence
-4. Deployment/runtime evidence
-5. `.ai/DECISIONS.md`
-6. `.ai/TASKS.md`
-7. Current `HANDOFF.md`
-8. Current `CHANGELOG_SESSION.md`
-9. ChatGPT or Cursor conversation text
+For factual claims, prefer current repository evidence for implementation, actual deployment receipts for installed revisions, and observed user-route results for live acceptance. Match tests to their exact revision and inputs. Use `.ai/DECISIONS.md`, `.ai/TASKS.md`, the current HANDOFF.md and CHANGELOG_SESSION.md as concise durable context; worker reports and chat supply intent and leads, not proof of deployed behavior.
 
 Never change code merely to make an outdated document appear correct. Update the document to reflect verified reality.
 
@@ -70,13 +67,13 @@ Never change code merely to make an outdated document appear correct. Update the
 
 ## 4. Canonical paths
 
-### Repository
+### Repository and execution environment
 
 ```text
 ~/Developer/AlphaTrade-AI
 ```
 
-If the active repository is under Desktop, Documents, Downloads, or iCloud Drive, stop and create a safe relocation plan before implementation.
+This is the existing Mac checkout path, not a cloud prerequisite. Verify the actual task workspace path and revision. A managed cloud worktree is valid; do not relocate or restart active work merely to match the Mac path. If the active checkout itself is inside a filesystem syncing service, pause unsafe Git writes and prepare a safe relocation while preserving work.
 
 ### Canonical local handoff files
 
@@ -311,7 +308,7 @@ It may not be enabled through an ordinary implementation task. It requires a sep
 
 ## 8. Task lifecycle
 
-Every Cursor task follows this lifecycle.
+The delivery owner follows this lifecycle through the whole agreed milestone. The user does not relay worker outputs or provide a new prompt for each internal step.
 
 ### Step 1: Inspect
 
@@ -334,23 +331,25 @@ Do not overwrite or discard unrelated work.
 Before implementation:
 
 1. Set `HANDOFF.md` to `IN_PROGRESS`.
-2. Record the current task, phase, baseline, goal, safety posture, and intended validation.
-3. Start or replace `CHANGELOG_SESSION.md` for the current execution session.
-4. Run the sync script.
-5. Verify source and iCloud copies match.
+2. Record outcome, scope, owner, execution environment, baseline, safety posture, existing authority and a small named pass/fail acceptance checklist in the existing task/handoff. Fix its denominator before implementation; show justified scope changes rather than removing failures or padding progress.
+3. Resume the existing CHANGELOG_SESSION.md or start the current session record without discarding useful work or valid evidence. Keep technical choices flexible.
+4. Perform one focused prerequisite pass for the next operations. Reuse valid access receipts; distinguish an inventory denial from absent credentials. Bundle missing access by exact operation/target, never secret value.
+5. Sync when available per §12. Unavailable Mac/iCloud access is recorded, not a prerequisite stopping independent cloud work.
 
 ### Step 3: Implement in scoped phases
 
-At each major phase boundary:
+At meaningful milestones, blockers and interruption boundaries:
 
 1. Update `HANDOFF.md` with completed work and current phase.
 2. Update `CHANGELOG_SESSION.md` with commands and results.
-3. Sync immediately.
-4. Continue only when the next phase is safe and authorized.
+3. Preserve a compact checkpoint; batch authorized publication and verify actual source equality per §12.
+4. Continue within standing authority without routine reconfirmation. Select the next unmet criterion, diagnose, make the smallest sufficient change and run a check that distinguishes success from failure.
+5. Use up to two independent workers only where useful. Supply base revision, allowed files, interface, acceptance criteria and prohibited shared changes; collect their commits/evidence directly. Keep one writer for schema sequencing, deployment, credentials and runtime configuration.
+6. Before retrying an interrupted external mutation, reconcile actual state and operation identity; a timeout does not prove nothing happened. After repeated unchanged failure, change the diagnosis or report the specific dependency.
 
 ### Step 4: Validate
 
-Use the narrowest relevant checks first, then broader regression checks.
+Run focused checks for changed behavior and concrete adjacent risks. Required consolidated and full-release checks follow .ai/RELEASE.md; do not run the complete backend suite after each fix or repeat green checks merely for progress.
 
 Validation evidence must include:
 
@@ -359,7 +358,8 @@ Validation evidence must include:
 - relevant result counts;
 - skipped or unavailable checks;
 - honest explanation of what was not run;
-- last known full-suite result when relevant.
+- exact tested revision and relevant input/configuration equivalence when reusing evidence;
+- named accepted/total criteria and separate implementation, integration, deployment and live acceptance.
 
 ### Step 5: Finish
 
@@ -368,10 +368,10 @@ When the task is complete:
 1. Set `HANDOFF.md` to `READY`.
 2. Regenerate all current-state sections.
 3. Finalize `CHANGELOG_SESSION.md`.
-4. Run the sync script.
-5. Verify source and iCloud copies using SHA256 and `cmp` or `diff`.
+4. Sync/publish when available and authorized per §12.
+5. Verify actual published bytes using SHA256 and `cmp` or `diff`; record unavailable downstream verification explicitly.
 6. Report Git status and whether code was committed or pushed.
-7. Include the next recommended model and exact next Cursor prompt.
+7. Record exact candidate/deployment revisions or unknown, acceptance counts, remaining external dependency and next executable operation. Finish when the complete agreed scope passes or only specific external dependencies remain.
 
 ---
 
@@ -395,13 +395,13 @@ Work is active and can continue safely without human intervention.
 
 #### `REVIEW_REQUIRED`
 
-A human decision, approval, permission, credential, secret, external action, or destructive confirmation is required.
+A genuinely new material decision, missing authority or required human/platform action prevents an operation. Already authorized routine engineering does not require this status.
 
-Cursor must stop before the protected action.
+Pause before that protected operation; continue independent authorized work for the same milestone. Missing access is reported precisely without implying a secret is absent.
 
 #### `BLOCKED`
 
-A technical or environmental issue prevents safe progress after scoped diagnostics.
+A specific technical or environmental dependency remains after scoped diagnostics and prevents the remaining operation. Continue independent work before returning the blocker.
 
 #### `FAILED`
 
@@ -409,7 +409,7 @@ The task or a critical validation failed and cannot be represented as successful
 
 #### `READY`
 
-The current task is complete, validated to the stated scope, synchronized, and ready for ChatGPT review or the next task.
+The current stated scope is complete and validated at its declared evidence level, with a durable checkpoint and truthful publication status. READY does not imply deployment or live acceptance unless their criteria actually passed.
 
 Do not use `DRAFT`. `IN_PROGRESS` replaces it.
 
@@ -419,21 +419,19 @@ Do not use `DRAFT`. `IN_PROGRESS` replaces it.
 
 ```text
 Task received
-→ Inspect repository and rules
-→ HANDOFF = IN_PROGRESS
-→ Sync and verify
-→ Implement phase 1
-→ Update handoff and session log
-→ Sync and verify
-→ Implement remaining phases
-→ Run validation
-→ HANDOFF = READY
-→ Final sync and verification
-→ Upload HANDOFF.md to ChatGPT
-→ ChatGPT reviews and prepares the next task
+→ Verify current branch, checkpoint and relevant instructions
+→ Fix named acceptance and confirm standing authority
+→ HANDOFF = IN_PROGRESS; check actual prerequisites once
+→ Implement the complete path; integrate scoped worker results directly
+→ Run focused checks; update checkpoint at meaningful milestones
+→ Close material findings; perform authorized release gates when due
+→ Record accepted/total and implementation/integration/deployment/live evidence
+→ HANDOFF = READY for completed stated scope
+→ Batch authorized publication; verify source equality or record unavailable sync
+→ Report exact evidence and next executable operation
 ```
 
-At no point should Cursor wait until the final response to create the handoff.
+The owner resumes this same assignment across interruptions. Manual user uploads or a new ChatGPT/Cursor prompt are not prerequisites for each phase.
 
 ---
 
@@ -453,14 +451,14 @@ Examples:
 
 Required behavior:
 
-1. Stop safely.
+1. Pause safely before the affected operation; prepare a concrete reviewable result first where possible.
 2. Set `HANDOFF.md` to `REVIEW_REQUIRED`.
 3. Document the exact human action needed.
 4. Record what was completed and what remains unchanged.
 5. Record whether code or configuration was modified.
 6. Record uncommitted work.
-7. Sync and verify immediately.
-8. Do not continue until approval or confirmation is provided.
+7. Record the blocker promptly and sync when available per §12.
+8. Bundle genuine missing inputs into one packet: blocked operation, missing access/authority, recommended action, exact verified target/destination, consequence and completed preparation. Continue independent authorized milestone work; resume the protected operation only after the required approval/access is actually available.
 
 ### Recoverable technical blocker
 
@@ -469,27 +467,27 @@ Required behavior:
 3. If unresolved, set `HANDOFF.md` to `BLOCKED`.
 4. Record the failed command and concise error evidence.
 5. Record the last successful step.
-6. Sync and verify immediately.
-7. Wait for ChatGPT or human guidance.
+6. Record and publish the checkpoint per §12 without repeated access prompts.
+7. Continue independent work. Retry only with a corrected input, changed configuration, new explanation or bounded transient policy; after repeated identical failure, change strategy or identify the external dependency.
 
 ### Failed task or critical validation
 
-1. Stop further changes.
+1. Preserve evidence; diagnose and repair the specific failure with focused checks. Stop only unsafe or unauthorized operations.
 2. Preserve evidence and current work.
 3. Set `HANDOFF.md` to `FAILED`.
 4. Explain the failure without claiming success.
 5. State whether rollback occurred or is needed.
-6. Sync and verify immediately.
-7. Do not commit, push, or deploy failed work unless explicitly directed for diagnostic purposes.
+6. Record the checkpoint promptly and sync when available per §12.
+7. Continue authorized repairs and independent work; do not claim acceptance or advance a release through failed gates. Diagnostic publication requires its own task scope and truthful failed status.
 
 ---
 
-## 12. Mandatory synchronization moments
+## 12. Checkpoints and publication
 
-Regenerate and synchronize `HANDOFF.md` and update `CHANGELOG_SESSION.md` at:
+Update the existing HANDOFF.md and CHANGELOG_SESSION.md promptly at:
 
 1. Task start
-2. Completion of every major phase
+2. Meaningful acceptance/integration milestones
 3. Any blocker
 4. Any review or approval requirement
 5. Any failed command or test that prevents progress
@@ -498,17 +496,17 @@ Regenerate and synchronize `HANDOFF.md` and update `CHANGELOG_SESSION.md` at:
 8. Before a destructive action
 9. After a destructive action
 10. Final task completion
-11. End of every Cursor agent run (success, failure, blocked, early stop, or
-    human-action required) — Cloud or local
+11. Owner interruption and completion boundaries — cloud or local
 
-Every regenerated handoff must include: current task, result, blocker/error if
-any, evidence, what was completed, what was not completed, repository safety
-state, exact human action required, exact recommended next Cursor prompt, and
-`Generated At UTC`.
+Every checkpoint includes current task/owner, revision, named accepted/total criteria,
+evidence, completed and pending work, installed deployment identity or unknown, safety state,
+the specific blocked operation and exact next executable action. Keep the existing template
+and Generated At UTC; do not create another management system or a document after each edit.
+Workers return scoped results to the owner rather than competing to overwrite the checkpoint.
 
 ### Local Mac worktree sync
 
-Run:
+When this Mac worktree and sync script are available, run:
 
 ```bash
 ~/.local/bin/sync-alphatrade-ai-handoff.sh
@@ -522,15 +520,26 @@ Then verify:
 - expected destination paths;
 - nonzero failure if verification fails.
 
+Record an actual sync failure honestly and preserve its evidence. If the Mac/iCloud/script
+is unavailable in a cloud environment, record mobile publication as unexecuted; this does
+not stop independent implementation, focused checks or already authorized Git publication.
+
 ### GitHub publish for cloud → iPhone sync
 
-Push the regenerated handoff to GitHub (dedicated `cursor/*handoff*` branch
+When publication is authorized and Git access is available, batch the regenerated handoff
+with the next meaningful milestone/blocker/completion publication (dedicated `cursor/*handoff*` branch
 when a product PR must stay clean; force-add only the ignored handoff files;
 do not open a PR for handoff-only branches). The Mac LaunchAgent
 `com.alphatrade.handoff-sync` discovers the newest `Generated At UTC` and
 copies it to iCloud automatically.
 
-Never wait for the task to end before synchronizing a blocker.
+Verify the intended published revision, normalized Source File SHA256 and actual remote
+document bytes against the source with ordinary SHA256 plus cmp/diff. This proves source
+publication, not the downstream Mac/iCloud copy; verify that copy when accessible and mark
+it unknown otherwise. Preserve the existing discovery behavior and LaunchAgent.
+
+Record a blocker immediately; do not require an extra push for each edit or internal phase,
+nor ask the user to manually relay the checkpoint before continuing authorized work.
 
 ---
 
@@ -605,6 +614,10 @@ The sync script must still verify the actual source and destination file bytes i
 15. Recommended Model
 16. Exact Next Instruction for ChatGPT
 17. Exact Next Cursor Prompt
+
+These existing template fields remain for compatibility. Record the current owner/model
+and exact next operation; use "No intervention required" when appropriate. They do not
+require a model switch, user upload or new ChatGPT/Cursor prompt for each internal phase.
 
 ### 13.5 Additional blocked-state content
 
@@ -732,7 +745,13 @@ If atomic file replacement prevents reliable file-level watching, diagnose first
 
 ## 17. Git safety
 
-Unless the current task explicitly authorizes them, Cursor must not:
+Apply the current task and standing grants once within their defined scope. Authorized
+routine commits, batched pushes, isolated branches/worktrees, PR updates and reviewed feature
+integration need no repeated approval at internal phase boundaries. Do not infer authority
+for main merge, deployment, destructive history changes, credential replacement, financial
+actions or new paid resources from permission to implement.
+
+Without the applicable authorization, the owner must not:
 
 - commit;
 - push;
@@ -747,14 +766,15 @@ Unless the current task explicitly authorizes them, Cursor must not:
 - alter secrets;
 - mutate external services.
 
-Before any approved Git write action:
+Before an authorized Git write action:
 
 1. inspect the full diff;
 2. confirm unrelated changes are excluded;
 3. scan for secrets;
 4. run required validation;
 5. document the intended commit or deployment;
-6. update and sync the handoff.
+6. preserve the current checkpoint and record the resulting revision at the meaningful
+   publication boundary; unavailable mobile sync does not gate the Git action.
 
 A dirty working tree is not automatically an error. It must be described accurately and preserved unless the current task owns the changes.
 
@@ -767,10 +787,13 @@ For each task:
 1. Identify the smallest relevant validation set.
 2. Run targeted tests during implementation.
 3. Run broader affected regressions before completion.
-4. Run full validation when risk and time justify it.
+4. Follow .ai/RELEASE.md for consolidated validation: the complete backend gate runs once
+   on the frozen candidate after supervising review, coordinated staging and fresh SFP
+   prerequisites, with explicit full-acceptance authority. No full suite during repairs.
 5. Never claim a suite passed if it was not run.
 6. Distinguish local, CI, staging, and production evidence.
-7. Include commit SHA for remote validation.
+7. Include exact revision for every result; reused evidence requires equivalent relevant
+   code, configuration, dependencies and inputs, not merely an older green badge.
 8. Record skipped tests and the reason.
 9. Treat flaky or degraded evidence conservatively.
 10. Preserve paper-only safety checks for all trading-related changes.
@@ -796,187 +819,84 @@ Use variable names, redacted fingerprints, boolean configuration indicators, or 
 
 When a secret is required:
 
-1. set status to `REVIEW_REQUIRED`;
-2. state the environment-variable name only;
-3. tell the operator where to enter it;
+1. identify the exact blocked operation and executor; distinguish missing access from an
+   inability to inspect configuration;
+2. state only the identity/secret reference, required scope/expiry and configuration field;
+3. give the verified destination in one consolidated action packet, without inventing an
+   upload mechanism or assuming reusable environment changes reached the current task;
 4. do not ask the operator to paste it into ChatGPT or Cursor chat;
-5. resume only after confirmation.
+5. pause that operation until its actual required access is available; continue independent
+   authorized work and record the truthful checkpoint status.
 
 ---
 
-## 20. One-time installation and reconciliation procedure
+## 20. Reconciliation of the former installation workflow
 
-Use this section once to install this master standard into AlphaTrade AI.
+The one-time installation prompt and permanent manual ChatGPT ↔ Cursor loop from
+version 2.0 are obsolete. They must not require renewed routine commit/push approval,
+a fresh audit, a model switch, user-relayed worker messages or a mobile upload before
+the owner continues the active milestone. Preserve existing authority and work.
 
-### Goal
-
-Merge the existing workflow, blocker protocol, and project rules into one coherent system without changing application behavior.
-
-### Procedure
-
-1. Verify the repository is `~/Developer/AlphaTrade-AI`.
-2. Inspect Git status and preserve all unrelated work.
-3. Back up any existing workflow documents before material replacement.
-4. Save this document as:
-
-```text
-.ai/MASTER_WORKFLOW.md
-```
-
-5. Update `.ai/MASTER.md` to reference this document as the authoritative workflow standard.
-6. Merge its requirements into:
-
-```text
-.ai/HANDOFF_TEMPLATE.md
-.ai/SESSION_TEMPLATE.md
-.ai/IMPLEMENT.md
-.ai/BUGFIX.md
-.ai/REFACTOR.md
-.ai/SECURITY.md
-.ai/RELEASE.md
-.cursor/rules/
-```
-
-7. Use the five-status model defined here.
-8. Remove the obsolete `DRAFT` status from project templates and rules.
-9. Apply the normalized self-hash rule.
-10. Ensure durable sanitized governance is tracked, while generated operational files remain ignored.
-11. Preserve the existing sync script and LaunchAgent if they already meet this standard.
-12. Validate the sync script, LaunchAgent, source/destination hashes, `cmp`, mtimes, and idempotency.
-13. Regenerate `HANDOFF.md` as `READY` when installation is complete.
-14. Sync and verify.
-15. Do not implement product backlog tasks during this installation.
-
-### Installation validation
-
-Report:
-
-1. repository path;
-2. branch and commit;
-3. initial and final Git status;
-4. workflow files created or updated;
-5. files tracked and ignored;
-6. backups created;
-7. secret scan result;
-8. LaunchAgent validation;
-9. source/destination hash verification;
-10. idempotent second-sync result;
-11. confirmation that application behavior was unchanged;
-12. next task and recommended model.
+Apply the adopted playbook through AGENTS.md, this workflow, the relevant .ai task
+instructions and .cursor/rules. Reuse the existing task and compact handoff. Do not
+create new control planes, ledgers, infrastructure or unrelated process backlog.
+Instruction changes do not prove platform permissions or hosting settings changed.
 
 ---
 
-## 21. Cleanup after successful installation
+## 21. Preserve existing assets
 
-After Cursor confirms the master standard is installed, validated, synchronized, and available in `.ai/MASTER_WORKFLOW.md`, the following source prompt files may be deleted or archived because this document supersedes them:
-
-```text
-ALPHATRADE_AI_WORKFLOW_CATCHUP_PROMPT.md
-ALPHATRADE_MOBILE_BLOCKER_HANDOFF_ADDENDUM.md
-```
-
-Also remove temporary duplicate copies from Downloads or iCloud after confirming the master document is safely stored.
-
-Do **not** delete:
-
-```text
-.ai/
-.cursor/rules/
-HANDOFF.md
-CHANGELOG_SESSION.md
-~/.local/bin/sync-alphatrade-ai-handoff.sh
-~/Library/LaunchAgents/com.sofien.alphatrade-ai-handoff-sync.plist
-```
-
-`HANDOFF.md` and `CHANGELOG_SESSION.md` may be regenerated or replaced by Cursor, but they remain part of the active workflow.
-
-Do not delete timestamped backups until the new workflow has completed at least one successful implementation task and one successful mobile handoff cycle.
+Keep .ai/, .cursor/rules/, HANDOFF.md, CHANGELOG_SESSION.md and the existing mobile
+sync script/LaunchAgent. Preserve safe tracking/ignore conventions, source equality
+verification and normalized self-hashes. Do not delete unrelated documents, backups,
+branches or cloud resources as part of process adoption.
 
 ---
 
-## 22. Standard operating workflow after installation
+## 22. Accountable owner workflow
 
-For every future AlphaTrade task:
+1. Read the active task and checkpoint; verify branch, preserved work and relevant evidence.
+2. Fix outcome, named acceptance, owner, target environment and existing authority once.
+3. Check required prerequisites in one focused pass; bundle genuine missing access.
+4. Implement the complete path and directly integrate reviewed independent contributions.
+5. Close material review findings in a coherent batch with focused checks and exact evidence.
+6. Run authorized release operations only after their repository prerequisites pass.
+7. Record accepted/total and implemented/integrated/deployed/live-accepted states separately.
+8. Publish the compact checkpoint at meaningful boundaries and verify actual source equality.
+9. Continue until the milestone passes or a specific external dependency blocks the remaining
+   operation; return the next executable action, not another general roadmap.
 
-1. ChatGPT reviews the uploaded `HANDOFF.md`.
-2. ChatGPT recommends the best Cursor model.
-3. ChatGPT provides one goal-oriented implementation prompt.
-4. Cursor sets `HANDOFF.md` to `IN_PROGRESS` and syncs before coding.
-5. Cursor implements in safe phases.
-6. Cursor updates and syncs at every phase, blocker, approval, failure, and completion.
-7. Cursor runs truthful validation.
-8. Cursor sets `HANDOFF.md` to `READY` only when the stated scope is complete.
-9. The user uploads the iCloud `HANDOFF.md` to ChatGPT.
-10. ChatGPT reviews achievements, remaining work, risks, and progress, then prepares the next task.
-
-This is the permanent ChatGPT ↔ Cursor loop.
-
----
-
-## 23. Exact Cursor installation prompt
-
-Use **Opus 4.8** and provide this master document to the active AlphaTrade AI Cursor agent with the following instruction:
-
-```text
-Final goal:
-
-Install ALPHATRADE_AI_MASTER_WORKFLOW.md as the authoritative AlphaTrade AI ChatGPT ↔ Cursor workflow, reconcile the existing .ai and .cursor rules with it, preserve all stricter safety requirements, and validate the complete mobile handoff system without changing application behavior or implementing product features.
-
-Requirements:
-
-1. Inspect the repository, current Git state, existing .ai files, .cursor/rules, HANDOFF.md, CHANGELOG_SESSION.md, sync script, LaunchAgent, and iCloud destination before changing anything.
-2. Preserve unrelated and uncommitted work.
-3. Back up any workflow file before material replacement.
-4. Save the supplied master document as .ai/MASTER_WORKFLOW.md.
-5. Make .ai/MASTER_WORKFLOW.md authoritative from .ai/MASTER.md.
-6. Merge its status, metadata, blocker, review, failure, sync, security, Git, broker/exchange, testing, and cleanup rules into the relevant templates and Cursor rules.
-7. Use only these handoff statuses: IN_PROGRESS, REVIEW_REQUIRED, BLOCKED, FAILED, READY.
-8. Remove obsolete DRAFT status references.
-9. Implement the normalized Source File SHA256 rule exactly as documented.
-10. Keep HANDOFF.md and CHANGELOG_SESSION.md ignored and mobile-synchronized.
-11. Track sanitized durable .ai governance and .cursor/rules unless repository policy proves this unsafe; place sensitive local material under ignored .ai/private or .ai/local.
-12. Do not modify application code.
-13. Do not implement any product backlog task.
-14. Do not expose secrets.
-15. Do not commit, push, or deploy unless I explicitly authorize that after reviewing the diff and validation report.
-16. Before further changes, regenerate HANDOFF.md with the current task state as IN_PROGRESS and run the sync once.
-17. At every major phase, review requirement, blocker, failed validation, and final completion, update both operational documents and sync immediately.
-18. Validate the script with bash syntax checks, the plist with plutil, LaunchAgent state, SHA256, cmp or diff, mtimes, and an idempotent second sync.
-19. Finish with HANDOFF.md status READY only if the installation and verification succeed.
-
-Final report:
-
-1. verified repository facts
-2. conflicts found and how they were reconciled
-3. files created, updated, backed up, tracked, and ignored
-4. status-model migration result
-5. self-hash implementation result
-6. sync and LaunchAgent validation
-7. secret scan result
-8. application-code-change confirmation
-9. final Git status
-10. whether a commit is recommended
-11. exact cleanup list for obsolete source documents
-12. next recommended model and task
-
-Stop with REVIEW_REQUIRED before any commit, push, deployment, destructive action, secret entry, or external-service mutation.
-```
+Optional product discussion or review may occur through ChatGPT/Cursor. It is not a
+mandatory manual relay or repeated authorization loop.
 
 ---
 
-## 24. Definition of done
+## 23. Safe resumption and feedback
 
-This workflow is installed only when:
+Resume the same milestone from the current handoff. Verify subsequent changes and
+reconcile external operations left in progress before retrying. Reuse valid evidence;
+do not restart an audit because a session changed.
 
-- the master document is stored under `.ai/MASTER_WORKFLOW.md`;
-- permanent rules reference it;
-- statuses are unified;
-- normal and blocked flows are implemented in templates and rules;
-- generated handoff files are ignored;
-- durable sanitized governance is available after a fresh clone;
-- the sync script and LaunchAgent pass validation;
-- iCloud source and destination copies match;
-- blockers synchronize immediately;
-- application behavior remains unchanged;
-- a final `READY` handoff is available for ChatGPT.
+The owner deduplicates review findings, checks their behavior/evidence/severity, then
+accepts and fixes, rejects with evidence or defers with a reason. Recheck the changed
+area rather than repeat a complete review. Escalate only a material product/authority
+tradeoff; do not add reviewers indefinitely or weaken acceptance to hide a failure.
 
+---
+
+## 24. Definition of done for a delivery milestone
+
+- The agreed named acceptance passes at its declared environment and evidence level.
+- Reviewed contributions are integrated; shared contracts and immutable migration ancestry
+  agree with the actual candidate when affected.
+- Focused checks and required release gates have exact revision/count/skip evidence.
+- Operator, financial, privacy, secret and execution boundaries remain intact.
+- Candidate and installed revisions are explicit; unavailable performance and unknown or
+  unexecuted deployment/live acceptance remain explicit.
+- The compact existing handoff contains acceptance counts, evidence, rollback reference,
+  specific remaining dependency and next executable operation.
+- Actual publication/sync equality is verified where available; an unavailable Mac copy is
+  recorded without claiming it succeeded or discarding completed cloud work.
+
+An essential failed criterion still blocks acceptance even if the named percentage is
+high. Implementation completion, merge, deployment and live acceptance are separate facts.

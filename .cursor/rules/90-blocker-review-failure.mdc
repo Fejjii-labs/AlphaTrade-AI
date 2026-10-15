@@ -11,19 +11,30 @@ precedence over speed and task completion. Never represent unfinished or failed 
 ## REVIEW_REQUIRED — human decision or protected action
 Set when a human approval, permission, credential/secret entry, external-service action,
 destructive confirmation, or a commit/push/deploy/release (not already authorized) is needed.
-1. Stop safely before the protected action.
+Standing task authority persists: routine authorized commits/pushes/integration do not
+require this status or repeated approval.
+1. Pause safely before the protected operation; prepare concrete reviewable results first.
 2. Set `HANDOFF.md` to `REVIEW_REQUIRED`; document the exact human action required.
 3. Record what was completed, what remains unchanged, whether code/config changed, and any
-   uncommitted work. 4. Sync and verify immediately. 5. Do not continue until confirmed.
+   uncommitted work. 4. Record the checkpoint and sync when available. 5. Continue independent
+   authorized milestone work; resume only the protected operation after its requirement is met.
+6. Bundle missing inputs once: exact blocked operation/target, missing access or decision,
+   recommended verified destination, consequence and completed preparation. No secret values.
 
 ## BLOCKED — recoverable technical/environmental issue
 1. Run only safe, scoped diagnostics; make no speculative destructive changes.
 2. If unresolved, set `BLOCKED`; record the failed command, concise error evidence, and the last
-   successful step. 3. Sync and verify immediately. 4. Wait for guidance.
+   successful step. 3. Update the existing checkpoint; batch authorized publication and verify
+   actual source equality. 4. Continue independent work. Retry only with new evidence, corrected
+   inputs/configuration or a bounded transient policy; change the diagnosis after repeated
+   identical failure instead of repeating expensive checks or access requests.
 
 ## FAILED — task or critical validation failed
-1. Stop further changes; preserve evidence and current work. 2. Set `FAILED`; explain honestly;
-   state whether rollback occurred or is needed. 3. Sync and verify immediately.
-4. Do not commit, push, or deploy failed work unless explicitly directed for diagnostics.
+1. Preserve evidence and current work; diagnose and repair the specific failure with focused
+   verification. Stop unsafe/unauthorized operations, not all independent repairs.
+2. Set FAILED truthfully if acceptance remains failed; state rollback status and exact next action.
+3. Record the checkpoint and actual publication/sync status; unavailable mobile access does not
+   stop independent work. 4. Do not claim acceptance or bypass a failed release gate.
+   Diagnostic publication requires its own scope and truthful status.
 
 Never include secrets or full sensitive logs in any of these states.

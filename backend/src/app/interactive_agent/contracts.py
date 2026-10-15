@@ -15,6 +15,7 @@ from pydantic import Field
 from app.agent_capture.contracts import SavedEntry
 from app.daily_review.contracts import DailyReview
 from app.interactive_agent.actions import ActionDescriptor, ActionRequest
+from app.market_contracts.context import MarketEvidenceContext
 from app.schemas.common import StrictModel
 from app.schemas.governed_learning import GovernedLearningStatus
 from app.schemas.strategy_analytics import StrategyAnalyticsFilters, StrategyAnalyticsReport
@@ -212,6 +213,7 @@ class MarketQuoteView(StrictModel):
     is_stale: bool
     fallback_used: bool
     provider_name: str = Field(min_length=1, max_length=80)
+    evidence_context: MarketEvidenceContext | None = None
 
 
 class JournalDraft(StrictModel):

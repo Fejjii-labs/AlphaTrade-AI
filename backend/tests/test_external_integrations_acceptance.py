@@ -75,7 +75,9 @@ def account_transport(
         assert request.method == "GET"
         assert request.url.host == "demo-trading-openapi.blofin.com"
         data = {
-            "/api/v1/user/query-apikey": [{"readOnly": 1}] if permissions is None else permissions,
+            "/api/v1/user/query-apikey": {"readOnly": 1, "uid": "acceptance-native-uid"}
+            if permissions is None
+            else permissions,
             "/api/v1/account/balance": [
                 {"currency": "USDT", "balance": "1000", "available": "900"}
             ],

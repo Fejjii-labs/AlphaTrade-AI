@@ -19,6 +19,7 @@ vi.mock("@/components/journal/JournalTradeScreen", () => ({ JournalTradeScreen: 
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: "fixture-user" }, organization: { id: "fixture-org" } }) }));
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/journal",
   useSearchParams: () => search,
 }));
 
@@ -354,21 +355,41 @@ describe("Journal hub Phase C3A", () => {
 
     first.unmount();
     search.set("position_id", "missing-pos");
-    prefillMock.mockRejectedValueOnce(new Error("Position not found"));
-    render(<JournalPage />);
-    await waitFor(() => {
-      expect(screen.getByTestId("journal-prefill-invalid")).toBeInTheDocument();
+    let rejectPrefill!: (reason: Error) => void;
+    prefillMock.mockReturnValueOnce(new Promise<never>((_resolve, reject) => {
+      rejectPrefill = reject;
+    }));
+    createMock.mockResolvedValueOnce(makeEntry({
+      id: "manual-after-invalid",
+      symbol: "BTCUSDT",
+      result: "open",
+      entry_rationale: "Manual after invalid context.",
+    }));
+    const second = render(<JournalPage />);
+    // React's passive resets may still be pending when this warning first commits.
+    // Enter immediately at that boundary, rather than after waitFor drains effects.
+    const observer = new MutationObserver(() => {
+      if (!second.container.querySelector('[data-testid="journal-prefill-invalid"]')) return;
+      observer.disconnect();
+      fireEvent.change(screen.getByLabelText(/What happened versus plan/i), {
+        target: { value: "Manual after invalid context." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Save journal entry/i }));
     });
+    observer.observe(second.container, { childList: true, subtree: true });
+    try {
+      rejectPrefill(new Error("Position not found"));
+      await waitFor(() => {
+        expect(createMock).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("journal-save-success")).toBeInTheDocument();
+      });
+    } finally {
+      observer.disconnect();
+    }
+    expect(screen.getByTestId("journal-prefill-invalid")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-entry-related-position")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText(/What happened versus plan/i), {
-      target: { value: "Manual after invalid context." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Save journal entry/i }));
-    await waitFor(() => {
-      expect(createMock).toHaveBeenCalled();
-    });
     const payload = createMock.mock.calls.at(-1)?.[0];
+    expect(payload.entry_rationale).toBe("Manual after invalid context.");
     expect(payload.linked_position_id).toBeUndefined();
     expect(payload.linked_proposal_id).toBeUndefined();
   });

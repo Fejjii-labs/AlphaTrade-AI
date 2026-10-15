@@ -111,6 +111,12 @@ after a deploy:
 
 ## 4. Pre-rollback checklist
 
+For PR237's a10 schema, use [the qualified retained-schema sequence](reviewer_wave/release_qualification.md).
+Plain b165/a8 and bda/a9 packages cannot resolve the database's a10 revision at
+startup. Do not use the generic previous-image rollback below until a migration-aware
+package is prepared and qualified. Preserve the a9 document generations/jobs and
+a10 native account/fact/cursor data; no schema downgrade is part of that path.
+
 - [ ] Note **failed** deploy revision (Render deploy id / Vercel deployment URL) and
       `/health` → `git_sha` if reachable.  
 - [ ] Note **last known good** revision (previous deploy that passed the smoke gate).  
@@ -164,7 +170,7 @@ Never commit connection strings or dump contents into git.
 
 ### 5.5 Canonical schema chain (Phase 7/8)
 
-Current Alembic head is a single linear chain:
+The historical Phase 7/8 portion of the migration chain is:
 
 `4fd8c1a90b27` (canonical Candidate) → `c9e2b4a1d078` (TradePlan + ActionEligibility)
 → `d4f7a2c8e901` (learning attribution) → `e8f1c4a9b702` (`journal_trades.account_id`)
@@ -177,8 +183,11 @@ Current Alembic head is a single linear chain:
 → `a8c3e1b94d20` (worker process RSS columns).
 
 These revisions ship non-empty `downgrade()`. Prefer leaving additive schema
-forward when rolling back the API image: old paper code can typically read the
-new columns. Do **not** blindly `alembic downgrade -1` on staging data without
+forward when rolling back a qualified migration-aware API/worker image. PR237's
+continuation includes the historical a3 merge and ends
+`a8agentcapture001 -> a9knowledgeoutbox001 -> a10blofinactivity001`, one head.
+Old code's ability to read added columns does not prove its startup can resolve the
+new revision. Do **not** blindly `alembic downgrade -1` on staging data without
 an explicit restore plan.
 
 | Head to reverse | Safer action |

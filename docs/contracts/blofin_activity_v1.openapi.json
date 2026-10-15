@@ -1,0 +1,713 @@
+{
+  "components": {
+    "schemas": {
+      "ActivityCoverage": {
+        "properties": {
+          "covered_begin_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Covered Begin Ms"
+          },
+          "covered_end_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Covered End Ms"
+          },
+          "gap_detected": {
+            "default": false,
+            "title": "Gap Detected",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "order",
+              "fill"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_successful_sync": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Successful Sync"
+          },
+          "native_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Cursor"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "selection": {
+            "enum": [
+              "cursor_sweep",
+              "time_window"
+            ],
+            "title": "Selection",
+            "type": "string"
+          },
+          "window_begin_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Begin Ms"
+          },
+          "window_complete": {
+            "default": false,
+            "title": "Window Complete",
+            "type": "boolean"
+          },
+          "window_end_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End Ms"
+          }
+        },
+        "required": [
+          "kind",
+          "selection"
+        ],
+        "title": "ActivityCoverage",
+        "type": "object"
+      },
+      "ActivityItem": {
+        "additionalProperties": false,
+        "properties": {
+          "average_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Price"
+          },
+          "base_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Currency"
+          },
+          "client_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Order Id"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "contract_multiplier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Multiplier"
+          },
+          "contract_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Type"
+          },
+          "created_at_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At Ms"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "fee_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Currency"
+          },
+          "filled_quantity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Quantity"
+          },
+          "funding": {
+            "title": "Funding",
+            "type": "null"
+          },
+          "instrument": {
+            "title": "Instrument",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "order",
+              "fill"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "metadata_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Observed At"
+          },
+          "native_id": {
+            "title": "Native Id",
+            "type": "string"
+          },
+          "occurred_at_ms": {
+            "title": "Occurred At Ms",
+            "type": "string"
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Type"
+          },
+          "origin": {
+            "enum": [
+              "native",
+              "alphatrade_matched"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "position_side": {
+            "title": "Position Side",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "quantity_unit": {
+            "const": "contracts",
+            "default": "contracts",
+            "title": "Quantity Unit",
+            "type": "string"
+          },
+          "realized_pnl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl"
+          },
+          "reduce_only": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduce Only"
+          },
+          "settlement_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Currency"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          },
+          "trade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Id"
+          },
+          "updated_at_ms": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At Ms"
+          }
+        },
+        "required": [
+          "kind",
+          "native_id",
+          "order_id",
+          "instrument",
+          "side",
+          "position_side",
+          "occurred_at_ms",
+          "quantity",
+          "origin"
+        ],
+        "title": "ActivityItem",
+        "type": "object"
+      },
+      "ActivityPage": {
+        "properties": {
+          "account_uid": {
+            "title": "Account Uid",
+            "type": "string"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "environment": {
+            "const": "demo",
+            "default": "demo",
+            "title": "Environment",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "never_synced",
+              "unverified"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "identity_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Error Code"
+          },
+          "identity_status": {
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "title": "Identity Status",
+            "type": "string"
+          },
+          "identity_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Verified At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "partial_coverage": {
+            "const": true,
+            "default": true,
+            "title": "Partial Coverage",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "const": "BloFinActivityV1",
+            "default": "BloFinActivityV1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "venue": {
+            "const": "BLOFIN",
+            "default": "BLOFIN",
+            "title": "Venue",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "account_uid",
+          "identity_status",
+          "items",
+          "coverage",
+          "freshness",
+          "limitations",
+          "generated_at"
+        ],
+        "title": "ActivityPage",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "AlphaTrade BloFin activity contract",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/exchange/blofin/activity": {
+      "get": {
+        "operationId": "activity_exchange_blofin_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "fill",
+              "enum": [
+                "order",
+                "fill"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Activity",
+        "tags": [
+          "blofin-activity"
+        ]
+      }
+    }
+  }
+}

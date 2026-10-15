@@ -7,10 +7,12 @@ import math
 import struct
 import time
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from datetime import UTC, datetime
+from typing import Any, Protocol, runtime_checkable
 
-import httpx
+import httpx2
 import structlog
+from openai import OpenAI
 
 from app.providers.base import BaseMockProvider, ProviderHealth, ProviderKind, ProviderStatus
 from app.providers.embedding_dimensions import (
@@ -108,7 +110,7 @@ class MockEmbeddingsProvider(BaseMockProvider):
 
 
 class OpenAIEmbeddingsProvider:
-    """OpenAI-compatible embeddings via HTTP with optional mock fallback."""
+    """Official SDK embeddings with validated ordered batches and explicit fallback."""
 
     name = "openai-embeddings"
     kind = ProviderKind.EMBEDDINGS
@@ -123,6 +125,7 @@ class OpenAIEmbeddingsProvider:
         fallback: MockEmbeddingsProvider | None = None,
         timeout_seconds: float = 30.0,
         fail_closed: bool = False,
+        require_usage_receipt: bool = False,
     ) -> None:
         if dimensions < 1:
             raise ValueError("dimensions must be >= 1")
@@ -131,9 +134,12 @@ class OpenAIEmbeddingsProvider:
         self._base_url = base_url.rstrip("/")
         self._dimensions = dimensions
         self._fail_closed = fail_closed
+        self._require_usage_receipt = require_usage_receipt
         self._fallback = (
             None if fail_closed else (fallback or MockEmbeddingsProvider(dimensions=dimensions))
         )
+        self._last_success: datetime | None = None
+        self._last_generation_failed = False
         self._timeout = timeout_seconds
         if self._fallback is not None and self._fallback.dimensions != dimensions:
             raise ValueError(
@@ -168,21 +174,31 @@ class OpenAIEmbeddingsProvider:
 
         started = time.perf_counter()
         try:
-            body: dict[str, object] = {"model": self._model, "input": texts}
+            body: dict[str, Any] = {"model": self._model, "input": texts}
             if model_supports_dimensions_param(self._model):
                 body["dimensions"] = self._dimensions
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
-                    f"{self._base_url}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-                response.raise_for_status()
-                payload = response.json()
+            with OpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                max_retries=0,
+                timeout=httpx2.Timeout(self._timeout, connect=min(5.0, self._timeout)),
+            ) as client:
+                payload = client.embeddings.create(**body).model_dump(mode="json")
+            if self._require_usage_receipt:
+                usage = payload.get("usage")
+                incoming = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                if (
+                    payload.get("model") != self._model
+                    or not isinstance(incoming, int)
+                    or isinstance(incoming, bool)
+                    or incoming <= 0
+                ):
+                    raise ValueError(
+                        "Embedding response has no verified model/input usage receipt."
+                    )
+            vectors = _validated_vectors(payload, len(texts), self._dimensions)
         except Exception as exc:
+            self._last_generation_failed = True
             logger.warning("openai_embeddings_request_failed", error=type(exc).__name__)
             if self._fail_closed or self._fallback is None:
                 raise ServiceUnavailableError(
@@ -194,31 +210,8 @@ class OpenAIEmbeddingsProvider:
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
             )
 
-        data = payload.get("data") or []
-        ordered = sorted(data, key=lambda row: row.get("index", 0))
-        vectors = [list(row["embedding"]) for row in ordered]
-        if vectors and len(vectors[0]) != self._dimensions:
-            logger.warning(
-                "openai_embeddings_dimension_mismatch",
-                expected=self._dimensions,
-                actual=len(vectors[0]),
-                model=self._model,
-            )
-            if self._fail_closed or self._fallback is None:
-                raise ServiceUnavailableError(
-                    "Embeddings provider returned incompatible dimensions.",
-                    details={
-                        "reason": "embedding_dimension_mismatch",
-                        "provider": self.name,
-                        "expected": self._dimensions,
-                        "actual": len(vectors[0]),
-                    },
-                )
-            return self._fallback_result(
-                texts,
-                latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            )
-
+        self._last_generation_failed = False
+        self._last_success = datetime.now(UTC)
         usage = payload.get("usage") or {}
         return EmbeddingResult(
             vectors=vectors,
@@ -261,36 +254,73 @@ class OpenAIEmbeddingsProvider:
                 ),
             )
         try:
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(
-                    f"{self._base_url}/models",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+            with OpenAI(
+                api_key=self._api_key, base_url=self._base_url, max_retries=0, timeout=5.0
+            ) as client:
+                payload = client.models.list().model_dump(mode="json")
+            rows = payload.get("data")
+            if (
+                not isinstance(rows, list)
+                or not rows
+                or not all(
+                    isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]
+                    for row in rows
                 )
-                if response.status_code < 500:
-                    return ProviderStatus(
-                        name=self.name,
-                        kind=self.kind,
-                        health=ProviderHealth.HEALTHY,
-                        using_fallback=False,
-                        is_mock=False,
-                        detail=(
-                            f"OpenAI-compatible embeddings ({self._model}, {self._dimensions}-d)."
-                        ),
-                    )
+            ):
+                raise ValueError("malformed model listing")
         except Exception as exc:
-            logger.debug("openai_embeddings_status_degraded", error=str(exc))
+            logger.debug("openai_embeddings_status_degraded", error_type=type(exc).__name__)
+            return ProviderStatus(
+                name=self.name,
+                kind=self.kind,
+                health=ProviderHealth.UNAVAILABLE if self._fail_closed else ProviderHealth.DEGRADED,
+                using_fallback=not self._fail_closed,
+                is_mock=False,
+                detail="Embeddings connectivity or authorization is unavailable.",
+                last_success_at=self._last_success,
+            )
+        proven = self._last_success is not None and not self._last_generation_failed
         return ProviderStatus(
             name=self.name,
             kind=self.kind,
-            health=(ProviderHealth.UNAVAILABLE if self._fail_closed else ProviderHealth.DEGRADED),
-            using_fallback=not self._fail_closed,
+            health=ProviderHealth.HEALTHY if proven else ProviderHealth.DEGRADED,
+            using_fallback=False,
             is_mock=False,
+            last_success_at=self._last_success,
             detail=(
-                "OpenAI embeddings API unreachable."
-                if self._fail_closed
-                else (
-                    f"OpenAI embeddings unreachable — mock-embeddings fallback "
-                    f"({self._dimensions}-d) active."
-                ),
+                "Models endpoint reachable and authorized; "
+                + (
+                    "embedding generation previously succeeded."
+                    if proven
+                    else "embedding generation has not been verified."
+                )
             ),
         )
+
+
+def _validated_vectors(payload: dict[str, Any], count: int, dimensions: int) -> list[list[float]]:
+    data = payload.get("data")
+    if not isinstance(data, list) or len(data) != count:
+        raise ValueError("embedding batch cardinality mismatch")
+    indexed: dict[int, list[float]] = {}
+    for row in data:
+        if not isinstance(row, dict):
+            raise ValueError("malformed embedding row")
+        index, values = row.get("index"), row.get("embedding")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index in indexed
+            or index < 0
+            or index >= count
+        ):
+            raise ValueError("invalid embedding batch index")
+        if not isinstance(values, list) or len(values) != dimensions:
+            raise ValueError("embedding dimension mismatch")
+        if not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+            for v in values
+        ):
+            raise ValueError("non-finite or non-numeric embedding")
+        indexed[index] = [float(v) for v in values]
+    return [indexed[i] for i in range(count)]

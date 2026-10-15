@@ -19,7 +19,10 @@ const e2eBackendEnv = {
 };
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: ".",
+  // Research persistence requires an explicit disposable PostgreSQL fixture and
+  // two selected phases separated by a real API restart; never run it on staging.
+  testMatch: ["e2e/**/*.spec.ts", "ui-tests/reviewer-wave.spec.ts", "ui-tests/reviewer-api-persistence.spec.ts", "ui-tests/experiments-api.spec.ts", ...(process.env.EXPERIMENT_BROWSER_AUTH_FILE ? ["ui-tests/research-api.spec.ts", "ui-tests/auth-recovery-api.spec.ts", "ui-tests/agent-knowledge-api.spec.ts", "ui-tests/conversation-viewport-api.spec.ts"] : [])],
   timeout: 90_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
@@ -88,7 +91,9 @@ export default defineConfig({
           timeout: 120_000,
         },
         {
-          command: "npm run dev -- --port 3000 --hostname localhost",
+          command: process.env.PLAYWRIGHT_PRODUCTION === "true"
+            ? "npm run start -- --port 3000 --hostname localhost"
+            : "npm run dev -- --port 3000 --hostname localhost",
           env: { NEXT_PUBLIC_API_URL: apiURL },
           url: baseURL,
           reuseExistingServer: !process.env.CI,

@@ -11,7 +11,14 @@ from pydantic import Field, field_validator, model_validator
 
 from app.schemas.agent_paper import AgentPaperTradeIntent
 from app.schemas.backtest import BacktestRunCreate
-from app.schemas.common import PositiveDecimal, StrictModel, Symbol, Timeframe, TradeDirection
+from app.schemas.common import (
+    PositiveDecimal,
+    StrategyId,
+    StrictModel,
+    Symbol,
+    Timeframe,
+    TradeDirection,
+)
 from app.schemas.pretrade import PreTradeAnalyzeBody
 from app.schemas.watcher_watchlist import WatcherWatchlistSlotWrite
 
@@ -47,6 +54,7 @@ class JournalNoteInput(TextInput):
 
 
 class StrategyInput(TextInput):
+    setup_type: StrategyId | None = None
     strategy_id: UUID | None = None
     evidence_document_ids: list[UUID] = Field(default_factory=list, max_length=20)
 

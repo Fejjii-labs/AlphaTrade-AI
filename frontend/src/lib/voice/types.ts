@@ -19,6 +19,10 @@ export type VoiceError = {
   sourceCode?: string;
 };
 export type VoiceSession = { stop(): void; cancel(): void };
+export type VoiceListenOptions = {
+  /** A single browser utterance ends on the browser's silence boundary. */
+  turnCompletion?: "utterance";
+};
 
 /** Transport only: providers never know about Agent APIs, tools, or authority. */
 export interface VoiceProvider {
@@ -32,7 +36,7 @@ export interface VoiceProvider {
     onTranscript(text: string): void;
     onComplete(text: string): void;
     onError(error: VoiceError): void;
-  }): VoiceSession;
+  }, options?: VoiceListenOptions): VoiceSession;
   speak(
     text: string,
     callbacks: {

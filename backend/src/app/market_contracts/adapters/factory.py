@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -77,11 +78,11 @@ def resolve_perpetual_evidence_source(
     if mode in REPLAY_MODES:
         return ReplayPerpetualSource()
     if mode == "bybit_usdt_perpetual":
-        return _bybit_source(settings, transport=transport, symbol=symbol)
+        return _bybit_source(settings, transport=transport, symbol=symbol, shared=shared)
     if mode in LIVE_MODES and secondary == "bybit_usdt_perpetual":
         return FailoverPerpetualSource(
             _binance_source(settings, transport=transport, catalog=catalog, shared=shared),
-            _bybit_source(settings, transport=transport, symbol=symbol),
+            _bybit_source(settings, transport=transport, symbol=symbol, shared=shared),
             primary_instrument=binance_usdm_perpetual(symbol),
             secondary_instrument=bybit_usdt_perpetual(symbol),
         )
@@ -113,6 +114,8 @@ def _binance_source(
         max_cached_rows=settings.binance_evidence_cache_max_rows,
         trade_cache=None if pool is None else pool.cache,
         reduced_cache=None if pool is None else pool.reduced,
+        observation_cache=None if pool is None else pool.observations,
+        observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
         budget=None if pool is None else pool.budget,
     )
 
@@ -122,8 +125,11 @@ def _bybit_source(
     *,
     transport: httpx.BaseTransport | None,
     symbol: str = "BTCUSDT",
+    shared: bool = False,
 ) -> BybitUsdtPerpetualSource:
     return BybitUsdtPerpetualSource(
+        reuse_recent_pages=shared,
+        observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
         instrument=bybit_usdt_perpetual(symbol),
         base_url=settings.bybit_perpetual_base_url,
         timeout_seconds=settings.perpetual_evidence_timeout_seconds,

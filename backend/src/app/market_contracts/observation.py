@@ -27,6 +27,7 @@ def observation_from_derivative(item: DerivativeObservation) -> PublicMarketObse
         item.availability is not EvidenceAvailability.AVAILABLE
         or item.event_time is None
         or item.freshness is None
+        or item.collected_at is None
     ):
         raise ValueError("Unavailable OI/funding cannot satisfy public evidence roles.")
     source_event_id = f"{item.metric.value}:{item.content_hash}"
@@ -39,7 +40,7 @@ def observation_from_derivative(item: DerivativeObservation) -> PublicMarketObse
             event_time=item.event_time,
             source_time=item.event_time,
             observed_at=item.observed_at,
-            receive_time=item.observed_at,
+            receive_time=item.collected_at,
             finality=Finality.FINAL,
             revision=1,
             freshness_state=item.freshness.state,

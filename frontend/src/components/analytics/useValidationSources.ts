@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 
-import { loadSource, type SourceResult } from "@/components/workflows";
+import { usePrivateSource } from "./usePrivateSource";
 import { api } from "@/lib/api";
 import type {
   LearningAnalyticsParams,
@@ -18,85 +18,7 @@ import {
   type AnalyticsFilterParams,
 } from "./filterValidation";
 
-type IndependentSourceReturn<T> = {
-  source: SourceResult<T> | null;
-  loading: boolean;
-  retryLoading: boolean;
-  reload: () => Promise<void>;
-  loadedKey: string | null;
-};
-
-function useIndependentValidationSource<T>(
-  enabled: boolean,
-  requestKey: string,
-  fetcher: () => Promise<SourceResult<T>>,
-): IndependentSourceReturn<T> {
-  const [result, setResult] = useState<SourceResult<T> | null>(null);
-  const [loadedKey, setLoadedKey] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [retryLoading, setRetryLoading] = useState(false);
-  const generationRef = useRef(0);
-  const mountedRef = useRef(true);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!enabled) {
-      setResult(null);
-      setLoadedKey(null);
-      setLoading(false);
-      setRetryLoading(false);
-      return;
-    }
-
-    const generation = ++generationRef.current;
-    setLoading(true);
-    setResult(null);
-
-    void fetcherRef.current().then((next) => {
-      if (!mountedRef.current || generation !== generationRef.current) return;
-      setResult(next);
-      setLoadedKey(requestKey);
-      setLoading(false);
-    });
-  }, [enabled, requestKey]);
-
-  const reload = useCallback(async () => {
-    if (!enabled) return;
-    const generation = ++generationRef.current;
-    setRetryLoading(true);
-    try {
-      const next = await fetcherRef.current();
-      if (!mountedRef.current || generation !== generationRef.current) return;
-      setResult(next);
-      setLoadedKey(requestKey);
-    } finally {
-      if (mountedRef.current && generation === generationRef.current) {
-        setRetryLoading(false);
-      }
-    }
-  }, [enabled, requestKey]);
-
-  const displaySource = enabled && loadedKey === requestKey ? result : null;
-  const isLoading = enabled && (loading || loadedKey !== requestKey);
-
-  return {
-    source: displaySource,
-    loading: isLoading,
-    retryLoading,
-    reload,
-    loadedKey: enabled ? loadedKey : null,
-  };
-}
-
-function learningParamsFromValidation(
+export function learningParamsFromValidation(
   params: AnalyticsFilterParams,
 ): LearningAnalyticsParams {
   return {
@@ -138,25 +60,29 @@ export function useValidationSources(params: AnalyticsFilterParams, enabled: boo
     [strategyParams],
   );
 
-  const summarySlot = useIndependentValidationSource<LearningAnalyticsSummaryResponse>(
+  const summarySlot = usePrivateSource<LearningAnalyticsSummaryResponse>(
     enabled,
+    "/learning-analytics/summary",
     summaryKey,
-    () => loadSource(api.learningAnalytics.summary(summaryParams)),
+    (signal) => api.learningAnalytics.summary(summaryParams, { signal }),
   );
-  const setupPerformanceSlot = useIndependentValidationSource<SetupPerformanceResponse>(
+  const setupPerformanceSlot = usePrivateSource<SetupPerformanceResponse>(
     enabled,
+    "/learning-analytics/setup-performance",
     setupPerformanceKey,
-    () => loadSource(api.learningAnalytics.setupPerformance(setupParams)),
+    (signal) => api.learningAnalytics.setupPerformance(setupParams, { signal }),
   );
-  const setupRankingSlot = useIndependentValidationSource<SetupRankingResponse>(
+  const setupRankingSlot = usePrivateSource<SetupRankingResponse>(
     enabled,
+    "/learning-analytics/setup-ranking",
     setupRankingKey,
-    () => loadSource(api.learningAnalytics.setupRanking(setupParams)),
+    (signal) => api.learningAnalytics.setupRanking(setupParams, { signal }),
   );
-  const strategyQualitySlot = useIndependentValidationSource<StrategyQualitySummaryResponse>(
+  const strategyQualitySlot = usePrivateSource<StrategyQualitySummaryResponse>(
     enabled,
+    "/strategy-quality/summary",
     strategyQualityKey,
-    () => loadSource(api.strategyQuality.summary(strategyParams)),
+    (signal) => api.strategyQuality.summary(strategyParams, { signal }),
   );
 
   const reloadSummary = summarySlot.reload;
@@ -186,6 +112,12 @@ export function useValidationSources(params: AnalyticsFilterParams, enabled: boo
 
   return {
     summary: summarySlot.source,
+    refreshFailures: [
+      { name: "Validation summary", error: summarySlot.refreshError, retry: reloadSummary },
+      { name: "Setup performance", error: setupPerformanceSlot.refreshError, retry: reloadSetupPerformance },
+      { name: "Setup ranking", error: setupRankingSlot.refreshError, retry: reloadSetupRanking },
+      { name: "Strategy quality", error: strategyQualitySlot.refreshError, retry: reloadStrategyQuality },
+    ],
     summaryLoading: summarySlot.loading,
     summaryRetryLoading: summarySlot.retryLoading,
     setupPerformance: setupPerformanceSlot.source,

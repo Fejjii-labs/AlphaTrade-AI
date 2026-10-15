@@ -1,0 +1,1060 @@
+{
+  "$defs": {
+    "ExperimentPerformance": {
+      "additionalProperties": false,
+      "properties": {
+        "account_history_complete": {
+          "const": false,
+          "default": false,
+          "title": "Account History Complete",
+          "type": "boolean"
+        },
+        "contract_version": {
+          "const": "blofin-experiment-performance/v1",
+          "default": "blofin-experiment-performance/v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "fee_cost": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fee Cost"
+        },
+        "funding": {
+          "default": null,
+          "title": "Funding",
+          "type": "null"
+        },
+        "methodology_version": {
+          "const": "attributable-native-outcomes/v1",
+          "default": "attributable-native-outcomes/v1",
+          "title": "Methodology Version",
+          "type": "string"
+        },
+        "native_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Native Uid"
+        },
+        "organization_id": {
+          "format": "uuid",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "outcomes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NativeOutcome"
+          },
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "realized_pnl_after_fees_excluding_funding": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Realized Pnl After Fees Excluding Funding"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "reported_realized_pnl": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Realized Pnl"
+        },
+        "required_sample_count": {
+          "minimum": 1,
+          "title": "Required Sample Count",
+          "type": "integer"
+        },
+        "rounding": {
+          "const": "18_decimal_places_half_even",
+          "default": "18_decimal_places_half_even",
+          "title": "Rounding",
+          "type": "string"
+        },
+        "sample_count": {
+          "minimum": 0,
+          "title": "Sample Count",
+          "type": "integer"
+        },
+        "sample_group_id": {
+          "format": "uuid",
+          "title": "Sample Group Id",
+          "type": "string"
+        },
+        "source": {
+          "const": "blofin_demo",
+          "default": "blofin_demo",
+          "title": "Source",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "variant_key": {
+          "title": "Variant Key",
+          "type": "string"
+        },
+        "version_id": {
+          "format": "uuid",
+          "title": "Version Id",
+          "type": "string"
+        },
+        "win_rate": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Win Rate"
+        }
+      },
+      "required": [
+        "organization_id",
+        "version_id",
+        "sample_group_id",
+        "variant_key",
+        "native_uid",
+        "evaluated_at",
+        "status",
+        "sample_count",
+        "required_sample_count"
+      ],
+      "title": "ExperimentPerformance",
+      "type": "object"
+    },
+    "ExperimentSource": {
+      "enum": [
+        "blofin_demo",
+        "internal_simulation"
+      ],
+      "title": "ExperimentSource",
+      "type": "string"
+    },
+    "NativeEntryBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_origin": {
+          "const": "experiment",
+          "default": "experiment",
+          "title": "Authority Origin",
+          "type": "string"
+        },
+        "configuration_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Hash",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "experiment-native-entry/v1",
+          "default": "experiment-native-entry/v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "environment": {
+          "const": "demo",
+          "default": "demo",
+          "title": "Environment",
+          "type": "string"
+        },
+        "execution_account_id": {
+          "format": "uuid",
+          "title": "Execution Account Id",
+          "type": "string"
+        },
+        "experiment_id": {
+          "format": "uuid",
+          "title": "Experiment Id",
+          "type": "string"
+        },
+        "native_uid": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Native Uid",
+          "type": "string"
+        },
+        "organization_id": {
+          "format": "uuid",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "ownership_command_id": {
+          "format": "uuid",
+          "title": "Ownership Command Id",
+          "type": "string"
+        },
+        "plan_content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Content Hash",
+          "type": "string"
+        },
+        "pre_entry_position_flat": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trusted server producer verified the exact UID/instrument NET position was flat before this opening command; a client echo or reduction cannot establish this.",
+          "title": "Pre Entry Position Flat"
+        },
+        "sample_group_id": {
+          "format": "uuid",
+          "title": "Sample Group Id",
+          "type": "string"
+        },
+        "strategy_content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Strategy Content Hash",
+          "type": "string"
+        },
+        "strategy_version_id": {
+          "format": "uuid",
+          "title": "Strategy Version Id",
+          "type": "string"
+        },
+        "user_id": {
+          "format": "uuid",
+          "title": "User Id",
+          "type": "string"
+        },
+        "variant_key": {
+          "title": "Variant Key",
+          "type": "string"
+        },
+        "version_id": {
+          "format": "uuid",
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "user_id",
+        "experiment_id",
+        "version_id",
+        "configuration_hash",
+        "sample_group_id",
+        "execution_account_id",
+        "native_uid",
+        "strategy_version_id",
+        "strategy_content_hash",
+        "variant_key",
+        "ownership_command_id",
+        "plan_content_hash"
+      ],
+      "title": "NativeEntryBinding",
+      "type": "object"
+    },
+    "NativeExitLineage": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {
+          "const": "experiment-native-exit/v1",
+          "default": "experiment-native-exit/v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "entry_binding_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Binding Hash",
+          "type": "string"
+        },
+        "entry_fill_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Entry Fill Ids",
+          "type": "array"
+        },
+        "exit_fill_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Exit Fill Ids",
+          "type": "array"
+        },
+        "fee_convention": {
+          "anyOf": [
+            {
+              "enum": [
+                "positive_cost",
+                "signed_cashflow"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fee Convention"
+        },
+        "monetary_methodology_version": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Monetary Methodology Version"
+        },
+        "native_entry_order_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Native Entry Order Id",
+          "type": "string"
+        },
+        "native_exit_order_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Native Exit Order Ids",
+          "type": "array"
+        },
+        "pnl_excludes_fees": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pnl Excludes Fees"
+        },
+        "position_lineage_verified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Trusted server producer verified complete flat-to-open-to-flat native position ancestry, including all owned fills and absence of unrelated inventory or fills.",
+          "title": "Position Lineage Verified"
+        }
+      },
+      "required": [
+        "entry_binding_hash",
+        "native_entry_order_id",
+        "native_exit_order_ids",
+        "entry_fill_ids",
+        "exit_fill_ids"
+      ],
+      "title": "NativeExitLineage",
+      "type": "object"
+    },
+    "NativeExperimentSourceProof": {
+      "additionalProperties": false,
+      "description": "Additive stored JSON proof; a11 already stores opaque proof/evidence hashes.",
+      "properties": {
+        "authority_origin": {
+          "const": "experiment",
+          "title": "Authority Origin",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "configuration_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Hash",
+          "type": "string"
+        },
+        "execution_account_id": {
+          "format": "uuid",
+          "title": "Execution Account Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "closed_trade",
+            "setup_observation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "lineage_methodology_version": {
+          "const": "experiment-native-lineage/v1",
+          "default": "experiment-native-lineage/v1",
+          "title": "Lineage Methodology Version",
+          "type": "string"
+        },
+        "native_entry_fill_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Native Entry Fill Ids",
+          "type": "array"
+        },
+        "native_entry_order_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Entry Order Id"
+        },
+        "native_exit_fill_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "title": "Native Exit Fill Ids",
+          "type": "array"
+        },
+        "native_exit_order_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Exit Order Id"
+        },
+        "native_exit_order_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Native Exit Order Ids",
+          "type": "array"
+        },
+        "native_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Native Uid"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        },
+        "organization_id": {
+          "format": "uuid",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "ownership_command_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ownership Command Id"
+        },
+        "sample_group_id": {
+          "format": "uuid",
+          "title": "Sample Group Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ExperimentSource"
+        },
+        "source_content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Content Hash",
+          "type": "string"
+        },
+        "source_record_id": {
+          "title": "Source Record Id",
+          "type": "string"
+        },
+        "strategy_version_id": {
+          "format": "uuid",
+          "title": "Strategy Version Id",
+          "type": "string"
+        },
+        "variant_key": {
+          "title": "Variant Key",
+          "type": "string"
+        },
+        "version_id": {
+          "format": "uuid",
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "execution_account_id",
+        "native_uid",
+        "source",
+        "version_id",
+        "configuration_hash",
+        "sample_group_id",
+        "strategy_version_id",
+        "variant_key",
+        "kind",
+        "source_record_id",
+        "source_content_hash",
+        "authority_origin",
+        "opened_at",
+        "completed_at",
+        "native_exit_order_ids",
+        "native_entry_fill_ids",
+        "native_exit_fill_ids"
+      ],
+      "title": "NativeExperimentSourceProof",
+      "type": "object"
+    },
+    "NativeFactProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "event_time": {
+          "format": "date-time",
+          "title": "Event Time",
+          "type": "string"
+        },
+        "fee": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fee"
+        },
+        "fee_currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fee Currency"
+        },
+        "first_observed_at": {
+          "format": "date-time",
+          "title": "First Observed At",
+          "type": "string"
+        },
+        "instrument": {
+          "title": "Instrument",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "order",
+            "fill"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "native_id": {
+          "title": "Native Id",
+          "type": "string"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Price"
+        },
+        "quantity": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Quantity",
+          "type": "string"
+        },
+        "quantity_unit": {
+          "const": "contracts",
+          "default": "contracts",
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "realized_pnl": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Realized Pnl"
+        }
+      },
+      "required": [
+        "kind",
+        "native_id",
+        "content_hash",
+        "event_time",
+        "first_observed_at",
+        "instrument",
+        "quantity",
+        "price",
+        "fee",
+        "fee_currency",
+        "realized_pnl"
+      ],
+      "title": "NativeFactProvenance",
+      "type": "object"
+    },
+    "NativeOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "account_history_complete": {
+          "const": false,
+          "default": false,
+          "title": "Account History Complete",
+          "type": "boolean"
+        },
+        "contract_version": {
+          "const": "blofin-experiment-outcome/v1",
+          "default": "blofin-experiment-outcome/v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "coverage": {
+          "default": "incomplete",
+          "enum": [
+            "reconciled_lineage_only",
+            "incomplete"
+          ],
+          "title": "Coverage",
+          "type": "string"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "entry_binding_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Binding Hash"
+        },
+        "environment": {
+          "const": "demo",
+          "default": "demo",
+          "title": "Environment",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "execution_account_id": {
+          "format": "uuid",
+          "title": "Execution Account Id",
+          "type": "string"
+        },
+        "exit_lineage_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Lineage Hash"
+        },
+        "facts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NativeFactProvenance"
+          },
+          "title": "Facts",
+          "type": "array"
+        },
+        "fee_cost": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fee Cost"
+        },
+        "freshness": {
+          "default": "unavailable",
+          "enum": [
+            "fresh",
+            "stale",
+            "unavailable"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        },
+        "funding": {
+          "default": null,
+          "title": "Funding",
+          "type": "null"
+        },
+        "identity_verified_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity Verified At"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument"
+        },
+        "limitations": {
+          "default": [
+            "funding_not_collected",
+            "account_history_retention_unverified",
+            "current_instrument_metadata_not_historical_conversion_proof"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "methodology_version": {
+          "const": "blofin-native-reconciliation/v1",
+          "default": "blofin-native-reconciliation/v1",
+          "title": "Methodology Version",
+          "type": "string"
+        },
+        "monetary_methodology_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Monetary Methodology Version"
+        },
+        "native_exit_order_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Native Exit Order Ids",
+          "type": "array"
+        },
+        "native_uid": {
+          "title": "Native Uid",
+          "type": "string"
+        },
+        "organization_id": {
+          "format": "uuid",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeExperimentSourceProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "const": "blofin_native_activity",
+          "default": "blofin_native_activity",
+          "title": "Provider",
+          "type": "string"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantity"
+        },
+        "quantity_unit": {
+          "const": "contracts",
+          "default": "contracts",
+          "title": "Quantity Unit",
+          "type": "string"
+        },
+        "realized_pnl_after_fees_excluding_funding": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Realized Pnl After Fees Excluding Funding"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "reported_realized_pnl": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Realized Pnl"
+        },
+        "rounding": {
+          "const": "18_decimal_places_half_even",
+          "default": "18_decimal_places_half_even",
+          "title": "Rounding",
+          "type": "string"
+        },
+        "source": {
+          "const": "blofin_demo",
+          "default": "blofin_demo",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_record_id": {
+          "title": "Source Record Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "strategy_version_id": {
+          "format": "uuid",
+          "title": "Strategy Version Id",
+          "type": "string"
+        },
+        "variant_key": {
+          "title": "Variant Key",
+          "type": "string"
+        },
+        "venue": {
+          "const": "BLOFIN",
+          "default": "BLOFIN",
+          "title": "Venue",
+          "type": "string"
+        },
+        "version_id": {
+          "format": "uuid",
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "execution_account_id",
+        "native_uid",
+        "version_id",
+        "strategy_version_id",
+        "variant_key",
+        "source_record_id",
+        "status",
+        "evaluated_at"
+      ],
+      "title": "NativeOutcome",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "blofin-experiment-outcome/v1": "#/$defs/NativeOutcome",
+      "blofin-experiment-performance/v1": "#/$defs/ExperimentPerformance",
+      "experiment-native-entry/v1": "#/$defs/NativeEntryBinding",
+      "experiment-native-exit/v1": "#/$defs/NativeExitLineage"
+    },
+    "propertyName": "contract_version"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/NativeEntryBinding"
+    },
+    {
+      "$ref": "#/$defs/NativeExitLineage"
+    },
+    {
+      "$ref": "#/$defs/NativeOutcome"
+    },
+    {
+      "$ref": "#/$defs/ExperimentPerformance"
+    }
+  ]
+}

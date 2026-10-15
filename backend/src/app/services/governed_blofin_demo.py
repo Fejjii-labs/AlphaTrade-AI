@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, ExecutionMode, Settings
+from app.core.errors import ConflictError
 from app.core.execution_credentials import (
     blofin_execution_authorized,
     governed_demo_worker_access_requested,
@@ -29,7 +30,10 @@ from app.db.models import (
     VenueSubmitEffect,
 )
 from app.evidence_pipeline.types import AssembledCanonicalEvidence
+from app.experiments.governed_context import GovernedExperimentContext
+from app.experiments.native_producer import BloFinNativeOutcomeProducer
 from app.market_contracts.enums import VenueId
+from app.providers.exchange.blofin_activity import BloFinActivityProvider
 from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
 from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBloFinDemoProvider
@@ -39,6 +43,7 @@ from app.schemas.common import ApprovalAction, TradeDirection
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import AuthorizationChannel, EntrySide, TradePlanRevisionCreate
+from app.security.tenant import TenantContext
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import (
@@ -111,10 +116,58 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         clock: Clock,
         *,
         provider: GovernedBloFinDemoProvider | None = None,
+        experiment_context: GovernedExperimentContext | None = None,
+        activity_provider: BloFinActivityProvider | None = None,
     ) -> None:
         super().__init__(runtime, settings, clock)
         self._provider = provider
         self._snapshot: DemoVenueSnapshot | None = None
+        self._experiment_context = experiment_context
+        self._activity_provider = activity_provider
+
+    def continue_experiment_setup(
+        self,
+        session: Session,
+        *,
+        tenant: TenantContext,
+        experiment_id: UUID,
+        version_id: UUID,
+        variant_key: str,
+        target: PaperScanTarget,
+        candidate: Candidate,
+        assessment: SetupAssessment,
+        window: CanonicalEvidenceWindowV1,
+        assembled: AssembledCanonicalEvidence,
+        policy: ExecutableStrategyPolicy,
+        kill_switch_active: bool,
+    ) -> AutomatedPaperLoopProof:
+        """Explicit internal experiment entry through the existing governed loop.
+
+        Domain start does not call this method and ordinary Watcher scans carry
+        no experiment selection. Existing posture/approval/risk gates still apply.
+        """
+        if (tenant.organization_id, tenant.user_id) != (target.organization_id, target.user_id):
+            raise ValueError("Experiment target must belong to its authenticated tenant.")
+        context = GovernedExperimentContext(tenant, experiment_id, version_id, variant_key)
+        context.require_active(session, self._settings, self._clock.now())
+        loop = GovernedBloFinDemoLoop(
+            self._runtime,
+            self._settings,
+            self._clock,
+            provider=self._provider,
+            experiment_context=context,
+            activity_provider=self._activity_provider,
+        )
+        return loop.continue_confirmed_setup(
+            session,
+            target=target,
+            candidate=candidate,
+            assessment=assessment,
+            window=window,
+            assembled=assembled,
+            policy=policy,
+            kill_switch_active=kill_switch_active,
+        )
 
     def _posture_refusal(self) -> str | None:
         return demo_posture_refusal(self._settings)
@@ -441,6 +494,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id
             )
+        context = self._experiment_context
+        producer: BloFinNativeOutcomeProducer | None = None
+        if context is not None:
+            if (context.tenant.organization_id, context.tenant.user_id) != (
+                target.organization_id,
+                target.user_id,
+            ):
+                raise ValueError("Experiment target must belong to its authenticated tenant.")
+            context.require_active(
+                session, self._settings, self._clock.now(), revision_id=revision_id
+            )
+            producer = BloFinNativeOutcomeProducer(
+                session, self._settings, context.tenant, clock=self._clock.now
+            )
+            producer.register_plan(
+                context.experiment_id, context.version_id, context.variant_key, revision_id
+            )
+            session.commit()  # Origin is durable BEFORE any command is created.
+            context.require_active(
+                session, self._settings, self._clock.now(), revision_id=revision_id
+            )
         if (
             session.scalar(
                 select(GovernedDemoLifecycleResolution.id).where(
@@ -500,6 +574,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         )
         if effect is None:
             raise ValueError("Durable demo effect missing.")
+        if producer is not None:
+            from app.services.blofin_activity_service import activity_provider
+
+            producer.bind_entry(
+                command_id, provider=self._activity_provider or activity_provider(self._settings)
+            )
+            session.commit()  # Verified position/binding is durable BEFORE dispatch leasing.
         dispatcher = self._dispatcher(session)
         if effect.state in {VenueSubmitEffectState.CREATED, VenueSubmitEffectState.LEASED}:
             owner = f"demo:{command_id}"
@@ -521,6 +602,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             dispatcher.recover_after_crash(command_id=command_id, owner="demo-recovery")
         session.commit()
         reason = self.reconcile_command(session, command_id=command_id)
+        if producer is not None:
+            try:
+                producer.reconcile(command_id)
+                session.commit()
+            except ConflictError as error:
+                if error.code != "experiment_account_unverified":
+                    raise
+                # A lost/stale identity after preflight keeps native reads
+                # unavailable. It must not erase the committed uncertain send
+                # identity or turn a safe dispatch refusal into another command.
+                session.rollback()
         trade = session.scalar(
             select(JournalTrade).where(
                 JournalTrade.organization_id == target.organization_id,
@@ -614,9 +706,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 safety_epochs=self._safety(session),
                 clock=self._clock.now,
             )
-            cumulative_fees = Decimal("0")
+            # These are reported fee amounts, never a normalized cost/net PnL.
+            # Missing historical currency must not become inferred USDT money.
+            fee_currency_verified = all(
+                fact.fee_currency == envelope.plan.instrument_rules.settlement_currency
+                for fact in evidence.fills
+            )
+            cumulative_fees = Decimal("0") if fee_currency_verified else None
             for fact in sorted(evidence.fills, key=lambda item: (item.occurred_at, item.identity)):
-                cumulative_fees += fact.fee
+                if cumulative_fees is not None:
+                    cumulative_fees += fact.fee
                 fill = self._dispatcher(session).apply_unique_fill(
                     command_id=command_id,
                     fill_quantity=fact.quantity,
@@ -633,8 +732,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     fill=fill,
                     revision_id=command.revision_id,
                     venue_fill_fee=fact.fee,
+                    venue_fill_fee_currency=fact.fee_currency,
                     cumulative_fees=cumulative_fees,
                     demo_protection=evidence.protection_status,
+                    demo_protection_order_ids=evidence.protection_order_ids,
+                    demo_native_tpsl_id=evidence.native_tpsl_id,
                 )
             exit_unavailable = False
             if evidence.fills:
@@ -643,7 +745,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         ExecutionProjection.receipt_id == effect.receipt_id
                     )
                 )
-                if projection is not None and projection.fees != cumulative_fees:
+                if (
+                    projection is not None
+                    and cumulative_fees is not None
+                    and projection.fees != cumulative_fees
+                ):
                     projection.fees = cumulative_fees
                     projection.version = int(projection.version) + 1
                 if evidence.status in {"canceled", "cancelled", "expired"}:

@@ -144,6 +144,7 @@ export function useAnalyticsFilters() {
   const applyDraft = useCallback(
     (draft: AnalyticsDraft) => {
       pushParams((params) => {
+        if (Object.keys(draft).length > 0) params.delete("offset");
         if ("dateFrom" in draft) setOrDelete(params, "date_from", draft.dateFrom);
         if ("dateTo" in draft) setOrDelete(params, "date_to", draft.dateTo);
         if ("symbol" in draft) setOrDelete(params, "symbol", draft.symbol);
@@ -227,6 +228,7 @@ export function useAnalyticsFilters() {
   const setDimension = useCallback(
     (dimension: ValidationDimension) => {
       pushParams((params) => {
+        params.delete("offset");
         if (dimension === DEFAULT_VALIDATION_DIMENSION) params.delete("dimension");
         else params.set("dimension", dimension);
       });

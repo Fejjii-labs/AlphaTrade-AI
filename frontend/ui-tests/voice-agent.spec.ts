@@ -1,539 +1,251 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
+import { agentTurnFixture, FIXTURE_UUID } from "../src/test/pilot-fixtures";
 
-type SpeechHarness = {
-  start(): void;
-  result(text: string, final: boolean): void;
-  end(): void;
-  error(code: string): void;
-  aborts: number;
-  speechCancels: number;
-  spoken: string[];
-};
+const otherConversation = "77777777-7777-4777-8777-777777777777";
+const documentId = "44444444-4444-4444-8444-444444444444";
+type SpeechHarness = { finish(text: string): void; partial(text: string): void; endPlayback(): void;
+  deny(): void; listens: number; aborts: number; cancels: number; spoken: string[] };
+declare global { interface Window { __voiceTest: SpeechHarness } }
 
-declare global {
-  interface Window {
-    __voiceTest: SpeechHarness;
-  }
-}
-
+/** Deterministic Web Speech events through the real browser provider; no microphone hardware. */
 async function installSpeech(page: Page, supported = true) {
-  await page.addInitScript((enabled) => {
-    const instances: Recognition[] = [];
+  await page.addInitScript(enabled => {
+    const recognitions: Recognition[] = [];
+    const current = () => recognitions.at(-1)!;
+    let playback: Utterance;
     const harness: SpeechHarness = {
-      start: () => instances[instances.length - 1].onstart?.(),
-      result: (text, final) =>
-        instances[instances.length - 1].onresult?.({
-          results: [{ isFinal: final, 0: { transcript: text } }],
-        }),
-      end: () => instances[instances.length - 1].onend?.(),
-      error: (code) =>
-        instances[instances.length - 1].onerror?.({ error: code }),
-      aborts: 0,
-      speechCancels: 0,
-      spoken: [],
+      finish: text => { current().onresult?.({ results: [{ isFinal: true, 0: { transcript: text } }] }); current().onend?.(); },
+      partial: text => current().onresult?.({ results: [{ isFinal: false, 0: { transcript: text } }] }),
+      endPlayback: () => playback.onend?.(), deny: () => current().onerror?.({ error: "not-allowed" }),
+      listens: 0, aborts: 0, cancels: 0, spoken: [],
     };
     class Recognition {
       onstart: (() => void) | null = null;
       onend: (() => void) | null = null;
-      onresult:
-        | ((event: {
-            results: { isFinal: boolean; 0: { transcript: string } }[];
-          }) => void)
-        | null = null;
       onerror: ((event: { error: string }) => void) | null = null;
-      constructor() {
-        instances.push(this);
-      }
-      start() {}
+      onresult: ((event: { results: { isFinal: boolean; 0: { transcript: string } }[] }) => void) | null = null;
+      start() { recognitions.push(this); harness.listens++; this.onstart?.(); }
       stop() {}
-      abort() {
-        harness.aborts++;
-      }
+      abort() { harness.aborts++; }
     }
     class Utterance {
       onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
       constructor(public text: string) {}
     }
-    Object.defineProperty(window, "SpeechRecognition", {
-      configurable: true,
-      value: enabled ? Recognition : undefined,
-    });
-    Object.defineProperty(window, "webkitSpeechRecognition", {
-      configurable: true,
-      value: undefined,
-    });
-    Object.defineProperty(window, "SpeechSynthesisUtterance", {
-      configurable: true,
-      value: enabled ? Utterance : undefined,
-    });
-    Object.defineProperty(window, "speechSynthesis", {
-      configurable: true,
-      value: enabled
-        ? {
-            speak: (utterance: Utterance) => {
-              harness.spoken.push(utterance.text);
-              utterance.onstart?.();
-            },
-            cancel: () => {
-              harness.speechCancels++;
-            },
-          }
-        : undefined,
-    });
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: enabled ? Recognition : undefined });
+    Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
+    Object.defineProperty(window, "SpeechSynthesisUtterance", { configurable: true, value: enabled ? Utterance : undefined });
+    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: enabled ? {
+      speak: (utterance: Utterance) => { playback = utterance; harness.spoken.push(utterance.text); utterance.onstart?.(); },
+      cancel: () => { harness.cancels++; },
+    } : undefined });
     window.__voiceTest = harness;
   }, supported);
 }
 
-async function installApi(
-  page: Page,
-  options: { failedTurn?: boolean; killSwitch?: boolean } = {},
-) {
-  await page.route("**/*", async (route) => {
-    const url = new URL(route.request().url());
-    if (["http://127.0.0.1:3000", "http://localhost:8000"].includes(url.origin)) {
-      return route.continue();
-    }
-    await route.abort();
-    throw new Error(`Voice acceptance forbids remote requests: ${url.origin}${url.pathname}`);
-  });
-  const posts: { path: string; body: unknown }[] = [];
-  const messages = [
-    {
-      id: "old-user",
-      role: "user",
-      content: "Review my paper trade",
-      created_at: "2026-10-01T09:00:00Z",
-    },
-    {
-      id: "old-agent",
-      role: "assistant",
-      content: "Keep the recorded invalidation explicit.",
-      created_at: "2026-10-01T09:00:00Z",
-    },
-  ];
-  await page
-    .context()
-    .addCookies([
-      { name: "alphatrade_session", value: "1", url: "http://127.0.0.1:3000" },
-    ]);
-  await page.addInitScript(() =>
-    sessionStorage.setItem(
-      "alphatrade_access_token",
-      "voice-test-fixture-only",
-    ),
-  );
-  await page.route("http://localhost:8000/**", async (route) => {
+async function installApi(page: Page, uncertainFirst = false) {
+  const turns: { body: Record<string, unknown>; key: string }[] = [];
+  const counts = { creations: 0, imports: 0, forbidden: 0, history: 0 };
+  await page.context().addCookies([{ name: "alphatrade_session", value: "1", url: "http://127.0.0.1:3000" }]);
+  await page.addInitScript(() => sessionStorage.setItem("alphatrade_access_token", "voice-fixture-only"));
+  await page.route("http://localhost:8000/**", async route => {
     const request = route.request();
-    const url = new URL(request.url());
-    const paginated = (items: unknown[]) => ({
-      items,
-      total: items.length,
-      limit: 100,
-      offset: 0,
-    });
+    const pathname = new URL(request.url()).pathname;
     if (request.method() === "POST") {
-      posts.push({ path: url.pathname, body: request.postDataJSON() });
-      expect(url.pathname).toBe("/agent/turns");
-      if (options.failedTurn) {
-        await route.fulfill({
-          status: 503,
-          json: { detail: "Agent temporarily unavailable" },
-        });
-        return;
+      if (pathname === "/conversations") {
+        counts.creations++;
+        await route.fulfill({ json: { id: FIXTURE_UUID, title: "Voice review", strategy_id: null } });
+      } else if (pathname === "/agent/turns") {
+        const body = request.postDataJSON();
+        const key = request.headers()["idempotency-key"];
+        turns.push({ body, key });
+        if (uncertainFirst && turns.length === 1) {
+          await route.fulfill({ status: 503, json: { detail: "Fixture response uncertain" } });
+        } else {
+          const n = turns.length;
+          await route.fulfill({ json: { ...agentTurnFixture, conversation_id: body.conversation_id ?? FIXTURE_UUID,
+            user_message_id: `22222222-2222-4222-8222-${String(n).padStart(12, "0")}`,
+            assistant_message_id: `33333333-3333-4333-8333-${String(n).padStart(12, "0")}`,
+            reply: `Acknowledged spoken reply ${n}.` } });
+        }
+      } else if (pathname === "/knowledge/files/preview") {
+        await route.fulfill({ json: { title: "rules", extracted_text: "Rules", warnings: [], preview_receipt: "fixture-receipt" } });
+      } else if (pathname === "/knowledge/files/import") {
+        counts.imports++;
+        await route.fulfill({ json: { document_id: documentId, source_hash: "a".repeat(64), chunk_count: 1, version: 1 } });
+      } else {
+        counts.forbidden++;
+        await route.fulfill({ status: 400, json: { detail: "Unexpected mutation in voice fixture" } });
       }
-      const body = request.postDataJSON() as { message: string };
-      const reply =
-        "Review your recorded risk. A journal proposal requires explicit confirmation.";
-      messages.push(
-        {
-          id: `user-${posts.length}`,
-          role: "user",
-          content: body.message,
-          created_at: "2026-10-01T09:01:00Z",
-        },
-        {
-          id: `agent-${posts.length}`,
-          role: "assistant",
-          content: reply,
-          created_at: "2026-10-01T09:01:00Z",
-        },
-      );
-      await route.fulfill({
-        json: {
-          conversation_id: "voice-c1",
-          reply,
-          capability: "journal_capture",
-          operation: "propose",
-          proposals: [
-            {
-              proposal_id: "journal-p1",
-              conversation_id: "voice-c1",
-              kind: "propose_journal_entry",
-              artifact_kind: "journal_entry",
-              status: "proposed",
-              summary: "Journal draft",
-              content_hash: "a".repeat(64),
-              applied: false,
-              authority_mutated: false,
-            },
-          ],
-          limitations: [],
-          authority_mutated: false,
-          execution_attempted: false,
-          real_trading_enabled: false,
-        },
-      });
       return;
     }
+    const pageOf = (items: unknown[]) => ({ items, total: items.length, limit: 100, offset: 0 });
     const fixtures: Record<string, unknown> = {
-      "/health": {
-        status: "ok",
-        execution_mode: "paper",
-        real_trading_enabled: false,
-        provider_mode: "mock",
-        must_verify_email: false,
-      },
-      "/auth/me": {
-        user: {
-          id: "voice-user",
-          email: "voice-fixture@example.com",
-          email_verified: true,
-        },
-        organization: { id: "voice-org", name: "Voice test fixture" },
-      },
-      "/providers/status": { providers: [] },
-      "/risk/kill-switch": {
-        active: Boolean(options.killSwitch),
-        global_active: false,
-        execution_blocked: Boolean(options.killSwitch),
-      },
-      "/positions": paginated([]),
-      "/strategies": paginated([
-        { id: "strategy-1", name: "Fixture strategy" },
-      ]),
-      "/conversations": paginated([
-        { id: "voice-c1", title: "Voice review" },
-        { id: "voice-c2", title: "Another conversation" },
-      ]),
-      "/conversations/voice-c1/messages": paginated(messages),
-      "/conversations/voice-c2/messages": paginated([]),
-      "/canonical/market-status": {
-        availability: "unavailable",
-        symbol: "BTCUSDT",
-      },
+      "/health": { status: "ok", execution_mode: "paper", real_trading_enabled: false, provider_mode: "mock", must_verify_email: false },
+      "/auth/me": { user: { id: FIXTURE_UUID, email: "voice-fixture@example.com", email_verified: true }, organization: { id: FIXTURE_UUID, name: "Voice fixture" } },
+      "/providers/status": { providers: [] }, "/positions": pageOf([]), "/strategies": pageOf([]),
+      "/risk/kill-switch": { active: false, global_active: false, execution_blocked: false },
+      "/conversations": pageOf([{ id: FIXTURE_UUID, title: "Voice review" }, { id: otherConversation, title: "Another conversation" }]),
+      [`/conversations/${FIXTURE_UUID}`]: { id: FIXTURE_UUID, title: "Voice review", strategy_id: null },
+      [`/conversations/${otherConversation}`]: { id: otherConversation, title: "Another conversation", strategy_id: null },
     };
-    expect(
-      url.pathname in fixtures,
-      `Unexpected API request: ${url.pathname}`,
-    ).toBe(true);
-    await route.fulfill({ json: fixtures[url.pathname] });
+    if (pathname.endsWith("/messages")) {
+      counts.history++;
+      // Deliberately stale history must not erase the immediate acknowledgment.
+      await route.fulfill({ json: pageOf([]) });
+    } else await route.fulfill({ status: pathname in fixtures ? 200 : 503, json: fixtures[pathname] ?? { detail: "Fixture unavailable" } });
   });
-  return posts;
+  return { turns, counts };
 }
 
-async function fits(page: Page) {
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth + 1,
-    ),
-  ).toBe(true);
-  const controls = page.getByRole("region", { name: "Voice controls" });
-  const clipped = await controls.evaluate((element) =>
-    [...element.querySelectorAll("button, p")]
-      .filter((child) => {
-        const box = child.getBoundingClientRect();
-        return box.right > innerWidth + 1 || box.left < -1;
-      })
-      .map((child) => child.textContent),
-  );
-  expect(clipped).toEqual([]);
-  for (const button of await controls.getByRole("button").all()) {
-    expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  }
+async function begin(page: Page) {
+  await page.getByRole("checkbox", { name: "Conversation mode" }).check();
+  await page.getByRole("button", { name: "Start conversation", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Voice conversation" }).getByRole("status")).toContainText("Listening");
+}
+async function navigate(page: Page, name: string) {
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page.getByRole("button", { name, exact: true }).click();
 }
 
-async function screenshot(page: Page, name: string) {
-  if (!process.env.VOICE_SCREENSHOTS) return;
-  await page.evaluate(() => {
-    const label = document.createElement("div");
-    label.id = "voice-fixture-label";
-    label.textContent = "FRONTEND + SPEECH TEST FIXTURE · NOT LIVE DATA";
-    label.style.cssText =
-      "position:fixed;right:8px;bottom:88px;z-index:9999;background:#18181b;color:#fafafa;padding:6px;font:10px monospace;border:1px solid #52525b";
-    document.body.appendChild(label);
-  });
-  await page.screenshot({
-    path: path.resolve("../docs/screenshots/voice-agent", `${name}.png`),
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page
-    .locator("#voice-fixture-label")
-    .evaluate((element) => element.remove());
-}
-
-for (const viewport of [
-  { name: "desktop", width: 1440, height: 1000 },
-  { name: "phone", width: 390, height: 844 },
-  { name: "phone-landscape", width: 844, height: 390 },
-]) {
-  test(`${viewport.name}: voice uses the existing conversation, keeps text, and interrupts speech`, async ({
-    page,
-  }) => {
-    const errors: string[] = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    await page.setViewportSize(viewport);
+for (const [name, width, height] of [["narrow", 320, 720], ["phone", 390, 844], ["desktop", 1440, 1000]] as const) {
+  test(`${name}: actual Agent creates a conversation and runs two successive spoken turns`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
     await installSpeech(page);
-    const posts = await installApi(page);
+    const { turns, counts } = await installApi(page);
     await page.goto("/agent");
-    await page
-      .getByRole("button", { name: "Voice review", exact: true })
-      .click();
-    await expect(page.getByTestId("agent-message")).toHaveCount(2);
-    await page.getByLabel("Symbol", { exact: true }).fill("BTCUSDT");
-    await page.getByLabel("Timeframe", { exact: true }).fill("4h");
-    await page
-      .getByLabel("Strategy", { exact: true })
-      .selectOption("strategy-1");
-    await page
-      .getByRole("textbox", { name: "Message", exact: true })
-      .fill("Keep this text draft");
-    await page.getByRole("button", { name: "Start recording" }).click();
-    await expect(page.getByTestId("agent-voice-status")).toContainText(
-      "permission",
-    );
-    await page.evaluate(() => {
-      window.__voiceTest.start();
-      window.__voiceTest.result(
-        "Review my journal strategy knowledge Watcher trading and risk",
-        false,
-      );
-    });
-    await expect(page.getByTestId("agent-voice-status")).toContainText(
-      "Recording",
-    );
-    await expect(
-      page.getByRole("button", { name: "Send transcript" }),
-    ).toBeDisabled();
-    await fits(page);
-    await screenshot(page, `${viewport.name}-recording`);
-    await page.getByRole("button", { name: "Stop recording" }).click();
-    await expect(page.getByTestId("agent-voice-status")).toContainText(
-      "Transcribing",
-    );
-    await page.evaluate(() => {
-      window.__voiceTest.result(
-        "Review my journal strategy knowledge Watcher trading and risk",
-        true,
-      );
-      window.__voiceTest.end();
-    });
-    await expect(page.getByTestId("agent-voice-status")).toContainText(
-      "review before sending",
-    );
-    expect(posts).toEqual([]);
-    await page.getByRole("button", { name: "Send transcript" }).click();
-    await expect(page.getByTestId("agent-voice-status")).toContainText(
-      "Transcript sent",
-    );
-    expect(posts).toEqual([
-      {
-        path: "/agent/turns",
-        body: {
-          message:
-            "Review my journal strategy knowledge Watcher trading and risk",
-          conversation_id: "voice-c1",
-          symbol: "BTCUSDT",
-          timeframe: "4h",
-          strategy_id: "strategy-1",
-        },
-      },
+    expect(await page.evaluate(() => window.__voiceTest.listens)).toBe(0);
+    await begin(page);
+    await page.evaluate(() => { window.__voiceTest.partial("Partial"); window.__voiceTest.partial("Partial"); });
+    expect(turns).toHaveLength(0);
+    await page.evaluate(() => window.__voiceTest.finish("First spoken turn"));
+    await expect(page.getByTestId("agent-thread")).toContainText("Acknowledged spoken reply 1.");
+    await expect(page.getByRole("button", { name: "Stop speaking" })).toBeEnabled();
+    const controls = page.getByRole("region", { name: "Voice conversation" });
+    await controls.evaluate(element => element.scrollIntoView({ block: "center" }));
+    await controls.screenshot({ path: path.resolve(`../docs/screenshots/voice-agent/${name}-integrated-speaking.png`) });
+    expect(await page.evaluate(() => window.__voiceTest.listens)).toBe(1);
+    await page.evaluate(() => window.__voiceTest.endPlayback());
+    await expect(controls.getByRole("status")).toContainText("Listening");
+    await page.evaluate(() => window.__voiceTest.finish("Second spoken turn"));
+    await expect(page.getByTestId("agent-thread")).toContainText("Acknowledged spoken reply 2.");
+    expect(turns).toHaveLength(2);
+    expect(turns.map(t => t.body)).toEqual([
+      { conversation_id: FIXTURE_UUID, message: "First spoken turn" },
+      { conversation_id: FIXTURE_UUID, message: "Second spoken turn" },
     ]);
-    await expect(
-      page.getByRole("textbox", { name: "Message", exact: true }),
-    ).toHaveValue("Keep this text draft");
-    await expect(page.getByTestId("agent-message").last()).toContainText(
-      "Review your recorded risk",
-    );
-    await expect(
-      page.getByRole("button", { name: "Confirm proposal" }),
-    ).toBeVisible();
-    expect(await page.evaluate(() => window.__voiceTest.spoken)).toEqual([]);
-    await page.getByRole("button", { name: "Read Agent reply" }).click();
-    await expect(page.getByTestId("agent-speech-status")).toHaveText(
-      "Speaking",
-    );
-    await screenshot(page, `${viewport.name}-speaking`);
-    await page.getByRole("button", { name: "Stop speech" }).click();
-    await expect(page.getByTestId("agent-speech-status")).toHaveText(
-      "Speech off",
-    );
-    await page.getByRole("button", { name: "Read Agent reply" }).click();
-    await page.getByRole("button", { name: "Start recording" }).click();
-    await expect(page.getByTestId("agent-speech-status")).toHaveText(
-      "Speech off",
-    );
-    await page.evaluate(() => {
-      window.__voiceTest.start();
-      window.__voiceTest.result("Do not send this", true);
-    });
-    await page.getByRole("button", { name: "Clear voice" }).click();
-    await page.evaluate(() => window.__voiceTest.end());
-    await expect(page.getByTestId("agent-voice-transcript")).toHaveCount(0);
-    await expect(page.getByTestId("agent-voice-status")).toHaveText(
-      "Microphone off",
-    );
-    await page.getByRole("button", { name: "Read Agent reply" }).click();
-    await page
-      .getByRole("button", { name: "Another conversation", exact: true })
-      .click();
-    await expect(page.getByTestId("agent-speech-status")).toHaveText(
-      "Speech off",
-    );
-    expect(posts).toHaveLength(1);
-    expect(errors).toEqual([]);
-    await fits(page);
+    expect(turns[0].key).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(turns[1].key).not.toBe(turns[0].key);
+    expect(counts.creations).toBe(1);
+    expect(counts.forbidden).toBe(0);
+    const outcomes = await page.evaluate(scope => JSON.parse(sessionStorage.getItem(`alphatrade:turn-outcome:${scope}`)!), `${FIXTURE_UUID}:${FIXTURE_UUID}`);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((proof: { origin: string }) => proof.origin === "voice")).toBe(true);
+    await expect(controls).toHaveCount(1);
+    for (const button of await controls.getByRole("button").all()) {
+      const box = await button.boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.getByRole("button", { name: "End conversation" }).click();
+    await navigate(page, "Another conversation");
+    await navigate(page, "Voice review");
+    await expect(page.getByRole("button", { name: /Resume voice|Start conversation/ })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Recover original request" })).toHaveCount(0);
+    expect(turns).toHaveLength(2);
   });
 }
 
-test("permission failure leaves text usable", async ({ page }) => {
+test("clear and replace review text keeps typed drafts through send and conversation changes", async ({ page }) => {
   await installSpeech(page);
-  const posts = await installApi(page);
+  const { turns, counts } = await installApi(page);
   await page.goto("/agent");
-  await page.getByRole("button", { name: "Start recording" }).click();
-  await page.evaluate(() => window.__voiceTest.error("not-allowed"));
-  await expect(
-    page.getByRole("region", { name: "Voice controls" }).getByRole("alert"),
-  ).toContainText("permission was denied");
-  await expect(
-    page.getByRole("button", { name: "Start recording" }),
-  ).toBeEnabled();
-  expect(posts).toEqual([]);
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Review risk in text");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByTestId("agent-message").last()).toContainText(
-    "Review your recorded risk",
-  );
-  expect(posts[0]).toEqual({
-    path: "/agent/turns",
-    body: { message: "Review risk in text" },
-  });
-});
-
-for (const cancel of ["conversation", "page-hide"] as const) {
-  test(`${cancel} cancels recording and playback and ignores late transcripts`, async ({ page }) => {
-    await installSpeech(page);
-    const posts = await installApi(page);
-    await page.goto("/agent");
-    await page.getByRole("button", { name: "Voice review", exact: true }).click();
-    await expect(page.getByTestId("agent-message")).toHaveCount(2);
-    const draft = page.getByRole("textbox", { name: "Message", exact: true });
-    await draft.fill("Preserve my typed draft");
-    await page.getByRole("button", { name: "Start recording" }).click();
-    await page.evaluate(() => { window.__voiceTest.start(); window.__voiceTest.result("Never send this late result", false); });
-    const aborts = await page.evaluate(() => window.__voiceTest.aborts);
-    if (cancel === "conversation") {
-      await page.getByRole("button", { name: "Another conversation", exact: true }).click();
-    } else {
-      await page.evaluate(() => {
-        Object.defineProperty(document, "hidden", { configurable: true, value: true });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-    }
-    await expect(page.getByTestId("agent-voice-status")).toHaveText("Microphone off");
-    expect(await page.evaluate(() => window.__voiceTest.aborts)).toBeGreaterThan(aborts);
-    await page.evaluate(() => { window.__voiceTest.result("Late transcript", true); window.__voiceTest.end(); });
-    if (cancel === "conversation") {
-      await expect(page.getByTestId("agent-voice-transcript")).toHaveCount(0);
-    } else {
-      await expect(page.getByTestId("agent-voice-transcript")).toContainText("Never send this late result");
-      await expect(page.getByTestId("agent-voice-transcript")).not.toContainText("Late transcript");
-      await expect(page.getByRole("button", { name: "Send transcript" })).toBeDisabled();
-    }
-    expect(posts).toEqual([]);
-    if (cancel === "page-hide") {
-      await expect(draft).toHaveValue("Preserve my typed draft");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "hidden", { configurable: true, value: false });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await page.getByRole("button", { name: "Read Agent reply" }).click();
-      await expect(page.getByTestId("agent-speech-status")).toHaveText("Speaking");
-      const cancels = await page.evaluate(() => window.__voiceTest.speechCancels);
-      await page.evaluate(() => {
-        Object.defineProperty(document, "hidden", { configurable: true, value: true });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await expect(page.getByTestId("agent-speech-status")).toHaveText("Speech off");
-      expect(await page.evaluate(() => window.__voiceTest.speechCancels)).toBeGreaterThan(cancels);
-    }
-  });
-}
-
-test("unsupported input and output keep the text composer usable", async ({
-  page,
-}) => {
-  await installSpeech(page, false);
-  const posts = await installApi(page);
-  await page.goto("/agent");
-  await expect(page.getByTestId("agent-voice")).toBeDisabled();
-  await expect(
-    page.getByText("Voice input is unavailable in this browser", {
-      exact: false,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Read Agent reply" }),
-  ).toBeDisabled();
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Review risk in text");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByTestId("agent-message").last()).toContainText(
-    "Review your recorded risk",
-  );
-  expect(posts[0]).toEqual({
-    path: "/agent/turns",
-    body: { message: "Review risk in text" },
-  });
-});
-
-test("failed turns retain the voice transcript; kill switch prevents recording", async ({
-  page,
-}) => {
-  await installSpeech(page);
-  const posts = await installApi(page, { failedTurn: true });
-  await page.goto("/agent");
-  await page.getByRole("button", { name: "Start recording" }).click();
-  await page.evaluate(() => {
-    window.__voiceTest.start();
-    window.__voiceTest.result("Review my journal", true);
-    window.__voiceTest.end();
-  });
+  const draft = page.getByRole("textbox", { name: "Message", exact: true });
+  await draft.fill("Keep my typed draft");
+  await begin(page);
+  await page.evaluate(() => window.__voiceTest.finish("Original speech"));
+  const transcript = page.getByRole("textbox", { name: "Voice transcript" });
+  await transcript.fill("");
+  await expect(transcript).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send transcript" })).toBeDisabled();
+  await transcript.fill("Replacement speech");
   await page.getByRole("button", { name: "Send transcript" }).click();
-  await expect(
-    page.getByTestId("agent-workspace").getByRole("alert"),
-  ).toContainText("Agent temporarily unavailable");
-  await expect(page.getByTestId("agent-voice-transcript")).toContainText(
-    "Review my journal",
-  );
-  await expect(
-    page.getByRole("button", { name: "Send transcript" }),
-  ).toBeEnabled();
-  expect(posts).toHaveLength(1);
-  await page.unroute("http://localhost:8000/**");
-  await installApi(page, { killSwitch: true });
+  await expect(page.getByTestId("agent-thread")).toContainText("Acknowledged spoken reply 1.");
+  await expect(draft).toHaveValue("Keep my typed draft");
+  await navigate(page, "Another conversation");
+  await draft.fill("Other draft");
+  await navigate(page, "Voice review");
+  await expect(draft).toHaveValue("Keep my typed draft");
+  expect(turns[0].body.message).toBe("Replacement speech");
+  expect(turns).toHaveLength(1);
+  expect(counts.forbidden).toBe(0);
+});
+
+test("uncertain speech reloads with the exact attachment/body/key and recovers once", async ({ page }) => {
+  await installSpeech(page);
+  const { turns, counts } = await installApi(page, true);
+  await page.goto(`/agent?conversation=${FIXTURE_UUID}`);
+  await page.getByRole("button", { name: "Attach document", exact: true }).click();
+  await page.getByLabel("Attach document", { exact: true }).setInputFiles({ name: "rules.txt", mimeType: "text/plain", buffer: Buffer.from("Rules") });
+  await page.getByRole("button", { name: "Preview attachment" }).click();
+  await expect(page.getByLabel("Attachment preview")).toBeVisible();
+  await begin(page);
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill("Draft retained through recovery reload");
+  await page.evaluate(() => window.__voiceTest.finish("Review original rules"));
+  await page.getByRole("button", { name: "Send transcript" }).click();
+  await expect(page.getByRole("button", { name: "Recover original request" })).toBeEnabled();
+  const saved = await page.evaluate(scope => JSON.parse(sessionStorage.getItem(`alphatrade:pending-turn:${scope}`)!), `${FIXTURE_UUID}:${FIXTURE_UUID}`);
+  expect(saved[0].voice).toMatchObject({ turnKey: turns[0].key, transcript: "Review original rules", origin: "voice" });
+  await navigate(page, "Another conversation");
   await page.reload();
-  await expect(
-    page.getByText("Kill switch is active. New messages are paused."),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Start recording" }),
-  ).toBeDisabled();
-  await expect(
-    page.getByRole("button", { name: "Send transcript" }),
-  ).toBeDisabled();
+  await expect(page).toHaveURL(new RegExp(otherConversation));
+  await navigate(page, "Voice review");
+  const draft = page.getByRole("textbox", { name: "Message", exact: true });
+  await expect(draft).toHaveValue("Draft retained through recovery reload");
+  await draft.fill("Keep recovery draft");
+  await page.getByRole("button", { name: "Recover original request" }).click();
+  await expect(page.getByTestId("agent-thread")).toContainText("Acknowledged spoken reply 2.");
+  expect(turns).toHaveLength(2);
+  expect(turns[1]).toEqual(turns[0]);
+  expect(turns[0].body.source_document_id).toBe(documentId);
+  expect(counts.imports).toBe(1);
+  expect(counts.forbidden).toBe(0);
+  await expect(draft).toHaveValue("Keep recovery draft");
+  await expect(page.getByRole("button", { name: "Recover original request" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Record|Resume voice/ })).toBeEnabled();
+});
+
+for (const cancel of ["navigation", "hidden"] as const) {
+  test(`${cancel} stops capture and ignores late speech events`, async ({ page }) => {
+    await installSpeech(page);
+    const { turns } = await installApi(page);
+    await page.goto("/agent"); await begin(page);
+    await page.evaluate(() => window.__voiceTest.partial("Unsent speech"));
+    const aborts = await page.evaluate(() => window.__voiceTest.aborts);
+    if (cancel === "navigation") await navigate(page, "Another conversation");
+    else await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await page.evaluate(() => window.__voiceTest.aborts)).toBeGreaterThan(aborts);
+    await page.evaluate(() => window.__voiceTest.finish("Late speech"));
+    expect(turns).toHaveLength(0);
+    await expect(page.getByRole("button", { name: "Stop recording" })).toHaveCount(0);
+  });
+}
+
+test("unsupported browser speech leaves typed Agent submission usable", async ({ page }) => {
+  await installSpeech(page, false);
+  const { turns } = await installApi(page);
+  await page.goto("/agent");
+  await expect(page.getByRole("button", { name: "Record" })).toBeDisabled();
+  await expect(page.getByText("Voice input unavailable. Type your message.")).toBeVisible();
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill("Typed fallback");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByTestId("agent-thread")).toContainText("Acknowledged spoken reply 1.");
+  expect(turns[0].body).toEqual({ message: "Typed fallback" });
 });

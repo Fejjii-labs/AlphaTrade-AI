@@ -89,6 +89,15 @@ class AgentService:
         symbol: str | None = None,
         timeframe: str | None = None,
     ) -> AgentMessageResponse:
+        from app.core.errors import ValidationAppError
+        from app.providers.llm import OpenAILLMProvider
+
+        if self._runtime.session is not None and isinstance(
+            self._runtime.llm_provider, OpenAILLMProvider
+        ):
+            raise ValidationAppError(
+                "Transaction-bound live Agent calls require the durable turn runtime."
+            )
         if context.trace_id:
             set_trace_id(context.trace_id)
         else:

@@ -94,7 +94,9 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/agent");
   await expect(page.getByTestId("agent-workspace")).toBeVisible();
-  await expect(page.getByTestId("agent-voice")).toBeEnabled();
+  const voice = page.getByRole("region", { name: "Voice conversation" });
+  await expect(voice).toBeVisible();
+  await expect(voice.getByRole("button", { name: "Record", exact: true })).toBeEnabled();
   await expect(page.getByTestId("agent-attach-image")).toHaveCount(0);
   const title = `Agent import smoke ${Date.now()}`;
   const text =
@@ -176,6 +178,10 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
   );
   await page.reload();
   await expect(page.getByTestId("agent-workspace")).toBeVisible();
+  await expect(page.getByTestId("saved-receipt")).toContainText("retained in this conversation");
+  await expect(page.getByRole("link", { name: "Open original document" })).toHaveAttribute(
+    "href", `/journal?tab=knowledge&document_id=${stored.document_id}`,
+  );
   for (const route of RETAINED) {
     await page.goto(route);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

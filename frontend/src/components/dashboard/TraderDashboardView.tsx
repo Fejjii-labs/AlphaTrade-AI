@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { isAlphaTradeBloFinExecution } from "@/lib/journal-activity";
+import { NativeActivity } from "@/components/activity/NativeActivity";
+import { useAuth } from "@/contexts/AuthContext";
+import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 import { AttentionCard } from "./AttentionCard";
 import { DailyReviewCard } from "./DailyReviewCard";
@@ -79,6 +81,10 @@ export function TraderDashboardView({
   refreshing?: boolean;
   demoRefreshKey?: number;
 }) {
+  const { user, organization } = useAuth();
+  const [session, setSession] = useState(sessionGeneration);
+  useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
+  const accountContext = JSON.stringify([organization?.id, user?.id, session]);
   const [accountScope, setAccountScope] = useState("blofin");
   const simulator = accountScope === "simulator";
   const winRate = portfolioWinRate(data.portfolio);
@@ -158,8 +164,11 @@ export function TraderDashboardView({
           <option value="simulator">Internal simulator · history</option>
         </select>
       </label>
-      {!simulator ? (
-        <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
+      {!simulator && user && organization ? (
+        <div key={accountContext} className="space-y-5">
+          <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
+          <NativeActivity statistics refreshKey={demoRefreshKey} />
+        </div>
       ) : null}
       <details className="rounded-card border border-border-subtle p-4">
         <summary className="min-h-11 cursor-pointer font-semibold">
@@ -433,15 +442,14 @@ export function TraderDashboardView({
           </div>
         </details>
       ) : null}
-      <Card>
+      {simulator ? <Card>
         <CardHeader>
-          <CardTitle>Recent activity</CardTitle>
+          <CardTitle>Recent simulator activity</CardTitle>
         </CardHeader>
         <CardContent>
           {data.journal.available ? (
             <ul className="space-y-2">
               {data.journal.data?.items
-                .filter((t) => simulator || isAlphaTradeBloFinExecution(t))
                 .slice(0, 5)
                 .map((t) => (
                   <li
@@ -473,7 +481,7 @@ export function TraderDashboardView({
             Open Journal &amp; Knowledge
           </Link>
         </CardContent>
-      </Card>
+      </Card> : null}
       {simulator ? (
         <>
           <p className="text-sm text-text-secondary">

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -19,7 +19,9 @@ from app.market_contracts.adapters.aggtrades import (
     fetch_complete_agg_trade_rows,
     iter_contiguous_agg_trade_rows,
 )
+from app.market_contracts.adapters.book_sequence import BookSequenceGuard
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
+from app.market_contracts.adapters.observation_cache import CausalObservationCache
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget, record_cache_hit
 from app.market_contracts.catalog import PerpetualInstrumentCatalog, default_perpetual_catalog
 from app.market_contracts.coverage import build_complete_trade_window_coverage
@@ -28,11 +30,13 @@ from app.market_contracts.derivatives import (
     DerivativeMetric,
     DerivativeObservation,
     derivative_observation,
+    refresh_derivative_observation,
 )
 from app.market_contracts.enums import MarketType, ProductFamily, SourceFamily, VenueId
 from app.market_contracts.errors import (
     FallbackForbiddenError,
     FormingCandleError,
+    GapDetectedError,
     RegionalProviderFailureError,
     SpotFallbackRejectedError,
     UnsupportedTradeContractError,
@@ -43,7 +47,7 @@ from app.market_contracts.errors import (
 )
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.freshness import first_slice_freshness_policy
-from app.market_contracts.hashing import with_content_hash
+from app.market_contracts.hashing import semantic_content_hash, with_content_hash
 from app.market_contracts.identity import (
     BINANCE_REST_ADAPTER_VERSION,
     EvidenceMarketIdentity,
@@ -58,6 +62,12 @@ from app.market_contracts.ohlcv import (
     OhlcvBar,
     build_ohlcv_bar,
     require_closed_series,
+)
+from app.market_contracts.order_book import (
+    BOOK_DEPTH,
+    OrderBookObservation,
+    order_book_observation,
+    refresh_order_book,
 )
 from app.market_contracts.order_flow import require_order_flow_request
 from app.market_contracts.provider_contracts import contract_from_binance_exchange_info
@@ -120,6 +130,8 @@ class BinanceUsdmPerpetualSource:
         reduced_cache: TtlValueCache | None = None,
         budget: SlidingWeightBudget | None = None,
         progress_interval_seconds: float = 5.0,
+        observation_cache: CausalObservationCache | None = None,
+        observation_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = client or ReadOnlyHttpGetClient(
@@ -152,8 +164,124 @@ class BinanceUsdmPerpetualSource:
         self._last_success_at: datetime | None = None
         self._last_error: str | None = None
         self._regional_failure = False
+        self._observation_cache = observation_cache or CausalObservationCache()
+        self._observation_clock = observation_clock
+        self._book_sequences: dict[str, BookSequenceGuard] = {}
+        self._book_snapshot_hashes: dict[str, str] = {}
 
     def fetch_derivative_observation(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        metric: DerivativeMetric,
+        observed_at: datetime,
+    ) -> DerivativeObservation:
+        self._assert_request(identity, instrument, None)
+        item = self._observation_cache.collect(
+            (
+                semantic_content_hash(identity.model_copy(update={"timeframe": None})),
+                instrument.provider_symbol,
+                metric.value,
+                "derivatives/v2",
+            ),
+            observed_at,
+            lambda: self._collect_derivative_observation(
+                identity=identity, instrument=instrument, metric=metric, observed_at=observed_at
+            ),
+        )
+        return refresh_derivative_observation(item, max(observed_at, item.observed_at))
+
+    def fetch_order_book_observation(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        self._assert_request(identity, instrument, None)
+        item = self._observation_cache.collect(
+            (
+                semantic_content_hash(identity.model_copy(update={"timeframe": None})),
+                instrument.provider_symbol,
+                "order_book",
+                "depth20/v1",
+            ),
+            observed_at,
+            lambda: self._collect_order_book(identity, instrument, observed_at),
+        )
+        if (
+            item.update_id is not None
+            and self._book_snapshot_hashes.get(instrument.provider_symbol) != item.content_hash
+        ):
+            self._book_sequences.setdefault(
+                instrument.provider_symbol, BookSequenceGuard(identity.venue)
+            ).snapshot(item.update_id)
+            self._book_snapshot_hashes[instrument.provider_symbol] = item.content_hash
+        return refresh_order_book(item, max(observed_at, item.observed_at))
+
+    def _collect_order_book(
+        self,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        self.verify_exchange_info(instrument)
+        payload = self._get(
+            "/fapi/v1/depth", {"symbol": instrument.provider_symbol, "limit": BOOK_DEPTH}
+        )
+        observed_at = self._observation_clock() if self._observation_clock else observed_at
+        return order_book_observation(
+            identity=identity,
+            observed_at=observed_at,
+            row=payload if isinstance(payload, dict) else None,
+            availability=EvidenceAvailability.INCOMPLETE,
+            reason="malformed_provider_payload",
+        )
+
+    def invalidate_order_book(self, symbol: str) -> None:
+        """A stream gap/disconnect requires a new independent REST snapshot."""
+        self._observation_cache.drop_symbol(symbol)
+        self._book_snapshot_hashes.pop(symbol, None)
+
+    def observe_order_book_delta(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        row: Mapping[str, Any],
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        """Invalidate truncated snapshots on changes/gaps; next GET resynchronizes.
+
+        This callback does not open a socket or claim a continuous local book.
+        Absolute delta quantities (including deletions) require a fresh snapshot.
+        """
+        self._assert_request(identity, instrument, None)
+        guard = self._book_sequences.setdefault(
+            instrument.provider_symbol, BookSequenceGuard(identity.venue)
+        )
+        reason = "depth_changed_snapshot_required"
+        try:
+            if row.get("s") != instrument.provider_symbol:
+                raise GapDetectedError("wrong_symbol")
+            if not guard.delta(row):
+                return self.fetch_order_book_observation(
+                    identity=identity, instrument=instrument, observed_at=observed_at
+                )
+        except GapDetectedError as exc:
+            guard.disconnect()
+            reason = str(exc)
+        self.invalidate_order_book(instrument.provider_symbol)
+        return order_book_observation(
+            identity=identity,
+            observed_at=observed_at,
+            availability=EvidenceAvailability.INCOMPLETE,
+            sequence_status="resync_required",
+            reason=reason,
+        )
+
+    def _collect_derivative_observation(
         self,
         *,
         identity: EvidenceMarketIdentity,
@@ -190,6 +318,7 @@ class BinanceUsdmPerpetualSource:
             if isinstance(row, dict) and row.get("symbol") != instrument.provider_symbol:
                 malformed = True
             value_key, time_key = "fundingRate", "fundingTime"
+        observed_at = self._observation_clock() if self._observation_clock else observed_at
         return derivative_observation(
             identity=identity,
             metric=metric,

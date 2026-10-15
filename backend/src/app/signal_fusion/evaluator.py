@@ -127,6 +127,7 @@ def evaluate_setup(
     market_symbol: str | None = None,
     nested_spec: object | None = None,
     sfp_spec: object | None = None,
+    trendpulse_spec: object | None = None,
 ) -> SetupAssessment:
     """Evaluate first-slice setup truth. Account/risk context is ignored.
 
@@ -137,6 +138,18 @@ def evaluate_setup(
     canonical first-slice symbol so existing BTC evaluations stay unchanged.
     """
     del account_context
+    if trendpulse_spec is not None:
+        if nested_spec is not None or sfp_spec is not None:
+            raise ValueError("A setup assessment must bind exactly one family")
+        from app.strategy_brain.trendpulse_1r.canonical import evaluate_trendpulse_setup
+
+        return evaluate_trendpulse_setup(
+            policy=policy,
+            command=command,
+            evidence=evidence,
+            evaluated_at=evaluated_at,
+            spec=trendpulse_spec,
+        )
     if sfp_spec is not None:
         if nested_spec is not None:
             raise ValueError("Exactly one strategy family may occupy evaluate_setup")
@@ -270,6 +283,9 @@ def evaluate_setup(
                 if isinstance(exc, StaleEvidenceError)
                 else "missing_required_evidence",
             )
+    if EvidenceRole.ORDER_BOOK in policy.required_roles:
+        # A current depth snapshot cannot prove liquidity at a historical trigger.
+        rules["complete_warmup"] = _rule("complete_warmup", False, "missing_required_evidence")
     quality_ok = all(rules[rule_id].passed for rule_id in QUALITY_RULE_IDS)
     all_passed = all(rules[rule_id].passed for rule_id in FIRST_SLICE_RULE_IDS)
     state, reason_codes = _resolve_state(

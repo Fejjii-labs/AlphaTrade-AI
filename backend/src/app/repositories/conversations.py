@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.db.models import (
     Conversation,
@@ -102,6 +102,10 @@ class ConversationMessageRepository(SQLAlchemyRepository[ConversationMessage]):
             ConversationMessage.conversation_id == conversation_id,
             ConversationMessage.organization_id == organization_id,
             ConversationMessage.user_id == user_id,
+            or_(
+                ConversationMessage.intent.is_(None),
+                ConversationMessage.intent != "agent_turn_reservation_v1",
+            ),
         ]
         total = int(
             self._session.scalar(

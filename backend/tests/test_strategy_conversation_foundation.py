@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.agents.mutation_policy import (
     confirmation_authorizes_mutation,
@@ -118,11 +118,11 @@ def _settings() -> Settings:
 
 
 @pytest.fixture
-def conv_env() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
+def conv_env(tmp_path: Path) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
+    # Concurrent requests need separate connections and independent transactions.
     engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
+        f"sqlite+pysqlite:///{tmp_path / 'conversations.db'}",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
 
     @event.listens_for(engine, "connect")
@@ -168,6 +168,7 @@ def conv_env() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     with TestClient(app) as client:
         yield client, factory
     app.dependency_overrides.clear()
+    engine.dispose()
 
 
 def _auth(client: TestClient, email: str) -> None:
@@ -739,7 +740,7 @@ def test_concurrent_confirmation_converges_to_one_version(
         worker.start()
     for worker in workers:
         worker.join()
-    assert results
+    assert len(results) == 2
     bodies = []
     for item in results:
         assert item.status_code == 200  # type: ignore[attr-defined]
@@ -926,3 +927,60 @@ def test_chat_structure_request_supersedes_open_draft_identity(
         )
         pending = stale_confirm.pending_proposal
         assert pending is None or pending.id != stale_id
+
+
+def test_agent_authoring_setup_type_confirmation_reload_and_replay(conv_env):
+    client, factory = conv_env
+    _auth(client, "conv-a@test.example")
+    _assert_agent_authoring_confirmation_journey(client, factory)
+
+
+def _assert_agent_authoring_confirmation_journey(client, factory):
+    response = client.post(
+        "/agent/turns",
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+        json={
+            "message": complete_first_slice_preview_text(),
+            "action": {
+                "name": "strategy.create",
+                "arguments": {
+                    "text": complete_first_slice_preview_text(),
+                    "setup_type": "liquidity_sweep_reversal",
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    turn = response.json()
+    linked = next(
+        item["linked_strategy_proposal_id"]
+        for item in turn["proposals"]
+        if item["linked_strategy_proposal_id"]
+    )
+    path = f"/conversations/{turn['conversation_id']}/proposals/{linked}"
+    draft = client.get(path).json()
+    assert draft["status"] == "draft"
+    from sqlalchemy import func
+
+    from app.db.models import UserStrategy, UserStrategyVersion
+
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(UserStrategy)) == 0
+    payload = {**_confirm_payload(draft), "request_id": str(uuid.uuid4())}
+    confirmed = client.post(path + "/confirm", json=payload)
+    assert confirmed.status_code == 200, confirmed.text
+    saved = confirmed.json()
+    strategy_path = f"/strategies/{saved['resulting_strategy_id']}"
+    assert client.get(strategy_path).json()["setup_type"] == "liquidity_sweep_reversal"
+    assert (
+        client.get(f"/conversations/{turn['conversation_id']}").json()["strategy_id"]
+        == saved["resulting_strategy_id"]
+    )
+    with factory() as session:
+        before = session.scalar(select(func.count()).select_from(UserStrategyVersion))
+    repeated = client.post(path + "/confirm", json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json()["resulting_version_id"] == saved["resulting_version_id"]
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(UserStrategyVersion)) == before
+    assert client.get(path).json()["resulting_version_id"] == saved["resulting_version_id"]

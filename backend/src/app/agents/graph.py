@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any, cast
+
 from langgraph.graph import END, StateGraph
 
 from app.agents import nodes
@@ -15,8 +18,16 @@ from app.agents.routing import (
 from app.agents.runtime import AgentRuntime
 
 
-def _wrap(node_fn, runtime: AgentRuntime):
-    def _node(state: dict) -> dict:
+def _wrap(
+    node_fn: Callable[[dict[str, Any], AgentRuntime], dict[str, Any]], runtime: AgentRuntime
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    def _node(state: dict[str, Any]) -> dict[str, Any]:
+        from app.services.turn_context import current_turn
+
+        turn = current_turn()
+        if turn is not None and turn.node_scope is not None:
+            with turn.node_scope(node_fn.__name__) as phase_runtime:
+                return node_fn(state, phase_runtime)
         return node_fn(state, runtime)
 
     return _node
@@ -81,7 +92,8 @@ def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
         "output_validation": nodes.output_validation,
     }
     for name in node_names:
-        graph.add_node(name, _wrap(node_fns[name], runtime))
+        # This established dict graph predates LangGraph's typed StateLike bound.
+        graph.add_node(name, cast(Any, _wrap(node_fns[name], runtime)))
 
     graph.set_entry_point("receive_request")
     graph.add_edge("receive_request", "auth_context")

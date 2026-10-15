@@ -498,4 +498,18 @@ describe("Setup analytics charts", () => {
     expect(screen.getByTestId("setup-expectancy-show-all")).toHaveTextContent(/Show compact view/i);
     expect(screen.getByTestId("setup-expectancy-show-all")).not.toHaveTextContent(/Show top/i);
   });
+  it("offers first-page recovery for an empty later page outside hidden table children", () => {
+    const onPageChange = vi.fn();
+    render(<SetupBucketTable source={ok({ ...rankedJournal, buckets: [], total_buckets: 0, offset: 40 })}
+      groupBy="setup" bucketOffset={40} onPageChange={onPageChange} />);
+    expect(screen.queryByTestId("setup-bucket-data-table")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "First page" }));
+    expect(onPageChange).toHaveBeenCalledWith(0);
+  });
+  it("keeps unavailable evidence distinct from an empty later page", () => {
+    render(<SetupBucketTable source={failed("Source unavailable")} groupBy="setup" bucketOffset={40} onPageChange={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "First page" })).not.toBeInTheDocument();
+    expect(screen.getByText("Source unavailable")).toBeInTheDocument();
+  });
+
 });

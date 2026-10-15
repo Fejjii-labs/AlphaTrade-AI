@@ -94,7 +94,11 @@ export function SetupBucketTable({
       emptyTitle={copy.bucketTableEmptyTitle}
       emptyDescription={copy.bucketTableEmptyDescription}
       emptyAction={
-        <JournalStatisticsLink data-testid="setup-bucket-table-empty-journal-link" />
+        <div className="flex flex-wrap items-center gap-3">
+          {bucketOffset > 0 ? <Button type="button" variant="outline"
+            onClick={() => onPageChange(0)} data-testid="setup-bucket-first">First page</Button> : null}
+          <JournalStatisticsLink data-testid="setup-bucket-table-empty-journal-link" />
+        </div>
       }
       truncated={derived.truncated}
       staleWholeTab={staleWholeTab}

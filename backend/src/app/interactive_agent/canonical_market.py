@@ -12,6 +12,7 @@ from app.core.errors import AppError
 from app.evidence_pipeline.http_schemas import CanonicalEvidenceRead
 from app.evidence_pipeline.service import CanonicalEvidenceService
 from app.interactive_agent.contracts import MarketQuoteView
+from app.market_contracts.context import MarketContextObservation, MarketEvidenceContext
 
 _USABLE_PRESENTATIONS = frozenset({"live_mark", "replay_fixture"})
 
@@ -78,6 +79,31 @@ def _view(read: CanonicalEvidenceRead, *, is_stale: bool, is_live: bool) -> Mark
         raise CanonicalMarketStateError("unavailable", _reason(read))
     source = f"canonical:{read.source.source_family}:{price.presentation}"
     provider = read.source.provider_name.strip() or "canonical"
+    components: list[tuple[str, MarketContextObservation]] = [
+        (x.metric.value, x) for x in read.market_intelligence
+    ]
+    components += [
+        (name, x)
+        for name, x in (("order_flow", read.order_flow), ("order_book", read.order_book))
+        if x is not None
+    ]
+    evaluated_at = (
+        read.timestamps.get("market_context_evaluated_at")
+        or read.timestamps.get("evaluated_at")
+        or price.freshness.evaluated_at
+    )
+    context = MarketEvidenceContext(
+        evaluated_at=evaluated_at,
+        evidence_cutoff_at=read.timestamps.get("evaluated_at"),
+        anchor_venue=read.source.venue,
+        anchor_symbol=read.symbol,
+        derivatives=read.market_intelligence,
+        order_flow=read.order_flow,
+        order_book=read.order_book,
+        cross_venue_components=tuple(
+            name for name, x in components if x.identity.venue.value != read.source.venue
+        ),
+    )
     return MarketQuoteView(
         symbol=read.symbol,
         last_price=price.price,
@@ -86,4 +112,5 @@ def _view(read: CanonicalEvidenceRead, *, is_stale: bool, is_live: bool) -> Mark
         is_stale=is_stale,
         fallback_used=False,
         provider_name=provider[:80],
+        evidence_context=context,
     )

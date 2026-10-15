@@ -390,6 +390,9 @@ def test_blofin_sync_read_only_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_client, factory, settings = client
+    settings.blofin_api_key = "sync-fixture-key"
+    settings.blofin_api_secret = "sync-fixture-secret"
+    settings.blofin_api_passphrase = "sync-fixture-passphrase"
     owner = _login(test_client, "at037-a@test.example")
 
     balances = [
@@ -417,6 +420,7 @@ def test_blofin_sync_read_only_contract(
     )
     provider = MagicMock()
     provider.name = "blofin_demo"
+    provider.native_account_uid = "sync-fixture-native-uid"
     provider.get_balances.return_value = balances
     provider.get_positions.return_value = positions
     provider.get_account_permissions.return_value = permissions

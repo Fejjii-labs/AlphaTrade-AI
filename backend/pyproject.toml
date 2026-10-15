@@ -25,6 +25,8 @@ dependencies = [
     "python-multipart>=0.0.32",
     "pypdf>=6.0.0,<7",
     "defusedxml>=0.7.1",
+    "openai==3.28.0",
+    "httpx2==2.13.1",
 ]
 
 [project.optional-dependencies]

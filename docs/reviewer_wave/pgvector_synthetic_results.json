@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "seed": 20261009,
+  "count": 2000,
+  "dimensions": 1536,
+  "documents": 500,
+  "queries": 20,
+  "filtered_candidates": 204,
+  "postgres_version": "PostgreSQL 17.11 (Debian 17.11-0+deb13u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+  "pgvector_version": "0.8.0",
+  "qdrant_mode": "QdrantClient local in-memory, exhaustive (not hosted Qdrant)",
+  "results": {
+    "qdrant": {
+      "upsert_ms": 1192.73,
+      "p50_ms": 30.036,
+      "p95_ms": 50.846,
+      "filtered_recall_at_5": 1.0,
+      "scope_violations": 0,
+      "scoped_delete_ms": 12.807
+    },
+    "pgvector-prototype": {
+      "upsert_ms": 1769.99,
+      "p50_ms": 3.02,
+      "p95_ms": 3.565,
+      "filtered_recall_at_5": 1.0,
+      "scope_violations": 0,
+      "scoped_delete_ms": 0.452
+    }
+  },
+  "pg_hnsw_build_ms": 911.27,
+  "pg_relation_bytes": 34111488,
+  "pg_filtered_plan": [
+    "Limit  (cost=132.21..132.22 rows=5 width=24)",
+    "  ->  Sort  (cost=132.21..132.44 rows=94 width=24)",
+    "        Sort Key: ((embedding <=> '<synthetic query vector>'::vector))",
+    "        ->  Bitmap Heap Scan on prototype_points  (cost=9.86..130.65 rows=94 width=24)",
+    "              Recheck Cond: (((organization_id = 'ee49e846-0a9b-5310-8c6c-4928275a969e'::uuid) AND (user_id = '521d87a4-cd7a-5df2-b425-9089ce55e1bf'::uuid) AND (source_type = 'risk_policy'::text)) OR ((organization_id = 'ee49e846-0a9b-5310-8c6c-4928275a969e'::uuid) AND (user_id IS NULL) AND (source_type = 'risk_policy'::text)))",
+    "              ->  BitmapOr  (cost=9.86..9.86 rows=101 width=0)",
+    "                    ->  Bitmap Index Scan on prototype_scope  (cost=0.00..4.70 rows=34 width=0)",
+    "                          Index Cond: ((organization_id = 'ee49e846-0a9b-5310-8c6c-4928275a969e'::uuid) AND (user_id = '521d87a4-cd7a-5df2-b425-9089ce55e1bf'::uuid) AND (source_type = 'risk_policy'::text))",
+    "                    ->  Bitmap Index Scan on prototype_scope  (cost=0.00..5.12 rows=67 width=0)",
+    "                          Index Cond: ((organization_id = 'ee49e846-0a9b-5310-8c6c-4928275a969e'::uuid) AND (user_id IS NULL) AND (source_type = 'risk_policy'::text))"
+  ],
+  "pg_delete_rollback_preserved_rows": true,
+  "python_peak_rss_kib_combined_clients": 333152
+}

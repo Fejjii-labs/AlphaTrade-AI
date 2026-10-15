@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -171,6 +172,9 @@ class StructureFromTextService:
         )
         valid, errors, warnings = validate_structured_rules(draft)
         pattern_spec, pattern_errors = self._pattern_spec_preview(request.text)
+        if pattern_errors:
+            valid = False
+            errors = [*errors, *pattern_errors]
         challenge_notes = self._challenge_notes(text, draft, pattern_errors)
         return StructureFromTextResponse(
             draft=draft,
@@ -188,6 +192,53 @@ class StructureFromTextService:
 
         Canonical first-slice constants are never copied in. Missing fields fail closed.
         """
+        # A captured document may contain a complete authored research contract.
+        # Import only a typed, explicit spec; text never grants approval/execution.
+        from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.sfp.contracts import SfpSpec
+        from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
+
+        models: dict[str, type[NestedContinuationSpec] | type[SfpSpec] | type[TrendPulseSpec]] = {
+            "operational_nested_continuation/v1": NestedContinuationSpec,
+            "swing_failure_pattern/v1": SfpSpec,
+            "trendpulse_1r/v1": TrendPulseSpec,
+        }
+        candidates = [original.strip(), *re.findall(r"```(?:json)?\s*([\s\S]*?)```", original)]
+        specs = []
+        for candidate in candidates:
+            try:
+                value = json.loads(candidate)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(value, dict):
+                continue
+            value = value.get("pattern_spec", value)
+            if not isinstance(value, dict):
+                continue
+            kind = value.get("kind")
+            if kind is not None and not isinstance(kind, str):
+                return None, ["Authored research spec kind must be a string."]
+            if kind not in models:
+                continue
+            model = models[kind]
+            try:
+                research_spec = model.model_validate(value)
+                # Do not silently author omitted baseline parameters or bindings.
+                missing_fields = set(model.model_fields) - value.keys()
+                missing_parameters = (
+                    set(type(research_spec.parameters).model_fields)
+                    - value.get("parameters", {}).keys()
+                )
+                if missing_fields or missing_parameters:
+                    return None, ["Authored research spec must state every field and parameter."]
+                specs.append(research_spec.model_dump(mode="json"))
+            except (ValidationError, ValueError, TypeError, AttributeError):
+                return None, ["Authored research spec is invalid; correct it before confirmation."]
+        if specs:
+            if any(spec != specs[0] for spec in specs[1:]):
+                return None, ["Conflicting authored research specs require clarification."]
+            return specs[0], []
+
         text = original.lower()
         wants_first_slice = (
             FIRST_SLICE_KIND in text

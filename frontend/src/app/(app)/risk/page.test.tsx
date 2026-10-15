@@ -47,6 +47,9 @@ vi.mock("@/contexts/ShellFreshnessContext", () => ({
 }));
 
 const useAsyncDataMock = vi.fn();
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({ user: { id: "user" }, organization: { id: "org" } }),
+}));
 
 vi.mock("@/hooks/useAsyncData", () => ({
   useAsyncData: (...args: unknown[]) => useAsyncDataMock(...args),
@@ -101,11 +104,11 @@ describe("Risk settings route ownership", () => {
     expect(screen.queryByTestId("portfolio-risk-block")).not.toBeInTheDocument();
   });
 
-  it("keeps /risk reachable as configuration-only with link to Portfolio posture", () => {
+  it("keeps /risk reachable as configuration-only with parent strategy navigation", () => {
     render(<RiskSettingsPage />);
     expect(screen.getByTestId("risk-settings-page")).toBeInTheDocument();
     expect(screen.getByTestId("risk-settings-form-card")).toBeInTheDocument();
-    expect(screen.getByTestId("risk-settings-portfolio-link")).toHaveAttribute("href", "/portfolio");
+    expect(screen.getByRole("link", { name: /Back to Strategies/ })).toHaveAttribute("href", "/strategies#risk");
     expect(screen.getByTestId("risk-settings-ownership")).toHaveTextContent(/configuration only/i);
     expect(screen.getByTestId("risk-daily-loss-limit")).toBeInTheDocument();
     expect(screen.getByTestId("paper-mode-indicator")).toBeInTheDocument();

@@ -1,0 +1,175 @@
+name: Backend launch proof
+
+on:
+  pull_request:
+    paths:
+      - scripts/run_backend_launch.py
+      - scripts/run_backend_release.py
+      - scripts/backend_checkpoints.py
+      - .github/actions/backend-release/**
+      - backend/tests/test_backend_checkpoints.py
+      - backend/tests/test_backend_launch.py
+      - .github/workflows/ci.yml
+      - .github/workflows/backend-launch-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-launch-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  launch-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source before launching tools
+        run: python3 scripts/run_backend_launch.py --output backend-launch-proof --prepare-only
+      - name: Retain early source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-launch-source-${{ github.run_id }}
+          path: backend-launch-proof/provenance.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: astral-sh/setup-uv@v5
+      - name: Install locked launch-proof dependencies
+        working-directory: backend
+        timeout-minutes: 2
+        run: uv sync --frozen --extra dev
+      - name: Exercise real launch failure timeout and cancellation
+        working-directory: backend
+        timeout-minutes: 1
+        env:
+          BACKEND_LAUNCH_PROOF_DIR: ${{ github.workspace }}/backend-launch-proof/cases
+        run: |
+          uv run --frozen --extra dev python tests/test_backend_launch.py -v
+          uv run --frozen --extra dev python tests/test_backend_checkpoints.py -v
+      - name: Retain diagnostic proof results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-launch-results-${{ github.run_id }}
+          path: backend-launch-proof/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Install checkpoint transport
+        timeout-minutes: 1
+        working-directory: .github/actions/backend-release
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Force timeout after retaining live fixture evidence
+        timeout-minutes: 1
+        uses: ./.github/actions/backend-release
+        with:
+          command: '["python3", ".github/actions/backend-release/probe.py"]'
+          working-directory: .
+          output: backend-timeout-proof
+          seconds: '18'
+          checkpoint-seconds: '6'
+          artifact-prefix: backend-timeout-progress
+          expected-exit: '124'
+      - name: Retrieve progress saved before timeout
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-timeout-progress-${{ github.run_id }}-${{ github.run_attempt }}-2
+          path: downloaded-timeout-progress
+      - name: Verify retrieved active fixture and exact timeout
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          active = json.loads(Path('downloaded-timeout-progress/active.json').read_text())
+          result = json.loads(Path('backend-timeout-proof/release-result.json').read_text())
+          assert active['nodeid'] == 'synthetic_stuck_fixture'
+          assert active['phase'] == 'setup'
+          assert result['exitcode'] == 124 and result['reason'] == 'launch_deadline'
+          print('Off-runner active fixture evidence retrieved after forced timeout')
+          PY
+      - name: Retain final timeout proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-timeout-results-${{ github.run_id }}
+          path: backend-timeout-proof/
+          if-no-files-found: warn
+          retention-days: 7
+
+  fixture-profile:
+    # Two known expensive cases only; this is not backend release acceptance.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alphatrade
+          POSTGRES_PASSWORD: alphatrade
+          POSTGRES_DB: alphatrade_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alphatrade -d alphatrade_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHASE1_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain profile source before tool startup
+        run: python3 scripts/run_backend_launch.py --output backend-fixture-profile --prepare-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-fixture-source-${{ github.run_id }}
+          path: backend-fixture-profile/provenance.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install locked profiling dependencies
+        working-directory: backend
+        timeout-minutes: 2
+        run: uv sync --frozen --extra dev
+      - name: Profile exactly two database fixtures
+        working-directory: backend
+        timeout-minutes: 3
+        run: >-
+          python3 ../scripts/run_backend_launch.py --output ../backend-fixture-profile
+          --stage probe --seconds 150 -- uv run python -m cProfile
+          -o ../backend-fixture-profile/profile.stats -m pytest
+          -p tests.support.release_diagnostics -x --durations=0 -v
+          tests/test_agent_paper_execution_v4.py::test_successful_conversation_paper_flow
+          tests/test_agent_paper_execution_v4.py::test_duplicate_confirmation_and_restart_converge
+          > ../backend-fixture-profile/pytest.log 2>&1
+      - name: Summarize measured fixture cost
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, pstats
+          from pathlib import Path
+          root = Path('backend-fixture-profile')
+          if (root / 'profile.stats').exists():
+              stats = pstats.Stats(str(root / 'profile.stats'))
+              rows = [dict(file=file, line=line, function=fn, calls=n, own_seconds=own,
+                           cumulative_seconds=cumulative)
+                      for (file, line, fn), (_, n, own, cumulative, _) in stats.stats.items()]
+              targeted = [row for row in rows if row['function'] in
+                          {'reset_public_schema', 'create_all', 'postgres_plan_world', 'paper_world'}]
+              data = dict(total_seconds=stats.total_tt, fixture_functions=targeted,
+                          top=sorted(rows, key=lambda row: row['cumulative_seconds'], reverse=True)[:20])
+              (root / 'profile-summary.json').write_text(json.dumps(data, indent=2))
+              print(json.dumps(dict(total_seconds=stats.total_tt, fixture_functions=targeted)))
+          PY
+      - name: Retain focused profile evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-fixture-profile-${{ github.run_id }}
+          path: backend-fixture-profile/
+          if-no-files-found: error
+          retention-days: 7

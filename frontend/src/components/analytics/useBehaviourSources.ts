@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 
-import { loadSource, type SourceResult } from "@/components/workflows";
+import { usePrivateSource } from "./usePrivateSource";
 import { api } from "@/lib/api";
 
 import {
@@ -11,84 +11,6 @@ import {
   buildRuleComplianceFilterKey,
   type AnalyticsFilterParams,
 } from "./filterValidation";
-
-type IndependentSourceReturn<T> = {
-  source: SourceResult<T> | null;
-  loading: boolean;
-  retryLoading: boolean;
-  reload: () => Promise<void>;
-  loadedKey: string | null;
-};
-
-function useIndependentBehaviourSource<T>(
-  enabled: boolean,
-  requestKey: string,
-  fetcher: () => Promise<SourceResult<T>>,
-): IndependentSourceReturn<T> {
-  const [result, setResult] = useState<SourceResult<T> | null>(null);
-  const [loadedKey, setLoadedKey] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [retryLoading, setRetryLoading] = useState(false);
-  const generationRef = useRef(0);
-  const mountedRef = useRef(true);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!enabled) {
-      setResult(null);
-      setLoadedKey(null);
-      setLoading(false);
-      setRetryLoading(false);
-      return;
-    }
-
-    const generation = ++generationRef.current;
-    setLoading(true);
-    setResult(null);
-
-    void fetcherRef.current().then((next) => {
-      if (!mountedRef.current || generation !== generationRef.current) return;
-      setResult(next);
-      setLoadedKey(requestKey);
-      setLoading(false);
-    });
-  }, [enabled, requestKey]);
-
-  const reload = useCallback(async () => {
-    if (!enabled) return;
-    const generation = ++generationRef.current;
-    setRetryLoading(true);
-    try {
-      const next = await fetcherRef.current();
-      if (!mountedRef.current || generation !== generationRef.current) return;
-      setResult(next);
-      setLoadedKey(requestKey);
-    } finally {
-      if (mountedRef.current && generation === generationRef.current) {
-        setRetryLoading(false);
-      }
-    }
-  }, [enabled, requestKey]);
-
-  const displaySource = enabled && loadedKey === requestKey ? result : null;
-  const isLoading = enabled && (loading || loadedKey !== requestKey);
-
-  return {
-    source: displaySource,
-    loading: isLoading,
-    retryLoading,
-    reload,
-    loadedKey: enabled ? loadedKey : null,
-  };
-}
 
 /**
  * Behaviour-tab loaders with independent source slots, keys, and retry actions.
@@ -108,25 +30,29 @@ export function useBehaviourSources(params: AnalyticsFilterParams, enabled: bool
     [params.learningWindow],
   );
 
-  const ruleComplianceSlot = useIndependentBehaviourSource(
+  const ruleComplianceSlot = usePrivateSource(
     enabled,
+    "/journal/statistics",
     ruleComplianceKey,
-    () => loadSource(api.journal.statistics(params.ruleComplianceJournal)),
+    (signal) => api.journal.statistics(params.ruleComplianceJournal, { signal }),
   );
-  const proposalDisciplineSlot = useIndependentBehaviourSource(
+  const proposalDisciplineSlot = usePrivateSource(
     enabled,
+    "/analytics/discipline",
     analyticsWindowKey,
-    () => loadSource(api.analytics.discipline(params.analyticsWindow)),
+    (signal) => api.analytics.discipline(params.analyticsWindow, { signal }),
   );
-  const learningDisciplineSlot = useIndependentBehaviourSource(
+  const learningDisciplineSlot = usePrivateSource(
     enabled,
+    "/learning-analytics/discipline",
     learningWindowKey,
-    () => loadSource(api.learningAnalytics.discipline(params.learningWindow)),
+    (signal) => api.learningAnalytics.discipline(params.learningWindow, { signal }),
   );
-  const riskBehaviorSlot = useIndependentBehaviourSource(
+  const riskBehaviorSlot = usePrivateSource(
     enabled,
+    "/analytics/risk-behavior",
     analyticsWindowKey,
-    () => loadSource(api.analytics.riskBehavior(params.analyticsWindow)),
+    (signal) => api.analytics.riskBehavior(params.analyticsWindow, { signal }),
   );
 
   const reloadRuleCompliance = ruleComplianceSlot.reload;
@@ -155,6 +81,12 @@ export function useBehaviourSources(params: AnalyticsFilterParams, enabled: bool
     riskBehaviorSlot.loading;
 
   return {
+    refreshFailures: [
+      { name: "Rule compliance", error: ruleComplianceSlot.refreshError, retry: reloadRuleCompliance },
+      { name: "Proposal discipline", error: proposalDisciplineSlot.refreshError, retry: reloadProposalDiscipline },
+      { name: "Learning discipline", error: learningDisciplineSlot.refreshError, retry: reloadLearningDiscipline },
+      { name: "Risk behavior", error: riskBehaviorSlot.refreshError, retry: reloadRiskBehavior },
+    ],
     ruleCompliance: ruleComplianceSlot.source,
     ruleComplianceLoading: ruleComplianceSlot.loading,
     ruleComplianceRetryLoading: ruleComplianceSlot.retryLoading,

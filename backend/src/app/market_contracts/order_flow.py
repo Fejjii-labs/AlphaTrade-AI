@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import TypedDict
+from typing import Literal, TypedDict
 from uuid import UUID, uuid5
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -99,6 +99,7 @@ class OrderFlowObservation(CanonicalModel):
     series_identity: str
     coverage_content_hash: str | None = None
     trade_set_hash: str | None = None
+    coverage_kind: Literal["proven_executed_trade_window", "unproven"] = "unproven"
     windows: tuple[FiveMinuteFlow, ...] = ()
     rolling_cvd: CanonicalDecimal | None = None
     rolling_quote_cvd: CanonicalDecimal | None = None
@@ -127,6 +128,8 @@ class OrderFlowObservation(CanonicalModel):
                 raise ValueError("Usable evidence requires complete coverage and freshness.")
             if len(self.windows) != ORDER_FLOW_BARS or not self.coverage_content_hash:
                 raise ValueError("Usable evidence requires both closed windows and coverage.")
+            if self.coverage_kind != "proven_executed_trade_window":
+                raise ValueError("Usable flow requires explicitly proven historical coverage.")
             base, quote = Decimal("0"), Decimal("0")
             for index, window in enumerate(self.windows):
                 if window.window_start != self.window_start + FIVE_MINUTES * index:
@@ -331,6 +334,7 @@ def order_flow_observation(
                 }
             ),
             coverage_content_hash=coverage_hash,
+            coverage_kind="proven_executed_trade_window" if windows else "unproven",
             trade_set_hash=trade_hash,
             windows=tuple(windows),
             rolling_cvd=windows[-1].rolling_cvd if windows else None,

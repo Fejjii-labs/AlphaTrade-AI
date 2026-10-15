@@ -59,6 +59,11 @@ export function useDemoAccountSnapshot(refreshKey: number) {
         }),
       ]);
       if (!mounted.current || request !== generation.current) return;
+      // Never retain a successful snapshot under a different/unknown account binding.
+      if (saved.current && result.account_id !== saved.current.account_id) {
+        saved.current = null;
+        setAccount(null);
+      }
       const failed = result.status === "unavailable" || !!result.refresh_error;
       if (!failed || hasSnapshot(result) || !hasSnapshot(saved.current)) {
         saved.current = result;

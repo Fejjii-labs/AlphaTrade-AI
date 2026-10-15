@@ -2,12 +2,13 @@
 
 import json
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.agent_capture.contracts import CapturePlan
 from app.core.config import Settings
+from app.interactive_agent.conversation import _correlation
 from app.providers.factory import resolve_providers
-from app.providers.llm import LLMMessage
+from app.providers.llm import LLMMessage, LLMProvider
 from app.schemas.model_routing import (
     ModelCallerScope,
     ModelContextScope,
@@ -19,12 +20,15 @@ from app.services.model_call_telemetry import ModelCallTelemetryService
 from app.services.model_router import ModelRouter
 
 SYSTEM = """Organize meaningful user contributions to a private trading workspace.
-Return the required schema only. Questions, greetings, confirmations and requests to execute
-orders or change system/risk settings need no capture. Save personal experiences/reflections to
+Return the required schema only. Pure questions, greetings, confirmations and requests to execute
+orders or change system/risk settings need no capture. Classify the meaning of ordinary language;
+users need not name a destination. A question alongside a meaningful contribution does not erase
+that contribution. Save personal experiences/reflections to
 journal; operating principles to rules; setup definitions/refinements to strategies; news,
 analysis and forecasts to news_analysis; general learning takeaways to lessons. Split independent
 mixed topics (up to 3); combine a related contribution with an existing supplied entry using its
 exact target_entry_id. A correction should revise the related entry. Do not invent targets.
+Avoid duplicate suggestions; combine corrections to the same target into one faithful revision.
 Retain uncertainty, negation, personal opinion, dates and source attribution. User-supplied claims
 are not verified market or exchange facts. Do not convert hypothetical trades into executions.
 Provide concise faithful summaries with verbatim evidence_quotes from current user/document
@@ -44,8 +48,9 @@ class CaptureUnavailableError(Exception):
 
 
 class CaptureModel:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, llm_provider: LLMProvider | None = None) -> None:
         self.settings = settings
+        self._llm_provider = llm_provider
         self.last_usage: dict[str, Any] = {}
 
     def plan(
@@ -56,9 +61,9 @@ class CaptureModel:
         conversation_id: UUID,
         content: dict[str, Any],
     ) -> CapturePlan:
-        providers = resolve_providers(self.settings)
+        llm = self._llm_provider or resolve_providers(self.settings).llm
         router = ModelRouter(
-            providers.llm,
+            llm,
             tier_a_model=self.settings.agent_reasoning_model,
             tier_b_model=self.settings.agent_reasoning_model,
             fail_closed=True,
@@ -80,7 +85,7 @@ class CaptureModel:
                 caller_user_id=user_id,
                 caller_resource_type=ModelResourceType.CONVERSATION,
                 caller_resource_id=conversation_id,
-                correlation_id=f"capture:{uuid4()}",
+                correlation_id=_correlation("capture"),
                 reasoning_effort=self.settings.agent_reasoning_effort,
                 max_output_tokens=self.settings.agent_max_output_tokens,
                 response_format={

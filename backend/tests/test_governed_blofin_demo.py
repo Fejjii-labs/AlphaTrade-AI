@@ -62,6 +62,7 @@ class Venue:
     ticker_reads: int = 0
     clock_delta: int = 0
     after_preflight: Callable[[], None] | None = None
+    entry_fee_currency: str | None = "USDT"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -160,6 +161,7 @@ class Venue:
                         if self.behavior in {"partial", "partial_cancel"}
                         else self.order["size"],
                         "fee": "0.02",
+                        "feeCurrency": self.entry_fee_currency,
                         "ts": _TS,
                     }
                 ]

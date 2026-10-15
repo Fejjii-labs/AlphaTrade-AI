@@ -116,6 +116,31 @@ def resolve_verified_demo_exit(
         "plan_content_hash": plan.content_hash,
         "authorization_id": str(command.authorization_id),
     }
+    entry_fee_events = list(
+        session.scalars(
+            select(JournalLifecycleEvent)
+            .where(
+                JournalLifecycleEvent.organization_id == command.organization_id,
+                JournalLifecycleEvent.user_id == command.user_id,
+                JournalLifecycleEvent.account_id == command.account_id,
+                JournalLifecycleEvent.execution_lifecycle_id == command.id,
+                JournalLifecycleEvent.event_type == JournalLifecycleEventType.FILL,
+                JournalLifecycleEvent.source_system == CANONICAL_EXECUTION_SOURCE_SYSTEM,
+                JournalLifecycleEvent.source_aggregate == "execution-command",
+            )
+            .limit(101)
+        )
+    )
+    payload["recorded_entry_protection_ids"] = sorted(
+        {
+            identity
+            for event in entry_fee_events
+            for identities in [event.payload.get("demo_protection_order_ids")]
+            if isinstance(identities, list)
+            for identity in identities
+            if isinstance(identity, str) and identity
+        }
+    )
     digest = canonical_sha256(payload)
     epochs.lock_epoch(organization_id=command.organization_id, account_id=command.account_id)
     existing = session.scalar(
@@ -173,10 +198,8 @@ def resolve_verified_demo_exit(
             JournalTrade.execution_lifecycle_id == command.id,
         )
     )
-    if trade is None or trade.status is not JournalTradeStatus.OPEN or trade.fees is None:
-        raise ValidationAppError(
-            "Demo exit requires its open recorded Journal trade and actual entry fees."
-        )
+    if trade is None or trade.status is not JournalTradeStatus.OPEN:
+        raise ValidationAppError("Demo exit requires its open recorded Journal trade.")
     accounting = epochs.lock_risk_accounting(
         organization_id=command.organization_id,
         account_id=command.account_id,
@@ -210,14 +233,36 @@ def resolve_verified_demo_exit(
         if all(f.reported_pnl is not None for f in evidence.fills)
         else None
     )
-    fees = trade.fees + sum((f.fee for f in evidence.fills), Decimal("0"))
+    # Closure/exposure release is independent of monetary availability. Retain
+    # individual reported signed amounts; aggregate only explicitly matching
+    # currencies. Never turn absent currency into settlement-currency evidence.
+    currency = plan.instrument_rules.settlement_currency
+    fee_currency_verified = (
+        len(entry_fee_events) == len(fills)
+        and {event.source_event_id for event in entry_fee_events} == {str(f.id) for f in fills}
+        and all(
+            event.payload.get("venue_fill_fee_currency") == currency for event in entry_fee_events
+        )
+        and all(f.fee is not None and f.fee_currency == currency for f in evidence.fills)
+    )
+    fees = None
+    if fee_currency_verified:
+        entry_fees = [Decimal(str(event.payload["venue_fill_fee"])) for event in entry_fee_events]
+        if not all(fee.is_finite() for fee in entry_fees):
+            raise ValidationAppError("Demo entry fee receipt is invalid.")
+        # Editable Journal totals are a projection, not the exchange's fee source.
+        fees = sum(entry_fees, Decimal("0")) + sum(
+            (f.fee for f in evidence.fills if f.fee is not None), Decimal("0")
+        )
     source_id = f"verified-demo-exit:{command.id}"
     close_payload = {
         "exit_time": close_time.isoformat(),
         "exit_price": str(exit_price),
         "exit_reason": "verified_blofin_demo_"
         + "_".join(sorted({f.category for f in evidence.fills})),
-        "fees": str(fees),
+        "fees": str(fees) if fees is not None else None,
+        "venue_reported_fee_currency": currency if fees is not None else None,
+        "fee_convention": None,
         # The wire contract calls fillPnl "profit and loss" without declaring
         # gross/net or funding semantics. Preserve it with its original name.
         "venue_reported_fill_pnl": str(reported_pnl) if reported_pnl is not None else None,
@@ -228,7 +273,15 @@ def resolve_verified_demo_exit(
         "result": TradeResult.OPEN.value,
         "demo_exit_evidence": payload,
         "demo_exit_content_hash": digest,
-        "missing_outcome_fields": ["gross_pnl", "funding", "net_pnl", "result"],
+        "missing_outcome_fields": [
+            *(["fees", "fee_currency"] if fees is None else []),
+            "fee_convention",
+            "fill_pnl_fee_basis",
+            "gross_pnl",
+            "funding",
+            "net_pnl",
+            "result",
+        ],
         "lineage": _lineage_payload(envelope, command.id, runtime).model_dump(
             mode="json", exclude_none=True
         ),

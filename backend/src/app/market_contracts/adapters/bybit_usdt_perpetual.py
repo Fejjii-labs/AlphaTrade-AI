@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -12,13 +13,18 @@ from uuid import UUID
 
 import httpx
 
+from app.market_contracts.adapters.aggtrade_cache import TtlValueCache
+from app.market_contracts.adapters.book_sequence import BookSequenceGuard
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
+from app.market_contracts.adapters.observation_cache import CausalObservationCache
+from app.market_contracts.adapters.request_budget import record_cache_hit
 from app.market_contracts.coverage import build_complete_trade_window_coverage
 from app.market_contracts.cursor import TradeStreamSnapshot
 from app.market_contracts.derivatives import (
     DerivativeMetric,
     DerivativeObservation,
     derivative_observation,
+    refresh_derivative_observation,
 )
 from app.market_contracts.enums import MarketType, ProductFamily, SourceFamily, VenueId
 from app.market_contracts.errors import (
@@ -35,7 +41,7 @@ from app.market_contracts.errors import (
     WrongSourceError,
 )
 from app.market_contracts.freshness import first_slice_freshness_policy
-from app.market_contracts.hashing import with_content_hash
+from app.market_contracts.hashing import semantic_content_hash, with_content_hash
 from app.market_contracts.identity import (
     BYBIT_ADAPTER_VERSION,
     BYBIT_AGGRESSOR_CONVENTION,
@@ -51,6 +57,12 @@ from app.market_contracts.ohlcv import (
     OhlcvBar,
     build_ohlcv_bar,
     require_closed_series,
+)
+from app.market_contracts.order_book import (
+    BOOK_DEPTH,
+    OrderBookObservation,
+    order_book_observation,
+    refresh_order_book,
 )
 from app.market_contracts.order_flow import require_order_flow_request
 from app.market_contracts.provider_contracts import contract_from_bybit_instruments
@@ -75,6 +87,7 @@ BYBIT_ALLOWED_PATHS = frozenset(
         "/v5/market/instruments-info",
         "/v5/market/open-interest",
         "/v5/market/funding/history",
+        "/v5/market/orderbook",
     }
 )
 BYBIT_ALLOWED_HOSTS = frozenset({"api.bybit.com"})
@@ -131,6 +144,9 @@ class BybitUsdtPerpetualSource:
         max_retries: int = 3,
         max_backoff_seconds: float = 30.0,
         instrument: InstrumentIdentity | None = None,
+        observation_cache: CausalObservationCache | None = None,
+        observation_clock: Callable[[], datetime] | None = None,
+        reuse_recent_pages: bool = False,
     ) -> None:
         if instrument is None:
             self._instrument = bybit_usdt_perpetual_btcusdt()
@@ -164,11 +180,126 @@ class BybitUsdtPerpetualSource:
         self._next_rank = 1
         self._recent_exec_ids: set[str] = set()
         self._lineages: OrderedDict[UUID, _LineageProof] = OrderedDict()
+        self._observation_cache = observation_cache or CausalObservationCache()
+        self._observation_clock = observation_clock
+        self._book_sequences: dict[str, BookSequenceGuard] = {}
+        self._book_snapshot_hashes: dict[str, str] = {}
+        self._recent_print_cache = TtlValueCache(max_entries=1, ttl_seconds=1)
+        self._recent_print_guard = threading.Lock()
+        self._reuse_recent_pages = reuse_recent_pages
 
     def active_instrument(self) -> InstrumentIdentity:
         return self._instrument
 
     def fetch_derivative_observation(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        metric: DerivativeMetric,
+        observed_at: datetime,
+    ) -> DerivativeObservation:
+        self._assert_request(identity, instrument)
+        item = self._observation_cache.collect(
+            (
+                semantic_content_hash(identity.model_copy(update={"timeframe": None})),
+                self._symbol,
+                metric.value,
+                "derivatives/v2",
+            ),
+            observed_at,
+            lambda: self._collect_derivative_observation(
+                identity=identity, instrument=instrument, metric=metric, observed_at=observed_at
+            ),
+        )
+        return refresh_derivative_observation(item, max(observed_at, item.observed_at))
+
+    def fetch_order_book_observation(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        self._assert_request(identity, instrument)
+        item = self._observation_cache.collect(
+            (
+                semantic_content_hash(identity.model_copy(update={"timeframe": None})),
+                self._symbol,
+                "order_book",
+                "depth20/v1",
+            ),
+            observed_at,
+            lambda: self._collect_order_book(identity, instrument, observed_at),
+        )
+        if (
+            item.update_id is not None
+            and self._book_snapshot_hashes.get(instrument.provider_symbol) != item.content_hash
+        ):
+            self._book_sequences.setdefault(
+                instrument.provider_symbol, BookSequenceGuard(identity.venue)
+            ).snapshot(item.update_id)
+            self._book_snapshot_hashes[instrument.provider_symbol] = item.content_hash
+        return refresh_order_book(item, max(observed_at, item.observed_at))
+
+    def _collect_order_book(
+        self,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        params: dict[str, str | int] = {"category": BYBIT_CATEGORY, "symbol": self._symbol}
+        contract = self._public_result("/v5/market/instruments-info", params)
+        self._assert_linear(contract)
+        contract_from_bybit_instruments({"result": contract}, requested_symbol=self._symbol)
+        params["limit"] = BOOK_DEPTH
+        result = self._public_result("/v5/market/orderbook", params)
+        # The documented orderbook result has s/b/a/cts, without a category field.
+        observed_at = self._observation_clock() if self._observation_clock else observed_at
+        return order_book_observation(identity=identity, observed_at=observed_at, row=result)
+
+    def invalidate_order_book(self, symbol: str) -> None:
+        self._observation_cache.drop_symbol(symbol)
+        self._book_snapshot_hashes.pop(symbol, None)
+
+    def observe_order_book_delta(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        row: Mapping[str, Any],
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        """Invalidate truncated snapshots on changes/gaps; next GET resynchronizes.
+
+        This callback does not open a socket or claim a continuous local book.
+        Absolute delta quantities (including deletions) require a fresh snapshot.
+        """
+        self._assert_request(identity, instrument)
+        guard = self._book_sequences.setdefault(
+            instrument.provider_symbol, BookSequenceGuard(identity.venue)
+        )
+        reason = "depth_changed_snapshot_required"
+        try:
+            if row.get("s") != instrument.provider_symbol:
+                raise GapDetectedError("wrong_symbol")
+            if not guard.delta(row):
+                return self.fetch_order_book_observation(
+                    identity=identity, instrument=instrument, observed_at=observed_at
+                )
+        except GapDetectedError as exc:
+            guard.disconnect()
+            reason = str(exc)
+        self.invalidate_order_book(instrument.provider_symbol)
+        return order_book_observation(
+            identity=identity,
+            observed_at=observed_at,
+            availability=EvidenceAvailability.INCOMPLETE,
+            sequence_status="resync_required",
+            reason=reason,
+        )
+
+    def _collect_derivative_observation(
         self,
         *,
         identity: EvidenceMarketIdentity,
@@ -220,6 +351,7 @@ class BybitUsdtPerpetualSource:
             malformed = True
         if metric is DerivativeMetric.FUNDING and isinstance(row, dict):
             malformed = malformed or row.get("symbol") != self._symbol
+        observed_at = self._observation_clock() if self._observation_clock else observed_at
         return derivative_observation(
             identity=identity,
             metric=metric,
@@ -299,7 +431,7 @@ class BybitUsdtPerpetualSource:
         self._assert_request(identity, instrument)
         if end <= start:
             raise WrongMarketError("Trade window end must be after start.")
-        rows = self._recent_trades_covering(start, end, source_connection_id)
+        rows = self._recent_trades_covering(start, end, source_connection_id, receive_at)
         raw_trades = [
             self._parse_trade(
                 row,
@@ -429,6 +561,7 @@ class BybitUsdtPerpetualSource:
         start: datetime,
         end: datetime,
         source_connection_id: UUID,
+        receive_at: datetime,
     ) -> list[dict[str, Any]]:
         """Return the proven half-open window, extending it only from an overlap.
 
@@ -441,7 +574,7 @@ class BybitUsdtPerpetualSource:
 
         start_ms = int(start.astimezone(UTC).timestamp() * 1000)
         end_ms = int(end.astimezone(UTC).timestamp() * 1000)
-        prints = self._load_recent_prints()
+        prints = self._cached_recent_prints(receive_at)
         proof = self._prepare_connection(source_connection_id)
         try:
             self._assign_ranks(prints)
@@ -629,6 +762,34 @@ class BybitUsdtPerpetualSource:
         prints.sort(key=lambda item: (item["time_ms"], item["exec_id"]))
         _reject_conflicting_exec_ids(prints)
         return _unique_exec_ids(prints)
+
+    def _cached_recent_prints(self, receive_at: datetime) -> list[dict[str, Any]]:
+        """One public page for all consumers at the same declared evaluation.
+
+        Each consumer proves its own bounded window/lineage over independent
+        copies. Later polls reacquire; no absent overlap is filled by the cache.
+        Future prints cannot prove the requested end boundary.
+        """
+        key = (self.name, self._symbol, "recent-trade/v1", receive_at.astimezone(UTC).isoformat())
+        if not self._reuse_recent_pages:
+            millis = int(receive_at.timestamp() * 1000)
+            prints = [x for x in self._load_recent_prints() if int(x["time_ms"]) <= millis]
+            if not prints:
+                raise IncompleteTradeWindowError("No public prints at/before observation time.")
+            return prints
+        with self._recent_print_guard:
+            cached = self._recent_print_cache.get(key)
+            if cached is None:
+                prints = self._load_recent_prints()
+                millis = int(receive_at.timestamp() * 1000)
+                prints = [x for x in prints if int(x["time_ms"]) <= millis]
+                if not prints:
+                    raise IncompleteTradeWindowError("No public prints at/before observation time.")
+                cached = tuple(dict(x) for x in prints)
+                self._recent_print_cache.put(key, cached)
+            else:
+                record_cache_hit()
+            return [dict(x) for x in cached]
 
     def _prove_initial_tail(
         self, prints: list[dict[str, Any]], start_ms: int, proof: _LineageProof

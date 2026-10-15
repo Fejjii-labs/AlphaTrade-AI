@@ -44,6 +44,7 @@ from app.signal_fusion.strategy_evaluation_policy import (
 )
 from app.signal_fusion.types import ExecutableSetupRef, RoleTimeframeBinding, RuleWeight
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
+from app.strategy_brain.trendpulse_1r.contracts import TRENDPULSE_KIND, TrendPulseSpec
 
 
 def resolve_executable_strategy_policy(
@@ -202,7 +203,7 @@ def evaluate_canonical_strategy_for_version(
 
 def _parse_authored_spec(
     version: UserStrategyVersion,
-) -> FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec:
+) -> FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec:
     if version.pattern_spec is None:
         raise StrategyEvaluationPolicyError(
             "Executable evaluation requires a stored pattern_spec on the version.",
@@ -211,6 +212,8 @@ def _parse_authored_spec(
     try:
         if version.pattern_spec.get("kind") == NESTED_KIND:
             return NestedContinuationSpec.model_validate(version.pattern_spec)
+        if version.pattern_spec.get("kind") == TRENDPULSE_KIND:
+            return TrendPulseSpec.model_validate(version.pattern_spec)
         if version.pattern_spec.get("kind") == SFP_KIND:
             return SfpSpec.model_validate(version.pattern_spec)
         return FirstSliceAuthoredPatternSpec.model_validate(version.pattern_spec)
@@ -226,7 +229,7 @@ def _fusion_policy_for_compiled(
     organization_id: UUID,
     strategy_version_id: UUID,
     compiled: CompiledSetupDefinition,
-    spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec,
+    spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec,
 ) -> FusionPolicy:
     setup = ExecutableSetupRef(
         setup_definition_id=compiled.id,
@@ -234,6 +237,28 @@ def _fusion_policy_for_compiled(
         content_hash=compiled.content_hash,
     )
     nested = isinstance(spec, (NestedContinuationSpec, SfpSpec))
+    if isinstance(spec, TrendPulseSpec):
+        return build_fusion_policy(
+            policy_version=spec.kind,
+            organization_id=organization_id,
+            strategy_version_id=strategy_version_id,
+            executable_setup=setup,
+            required_roles=(EvidenceRole.TRIGGER_OHLCV, EvidenceRole.CONTEXT_OHLCV),
+            role_timeframes=(
+                RoleTimeframeBinding(
+                    role=EvidenceRole.TRIGGER_OHLCV, timeframe=spec.trigger_timeframe
+                ),
+                RoleTimeframeBinding(
+                    role=EvidenceRole.CONTEXT_OHLCV, timeframe=spec.trend_timeframe
+                ),
+            ),
+            thresholds=FusionThresholds(
+                confirmation_score=Decimal("1.0"),
+                weights=(RuleWeight(rule_id="mandatory_evidence", weight=Decimal("1.0")),),
+            ),
+            freshness_policy_version=FIRST_SLICE_FRESHNESS_POLICY_VERSION,
+            finality_policy_version=FINALITY_POLICY_VERSION,
+        )
     return build_fusion_policy(
         role_timeframes=(
             RoleTimeframeBinding(role=EvidenceRole.TRIGGER_OHLCV, timeframe=spec.trigger_timeframe),

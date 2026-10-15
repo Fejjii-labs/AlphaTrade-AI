@@ -19,4 +19,4 @@ export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000
 
 rm -f .e2e-alphatrade.db
 uv run python scripts/init_e2e_db.py
-exec uv run uvicorn app.main:app --port 8000 --host 127.0.0.1
+exec uv run python scripts/run_e2e_api.py

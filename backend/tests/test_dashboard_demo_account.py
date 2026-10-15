@@ -36,7 +36,9 @@ def configure(settings):
         setattr(settings, key, getattr(safe, key))
 
 
-def transport(seen, *, positions=None, fail=False, instruments=None, metadata_fail=False):
+def transport(
+    seen, *, positions=None, fail=False, instruments=None, metadata_fail=False, identity=None
+):
     def handle(request):
         seen.append((request.method, request.url.path))
         assert request.url.host == "demo-trading-openapi.blofin.com"
@@ -48,7 +50,9 @@ def transport(seen, *, positions=None, fail=False, instruments=None, metadata_fa
         if metadata_fail and request.url.path == "/api/v1/market/instruments":
             return httpx.Response(503, json={"msg": "metadata unavailable"})
         data = {
-            "/api/v1/user/query-apikey": {"readOnly": 1},
+            "/api/v1/user/query-apikey": identity
+            if identity is not None
+            else {"readOnly": 1, "uid": "dashboard-native-uid"},
             "/api/v1/market/instruments": instruments
             if instruments is not None
             else [instrument()],

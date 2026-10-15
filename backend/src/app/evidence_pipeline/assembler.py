@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from uuid import UUID, uuid5
 
+from app.evidence_pipeline.acquisition import ScanAcquisition
 from app.evidence_pipeline.canonical import (
     build_first_slice_assessment_command,
     first_slice_read_policy,
@@ -29,6 +31,7 @@ from app.evidence_pipeline.setup_lifetime import (
 from app.evidence_pipeline.types import (
     AssembledCanonicalEvidence,
     CompletenessReport,
+    CurrentPricePresentation,
     CurrentPriceQuote,
     EvidenceClockReport,
 )
@@ -51,6 +54,7 @@ from app.market_contracts.cvd import (
 from app.market_contracts.derivatives import (
     DerivativeMetric,
     DerivativeObservation,
+    refresh_derivative_observation,
     require_derivative_observations,
 )
 from app.market_contracts.enums import DataCompleteness, Finality, FreshnessState, MarketType
@@ -59,6 +63,7 @@ from app.market_contracts.errors import (
     FallbackForbiddenError,
     FormingCandleError,
     IncompleteWarmUpError,
+    MarketContractError,
     SpotFallbackRejectedError,
     StaleEvidenceError,
     WrongSourceError,
@@ -143,9 +148,13 @@ class FirstSliceEvidenceAssembler:
         connection_id: UUID | None = None,
         setup_trigger_end: datetime | None = None,
     ) -> AssembledCanonicalEvidence:
-        diagnostics = EvidenceDiagnostics(
-            self._source, symbol, evaluated_at or self._default_clock()
+        acquisition = ScanAcquisition(
+            cutoff_at=evaluated_at or self._default_clock(),
+            clock=self._default_clock
+            if not self._replay and (evaluated_at is None or self._clock is not None)
+            else None,
         )
+        diagnostics = EvidenceDiagnostics(self._source, symbol, acquisition.cutoff_at)
         self._diagnostics = ()
         try:
             return self._assemble_diagnosed(
@@ -154,7 +163,7 @@ class FirstSliceEvidenceAssembler:
                     diagnostics=diagnostics,
                     organization_id=organization_id,
                     symbol=symbol,
-                    evaluated_at=diagnostics.evaluated_at,
+                    acquisition=acquisition,
                     policy=policy,
                     adapter_kind=adapter_kind,
                     tenant_assertions=tenant_assertions,
@@ -203,7 +212,7 @@ class FirstSliceEvidenceAssembler:
         diagnostics: EvidenceDiagnostics,
         organization_id: UUID,
         symbol: str,
-        evaluated_at: datetime | None,
+        acquisition: ScanAcquisition,
         policy: FusionPolicy | None,
         adapter_kind: EvidenceAdapterKind,
         tenant_assertions: tuple[TenantExternalAssertion, ...],
@@ -214,8 +223,12 @@ class FirstSliceEvidenceAssembler:
     ) -> AssembledCanonicalEvidence:
         with diagnostics.stage(Component.INSTRUMENT) as probe:
             instrument = instrument_for_source(self._source, self._catalog, symbol)
-            clock = evaluated_at or self._default_clock()
+            clock = acquisition.cutoff_at
             bound_policy = policy or first_slice_read_policy(organization_id)
+            if EvidenceRole.ORDER_BOOK in bound_policy.required_roles:
+                raise MarketContractError(
+                    "required_order_book:historical_snapshot_coverage_unavailable"
+                )
             if bound_policy.organization_id != organization_id:
                 raise WrongSourceError(
                     "Fusion policy organization_id does not match the caller tenant."
@@ -430,15 +443,24 @@ class FirstSliceEvidenceAssembler:
             for role in bound_policy.required_roles
             if role in DERIVATIVE_ROLES
         )
+
+        def complete_acquisition() -> datetime:
+            diagnostics.evaluated_at = acquisition.complete()
+            return diagnostics.evaluated_at
+
         intelligence = tuple(
             diagnostics.run(
                 Component(metric.value),
-                lambda metric=metric: _required_derivative(
+                partial(
+                    _required_derivative,
                     self._source,
                     metric=metric,
                     identity=trigger_identity,
                     instrument=instrument,
                     observed_at=clock,
+                    acquisition_clock=complete_acquisition
+                    if acquisition.clock is not None
+                    else None,
                 ),
                 timeframe=Timeframe.M5
                 if trigger_identity.venue.value == "bybit" and metric.value == "open_interest"
@@ -504,6 +526,63 @@ class FirstSliceEvidenceAssembler:
                 status=DiagnosticStatus.NOT_REQUIRED,
                 reason=DiagnosticReason.NOT_REQUIRED,
             )
+        # All required facts share the final independent evaluation clock. Event
+        # selection remains bounded by the original scan cutoff, including when
+        # acquisition crosses a candle boundary. Do not move that cutoff forward.
+        clock = complete_acquisition()
+        refreshed = []
+        for item in intelligence:
+            with diagnostics.stage(Component(item.metric.value), success=False):
+                require_derivative_observations(
+                    (item,),
+                    required_metrics=(item.metric,),
+                    identity=trigger_identity,
+                    evaluated_at=clock,
+                    event_cutoff_at=acquisition.cutoff_at,
+                )
+                refreshed.append(refresh_derivative_observation(item, clock))
+        intelligence = tuple(refreshed)
+        if order_flow is not None:
+            _require_order_flow_diagnosed(order_flow, identity=trigger_identity, evaluated_at=clock)
+        # Recheck live freshness after the potentially delayed acquisition. A
+        # valid historical closed window must not be presented as a fresh mark.
+        with diagnostics.stage(Component.FRESHNESS, success=False):
+            freshness = evaluate_freshness(
+                source_time=cvd.event_time_max or snapshot_terminal_event_time(snapshot),
+                evaluated_at=clock,
+                policy=first_slice_freshness_policy(),
+                require_fresh=live_window,
+            )
+        if current is not None and clock != acquisition.cutoff_at:
+            with diagnostics.stage(Component.PRICE, success=False):
+                quote_freshness = evaluate_freshness(
+                    source_time=current.source_time,
+                    evaluated_at=clock,
+                    policy=first_slice_freshness_policy(),
+                    require_fresh=live_window,
+                )
+                current = current.model_copy(
+                    update={
+                        "freshness": quote_freshness,
+                        "usable_as_current_market_price": current.usable_as_current_market_price
+                        and quote_freshness.state in {FreshnessState.FRESH, FreshnessState.AGING},
+                        "presentation": CurrentPricePresentation.STALE
+                        if quote_freshness.state is FreshnessState.STALE
+                        else current.presentation,
+                    }
+                )
+        # Replace the derivative envelopes with final-age metadata, preserving
+        # original collected_at/receive_time and the immutable provider hashes.
+        if intelligence:
+            envelopes = {x.content_hash: observation_from_derivative(x) for x in intelligence}
+            command = command.model_copy(
+                update={
+                    "public_observations": tuple(
+                        envelopes.get(observation.payload_content_hash, observation)
+                        for observation in command.public_observations
+                    )
+                }
+            )
         window = diagnostics.run(
             Component.CONTRACT, lambda: evidence_window_from_assessment_command(command)
         )
@@ -531,6 +610,8 @@ class FirstSliceEvidenceAssembler:
         if not live_window:
             stream_fresh = bool(snapshot.coverage.content_hash)
         clocks = EvidenceClockReport(
+            evidence_cutoff_at=acquisition.cutoff_at,
+            acquisition_completed_at=clock,
             quote_source_time=None if current is None else current.source_time,
             quote_fresh=current is not None and current.usable_as_current_market_price,
             trade_stream_event_time_max=cvd.event_time_max,
@@ -767,17 +848,28 @@ def _required_derivative(
     identity: EvidenceMarketIdentity,
     instrument: InstrumentIdentity,
     observed_at: datetime,
+    acquisition_clock: Callable[[], datetime] | None = None,
 ) -> DerivativeObservation:
     observations = read_market_intelligence(
-        source, identity=identity, instrument=instrument, observed_at=observed_at, metrics=(metric,)
+        source,
+        identity=identity,
+        instrument=instrument,
+        observed_at=observed_at,
+        metrics=(metric,),
+        acquisition_clock=acquisition_clock,
     )
     try:
         require_derivative_observations(
-            observations, required_metrics=(metric,), identity=identity, evaluated_at=observed_at
+            observations,
+            required_metrics=(metric,),
+            identity=identity,
+            evaluated_at=acquisition_clock() if acquisition_clock is not None else observed_at,
+            event_cutoff_at=observed_at,
         )
     except Exception as exc:
         if observations and observations[0].availability.value != "AVAILABLE":
-            exc.canonical_reason = _availability_reason(observations[0])
+            # Preserve the original exception type while attaching diagnostic metadata.
+            setattr(exc, "canonical_reason", _availability_reason(observations[0]))  # noqa: B010
         raise
     return observations[0]
 
@@ -792,5 +884,5 @@ def _require_order_flow_diagnosed(
         require_order_flow(item, identity=identity, evaluated_at=evaluated_at)
     except Exception as exc:
         if item is not None and item.availability.value != "AVAILABLE":
-            exc.canonical_reason = _availability_reason(item)
+            setattr(exc, "canonical_reason", _availability_reason(item))  # noqa: B010
         raise

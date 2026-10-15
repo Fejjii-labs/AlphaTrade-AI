@@ -7,18 +7,40 @@ same enums, avoiding string drift between API and database.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_serializer,
+)
 
 # --------------------------------------------------------------------------- #
 # Base models
 # --------------------------------------------------------------------------- #
 
 
-class StrictModel(BaseModel):
+class TimestampModel(BaseModel):
+    """SQL timestamps are UTC; SQLite omits the offset on ORM reload.
+
+    Normalize response serialization without relaxing date-time input validation
+    or changing stored values and deterministic execution controls.
+    """
+
+    @field_serializer("*", mode="wrap", check_fields=False)
+    def serialize_timestamp(self, value: Any, handler: Any):  # type: ignore[no-untyped-def]
+        if isinstance(value, datetime) and value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return handler(value)
+
+
+class StrictModel(TimestampModel):
     """Base for external request models: rejects unknown fields.
 
     Using ``extra="forbid"`` at request boundaries prevents typos and smuggled
@@ -28,7 +50,7 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class ORMModel(BaseModel):
+class ORMModel(TimestampModel):
     """Base for response models that may be built from ORM rows."""
 
     model_config = ConfigDict(from_attributes=True)
