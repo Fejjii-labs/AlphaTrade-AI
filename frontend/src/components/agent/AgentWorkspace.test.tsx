@@ -346,7 +346,7 @@ describe("Agent workspace", () => {
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: record.original_text } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     const target = "/journal?tab=knowledge&category=rules&saved=owned-saved-rule";
-    expect(await screen.findByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", target);
+    expect(await screen.findByRole("link", { name: /^Open$/ })).toHaveAttribute("href", target);
     expect(screen.getByText("Your rule is saved.")).toBeInTheDocument();
     view.unmount();
     testParams = new URLSearchParams(`conversation=${agentTurnFixture.conversation_id}`);
@@ -356,7 +356,7 @@ describe("Agent workspace", () => {
         payload: { interactive_agent: { capture: { status: "saved", saved_entries: [record], source_message_id: "m3" } } } },
     ] });
     render(<AgentWorkspace />);
-    expect(await screen.findByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", target);
+    expect(await screen.findByRole("link", { name: /^Open$/ })).toHaveAttribute("href", target);
     expect(screen.getByText("Your rule is saved.")).toBeInTheDocument();
     expect(apiMocks.agentTurn).toHaveBeenCalledTimes(1);
   });
