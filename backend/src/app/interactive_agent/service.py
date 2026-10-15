@@ -180,6 +180,14 @@ class InteractiveAgentService:
         """Persist a turn and prepare proposals through bounded canonical authorities."""
         safety = paper_safety_contract(self._settings)
         classification = classify_turn(request.message)
+        # Ordinary capture later rewrites proposals into reads. Reject a
+        # filter-bearing mutation or refusal first, or that rewrite would
+        # answer it as a strategy-analytics read.
+        if (
+            request.analytics_filters is not None
+            and classification.operation is not TurnOperation.READ
+        ):
+            raise ValidationAppError("Analytics filters require a read-only turn.")
         if request.conversation_id is not None:
             # Preserve scoped not-found refusal without rebinding or updating the transcript.
             self._conversations.require(

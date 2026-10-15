@@ -2,6 +2,20 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-099 — Analytics filters cannot turn a mutation into a read
+
+- Date: 2026-10-15
+- Decision: Owner Sofien kept HTTP 422 for invalid strategy-analytics input.
+  A turn that is not a read, including a proposal or a real-trading refusal,
+  stays rejected when `analytics_filters` is present. Ordinary capture must
+  not rewrite that turn into a strategy-analytics read. The test expectation
+  remains 422.
+- Safety: Fail closed. No order, mode change, or analytics reply is produced
+  for that input. Real trading stays disabled.
+- Reference: `backend/src/app/interactive_agent/service.py`;
+  `tests/test_agent_strategy_analytics.py`; approved 2026-10-15 15:51 CEST.
+  Numbered 099 because 098 is the CI-gate decision on the separate draft.
+
 ## AT-ADR-097 — Separate native closure from protection attribution
 
 - Date: 2026-10-09
