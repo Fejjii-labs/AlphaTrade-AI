@@ -235,6 +235,9 @@ def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db
     # earlier tests, so 81 full collections took ~300 s and hit the timeout.
     # Freeze that pre-existing heap so collection only walks this test's objects;
     # everything allocated by the cycles below is still collected normally.
+    # Collect first so unreachable objects from earlier tests are reclaimed
+    # instead of being pinned for the duration of the freeze.
+    gc.collect()
     gc.freeze()
     before = release_allocator_memory().rss_bytes
     rss = []
