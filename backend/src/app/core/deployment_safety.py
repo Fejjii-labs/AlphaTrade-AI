@@ -118,6 +118,11 @@ def validate_deployment_settings(settings: Settings) -> None:
             "rate_limit_allow_in_memory_fallback must be false in staging/production "
             "(AT-018: rate limiting requires shared Redis state)"
         )
+    if settings.auth_register_rate_limit != 10:
+        errors.append(
+            "auth_register_rate_limit must stay 10 in staging/production "
+            "(the higher budget is only for the disposable local e2e server)"
+        )
 
     if not settings.access_token_denylist_enabled:
         errors.append("access_token_denylist_enabled must be true in staging/production")

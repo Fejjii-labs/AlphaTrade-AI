@@ -14,6 +14,8 @@ export MARKET_DATA_PROVIDER="${MARKET_DATA_PROVIDER:-mock}"
 export JOURNAL_RAG_SYNC_ENABLED="${JOURNAL_RAG_SYNC_ENABLED:-true}"
 export EMAIL_AUTO_VERIFY_LOCAL="${EMAIL_AUTO_VERIFY_LOCAL:-true}"
 export ACCESS_TOKEN_DENYLIST_ENABLED="${ACCESS_TOKEN_DENYLIST_ENABLED:-false}"
+# One loopback process hosts the whole smoke suite, including worker restarts.
+export AUTH_REGISTER_RATE_LIMIT="${AUTH_REGISTER_RATE_LIMIT:-200}"
 export LOG_JSON="${LOG_JSON:-false}"
 export CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
 
