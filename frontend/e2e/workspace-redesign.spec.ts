@@ -462,7 +462,7 @@ for (const width of [1280, 390]) {
     await screenshot("knowledge");
     await noOverflow();
     await page.getByRole("link", { name: "Open", exact: true }).click();
-    await page.getByRole("link", { name: /Back to Journal/ }).click();
+    await page.getByRole("link", { name: "Back to Knowledge" }).click();
     await expect(page).toHaveURL(/category=rules&q=close/);
     await page.goto("/journal");
     await expect(
