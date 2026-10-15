@@ -84,7 +84,6 @@ def test_schema_reset_and_changed_table_force_rebuild(change):
     try:
         factory = database.session_factory()
         postgres_plan_world(factory)
-        objects = schema_objects(database.engine)
         if change == "schema-reset":
             other = persistence_session_factory()  # Drops public, installs a narrower schema.
             other.kw["bind"].dispose()
@@ -103,7 +102,8 @@ def test_schema_reset_and_changed_table_force_rebuild(change):
             with database.engine.begin() as conn:
                 conn.execute(text(commands[change]))
         fresh = database.session_factory()
-        assert schema_objects(database.engine) != objects
+        # Rebuilding clones the same template, so catalog OIDs match the first clone.
+        # Restored tables, columns, and history triggers prove the mutation was discarded.
         assert set(inspect(database.engine).get_table_names()) == set(Base.metadata.tables)
         assert "fixture_extra" not in {
             c["name"] for c in inspect(database.engine).get_columns("users")

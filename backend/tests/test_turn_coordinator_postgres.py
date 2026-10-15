@@ -6,12 +6,10 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 from app.core.errors import ConflictError
-from app.db.base import Base
 from app.db.models import (
     Conversation,
     ConversationMessage,
@@ -32,14 +30,9 @@ pytestmark = requires_postgres
 
 @pytest.fixture
 def turns_db():
-    admin = create_engine(POSTGRES_URL, poolclass=NullPool)
-    schema = "agent_turn_" + uuid4().hex
-    with admin.begin() as conn:
-        conn.execute(text(f"CREATE SCHEMA {schema}"))
-    engine = create_engine(
-        admin.url.update_query_dict({"options": "-csearch_path=" + schema}), poolclass=NullPool
-    )
-    Base.metadata.create_all(engine)
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(POSTGRES_URL)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
         session.add(Organization(id=ORG_A, name="Turn fixtures"))
@@ -50,10 +43,7 @@ def turns_db():
     try:
         yield factory
     finally:
-        engine.dispose()
-        with admin.begin() as conn:
-            conn.execute(text(f"DROP SCHEMA {schema} CASCADE"))
-        admin.dispose()
+        drop_clone(engine)
 
 
 def reserve(coordinator, **updates):
