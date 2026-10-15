@@ -212,6 +212,7 @@ def test_invalid_configured_organization_scope_is_rejected():
 
 
 def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db, capsys):
+    import gc
     import json
 
     from app.observability.process_memory import read_process_memory, release_allocator_memory
@@ -229,6 +230,15 @@ def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db
         telegram_cycle=lambda: CycleOutcome(status="disarmed"),
         memory_diagnostics_enabled=True,
     )
+    # Every worker step calls release_allocator_memory(), i.e. a full gc.collect().
+    # Late in a full suite run the process heap holds millions of objects left by
+    # earlier tests, so 81 full collections took ~300 s and hit the timeout.
+    # Freeze that pre-existing heap so collection only walks this test's objects;
+    # everything allocated by the cycles below is still collected normally.
+    # Collect first so unreachable objects from earlier tests are reclaimed
+    # instead of being pinned for the duration of the freeze.
+    gc.collect()
+    gc.freeze()
     before = release_allocator_memory().rss_bytes
     rss = []
     try:
@@ -248,6 +258,7 @@ def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db
             market.calls.clear()  # The test recorder is not a production retained structure.
     finally:
         factory.retain(())
+        gc.unfreeze()
     # Record measurements; assert logical bounds, never a platform-specific absolute RSS.
     with capsys.disabled():
         print(
