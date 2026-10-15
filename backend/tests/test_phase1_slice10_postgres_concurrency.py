@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.errors import ConflictError, NotFoundError, TradingPolicyError
-from app.db.base import Base
 from app.db.historical_immutability import is_historical_immutability_error
 from app.db.models import (
     AccountRiskAccountingState,
@@ -51,6 +50,7 @@ from tests.support.phase1_plan_fixtures import (
     plan_request,
     prepared_authorized_plan,
 )
+from tests.support.postgres_template import refresh_database
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -79,9 +79,7 @@ requires_postgres = pytest.mark.skipif(
 
 
 def _factory() -> tuple[sessionmaker[Session], str]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     return sessionmaker(bind=engine, expire_on_commit=False), POSTGRES_URL
 
 

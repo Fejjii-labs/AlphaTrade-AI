@@ -2,18 +2,15 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 from app.agent_capture.contracts import CapturePlan, SavedEntryUpdate
 from app.agent_capture.service import CaptureService
 from app.agent_capture.store import update_entry
 from app.core.errors import ConflictError
-from app.db.base import Base
 from app.db.models import AgentCaptureSource, AgentSavedEntry, Organization, User
 from app.services.conversation_service import ConversationService
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
@@ -25,16 +22,10 @@ pytestmark = requires_postgres
 
 @pytest.fixture
 def postgres_capture_db():
-    admin = create_engine(POSTGRES_URL, poolclass=NullPool)
-    schema = "agent_capture_" + uuid4().hex
-    with admin.begin() as connection:
-        connection.execute(text(f"CREATE SCHEMA {schema}"))
-    engine = create_engine(
-        admin.url.update_query_dict({"options": f"-csearch_path={schema}"}),
-        poolclass=NullPool,
-    )
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(POSTGRES_URL)
     try:
-        Base.metadata.create_all(engine)
         factory = sessionmaker(bind=engine, expire_on_commit=False)
         with factory() as session:
             session.add(Organization(id=ORG_A, name="Private capture fixture"))
@@ -42,10 +33,7 @@ def postgres_capture_db():
             session.commit()
         yield factory, _settings()
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
-        admin.dispose()
+        drop_clone(engine)
 
 
 def test_concurrent_duplicate_capture_keeps_one_save_and_allows_unrelated_user_references(
