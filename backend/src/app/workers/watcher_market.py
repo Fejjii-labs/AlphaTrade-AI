@@ -19,7 +19,10 @@ from app.core.config import Settings
 from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler
 from app.evidence_pipeline.setup_lifetime import SetupLifetimeStore
 from app.evidence_pipeline.watcher_port import AssemblingWatcherScanEvidence
-from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
+from app.market_contracts.adapters.binance_usdm import (
+    BINANCE_REST_SETTLEMENT_GRACE,
+    BinanceUsdmPerpetualSource,
+)
 from app.market_contracts.adapters.factory import (
     perpetual_source_is_replay,
     resolve_perpetual_evidence_source,
@@ -190,6 +193,21 @@ class _EligibleSource:
         return self.source.fetch_ordered_trades(**kwargs)
 
 
+def _active_rest_source(source: object) -> object:
+    """Return the adapter a probe will read, under the eligibility wrapper.
+
+    ``_EligibleSource.__getattr__`` raises for names the inner adapter lacks, so
+    ``getattr(source, "active_source", source)`` cannot see through it.
+    """
+
+    current = source
+    if isinstance(current, FailoverPerpetualSource):
+        current = current.active_source
+    if isinstance(current, _EligibleSource):
+        current = current.source
+    return current
+
+
 def _wait_for_binance_rest_settlement(
     evaluated_at: datetime,
     *,
@@ -325,9 +343,11 @@ class SymbolMarketFactory:
         # Two final M15 bars (provider request bounded to four rows). Never a
         # current-price quote, full trade/CVD window, strategy or candidate.
         now = self._clock() if self._clock is not None else datetime.now(UTC)
-        # Binance withholds the just-closed candle for a few seconds. Wait that
-        # out before the admission reads so the cycle is not reported idle.
-        if _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper):
+        # Binance withholds the just-closed candle for a few seconds. Bybit and
+        # the other adapters admit that candle immediately, so they must not sleep.
+        if isinstance(_active_rest_source(source), BinanceUsdmPerpetualSource) and (
+            _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper)
+        ):
             now = self._clock() if self._clock is not None else datetime.now(UTC)
         for attempt in range(2):
             instrument = instrument_for_source(source, catalog, symbol)

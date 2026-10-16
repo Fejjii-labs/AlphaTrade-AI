@@ -5,8 +5,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.config import Settings
+from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
+from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
 from app.workers.watcher_market import (
     SymbolMarketFactory,
+    _EligibleSource,
     _wait_for_binance_rest_settlement,
 )
 
@@ -82,30 +85,40 @@ def test_default_settlement_wait_uses_the_wall_clock(monkeypatch) -> None:
     assert slept == [2.0]
 
 
-def test_probe_uses_the_injected_clock_before_the_market_read(monkeypatch) -> None:
+def test_probe_waits_for_binance_only_inside_the_window(monkeypatch) -> None:
     moment = datetime(2026, 10, 16, 0, 0, 3, tzinfo=UTC)
-    state = {"at": moment}
-    sleeps: list[float] = []
-
-    def clock() -> datetime:
-        return state["at"]
-
-    def sleeper(seconds: float) -> None:
-        sleeps.append(seconds)
-        state["at"] += timedelta(seconds=seconds)
-
     monkeypatch.setattr(
         "app.workers.watcher_market.sleep",
         lambda _seconds: pytest.fail("probe must not block on the real grace period"),
     )
-    factory = SymbolMarketFactory(_settings(), clock=clock, sleeper=sleeper)
-    monkeypatch.setattr(factory, "composition", lambda _symbol: (object(), object(), None, ()))
 
     def read_started(*_args, **_kwargs):
         raise RuntimeError("read started")
 
     monkeypatch.setattr("app.workers.watcher_market.instrument_for_source", read_started)
-    with pytest.raises(RuntimeError, match="read started"):
-        factory.probe("ETHUSDT")
-    assert sleeps == [2.0]
-    assert state["at"] == datetime(2026, 10, 16, 0, 0, 5, tzinfo=UTC)
+
+    def probe(source: object) -> tuple[list[float], datetime]:
+        state = {"at": moment}
+        sleeps: list[float] = []
+
+        def clock() -> datetime:
+            return state["at"]
+
+        def sleeper(seconds: float) -> None:
+            sleeps.append(seconds)
+            state["at"] += timedelta(seconds=seconds)
+
+        factory = SymbolMarketFactory(_settings(), clock=clock, sleeper=sleeper)
+        wrapped = _EligibleSource(source, lambda: None, lambda: None)
+        monkeypatch.setattr(factory, "composition", lambda _symbol: (wrapped, object(), None, ()))
+        with pytest.raises(RuntimeError, match="read started"):
+            factory.probe("ETHUSDT")
+        return sleeps, state["at"]
+
+    binance_sleeps, binance_at = probe(BinanceUsdmPerpetualSource())
+    assert binance_sleeps == [2.0]
+    assert binance_at == datetime(2026, 10, 16, 0, 0, 5, tzinfo=UTC)
+
+    bybit_sleeps, bybit_at = probe(BybitUsdtPerpetualSource())
+    assert bybit_sleeps == []
+    assert bybit_at == moment
