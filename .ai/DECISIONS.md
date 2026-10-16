@@ -2,7 +2,7 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
-## AT-ADR-099 — Full backend report lists failures, not every pass
+## AT-ADR-104 — Full backend report lists failures, not every pass
 
 - Date: 2026-10-15
 - Decision: The complete backend gate keeps the 300s thread timeout, the 50
@@ -13,20 +13,21 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   artifact was uploaded.
 - Limit: This does not skip tests and does not change assertions. The known
   analytics-filter 422 failure stays a real failure. No merge or dispatch is
-  authorized by this decision.
+  authorized by this decision. This ID is not the 2026-10-10 AT-ADR-099.
 - Reference: `.github/workflows/ci.yml`; run 38765481172.
 
-## AT-ADR-098 — Full backend gate keeps diagnostics and a nightly run
+## AT-ADR-103 — Full backend gate keeps diagnostics and a nightly run
 
 - Date: 2026-10-15
 - Decision: Owner Sofien approved hardening only the complete backend gate.
   Focused push/PR selection stays as it is. `workflow_dispatch` with
   `full_backend=true`, and the default-branch schedule at 02:00 UTC, run the
-  full suite with a 300s thread timeout, `-rA`, the 50 slowest durations, junit
+  full suite with a 300s thread timeout, `-rfE`, the 50 slowest durations, junit
   and pytest log artifacts, and a 150 minute backend job timeout.
 - Limit: The nightly schedule does not run until this workflow is on the default
   branch. It is not release acceptance by itself. No merge, deploy, secret,
-  Render, or branch-protection change is authorized by this decision.
+  Render, or branch-protection change is authorized by this decision. This ID
+  is not the 2026-10-10 AT-ADR-098.
 - Reference: `.github/workflows/ci.yml`; approved 2026-10-15 15:51 CEST.
 
 ## AT-ADR-097 — Separate native closure from protection attribution

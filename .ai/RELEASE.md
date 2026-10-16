@@ -15,7 +15,6 @@ uv run pytest tests/<affected-test>.py
 # frontend/
 npm run lint && npm run typecheck
 npx vitest run <affected-test-files>
-# Full frontend unit/build/browser validation requires an explicit combined request.
 ```
 - Inspect `git status` and full diff; confirm every changed file is intentional.
 - Secret scan the diff; confirm no secrets, keys, or private URLs.
@@ -24,79 +23,71 @@ npx vitest run <affected-test-files>
   Watcher/Telegram flags `false`. Defaults are not an instruction to reset existing operator
   settings: preserve watcher, Telegram, kill switch, account and provider configuration.
 
-Ordinary push/PR CI keeps the six existing job names and required development quality
-checks. PR runs for the same PR cancel superseded runs; main/master pushes and manual
-runs have separate concurrency groups and are not cancelled by PR updates. Read-only
-workflow permissions and job timeouts bound routine execution.
-Backend pytest runs `scripts/run_backend_focused.py`: a small config/deployment/
-workflow baseline, changed backend test files, the exact `tests/test_<module>.py`
-file when it exists, and explicit source mappings (safety modules, the
-SFP/receipt/logging group, reviewer boundaries, and native-activity boundaries).
-Filename prefixes such as `test_agent*.py` are not used.
+Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
+`backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
+`e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
+`frontend`. The workflow file has no concurrency group and no `permissions`
+block. The only `workflow_dispatch` input is `full_backend`, and its default is
+`true`. There is no `combined_validation` input.
 
-Development CI partitions that exact selection into three whole-file batches, each on its
-own PostgreSQL service. The required `backend` check keeps Ruff and requires all batches
-to succeed. Existing diagnostics retain each selection, test identity/phase, log, JUnit and
-exit receipt. Each batch has a 16-minute inner budget, 17-minute launcher budget and
-18-minute step within the existing 20-minute job limit. Full release execution retains
-its separate unfiltered command, deadlines and checkpoint uploads. Unchanged fixture
-profiling remains available by explicit workflow dispatch and is skipped on ordinary PRs.
+The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
+150-minute job timeout. On an ordinary push or pull request, and on a manual
+dispatch with `full_backend` false, it runs `scripts/run_backend_focused.py` as
+one pytest process. That selector always includes `tests/test_config.py`,
+`tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`. It also
+includes a changed `backend/tests/test_*.py` file, every
+`tests/test_<module stem>*.py` match when a `backend/src/app/**/*.py` file
+changes (that is a filename-prefix glob), and the SFP/receipt/logging group
+when a changed path is in the script's SFP path list. The diff is
+`git diff --name-only` from the pull request base SHA, or `github.event.before`
+on a push. This is a development selection, not exhaustive dependency analysis.
+A successful focused run is **not complete backend acceptance**. Include focused
+tests for other cross-module changes in the PR. The CI database URL is bound to
+`AT028_POSTGRES_URL`, `EXPERIMENT_TEST_POSTGRES_URL`,
+`BLOFIN_ACTIVITY_TEST_POSTGRES_URL`, and `PR237_ROLLBACK_POSTGRES_URL` so those
+disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
 
-This is a development selection, not exhaustive dependency analysis. For other cross-module changes,
-include their focused tests explicitly in the PR; the complete gate below remains
-required. A successful focused run is **not complete backend acceptance**.
-Native activity/schema/client changes include scoped provider, account and migration
-regressions. `BLOFIN_ACTIVITY_TEST_POSTGRES_URL` uses the existing disposable CI
-PostgreSQL service so the activity durability/migration cases actually execute.
+The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
+`npm run test`, and `npm run build` on ordinary events. It does not run
+`scripts/run_frontend_focused.py`. The evaluation, Docker build, and Playwright
+smoke jobs also run on ordinary events; they are not skipped behind a second
+manual flag. No branch-protection settings are changed by this policy.
 
-The frontend keeps generated drift, lint and type checks, then runs
-`scripts/run_frontend_focused.py`: contract/cache baselines, changed tests and
-module/domain neighbors, including Agent/API/account boundaries. This heuristic is
-not exhaustive dependency analysis; owners must record focused local checks for their
-actual changes. Preserve backend, frontend and deployment-safety merge checks and
-failure propagation. No branch-protection settings are changed by this policy.
-
-Expensive combined validation is manual only: full frontend unit/build, deterministic
-evaluations, Docker build and production-browser smoke. Their jobs/steps are skipped
-on routine events, and those skips do **not** establish acceptance. Both manual
-booleans default to false; `full_backend=true` also enables combined validation.
-Only when explicitly requested, run development combined validation with:
-
-```sh
-gh workflow run ci.yml --ref <reviewed-ref> -f combined_validation=true -f full_backend=false
-```
-
-This still uses the focused backend selection and is not the full release gate.
-Manual development selection compares the branch to its `origin/main` merge base,
-so a final evidence-only commit cannot omit the accumulated feature changes.
 Do not repeat green runs merely to show progress. Record the exact tested SHA,
-selected tests, failures and skips; batch related fixes before pushing. Cancel older
-active PR runs where authorized access permits. Never cancel the current release
-acceptance run as a development cost measure.
+selected tests, failures, and skips. Batch related fixes before pushing.
 
 ## Final consolidated release acceptance
 
 Freeze the exact consolidated candidate after supervising review, coordinated staging
-deployment and fresh SFP diagnostics/evaluations. Only with the explicit full-acceptance
-request and these prerequisites satisfied, dispatch **one** complete CI run on that ref:
+deployment and fresh SFP diagnostics/evaluations. The complete backend suite runs
+when the workflow is scheduled, or when it is dispatched with `full_backend=true`:
 
 ```sh
 gh workflow run ci.yml --ref <reviewed-release-ref> -f full_backend=true
 ```
 
-The Actions UI exposes the same `full_backend` boolean, defaulting to false for
-manual dispatch. Ordinary push/PR events always use development mode. A manual false
-value without `combined_validation=true` requests development checks only. Do not dispatch a full run during routine
-implementation or call a focused green check the complete release gate.
+The Actions UI exposes that same boolean, and its default for manual dispatch is
+`true`. Ordinary push and pull_request events use the focused backend step above.
+A manual dispatch with `full_backend` false also uses that focused step. Do not
+dispatch a full run during routine implementation, and do not call a focused
+green check the complete release gate.
 
-The full dispatch runs the complete backend suite (`pytest` with a 300s per-test
-thread timeout, `-rfE`, durations, and junit/log artifacts) with PostgreSQL and all
-existing Ruff, frontend lint/type/unit/build, deployment-safety, Docker build,
-deterministic Agent/RAG/guardrail evaluation and Playwright browser smoke checks.
-The same full backend gate is scheduled at 02:00 UTC on the default branch. Record
-the run URL, exact `head_sha`, full backend counts/skips and successful results for
-all six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
-acceptance. Investigate skips and do not attribute counts from another commit.
+The full step runs one pytest process:
+
+```sh
+uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+```
+
+The shell is `bash -eo pipefail`. The step timeout is 140 minutes, inside the
+150-minute backend job. JUnit and the pytest log are uploaded as the
+`full-backend-pytest` artifact. The same run still executes Ruff, the frontend
+lint/type/unit/build steps, deployment-safety, the Docker build, the
+deterministic Agent/RAG/guardrail evaluation, and the Playwright browser smoke
+job. The schedule is 02:00 UTC and runs from the default branch only. Record
+the run URL, exact `head_sha`, full backend counts and skips, and successful
+results for all six jobs. Failed, skipped, or cancelled evaluation or browser
+jobs do not establish acceptance. Investigate skips and do not attribute counts
+from another commit.
 If the reviewed commit changes, its earlier full result is not final acceptance.
 If the run fails, diagnose and repair the specific failures with focused verification. Rerun
 failed jobs where valid; broaden only for concrete new risk. Do not repeat already green
