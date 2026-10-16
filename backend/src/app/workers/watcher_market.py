@@ -190,30 +190,47 @@ class _EligibleSource:
         return self.source.fetch_ordered_trades(**kwargs)
 
 
-def _wait_for_binance_rest_settlement(evaluated_at: datetime) -> bool:
+def _wait_for_binance_rest_settlement(
+    evaluated_at: datetime,
+    *,
+    now: Callable[[], datetime] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> bool:
     """Pause until Binance's post-close admission window has elapsed.
 
     The adapter rejects a candle whose close is still inside that window.
     A pause is useful only for that short interval. Any other forming-candle
-    failure returns immediately so the caller can record it.
+    failure returns immediately so the caller can record it. ``now`` and
+    ``sleeper`` default to the wall clock and ``time.sleep``.
     """
 
+    clock = now or (lambda: datetime.now(UTC))
+    pause = sleeper or sleep
     close = evaluated_at.replace(second=0, microsecond=0) - timedelta(
         minutes=evaluated_at.minute % 15
     )
-    remaining = (close + BINANCE_REST_SETTLEMENT_GRACE) - datetime.now(UTC)
+    remaining = (close + BINANCE_REST_SETTLEMENT_GRACE) - clock()
     if remaining <= timedelta(0) or remaining > BINANCE_REST_SETTLEMENT_GRACE:
         return False
-    sleep(remaining.total_seconds())
+    pause(remaining.total_seconds())
     return True
 
 
 class SymbolMarketFactory:
     """At most five independent sources/monitors; no tenant data is cached here."""
 
-    def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], datetime] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> None:
         self.settings = settings
         self.transport = transport
+        self._clock = clock
+        self._sleeper = sleeper
         self.discovery = WatchlistContractDiscovery(settings, transport=transport)
         self._entries: OrderedDict[str, tuple] = OrderedDict()
         self._replay = perpetual_source_is_replay(settings)
@@ -307,11 +324,11 @@ class SymbolMarketFactory:
         source, catalog, _, _ = self.composition(symbol)
         # Two final M15 bars (provider request bounded to four rows). Never a
         # current-price quote, full trade/CVD window, strategy or candidate.
-        now = datetime.now(UTC)
+        now = self._clock() if self._clock is not None else datetime.now(UTC)
         # Binance withholds the just-closed candle for a few seconds. Wait that
         # out before the admission reads so the cycle is not reported idle.
-        if _wait_for_binance_rest_settlement(now):
-            now = datetime.now(UTC)
+        if _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper):
+            now = self._clock() if self._clock is not None else datetime.now(UTC)
         for attempt in range(2):
             instrument = instrument_for_source(source, catalog, symbol)
             self.discovery.require(symbol, instrument.venue)
