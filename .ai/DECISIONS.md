@@ -2,6 +2,26 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-105 — Analytics filters on a mutation turn return 422
+
+- Date: 2026-10-16
+- Decision: Owner Sofien decided that `analytics_filters` on a non-read turn
+  must return HTTP 422. `handle_turn` raises `ValidationAppError` when those
+  filters are present and `classify_turn` is not `TurnOperation.READ`, before
+  ordinary capture can rewrite a proposal or refusal into a read. A proposal
+  such as "Create a strategy", a paper-trade request, and a real-trading
+  refusal all stay rejected. No strategy-analytics reply is produced.
+- Correction: Commit `df0a12d3` wrongly changed
+  `test_analytics_filters_cannot_route_mutations` so "Create a strategy" with
+  `analytics_filters` expected 200. That expectation is restored to 422. This
+  ID is not the 2026-10-10 AT-ADR-099 and not the colliding AT-ADR-099 text on
+  `fix/strategy-analytics-422` (`4d1c7349`).
+- Safety: Fail closed. No order, mode change, or analytics reply is produced
+  for that input. Real trading stays disabled.
+- Reference: `backend/src/app/interactive_agent/service.py`;
+  `backend/tests/test_agent_strategy_analytics.py`; ported from
+  `4d1c734930081be2cc74259773c6193cba0182d5`.
+
 ## AT-ADR-104 — Full backend report lists failures, not every pass
 
 - Date: 2026-10-15
