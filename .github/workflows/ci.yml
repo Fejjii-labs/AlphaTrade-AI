@@ -35,6 +35,11 @@ jobs:
           --health-retries 10
     env:
       AT028_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      # Same disposable database. These names are what the PR249 Postgres
+      # fixtures require before they will execute in the full gate.
+      EXPERIMENT_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      BLOFIN_ACTIVITY_TEST_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
+      PR237_ROLLBACK_POSTGRES_URL: postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test
     defaults:
       run:
         working-directory: backend

@@ -250,10 +250,13 @@ def test_cli_blocked_preflight_has_no_measured_metrics(monkeypatch, capsys):
 
 @pytest.fixture
 def postgres_run():
-    # Require the explicit disposable binding; never fall back to or reset public.
-    url = os.environ.get("PHASE1_POSTGRES_URL")
+    # Require an explicit disposable binding; never fall back to or reset public.
+    url = os.environ.get("EXPERIMENT_TEST_POSTGRES_URL") or os.environ.get("PHASE1_POSTGRES_URL")
     if not url:
-        pytest.skip("PHASE1_POSTGRES_URL for disposable PostgreSQL is not explicitly bound")
+        pytest.skip(
+            "EXPERIMENT_TEST_POSTGRES_URL or PHASE1_POSTGRES_URL for disposable "
+            "PostgreSQL is not explicitly bound"
+        )
     admin = create_engine(url, poolclass=NullPool)
     run_id = uuid4()
     schema = "agent_eval_" + run_id.hex
