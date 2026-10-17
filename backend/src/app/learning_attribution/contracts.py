@@ -40,6 +40,7 @@ class DecisionActor(StrEnum):
     SYSTEM_SETUP = "system_setup"
     HUMAN_DECISION = "human_decision"
     HUMAN_APPROVAL = "human_approval"
+    AUTONOMOUS_APPROVAL = "autonomous_approval"
     PAPER_SYSTEM_EXECUTION = "paper_system_execution"
 
 

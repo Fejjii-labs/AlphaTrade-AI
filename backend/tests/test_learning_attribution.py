@@ -7,6 +7,7 @@ record-only. REJECT/SKIP never create executed outcomes.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -609,3 +610,118 @@ def test_candidate_confirmed_is_not_an_executed_outcome(
         assert result.journal_trade_id is None
         assert result.record.facts.trader_behavior.actor is DecisionActor.SYSTEM_SETUP
         assert _count_trades(session) == 0
+
+
+def test_autonomous_approval_is_excluded_from_human_approval_counts(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.learning_attribution.adapters.analytics import rollup_organization
+    from app.paper_evaluation.metrics import _human_facts
+
+    lifecycle_id = uuid4()
+    store = InMemoryAttributionStore()
+    with attribution_sessions() as session:
+        service = learning_service(session, store)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="auto-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.actor is DecisionActor.AUTONOMOUS_APPROVAL
+        assert plan.record.facts.human_vs_system.decision_actor is (
+            DecisionActor.AUTONOMOUS_APPROVAL
+        )
+        assert plan.record.facts.strategy_pattern.plan_approved is False
+        service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="auto-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(
+                        entry_price="64010",
+                        size="1",
+                        approval_channel="AUTONOMOUS",
+                    ),
+                ),
+                lineage,
+            )
+        )
+        close = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.CLOSE,
+                    source_event_id="auto-close",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(
+                        exit_price="63000",
+                        net_pnl="900",
+                        result=TradeResult.WIN.value,
+                        realized_vs_available_pct="80",
+                        approval_channel="AUTONOMOUS",
+                    ),
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        pattern = close.record.facts.strategy_pattern
+        assert pattern.plan_approved is False
+        assert pattern.filled is True
+        assert pattern.win is True
+        assert close.record.facts.outcome.eligible is True
+        assert close.record.facts.human_vs_system.decision_actor is not (
+            DecisionActor.HUMAN_APPROVAL
+        )
+        human = _human_facts((close.record,), SimpleNamespace(confirmed_setup_count=0))
+        assert human.human_approvals == 0
+        assert human.human_approved_executed_wins == 0
+        assert human.human_approved_executed_losses == 0
+        assert human.paper_system_executions == 1
+    snapshot = rollup_organization(store, organization_id=ORG_ID)
+    assert snapshot.human_vs_system.human_approvals == 0
+    assert snapshot.human_vs_system.human_approved_executed_wins == 0
+    assert snapshot.patterns[0].plan_approved_count == 0
+    assert snapshot.patterns[0].win_count == 1
+
+
+def test_missing_approval_channel_remains_a_human_approval(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    lifecycle_id = uuid4()
+    with attribution_sessions() as session:
+        service = learning_service(session)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="human-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.actor is DecisionActor.HUMAN_APPROVAL
+        assert plan.record.facts.strategy_pattern.plan_approved is True
+        fill = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="human-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(entry_price="64010", size="1"),
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        assert fill.record.facts.strategy_pattern.plan_approved is True

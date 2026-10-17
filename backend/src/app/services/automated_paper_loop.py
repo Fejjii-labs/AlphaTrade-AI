@@ -372,6 +372,11 @@ class AutomatedPaperLoop:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
         blocked = self._autonomous_approval_refusal(session, target.organization_id)
         if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+            )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         execution = ExecutionService(
             session,

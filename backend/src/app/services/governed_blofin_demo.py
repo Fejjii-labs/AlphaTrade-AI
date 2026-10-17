@@ -117,12 +117,10 @@ def _demo_risk_snapshot(
             organization_id=organization_id,
             user_id=user_id,
         )
+        if settings.daily_loss_limit is None:
+            return None
         max_notional = settings.default_account_balance
-        max_daily_loss = (
-            settings.daily_loss_limit
-            if settings.daily_loss_limit is not None
-            else settings.default_account_balance
-        )
+        max_daily_loss = settings.daily_loss_limit
         max_slots = int(settings.max_trades_per_day)
         reserved_notional = Decimal("0")
         reserved_daily_loss = Decimal("0")
@@ -138,6 +136,8 @@ def _demo_risk_snapshot(
         max_notional = row.max_notional
         max_daily_loss = row.max_daily_loss
         max_symbol = row.max_symbol_notional
+        if max_daily_loss >= max_notional or max_symbol >= max_notional:
+            return None
         max_slots = int(row.max_trade_slots)
         reserved_notional = row.reserved_notional
         reserved_daily_loss = row.reserved_daily_loss
@@ -727,6 +727,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
         blocked, _limits_again = self._demo_auto_approval_refusal(session, target, envelope.plan)
         if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+            )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime

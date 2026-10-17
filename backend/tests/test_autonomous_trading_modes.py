@@ -464,6 +464,8 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
 
     kill = _Kill()
 
+    authorization_id = uuid4()
+
     class _Approval:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -474,7 +476,12 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
         def decide(self, _approval_id: object, _decision: object, **kwargs: object) -> object:
             captured.update(kwargs)
             kill.active = True
-            return SimpleNamespace(authorization=SimpleNamespace(authorization_id=uuid4()))
+            return SimpleNamespace(authorization=SimpleNamespace(authorization_id=authorization_id))
+
+        def revoke_authorization(self, revoked_id: object, **kwargs: object) -> None:
+            captured["revoked_id"] = revoked_id
+            captured["revoke_organization_id"] = kwargs.get("organization_id")
+            captured["revoke_user_id"] = kwargs.get("user_id")
 
     monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
     monkeypatch.setattr(
@@ -506,9 +513,196 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
     assert meta["flags"]["autonomous_internal_paper_enabled"] is True
     assert meta["flags"]["autonomous_blofin_demo_enabled"] is False
     assert meta["limits"] is None
+    assert captured["revoked_id"] == authorization_id
+    assert captured["revoke_organization_id"] is not None
+    assert captured["revoke_user_id"] is not None
 
 
-def _run_disarmed_style_demo(settings: object):  # type: ignore[no-untyped-def]
+def test_demo_auto_approval_records_system_actor_and_limit_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limits = _limits()
+    captured: dict[str, object] = {}
+    authorization_id = uuid4()
+    calls = {"n": 0}
+
+    def _refusal(
+        *_args: object, **_kwargs: object
+    ) -> tuple[None, RiskLimitSnapshot] | tuple[str, None]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None, limits
+        return "kill_switch_active", None
+
+    class _Approval:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def create_for_plan_revision(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(id=uuid4())
+
+        def decide(self, _approval_id: object, _decision: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(authorization=SimpleNamespace(authorization_id=authorization_id))
+
+        def revoke_authorization(self, revoked_id: object, **_kwargs: object) -> None:
+            captured["revoked_id"] = revoked_id
+
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.GovernedBloFinDemoLoop._demo_auto_approval_refusal",
+        _refusal,
+    )
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _Approval)
+    proof = _run_disarmed_style_demo(_armed_demo_view())
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "kill_switch_active"
+    assert getattr(captured["channel"], "value", None) == "AUTONOMOUS"
+    assert captured["actor_type"] == "SYSTEM"
+    meta = captured["audit_metadata"]
+    assert isinstance(meta, dict)
+    assert meta["actor"] == "system"
+    assert meta["channel"] == "AUTONOMOUS"
+    assert meta["mode"] == "blofin_demo"
+    snapshot = meta["limits"]
+    assert isinstance(snapshot, dict)
+    assert snapshot["max_notional"] == "1000"
+    assert snapshot["max_daily_loss"] == "100"
+    assert snapshot["max_symbol_notional"] == "250"
+    assert snapshot["instrument"] == "BTCUSDT"
+    assert captured["revoked_id"] == authorization_id
+
+
+def test_unset_daily_loss_limit_refuses_demo_auto_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RiskSettings:
+        def __init__(self, _session: object, _audit: object) -> None:
+            pass
+
+        def get(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                default_account_balance=Decimal("10000"),
+                daily_loss_limit=None,
+                max_trades_per_day=3,
+            )
+
+    monkeypatch.setattr("app.services.risk.settings_service.RiskSettingsService", _RiskSettings)
+    _patch_reservation(monkeypatch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    proof = _run_disarmed_style_demo(_armed_demo_view())
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "risk_limits_unverified"
+
+
+def test_ledger_daily_loss_at_notional_refuses_demo_auto_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reservation(monkeypatch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    proof = _run_disarmed_style_demo(
+        _armed_demo_view(),
+        session=_ledger_session(_ledger_row(max_daily_loss=Decimal("1000"))),
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "risk_limits_unverified"
+
+
+def test_ledger_symbol_cap_at_notional_refuses_demo_auto_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reservation(monkeypatch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    proof = _run_disarmed_style_demo(
+        _armed_demo_view(),
+        session=_ledger_session(_ledger_row(max_symbol_notional=Decimal("1000"))),
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "risk_limits_unverified"
+    from app.services.governed_blofin_demo import _demo_risk_snapshot
+
+    healthy = _demo_risk_snapshot(
+        _ledger_session(_ledger_row(), always=True),  # type: ignore[arg-type]
+        SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
+        SimpleNamespace(account_id=uuid4()),
+        SimpleNamespace(
+            pending_notional=Decimal("10"),
+            daily_loss=Decimal("1"),
+            instrument="BTCUSDT",
+            trade_slots=1,
+        ),
+    )
+    assert healthy is not None
+    assert healthy.max_daily_loss == Decimal("100")
+    assert healthy.max_symbol_notional == Decimal("250")
+
+
+def test_journal_payload_copies_the_autonomous_approval_channel() -> None:
+    from app.schemas.trade_plan import AuthorizationChannel
+    from app.services.canonical_paper_execution import _attach_approval_channel
+
+    authorization_id = uuid4()
+
+    class _Session:
+        def get(self, _model: object, key: object) -> SimpleNamespace | None:
+            if key != authorization_id:
+                return None
+            return SimpleNamespace(channel=AuthorizationChannel.AUTONOMOUS)
+
+    payload: dict[str, object] = {}
+    _attach_approval_channel(_Session(), payload, authorization_id)  # type: ignore[arg-type]
+    assert payload["approval_channel"] == "AUTONOMOUS"
+    untouched: dict[str, object] = {}
+    _attach_approval_channel(_Session(), untouched, uuid4())  # type: ignore[arg-type]
+    assert "approval_channel" not in untouched
+
+
+def _patch_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.execution_claim.conservative_reservation",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            pending_notional=Decimal("10"),
+            daily_loss=Decimal("1"),
+            instrument="BTCUSDT",
+            trade_slots=1,
+        ),
+    )
+
+
+def _ledger_row(**updates: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "max_notional": Decimal("1000"),
+        "max_daily_loss": Decimal("100"),
+        "max_symbol_notional": Decimal("250"),
+        "max_trade_slots": 5,
+        "reserved_notional": Decimal("0"),
+        "reserved_daily_loss": Decimal("0"),
+        "reserved_trade_slots": 0,
+        "actual_notional": Decimal("0"),
+        "actual_daily_loss": Decimal("0"),
+        "actual_trade_count": 0,
+        "symbol_reserved": {},
+        "symbol_actual": {},
+        "daily_locked": False,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
+def _ledger_session(row: SimpleNamespace, *, always: bool = False) -> object:
+    class _Session:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def scalar(self, _statement: object) -> SimpleNamespace | None:
+            self.calls += 1
+            if always or self.calls >= 3:
+                return row
+            return None
+
+    return _Session()
+
+
+def _run_disarmed_style_demo(settings: object, session: object | None = None):  # type: ignore[no-untyped-def]
     revision_id = uuid4()
     candidate = SimpleNamespace(candidate_id=uuid4())
     target = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
@@ -529,7 +723,7 @@ def _run_disarmed_style_demo(settings: object):  # type: ignore[no-untyped-def]
             return None
 
     return demo._execute_existing(
-        _Session(),  # type: ignore[arg-type]
+        _Session() if session is None else session,  # type: ignore[arg-type]
         target=target,  # type: ignore[arg-type]
         candidate=candidate,  # type: ignore[arg-type]
         revision_id=revision_id,

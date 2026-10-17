@@ -29,7 +29,12 @@ from app.security.tenant import TenantContext
 from app.workers.watcher_paper_targets import PaperScanTarget
 from tests.test_blofin_native_producer_postgres import producer_engine as producer_engine
 from tests.test_governed_demo_lifecycle import ClosingVenue
-from tests.test_governed_experiment_context_postgres import execute, make_loop, pause
+from tests.test_governed_experiment_context_postgres import (
+    execute,
+    make_loop,
+    pause,
+    use_verified_persisted_symbol_cap,
+)
 from tests.test_governed_experiment_context_postgres import world as world
 
 
@@ -506,6 +511,7 @@ def test_lost_native_reply_and_repeated_entry_keep_one_post_and_one_reservation(
     loop, venue, command = open_owned(world, monkeypatch, behavior="timeout")
     requests = list(world.requests)
     with world.factory() as fresh:
+        use_verified_persisted_symbol_cap(fresh)
         result = execute(world, loop, fresh)
         assert result.execution_command_id == command.id
         assert (
