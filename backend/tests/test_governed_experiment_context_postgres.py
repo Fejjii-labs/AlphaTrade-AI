@@ -144,6 +144,7 @@ def make_loop(world, monkeypatch, *, before_fence=None):
     settings = world.w.settings.model_copy(
         update={
             "governed_blofin_demo_enabled": True,
+            "autonomous_blofin_demo_enabled": True,
             "watcher_paper_staging_activation": True,
             "watcher_orchestration_enabled": True,
         }

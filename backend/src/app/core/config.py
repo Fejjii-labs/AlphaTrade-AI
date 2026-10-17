@@ -218,6 +218,10 @@ class Settings(BaseSettings):
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""
+    # Autonomous continuation (AT-ADR-106). Both default off. Neither flag
+    # authorizes real-money trading. Setting both fails closed.
+    autonomous_internal_paper_enabled: bool = False
+    autonomous_blofin_demo_enabled: bool = False
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)

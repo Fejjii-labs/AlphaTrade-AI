@@ -1121,40 +1121,59 @@ class WatcherPaperRuntime:
             return report
         assembled, policy = loaded
         from app.services.automated_paper_loop import AutomatedPaperLoop, _proof
+        from app.services.autonomous_trading import AutonomousMode, resolve_autonomous_mode
 
-        loop_clock: Clock = self._eval_clock
-        loop: AutomatedPaperLoop
-        refusal: str | None = None
-        if self._settings.exchange_mode.value == "paper_exchange_demo":
-            from app.experiments.execution_selection import select_execution_context
-            from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
-            loop_clock = self._clock
-            context, refusal = select_execution_context(
-                session, self._settings, target, loop_clock.now()
-            )
-            loop = GovernedBloFinDemoLoop(
-                runtime,  # type: ignore[arg-type]
-                self._settings,
-                loop_clock,
-                experiment_context=context,
-            )
+        candidate = discussion.candidate
+        if report.kill_switch_active or self._settings.global_kill_switch_active:
+            proof = _proof(candidate, "blocked", "kill_switch_active")
         else:
-            loop = AutomatedPaperLoop(runtime, self._settings, loop_clock)  # type: ignore[arg-type]
-        proof = (
-            _proof(discussion.candidate, "blocked", refusal)
-            if refusal
-            else loop.continue_confirmed_setup(
-                session,
-                target=target,
-                candidate=discussion.candidate,
-                assessment=discussion.assessment,
-                window=discussion.window,
-                assembled=assembled,
-                policy=policy,
-                kill_switch_active=report.kill_switch_active,
-            )
-        )
+            resolution = resolve_autonomous_mode(self._settings)
+            if resolution.refusal is not None:
+                proof = _proof(candidate, "blocked", resolution.refusal)
+            elif resolution.mode is AutonomousMode.OFF:
+                proof = _proof(candidate, "blocked", "autonomous_mode_disarmed")
+            elif resolution.mode is AutonomousMode.BLOFIN_DEMO:
+                from app.experiments.execution_selection import select_execution_context
+                from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+                context, refusal = select_execution_context(
+                    session, self._settings, target, self._clock.now()
+                )
+                if refusal:
+                    proof = _proof(candidate, "blocked", refusal)
+                else:
+                    proof = GovernedBloFinDemoLoop(
+                        runtime,  # type: ignore[arg-type]
+                        self._settings,
+                        self._clock,
+                        experiment_context=context,
+                    ).continue_confirmed_setup(
+                        session,
+                        target=target,
+                        candidate=candidate,
+                        assessment=discussion.assessment,
+                        window=discussion.window,
+                        assembled=assembled,
+                        policy=policy,
+                        kill_switch_active=report.kill_switch_active,
+                    )
+            elif resolution.mode is AutonomousMode.INTERNAL_PAPER:
+                proof = AutomatedPaperLoop(
+                    runtime,  # type: ignore[arg-type]
+                    self._settings,
+                    self._eval_clock,
+                ).continue_confirmed_setup(
+                    session,
+                    target=target,
+                    candidate=candidate,
+                    assessment=discussion.assessment,
+                    window=discussion.window,
+                    assembled=assembled,
+                    policy=policy,
+                    kill_switch_active=report.kill_switch_active,
+                )
+            else:
+                proof = _proof(candidate, "blocked", "autonomous_mode_unverified")
         logger.info(
             "automated_paper_loop",
             organization_id=str(target.organization_id),

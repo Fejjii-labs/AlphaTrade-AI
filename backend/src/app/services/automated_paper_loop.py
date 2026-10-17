@@ -96,6 +96,12 @@ class AutomatedPaperLoopProof:
     journal_status: str | None = None
 
 
+def _global_kill_switch_active(settings: object) -> bool:
+    """True only for an explicit boolean global kill switch."""
+
+    return getattr(settings, "global_kill_switch_active", None) is True
+
+
 def paper_loop_posture_refusal(settings: Settings) -> str | None:
     """Return a refusal code when this process may not place an internal paper fill."""
 
@@ -135,6 +141,7 @@ class AutomatedPaperLoop:
     ) -> AutomatedPaperLoopProof:
         """Open one internal paper journal trade, or write nothing when a gate fails."""
 
+        self._observed_kill_switch = kill_switch_active
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -172,11 +179,13 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
-        if kill_switch_active:
-            return _proof(candidate, "blocked", "kill_switch_active")
         if assessment.state is not SetupAssessmentState.CONFIRMED_SETUP:
             return _proof(candidate, "skipped", "setup_not_confirmed")
         lineage = _lineage_refusal(
@@ -324,6 +333,9 @@ class AutomatedPaperLoop:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
             eligibility_state = envelope.lineage.eligibility_state.value
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         approval = ApprovalService(
             session,
             AuditService(session),
@@ -454,8 +466,35 @@ class AutomatedPaperLoop:
             else str(trade.status),
         )
 
+    def _autonomous_approval_refusal(self, session: Session, organization_id: UUID) -> str | None:
+        """Re-check mode and kill switch immediately before auto-approval."""
+
+        from app.services.autonomous_trading import (
+            AutonomousMode,
+            continuation_refusal,
+            kill_switch_refusal,
+        )
+
+        refusal = continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
+        if refusal is not None:
+            return refusal
+        observed = getattr(self, "_observed_kill_switch", None)
+        if observed is not None and not isinstance(observed, bool):
+            return "kill_switch_unverified"
+        return kill_switch_refusal(
+            self._settings,
+            session,
+            organization_id,
+            observed=observed if isinstance(observed, bool) else None,
+        )
+
     def _posture_refusal(self) -> str | None:
-        return paper_loop_posture_refusal(self._settings)
+        refusal = paper_loop_posture_refusal(self._settings)
+        if refusal is not None:
+            return refusal
+        from app.services.autonomous_trading import AutonomousMode, continuation_refusal
+
+        return continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
 
     def _policy_version(self) -> str:
         return _POLICY_VERSION

@@ -2,6 +2,31 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
+
+- Date: 2026-10-17
+- Decision: Owner Sofien decided (2026-10-17 22:49 CEST) that there are two
+  autonomous trading modes, (1) autonomous on internal paper and (2) autonomous
+  on the BloFin DEMO account, and BloFin demo trades may be auto-approved
+  without per-trade human approval, but only within the configured risk limits,
+  with the kill switch always honoured. Real-money trading stays permanently
+  blocked in code. Both modes ship behind feature flags that default OFF.
+- Flags: `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled`. Both default false. Both true, a flag that
+  disagrees with `execution_mode` / `exchange_mode`, or unreadable settings
+  fail closed. No flag means that mode is disarmed.
+- Demo auto-approval: allowed only when the demo flag resolves cleanly, the
+  kill switch is verified inactive, and the order fits the configured account
+  limits that already exist (max position / symbol notional, total exposure,
+  daily loss, and the stored trade-slot cap). Unreadable limits fail closed.
+  The existing claim predicate remains the execution authority.
+- Safety: `execution_mode=trade`, `exchange_mode=trade_live`, and
+  `enable_real_trading=true` stay permanently rejected. This decision does not
+  enable either flag, change deploy config, or authorize a merge. It does not
+  reopen live trading. AT-ADR-020's rejection of an autonomous live path
+  remains in force.
+- Reference: PR #258; `backend/src/app/services/autonomous_trading.py`.
+
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422
 
 - Date: 2026-10-16

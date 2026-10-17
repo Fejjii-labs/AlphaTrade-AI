@@ -58,6 +58,7 @@ from app.services.automated_paper_loop import (
     _plan_terms,
     _proof,
 )
+from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
@@ -82,6 +83,94 @@ from app.workers.watcher_paper_targets import PaperScanTarget
 
 DEMO_POLICY = "governed-blofin-demo/v1"
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
+
+
+def _demo_risk_snapshot(
+    session: Session,
+    target: PaperScanTarget,
+    plan: object,
+    intent: object,
+) -> RiskLimitSnapshot | None:
+    """Build the account limit snapshot, or None when it cannot be verified."""
+
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.db.models import AccountRiskAccountingState
+    from app.services.audit_service import AuditService
+    from app.services.risk.settings_service import RiskSettingsService
+
+    account_id = getattr(plan, "account_id", None)
+    organization_id = getattr(target, "organization_id", None)
+    user_id = getattr(target, "user_id", None)
+    if account_id is None or organization_id is None or user_id is None:
+        return None
+    row = session.scalar(
+        select(AccountRiskAccountingState).where(
+            AccountRiskAccountingState.organization_id == organization_id,
+            AccountRiskAccountingState.account_id == account_id,
+        )
+    )
+    if row is None:
+        settings = RiskSettingsService(session, AuditService(session)).get(
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        max_notional = settings.default_account_balance
+        max_daily_loss = (
+            settings.daily_loss_limit
+            if settings.daily_loss_limit is not None
+            else settings.default_account_balance
+        )
+        max_slots = int(settings.max_trades_per_day)
+        reserved_notional = Decimal("0")
+        reserved_daily_loss = Decimal("0")
+        reserved_slots = 0
+        actual_notional = Decimal("0")
+        actual_daily_loss = Decimal("0")
+        actual_trades = 0
+        symbol_reserved: dict[str, str] = {}
+        symbol_actual: dict[str, str] = {}
+        daily_locked = False
+        max_symbol = max_notional
+    else:
+        max_notional = row.max_notional
+        max_daily_loss = row.max_daily_loss
+        max_symbol = row.max_symbol_notional
+        max_slots = int(row.max_trade_slots)
+        reserved_notional = row.reserved_notional
+        reserved_daily_loss = row.reserved_daily_loss
+        reserved_slots = int(row.reserved_trade_slots)
+        actual_notional = row.actual_notional
+        actual_daily_loss = row.actual_daily_loss
+        actual_trades = int(row.actual_trade_count)
+        symbol_reserved = {
+            str(key): str(value) for key, value in dict(row.symbol_reserved or {}).items()
+        }
+        symbol_actual = {
+            str(key): str(value) for key, value in dict(row.symbol_actual or {}).items()
+        }
+        daily_locked = bool(row.daily_locked)
+    return RiskLimitSnapshot(
+        max_notional=max_notional,
+        max_daily_loss=max_daily_loss,
+        max_symbol_notional=max_symbol,
+        max_trade_slots=max_slots,
+        pending_notional=intent.pending_notional,  # type: ignore[attr-defined]
+        proposed_loss=intent.daily_loss,  # type: ignore[attr-defined]
+        instrument=str(intent.instrument),  # type: ignore[attr-defined]
+        reserved_notional=reserved_notional,
+        reserved_daily_loss=reserved_daily_loss,
+        reserved_trade_slots=reserved_slots,
+        actual_notional=actual_notional,
+        actual_daily_loss=actual_daily_loss,
+        actual_trade_count=actual_trades,
+        symbol_reserved=symbol_reserved,
+        symbol_actual=symbol_actual,
+        daily_locked=daily_locked,
+        trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
+    )
 
 
 def demo_posture_refusal(settings: Settings) -> str | None:
@@ -173,7 +262,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         )
 
     def _posture_refusal(self) -> str | None:
-        return demo_posture_refusal(self._settings)
+        refusal = demo_posture_refusal(self._settings)
+        if refusal is not None:
+            return refusal
+        from app.services.autonomous_trading import AutonomousMode, continuation_refusal
+
+        return continuation_refusal(self._settings, expected=AutonomousMode.BLOFIN_DEMO)
 
     def _policy_version(self) -> str:
         return DEMO_POLICY
@@ -475,6 +569,55 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             raise ValueError("Demo preflight evidence missing.")
         return self._snapshot
 
+    def _demo_auto_approval_refusal(
+        self,
+        session: Session,
+        target: PaperScanTarget,
+        plan: object,
+    ) -> str | None:
+        """Refuse demo auto-approval unless mode, kill switch, and limits verify."""
+
+        from app.experiments.execution_risk import experiment_reservation_refusal
+        from app.services.autonomous_trading import (
+            AutonomousMode,
+            configured_risk_refusal,
+            continuation_refusal,
+            kill_switch_refusal,
+        )
+        from app.services.execution_claim import conservative_reservation
+
+        refusal = continuation_refusal(self._settings, expected=AutonomousMode.BLOFIN_DEMO)
+        if refusal is not None:
+            return refusal
+        observed = getattr(self, "_observed_kill_switch", None)
+        if observed is not None and not isinstance(observed, bool):
+            return "kill_switch_unverified"
+        kill = kill_switch_refusal(
+            self._settings,
+            session,
+            getattr(target, "organization_id", None),
+            observed=observed if isinstance(observed, bool) else None,
+        )
+        if kill is not None:
+            return kill
+        try:
+            intent = conservative_reservation(plan)  # type: ignore[arg-type]
+            snapshot = _demo_risk_snapshot(session, target, plan, intent)
+        except Exception:
+            return "risk_limits_unverified"
+        risk = configured_risk_refusal(snapshot)
+        if risk is not None:
+            return risk
+        try:
+            return experiment_reservation_refusal(
+                session,
+                plan,
+                intent,
+                self._clock.now(),  # type: ignore[arg-type]
+            )
+        except Exception:
+            return "risk_limits_unverified"
+
     def _execute_existing(
         self,
         session: Session,
@@ -538,6 +681,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             is not None
         ):
             return _proof(candidate, "closed", "demo_closed_reconciled", revision_id=revision_id)
+        blocked = self._demo_auto_approval_refusal(session, target, envelope.plan)
+        if blocked is not None:
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         approval = ApprovalService(
             session, AuditService(session), clock=self._clock.now, plans=plans
         )

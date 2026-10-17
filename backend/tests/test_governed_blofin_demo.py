@@ -207,6 +207,7 @@ def demo_settings(account_id: str, **updates: object) -> Settings:
         blofin_demo_enabled=True,
         blofin_live_evidence_demo_enabled=False,
         governed_blofin_demo_enabled=True,
+        autonomous_blofin_demo_enabled=True,
         watcher_orchestration_enabled=True,
         watcher_paper_staging_activation=True,
         governed_blofin_demo_organization_id=str(ORG),
