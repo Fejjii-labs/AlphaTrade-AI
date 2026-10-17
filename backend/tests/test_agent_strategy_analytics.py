@@ -461,6 +461,7 @@ async def test_analytics_filters_cannot_route_mutations(api: _Api, client: Async
             },
         )
         assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "validation_error"
 
 
 def test_adapter_read_does_not_autoflush_pending_authority_changes(api: _Api) -> None:

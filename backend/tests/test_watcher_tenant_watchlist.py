@@ -19,6 +19,8 @@ from app.db.models import Organization
 from app.db.session import get_session
 from app.db.watcher_watchlist import WatcherSymbolStatusRow, WatcherWatchlistRow
 from app.main import create_app
+from app.market_contracts.adapters.failover import FailoverPerpetualSource
+from app.market_contracts.enums import VenueId
 from app.market_contracts.errors import StaleEvidenceError, WrongInstrumentError
 from app.market_contracts.provider_contracts import ContractBook
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
@@ -432,6 +434,49 @@ def test_symbol_specific_failover_and_wrong_instrument(db):
     market.wrong = True
     with pytest.raises(WrongInstrumentError):
         factory.probe("ETHUSDT")
+
+
+def _kline_hosts(market: PublicMarket) -> list[str]:
+    return [
+        host
+        for host, path, _symbol in market.calls
+        if path.endswith("/klines") or path.endswith("/kline")
+    ]
+
+
+def test_failover_probe_uses_binance_primary_then_bybit() -> None:
+    """A healthy probe reads Binance. A primary failure switches the probe to Bybit."""
+
+    healthy = PublicMarket()
+    factory = _market_factory(
+        settings(perpetual_evidence_secondary_source="bybit_usdt_perpetual"),
+        healthy.transport,
+        healthy.clock,
+    )
+    factory.discovery(ContractBook(()), ["ETHUSDT"])
+    probed = factory.probe("ETHUSDT")
+    source, _, _, _ = factory.composition("ETHUSDT")
+    assert isinstance(source, FailoverPerpetualSource)
+    assert source.using_secondary is False
+    assert source.active_instrument().venue is VenueId.BINANCE
+    assert probed.provider == "binance-usdm-perpetual"
+    assert probed.freshness == "fresh_closed_candle"
+    assert _kline_hosts(healthy) == ["fapi.binance.com", "fapi.binance.com"]
+
+    failed = PublicMarket(failover={"ETHUSDT"})
+    failed_factory = _market_factory(
+        settings(perpetual_evidence_secondary_source="bybit_usdt_perpetual"),
+        failed.transport,
+        failed.clock,
+    )
+    failed_factory.discovery(ContractBook(()), ["ETHUSDT"])
+    switched = failed_factory.probe("ETHUSDT")
+    failed_source, _, _, _ = failed_factory.composition("ETHUSDT")
+    assert isinstance(failed_source, FailoverPerpetualSource)
+    assert failed_source.using_secondary is True
+    assert failed_source.active_instrument().venue is VenueId.BYBIT
+    assert switched.provider == "bybit-usdt-perpetual"
+    assert _kline_hosts(failed) == ["fapi.binance.com", "api.bybit.com"]
 
 
 def test_stale_probe_cannot_report_success():

@@ -15,8 +15,16 @@ on:
         required: true
         default: true
 
+# Job permissions replace these. actions: write is only on jobs that save a
+# dependency cache or upload an artifact. docker-build keeps contents: read.
+permissions:
+  contents: read
+
 jobs:
   backend:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 150
     services:
@@ -79,6 +87,9 @@ jobs:
           if-no-files-found: warn
 
   deployment-safety:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -142,6 +153,9 @@ jobs:
           test "$code" -eq 2
 
   frontend:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -165,6 +179,9 @@ jobs:
         run: npm run build
 
   evaluation:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     needs: [backend]
     steps:
@@ -193,6 +210,9 @@ jobs:
         run: docker build -t alphatrade-backend:ci ./backend
 
   e2e-smoke:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     defaults:

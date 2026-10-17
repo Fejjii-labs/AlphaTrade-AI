@@ -34,6 +34,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Limit: This does not skip tests and does not change assertions. The known
   analytics-filter 422 failure stays a real failure. No merge or dispatch is
   authorized by this decision. This ID is not the 2026-10-10 AT-ADR-099.
+- Note: The B1 422 failure is closed by PR 270, merged as 2a160c07.
 - Reference: `.github/workflows/ci.yml`; run 38765481172.
 
 ## AT-ADR-103 — Full backend gate keeps diagnostics and a nightly run
