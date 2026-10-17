@@ -635,10 +635,15 @@ def test_autonomous_approval_is_excluded_from_human_approval_counts(
             )
         )
         assert plan.record.facts.trader_behavior.actor is DecisionActor.AUTONOMOUS_APPROVAL
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.AUTONOMOUS_APPROVAL
         assert plan.record.facts.human_vs_system.decision_actor is (
             DecisionActor.AUTONOMOUS_APPROVAL
         )
+        assert plan.record.facts.human_vs_system.trader_behavior_axis is (
+            TraderBehavior.AUTONOMOUS_APPROVAL
+        )
         assert plan.record.facts.strategy_pattern.plan_approved is False
+        assert plan.record.facts.strategy_pattern.autonomous_approval is True
         service.apply(
             command_for(
                 lifecycle_event(
@@ -711,7 +716,9 @@ def test_missing_approval_channel_remains_a_human_approval(
             )
         )
         assert plan.record.facts.trader_behavior.actor is DecisionActor.HUMAN_APPROVAL
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.APPROVED_PLAN
         assert plan.record.facts.strategy_pattern.plan_approved is True
+        assert plan.record.facts.strategy_pattern.autonomous_approval is False
         fill = service.apply(
             command_for(
                 lifecycle_event(
@@ -725,3 +732,78 @@ def test_missing_approval_channel_remains_a_human_approval(
         )
         session.commit()
         assert fill.record.facts.strategy_pattern.plan_approved is True
+
+
+def test_unstamped_close_cannot_reclassify_an_autonomous_approval(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    """A later close that the test does not stamp must not become a human approval.
+
+    The production demo close now copies the authorization channel. This test
+    leaves the fill and close payloads without ``approval_channel`` so the
+    sticky fold, not a hand-set channel, is what keeps the counts at zero.
+    """
+
+    from app.learning_attribution.adapters.analytics import rollup_organization
+    from app.paper_evaluation.metrics import _human_facts
+
+    lifecycle_id = uuid4()
+    store = InMemoryAttributionStore()
+    with attribution_sessions() as session:
+        service = learning_service(session, store)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="sticky-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.AUTONOMOUS_APPROVAL
+        service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="sticky-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(entry_price="64010", size="1"),
+                ),
+                lineage,
+            )
+        )
+        close_payload = instrument_payload(
+            exit_price="63000",
+            net_pnl="-900",
+            result=TradeResult.LOSS.value,
+            realized_vs_available_pct="80",
+        )
+        assert "approval_channel" not in close_payload
+        close = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.CLOSE,
+                    source_event_id="sticky-close",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=close_payload,
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        pattern = close.record.facts.strategy_pattern
+        assert pattern.autonomous_approval is True
+        assert pattern.plan_approved is False
+        assert pattern.closed is True
+        assert pattern.loss is True
+        human = _human_facts((close.record,), SimpleNamespace(confirmed_setup_count=0))
+        assert human.human_approvals == 0
+        assert human.human_approved_executed_wins == 0
+        assert human.human_approved_executed_losses == 0
+    snapshot = rollup_organization(store, organization_id=ORG_ID)
+    assert snapshot.human_vs_system.human_approvals == 0
+    assert snapshot.human_vs_system.human_approved_executed_wins == 0
+    assert snapshot.human_vs_system.human_approved_executed_losses == 0

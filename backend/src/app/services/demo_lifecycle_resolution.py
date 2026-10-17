@@ -46,7 +46,10 @@ from app.services.canonical_execution_journal import (
     project_canonical_execution_event,
 )
 from app.services.canonical_execution_learning import attribute_canonical_paper_event
-from app.services.canonical_paper_execution import _lineage_payload
+from app.services.canonical_paper_execution import (
+    _attach_approval_channel,
+    _lineage_payload,
+)
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
@@ -290,6 +293,7 @@ def resolve_verified_demo_exit(
             mode="json", exclude_none=True
         ),
     }
+    _attach_approval_channel(session, close_payload, command.authorization_id)
     event = JournalLifecycleEventInput(
         event_type=JournalLifecycleEventType.CLOSE,
         execution_lifecycle_id=command.id,

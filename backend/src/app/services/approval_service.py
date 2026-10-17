@@ -547,12 +547,29 @@ class ApprovalService:
         *,
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
+        reason: str | None = None,
     ) -> ApprovalAuthorization:
         row = self._authorizations.get(authorization_id)
         if row is None or row.organization_id != organization_id or row.user_id != user_id:
             raise NotFoundError("Approval authorization not found")
         self._authorizations.revoke_available(authorization_id, at=self._aware(self._clock()))
         self._session.refresh(row)
+        if reason is not None:
+            channel = row.channel
+            self._record_audit(
+                AuditEventType.APPROVAL_DECISION,
+                organization_id=row.organization_id,
+                user_id=row.user_id,
+                resource_id=str(row.id),
+                actor_type=ActorType.SYSTEM if row.actor_type == "SYSTEM" else ActorType.USER,
+                metadata={
+                    "action": "revoke",
+                    "reason": reason,
+                    "authorization_id": str(row.id),
+                    "channel": channel.value if hasattr(channel, "value") else str(channel),
+                    "actor_type": row.actor_type,
+                },
+            )
         return self._authorization_to_schema(row)
 
     def is_authorization_available(

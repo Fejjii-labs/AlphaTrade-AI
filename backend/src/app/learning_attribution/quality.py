@@ -131,7 +131,16 @@ def human_plan_approved(
     )
 
 
-def trader_behavior_for(event_type: JournalLifecycleEventType) -> TraderBehavior:
+def trader_behavior_for(
+    event_type: JournalLifecycleEventType,
+    *,
+    approval_channel: str | None = None,
+) -> TraderBehavior:
+    if (
+        event_type is JournalLifecycleEventType.APPROVED_PLAN
+        and approval_channel == AuthorizationChannel.AUTONOMOUS.value
+    ):
+        return TraderBehavior.AUTONOMOUS_APPROVAL
     mapping = {
         JournalLifecycleEventType.CANDIDATE_CONFIRMED: TraderBehavior.AWAITING_DECISION,
         JournalLifecycleEventType.REJECT: TraderBehavior.REJECTED,
@@ -192,11 +201,12 @@ def behavior_facts(
     trade: JournalTrade | None,
     payload: dict[str, object] | None = None,
 ) -> TraderBehaviorFacts:
+    channel = approval_channel_from_payload(payload)
     return TraderBehaviorFacts(
-        axis=trader_behavior_for(event_type),
+        axis=trader_behavior_for(event_type, approval_channel=channel),
         actor=decision_actor_for(
             event_type,
-            approval_channel=approval_channel_from_payload(payload),
+            approval_channel=channel,
         ),
         event_type=event_type,
         candidate_state=candidate.state,
@@ -304,6 +314,7 @@ def strategy_pattern_facts(
     }
     closed = trade is not None and trade.status is JournalTradeStatus.CLOSED
     result = outcome.result if outcome.eligible else None
+    autonomous = approval_channel_from_payload(payload) == AuthorizationChannel.AUTONOMOUS.value
     return StrategyPatternStatFacts(
         strategy_version_id=candidate.strategy_version_id,
         setup_definition_id=candidate.setup_definition_id,
@@ -314,6 +325,7 @@ def strategy_pattern_facts(
         rejected=event_type is JournalLifecycleEventType.REJECT,
         skipped=event_type is JournalLifecycleEventType.SKIP,
         plan_approved=human_plan_approved(event_type, trade, payload),
+        autonomous_approval=autonomous,
         filled=filled and outcome.eligible,
         closed=closed and outcome.eligible,
         executed_outcome=outcome.eligible,
