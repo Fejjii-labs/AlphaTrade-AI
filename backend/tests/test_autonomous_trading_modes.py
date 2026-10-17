@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import Settings
+from app.schemas.execution_protocol import ExecutionCommandOutcome
 from app.services.automated_paper_loop import AutomatedPaperLoop
 from app.services.autonomous_trading import (
     AutonomousMode,
@@ -259,7 +260,11 @@ def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
     )
 
 
-def test_disarmed_loops_do_not_auto_approve(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disarmed_demo_keeps_the_governed_api_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag-off governed demo is the existing API approval, not the ledger guard."""
+
     settings = Settings(_env_file=None)
     paper = AutomatedPaperLoop(None, settings, SimpleNamespace())  # type: ignore[arg-type]
     assert paper._posture_refusal() == "autonomous_paper_disarmed"
@@ -270,19 +275,39 @@ def test_disarmed_loops_do_not_auto_approve(monkeypatch: pytest.MonkeyPatch) -> 
     envelope = SimpleNamespace(
         plan=SimpleNamespace(execution_venue="BLOFIN_DEMO", execution_policy_version=DEMO_POLICY)
     )
+    captured: dict[str, object] = {}
+
+    class _Approval:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def create_for_plan_revision(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(id=uuid4())
+
+        def decide(self, _approval_id: object, _decision: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(authorization=SimpleNamespace(authorization_id=uuid4()))
+
+    class _Execution:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def execute_paper_plan(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            captured["executed"] = True
+            return SimpleNamespace(
+                outcome=ExecutionCommandOutcome.BLOCKED,
+                blocked_reason_code="execution_blocked",
+                command_id=None,
+                replayed=False,
+            )
+
     monkeypatch.setattr(
         GovernedBloFinDemoLoop,
         "_plan_service",
         lambda _self: SimpleNamespace(get_scoped=lambda *_args, **_kwargs: envelope),
     )
-
-    def _forbid_approval(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("disarmed demo mode must not create an approval")
-
-    monkeypatch.setattr(
-        "app.services.governed_blofin_demo.ApprovalService",
-        _forbid_approval,
-    )
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _Approval)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ExecutionService", _Execution)
 
     class _NoClosedLifecycle:
         def scalar(self, _statement: object) -> None:
@@ -296,8 +321,32 @@ def test_disarmed_loops_do_not_auto_approve(monkeypatch: pytest.MonkeyPatch) -> 
         revision_id=revision_id,
         account_id=uuid4(),
     )
-    assert proof.reason_code == "autonomous_demo_disarmed"
     assert proof.stage == "blocked"
+    assert proof.reason_code == "execution_blocked"
+    assert getattr(captured["channel"], "value", None) == "API"
+    assert captured.get("actor_type") is None
+    assert captured["executed"] is True
+
+    def _forbid_approval(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a contradictory autonomous mode must not create an approval")
+
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    contradictory = settings.model_copy(
+        update={
+            "autonomous_internal_paper_enabled": True,
+            "autonomous_blofin_demo_enabled": True,
+        }
+    )
+    blocked = GovernedBloFinDemoLoop(None, contradictory, SimpleNamespace(now=lambda: None))
+    refused = blocked._execute_existing(
+        _NoClosedLifecycle(),  # type: ignore[arg-type]
+        target=target,  # type: ignore[arg-type]
+        candidate=candidate,  # type: ignore[arg-type]
+        revision_id=revision_id,
+        account_id=uuid4(),
+    )
+    assert refused.stage == "blocked"
+    assert refused.reason_code == "autonomous_mode_ambiguous"
 
 
 def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:
@@ -354,6 +403,66 @@ def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:
         evidence,  # type: ignore[arg-type]
     )
     assert disarmed.paper_loop_reason == "autonomous_mode_disarmed"
+
+
+def test_disarmed_demo_exchange_still_enters_the_governed_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_governed_blofin_demo import demo_settings
+
+    settings = demo_settings(str(uuid4()))
+    assert settings.autonomous_blofin_demo_enabled is False
+    called: dict[str, object] = {}
+
+    def _continue(self: object, _session: object, **kwargs: object) -> SimpleNamespace:
+        called["settings"] = getattr(self, "_settings", None)
+        candidate = kwargs["candidate"]
+        return SimpleNamespace(
+            stage="blocked",
+            reason_code="governed_human_path",
+            replayed=False,
+            candidate_id=getattr(candidate, "candidate_id", None),
+            eligibility_id=None,
+            eligibility_state=None,
+            trade_plan_revision_id=None,
+            execution_command_id=None,
+            paper_fill_id=None,
+            journal_trade_id=None,
+            journal_status=None,
+        )
+
+    monkeypatch.setattr(GovernedBloFinDemoLoop, "continue_confirmed_setup", _continue)
+    candidate_id = uuid4()
+    candidate = SimpleNamespace(candidate_id=candidate_id)
+    report = WatcherPaperScanReport(
+        organization_id=uuid4(),
+        scan_scope="scope",
+        symbol="BTCUSDT",
+        status="succeeded",
+        reason_code="fixture",
+        replayed=False,
+        published=True,
+        candidate_ids=(candidate_id,),
+        kill_switch_active=False,
+        discussion=SimpleNamespace(candidate=candidate, assessment=None, window=None),  # type: ignore[arg-type]
+    )
+    runtime = SimpleNamespace(
+        _canonical_runtime=object(),
+        _settings=settings,
+        _eval_clock=SimpleNamespace(now=lambda: None),
+        _clock=SimpleNamespace(now=lambda: None),
+    )
+    evidence = SimpleNamespace(last_assembly=lambda: (object(), object()))
+    target = SimpleNamespace(organization_id=report.organization_id, scan_scope="scope")
+    continued = WatcherPaperRuntime._continue_paper_loop(
+        runtime,  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        target,  # type: ignore[arg-type]
+        report,
+        evidence,  # type: ignore[arg-type]
+    )
+    assert continued.paper_loop_reason == "governed_human_path"
+    assert getattr(called["settings"], "autonomous_blofin_demo_enabled", None) is False
 
 
 def test_trade_slot_refusal_is_distinct_from_exposure() -> None:

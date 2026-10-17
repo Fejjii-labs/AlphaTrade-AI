@@ -181,6 +181,28 @@ def demo_posture_refusal(settings: Settings) -> str | None:
     return None
 
 
+def governed_demo_autonomous_gate(settings: object) -> tuple[bool, str | None]:
+    """Split the existing governed approval from autonomous auto-approval.
+
+    A clean OFF resolution keeps the pre-existing API-channel approval. That
+    path is not an AUTONOMOUS approval and does not use the unverified-ledger
+    guard. A verified BloFin-demo mode uses the autonomous approval, which
+    still fails closed when risk limits are unverified. Any other resolution
+    refuses before either path.
+    """
+
+    from app.services.autonomous_trading import AutonomousMode, resolve_autonomous_mode
+
+    resolution = resolve_autonomous_mode(settings)
+    if resolution.refusal is not None:
+        return False, resolution.refusal
+    if resolution.mode is AutonomousMode.BLOFIN_DEMO:
+        return True, None
+    if resolution.mode is AutonomousMode.OFF:
+        return False, None
+    return False, "autonomous_mode_mismatch"
+
+
 def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | None:
     resolved = session.scalar(
         select(GovernedDemoLifecycleResolution).where(
@@ -265,9 +287,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         refusal = demo_posture_refusal(self._settings)
         if refusal is not None:
             return refusal
-        from app.services.autonomous_trading import AutonomousMode, continuation_refusal
-
-        return continuation_refusal(self._settings, expected=AutonomousMode.BLOFIN_DEMO)
+        _use_autonomous, block = governed_demo_autonomous_gate(self._settings)
+        return block
 
     def _policy_version(self) -> str:
         return DEMO_POLICY
@@ -688,15 +709,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             is not None
         ):
             return _proof(candidate, "closed", "demo_closed_reconciled", revision_id=revision_id)
-        blocked, limits = self._demo_auto_approval_refusal(session, target, envelope.plan)
-        if blocked is not None:
-            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
-        from app.services.autonomous_trading import (
-            AUTONOMOUS_ACTOR_TYPE,
-            AutonomousMode,
-            autonomous_decision_metadata,
-        )
-
+        use_autonomous, autonomous_block = governed_demo_autonomous_gate(self._settings)
+        if autonomous_block is not None:
+            return _proof(candidate, "blocked", autonomous_block, revision_id=revision_id)
+        limits = None
+        if use_autonomous:
+            blocked, limits = self._demo_auto_approval_refusal(session, target, envelope.plan)
+            if blocked is not None:
+                return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         approval = ApprovalService(
             session, AuditService(session), clock=self._clock.now, plans=plans
         )
@@ -706,34 +726,52 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             user_id=target.user_id,
             approval_reason="Explicit automatic demo capability; exact immutable hash binding",
         )
-        decided = approval.decide(
-            pending.id,
-            ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
-            principal_organization_id=target.organization_id,
-            principal_user_id=target.user_id,
-            channel=AuthorizationChannel.AUTONOMOUS,
-            actor_type=AUTONOMOUS_ACTOR_TYPE,
-            audit_metadata=autonomous_decision_metadata(
-                mode=AutonomousMode.BLOFIN_DEMO,
-                settings=self._settings,
-                limits=limits,
-                limits_note=(
-                    "account ledger snapshot accepted at auto-approval; "
-                    "the claim predicate remains the execution authority"
+        if use_autonomous:
+            from app.services.autonomous_trading import (
+                AUTONOMOUS_ACTOR_TYPE,
+                AutonomousMode,
+                autonomous_decision_metadata,
+            )
+
+            decided = approval.decide(
+                pending.id,
+                ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+                principal_organization_id=target.organization_id,
+                principal_user_id=target.user_id,
+                channel=AuthorizationChannel.AUTONOMOUS,
+                actor_type=AUTONOMOUS_ACTOR_TYPE,
+                audit_metadata=autonomous_decision_metadata(
+                    mode=AutonomousMode.BLOFIN_DEMO,
+                    settings=self._settings,
+                    limits=limits,
+                    limits_note=(
+                        "account ledger snapshot accepted at auto-approval; "
+                        "the claim predicate remains the execution authority"
+                    ),
                 ),
-            ),
-        )
+            )
+        else:
+            decided = approval.decide(
+                pending.id,
+                ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+                principal_organization_id=target.organization_id,
+                principal_user_id=target.user_id,
+                channel=AuthorizationChannel.API,
+            )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
-        blocked, _limits_again = self._demo_auto_approval_refusal(session, target, envelope.plan)
-        if blocked is not None:
-            approval.revoke_authorization(
-                decided.authorization.authorization_id,
-                organization_id=target.organization_id,
-                user_id=target.user_id,
-                reason="post_approval_recheck",
+        if use_autonomous:
+            blocked, _limits_again = self._demo_auto_approval_refusal(
+                session, target, envelope.plan
             )
-            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+            if blocked is not None:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason="post_approval_recheck",
+                )
+                return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(

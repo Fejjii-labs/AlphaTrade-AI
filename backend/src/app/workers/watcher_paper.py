@@ -1131,7 +1131,31 @@ class WatcherPaperRuntime:
             if resolution.refusal is not None:
                 proof = _proof(candidate, "blocked", resolution.refusal)
             elif resolution.mode is AutonomousMode.OFF:
-                proof = _proof(candidate, "blocked", "autonomous_mode_disarmed")
+                # The autonomous flag is off. Internal paper stays disarmed.
+                # The existing governed demo worker still approves on the API
+                # channel; that path is not the autonomous ledger guard.
+                exchange = getattr(
+                    self._settings.exchange_mode, "value", self._settings.exchange_mode
+                )
+                if exchange == "paper_exchange_demo":
+                    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+                    proof = GovernedBloFinDemoLoop(
+                        runtime,  # type: ignore[arg-type]
+                        self._settings,
+                        self._clock,
+                    ).continue_confirmed_setup(
+                        session,
+                        target=target,
+                        candidate=candidate,
+                        assessment=discussion.assessment,
+                        window=discussion.window,
+                        assembled=assembled,
+                        policy=policy,
+                        kill_switch_active=report.kill_switch_active,
+                    )
+                else:
+                    proof = _proof(candidate, "blocked", "autonomous_mode_disarmed")
             elif resolution.mode is AutonomousMode.BLOFIN_DEMO:
                 from app.experiments.execution_selection import select_execution_context
                 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
