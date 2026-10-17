@@ -9891,6 +9891,7 @@
           "system_setup",
           "human_decision",
           "human_approval",
+          "autonomous_approval",
           "paper_system_execution"
         ],
         "title": "DecisionActor",

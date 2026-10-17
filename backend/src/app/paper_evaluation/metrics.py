@@ -516,12 +516,17 @@ def _missed_facts(
         for record in attributions
         if record.facts.strategy_pattern.plan_approved
     }
+    executed = {
+        record.candidate_id
+        for record in attributions
+        if record.facts.strategy_pattern.filled or record.facts.outcome.eligible
+    }
     eligible_not_approved = 0
     blocked_after = 0
     for evaluation in latest.values():
         candidate_id = evaluation.eligibility.candidate_id
         if evaluation.eligibility.state is ActionEligibilityState.ELIGIBLE:
-            if candidate_id not in approved:
+            if candidate_id not in approved and candidate_id not in executed:
                 eligible_not_approved += 1
         elif evaluation.eligibility.state is ActionEligibilityState.BLOCKED:
             blocked_after += 1

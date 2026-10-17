@@ -32,16 +32,25 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   sizing may use up to 10% of equity as notional and 1% as loss
   (`governed_blofin_demo.py`), which is above that 5% per-order cap. The claim
   predicate remains the execution authority for the kill switch, daily lock,
-  total exposure, daily loss, trade slots, and symbol notional. The fallback
-  numbers used when no ledger row exists are unchanged; a later grade-based
-  risk-per-trade policy will replace that fallback.
+  total exposure, daily loss, trade slots, and symbol notional. The numeric
+  fallbacks used when no ledger row exists are unchanged. Demo auto-approval
+  refuses with `risk_limits_unverified` when that fallback has no
+  `daily_loss_limit`, and when an existing ledger row has `max_daily_loss` or
+  `max_symbol_notional` greater than or equal to `max_notional` (the 100%
+  fallback a first claim would persist). A later grade-based risk-per-trade
+  policy may loosen that guard.
 - Approval identity: an autonomous auto-approval is actor type `SYSTEM` on
   channel `AUTONOMOUS`, not the plan user on the API channel. `actor_id` stays
   the tenant user because that column is a user foreign key. The approval
   audit row records the mode, both flag values, policy version
   `at-adr-106/v1`, and the limit snapshot used. Demo records the account ledger
   snapshot that passed. Paper records that the account ledger is enforced at
-  claim, not at this approval.
+  claim, not at this approval. Journal events carry `approval_channel`.
+  Learning attribution maps `AUTONOMOUS` to `autonomous_approval` and does not
+  set `plan_approved`, so those trades are not human approvals and do not
+  enter human-approved win/loss counts. A missing channel on a legacy event
+  stays a human approval. If the kill switch (or the same re-check) blocks
+  after the authorization is issued, that authorization is revoked.
 - Environment: `environment=production` refuses both modes. BloFin demo
   execution stays staging-only through the existing governed demo posture.
 - Kill switch: it stops new entries only. It does not close open demo

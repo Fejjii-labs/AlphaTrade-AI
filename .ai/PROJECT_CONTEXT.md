@@ -23,7 +23,7 @@ Release line: `v0.1.0-paper-mvp` (built in vertical slices 1–~91A per `docs/`)
 - Position sizing, stop loss, take profit, and runner logic (paper)
 - Behavioral coaching / journal → lessons → RAG learning loop
 - Deterministic risk checks. `RiskEngine.evaluate()` does not gate a BloFin demo order. Eligibility runs a subset of its rules. Demo sizing may use up to 10% of equity as notional and 1% as loss, above the engine's 5% per-order cap. The claim predicate governs the order that is sent. A `BLOCK` from a check that does run is final.
-- Approval before an order. A human approval uses the API, web, or Telegram channel. Autonomous internal paper and autonomous BloFin demo, when their own flag is on, record a system actor on the AUTONOMOUS channel. Both flags default off. Demo auto-approval is staging-only and stays inside the configured account limits. The kill switch stops new entries and does not close open demo positions.
+- Approval before an order. A human approval uses the API, web, or Telegram channel. Autonomous internal paper and autonomous BloFin demo, when their own flag is on, record a system actor on the AUTONOMOUS channel and are not counted as human approvals. Both flags default off. Demo auto-approval is staging-only, stays inside configured account limits, and refuses an unverified 100% ledger fallback. The kill switch stops new entries and does not close open demo positions.
 
 ## Hard safety rules (NON-NEGOTIABLE)
 

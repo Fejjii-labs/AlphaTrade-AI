@@ -231,8 +231,18 @@ _ENUM_LEN = 40
 
 
 def _enum(enum_cls: type) -> Enum:
-    """Portable, non-native enum column (VARCHAR + CHECK)."""
-    return Enum(enum_cls, native_enum=False, length=_ENUM_LEN, validate_strings=True)
+    """Portable non-native enum column (VARCHAR).
+
+    ``create_constraint`` is false, so the database has no CHECK on the stored
+    value. ``validate_strings`` checks the value in Python only.
+    """
+    return Enum(
+        enum_cls,
+        native_enum=False,
+        create_constraint=False,
+        length=_ENUM_LEN,
+        validate_strings=True,
+    )
 
 
 # --------------------------------------------------------------------------- #

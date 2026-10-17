@@ -244,7 +244,12 @@ class LearningAttributionService:
             trade=trade,
             payload=dict(event.payload),
         )
-        behavior = behavior_facts(event_type=event.event_type, candidate=candidate, trade=trade)
+        behavior = behavior_facts(
+            event_type=event.event_type,
+            candidate=candidate,
+            trade=trade,
+            payload=dict(event.payload),
+        )
         outcome = outcome_facts(event_type=event.event_type, trade=trade)
         pattern = strategy_pattern_facts(
             candidate=candidate,
@@ -252,6 +257,7 @@ class LearningAttributionService:
             trade=trade,
             outcome=outcome,
             learning_venue_mode=learning_venue_mode,
+            payload=dict(event.payload),
         )
         human = HumanVsSystemAttributionFacts(
             decision_actor=behavior.actor,
@@ -445,7 +451,12 @@ class LearningAttributionService:
             trade=trade,
             payload=dict(command.event.payload),
         )
-        behavior = behavior_facts(event_type=event_type, candidate=candidate, trade=trade)
+        behavior = behavior_facts(
+            event_type=event_type,
+            candidate=candidate,
+            trade=trade,
+            payload=dict(command.event.payload),
+        )
         outcome = outcome_facts(event_type=event_type, trade=trade)
         if event_type in {
             JournalLifecycleEventType.REJECT,
@@ -461,6 +472,7 @@ class LearningAttributionService:
             trade=trade,
             outcome=outcome,
             learning_venue_mode=command.learning_venue_mode,
+            payload=dict(command.event.payload),
         )
         human = HumanVsSystemAttributionFacts(
             decision_actor=behavior.actor,
