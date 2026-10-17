@@ -807,3 +807,134 @@ def test_unstamped_close_cannot_reclassify_an_autonomous_approval(
     assert snapshot.human_vs_system.human_approvals == 0
     assert snapshot.human_vs_system.human_approved_executed_wins == 0
     assert snapshot.human_vs_system.human_approved_executed_losses == 0
+
+
+def _legacy_facts_hash(dump: dict[str, object]) -> str:
+    """Hash a facts dump the way main did, before autonomous_approval existed."""
+
+    from app.market_contracts.hashing import CONTENT_HASH_EXCLUDE, RECEIVE_AND_TRANSPORT_FIELDS
+    from app.services.canonical_serialization import canonical_sha256
+
+    exclude = RECEIVE_AND_TRANSPORT_FIELDS | CONTENT_HASH_EXCLUDE
+    pattern = dict(dump["strategy_pattern"])  # type: ignore[arg-type]
+    pattern.pop("autonomous_approval", None)
+    preimage = {
+        key: (pattern if key == "strategy_pattern" else item)
+        for key, item in dump.items()
+        if key not in exclude
+    }
+    return canonical_sha256(preimage)
+
+
+def test_legacy_facts_payload_loads_and_tamper_is_rejected(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.db.learning_attribution import LearningAttributionRecordRow
+    from app.learning_attribution.errors import LearningAttributionConflictError
+    from app.persistence.attribution_postgres import PostgresAttributionStore, _facts_from_payload
+    from app.services.canonical_serialization import canonical_sha256
+
+    with attribution_sessions() as session:
+        store = PostgresAttributionStore(session)
+        service = learning_service(session, store)
+        lifecycle_id = uuid4()
+        result = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="legacy-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(),
+                ),
+                make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id),
+            )
+        )
+        session.commit()
+        facts = result.record.facts
+        python_dump = facts.model_dump(mode="python")
+        legacy_hash = _legacy_facts_hash(python_dump)
+        included = dict(python_dump)
+        pattern = dict(included["strategy_pattern"])
+        pattern["autonomous_approval"] = False
+        included["strategy_pattern"] = pattern
+        included.pop("content_hash", None)
+        from app.market_contracts.hashing import CONTENT_HASH_EXCLUDE, RECEIVE_AND_TRANSPORT_FIELDS
+
+        broken_hash = canonical_sha256(
+            {
+                key: item
+                for key, item in included.items()
+                if key not in (RECEIVE_AND_TRANSPORT_FIELDS | CONTENT_HASH_EXCLUDE)
+            }
+        )
+        assert broken_hash != legacy_hash
+        assert facts.content_hash == legacy_hash
+        payload = facts.model_dump(mode="json")
+        assert payload["strategy_pattern"].pop("autonomous_approval") is False
+        payload["content_hash"] = legacy_hash
+        loaded = _facts_from_payload(payload, expected_hash=legacy_hash)
+        assert loaded.strategy_pattern.autonomous_approval is False
+        assert loaded.strategy_pattern.plan_approved is True
+        tampered = facts.model_dump(mode="json")
+        tampered["strategy_pattern"].pop("autonomous_approval", None)
+        tampered["content_hash"] = legacy_hash
+        tampered["strategy_pattern"]["plan_approved"] = False
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(tampered, expected_hash=legacy_hash)
+        injected = facts.model_dump(mode="json")
+        injected["content_hash"] = legacy_hash
+        injected["strategy_pattern"]["autonomous_approval"] = True
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(injected, expected_hash=legacy_hash)
+
+        row = session.scalars(select(LearningAttributionRecordRow)).one()
+        stored = dict(row.facts_payload)
+        stored_pattern = dict(stored["strategy_pattern"])
+        stored_pattern.pop("autonomous_approval", None)
+        stored["strategy_pattern"] = stored_pattern
+        row.facts_payload = stored
+        session.commit()
+        listed = store.list_for_organization(ORG_ID)
+        assert len(listed) == 1
+        assert listed[0].facts.content_hash == legacy_hash
+        assert listed[0].facts.strategy_pattern.autonomous_approval is False
+
+
+def test_autonomous_facts_round_trip_through_the_loader(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.learning_attribution.errors import LearningAttributionConflictError
+    from app.persistence.attribution_postgres import _facts_from_payload
+
+    lifecycle_id = uuid4()
+    with attribution_sessions() as session:
+        result = learning_service(session).apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="auto-round-trip",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id),
+            )
+        )
+        session.commit()
+        facts = result.record.facts
+        assert facts.strategy_pattern.autonomous_approval is True
+        payload = facts.model_dump(mode="json")
+        assert payload["strategy_pattern"]["autonomous_approval"] is True
+        loaded = _facts_from_payload(payload, expected_hash=facts.content_hash)
+        assert loaded.content_hash == facts.content_hash
+        assert loaded.strategy_pattern.autonomous_approval is True
+        assert loaded.strategy_pattern.plan_approved is False
+        stripped = facts.model_dump(mode="json")
+        stripped["strategy_pattern"].pop("autonomous_approval")
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(stripped, expected_hash=facts.content_hash)

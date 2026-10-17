@@ -49,9 +49,11 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   Learning attribution maps `AUTONOMOUS` to `autonomous_approval` and does not
   set `plan_approved`, so those trades are not human approvals and do not
   enter human-approved win/loss counts. The verified demo close copies
-  `approval_channel` from the authorization. Once a record is autonomous,
+  `approval_channel` from the authorization.   Once a record is autonomous,
   that flag is sticky: a later fill or close with no channel cannot flip
-  `plan_approved` back to true. An autonomous approval's trader-behavior
+  `plan_approved` back to true. `autonomous_approval: false` is omitted from
+  the canonical facts hash so records stored before the field still load.
+  A true value stays in the hash. An autonomous approval's trader-behavior
   axis is `autonomous_approval`, not `approved_plan`. A missing channel on a
   legacy event that was never autonomous stays a human approval. If the
   kill switch (or the same re-check) blocks after the authorization is

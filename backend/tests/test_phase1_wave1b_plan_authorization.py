@@ -728,6 +728,19 @@ def test_post_approval_recheck_revoke_writes_an_audit_row(session: Session) -> N
     assert len(revoke_audits) == 1
     assert revoke_audits[0].resource_id == str(authorization.authorization_id)
     assert revoke_audits[0].resource_type == "approval"
+    issuing_service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="post_approval_recheck",
+    )
+    again = [
+        row
+        for row in session.scalars(select(AuditLog)).all()
+        if row.action is AuditEventType.APPROVAL_DECISION
+        and (row.redacted_metadata or {}).get("reason") == "post_approval_recheck"
+    ]
+    assert len(again) == 1
 
 
 def test_reject_and_skip_never_authorize(session: Session) -> None:
