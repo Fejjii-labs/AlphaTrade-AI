@@ -10,9 +10,10 @@
 ## What it is
 
 Human-in-the-loop AI trading **copilot** for crypto markets. It produces structured
-analysis, applies a deterministic risk engine, requires explicit human approval, and
-executes **paper-only** (simulated) trades. There is no live broker/exchange execution
-wired in this release.
+analysis, applies deterministic risk checks, records an approval before an order, and
+executes **paper-only** (simulated) trades. Human approvals are separate from
+autonomous internal-paper and BloFin demo auto-approvals, which stay behind flags
+that default off. There is no live broker/exchange execution wired in this release.
 
 Release line: `v0.1.0-paper-mvp` (built in vertical slices 1–~91A per `docs/`).
 
@@ -21,8 +22,8 @@ Release line: `v0.1.0-paper-mvp` (built in vertical slices 1–~91A per `docs/`)
 - Human-vs-system comparison and paper validation of trading discipline
 - Position sizing, stop loss, take profit, and runner logic (paper)
 - Behavioral coaching / journal → lessons → RAG learning loop
-- Deterministic risk engine with final `BLOCK` authority over proposals and paper execution
-- Explicit approval workflow (approve / reject / modify) before any paper order
+- Deterministic risk checks. `RiskEngine.evaluate()` does not gate a BloFin demo order. Eligibility runs a subset of its rules. Demo sizing may use up to 10% of equity as notional and 1% as loss, above the engine's 5% per-order cap. The claim predicate governs the order that is sent. A `BLOCK` from a check that does run is final.
+- Approval before an order. A human approval uses the API, web, or Telegram channel. Autonomous internal paper and autonomous BloFin demo, when their own flag is on, record a system actor on the AUTONOMOUS channel. Both flags default off. Demo auto-approval is staging-only and stays inside the configured account limits. The kill switch stops new entries and does not close open demo positions.
 
 ## Hard safety rules (NON-NEGOTIABLE)
 

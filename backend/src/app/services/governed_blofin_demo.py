@@ -574,8 +574,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         session: Session,
         target: PaperScanTarget,
         plan: object,
-    ) -> str | None:
-        """Refuse demo auto-approval unless mode, kill switch, and limits verify."""
+    ) -> tuple[str | None, RiskLimitSnapshot | None]:
+        """Refuse demo auto-approval unless mode, kill switch, and limits verify.
+
+        The snapshot is returned only when every check passed, so the approval
+        audit can record the limits that were actually used.
+        """
 
         from app.experiments.execution_risk import experiment_reservation_refusal
         from app.services.autonomous_trading import (
@@ -588,10 +592,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
         refusal = continuation_refusal(self._settings, expected=AutonomousMode.BLOFIN_DEMO)
         if refusal is not None:
-            return refusal
+            return refusal, None
         observed = getattr(self, "_observed_kill_switch", None)
         if observed is not None and not isinstance(observed, bool):
-            return "kill_switch_unverified"
+            return "kill_switch_unverified", None
         kill = kill_switch_refusal(
             self._settings,
             session,
@@ -599,24 +603,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             observed=observed if isinstance(observed, bool) else None,
         )
         if kill is not None:
-            return kill
+            return kill, None
         try:
             intent = conservative_reservation(plan)  # type: ignore[arg-type]
             snapshot = _demo_risk_snapshot(session, target, plan, intent)
         except Exception:
-            return "risk_limits_unverified"
+            return "risk_limits_unverified", None
         risk = configured_risk_refusal(snapshot)
         if risk is not None:
-            return risk
+            return risk, None
         try:
-            return experiment_reservation_refusal(
+            experiment = experiment_reservation_refusal(
                 session,
                 plan,
                 intent,
                 self._clock.now(),  # type: ignore[arg-type]
             )
         except Exception:
-            return "risk_limits_unverified"
+            return "risk_limits_unverified", None
+        if experiment is not None:
+            return experiment, None
+        return None, snapshot
 
     def _execute_existing(
         self,
@@ -681,9 +688,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             is not None
         ):
             return _proof(candidate, "closed", "demo_closed_reconciled", revision_id=revision_id)
-        blocked = self._demo_auto_approval_refusal(session, target, envelope.plan)
+        blocked, limits = self._demo_auto_approval_refusal(session, target, envelope.plan)
         if blocked is not None:
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        from app.services.autonomous_trading import (
+            AUTONOMOUS_ACTOR_TYPE,
+            AutonomousMode,
+            autonomous_decision_metadata,
+        )
+
         approval = ApprovalService(
             session, AuditService(session), clock=self._clock.now, plans=plans
         )
@@ -698,10 +711,23 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
             principal_organization_id=target.organization_id,
             principal_user_id=target.user_id,
-            channel=AuthorizationChannel.API,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+            audit_metadata=autonomous_decision_metadata(
+                mode=AutonomousMode.BLOFIN_DEMO,
+                settings=self._settings,
+                limits=limits,
+                limits_note=(
+                    "account ledger snapshot accepted at auto-approval; "
+                    "the claim predicate remains the execution authority"
+                ),
+            ),
         )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
+        blocked, _limits_again = self._demo_auto_approval_refusal(session, target, envelope.plan)
+        if blocked is not None:
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(

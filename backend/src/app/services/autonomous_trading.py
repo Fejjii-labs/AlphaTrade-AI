@@ -35,6 +35,10 @@ class AutonomousMode(StrEnum):
     BLOFIN_DEMO = "blofin_demo"
 
 
+AUTONOMOUS_APPROVAL_POLICY_VERSION = "at-adr-106/v1"
+AUTONOMOUS_ACTOR_TYPE = "SYSTEM"
+
+
 @dataclass(frozen=True)
 class AutonomousModeResolution:
     """Resolved mode. ``refusal`` is set whenever the mode cannot be verified."""
@@ -93,6 +97,9 @@ def resolve_autonomous_mode(settings: object) -> AutonomousModeResolution:
         return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_mode_unverified")
     if enable_real or real_trading or execution_mode == "trade" or exchange_mode == "trade_live":
         return AutonomousModeResolution(AutonomousMode.OFF, "real_trading_blocked")
+    environment = _enum_value(getattr(settings, "environment", None))
+    if environment == "production" and (paper_flag or demo_flag):
+        return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_production_refused")
     if paper_flag and demo_flag:
         return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_mode_ambiguous")
     if paper_flag:
@@ -104,6 +111,39 @@ def resolve_autonomous_mode(settings: object) -> AutonomousModeResolution:
             return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_demo_unverified")
         return AutonomousModeResolution(AutonomousMode.BLOFIN_DEMO, None)
     return AutonomousModeResolution(AutonomousMode.OFF, None)
+
+
+def autonomous_decision_metadata(
+    *,
+    mode: AutonomousMode,
+    settings: object,
+    limits: RiskLimitSnapshot | None,
+    limits_note: str,
+) -> dict[str, object]:
+    """Identity recorded with an autonomous auto-approval.
+
+    ``limits`` is the snapshot the approval used. Paper does not evaluate the
+    account ledger at approval time; callers pass None and say so in
+    ``limits_note``. Demo passes the snapshot that passed the account-limit check.
+    """
+
+    return {
+        "actor": "system",
+        "channel": "AUTONOMOUS",
+        "mode": mode.value,
+        "policy_version": AUTONOMOUS_APPROVAL_POLICY_VERSION,
+        "flags": {
+            "autonomous_internal_paper_enabled": getattr(
+                settings, "autonomous_internal_paper_enabled", None
+            ),
+            "autonomous_blofin_demo_enabled": getattr(
+                settings, "autonomous_blofin_demo_enabled", None
+            ),
+        },
+        "environment": _enum_value(getattr(settings, "environment", None)),
+        "limits_note": limits_note,
+        "limits": _limit_payload(limits),
+    }
 
 
 def continuation_refusal(settings: object, *, expected: AutonomousMode) -> str | None:
@@ -239,6 +279,30 @@ def configured_risk_refusal(snapshot: RiskLimitSnapshot | None) -> str | None:
 
 
 _MISSING = object()
+
+
+def _limit_payload(snapshot: RiskLimitSnapshot | None) -> dict[str, object] | None:
+    if snapshot is None:
+        return None
+    return {
+        "max_notional": str(snapshot.max_notional),
+        "max_daily_loss": str(snapshot.max_daily_loss),
+        "max_symbol_notional": str(snapshot.max_symbol_notional),
+        "max_trade_slots": snapshot.max_trade_slots,
+        "pending_notional": str(snapshot.pending_notional),
+        "proposed_loss": str(snapshot.proposed_loss),
+        "instrument": snapshot.instrument,
+        "reserved_notional": str(snapshot.reserved_notional),
+        "reserved_daily_loss": str(snapshot.reserved_daily_loss),
+        "reserved_trade_slots": snapshot.reserved_trade_slots,
+        "actual_notional": str(snapshot.actual_notional),
+        "actual_daily_loss": str(snapshot.actual_daily_loss),
+        "actual_trade_count": snapshot.actual_trade_count,
+        "symbol_reserved": dict(snapshot.symbol_reserved or {}),
+        "symbol_actual": dict(snapshot.symbol_actual or {}),
+        "daily_locked": snapshot.daily_locked,
+        "trade_slots": snapshot.trade_slots,
+    }
 
 
 def _enum_value(value: object) -> str | None:

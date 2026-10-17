@@ -1027,7 +1027,7 @@ export interface components {
          * AuthorizationChannel
          * @enum {string}
          */
-        AuthorizationChannel: "WEB" | "API" | "TELEGRAM";
+        AuthorizationChannel: "WEB" | "API" | "TELEGRAM" | "AUTONOMOUS";
         /**
          * BacktestStatus
          * @description Placeholder backtest lifecycle.

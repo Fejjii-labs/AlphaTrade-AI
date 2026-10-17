@@ -12,6 +12,15 @@ with only a release workflow/plugin-import fixture fix. That disjoint change is
 not copied into this branch. The release/CI continuation stays separate. Execution remains disarmed; this work
 has not changed runtime/account settings, deployed anything, or contacted BloFin.
 
+## Kill switch and open demo positions
+
+The kill switch stops new entries only. It does not close an open BloFin demo
+position, cancel a resting protective order, or repair a missing stop. After it
+is on, an operator closes the open demo position by hand on the BloFin demo
+account, confirms the account is flat, and only then disarms or reviews the
+remaining orders. Real-money trading stays blocked. Neither autonomous flag is
+turned on by this note.
+
 ## Implemented path
 
 The existing Watcher target, compiled strategy version and confirmed Candidate

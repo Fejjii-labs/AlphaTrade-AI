@@ -144,6 +144,38 @@ def test_modes_are_separate_and_fail_closed_when_unverified() -> None:
     broken = _view()
     del broken.autonomous_blofin_demo_enabled
     assert resolve_autonomous_mode(broken).refusal == "autonomous_mode_unverified"
+    assert (
+        resolve_autonomous_mode(
+            _view(autonomous_internal_paper_enabled=True, execution_mode="read_only")
+        ).refusal
+        == "autonomous_paper_unverified"
+    )
+    assert (
+        resolve_autonomous_mode(
+            _view(
+                autonomous_blofin_demo_enabled=True,
+                exchange_mode="paper_exchange_demo",
+                execution_mode="read_only",
+            )
+        ).refusal
+        == "autonomous_demo_unverified"
+    )
+    assert (
+        resolve_autonomous_mode(
+            _view(environment="production", autonomous_internal_paper_enabled=True)
+        ).refusal
+        == "autonomous_production_refused"
+    )
+    assert (
+        resolve_autonomous_mode(
+            _view(
+                environment="production",
+                autonomous_blofin_demo_enabled=True,
+                exchange_mode="paper_exchange_demo",
+            )
+        ).refusal
+        == "autonomous_production_refused"
+    )
 
 
 def test_kill_switch_blocks_and_unreadable_state_fails_closed() -> None:
@@ -212,6 +244,14 @@ def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
     over_daily_loss = _limits(actual_daily_loss=Decimal("95"), proposed_loss=Decimal("10"))
     assert configured_risk_refusal(over_daily_loss) == "daily_loss_limit"
     assert configured_risk_refusal(_limits(daily_locked=True)) == "daily_loss_limit"
+    assert (
+        configured_risk_refusal(_limits(max_trade_slots=1, actual_trade_count=1))
+        == "daily_trade_limit"
+    )
+    assert (
+        configured_risk_refusal(_limits(max_trade_slots=2, reserved_trade_slots=2))
+        == "daily_trade_limit"
+    )
     assert configured_risk_refusal(None) == "risk_limits_unverified"
     assert configured_risk_refusal(_limits(max_notional=Decimal("NaN"))) == "risk_limits_unverified"
     assert configured_risk_refusal(_limits(symbol_reserved={"BTCUSDT": "nope"})) == (
@@ -314,3 +354,184 @@ def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:
         evidence,  # type: ignore[arg-type]
     )
     assert disarmed.paper_loop_reason == "autonomous_mode_disarmed"
+
+
+def test_trade_slot_refusal_is_distinct_from_exposure() -> None:
+    assert configured_risk_refusal(_limits(max_trade_slots=0, trade_slots=1)) == "daily_trade_limit"
+
+
+def test_missing_ledger_row_uses_stored_risk_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _RiskSettings:
+        def __init__(self, _session: object, _audit: object) -> None:
+            pass
+
+        def get(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                default_account_balance=Decimal("10000"),
+                daily_loss_limit=Decimal("250"),
+                max_trades_per_day=3,
+            )
+
+    monkeypatch.setattr("app.services.risk.settings_service.RiskSettingsService", _RiskSettings)
+
+    class _NoLedger:
+        def scalar(self, _statement: object) -> None:
+            return None
+
+    from app.services.governed_blofin_demo import _demo_risk_snapshot
+
+    snapshot = _demo_risk_snapshot(
+        _NoLedger(),  # type: ignore[arg-type]
+        SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
+        SimpleNamespace(account_id=uuid4()),
+        SimpleNamespace(
+            pending_notional=Decimal("10"),
+            daily_loss=Decimal("1"),
+            instrument="BTCUSDT",
+            trade_slots=1,
+        ),
+    )
+    assert snapshot is not None
+    assert snapshot.max_notional == Decimal("10000")
+    assert snapshot.max_daily_loss == Decimal("250")
+    assert snapshot.max_symbol_notional == Decimal("10000")
+    assert snapshot.max_trade_slots == 3
+    assert snapshot.pending_notional == Decimal("10")
+    assert snapshot.reserved_notional == Decimal("0")
+    assert snapshot.daily_locked is False
+
+
+def _forbid_approval(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("this failure must not create an approval")
+
+
+def _armed_demo_view() -> SimpleNamespace:
+    return _view(
+        autonomous_blofin_demo_enabled=True,
+        exchange_mode="paper_exchange_demo",
+        environment="staging",
+    )
+
+
+def test_limit_snapshot_error_blocks_the_demo_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("limit snapshot unavailable")
+
+    monkeypatch.setattr("app.services.execution_claim.conservative_reservation", _raise)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    proof = _run_disarmed_style_demo(_armed_demo_view())
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "risk_limits_unverified"
+
+
+def test_experiment_budget_error_blocks_the_demo_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    intent = SimpleNamespace(
+        pending_notional=Decimal("10"),
+        daily_loss=Decimal("1"),
+        instrument="BTCUSDT",
+        trade_slots=1,
+    )
+    monkeypatch.setattr(
+        "app.services.execution_claim.conservative_reservation",
+        lambda *_args, **_kwargs: intent,
+    )
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo._demo_risk_snapshot",
+        lambda *_args, **_kwargs: _limits(),
+    )
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("experiment budget unavailable")
+
+    monkeypatch.setattr("app.experiments.execution_risk.experiment_reservation_refusal", _raise)
+    monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
+    proof = _run_disarmed_style_demo(_armed_demo_view())
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "risk_limits_unverified"
+
+
+def test_kill_switch_after_auto_approval_blocks_before_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None, autonomous_internal_paper_enabled=True)
+    captured: dict[str, object] = {}
+
+    class _Kill:
+        active = False
+
+        def scalar(self, _statement: object) -> SimpleNamespace:
+            return SimpleNamespace(active=self.active)
+
+    kill = _Kill()
+
+    class _Approval:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def create_for_plan_revision(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(id=uuid4())
+
+        def decide(self, _approval_id: object, _decision: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            kill.active = True
+            return SimpleNamespace(authorization=SimpleNamespace(authorization_id=uuid4()))
+
+    monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop.ExecutionService",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("claim must not run after the kill switch turns on")
+        ),
+    )
+    loop = AutomatedPaperLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
+    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    proof = loop._execute_existing(
+        kill,  # type: ignore[arg-type]
+        target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        revision_id=uuid4(),
+        account_id=uuid4(),
+        eligibility_id=uuid4(),
+        eligibility_state="eligible",
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "kill_switch_active"
+    channel = captured["channel"]
+    assert getattr(channel, "value", None) == "AUTONOMOUS"
+    assert captured["actor_type"] == "SYSTEM"
+    meta = captured["audit_metadata"]
+    assert isinstance(meta, dict)
+    assert meta["mode"] == "internal_paper"
+    assert meta["policy_version"] == "at-adr-106/v1"
+    assert meta["flags"]["autonomous_internal_paper_enabled"] is True
+    assert meta["flags"]["autonomous_blofin_demo_enabled"] is False
+    assert meta["limits"] is None
+
+
+def _run_disarmed_style_demo(settings: object):  # type: ignore[no-untyped-def]
+    revision_id = uuid4()
+    candidate = SimpleNamespace(candidate_id=uuid4())
+    target = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
+    envelope = SimpleNamespace(
+        plan=SimpleNamespace(execution_venue="BLOFIN_DEMO", execution_policy_version=DEMO_POLICY)
+    )
+    demo = GovernedBloFinDemoLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
+    demo._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_args, **_kwargs: envelope
+    )
+
+    class _Session:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def scalar(self, _statement: object) -> None:
+            self.calls += 1
+            return None
+
+    return demo._execute_existing(
+        _Session(),  # type: ignore[arg-type]
+        target=target,  # type: ignore[arg-type]
+        candidate=candidate,  # type: ignore[arg-type]
+        revision_id=revision_id,
+        account_id=uuid4(),
+    )
