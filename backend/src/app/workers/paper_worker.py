@@ -380,12 +380,24 @@ class PaperWorkerSupervisor:
                 return
             self._succeed(component, outcome)
         finally:
+            self._finish_memory_cycle(component, sampler)
+
+    def _finish_memory_cycle(
+        self, component: _Component, sampler: CycleMemorySampler | None
+    ) -> None:
+        """Cleanup and diagnostics fail safe: they must never kill a component thread."""
+        try:
             if sampler is not None:
                 sampler.stop()
             after = release_allocator_memory()
-            if sampler is not None:
-                assert self._memory_diagnostics is not None
+            if sampler is not None and self._memory_diagnostics is not None:
                 self._memory_diagnostics.finish(component.name, sampler, after)
+        except Exception as exc:
+            logger.warning(
+                "paper_worker_memory_diagnostics_failed",
+                component=component.name,
+                error=_safe_error(exc),
+            )
 
     def _revert(self, component: _Component) -> None:
         guard = component.guard
