@@ -12,6 +12,7 @@ const e2eBackendEnv = {
   JOURNAL_RAG_SYNC_ENABLED: "true",
   EMAIL_AUTO_VERIFY_LOCAL: "true",
   ACCESS_TOKEN_DENYLIST_ENABLED: "false",
+  AUTH_REGISTER_RATE_LIMIT: "200",
   JWT_SECRET: "e2e-test-secret-at-least-32-characters-long",
   DATABASE_URL: "sqlite+pysqlite:///./.e2e-alphatrade.db",
   LOG_JSON: "false",
@@ -19,7 +20,10 @@ const e2eBackendEnv = {
 };
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: ".",
+  // Research persistence requires an explicit disposable PostgreSQL fixture and
+  // two selected phases separated by a real API restart; never run it on staging.
+  testMatch: ["e2e/**/*.spec.ts", "ui-tests/reviewer-wave.spec.ts", "ui-tests/reviewer-api-persistence.spec.ts", "ui-tests/experiments-api.spec.ts", ...(process.env.EXPERIMENT_BROWSER_AUTH_FILE ? ["ui-tests/research-api.spec.ts", "ui-tests/auth-recovery-api.spec.ts", "ui-tests/agent-knowledge-api.spec.ts", "ui-tests/conversation-viewport-api.spec.ts"] : [])],
   timeout: 90_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
@@ -88,8 +92,13 @@ export default defineConfig({
           timeout: 120_000,
         },
         {
-          command: "npm run dev -- --port 3000 --hostname localhost",
-          env: { NEXT_PUBLIC_API_URL: apiURL },
+          command: process.env.PLAYWRIGHT_PRODUCTION === "true"
+            ? "npm run start -- --port 3000 --hostname localhost"
+            : "npm run dev -- --port 3000 --hostname localhost",
+          env: {
+            NEXT_PUBLIC_API_URL: apiURL,
+            E2E_DISABLE_REACT_STRICT_MODE: "1",
+          },
           url: baseURL,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

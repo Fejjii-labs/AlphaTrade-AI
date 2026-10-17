@@ -46,10 +46,10 @@ CVD or order-flow calculation is inferred from these endpoints.
 Versioned age limits are 60 seconds for Binance OI, 600 seconds for Bybit's native
 5-minute OI, and 24 hours for **last settled funding history**. The funding limit is
 an explicit consumer policy, not a venue funding schedule or a claim that the rate
-is current/predicted. The exact age boundary is inclusive. A 2-second provider clock-skew allowance
-is reported explicitly by the freshness evaluation. Event times farther in the
-future fail closed with unknown freshness. These policies reuse the existing freshness
-evaluator; existing 10-second trade/quote policy constants stay unchanged.
+is current/predicted. The exact age boundary is inclusive. The current v2 freshness
+policy rejects any event after observation/evaluation; clock-skew allowance is zero.
+Future events fail closed with unknown freshness. These policies reuse the existing
+freshness evaluator; existing 10-second trade/quote policy constants stay unchanged.
 
 OI/funding are optional market intelligence in canonical reads. Optional data is
 outside the existing setup evidence hash and cannot silently strengthen a strategy.
@@ -82,3 +82,6 @@ Checked on 2026-10-01 using the official Binance connector and official Bybit do
 Validation uses deterministic `httpx.MockTransport` responses with injected
 observation times, including recorded candle/trade fixtures for pipeline checks.
 No live venue connectivity or live values are claimed by these tests.
+
+Current receipt-time capture, explicit single-record coverage, cache and Agent
+consumer contract: [Public market evidence foundation](market_evidence_foundation.md).

@@ -1,3 +1,4 @@
+import { agentTurnFixture } from "../src/test/pilot-fixtures";
 import { expect, test, type Page } from "@playwright/test";
 import { installSmokeSession } from "./helpers/staging-smoke-auth";
 
@@ -32,7 +33,7 @@ async function fixture(page: Page) {
       observations.push(note);
       return route.fulfill({ json: note, status: 201 });
     }
-    if (path === "/agent/turns") return route.fulfill({ json: { conversation_id: "fixture-conversation", reply: "BTCUSDT long · BloFin demo. Entry verified: 0.1 contracts at 82,234.40 USDT. Exit remains unverified. Open this attempt’s Journal detail.", recorded_evidence: `Command ${command}; order fixture-native-order; no verified closure.`, connections: [{ artifact_kind: "journal_entry", relation: "recorded trade lineage", title: "Journal", record_id: tradeId }] } });
+    if (path === "/agent/turns") return route.fulfill({ json: { ...agentTurnFixture, reply: "BTCUSDT long · BloFin demo. Entry verified: 0.1 contracts at 82,234.40 USDT. Exit remains unverified. Open this attempt’s Journal detail.", recorded_evidence: `Command ${command}; order fixture-native-order; no verified closure.`, connections: [{ artifact_kind: "journal_entry", provenance: "trade_outcome", relation: "recorded trade lineage", title: "Journal", record_id: tradeId }] } });
     return route.fulfill({ status: 404, json: { detail: "Fixture record unavailable in this organization" } });
   });
   return writes;

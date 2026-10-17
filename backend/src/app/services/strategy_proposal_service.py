@@ -422,7 +422,10 @@ class StrategyProposalService:
             card_dump = dict(parent.card)
         elif drafted.draft is not None:
             card_dump = StrategyCard(
-                strategy_name=(text.strip()[:120] or "Conversation draft"),
+                strategy_name=(
+                    str((pattern_dump or {}).get("name") or text.strip())[:120]
+                    or "Conversation draft"
+                ),
                 entry_conditions=[text.strip()[:500]],
                 invalidation=["Close beyond defined invalidation"],
                 stop_loss=["Stop at invalidation"],
@@ -507,6 +510,10 @@ class StrategyProposalService:
             raise ConflictError("This proposal was superseded by a later draft.")
         if row.proposed_structured_rules is None:
             raise ValidationAppError("Proposal has no structured rules to persist.")
+        if not (row.validation or {}).get("valid"):
+            raise ValidationAppError(
+                "Correct the proposal's validation errors before confirmation."
+            )
         self._assert_confirmation_identity(
             row,
             expected_content_hash=expected_content_hash,
@@ -642,6 +649,9 @@ class StrategyProposalService:
         )
         now = datetime.now(UTC)
         row.status = StrategyProposalStatus.CONFIRMED
+        conversation = self._session.get(Conversation, row.conversation_id)
+        if conversation is not None and conversation.strategy_id is None:
+            conversation.strategy_id = strategy.id
         row.resulting_strategy_id = strategy.id
         row.resulting_version_id = version.id
         row.resulting_content_hash = version.content_hash
@@ -733,8 +743,12 @@ class StrategyProposalService:
             UserStrategyCreate(
                 organization_id=row.organization_id,
                 user_id=user_id,
-                name=f"{name} {str(row.id)[:8]}",
-                setup_type=StrategyId.HTF_TREND_PULLBACK,
+                name=f"{name[:111]} {str(row.id)[:8]}",
+                setup_type=StrategyId(
+                    StrategyId.MANUAL_REVIEW
+                    if (row.proposed_pattern_spec or {}).get("kind") == "trendpulse_1r/v1"
+                    else (row.context_refs or {}).get("setup_type") or StrategyId.HTF_TREND_PULLBACK
+                ),
                 card=StrategyCard.model_validate(row.proposed_card)
                 if row.proposed_card
                 else StrategyCard(

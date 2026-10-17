@@ -1,0 +1,1603 @@
+{
+  "$defs": {
+    "ContractStyle": {
+      "enum": [
+        "linear",
+        "inverse"
+      ],
+      "title": "ContractStyle",
+      "type": "string"
+    },
+    "ContractType": {
+      "enum": [
+        "LINEAR",
+        "INVERSE"
+      ],
+      "title": "ContractType",
+      "type": "string"
+    },
+    "EvidenceMarketIdentity": {
+      "additionalProperties": false,
+      "description": "Full identity required on every first-slice evidence object.",
+      "properties": {
+        "instrument": {
+          "$ref": "#/$defs/InstrumentIdentity"
+        },
+        "market_type": {
+          "$ref": "#/$defs/MarketType"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ProviderProvenance"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceIdentity"
+        },
+        "timeframe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timeframe"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "venue": {
+          "$ref": "#/$defs/VenueId"
+        }
+      },
+      "required": [
+        "venue",
+        "market_type",
+        "instrument",
+        "source",
+        "provenance"
+      ],
+      "title": "EvidenceMarketIdentity",
+      "type": "object"
+    },
+    "ExperimentBoundTrendPulse": {
+      "additionalProperties": false,
+      "properties": {
+        "account_verified_here": {
+          "const": false,
+          "default": false,
+          "title": "Account Verified Here",
+          "type": "boolean"
+        },
+        "binding_id": {
+          "format": "uuid",
+          "title": "Binding Id",
+          "type": "string"
+        },
+        "configuration_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Hash",
+          "type": "string"
+        },
+        "contract_version": {
+          "const": "trendpulse-experiment-research/v1",
+          "default": "trendpulse-experiment-research/v1",
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "declared_execution_account_id": {
+          "format": "uuid",
+          "title": "Declared Execution Account Id",
+          "type": "string"
+        },
+        "declared_execution_source": {
+          "$ref": "#/$defs/ExperimentSource"
+        },
+        "declared_native_uid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Declared Native Uid"
+        },
+        "experiment_id": {
+          "format": "uuid",
+          "title": "Experiment Id",
+          "type": "string"
+        },
+        "experiment_version_id": {
+          "format": "uuid",
+          "title": "Experiment Version Id",
+          "type": "string"
+        },
+        "native_execution": {
+          "const": false,
+          "default": false,
+          "title": "Native Execution",
+          "type": "boolean"
+        },
+        "organization_id": {
+          "format": "uuid",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "performance": {
+          "default": null,
+          "title": "Performance",
+          "type": "null"
+        },
+        "runtime_activated": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Activated",
+          "type": "boolean"
+        },
+        "sample_eligible": {
+          "const": false,
+          "default": false,
+          "title": "Sample Eligible",
+          "type": "boolean"
+        },
+        "sample_group_id": {
+          "format": "uuid",
+          "title": "Sample Group Id",
+          "type": "string"
+        },
+        "signal": {
+          "$ref": "#/$defs/TrendPulseSignal"
+        },
+        "strategy_content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Strategy Content Hash",
+          "type": "string"
+        },
+        "strategy_id": {
+          "format": "uuid",
+          "title": "Strategy Id",
+          "type": "string"
+        },
+        "strategy_version_id": {
+          "format": "uuid",
+          "title": "Strategy Version Id",
+          "type": "string"
+        },
+        "variant_key": {
+          "title": "Variant Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding_id",
+        "organization_id",
+        "experiment_id",
+        "experiment_version_id",
+        "configuration_hash",
+        "sample_group_id",
+        "variant_key",
+        "strategy_id",
+        "strategy_version_id",
+        "strategy_content_hash",
+        "declared_execution_source",
+        "declared_execution_account_id",
+        "declared_native_uid",
+        "signal"
+      ],
+      "title": "ExperimentBoundTrendPulse",
+      "type": "object"
+    },
+    "ExperimentSource": {
+      "enum": [
+        "blofin_demo",
+        "internal_simulation"
+      ],
+      "title": "ExperimentSource",
+      "type": "string"
+    },
+    "Finality": {
+      "enum": [
+        "final",
+        "forming",
+        "corrected",
+        "unknown"
+      ],
+      "title": "Finality",
+      "type": "string"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "aging",
+        "stale",
+        "gap",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "InstrumentIdentity": {
+      "additionalProperties": false,
+      "description": "Canonical perpetual instrument identity; independent of provider symbol formatting.",
+      "properties": {
+        "base_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Base Asset",
+          "type": "string"
+        },
+        "base_quantity_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Base Quantity Unit",
+          "type": "string"
+        },
+        "contract_multiplier": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Contract Multiplier"
+        },
+        "contract_style": {
+          "$ref": "#/$defs/ContractStyle"
+        },
+        "instrument_id": {
+          "maxLength": 80,
+          "minLength": 8,
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "market_type": {
+          "$ref": "#/$defs/MarketType"
+        },
+        "price_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Price Unit",
+          "type": "string"
+        },
+        "product_family": {
+          "$ref": "#/$defs/ProductFamily"
+        },
+        "provider_symbol": {
+          "maxLength": 32,
+          "minLength": 2,
+          "title": "Provider Symbol",
+          "type": "string"
+        },
+        "quote_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Quote Asset",
+          "type": "string"
+        },
+        "quote_quantity_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Quote Quantity Unit",
+          "type": "string"
+        },
+        "settlement_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Settlement Asset",
+          "type": "string"
+        },
+        "venue": {
+          "$ref": "#/$defs/VenueId"
+        }
+      },
+      "required": [
+        "venue",
+        "market_type",
+        "product_family",
+        "contract_style",
+        "instrument_id",
+        "provider_symbol",
+        "base_asset",
+        "quote_asset",
+        "settlement_asset",
+        "contract_multiplier",
+        "price_unit",
+        "base_quantity_unit",
+        "quote_quantity_unit"
+      ],
+      "title": "InstrumentIdentity",
+      "type": "object"
+    },
+    "InstrumentRules": {
+      "additionalProperties": false,
+      "properties": {
+        "base_currency": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Base Currency",
+          "type": "string"
+        },
+        "contract_multiplier": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Contract Multiplier"
+        },
+        "contract_type": {
+          "$ref": "#/$defs/ContractType"
+        },
+        "lot_size": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Lot Size"
+        },
+        "minimum_notional": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Minimum Notional"
+        },
+        "minimum_quantity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Minimum Quantity"
+        },
+        "quote_currency": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Quote Currency",
+          "type": "string"
+        },
+        "rules_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Rules Version",
+          "type": "string"
+        },
+        "settlement_currency": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Settlement Currency",
+          "type": "string"
+        },
+        "tick_size": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Tick Size"
+        }
+      },
+      "required": [
+        "contract_multiplier",
+        "contract_type",
+        "base_currency",
+        "quote_currency",
+        "settlement_currency",
+        "tick_size",
+        "lot_size",
+        "minimum_quantity",
+        "minimum_notional",
+        "rules_version"
+      ],
+      "title": "InstrumentRules",
+      "type": "object"
+    },
+    "MarketType": {
+      "enum": [
+        "perpetual",
+        "spot",
+        "delivery",
+        "coin_m_perpetual",
+        "option"
+      ],
+      "title": "MarketType",
+      "type": "string"
+    },
+    "ObservationType": {
+      "enum": [
+        "ohlcv",
+        "trade",
+        "cvd",
+        "order_book",
+        "volume",
+        "structure",
+        "open_interest",
+        "funding"
+      ],
+      "title": "ObservationType",
+      "type": "string"
+    },
+    "OhlcvBar": {
+      "additionalProperties": false,
+      "description": "One venue kline after normalization.",
+      "properties": {
+        "adapter_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "base_volume": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Base Volume"
+        },
+        "close": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Close"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "finality": {
+          "$ref": "#/$defs/Finality"
+        },
+        "high": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "High"
+        },
+        "instrument": {
+          "$ref": "#/$defs/InstrumentIdentity"
+        },
+        "interval_end": {
+          "format": "date-time",
+          "title": "Interval End",
+          "type": "string"
+        },
+        "interval_start": {
+          "format": "date-time",
+          "title": "Interval Start",
+          "type": "string"
+        },
+        "low": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Low"
+        },
+        "open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Open"
+        },
+        "provider_complete": {
+          "title": "Provider Complete",
+          "type": "boolean"
+        },
+        "quote_volume": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Quote Volume"
+        },
+        "revision": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_time": {
+          "format": "date-time",
+          "title": "Source Time",
+          "type": "string"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe"
+        },
+        "trade_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trade Count"
+        }
+      },
+      "required": [
+        "instrument",
+        "timeframe",
+        "interval_start",
+        "interval_end",
+        "open",
+        "high",
+        "low",
+        "close",
+        "base_volume",
+        "quote_volume",
+        "source_event_id",
+        "provider_complete",
+        "finality",
+        "revision",
+        "source_time",
+        "adapter_version",
+        "content_hash"
+      ],
+      "title": "OhlcvBar",
+      "type": "object"
+    },
+    "PrivacyClass": {
+      "enum": [
+        "public_market_data"
+      ],
+      "title": "PrivacyClass",
+      "type": "string"
+    },
+    "ProductFamily": {
+      "enum": [
+        "usdm_futures",
+        "coinm_futures",
+        "spot"
+      ],
+      "title": "ProductFamily",
+      "type": "string"
+    },
+    "ProviderProvenance": {
+      "additionalProperties": false,
+      "description": "Read-only provider provenance attached to every evidence envelope.",
+      "properties": {
+        "adapter_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "is_live": {
+          "title": "Is Live",
+          "type": "boolean"
+        },
+        "is_mock": {
+          "title": "Is Mock",
+          "type": "boolean"
+        },
+        "provider_name": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "regional_failure": {
+          "default": false,
+          "title": "Regional Failure",
+          "type": "boolean"
+        },
+        "source_family": {
+          "$ref": "#/$defs/SourceFamily"
+        }
+      },
+      "required": [
+        "provider_name",
+        "source_family",
+        "adapter_version",
+        "is_live",
+        "fallback_used",
+        "is_mock"
+      ],
+      "title": "ProviderProvenance",
+      "type": "object"
+    },
+    "PublicMarketObservation": {
+      "additionalProperties": false,
+      "description": "Global public venue fact. No tenant owner.",
+      "properties": {
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "event_time": {
+          "format": "date-time",
+          "title": "Event Time",
+          "type": "string"
+        },
+        "finality": {
+          "$ref": "#/$defs/Finality"
+        },
+        "freshness_state": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "identity": {
+          "$ref": "#/$defs/EvidenceMarketIdentity"
+        },
+        "interval_end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interval End"
+        },
+        "interval_start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interval Start"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "observation_type": {
+          "$ref": "#/$defs/ObservationType"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "payload_content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Content Hash",
+          "type": "string"
+        },
+        "privacy_class": {
+          "$ref": "#/$defs/PrivacyClass",
+          "default": "public_market_data"
+        },
+        "receive_time": {
+          "format": "date-time",
+          "title": "Receive Time",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "source_event_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_time": {
+          "format": "date-time",
+          "title": "Source Time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "identity",
+        "observation_type",
+        "source_event_id",
+        "event_time",
+        "source_time",
+        "observed_at",
+        "receive_time",
+        "finality",
+        "revision",
+        "freshness_state",
+        "payload_content_hash",
+        "content_hash",
+        "recorded_at"
+      ],
+      "title": "PublicMarketObservation",
+      "type": "object"
+    },
+    "SourceFamily": {
+      "enum": [
+        "binance_usdm_futures_public",
+        "bybit_usdt_perpetual_public",
+        "replay_fixture"
+      ],
+      "title": "SourceFamily",
+      "type": "string"
+    },
+    "SourceIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "aggressor_convention": {
+          "maxLength": 120,
+          "minLength": 3,
+          "title": "Aggressor Convention",
+          "type": "string"
+        },
+        "family": {
+          "$ref": "#/$defs/SourceFamily"
+        },
+        "provider_name": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Provider Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family",
+        "provider_name",
+        "adapter_version",
+        "aggressor_convention"
+      ],
+      "title": "SourceIdentity",
+      "type": "object"
+    },
+    "Timeframe": {
+      "description": "Supported candle timeframes.",
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "6h",
+        "12h",
+        "1d",
+        "3d",
+        "1w"
+      ],
+      "title": "Timeframe",
+      "type": "string"
+    },
+    "TradeDirection": {
+      "enum": [
+        "long",
+        "short"
+      ],
+      "title": "TradeDirection",
+      "type": "string"
+    },
+    "TrendPulseEvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "available_at": {
+          "format": "date-time",
+          "title": "Available At",
+          "type": "string"
+        },
+        "observation_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Hash",
+          "type": "string"
+        },
+        "observation_id": {
+          "format": "uuid",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "payload_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Payload Hash",
+          "type": "string"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe"
+        }
+      },
+      "required": [
+        "timeframe",
+        "observation_id",
+        "payload_hash",
+        "observation_hash",
+        "available_at"
+      ],
+      "title": "TrendPulseEvidenceReference",
+      "type": "object"
+    },
+    "TrendPulseParameters": {
+      "additionalProperties": false,
+      "description": "Fixed baseline. Changing any rule requires a separately reviewed version.",
+      "properties": {
+        "entry_history_bars": {
+          "const": 60,
+          "default": 60,
+          "title": "Entry History Bars",
+          "type": "integer"
+        },
+        "expiry_seconds": {
+          "const": 60,
+          "default": 60,
+          "title": "Expiry Seconds",
+          "type": "integer"
+        },
+        "fast_ema_period": {
+          "const": 20,
+          "default": 20,
+          "title": "Fast Ema Period",
+          "type": "integer"
+        },
+        "maximum_entry_rounding_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.001",
+          "gt": 0,
+          "title": "Maximum Entry Rounding Ratio"
+        },
+        "maximum_pullback_penetration": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.003",
+          "gt": 0,
+          "title": "Maximum Pullback Penetration"
+        },
+        "maximum_risk_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.02",
+          "gt": 0,
+          "title": "Maximum Risk Ratio"
+        },
+        "maximum_trigger_open_gap_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.001",
+          "gt": 0,
+          "title": "Maximum Trigger Open Gap Ratio"
+        },
+        "minimum_risk_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.001",
+          "gt": 0,
+          "title": "Minimum Risk Ratio"
+        },
+        "minimum_slope_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.001",
+          "gt": 0,
+          "title": "Minimum Slope Ratio"
+        },
+        "pivot_width": {
+          "const": 2,
+          "default": 2,
+          "title": "Pivot Width",
+          "type": "integer"
+        },
+        "provisional": {
+          "const": true,
+          "default": true,
+          "title": "Provisional",
+          "type": "boolean"
+        },
+        "pullback_bars": {
+          "const": 3,
+          "default": 3,
+          "title": "Pullback Bars",
+          "type": "integer"
+        },
+        "pullback_tolerance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0.001",
+          "gt": 0,
+          "title": "Pullback Tolerance"
+        },
+        "slope_bars": {
+          "const": 3,
+          "default": 3,
+          "title": "Slope Bars",
+          "type": "integer"
+        },
+        "slow_ema_period": {
+          "const": 50,
+          "default": 50,
+          "title": "Slow Ema Period",
+          "type": "integer"
+        },
+        "stop_buffer_ticks": {
+          "const": 1,
+          "default": 1,
+          "title": "Stop Buffer Ticks",
+          "type": "integer"
+        },
+        "structure_lookback": {
+          "const": 32,
+          "default": 32,
+          "title": "Structure Lookback",
+          "type": "integer"
+        },
+        "trend_history_bars": {
+          "const": 250,
+          "default": 250,
+          "title": "Trend History Bars",
+          "type": "integer"
+        },
+        "trigger": {
+          "const": "closed_break_of_pullback_extreme",
+          "default": "closed_break_of_pullback_extreme",
+          "title": "Trigger",
+          "type": "string"
+        },
+        "version": {
+          "const": "trendpulse-1r-research/v1",
+          "default": "trendpulse-1r-research/v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "title": "TrendPulseParameters",
+      "type": "object"
+    },
+    "TrendPulseRequest": {
+      "additionalProperties": false,
+      "description": "Offline interface for later callers; no HTTP endpoint or provider fetch.",
+      "properties": {
+        "entry_bars": {
+          "items": {
+            "$ref": "#/$defs/OhlcvBar"
+          },
+          "maxItems": 1024,
+          "title": "Entry Bars",
+          "type": "array"
+        },
+        "entry_observations": {
+          "items": {
+            "$ref": "#/$defs/PublicMarketObservation"
+          },
+          "maxItems": 1024,
+          "title": "Entry Observations",
+          "type": "array"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "instrument_rules": {
+          "$ref": "#/$defs/InstrumentRules"
+        },
+        "seen_signal_ids": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Seen Signal Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "spec": {
+          "$ref": "#/$defs/TrendPulseSpec"
+        },
+        "trend_bars": {
+          "items": {
+            "$ref": "#/$defs/OhlcvBar"
+          },
+          "maxItems": 1024,
+          "title": "Trend Bars",
+          "type": "array"
+        },
+        "trend_observations": {
+          "items": {
+            "$ref": "#/$defs/PublicMarketObservation"
+          },
+          "maxItems": 1024,
+          "title": "Trend Observations",
+          "type": "array"
+        },
+        "trigger_end": {
+          "format": "date-time",
+          "title": "Trigger End",
+          "type": "string"
+        }
+      },
+      "required": [
+        "spec",
+        "trend_bars",
+        "trend_observations",
+        "entry_bars",
+        "entry_observations",
+        "instrument_rules",
+        "trigger_end",
+        "evaluated_at"
+      ],
+      "title": "TrendPulseRequest",
+      "type": "object"
+    },
+    "TrendPulseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "duplicate_signal_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duplicate Signal Id"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "runtime_activated": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Activated",
+          "type": "boolean"
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrendPulseSignal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "$ref": "#/$defs/TrendPulseStatus"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "TrendPulseResult",
+      "type": "object"
+    },
+    "TrendPulseSignal": {
+      "additionalProperties": false,
+      "description": "Closed-candle research geometry, never a Candidate or executable TradePlan.",
+      "properties": {
+        "adapter_version": {
+          "const": "trendpulse-1r-research/v2",
+          "default": "trendpulse-1r-research/v2",
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "decision_at": {
+          "format": "date-time",
+          "title": "Decision At",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TradeDirection"
+        },
+        "ema50_slope_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Ema50 Slope Ratio"
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Entry"
+        },
+        "entry_ema20": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Entry Ema20"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/TrendPulseEvidenceReference"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "execution_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Execution Authorized",
+          "type": "boolean"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "gross_reward_risk": {
+          "const": 1,
+          "default": 1,
+          "title": "Gross Reward Risk",
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/EvidenceMarketIdentity"
+        },
+        "instrument_rules_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Instrument Rules Hash",
+          "type": "string"
+        },
+        "known_at": {
+          "format": "date-time",
+          "title": "Known At",
+          "type": "string"
+        },
+        "management_authority": {
+          "const": false,
+          "default": false,
+          "title": "Management Authority",
+          "type": "boolean"
+        },
+        "performance": {
+          "default": null,
+          "title": "Performance",
+          "type": "null"
+        },
+        "pullback_event_ids": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Pullback Event Ids",
+          "type": "array"
+        },
+        "runtime_activated": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Activated",
+          "type": "boolean"
+        },
+        "signal_id": {
+          "format": "uuid",
+          "title": "Signal Id",
+          "type": "string"
+        },
+        "spec_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Spec Hash",
+          "type": "string"
+        },
+        "structural_extreme": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Structural Extreme"
+        },
+        "structural_stop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Structural Stop"
+        },
+        "structure_anchor_ids": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Structure Anchor Ids",
+          "type": "array"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Target"
+        },
+        "trend_ema20": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Trend Ema20"
+        },
+        "trend_ema50": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "gt": 0,
+          "title": "Trend Ema50"
+        },
+        "trend_end": {
+          "format": "date-time",
+          "title": "Trend End",
+          "type": "string"
+        },
+        "trigger_end": {
+          "format": "date-time",
+          "title": "Trigger End",
+          "type": "string"
+        },
+        "trigger_event_id": {
+          "title": "Trigger Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal_id",
+        "content_hash",
+        "spec_hash",
+        "instrument_rules_hash",
+        "identity",
+        "direction",
+        "trigger_event_id",
+        "trigger_end",
+        "known_at",
+        "decision_at",
+        "expires_at",
+        "trend_end",
+        "trend_ema20",
+        "trend_ema50",
+        "ema50_slope_ratio",
+        "structure_anchor_ids",
+        "entry_ema20",
+        "pullback_event_ids",
+        "structural_extreme",
+        "entry",
+        "structural_stop",
+        "target",
+        "evidence"
+      ],
+      "title": "TrendPulseSignal",
+      "type": "object"
+    },
+    "TrendPulseSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/TradeDirection"
+        },
+        "kind": {
+          "const": "trendpulse_1r/v1",
+          "default": "trendpulse_1r/v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "default": "TrendPulse1R conservative research v1",
+          "title": "Name",
+          "type": "string"
+        },
+        "paper_only": {
+          "const": true,
+          "default": true,
+          "title": "Paper Only",
+          "type": "boolean"
+        },
+        "parameters": {
+          "$ref": "#/$defs/TrendPulseParameters"
+        },
+        "spec_version": {
+          "const": "strategy-pattern-spec/v1",
+          "default": "strategy-pattern-spec/v1",
+          "title": "Spec Version",
+          "type": "string"
+        },
+        "symbol": {
+          "pattern": "^[A-Z0-9]{2,32}$",
+          "title": "Symbol",
+          "type": "string"
+        },
+        "trend_timeframe": {
+          "const": "15m",
+          "default": "15m",
+          "title": "Trend Timeframe",
+          "type": "string"
+        },
+        "trigger_timeframe": {
+          "const": "5m",
+          "default": "5m",
+          "title": "Trigger Timeframe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "direction"
+      ],
+      "title": "TrendPulseSpec",
+      "type": "object"
+    },
+    "TrendPulseStatus": {
+      "enum": [
+        "unavailable",
+        "refused",
+        "no_setup",
+        "qualified_research_signal",
+        "duplicate"
+      ],
+      "title": "TrendPulseStatus",
+      "type": "string"
+    },
+    "VenueId": {
+      "enum": [
+        "binance",
+        "blofin",
+        "bybit"
+      ],
+      "title": "VenueId",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "experiment_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExperimentBoundTrendPulse"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "request": {
+      "$ref": "#/$defs/TrendPulseRequest"
+    },
+    "result": {
+      "$ref": "#/$defs/TrendPulseResult"
+    }
+  },
+  "required": [
+    "request",
+    "result"
+  ],
+  "title": "TrendPulseInterface",
+  "type": "object"
+}

@@ -42,11 +42,11 @@ export function TradingAnalysisPanel({ analysis }: { analysis: TradingAnalysisDe
             <p>{analysis.setup_type}</p>
           </div>
         ) : null}
-        {analysis.evidence.length ? (
+        {(analysis.evidence ?? []).length ? (
           <div>
             <p className="mb-1 font-medium text-zinc-200">Evidence</p>
             <ul className="list-disc space-y-1 pl-5 text-zinc-400">
-              {analysis.evidence.map((item) => (
+              {(analysis.evidence ?? []).map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>

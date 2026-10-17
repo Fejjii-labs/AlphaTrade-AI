@@ -61,6 +61,7 @@ from app.services.execution_service import LEGACY_PAPER_EXECUTION_REASON, Execut
 from app.services.proposal_service import ProposalService
 from app.services.quota_service import QuotaService
 from app.services.usage_service import UsageService
+from tests.support.postgres_template import refresh_database
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000028")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000029")
@@ -331,16 +332,13 @@ def sqlite_file_db(tmp_path: Path) -> Iterator[tuple[sessionmaker[Session], Sett
 
 @pytest.fixture
 def postgres_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     settings = _settings(database_url=POSTGRES_URL)
     with factory() as session:
         _seed_org_user(session)
         session.commit()
     yield factory, settings
-    Base.metadata.drop_all(engine)
     engine.dispose()
 
 
@@ -355,9 +353,7 @@ def postgres_http_db(
         _FakeDemoExecution,
     ]
 ]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     factory = sessionmaker(
         bind=engine,
         class_=_TrackingSession,
@@ -400,7 +396,6 @@ def postgres_http_db(
         _TrackingSession.commit_count = 0
         yield factory, settings, client, fake_demo
 
-    Base.metadata.drop_all(engine)
     engine.dispose()
 
 

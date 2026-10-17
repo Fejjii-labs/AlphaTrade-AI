@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.persistence_firewall import install_persistence_firewall
-from app.db.base import Base
 from app.db.models import Membership, Organization, User, UserStrategy, UserStrategyVersion
 from app.db.strategy_immutability import (
     backfill_strategy_version_content_hashes,
@@ -23,6 +22,7 @@ from app.schemas.common import MembershipRole, StrategyId
 from app.schemas.strategy_library import StrategyCard, UserStrategyCreate
 from app.schemas.strategy_pattern_spec import FIRST_SLICE_NAME
 from app.services.strategy_library_service import StrategyLibraryService
+from tests.support.postgres_template import refresh_database
 
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
@@ -51,9 +51,7 @@ requires_postgres = pytest.mark.skipif(
 
 
 def _factory() -> sessionmaker[Session]:
-    engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    engine = refresh_database(POSTGRES_URL, kind="full")
     install_persistence_firewall()
     return sessionmaker(bind=engine, expire_on_commit=False)
 

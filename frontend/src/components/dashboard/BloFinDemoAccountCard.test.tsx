@@ -62,6 +62,17 @@ beforeEach(() => {
   refresh.mockReset().mockResolvedValue(account());
 });
 
+it("does not preserve another account's snapshot when a new account read fails", async () => {
+  latest.mockResolvedValueOnce(account({ account_id: "first-account" }))
+    .mockResolvedValueOnce(account({ account_id: "second-account", status: "unavailable", total_equity_usd: null }));
+  const { rerender } = render(<BloFinDemoAccountCard refreshKey={0} />);
+  expect(await screen.findByText("Native demo account snapshot.")).toBeInTheDocument();
+  expect(screen.getByTestId("dashboard-equity")).toHaveTextContent("1,001.5");
+  rerender(<BloFinDemoAccountCard refreshKey={1} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("refresh failed");
+  expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent("1,001.5");
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();

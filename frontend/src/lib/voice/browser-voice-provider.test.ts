@@ -51,6 +51,41 @@ describe("browser voice transport", () => {
     vi.unstubAllGlobals();
   });
 
+  it("adds single-utterance completion without changing legacy continuous recording", () => {
+    const provider = createBrowserVoiceProvider();
+    provider.listen(callbacks());
+    expect(Recognition.instances[0].continuous).toBe(true);
+    const events = callbacks();
+    provider.listen(events, { turnCompletion: "utterance" });
+    const recognition = Recognition.instances[1];
+    expect(recognition.continuous).toBe(false);
+    recognition.result("Partial", false);
+    expect(events.onComplete).not.toHaveBeenCalled();
+    recognition.result("Completed utterance");
+    recognition.result("Completed utterance");
+    recognition.onend?.();
+    expect(events.onComplete).toHaveBeenCalledExactlyOnceWith("Completed utterance");
+    provider.dispose();
+  });
+
+  it("aborts recognition before playback and ignores late recognition callbacks", () => {
+    class Utterance { constructor(public text: string) {} }
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+    const speak = vi.fn();
+    vi.stubGlobal("speechSynthesis", { speak, cancel: vi.fn() });
+    const provider = createBrowserVoiceProvider();
+    const events = callbacks();
+    provider.listen(events, { turnCompletion: "utterance" });
+    const recognition = Recognition.instances[0];
+    const late = recognition.onresult;
+    provider.speak("App reply", { onStart: vi.fn(), onEnd: vi.fn(), onError: vi.fn() });
+    expect(recognition.abort).toHaveBeenCalledTimes(1);
+    expect(recognition.abort.mock.invocationCallOrder[0]).toBeLessThan(speak.mock.invocationCallOrder[0]);
+    late?.({ results: [{ isFinal: true, 0: { transcript: "App reply" } }] });
+    expect(events.onTranscript).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
   it.each(["permissionsPolicy", "featurePolicy"])(
     "explains a %s microphone block before requesting capture or recognition",
     (name) => {

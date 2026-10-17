@@ -149,6 +149,21 @@ def main() -> int:
         _ingest_corpus(service)
         session.commit()
 
+        from app.rag.indexing import IndexingRunner
+        from app.db.models import KnowledgeIndexingJob
+        from sqlalchemy import select
+        runner = IndexingRunner(factory, vector_store=service._vector_store,
+                                embeddings=service._embeddings, settings=service._settings)
+        # Advance the real outbox in this isolated deterministic fixture. Search
+        # assertions require a ready ack; ingestion stays asynchronous.
+        for _ in range(len(CORPUS) + 1):
+            runner.run_once(max_jobs=len(CORPUS))
+            session.expire_all()
+            if all(job.status == "ready" for job in session.scalars(select(KnowledgeIndexingJob))):
+                break
+        else:
+            raise RuntimeError("Evaluation corpus did not become ready within its bounded worker budget")
+
         results = [_evaluate_case(service, case) for case in _load_cases()]
 
     passed = sum(1 for r in results if r.passed)

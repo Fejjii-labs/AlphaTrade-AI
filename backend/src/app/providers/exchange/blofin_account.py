@@ -188,6 +188,7 @@ class BloFinAccountProvider:
         self._client = client
         self._is_demo = is_demo
         self._permissions_verified_at: datetime | None = None
+        self.native_account_uid: str | None = None
         self.total_equity_usd: Decimal | None = None
 
     def get_instruments(self) -> list[ExchangeInstrument]:
@@ -360,8 +361,12 @@ class BloFinAccountProvider:
         Raises an :class:`ExchangeError` subclass if the venue cannot be reached
         or rejects the key; callers decide whether that is fatal.
         """
+        from app.core.blofin_identity import native_uid
+
+        self.native_account_uid = None
         data = self._client.request("GET", PERMISSIONS_ENDPOINT, signed=True)
         permissions = parse_account_permissions(data)
+        self.native_account_uid = native_uid(data) if permissions.can_read else None
         self._permissions_verified_at = datetime.now(UTC)
         return permissions
 

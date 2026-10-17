@@ -68,31 +68,31 @@ export function NarrativePanel({
           <p className="mb-1 font-medium text-zinc-200">Next decision point</p>
           <p className="text-zinc-400">{narrative.next_decision_point}</p>
         </div>
-        {narrative.caution_notes.length ? (
+        {(narrative.caution_notes ?? []).length ? (
           <div>
             <p className="mb-1 font-medium text-zinc-200">Caution</p>
             <ul className="list-disc space-y-1 pl-5 text-zinc-400">
-              {narrative.caution_notes.map((item) => (
+              {(narrative.caution_notes ?? []).map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
           </div>
         ) : null}
-        {narrative.limitations.length ? (
+        {(narrative.limitations ?? []).length ? (
           <div>
             <p className="mb-1 font-medium text-zinc-200">Limitations</p>
             <ul className="list-disc space-y-1 pl-5 text-zinc-400">
-              {narrative.limitations.map((item) => (
+              {(narrative.limitations ?? []).map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
           </div>
         ) : null}
-        {narrative.citations_used.length ? (
+        {(narrative.citations_used ?? []).length ? (
           <div>
             <p className="mb-1 font-medium text-zinc-200">Citations used</p>
             <ul className="list-disc space-y-1 pl-5 text-zinc-400">
-              {narrative.citations_used.map((item) => (
+              {(narrative.citations_used ?? []).map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>

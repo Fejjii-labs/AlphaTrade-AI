@@ -1,0 +1,103 @@
+{
+  "adapter_version": "trendpulse-1r-research/v2",
+  "aggregated_m15_bars_per_regime": 300,
+  "contract_version": "trendpulse-synthetic-replay-report/v1",
+  "decisions": 192,
+  "entry_m5_bars": 60,
+  "evidence_manifest_hash": "80cd25491e8ac644b4b9b9e6beda6ff03a682a18cb2d2d3103974605e3b38717",
+  "experiment_samples": 0,
+  "native_trades": 0,
+  "parameter_thresholds_changed": false,
+  "performance": null,
+  "provenance": "synthetic_fixture",
+  "raw_m5_bars_per_regime": 900,
+  "real_market_decisions": 0,
+  "receipt_delay_seconds": {
+    "decision": 8,
+    "observed": 2,
+    "received": 3,
+    "recorded": 4
+  },
+  "regimes": {
+    "downtrend": {
+      "close_positions": {
+        "0": 16,
+        "10": 16,
+        "5": 16
+      },
+      "decisions": 48,
+      "directions": {
+        "long": 24,
+        "short": 24
+      },
+      "reasons": {
+        "trend_not_confirmed": 48
+      },
+      "statuses": {
+        "no_setup": 48
+      }
+    },
+    "range": {
+      "close_positions": {
+        "0": 16,
+        "10": 16,
+        "5": 16
+      },
+      "decisions": 48,
+      "directions": {
+        "long": 24,
+        "short": 24
+      },
+      "reasons": {
+        "trend_not_confirmed": 48
+      },
+      "statuses": {
+        "no_setup": 48
+      }
+    },
+    "uptrend": {
+      "close_positions": {
+        "0": 16,
+        "10": 16,
+        "5": 16
+      },
+      "decisions": 48,
+      "directions": {
+        "long": 24,
+        "short": 24
+      },
+      "reasons": {
+        "pullback_not_confirmed": 6,
+        "trend_not_confirmed": 42
+      },
+      "statuses": {
+        "no_setup": 48
+      }
+    },
+    "volatile": {
+      "close_positions": {
+        "0": 16,
+        "10": 16,
+        "5": 16
+      },
+      "decisions": 48,
+      "directions": {
+        "long": 24,
+        "short": 24
+      },
+      "reasons": {
+        "trend_not_confirmed": 48
+      },
+      "statuses": {
+        "no_setup": 48
+      }
+    }
+  },
+  "restart_idempotent_records": 192,
+  "seed_base": 24300,
+  "signals": 0,
+  "source_end": "2026-10-04T03:00:00+00:00",
+  "source_start": "2026-10-01T00:00:00+00:00",
+  "symbol": "BTCUSDT",
+  "warmup_m15_bars": 250
+}

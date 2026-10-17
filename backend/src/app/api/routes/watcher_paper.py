@@ -13,6 +13,7 @@ from app.core.dependencies import SessionDep, SettingsDep
 from app.core.errors import ValidationAppError
 from app.db.models import KillSwitchState
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
+from app.schemas.watcher_assignments import WatcherAssignmentReplace, WatcherAssignmentsRead
 from app.schemas.watcher_paper import (
     WATCHER_PAPER_ACTIVATION_REQUIREMENTS,
     WatcherPaperRuntimeStatus,
@@ -26,6 +27,7 @@ from app.schemas.watcher_watchlist import (
 )
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import ReaderDep, TraderDep
+from app.services.watcher_assignment_service import WatcherAssignmentService
 from app.workers.watcher_paper import paper_runtime_enabled
 from app.workers.watcher_watchlist import WatchlistConfiguration, WatchlistValidationError
 
@@ -177,3 +179,27 @@ def _tenant_kill_switch_active(
         select(KillSwitchState).where(KillSwitchState.organization_id == organization_id)
     )
     return bool(row is not None and row.active)
+
+
+@router.get("/assignments", response_model=WatcherAssignmentsRead, dependencies=[_READ_LIMIT])
+def read_watcher_assignments(tenant: ReaderDep, session: SessionDep) -> WatcherAssignmentsRead:
+    return WatcherAssignmentService(session).read(
+        organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
+
+
+@router.put("/assignments", response_model=WatcherAssignmentsRead, dependencies=[_WRITE_LIMIT])
+def replace_watcher_assignments(
+    body: WatcherAssignmentReplace, tenant: TraderDep, session: SessionDep, settings: SettingsDep
+) -> WatcherAssignmentsRead:
+    if settings.real_trading_enabled or settings.enable_real_trading:
+        raise ValidationAppError("Monitoring assignment changes stay paper-only.")
+    try:
+        result = WatcherAssignmentService(session).replace(
+            organization_id=tenant.organization_id, user_id=tenant.user_id, body=body
+        )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise

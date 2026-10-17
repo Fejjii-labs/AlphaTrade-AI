@@ -309,10 +309,10 @@ export default function WorkspacePage() {
             {response?.risk_result?.action === "block" ? (
               <RiskBlock
                 reason={
-                  response.risk_result.summary ||
+                  response.risk_result.explanation ||
                   "Risk engine BLOCKED this request. No override is available."
                 }
-                ruleReference={response.risk_result.triggered_rules[0]?.rule_id}
+                ruleReference={response.risk_result.triggered_rules?.[0]?.rule_id}
               />
             ) : null}
             <div className="grid gap-4 md:grid-cols-2">
@@ -405,9 +405,9 @@ export default function WorkspacePage() {
             </CardHeader>
             <CardContent className="space-y-4 text-sm text-text-secondary">
               <p className="whitespace-pre-wrap">{response.reply}</p>
-              {response.limitations.length ? (
+              {(response.limitations ?? []).length ? (
                 <ul className="list-disc space-y-1 pl-5 text-text-muted">
-                  {response.limitations.map((item) => (
+                  {(response.limitations ?? []).map((item) => (
                     <li key={item}>{item}</li>
                   ))}
                 </ul>

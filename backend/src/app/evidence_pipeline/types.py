@@ -52,6 +52,8 @@ class EvidenceClockReport(CanonicalModel):
     does not expire a setup.
     """
 
+    evidence_cutoff_at: datetime | None = None
+    acquisition_completed_at: datetime | None = None
     quote_source_time: datetime | None = None
     quote_fresh: bool = False
     trade_stream_event_time_max: datetime | None = None

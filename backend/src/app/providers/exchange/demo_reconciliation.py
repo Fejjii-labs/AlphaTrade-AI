@@ -216,10 +216,15 @@ def reconcile_native(
                 "fill_identity_mismatch",
             )
             trade_id = identity(fill.get("tradeId"))
-            require(fill.get("feeCurrency", "USDT") == "USDT", "fill_fee_currency_unsupported")
-            # REST fills-history reports fee as a cost (positive paid, negative
-            # rebate), as in BloFin's examples and CCXT parse_trade. Account-ledger
-            # cashflow and trading-rate signs are different contracts. Never abs().
+            fee_currency = fill.get("feeCurrency")
+            require(
+                fee_currency in (None, "")
+                or (isinstance(fee_currency, str) and 0 < len(fee_currency) <= 128),
+                "fill_fee_currency_invalid",
+            )
+            # Retain the original signed native value. Fee cost/sign semantics
+            # require independent evidence; neither abs() nor settlement metadata
+            # can supply it or an omitted historical currency.
             fee = number(fill.get("fee"), field="fee")
             quantity = number(fill.get("fillSize"), field="fillSize", positive=True)
             price = number(fill.get("fillPrice"), field="fillPrice", positive=True)
@@ -237,6 +242,7 @@ def reconcile_native(
                     price,
                     occurrence(timestamp, earliest=created, now=clock()),
                     fee,
+                    fee_currency or None,
                 )
             )
         fills.sort(key=lambda fill: (fill.occurred_at, fill.identity))

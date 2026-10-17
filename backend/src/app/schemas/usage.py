@@ -146,9 +146,11 @@ class QuotaUsageSnapshot(StrictModel):
     """Current period consumption vs limits."""
 
     monthly_tokens_used: int = 0
+    monthly_tokens_reserved: int = Field(default=0, ge=0)
     monthly_tokens_limit: int = 0
     monthly_tokens_pct: float = 0.0
     monthly_cost_used: NonNegativeDecimal = Decimal("0")
+    monthly_cost_reserved: NonNegativeDecimal = Decimal("0")
     monthly_cost_limit: NonNegativeDecimal = Decimal("0")
     monthly_cost_pct: float = 0.0
     daily_requests_used: int = 0

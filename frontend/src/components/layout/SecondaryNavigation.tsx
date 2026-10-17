@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils";
 
 export function SecondaryNavigation() {
   const pathname = usePathname();
+  // The parent destination is already present in primary navigation and the page heading.
+  if (pathname === "/settings") return null;
   const destinationId = getDestinationId(pathname);
   if (!destinationId) return null;
 

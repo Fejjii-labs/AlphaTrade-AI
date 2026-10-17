@@ -1,6 +1,7 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { renderHook } from "@/test/private-query";
 import { api } from "@/lib/api";
 
 import type { AnalyticsFilterParams } from "./filterValidation";
@@ -306,6 +307,7 @@ describe("useBehaviourSources", () => {
     await waitFor(() => expect(result.current.ruleComplianceLoading).toBe(false));
     expect(api.journal.statistics).toHaveBeenLastCalledWith(
       expect.objectContaining({ symbol: "ETHUSDT" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(api.analytics.discipline).toHaveBeenCalledTimes(1);
     expect(api.learningAnalytics.discipline).toHaveBeenCalledTimes(1);
@@ -342,15 +344,19 @@ describe("useBehaviourSources", () => {
 
     expect(api.journal.statistics).toHaveBeenCalledWith(
       expect.objectContaining({ date_from: "2026-02-01T00:00:00Z" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(api.analytics.discipline).toHaveBeenCalledWith(
       expect.objectContaining({ start_date: "2026-02-01" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(api.learningAnalytics.discipline).toHaveBeenCalledWith(
       expect.objectContaining({ start_date: "2026-02-01" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(api.analytics.riskBehavior).toHaveBeenCalledWith(
       expect.objectContaining({ start_date: "2026-02-01" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(result.current.ruleComplianceLoadedKey).toBe(
       buildRuleComplianceFilterKey(next.ruleComplianceJournal),

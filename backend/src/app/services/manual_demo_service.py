@@ -94,6 +94,7 @@ from app.services.manual_demo_policy import validate_manual_demo
 from app.services.manual_demo_recovery import (
     project_verified_exits,
     record_lifecycle,
+    recorded_exit_facts,
     resolve_manual_lifecycle,
 )
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
@@ -484,6 +485,20 @@ class ManualDemoService:
             )
         )
         command_id = result.command_id
+        if snapshot.native_account_uid is not None:
+            account_evidence = {
+                "native_account_uid": snapshot.native_account_uid,
+                "execution_account_id": str(plan.account_id),
+                "environment": "demo",
+                "plan_content_hash": plan.content_hash,
+            }
+            self._audit(
+                tenant,
+                AuditEventType.APPROVAL_DECISION,
+                command_id,
+                "manual_demo_execution_account_verified",
+                {**account_evidence, "evidence_hash": canonical_sha256(account_evidence)},
+            )
         self.session.commit()  # Durable exact authority and reservation before provider IO.
         if result.outcome is ExecutionCommandOutcome.ALLOW:
             dispatch = self._dispatcher()
@@ -699,6 +714,10 @@ class ManualDemoService:
                 "native_tpsl_id": evidence.native_tpsl_id,
                 "diagnostics": [d.model_dump(exclude_none=True) for d in diagnostics],
             }
+            if evidence.native_account_uid is not None:
+                receipt["native_account_uid"] = evidence.native_account_uid
+                receipt["execution_account_id"] = str(command.account_id)
+                receipt["environment"] = "demo"
             receipt_hash = canonical_sha256(receipt)
             prior_receipt = self.session.scalar(
                 select(AuditLog.id).where(
@@ -726,7 +745,14 @@ class ManualDemoService:
                     audit=self.audit,
                     native_receipt_hash=receipt_hash,
                 )
-            fees = sum((f.fee for f in evidence.fills), Decimal("0"))
+            fees = (
+                sum((f.fee for f in evidence.fills), Decimal("0"))
+                if all(
+                    f.fee_currency == plan.instrument_rules.settlement_currency
+                    for f in evidence.fills
+                )
+                else None
+            )
             for fact in evidence.fills:
                 quantity, price = self._replay_representation(tenant, command_id, fact)
                 fill = self._dispatcher().apply_unique_fill(
@@ -758,8 +784,22 @@ class ManualDemoService:
                             "Verified manual demo fill fee conflicts with its stored receipt; "
                             "operator review required."
                         )
+                    if (
+                        prior_fee.redacted_metadata.get("fee_evidence_contract")
+                        == "manual-demo-native-fee/v2"
+                        and prior_fee.redacted_metadata.get("fee_currency") != fact.fee_currency
+                    ):
+                        raise TradingPolicyError(
+                            "Native manual demo fee currency conflicts with its recorded receipt; "
+                            "operator review required."
+                        )
                 if not fill.replayed or (
-                    prior_fee is not None and "quantity" not in prior_fee.redacted_metadata
+                    prior_fee is not None
+                    and (
+                        "quantity" not in prior_fee.redacted_metadata
+                        or prior_fee.redacted_metadata.get("fee_evidence_contract")
+                        != "manual-demo-native-fee/v2"
+                    )
                 ):
                     self._audit(
                         tenant,
@@ -773,7 +813,8 @@ class ManualDemoService:
                             "fee": str(fact.fee),
                             "quantity": str(fact.quantity),
                             "price": str(fact.price),
-                            "fee_currency": "USDT",
+                            "fee_currency": fact.fee_currency,
+                            "fee_evidence_contract": "manual-demo-native-fee/v2",
                             "protection": evidence.protection_status,
                         },
                     )
@@ -921,7 +962,7 @@ class ManualDemoService:
             funding=durable.funding,
             net_pnl=durable.net_pnl,
             journal_trade_id=trade.id if trade else None,
-            missing_evidence=tuple(missing),
+            missing_evidence=tuple(dict.fromkeys([*missing, *durable.missing_evidence])),
             reconciliation_diagnostics=diagnostics
             + (observation.diagnostics if observation else ()),
             execution_status=durable.execution_status,
@@ -1071,7 +1112,7 @@ class ManualDemoService:
         command: ExecutionCommand,
         plan: TradePlanRevision,
         fills: tuple[DemoFill, ...],
-        fees: Decimal,
+        fees: Decimal | None,
         protection: str,
     ) -> None:
         if not fills:
@@ -1127,19 +1168,16 @@ class ManualDemoService:
         trade.entry_price = sum((f.quantity * f.price for f in fills), Decimal("0")) / total
         trade.size = total * plan.instrument_rules.contract_multiplier
         trade.entry_time = min(f.occurred_at for f in fills)
-        exits = list(
-            self.session.scalars(
-                select(AuditLog).where(
-                    AuditLog.organization_id == tenant.organization_id,
-                    AuditLog.user_id == tenant.user_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == str(command.id),
-                    AuditLog.redacted_metadata["operation"].as_string() == "manual_demo_exit_fill",
-                )
+        exits = recorded_exit_facts(self.session, command)
+        trade.fees = (
+            fees + sum((Decimal(f["fee"]) for f in exits), Decimal("0"))
+            if fees is not None
+            and all(
+                f.get("fee") is not None
+                and f.get("fee_currency") == plan.instrument_rules.settlement_currency
+                for f in exits
             )
-        )
-        trade.fees = fees + sum(
-            (Decimal(a.redacted_metadata["fact"]["fee"]) for a in exits), Decimal("0")
+            else None
         )
         if trade.exit_price is None:
             trade.status = JournalTradeStatus.OPEN

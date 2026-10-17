@@ -161,6 +161,11 @@ def test_staging_rejects_in_memory_rate_limit_fallback() -> None:
         Settings(**{**_STAGING_BASE, "rate_limit_allow_in_memory_fallback": True})
 
 
+def test_staging_rejects_raised_register_rate_limit() -> None:
+    with pytest.raises(ValidationError, match="auth_register_rate_limit"):
+        Settings(**{**_STAGING_BASE, "auth_register_rate_limit": 200})
+
+
 def test_production_rejects_in_memory_rate_limit_fallback() -> None:
     with pytest.raises(ValidationError, match="rate_limit_allow_in_memory_fallback"):
         Settings(**{**_PRODUCTION_BASE, "rate_limit_allow_in_memory_fallback": True})

@@ -95,6 +95,7 @@ class VenueSubmitDispatcher:
     ) -> None:
         self._session = session
         self._epochs = safety_epochs
+        self._settings = safety_epochs._settings
         self._clock = clock
         self._effects = VenueSubmitEffectRepository(session)
         self._commands = ExecutionCommandRepository(session)
@@ -113,6 +114,9 @@ class VenueSubmitDispatcher:
         now = _aware(self._clock())
         ensure_db_transaction(self._session)
         command = self._require_command(command_id)
+        from app.experiments.governed_context import require_registered_experiment_dispatch
+
+        require_registered_experiment_dispatch(self._session, self._settings, command, now=now)
         epoch = self._epochs.lock_epoch(
             organization_id=command.organization_id, account_id=command.account_id
         )
@@ -166,6 +170,9 @@ class VenueSubmitDispatcher:
         now = _aware(self._clock())
         ensure_db_transaction(self._session)
         command = self._require_command(command_id)
+        from app.experiments.governed_context import require_registered_experiment_dispatch
+
+        require_registered_experiment_dispatch(self._session, self._settings, command, now=now)
         epoch = self._epochs.lock_epoch(
             organization_id=command.organization_id, account_id=command.account_id
         )
@@ -363,6 +370,15 @@ class VenueSubmitDispatcher:
         # fence or safety epoch. Locked reads must refresh the identity map too.
         self._session.expire_all()
         command = self._require_command(command_id)
+        from app.experiments.governed_context import require_registered_experiment_dispatch
+
+        try:
+            require_registered_experiment_dispatch(
+                self._session, self._settings, command, now=_aware(self._clock())
+            )
+        except Exception:
+            self._session.rollback()
+            raise
         epoch = self._epochs.lock_epoch(
             organization_id=command.organization_id, account_id=command.account_id
         )

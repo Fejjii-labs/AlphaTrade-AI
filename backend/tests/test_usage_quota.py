@@ -287,6 +287,8 @@ def test_chat_blocked_when_quota_exceeded(api_client: TestClient, db_session: Se
             hard_block_threshold=Decimal("0.00"),
         ),
     )
+    # Independent turn phases read committed policy, as the quota API persists it.
+    db_session.commit()
 
     response = api_client.post(
         "/chat/message",

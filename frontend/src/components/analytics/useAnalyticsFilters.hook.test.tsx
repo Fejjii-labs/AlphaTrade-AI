@@ -180,4 +180,26 @@ describe("useAnalyticsFilters hook", () => {
       { scroll: false },
     );
   });
+  it.each([
+    { dateFrom: "2026-02-01" }, { dateTo: "2026-02-28" }, { symbol: "ETHUSDT" },
+    { timeframe: "1h" }, { portfolioSource: "all" as const }, { journalSource: "manual" as const },
+    { setupId: SETUP_UUID }, { userStrategyId: SETUP_UUID }, { strategyVersionId: SETUP_UUID },
+    { ruleCompliance: "unassessed" as const }, { marketRegime: null }, { minSample: 10 },
+  ])("resets offset for each result-set filter while preserving unrelated parameters: %j", (draft) => {
+    searchParams = new URLSearchParams("tab=setups&offset=40&keep=owned&date_from=2026-01-01");
+    const { result } = renderHook(() => useAnalyticsFilters());
+    result.current.applyDraft(draft);
+    const href = pushMock.mock.calls[0][0];
+    const query = new URL(href, "http://fixture").searchParams;
+    expect(query.has("offset")).toBe(false);
+    expect(query.get("keep")).toBe("owned");
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+  it.each(["7d", "30d", "90d", "ytd", "all"] as const)("resets offset for %s date preset", (preset) => {
+    searchParams = new URLSearchParams("tab=setups&offset=40&keep=owned");
+    const { result } = renderHook(() => useAnalyticsFilters());
+    result.current.applyDatePreset(preset);
+    expect(new URL(pushMock.mock.calls[0][0], "http://fixture").searchParams.has("offset")).toBe(false);
+  });
+
 });

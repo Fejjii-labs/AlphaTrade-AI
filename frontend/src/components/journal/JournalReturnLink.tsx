@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 export function journalReturnKey(userId?: string, organizationId?: string) {
@@ -7,8 +8,13 @@ export function journalReturnKey(userId?: string, organizationId?: string) {
 }
 export function JournalReturnLink() {
   const { user, organization } = useAuth();
-  const [href, setHref] = useState("/journal");
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const fallback = pathname === "/knowledge" || params.get("tab") === "knowledge"
+    ? "/journal?tab=knowledge" : "/journal";
+  const [href, setHref] = useState(fallback);
   useEffect(() => {
+    setHref(fallback);
     try {
       const stored = JSON.parse(
         sessionStorage.getItem(journalReturnKey(user?.id, organization?.id)) ??
@@ -19,13 +25,14 @@ export function JournalReturnLink() {
     } catch {
       /* direct link */
     }
-  }, [user?.id, organization?.id]);
+  }, [user?.id, organization?.id, fallback]);
   return (
     <Link
       href={href}
       className="inline-flex min-h-11 items-center text-sm text-accent"
     >
-      ← Back to Journal &amp; Knowledge
+      {href.startsWith("/knowledge") || href.includes("tab=knowledge")
+        ? "← Back to Knowledge" : "← Back to Journal"}
     </Link>
   );
 }

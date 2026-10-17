@@ -1,5 +1,6 @@
 "use client";
 
+import { useValidationPrefetch } from "@/components/analytics/useValidationPrefetch";
 import { useEffect, useMemo } from "react";
 
 import {
@@ -60,6 +61,7 @@ export default function AnalyticsPage() {
     cleanupIgnoredParams,
   } = useAnalyticsFilters();
 
+  const prefetchValidation = useValidationPrefetch(apiParams);
   const sharedEnabled = state.tab === "overview" || state.tab === "performance";
   const shared = useAnalyticsSources(apiParams, { enabled: sharedEnabled });
   const setups = useSetupAnalyticsSources(setupApiParams, { enabled: state.tab === "setups" });
@@ -147,7 +149,7 @@ export default function AnalyticsPage() {
 
       <TabsRoot value={state.tab} onChange={(tab) => setTab(tab as typeof state.tab)}>
         <div data-testid="analytics-tabs">
-          <Tabs items={TAB_ITEMS} aria-label="Analytics sections" />
+          <Tabs items={TAB_ITEMS} onIntent={prefetchValidation} aria-label="Analytics sections" />
         </div>
 
         <AnalyticsFilterBar

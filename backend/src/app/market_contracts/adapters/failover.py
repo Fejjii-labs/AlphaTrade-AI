@@ -22,10 +22,12 @@ from app.market_contracts.errors import (
 )
 from app.market_contracts.identity import EvidenceMarketIdentity, InstrumentIdentity
 from app.market_contracts.ohlcv import ClosedOhlcvSeries
+from app.market_contracts.order_book import OrderBookObservation, order_book_observation
 from app.market_contracts.trade_reduction import build_released_trade_snapshot
 from app.market_contracts.trades import OrderedTradeBatch
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.schemas.common import Timeframe
+from app.schemas.nested_continuation import EvidenceAvailability
 
 _SWITCH_ERRORS = (UpstreamBanError, RegionalProviderFailureError, RateLimitedError)
 
@@ -125,6 +127,30 @@ class FailoverPerpetualSource:
         except _SWITCH_ERRORS as exc:
             self._switch(exc)
 
+    def fetch_order_book_observation(
+        self,
+        *,
+        identity: EvidenceMarketIdentity,
+        instrument: InstrumentIdentity,
+        observed_at: datetime,
+    ) -> OrderBookObservation:
+        self._require_active_identity(identity, instrument)
+        fetch = getattr(self.active_source, "fetch_order_book_observation", None)
+        if not callable(fetch):
+            return order_book_observation(
+                identity=identity,
+                observed_at=observed_at,
+                availability=EvidenceAvailability.UNSUPPORTED,
+                reason="provider_has_no_resting_book_contract",
+            )
+        try:
+            item = fetch(identity=identity, instrument=instrument, observed_at=observed_at)
+            if not isinstance(item, OrderBookObservation):
+                raise WrongSourceError("Active source returned an invalid resting snapshot.")
+            return item
+        except _SWITCH_ERRORS as exc:
+            self._switch(exc)
+
     def fetch_ordered_trades(
         self,
         *,
@@ -209,7 +235,7 @@ class FailoverPerpetualSource:
             fetch = getattr(self.active_source, "fetch_order_flow_snapshot", None)
             if not callable(fetch):
                 raise WrongSourceError("Active provider has no verified order-flow contract.")
-            return fetch(
+            snapshot = fetch(
                 identity=identity,
                 instrument=instrument,
                 start=start,
@@ -217,6 +243,9 @@ class FailoverPerpetualSource:
                 source_connection_id=source_connection_id,
                 receive_at=receive_at,
             )
+            if not isinstance(snapshot, TradeStreamSnapshot):
+                raise WrongSourceError("Active source returned an invalid order-flow snapshot.")
+            return snapshot
         except _SWITCH_ERRORS as exc:
             self._switch(exc)
 

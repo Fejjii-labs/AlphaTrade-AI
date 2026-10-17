@@ -43,6 +43,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.blofin_activity import (  # noqa: F401
+    BloFinActivityAccount,
+    BloFinActivityCursor,
+    BloFinActivityFact,
+)
 from app.db.canonical_candidates import (  # noqa: F401
     CanonicalCandidateCreationKeyRow,
     CanonicalCandidateRow,
@@ -104,6 +109,11 @@ from app.db.telegram_security import (  # noqa: F401
     TelegramOutboxRow,
     TelegramProtocolAuditEventRow,
 )
+from app.db.voice_realtime import VoiceSessionReservation  # noqa: F401
+from app.db.watcher_assignments import (  # noqa: F401
+    WatcherAssignmentReceiptRow,
+    WatcherStrategyAssignmentRow,
+)
 from app.db.watcher_orchestration import (  # noqa: F401
     WatcherHealthSnapshotRow,
     WatcherHeartbeatRow,
@@ -117,6 +127,13 @@ from app.db.watcher_orchestration import (  # noqa: F401
     WatcherWorkerLeaseRow,
 )
 from app.db.watcher_watchlist import WatcherSymbolStatusRow, WatcherWatchlistRow  # noqa: F401
+from app.experiments import guards as _experiment_guards  # noqa: F401
+from app.experiments.models import (  # noqa: F401
+    ExperimentEventRow,
+    ExperimentRow,
+    ExperimentSampleRow,
+    ExperimentVersionRow,
+)
 from app.schemas.common import (
     ActorType,
     AlertDeliveryChannel,
@@ -207,6 +224,7 @@ from app.schemas.trade_plan import (
 from app.schemas.trade_plan import (
     ExecutionMode as PlanExecutionMode,
 )
+from app.strategy_brain.trendpulse_screening.models import TrendPulseScreeningRow  # noqa: F401
 
 _MONEY = Numeric(20, 8)
 _ENUM_LEN = 40
@@ -3154,6 +3172,36 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     tags: Mapped[list] = mapped_column(JSON, default=list)
     ingestion_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    indexing_generation: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+
+
+class KnowledgeIndexingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Durable scoped intent; no document FK so deletion tombstones survive."""
+
+    __tablename__ = "knowledge_indexing_jobs"
+    __table_args__ = (
+        Index("ix_knowledge_indexing_due", "status", "available_at"),
+        Index("ix_knowledge_indexing_document", "document_id", "organization_id", "user_id"),
+        CheckConstraint("attempts >= 0", name="knowledge_indexing_attempts"),
+        CheckConstraint("operation IN ('upsert', 'delete')", name="knowledge_indexing_operation"),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'ready', 'failed', 'superseded')",
+            name="knowledge_indexing_status",
+        ),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    document_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operation: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claimed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class Chunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):

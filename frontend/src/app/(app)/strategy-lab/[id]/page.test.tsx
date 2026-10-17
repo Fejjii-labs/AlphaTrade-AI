@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import StrategyDetailPage from "./page";
 
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: "user-1" }, organization: { id: "org-1" } }) }));
+vi.mock("@/lib/api/generated/client", async original => ({
+  ...await original<typeof import("@/lib/api/generated/client")>(),
+  paperAccount: vi.fn(async () => ({ account: null, can_register: false })),
+  strategyVersions: vi.fn(async () => ({ items: [], total: 0, limit: 100, offset: 0 })),
+}));
+
 type Deferred<T> = {
   promise: Promise<T>;
   resolve: (value: T) => void;

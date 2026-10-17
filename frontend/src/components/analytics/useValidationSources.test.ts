@@ -1,6 +1,7 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { renderHook } from "@/test/private-query";
 import { api } from "@/lib/api";
 
 import type { AnalyticsFilterParams } from "./filterValidation";
@@ -123,13 +124,13 @@ describe("useValidationSources", () => {
       start_date: "2026-01-01",
       end_date: "2026-01-31",
       min_sample: 5,
-    });
+    }, { signal: expect.any(AbortSignal) });
     expect(api.learningAnalytics.setupPerformance).toHaveBeenCalledWith({
       start_date: "2026-01-01",
       end_date: "2026-01-31",
       min_sample: 5,
       dimension: "condition",
-    });
+    }, { signal: expect.any(AbortSignal) });
     const summaryCall = vi.mocked(api.learningAnalytics.summary).mock.calls[0]?.[0] ?? {};
     expect(summaryCall).not.toHaveProperty("symbol");
     expect(summaryCall).not.toHaveProperty("timeframe");

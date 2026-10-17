@@ -194,6 +194,11 @@ def test_alembic_single_head() -> None:
     config = _alembic_config()
     script = ScriptDirectory.from_config(config)
     current_head = single_alembic_head(script)
+    assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
+    assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
+    assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
+    assert script.get_revision("a10blofinactivity001").down_revision == "a9knowledgeoutbox001"
+    assert script.get_revision("a9knowledgeoutbox001").down_revision == "a8agentcapture001"
     assert script.get_revision("a8agentcapture001").down_revision == "a7manualrecovery001"
     assert script.get_revision("a7manualrecovery001").down_revision == "a6manualdemo001"
     assert script.get_revision("a6manualdemo001").down_revision == "a5demolifecycle001"

@@ -10,7 +10,7 @@ import uuid
 from typing import Literal, Protocol
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import case, literal, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
@@ -133,6 +133,36 @@ def _lexical_hits(
         .where(Chunk.organization_id == organization_id)
         .where(or_(Document.user_id.is_(None), Document.user_id == user_id))
         .where(or_(Chunk.user_id.is_(None), Chunk.user_id == user_id))
+        .where(
+            or_(
+                *[
+                    field.ilike(f"%{token}%", escape="\\")
+                    for token in sorted(tokens)[:12]
+                    for field in (Document.title, Chunk.content)
+                ]
+            )
+        )
+        .order_by(
+            sum(
+                (
+                    case(
+                        (
+                            or_(
+                                Document.title.ilike(f"%{token}%"),
+                                Chunk.content.ilike(f"%{token}%"),
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                    for token in sorted(tokens)[:12]
+                ),
+                literal(0),
+            ).desc(),
+            Document.title,
+            Chunk.ordinal,
+            Chunk.id,
+        )
         .limit(_SCAN_LIMIT)
     )
     ranked: list[tuple[int, KnowledgeHit]] = []
@@ -157,10 +187,7 @@ def retrieve_knowledge(
     vector_retriever: VectorKnowledgeRetriever | None = None,
 ) -> tuple[list[KnowledgeHit], list[str]]:
     """Return tenant-scoped knowledge hits and honest retrieval limitations."""
-    limitations = [
-        "Knowledge retrieval reads the existing document and chunk store. "
-        "Qdrant is not queried unless a vector retriever is injected."
-    ]
+    limitations: list[str] = []
     tokens = query_tokens(query)
     if vector_retriever is not None:
         verified, notes = _verified_vector_hits(
@@ -173,11 +200,20 @@ def retrieve_knowledge(
             limit=limit,
         )
         limitations.extend(notes)
+        limitations.extend(getattr(vector_retriever, "notes", []))
         if verified:
             return verified, limitations
+        if not getattr(vector_retriever, "allow_sql_fallback", True):
+            limitations.append(
+                "Provider policy refuses degraded retrieval; source evidence is unavailable."
+            )
+            return [], limitations
     if not tokens:
         return [], limitations
-    limitations.append("Lexical retrieval scanned at most 200 chunks.")
+    limitations.append(
+        "Deterministic lexical fallback filters the full scoped store, then ranks "
+        "at most 200 matching candidates; vector relevance is unavailable."
+    )
     return (
         _lexical_hits(
             session,
@@ -211,6 +247,7 @@ def _verified_vector_hits(
         logger.warning("interactive_agent_vector_retrieval_failed")
         return [], ["Vector retrieval failed. Lexical chunk search was used."]
     verified: list[KnowledgeHit] = []
+    seen: set[uuid.UUID] = set()
     dropped = False
     for hit in raw:
         loaded = _load_scoped_chunk(
@@ -219,9 +256,12 @@ def _verified_vector_hits(
             organization_id=organization_id,
             user_id=user_id,
         )
-        if loaded is None:
+        if loaded is None or loaded[1].id != hit.document_id:
             dropped = True
             continue
+        if hit.chunk_id in seen:
+            continue
+        seen.add(hit.chunk_id)
         chunk, document = loaded
         overlap = len(query_tokens(chunk.content) & tokens)
         rebuilt = _hit_from_row(chunk, document, mode="vector", match_count=overlap)

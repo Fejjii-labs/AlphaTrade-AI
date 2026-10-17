@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -36,6 +36,12 @@ class DerivativeObservation(CanonicalModel):
     identity: EvidenceMarketIdentity
     event_time: AwareDatetime | None
     observed_at: AwareDatetime
+    collected_at: AwareDatetime | None = None
+    coverage_kind: Literal["single_provider_record"] = "single_provider_record"
+    historical_coverage: Literal[False] = False
+    methodology_version: Literal["provider-reported-derivatives/v2"] = (
+        "provider-reported-derivatives/v2"
+    )
     freshness: FreshnessEvaluation | None
     freshness_policy_version: str = Field(min_length=3, max_length=80)
     units: str = Field(min_length=1, max_length=80)
@@ -47,9 +53,13 @@ class DerivativeObservation(CanonicalModel):
 
     @model_validator(mode="after")
     def _available_requires_evidence(self) -> DerivativeObservation:
+        if self.collected_at is not None and self.collected_at > self.observed_at:
+            raise ValueError("Collection cannot occur after observation.")
         if self.availability in {EvidenceAvailability.AVAILABLE, EvidenceAvailability.STALE}:
             if self.value is None or self.event_time is None or self.freshness is None:
                 raise ValueError("Available/stale observations require value, time and freshness.")
+            if self.collected_at is None or self.event_time > self.collected_at:
+                raise ValueError("Usable records require causal collection time.")
         elif self.value is not None:
             raise ValueError("Unavailable observations cannot carry an executable value.")
         if (
@@ -63,7 +73,7 @@ class DerivativeObservation(CanonicalModel):
 
 def hash_derivative_observation(item: DerivativeObservation) -> DerivativeObservation:
     """Freshness age is consumer metadata; bind its policy, not a polling clock."""
-    return with_content_hash(item, extra_exclude=frozenset({"freshness"}))
+    return with_content_hash(item, extra_exclude=frozenset({"freshness", "collected_at"}))
 
 
 def derivative_freshness_policy(metric: DerivativeMetric, venue: VenueId) -> FreshnessPolicy:
@@ -72,11 +82,11 @@ def derivative_freshness_policy(metric: DerivativeMetric, venue: VenueId) -> Fre
         24 * 3600 if metric is DerivativeMetric.FUNDING else (600 if venue is VenueId.BYBIT else 60)
     )
     return FreshnessPolicy(
-        policy_version=f"oi-funding/{venue.value}/{metric.value}/v1",
+        policy_version=f"oi-funding/{venue.value}/{metric.value}/no-future/v2",
         trade_max_age_seconds=max_age,
         aging_age_seconds=max_age,
         ohlcv_post_close_grace_seconds=0,
-        max_clock_skew_seconds=2,
+        max_clock_skew_seconds=0,
     )
 
 
@@ -162,6 +172,7 @@ def derivative_observation(
             identity=identity,
             event_time=event_time,
             observed_at=observed_at,
+            collected_at=observed_at,
             freshness=freshness,
             freshness_policy_version=derivative_freshness_policy(
                 metric, identity.venue
@@ -176,12 +187,43 @@ def derivative_observation(
     )
 
 
+def refresh_derivative_observation(
+    item: DerivativeObservation, observed_at: datetime
+) -> DerivativeObservation:
+    """Reuse a causally collected provider fact, re-evaluating age for this consumer."""
+    if item.event_time is None or item.availability not in {
+        EvidenceAvailability.AVAILABLE,
+        EvidenceAvailability.STALE,
+    }:
+        return item
+    freshness = evaluate_freshness(
+        source_time=item.event_time,
+        evaluated_at=observed_at,
+        policy=derivative_freshness_policy(item.metric, item.identity.venue),
+        require_fresh=False,
+    )
+    stale = freshness.state is FreshnessState.STALE
+    return hash_derivative_observation(
+        item.model_copy(
+            update={
+                "observed_at": observed_at,
+                "freshness": freshness,
+                "availability": EvidenceAvailability.STALE
+                if stale
+                else EvidenceAvailability.AVAILABLE,
+                "reason": "event_time_exceeds_max_age" if stale else None,
+            }
+        )
+    )
+
+
 def require_derivative_observations(
     observations: Sequence[DerivativeObservation],
     *,
     required_metrics: Sequence[DerivativeMetric],
     identity: EvidenceMarketIdentity,
     evaluated_at: datetime,
+    event_cutoff_at: datetime | None = None,
 ) -> None:
     """Re-evaluate age at every strategy consumer boundary; no stale replay of a pass."""
     for metric in required_metrics:
@@ -189,6 +231,7 @@ def require_derivative_observations(
         if len(matches) != 1:
             raise MarketContractError(f"required_{metric.value}:MISSING")
         item = matches[0]
+        item = DerivativeObservation.model_validate(item.model_dump())
         if item.identity != derivative_identity(identity, metric):
             raise WrongSourceError(f"required_{metric.value}:wrong_source")
         if hash_derivative_observation(item).content_hash != item.content_hash:
@@ -202,8 +245,15 @@ def require_derivative_observations(
             raise MarketContractError(f"required_{metric.value}:{item.availability.value}")
         if item.event_time is None or item.value is None:
             raise MarketContractError(f"required_{metric.value}:INCOMPLETE")
+        expected = derivative_observation(
+            identity=identity, metric=metric, observed_at=evaluated_at
+        )
+        if item.units != expected.units or item.calculation_method != expected.calculation_method:
+            raise WrongSourceError(f"required_{metric.value}:wrong_units_or_method")
         if item.observed_at > evaluated_at:
             raise StaleEvidenceError(f"required_{metric.value}:future_observation")
+        if event_cutoff_at is not None and item.event_time > event_cutoff_at:
+            raise WrongSourceError(f"required_{metric.value}:event_after_cutoff")
         evaluate_freshness(
             source_time=item.event_time,
             evaluated_at=evaluated_at,

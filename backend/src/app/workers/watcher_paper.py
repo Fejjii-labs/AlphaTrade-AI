@@ -288,6 +288,9 @@ class WatcherPaperRuntime:
         self._organization_id: UUID | None = None
         self._organization_cursor: UUID | None = None
         self._probes_completed = 0
+        self._assignment_observations: dict[str, list[dict]] = {}
+        self._assignment_configured = False
+        self._assignment_managed_symbols: set[str] = set()
         self._watchlist = watchlist
         self._watchlist_store = watchlist_store
         self._symbol_status = symbol_status if symbol_status is not None else SymbolStatusBook()
@@ -463,6 +466,9 @@ class WatcherPaperRuntime:
     def run_cycle(self) -> WatcherPaperCycleReport:
         if not self._tenant_watchlists:
             return self._run_cycle()
+        self._assignment_observations = {}
+        self._assignment_configured = False
+        self._assignment_managed_symbols = set()
         from sqlalchemy import select
 
         from app.db.models import Organization
@@ -515,6 +521,7 @@ class WatcherPaperRuntime:
                 self._symbol_status.snapshot(),
                 observed_at=self._clock.now(),
                 runtime=self._tenant_runtime_summary(report),
+                assignment_observations=self._assignment_observations,
             )
             session.commit()
         active = {scan.scan_scope for scan in report.scans}
@@ -720,12 +727,49 @@ class WatcherPaperRuntime:
         if session is None:
             return ()
         if self._watchlist_mode:
-            return list_watchlist_scan_targets(
-                session,
-                symbols=self._symbols,
-                organization_id=self._organization_id,
-                limit=self._max_scopes_per_cycle,
+            from app.services.watcher_assignment_service import (
+                assignment_configuration_exists,
+                assignment_scan_targets,
+                managed_assignment_coverage,
             )
+
+            self._assignment_observations = {}
+            self._assignment_configured = False
+            self._assignment_managed_symbols = set()
+            explicit: tuple[PaperScanTarget, ...] = ()
+            managed: set[tuple[UUID, UUID, str]] = set()
+            revision: int | None = None
+            symbols = self._symbols
+            if self._organization_id is not None:
+                from app.repositories.watcher_watchlist import WatcherWatchlistRepository
+
+                config = WatcherWatchlistRepository(session).load(self._organization_id)
+                revision = config.revision
+                symbols = tuple(symbol for symbol in symbols if symbol in config.enabled_symbols())
+            if self._organization_id is not None and assignment_configuration_exists(
+                session, self._organization_id
+            ):
+                self._assignment_configured = True
+                explicit, self._assignment_observations = assignment_scan_targets(
+                    session,
+                    organization_id=self._organization_id,
+                    symbols=symbols,
+                    limit=self._max_scopes_per_cycle,
+                )
+                managed = managed_assignment_coverage(session, self._organization_id)
+                self._assignment_managed_symbols = {symbol for _, _, symbol in managed}
+            inferred = list_watchlist_scan_targets(
+                session,
+                symbols=symbols,
+                organization_id=self._organization_id,
+                limit=self._max_scopes_per_cycle - len(explicit),
+                excluded_coverage=managed,
+            )
+            if revision is not None:
+                inferred = tuple(
+                    replace(target, configuration_revision=revision) for target in inferred
+                )
+            return explicit + inferred
         return list_paper_scan_targets(
             session,
             symbols=self._symbols,
@@ -750,7 +794,19 @@ class WatcherPaperRuntime:
             report = self._scan_target(session, target)
             if session is not None:
                 session.commit()
-            self._notify_scan(report)
+            authority_changed = False
+            if target.configuration_revision is not None and session is not None:
+                from app.services.watcher_assignment_service import assignment_target_reason
+
+                reason = assignment_target_reason(session, target)
+                if reason is not None:
+                    authority_changed = True
+                    report = replace(report, status="blocked", reason_code=reason, published=False)
+            self._record_assignment_scan(target, report)
+            if not authority_changed and (
+                target.assignment_id is None or report.status != "blocked"
+            ):
+                self._notify_scan(report)
             return report
         except Exception:
             if session is not None:
@@ -764,7 +820,7 @@ class WatcherPaperRuntime:
                 exc_info=True,
             )
             observe_scan("failed")
-            return WatcherPaperScanReport(
+            report = WatcherPaperScanReport(
                 organization_id=target.organization_id,
                 scan_scope=target.scan_scope,
                 symbol=target.symbol,
@@ -777,10 +833,29 @@ class WatcherPaperRuntime:
                 user_id=target.user_id,
                 nested_strategy=target.fusion_policy_version == NESTED_KIND,
             )
+            self._record_assignment_scan(target, report)
+            return report
 
     def _scan_target(
         self, session: Session | None, target: PaperScanTarget
     ) -> WatcherPaperScanReport:
+        if target.configuration_revision is not None and session is not None:
+            from app.services.watcher_assignment_service import assignment_target_reason
+
+            reason = assignment_target_reason(session, target)
+            if reason is not None:
+                return WatcherPaperScanReport(
+                    organization_id=target.organization_id,
+                    scan_scope=target.scan_scope,
+                    symbol=target.symbol,
+                    status="blocked",
+                    reason_code=reason,
+                    replayed=False,
+                    published=False,
+                    candidate_ids=(),
+                    kill_switch_active=False,
+                    user_id=target.user_id,
+                )
         kill_active = self._kill_switch_is_active(session, target.organization_id)
         if automated_paper_actions_blocked(kill_active):
             report = WatcherPaperScanReport(
@@ -845,11 +920,16 @@ class WatcherPaperRuntime:
             poll_monitor = getattr(self._evidence_factory, "poll_monitor", None)
             if callable(poll_monitor):
                 poll_monitor(target.symbol)
+        persistence_fence = self._persistence_fence
+        if target.configuration_revision is not None and session is not None:
+            from app.services.watcher_assignment_service import AssignmentCandidateFence
+
+            persistence_fence = AssignmentCandidateFence(session, target, persistence_fence)
         evaluator = build_fusion_evaluation_service(
             evidence=evidence,
             lifecycle=self._lifecycle,
             clock=self._eval_clock,
-            persistence_fence=self._persistence_fence,
+            persistence_fence=persistence_fence,
             outcome_observer=self._observer_factory(session, target),
         )
         orchestrator = WatcherOrchestrator(
@@ -890,7 +970,16 @@ class WatcherPaperRuntime:
                 and not watcher_measurement_is_replay(self._settings)
             ),
         )
-        report = self._continue_paper_loop(session, target, report, evidence)
+        # Assignments grant observation authority only. Existing unowned execution
+        # paths retain their original approvals and gates.
+        if target.assignment_id is None:
+            if target.configuration_revision is not None and session is not None:
+                from app.services.watcher_assignment_service import assignment_target_reason
+
+                reason = assignment_target_reason(session, target)
+                if reason is not None:
+                    return replace(report, status="blocked", reason_code=reason, published=False)
+            report = self._continue_paper_loop(session, target, report, evidence)
         from app.strategy_brain.assembly import record_paper_link
 
         nested_alert = record_paper_link(
@@ -1241,6 +1330,21 @@ class WatcherPaperRuntime:
             verdicts=self._contract_verdicts,
         )
 
+    def _record_assignment_scan(
+        self, target: PaperScanTarget, report: WatcherPaperScanReport
+    ) -> None:
+        if target.assignment_id is None:
+            return
+        for raw in self._assignment_observations.get(target.symbol, []):
+            if raw["assignment_id"] == str(target.assignment_id):
+                raw.update(
+                    status=report.status,
+                    reason_code=report.reason_code,
+                    replayed=report.replayed,
+                    candidate_count=len(report.candidate_ids),
+                    observed_at=self._clock.now().isoformat(),
+                )
+
     def _record_watchlist_scans(self, report: WatcherPaperCycleReport) -> None:
         config = self._watchlist
         if config is None:
@@ -1286,7 +1390,14 @@ class WatcherPaperRuntime:
                 continue
             self._symbol_status.mark_unscanned(
                 symbol,
-                setup_state="no_strategy",
+                setup_state=(
+                    self._assignment_observations.get(symbol, [{}])[0].get(
+                        "reason_code",
+                        "no_monitoring_assignment"
+                        if symbol in self._assignment_managed_symbols
+                        else "no_strategy",
+                    )
+                ),
                 error_state=None,
             )
 

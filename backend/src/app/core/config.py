@@ -136,6 +136,7 @@ class Settings(BaseSettings):
 
     # --- Background worker (Slice 59 — disabled by default) ---
     worker_enabled: bool = False
+    knowledge_indexing_enabled: bool = False
     worker_mode: str = "process"  # process | in_process
     worker_name: str = "alphatrade-worker"
     worker_scan_interval_seconds: int = Field(default=60, ge=5, le=86400)
@@ -181,6 +182,11 @@ class Settings(BaseSettings):
     telegram_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
     email_alerts_enabled: bool = False
+
+    # Interactive provider voice stays unavailable without a verified finite
+    # budget/pricing receipt. These defaults never activate an operator's provider.
+    agent_realtime_enabled: bool = False
+    agent_realtime_limits_file: str = ""
 
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False
@@ -315,6 +321,8 @@ class Settings(BaseSettings):
     # Phase 5 perpetual evidence: replay fixtures by default; live USD-M is opt-in.
     # Never falls back to spot. Values: replay | binance_usdm | bybit_usdt_perpetual
     perpetual_evidence_source: str = "replay"
+    # Separate on-demand research API; no scheduler, execution or automatic activation.
+    trendpulse_screening_enabled: bool = False
     # Optional whole-source failover. none | bybit_usdt_perpetual. Not a price substitute.
     perpetual_evidence_secondary_source: str = "none"
     bybit_perpetual_base_url: str = "https://api.bybit.com"
@@ -407,6 +415,9 @@ class Settings(BaseSettings):
     # --- Rate limiting ---
     rate_limit_use_redis: bool = True
     rate_limit_allow_in_memory_fallback: bool = True
+    # Production registration stays at 10/hour/IP. The disposable e2e server raises
+    # this because one loopback worker legitimately registers for the whole smoke suite.
+    auth_register_rate_limit: int = Field(default=10, ge=1, le=10_000)
     redis_connect_timeout_seconds: float = 1.0
     jwt_secret_min_length: int = 32
 

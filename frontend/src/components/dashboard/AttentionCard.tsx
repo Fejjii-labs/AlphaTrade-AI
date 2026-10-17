@@ -10,7 +10,7 @@ import { formatDateTime, humanizeToken } from "@/lib/format";
 
 export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: number }) {
   const items = queue.items.filter((item) =>
-    item.expires_at === null || Date.parse(item.expires_at) > now,
+    item.expires_at == null || Date.parse(item.expires_at) > now,
   );
   return (
     <div className="space-y-3 text-sm" data-testid="attention-content">

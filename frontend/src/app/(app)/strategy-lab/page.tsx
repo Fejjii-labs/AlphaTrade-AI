@@ -25,7 +25,7 @@ export default function StrategyLabPage() {
       <div>
         <h1 className="text-2xl font-semibold">Strategy Lab</h1>
         <p className="text-sm text-zinc-400">
-          Build and version strategy cards for paper-only pre-trade workflows.
+          Review strategy cards and discuss changes with Agent.
         </p>
       </div>
 
@@ -33,10 +33,10 @@ export default function StrategyLabPage() {
 
       <div>
         <Link
-          href="/strategy-lab/new"
+          href="/agent?intent=strategy"
           className="inline-flex rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-white"
         >
-          Create strategy
+          Discuss a strategy with Agent
         </Link>
       </div>
 

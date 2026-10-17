@@ -43,6 +43,8 @@ class PaperScanTarget:
     fusion_policy_version: str
     symbol: str
     timeframe: str = FIRST_SLICE_TIMEFRAME
+    assignment_id: UUID | None = None
+    configuration_revision: int | None = None
 
     @property
     def policy_id(self) -> UUID:
@@ -162,6 +164,7 @@ def list_watchlist_scan_targets(
     symbols: Sequence[str],
     organization_id: UUID | None = None,
     limit: int,
+    excluded_coverage: set[tuple[UUID, UUID, str]] | None = None,
 ) -> tuple[PaperScanTarget, ...]:
     """Scan targets for the configured slots.
 
@@ -171,6 +174,8 @@ def list_watchlist_scan_targets(
     """
 
     enabled_symbols = ordered_watch_symbols(symbols)
+    if limit <= 0:
+        return ()
     stmt = select(UserStrategy).where(UserStrategy.enabled.is_(True))
     if organization_id is not None:
         stmt = stmt.where(UserStrategy.organization_id == organization_id)
@@ -193,6 +198,8 @@ def list_watchlist_scan_targets(
     targets: list[PaperScanTarget] = []
     for symbol in enabled_symbols:
         for strategy, executable in strategies:
+            if excluded_coverage and (strategy.user_id, strategy.id, symbol) in excluded_coverage:
+                continue
             if executable.authored_spec.symbol.strip().upper() != symbol:
                 continue
             targets.append(_target_from_executable(strategy, executable, symbol=symbol))

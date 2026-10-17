@@ -34,6 +34,11 @@ def test_single_head_extends_verified_demo_lifecycle():
     )
     scripts = ScriptDirectory.from_config(config)
     single_alembic_head(scripts)
+    assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
+    assert scripts.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
+    assert scripts.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
+    assert scripts.get_revision("a10blofinactivity001").down_revision == "a9knowledgeoutbox001"
+    assert scripts.get_revision("a9knowledgeoutbox001").down_revision == "a8agentcapture001"
     assert scripts.get_revision("a8agentcapture001").down_revision == "a7manualrecovery001"
     assert scripts.get_revision("a7manualrecovery001").down_revision == "a6manualdemo001"
     assert scripts.get_revision("a6manualdemo001").down_revision == "a5demolifecycle001"

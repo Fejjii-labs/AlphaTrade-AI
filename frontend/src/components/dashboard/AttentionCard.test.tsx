@@ -17,7 +17,7 @@ const item: AttentionItem = {
 };
 const queue: AttentionQueue = {
   schema_version: "AttentionQueue/v1", organization_id: "org-1", user_id: "user-1",
-  generated_at: "2026-10-02T12:00:00Z", items: [item], recommended_next_action: item.recommended_next_action,
+  generated_at: "2026-10-02T12:00:00Z", items: [item], recommended_next_action: item.recommended_next_action ?? null,
   limitations: ["Only stored records are projected."], execution_mode: "paper",
   executes_trades: false, approves_strategies: false, bypasses_risk: false, telegram_delivery: false,
 };

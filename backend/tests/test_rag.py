@@ -36,6 +36,7 @@ from app.services.strategy_service import StrategyService
 from app.strategies.registry import build_default_registry
 from app.tools.registry import ToolRegistry
 from app.tools.registry import build_default_registry as build_tools
+from tests.support.knowledge_indexing import drain_indexing
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000020")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000021")
@@ -109,6 +110,7 @@ def test_document_ingestion_persists_chunks(rag_service: RagService, db_session:
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
     assert result.chunk_count >= 1
     assert result.duplicate is False
 
@@ -129,6 +131,7 @@ def test_duplicate_source_hash_returns_existing(
     )
     first = rag_service.ingest(payload)
     db_session.commit()
+    drain_indexing(rag_service)
     second = rag_service.ingest(payload)
     assert second.duplicate is True
     assert second.document_id == first.document_id
@@ -187,6 +190,7 @@ def test_retrieval_with_source_type_filter(rag_service: RagService, db_session: 
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
 
     result = rag_service.search(
         RagQuery(
@@ -222,6 +226,7 @@ def test_retrieval_with_strategy_and_risk_tag_filters(
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
 
     strategy_result = rag_service.search(
         RagQuery(
@@ -256,6 +261,7 @@ def test_citation_object_creation(rag_service: RagService, db_session: Session) 
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
     result = rag_service.search(
         RagQuery(query="capital preservation", organization_id=ORG_ID, top_k=1)
     )
@@ -278,6 +284,7 @@ def test_rag_tool_calls_rag_service(rag_service: RagService, db_session: Session
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
     registry: ToolRegistry = build_tools(rag_service=rag_service)
     output = registry.execute(
         "rag_retriever",
@@ -304,6 +311,7 @@ def test_agent_context_retrieval_populates_citations(
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
 
     settings = Settings(log_json=False, execution_mode="paper", enable_real_trading=False)
     runtime = AgentRuntime(
@@ -340,6 +348,7 @@ def test_rag_does_not_bypass_risk_engine_or_create_trading_signal(
         )
     )
     db_session.commit()
+    drain_indexing(rag_service)
 
     settings = Settings(log_json=False, execution_mode="paper", enable_real_trading=False)
     runtime = AgentRuntime(

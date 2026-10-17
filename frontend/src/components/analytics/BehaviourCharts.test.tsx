@@ -153,6 +153,7 @@ function mockBehaviourSources(
   overrides: Partial<ReturnType<typeof useBehaviourSources>> = {},
 ): ReturnType<typeof useBehaviourSources> {
   return {
+    refreshFailures: [],
     ruleCompliance: null,
     ruleComplianceLoading: false,
     ruleComplianceRetryLoading: false,

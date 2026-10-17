@@ -215,7 +215,7 @@ export function StrategyConversationPanel({ strategyId }: Props) {
               Proposal {proposal.status}
               {proposal.is_preview ? " · preview only" : ""}
             </p>
-            {proposal.challenge_notes.slice(0, 3).map((note) => (
+            {(proposal.challenge_notes ?? []).slice(0, 3).map((note) => (
               <p key={note} className="text-sm text-amber-300">
                 Challenge: {note}
               </p>
@@ -234,7 +234,7 @@ export function StrategyConversationPanel({ strategyId }: Props) {
                 <div>user_id: {proposal.user_id}</div>
               </dl>
             ) : null}
-            {proposal.limitations.slice(0, 2).map((note) => (
+            {(proposal.limitations ?? []).slice(0, 2).map((note) => (
               <p key={note} className="text-xs text-zinc-400">
                 {note}
               </p>

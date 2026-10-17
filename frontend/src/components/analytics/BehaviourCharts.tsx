@@ -1,4 +1,5 @@
 "use client";
+import { SourceRefreshFailures } from "./SourceRefreshFailures";
 
 import { useMemo } from "react";
 
@@ -26,6 +27,7 @@ export type BehaviourChartsProps = {
 
 export function BehaviourCharts({ apiParams, enabled = true }: BehaviourChartsProps) {
   const {
+    refreshFailures = [],
     ruleCompliance,
     ruleComplianceLoading,
     ruleComplianceRetryLoading,
@@ -68,9 +70,11 @@ export function BehaviourCharts({ apiParams, enabled = true }: BehaviourChartsPr
 
   return (
     <div className="space-y-6" data-testid="behaviour-charts">
+      <SourceRefreshFailures sources={refreshFailures} />
+      {ruleComplianceRetryLoading || proposalDisciplineRetryLoading || learningDisciplineRetryLoading || riskBehaviorRetryLoading ? <p role="status" className="text-caption text-text-muted">Refreshing requested sources…</p> : null}
       <RuleComplianceChart
         source={gatedRuleCompliance}
-        loading={ruleComplianceLoading || ruleComplianceRetryLoading}
+        loading={ruleComplianceLoading}
         onRetry={() => void reloadRuleCompliance()}
         filtersSummary={ruleComplianceSummary}
         staleWholeTab={ruleComplianceStale}
@@ -78,8 +82,8 @@ export function BehaviourCharts({ apiParams, enabled = true }: BehaviourChartsPr
       <DisciplineScoreCards
         proposalSource={proposalDiscipline}
         learningSource={learningDiscipline}
-        proposalLoading={proposalDisciplineLoading || proposalDisciplineRetryLoading}
-        learningLoading={learningDisciplineLoading || learningDisciplineRetryLoading}
+        proposalLoading={proposalDisciplineLoading}
+        learningLoading={learningDisciplineLoading}
         onRetryProposal={() => void reloadProposalDiscipline()}
         onRetryLearning={() => void reloadLearningDiscipline()}
         proposalFiltersSummary={analyticsWindowSummary}
@@ -89,7 +93,7 @@ export function BehaviourCharts({ apiParams, enabled = true }: BehaviourChartsPr
       />
       <RiskBehaviourCounters
         source={riskBehavior}
-        loading={riskBehaviorLoading || riskBehaviorRetryLoading}
+        loading={riskBehaviorLoading}
         onRetry={() => void reloadRiskBehavior()}
         filtersSummary={analyticsWindowSummary}
         freshnessNote={NO_SERVER_FRESHNESS_TIMESTAMP_NOTE}

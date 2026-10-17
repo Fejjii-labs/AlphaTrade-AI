@@ -95,7 +95,16 @@ test.describe("AlphaTrade MVP API workflow", () => {
       },
     });
     expect(journal.ok()).toBeTruthy();
+    const journalRecord = await journal.json();
 
+    await expect.poll(async () => {
+      const listed = await request.get(`${API_URL}/knowledge/documents`, {
+        headers, params: { source_type: "trade_journal", limit: 100 },
+      });
+      const documents = (await listed.json()).items;
+      return documents.some((document: { source_uri?: string; ingestion_metadata?: { indexing?: { vector_index_status?: string } } }) =>
+        document.source_uri?.includes(journalRecord.id) && document.ingestion_metadata?.indexing?.vector_index_status === "ready");
+    }, { timeout: 15_000, intervals: [100, 250, 500] }).toBe(true);
     const search = await request.post(`${API_URL}/knowledge/search`, {
       headers,
       data: { query: uniqueLesson, top_k: 5, source_types: ["trade_journal"] },

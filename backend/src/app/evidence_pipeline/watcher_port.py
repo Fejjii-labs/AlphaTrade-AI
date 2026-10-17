@@ -194,6 +194,13 @@ class AssemblingWatcherScanEvidence:
                 reason_code="missing_monitor",
             )
         executable = self._resolve_executable(command)
+        from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
+
+        if executable is not None and isinstance(executable.authored_spec, TrendPulseSpec):
+            raise WatcherEvidenceUnavailableError(
+                "TrendPulse requires its bounded two-timeframe screening receipts.",
+                reason_code="trendpulse_screening_receipts_required",
+            )
         from app.schemas.nested_continuation import NestedContinuationSpec
         from app.strategy_brain.sfp.contracts import SfpSpec
 

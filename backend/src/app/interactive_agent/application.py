@@ -25,6 +25,7 @@ from app.schemas.backtest import BacktestRunCreate
 from app.schemas.common import ConversationMessageRole, StrategyProposalStatus, StrictModel
 from app.schemas.pretrade import PreTradeAnalyzeRequest
 from app.schemas.rag import IngestDocumentRequest
+from app.schemas.watcher_assignments import WatcherAssignmentReplace
 from app.schemas.watcher_watchlist import WatcherWatchlistReplace
 from app.services.agent_paper_execution import AgentPaperExecutionService
 from app.services.audit_service import AuditService
@@ -103,6 +104,27 @@ def apply_confirmed_action(
             **ingested.model_dump(mode="json"),
             "provenance": proposal.payload.get("provenance"),
             "evidence_links_persisted": proposal.payload.get("evidence_document_ids", []),
+        }
+    if isinstance(inputs, WatcherAssignmentReplace):
+        from app.services.watcher_assignment_service import WatcherAssignmentService
+
+        assignment_replacement = WatcherAssignmentReplace.model_validate(
+            proposal.payload["assignment_replace_request"]
+        )
+        if assignment_replacement != inputs:
+            raise ConflictError("Monitoring proposal snapshot does not match reviewed input.")
+        assignment_result = WatcherAssignmentService(session).replace(
+            organization_id=conversation.organization_id,
+            user_id=conversation.user_id,
+            body=assignment_replacement,
+        )
+        return conversation.organization_id, {
+            "record_type": "watcher_assignments",
+            "configuration_revision": assignment_result.revision,
+            "monitoring_only": True,
+            "configuration_changed": True,
+            "trading_activated": False,
+            "execution_attempted": False,
         }
     if isinstance(inputs, WatcherChangeInput):
         if not proposal.payload.get("replace_request"):

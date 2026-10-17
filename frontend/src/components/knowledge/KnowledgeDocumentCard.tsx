@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { api } from "@/lib/api";
 
 import {
   formatKnowledgeTimestamp,
@@ -11,6 +12,7 @@ import {
   type DeepLinkExclusionNotice,
 } from "@/components/knowledge/knowledgeDisplay";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { RagDocument } from "@/lib/api/types";
 
@@ -31,6 +33,9 @@ export function KnowledgeDocumentCard({
   onToggleExpand,
   detailSlot,
 }: KnowledgeDocumentCardProps) {
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const status = document.ingestion_metadata?.indexing?.vector_index_status ?? "unknown";
   const category = knowledgeCategory(document);
   const relationships = resolveKnowledgeRelationships(document);
   const createdLabel = formatKnowledgeTimestamp(document.created_at);
@@ -60,6 +65,16 @@ export function KnowledgeDocumentCard({
             </Badge>
           </div>
         </div>
+        <p role="status" data-testid="knowledge-indexing-status">
+          Stored · Search {status === "upsert_acknowledged" ? "previously acknowledged" : status === "unknown" ? "unverified" : status}
+        </p>
+        {status === "failed" ? <Button size="sm" variant="outline" type="button" disabled={retrying} onClick={async () => {
+          setRetrying(true); setRetryError(null);
+          try { await api.knowledge.retryIndexing(document.id); setRetryError("Retry queued. Refresh the library to check readiness."); }
+          catch (error) { setRetryError(error instanceof Error ? error.message : "Indexing retry failed"); }
+          finally { setRetrying(false); }
+        }}>Retry indexing</Button> : null}
+        {retryError ? <p role="status">{retryError}</p> : null}
         {deepLinkNotices.map((notice) => (
           <p
             key={notice.kind}
@@ -109,8 +124,7 @@ export function KnowledgeDocumentCard({
               {document.ingestion_metadata?.indexing ? (
                 <p>
                   Recorded search index:{" "}
-                  {document.ingestion_metadata.indexing.vector_backend}, upsert
-                  acknowledged at{" "}
+                  {document.ingestion_metadata.indexing.vector_backend ?? "unverified"}, {status} at{" "}
                   {document.ingestion_metadata.indexing.observed_at}
                   {document.ingestion_metadata.indexing.fallback_used
                     ? " (fallback/local)"
@@ -160,15 +174,16 @@ export function KnowledgeDocumentCard({
         </ul>
 
         {onToggleExpand ? (
-          <button
+          <Button
             type="button"
-            className="inline-flex h-10 items-center rounded-control border border-border bg-surface-1 px-4 text-sm font-medium text-text-primary hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            size="sm"
+            variant="outline"
             data-testid={`knowledge-expand-${document.id}`}
             aria-expanded={expanded}
             onClick={onToggleExpand}
           >
             {expanded ? "Close" : "Open"}
-          </button>
+          </Button>
         ) : null}
 
         {expanded ? detailSlot : null}

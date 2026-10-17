@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PrivateQueryFixture } from "@/test/private-query";
 import AnalyticsPage from "@/app/(app)/analytics/page";
 import type {
   JournalStatsResponse,
@@ -433,7 +434,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
   });
 
   it("keeps all six tabpanels in the DOM with overview active by default", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
 
     const overviewTab = screen.getByRole("tab", { name: "Overview" });
     const performanceTab = screen.getByRole("tab", { name: "Performance" });
@@ -507,7 +508,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
   });
 
   it("does not mount performance/setups/behaviour/validation/comparison charts while overview is active", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(performanceChartsMounted).not.toHaveBeenCalled();
     expect(setupsChartsMounted).not.toHaveBeenCalled();
     expect(behaviourChartsMounted).not.toHaveBeenCalled();
@@ -517,14 +518,14 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
 
   it("mounts behaviour charts when the behaviour tab is active", () => {
     filterState = { ...filterState, tab: "behaviour" };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(behaviourChartsMounted).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("behaviour-charts")).toBeInTheDocument();
   });
 
   it("mounts validation charts only when the validation tab is active", () => {
     filterState = { ...filterState, tab: "validation" };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(validationChartsMounted).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("validation-charts")).toBeInTheDocument();
     expect(behaviourChartsMounted).not.toHaveBeenCalled();
@@ -533,7 +534,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
 
   it("mounts comparison charts when the comparison tab is active", () => {
     filterState = { ...filterState, tab: "comparison" };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(comparisonChartsMounted).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("comparison-charts")).toBeInTheDocument();
     expect(validationChartsMounted).not.toHaveBeenCalled();
@@ -549,13 +550,13 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: false,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("behaviour-charts")).toBeInTheDocument();
     expect(screen.queryByTestId("error-state")).not.toBeInTheDocument();
   });
 
   it("renders overview stats from available sources", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-page")).toBeInTheDocument();
     expect(screen.getByTestId("overview-stats")).toBeInTheDocument();
     expect(screen.getByText("Realised P&L")).toBeInTheDocument();
@@ -571,7 +572,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: true,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-partial-data")).toHaveTextContent(/partial analytics data/i);
     expect(screen.getByTestId("overview-journal-error")).toBeInTheDocument();
   });
@@ -585,7 +586,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: false,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("error-state")).toHaveTextContent(/both failed/i);
     expect(screen.queryByTestId("overview-stats")).not.toBeInTheDocument();
     const tablist = screen.getByRole("tablist", { name: "Analytics sections" });
@@ -607,7 +608,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: true,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("daily-pnl-chart-error")).toBeInTheDocument();
     expect(screen.getByTestId("cumulative-pnl-chart-error")).toBeInTheDocument();
     expect(screen.queryByTestId("daily-pnl-chart-plot")).not.toBeInTheDocument();
@@ -615,7 +616,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
   });
 
   it("wires tab aria-controls to tabpanels and aria-labelledby back to tabs", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     const tablist = screen.getByRole("tablist", { name: "Analytics sections" });
     const tabs = within(tablist).getAllByRole("tab");
     expect(tabs).toHaveLength(6);
@@ -631,7 +632,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
   });
 
   it("uses filter bar actions", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     fireEvent.click(screen.getByTestId("analytics-preset-30d"));
     expect(mockApplyPreset).toHaveBeenCalledWith("30d");
     fireEvent.click(screen.getByTestId("analytics-clear-filters"));
@@ -652,7 +653,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: false,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("overview-stale-state")).toHaveTextContent(/stale for this view/i);
     vi.useRealTimers();
   });
@@ -672,7 +673,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       partialData: false,
       loadedFilterKey: "key",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("daily-pnl-chart-error")).toHaveTextContent(/clock-skewed/i);
     expect(screen.getByTestId("cumulative-pnl-chart-error")).toHaveTextContent(/clock-skewed/i);
     expect(screen.queryByTestId("daily-pnl-chart-plot")).not.toBeInTheDocument();
@@ -687,7 +688,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       groupBy: "setup_version",
       setupId: "11111111-1111-1111-1111-111111111111",
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(setupsChartsMounted).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("setups-charts")).toBeInTheDocument();
     expect(screen.getByTestId("setup-win-rate-chart")).toBeInTheDocument();
@@ -706,7 +707,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       journal: failed("journal down"),
       evidence: failed("evidence down"),
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     const setupsTab = screen.getByRole("tab", { name: "Setups" });
     const panel = document.getElementById(setupsTab.getAttribute("aria-controls")!);
     expect(panel).toBeTruthy();
@@ -718,14 +719,14 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
 
   it("shows unassigned and No P&L data on setups tab", () => {
     filterState = { ...filterState, tab: "setups", groupBy: "setup_version" };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("setup-win-rate-row-unassigned")).toBeInTheDocument();
     expect(screen.getByTestId("setup-expectancy-row-unassigned")).toHaveTextContent("No P&L data");
   });
 
   it("wires grouping toggle through push handler", () => {
     filterState = { ...filterState, tab: "setups" };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     fireEvent.click(screen.getByTestId("setup-group-strategy"));
     expect(mockSetGroupBy).toHaveBeenCalledWith("strategy");
   });
@@ -738,7 +739,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       strategiesLoaded: false,
       strategies: [],
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-strategies-loading")).toBeInTheDocument();
     expect(screen.queryByTestId("analytics-strategies-empty")).not.toBeInTheDocument();
   });
@@ -751,7 +752,7 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       strategiesLoaded: false,
       strategies: [],
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-strategies-error")).toHaveTextContent(/strategies down/i);
     expect(screen.getByTestId("setup-win-rate-chart-plot")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("analytics-strategies-retry"));
@@ -766,14 +767,14 @@ describe("AnalyticsPage PR1–PR4 integration", () => {
       strategiesLoading: false,
       strategies: [],
     };
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-strategies-empty")).toHaveTextContent(
       /No strategies available/i,
     );
   });
 
   it("does not use page-level overflow-x-hidden", () => {
-    render(<AnalyticsPage />);
+    render(<AnalyticsPage />, { wrapper: PrivateQueryFixture });
     expect(screen.getByTestId("analytics-page").className).not.toMatch(/overflow-x-hidden/);
   });
 });

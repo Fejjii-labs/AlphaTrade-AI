@@ -118,3 +118,15 @@ def test_postgres_concurrent_confirmation_converges_to_one_version(
     assert len(version_ids) == 1
     versions_after = client.get(f"/strategies/{strategy_id}/versions")
     assert len(versions_after.json()["items"]) == start_count + 1
+
+
+@requires_postgres
+def test_postgres_agent_authoring_preserves_setup_type_and_replays_one_version(postgres_conv_env):
+    from tests.test_strategy_conversation_foundation import (
+        _assert_agent_authoring_confirmation_journey,
+        _auth,
+    )
+
+    client, factory = postgres_conv_env
+    _auth(client, "conv-pg@test.example")
+    _assert_agent_authoring_confirmation_journey(client, factory)

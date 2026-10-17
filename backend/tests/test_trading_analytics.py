@@ -248,7 +248,9 @@ def test_journal_rag_sync_still_works(
         session.commit()
         from app.schemas.common import DocumentSourceType
         from app.schemas.rag import RagQuery
+        from tests.support.knowledge_indexing import drain_indexing
 
+        assert drain_indexing(rag) == ["ready"]
         search = rag.search(
             RagQuery(
                 query=unique,

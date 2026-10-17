@@ -10,6 +10,9 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 
+import { PrivateQueryProvider } from "@/components/query/PrivateQueryProvider";
+import { sessionCleared, sessionGeneration } from "@/lib/auth/session-events";
+import { bindRecoverySession, recoverySession } from "@/lib/auth/recovery-session";
 import { api, ApiError } from "@/lib/api";
 import type { AuthResponse, MeResponse } from "@/lib/api/types";
 import { sanitizeNextPath } from "@/lib/auth/boundary";
@@ -46,27 +49,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setOrganization(null);
       return;
     }
+    const generation = sessionGeneration();
     const me = await api.auth.me();
+    if (generation !== sessionGeneration()) return;
+    const previous = recoverySession();
+    if (previous && (previous.userId !== me.user.id || previous.organizationId !== me.organization.id)) sessionCleared();
+    bindRecoverySession(me.organization.id, me.user.id);
     setUser(me.user);
     setOrganization(me.organization);
   }, []);
 
   useEffect(() => {
+    const generation = sessionGeneration();
+    let active = true;
     void (async () => {
       try {
         await refreshProfile();
       } catch {
+        if (!active || generation !== sessionGeneration()) return;
         clearTokens();
         setUser(null);
         setOrganization(null);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
+    return () => { active = false; };
   }, [refreshProfile]);
 
   const applyAuthResponse = useCallback(async (response: AuthResponse) => {
+    sessionCleared();
     setTokens(response.tokens.access_token, response.tokens.refresh_token || undefined);
+    bindRecoverySession(response.organization.id, response.user.id);
     setUser(response.user);
     setOrganization(response.organization);
   }, []);
@@ -99,15 +113,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     const refreshToken = getRefreshToken();
+    const logoutRequest = api.auth.logout(refreshToken ?? undefined);
+    clearTokens();
+    const generation = sessionGeneration();
+    setUser(null);
+    setOrganization(null);
     try {
-      await api.auth.logout(refreshToken ?? undefined);
+      await logoutRequest;
     } catch {
       // Ignore logout failures; local session is cleared regardless.
     } finally {
-      clearTokens();
-      setUser(null);
-      setOrganization(null);
-      router.replace("/login");
+      if (generation === sessionGeneration()) {
+        setUser(null);
+        setOrganization(null);
+        router.replace("/login");
+      }
     }
   }, [router]);
 
@@ -125,7 +145,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user, organization, loading, login, register, logout, refreshProfile],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>
+    <PrivateQueryProvider organizationId={organization?.id ?? null} userId={user?.id ?? null}>
+      {children}
+    </PrivateQueryProvider>
+  </AuthContext.Provider>;
 }
 
 export function useAuth() {

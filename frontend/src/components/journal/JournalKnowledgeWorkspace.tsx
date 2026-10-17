@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { KnowledgeDocumentCard } from "@/components/knowledge/KnowledgeDocumentCard";
 import { KnowledgeDetailPanel } from "@/components/knowledge/KnowledgeDetailPanel";
 import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
@@ -19,6 +19,8 @@ import {
 } from "@/lib/api/saved-entries";
 import { formatDateTime } from "@/lib/format";
 import { isAlphaTradeBloFinExecution } from "@/lib/journal-activity";
+import { NativeActivity } from "@/components/activity/NativeActivity";
+import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 export function SavedEntryDetail({
   entry,
@@ -50,13 +52,12 @@ export function SavedEntryDetail({
   }
   return (
     <article className="space-y-3 rounded-card border border-border-subtle p-4">
-      <JournalReturnLink />
       <h2 className="text-xl font-semibold">{current.title}</h2>
       <p className="text-sm text-text-muted">
         {ENTRY_LABELS[current.category]} · {formatDateTime(current.updated_at)}{" "}
         · {current.undone ? "Undone" : `v${current.revision}`}
       </p>
-      <p className="text-sm">{current.summary}</p>
+      <p className="whitespace-pre-wrap break-words text-base leading-relaxed">{current.summary}</p>
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm">
           Category{" "}
@@ -138,9 +139,9 @@ export function SavedEntryDetail({
         <summary className="min-h-11 cursor-pointer text-sm">
           Original content &amp; evidence
         </summary>
-        <p className="whitespace-pre-wrap text-sm">{current.original_text}</p>
+        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{current.original_text}</p>
         {current.draft && (
-          <pre className="overflow-auto whitespace-pre-wrap text-xs">
+          <pre className="whitespace-pre-wrap break-words text-xs">
             {JSON.stringify(current.draft, null, 2)}
           </pre>
         )}
@@ -150,6 +151,13 @@ export function SavedEntryDetail({
 }
 
 export function JournalKnowledgeWorkspace() {
+  const { user, organization } = useAuth();
+  const [session, setSession] = useState(sessionGeneration);
+  useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
+  return <JournalWorkspaceContent key={JSON.stringify([organization?.id, user?.id, session])} />;
+}
+
+function JournalWorkspaceContent() {
   const params = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -164,6 +172,20 @@ export function JournalKnowledgeWorkspace() {
   const sourcePage = Math.max(0, Number(params.get("source_page")) || 0);
   const chunkPage = Math.max(0, Number(params.get("chunk_page")) || 0);
   const loader = useCallback(async () => {
+    if (savedId || documentId) {
+      // Exact source navigation must not wait for unrelated library listings.
+      const [linked, chunks] = await Promise.allSettled([
+        savedId ? savedEntries.get(savedId) : Promise.resolve(null),
+        documentId ? api.knowledge.listChunks({
+          document_id: documentId, limit: 50, offset: chunkPage * 50,
+        }) : Promise.resolve(null),
+      ]);
+      return {
+        entries: [], entryTotal: 0, sourceTotal: 0, trades: [], documents: [],
+        linked: linked.status === "fulfilled" ? linked.value : null,
+        chunks: chunks.status === "fulfilled" ? chunks.value : null,
+      };
+    }
     const [entries, trades, documents, linked, chunks] =
       await Promise.allSettled([
         savedEntries.list({
@@ -229,6 +251,16 @@ export function JournalKnowledgeWorkspace() {
     sourcePage,
     chunkPage,
   ]);
+  const readinessDeadline = useRef(0);
+  const hasPending = Boolean(data?.documents?.some(document =>
+    document.ingestion_metadata?.indexing?.vector_index_status === "pending"));
+  useEffect(() => {
+    if (!knowledge || savedId || documentId || !hasPending) { readinessDeadline.current = 0; return; }
+    if (!readinessDeadline.current) readinessDeadline.current = Date.now() + 60_000;
+    if (Date.now() >= readinessDeadline.current) return;
+    const timer = setTimeout(() => { void reload(); }, 2_000);
+    return () => clearTimeout(timer);
+  }, [knowledge, savedId, documentId, hasPending, data, reload]);
   const returnKey = journalReturnKey(user?.id, organization?.id);
   useEffect(() => {
     if (loading || savedId || documentId) return;
@@ -294,7 +326,7 @@ export function JournalKnowledgeWorkspace() {
               : d.source_type === "general_note")),
   );
   return (
-    <div className="space-y-4" data-testid="journal-knowledge-workspace">
+    <div className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
       <div className="flex flex-wrap justify-between gap-3">
         <h1 className="text-2xl font-semibold">Journal &amp; Knowledge</h1>
         <Link href="/agent" className="text-accent">
@@ -322,17 +354,20 @@ export function JournalKnowledgeWorkspace() {
           Knowledge
         </Link>
       </nav>
-      <div className="flex flex-wrap items-center gap-3">
+      {savedId || documentId ? <JournalReturnLink /> : null}
+      {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
+      <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
         <Input
           aria-label="Search entries"
           placeholder="Search"
           value={query}
           onChange={(e) => filter("q", e.target.value)}
-          className="max-w-md"
+          className="col-span-2 min-w-0 sm:w-auto sm:flex-1"
         />
         {knowledge && (
           <Select
             aria-label="Knowledge category"
+            className="min-w-0 sm:w-auto"
             value={category}
             onChange={(e) => filter("category", e.target.value)}
           >
@@ -347,7 +382,8 @@ export function JournalKnowledgeWorkspace() {
         <Button
           disabled={loading}
           variant="outline"
-          onClick={() => void reload()}
+          size="sm"
+          onClick={() => { readinessDeadline.current = 0; void reload(); }}
         >
           Refresh
         </Button>
@@ -356,6 +392,7 @@ export function JournalKnowledgeWorkspace() {
         <p role="status">Loading entries…</p>
       ) : (
         <>
+          {!knowledge && !savedId && !documentId ? <h2 className="text-base font-semibold">Saved notes &amp; recorded trade reviews</h2> : null}
           {savedId ? (
             data?.linked ? (
               <SavedEntryDetail
@@ -369,7 +406,6 @@ export function JournalKnowledgeWorkspace() {
           ) : null}
           {documentId && (
             <>
-              <JournalReturnLink />
               {(!data?.chunks || data.chunks.total === 0) && (
                 <p role="alert" data-testid="knowledge-document-stale">
                   Original document unavailable or has no readable text. No
@@ -441,7 +477,7 @@ export function JournalKnowledgeWorkspace() {
                   </p>
                   <Link
                     onClick={remember}
-                    href={`/journal?${knowledge ? "tab=knowledge&" : ""}saved=${e.id}`}
+                    href={`/journal?${knowledge ? `tab=knowledge&category=${e.category}&` : ""}saved=${encodeURIComponent(e.id)}`}
                     className="inline-flex min-h-11 items-center text-sm text-accent"
                   >
                     Open
@@ -458,7 +494,7 @@ export function JournalKnowledgeWorkspace() {
                       {t.symbol} · {t.direction}
                     </h2>
                     <p className="text-sm text-text-muted">
-                      BloFin · {t.status} · {formatDateTime(t.entry_time)}
+                      Recorded trade review · {t.status} · {formatDateTime(t.entry_time)}
                       {t.source === "manual_demo_test"
                         ? " · Connectivity test"
                         : ""}
@@ -488,7 +524,7 @@ export function JournalKnowledgeWorkspace() {
                   ? documents?.length === 0
                   : visibleTrades?.length === 0) && (
                   <p className="text-sm text-text-muted">
-                    No matching entries.
+                    {knowledge ? "No matching entries." : "No matching saved notes or recorded reviews."}
                   </p>
                 )}
             </div>
@@ -501,9 +537,9 @@ export function JournalKnowledgeWorkspace() {
                   "source_page",
                   sourcePage,
                   data.sourceTotal,
-                  knowledge ? "Documents" : "Activity records",
+                  knowledge ? "Documents" : "Recorded reviews",
                 ],
-              ].map(([key, index, total, label]) => (
+              ].filter(([, index, total]) => Number(total) > 50 || Number(index) > 0).map(([key, index, total, label]) => (
                 <nav
                   key={String(key)}
                   aria-label={`${label} pages`}

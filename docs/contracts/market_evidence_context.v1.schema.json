@@ -1,0 +1,1322 @@
+{
+  "$defs": {
+    "BookLevel": {
+      "additionalProperties": false,
+      "properties": {
+        "base_quantity": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Base Quantity",
+          "type": "string"
+        },
+        "price": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Price",
+          "type": "string"
+        }
+      },
+      "required": [
+        "price",
+        "base_quantity"
+      ],
+      "title": "BookLevel",
+      "type": "object"
+    },
+    "ContractStyle": {
+      "enum": [
+        "linear",
+        "inverse"
+      ],
+      "title": "ContractStyle",
+      "type": "string"
+    },
+    "DataCompleteness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "DataCompleteness",
+      "type": "string"
+    },
+    "DerivativeMetric": {
+      "enum": [
+        "open_interest",
+        "funding"
+      ],
+      "title": "DerivativeMetric",
+      "type": "string"
+    },
+    "DerivativeObservation": {
+      "additionalProperties": false,
+      "description": "Identity includes instrument, venue, market, provider and native timeframe.\n\nMissing event times stay null; observation time never substitutes for them.\nFunding is a dimensionless settled rate, without annualization or an assumed\n8h interval. OI is never combined across venues or quantity conventions.",
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/EvidenceAvailability"
+        },
+        "calculation_method": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Calculation Method",
+          "type": "string"
+        },
+        "collected_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Collected At"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "coverage_kind": {
+          "const": "single_provider_record",
+          "default": "single_provider_record",
+          "title": "Coverage Kind",
+          "type": "string"
+        },
+        "event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Time"
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness_policy_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Freshness Policy Version",
+          "type": "string"
+        },
+        "historical_coverage": {
+          "const": false,
+          "default": false,
+          "title": "Historical Coverage",
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/EvidenceMarketIdentity"
+        },
+        "methodology_version": {
+          "const": "provider-reported-derivatives/v2",
+          "default": "provider-reported-derivatives/v2",
+          "title": "Methodology Version",
+          "type": "string"
+        },
+        "metric": {
+          "$ref": "#/$defs/DerivativeMetric"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "units": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Units",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "metric",
+        "identity",
+        "event_time",
+        "observed_at",
+        "freshness",
+        "freshness_policy_version",
+        "units",
+        "calculation_method",
+        "availability",
+        "value",
+        "content_hash"
+      ],
+      "title": "DerivativeObservation",
+      "type": "object"
+    },
+    "EvidenceAvailability": {
+      "enum": [
+        "AVAILABLE",
+        "MISSING",
+        "STALE",
+        "UNSUPPORTED",
+        "INCOMPLETE"
+      ],
+      "title": "EvidenceAvailability",
+      "type": "string"
+    },
+    "EvidenceMarketIdentity": {
+      "additionalProperties": false,
+      "description": "Full identity required on every first-slice evidence object.",
+      "properties": {
+        "instrument": {
+          "$ref": "#/$defs/InstrumentIdentity"
+        },
+        "market_type": {
+          "$ref": "#/$defs/MarketType"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ProviderProvenance"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceIdentity"
+        },
+        "timeframe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timeframe"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "venue": {
+          "$ref": "#/$defs/VenueId"
+        }
+      },
+      "required": [
+        "venue",
+        "market_type",
+        "instrument",
+        "source",
+        "provenance"
+      ],
+      "title": "EvidenceMarketIdentity",
+      "type": "object"
+    },
+    "FiveMinuteFlow": {
+      "additionalProperties": false,
+      "properties": {
+        "aggressive_buy_base_volume": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Aggressive Buy Base Volume",
+          "type": "string"
+        },
+        "aggressive_buy_quote_volume": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Aggressive Buy Quote Volume",
+          "type": "string"
+        },
+        "aggressive_sell_base_volume": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Aggressive Sell Base Volume",
+          "type": "string"
+        },
+        "aggressive_sell_quote_volume": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Aggressive Sell Quote Volume",
+          "type": "string"
+        },
+        "buy_sell_imbalance_ratio": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Buy Sell Imbalance Ratio"
+        },
+        "event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Time"
+        },
+        "quote_volume_delta": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Quote Volume Delta",
+          "type": "string"
+        },
+        "rolling_cvd": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Rolling Cvd",
+          "type": "string"
+        },
+        "rolling_quote_cvd": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Rolling Quote Cvd",
+          "type": "string"
+        },
+        "signed_volume_delta": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Signed Volume Delta",
+          "type": "string"
+        },
+        "terminal_price": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Terminal Price"
+        },
+        "trade_count": {
+          "minimum": 0,
+          "title": "Trade Count",
+          "type": "integer"
+        },
+        "window_end": {
+          "format": "date-time",
+          "title": "Window End",
+          "type": "string"
+        },
+        "window_start": {
+          "format": "date-time",
+          "title": "Window Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "window_start",
+        "window_end",
+        "aggressive_buy_base_volume",
+        "aggressive_sell_base_volume",
+        "aggressive_buy_quote_volume",
+        "aggressive_sell_quote_volume",
+        "signed_volume_delta",
+        "quote_volume_delta",
+        "trade_count",
+        "buy_sell_imbalance_ratio",
+        "rolling_cvd",
+        "rolling_quote_cvd",
+        "event_time",
+        "terminal_price"
+      ],
+      "title": "FiveMinuteFlow",
+      "type": "object"
+    },
+    "FreshnessEvaluation": {
+      "additionalProperties": false,
+      "properties": {
+        "age_seconds": {
+          "ge": 0,
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Age Seconds",
+          "type": "string"
+        },
+        "clock_skew_seconds": {
+          "ge": 0,
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Clock Skew Seconds",
+          "type": "string"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "policy_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "source_time": {
+          "format": "date-time",
+          "title": "Source Time",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/FreshnessState"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "title": "Valid Until",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_version",
+        "evaluated_at",
+        "source_time",
+        "age_seconds",
+        "valid_until",
+        "state",
+        "clock_skew_seconds",
+        "content_hash"
+      ],
+      "title": "FreshnessEvaluation",
+      "type": "object"
+    },
+    "FreshnessState": {
+      "enum": [
+        "fresh",
+        "aging",
+        "stale",
+        "gap",
+        "unknown"
+      ],
+      "title": "FreshnessState",
+      "type": "string"
+    },
+    "InstrumentIdentity": {
+      "additionalProperties": false,
+      "description": "Canonical perpetual instrument identity; independent of provider symbol formatting.",
+      "properties": {
+        "base_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Base Asset",
+          "type": "string"
+        },
+        "base_quantity_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Base Quantity Unit",
+          "type": "string"
+        },
+        "contract_multiplier": {
+          "gt": 0,
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Contract Multiplier",
+          "type": "string"
+        },
+        "contract_style": {
+          "$ref": "#/$defs/ContractStyle"
+        },
+        "instrument_id": {
+          "maxLength": 80,
+          "minLength": 8,
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "market_type": {
+          "$ref": "#/$defs/MarketType"
+        },
+        "price_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Price Unit",
+          "type": "string"
+        },
+        "product_family": {
+          "$ref": "#/$defs/ProductFamily"
+        },
+        "provider_symbol": {
+          "maxLength": 32,
+          "minLength": 2,
+          "title": "Provider Symbol",
+          "type": "string"
+        },
+        "quote_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Quote Asset",
+          "type": "string"
+        },
+        "quote_quantity_unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Quote Quantity Unit",
+          "type": "string"
+        },
+        "settlement_asset": {
+          "maxLength": 16,
+          "minLength": 2,
+          "title": "Settlement Asset",
+          "type": "string"
+        },
+        "venue": {
+          "$ref": "#/$defs/VenueId"
+        }
+      },
+      "required": [
+        "venue",
+        "market_type",
+        "product_family",
+        "contract_style",
+        "instrument_id",
+        "provider_symbol",
+        "base_asset",
+        "quote_asset",
+        "settlement_asset",
+        "contract_multiplier",
+        "price_unit",
+        "base_quantity_unit",
+        "quote_quantity_unit"
+      ],
+      "title": "InstrumentIdentity",
+      "type": "object"
+    },
+    "MarketType": {
+      "enum": [
+        "perpetual",
+        "spot",
+        "delivery",
+        "coin_m_perpetual",
+        "option"
+      ],
+      "title": "MarketType",
+      "type": "string"
+    },
+    "OrderBookObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "ask_base_quantity": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ask Base Quantity"
+        },
+        "ask_quote_notional": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ask Quote Notional"
+        },
+        "asks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BookLevel"
+          },
+          "title": "Asks",
+          "type": "array"
+        },
+        "availability": {
+          "$ref": "#/$defs/EvidenceAvailability"
+        },
+        "base_units": {
+          "title": "Base Units",
+          "type": "string"
+        },
+        "bid_base_quantity": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bid Base Quantity"
+        },
+        "bid_quote_notional": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bid Quote Notional"
+        },
+        "bids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BookLevel"
+          },
+          "title": "Bids",
+          "type": "array"
+        },
+        "calculation_method": {
+          "default": "visible-resting-depth/base-and-unrounded-quote/v1",
+          "title": "Calculation Method",
+          "type": "string"
+        },
+        "collected_at": {
+          "format": "date-time",
+          "title": "Collected At",
+          "type": "string"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "coverage_kind": {
+          "const": "depth_limited_snapshot",
+          "default": "depth_limited_snapshot",
+          "title": "Coverage Kind",
+          "type": "string"
+        },
+        "cross_sequence": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cross Sequence"
+        },
+        "event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Time"
+        },
+        "excluded_liquidity": {
+          "const": "RPI",
+          "default": "RPI",
+          "title": "Excluded Liquidity",
+          "type": "string"
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "freshness_policy_version": {
+          "default": "resting-book/event-age-10s/no-future/v1",
+          "title": "Freshness Policy Version",
+          "type": "string"
+        },
+        "historical_coverage": {
+          "const": false,
+          "default": false,
+          "title": "Historical Coverage",
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/EvidenceMarketIdentity"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "price_units": {
+          "title": "Price Units",
+          "type": "string"
+        },
+        "provider_generated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Generated At"
+        },
+        "quote_units": {
+          "title": "Quote Units",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "requested_depth": {
+          "const": 20,
+          "default": 20,
+          "title": "Requested Depth",
+          "type": "integer"
+        },
+        "resting_base_imbalance_ratio": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resting Base Imbalance Ratio"
+        },
+        "sequence_status": {
+          "default": "independent_snapshot",
+          "enum": [
+            "independent_snapshot",
+            "resync_required"
+          ],
+          "title": "Sequence Status",
+          "type": "string"
+        },
+        "spread": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spread"
+        },
+        "update_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Update Id"
+        }
+      },
+      "required": [
+        "identity",
+        "observed_at",
+        "collected_at",
+        "availability",
+        "base_units",
+        "quote_units",
+        "price_units",
+        "content_hash"
+      ],
+      "title": "OrderBookObservation",
+      "type": "object"
+    },
+    "OrderFlowObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/EvidenceAvailability"
+        },
+        "base_units": {
+          "title": "Base Units",
+          "type": "string"
+        },
+        "baseline": {
+          "default": "0",
+          "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+          "title": "Baseline",
+          "type": "string"
+        },
+        "calculation_method": {
+          "default": "real-aggressor-prints/base-and-unrounded-quote/5m/v1",
+          "title": "Calculation Method",
+          "type": "string"
+        },
+        "completeness": {
+          "$ref": "#/$defs/DataCompleteness"
+        },
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "coverage_content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coverage Content Hash"
+        },
+        "coverage_kind": {
+          "default": "unproven",
+          "enum": [
+            "proven_executed_trade_window",
+            "unproven"
+          ],
+          "title": "Coverage Kind",
+          "type": "string"
+        },
+        "cvd_change": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cvd Change"
+        },
+        "cvd_divergence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cvd Divergence"
+        },
+        "cvd_slope_base_per_second": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cvd Slope Base Per Second"
+        },
+        "cvd_supportive_side": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cvd Supportive Side"
+        },
+        "cvd_units": {
+          "title": "Cvd Units",
+          "type": "string"
+        },
+        "cvd_weakening": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cvd Weakening"
+        },
+        "event_time": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Event Time"
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FreshnessEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness_policy_version": {
+          "title": "Freshness Policy Version",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/EvidenceMarketIdentity"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "order_flow_strengthening_side": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Order Flow Strengthening Side"
+        },
+        "quote_units": {
+          "title": "Quote Units",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "reset_semantics": {
+          "default": "zero-at-10m-window-start;rebuild-on-window-roll-or-venue-switch/v1",
+          "title": "Reset Semantics",
+          "type": "string"
+        },
+        "rolling_cvd": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rolling Cvd"
+        },
+        "rolling_quote_cvd": {
+          "anyOf": [
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rolling Quote Cvd"
+        },
+        "series_identity": {
+          "title": "Series Identity",
+          "type": "string"
+        },
+        "state_method": {
+          "default": "last-vs-prior-5m;directional-delta-and-quote-imbalance;print-close/v1",
+          "title": "State Method",
+          "type": "string"
+        },
+        "trade_set_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trade Set Hash"
+        },
+        "window_end": {
+          "format": "date-time",
+          "title": "Window End",
+          "type": "string"
+        },
+        "window_start": {
+          "format": "date-time",
+          "title": "Window Start",
+          "type": "string"
+        },
+        "windows": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FiveMinuteFlow"
+          },
+          "title": "Windows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "identity",
+        "window_start",
+        "window_end",
+        "observed_at",
+        "event_time",
+        "availability",
+        "completeness",
+        "freshness",
+        "freshness_policy_version",
+        "base_units",
+        "quote_units",
+        "cvd_units",
+        "series_identity",
+        "content_hash"
+      ],
+      "title": "OrderFlowObservation",
+      "type": "object"
+    },
+    "ProductFamily": {
+      "enum": [
+        "usdm_futures",
+        "coinm_futures",
+        "spot"
+      ],
+      "title": "ProductFamily",
+      "type": "string"
+    },
+    "ProviderProvenance": {
+      "additionalProperties": false,
+      "description": "Read-only provider provenance attached to every evidence envelope.",
+      "properties": {
+        "adapter_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "is_live": {
+          "title": "Is Live",
+          "type": "boolean"
+        },
+        "is_mock": {
+          "title": "Is Mock",
+          "type": "boolean"
+        },
+        "provider_name": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "regional_failure": {
+          "default": false,
+          "title": "Regional Failure",
+          "type": "boolean"
+        },
+        "source_family": {
+          "$ref": "#/$defs/SourceFamily"
+        }
+      },
+      "required": [
+        "provider_name",
+        "source_family",
+        "adapter_version",
+        "is_live",
+        "fallback_used",
+        "is_mock"
+      ],
+      "title": "ProviderProvenance",
+      "type": "object"
+    },
+    "SourceFamily": {
+      "enum": [
+        "binance_usdm_futures_public",
+        "bybit_usdt_perpetual_public",
+        "replay_fixture"
+      ],
+      "title": "SourceFamily",
+      "type": "string"
+    },
+    "SourceIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_version": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "aggressor_convention": {
+          "maxLength": 120,
+          "minLength": 3,
+          "title": "Aggressor Convention",
+          "type": "string"
+        },
+        "family": {
+          "$ref": "#/$defs/SourceFamily"
+        },
+        "provider_name": {
+          "maxLength": 80,
+          "minLength": 3,
+          "title": "Provider Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family",
+        "provider_name",
+        "adapter_version",
+        "aggressor_convention"
+      ],
+      "title": "SourceIdentity",
+      "type": "object"
+    },
+    "Timeframe": {
+      "description": "Supported candle timeframes.",
+      "enum": [
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "6h",
+        "12h",
+        "1d",
+        "3d",
+        "1w"
+      ],
+      "title": "Timeframe",
+      "type": "string"
+    },
+    "UnavailableContextMetric": {
+      "additionalProperties": false,
+      "description": "Capability limitation, not an observation or a zero-valued market fact.",
+      "properties": {
+        "availability": {
+          "const": "UNSUPPORTED",
+          "default": "UNSUPPORTED",
+          "title": "Availability",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 120,
+          "minLength": 3,
+          "title": "Reason",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "title": "Value",
+          "type": "null"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "UnavailableContextMetric",
+      "type": "object"
+    },
+    "VenueId": {
+      "enum": [
+        "binance",
+        "blofin",
+        "bybit"
+      ],
+      "title": "VenueId",
+      "type": "string"
+    }
+  },
+  "$id": "urn:alphatrade:public-market-context:v1",
+  "additionalProperties": false,
+  "description": "Stable v1 optional context; required qualification uses canonical evidence.\n\nEvent selection can retain an earlier cutoff than evaluation/receipt. Every\navailable observation still needs a consumer freshness/hash/identity check.\nUnsupported capabilities below carry no inferred observations or values.",
+  "properties": {
+    "anchor_symbol": {
+      "maxLength": 32,
+      "minLength": 2,
+      "title": "Anchor Symbol",
+      "type": "string"
+    },
+    "anchor_venue": {
+      "maxLength": 32,
+      "minLength": 2,
+      "title": "Anchor Venue",
+      "type": "string"
+    },
+    "contract_version": {
+      "const": "public-market-context/v1",
+      "default": "public-market-context/v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "cross_venue_components": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Cross Venue Components",
+      "type": "array"
+    },
+    "derivatives": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DerivativeObservation"
+      },
+      "title": "Derivatives",
+      "type": "array"
+    },
+    "evaluated_at": {
+      "format": "date-time",
+      "title": "Evaluated At",
+      "type": "string"
+    },
+    "evidence_cutoff_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evidence Cutoff At"
+    },
+    "historical_order_book": {
+      "$ref": "#/$defs/UnavailableContextMetric"
+    },
+    "open_interest_change": {
+      "$ref": "#/$defs/UnavailableContextMetric"
+    },
+    "open_interest_notional": {
+      "$ref": "#/$defs/UnavailableContextMetric"
+    },
+    "order_book": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OrderBookObservation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "order_flow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OrderFlowObservation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "qualification_authority": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Authority",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "evaluated_at",
+    "anchor_venue",
+    "anchor_symbol"
+  ],
+  "title": "MarketEvidenceContext",
+  "type": "object"
+}

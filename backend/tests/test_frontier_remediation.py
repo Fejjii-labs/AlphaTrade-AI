@@ -360,6 +360,7 @@ def _message(*, update_id: int, chat_id: str, text: str) -> ParsedTelegramUpdate
 
 def test_telegram_token_cannot_appear_in_logs_exceptions_or_health(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
     assert TOKEN not in redact_text(url)
@@ -372,6 +373,8 @@ def test_telegram_token_cannot_appear_in_logs_exceptions_or_health(
     handler.setFormatter(RedactingFormatter("%(message)s"))
     handler.addFilter(SecretRedactionFilter())
     library = logging.getLogger("httpx")
+    # Earlier in-process Alembic probes disable existing loggers.
+    monkeypatch.setattr(library, "disabled", False)
     library.addHandler(handler)
     library.setLevel(logging.INFO)
     try:

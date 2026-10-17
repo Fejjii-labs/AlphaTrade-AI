@@ -44,6 +44,7 @@ from app.providers.qdrant import (
 from app.schemas.common import DocumentSourceType
 from app.schemas.rag import IngestDocumentRequest, RagQuery
 from app.services.rag_service import RagService
+from tests.support.knowledge_indexing import drain_indexing
 
 ORG_ID = UUID("00000000-0000-0000-0000-000000000130")
 USER_ID = UUID("00000000-0000-0000-0000-000000000131")
@@ -175,11 +176,11 @@ class TestLLMFailClosed:
             model="gpt-4o-mini",
             fail_closed=True,
         )
-        with patch("httpx.Client") as client_cls:
+        with patch("app.providers.llm.OpenAI") as client_cls:
             client = MagicMock()
             client.__enter__.return_value = client
             client.__exit__.return_value = False
-            client.post.side_effect = RuntimeError("connection reset")
+            client.chat.completions.create.side_effect = RuntimeError("connection reset")
             client_cls.return_value = client
             with pytest.raises(ServiceUnavailableError, match="unavailable"):
                 p.complete(self._request())
@@ -229,11 +230,11 @@ class TestEmbeddingsFailClosed:
             dimensions=8,
             fail_closed=True,
         )
-        with patch("httpx.Client") as client_cls:
+        with patch("app.providers.embeddings.OpenAI") as client_cls:
             client = MagicMock()
             client.__enter__.return_value = client
             client.__exit__.return_value = False
-            client.post.side_effect = RuntimeError("openai 500")
+            client.embeddings.create.side_effect = RuntimeError("openai 500")
             client_cls.return_value = client
             with pytest.raises(ServiceUnavailableError, match="unavailable"):
                 p.embed(["hello"])
@@ -343,7 +344,9 @@ class TestRagIngestFailClosed:
     def _staging_settings(self) -> Settings:
         return Settings(**{**_STAGING_SAFE, "embeddings_dimensions": 8})
 
-    def test_ingest_fails_when_embedding_fallback_in_staging(self, db_session: Session) -> None:
+    def test_worker_refuses_embedding_fallback_after_pending_storage(
+        self, db_session: Session
+    ) -> None:
         embeddings = MagicMock()
         embeddings.embed_with_metadata.return_value = EmbeddingResult(
             vectors=[[0.1] * 8],
@@ -356,25 +359,32 @@ class TestRagIngestFailClosed:
         qdrant = MagicMock(spec=QdrantVectorStore)
         qdrant.name = "qdrant"
         qdrant.using_qdrant = True
+        qdrant.status.return_value = ProviderStatus(
+            name="qdrant",
+            kind=ProviderKind.VECTOR,
+            health=ProviderHealth.HEALTHY,
+            using_fallback=False,
+        )
         svc = RagService(
             db_session,
             embeddings=embeddings,
             vector_store=qdrant,
             settings=self._staging_settings(),
         )
-        with pytest.raises(ServiceUnavailableError, match="embeddings fallback"):
-            svc.ingest(
-                IngestDocumentRequest(
-                    organization_id=ORG_ID,
-                    user_id=USER_ID,
-                    source_type=DocumentSourceType.RISK_POLICY,
-                    title="Policy",
-                    text="Capital preservation requires a stop loss on every trade.",
-                )
+        result = svc.ingest(
+            IngestDocumentRequest(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                source_type=DocumentSourceType.RISK_POLICY,
+                title="Policy",
+                text="Capital preservation requires a stop loss on every trade.",
             )
+        )
+        assert result.vector_index_status == "pending"
+        assert drain_indexing(svc) == ["pending"]
         qdrant.upsert.assert_not_called()
 
-    def test_ingest_fails_when_qdrant_unavailable(self, db_session: Session) -> None:
+    def test_worker_refuses_memory_after_pending_storage(self, db_session: Session) -> None:
         embeddings = MagicMock()
         embeddings.embed_with_metadata.return_value = EmbeddingResult(
             vectors=[[0.1] * 8],
@@ -391,18 +401,19 @@ class TestRagIngestFailClosed:
             vector_store=memory,
             settings=self._staging_settings(),
         )
-        with pytest.raises(ServiceUnavailableError, match="Qdrant"):
-            svc.ingest(
-                IngestDocumentRequest(
-                    organization_id=ORG_ID,
-                    user_id=USER_ID,
-                    source_type=DocumentSourceType.RISK_POLICY,
-                    title="Policy",
-                    text="Capital preservation requires a stop loss on every trade.",
-                )
+        result = svc.ingest(
+            IngestDocumentRequest(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                source_type=DocumentSourceType.RISK_POLICY,
+                title="Policy",
+                text="Capital preservation requires a stop loss on every trade.",
             )
+        )
+        assert result.vector_index_status == "pending"
+        assert drain_indexing(svc) == ["pending"]
 
-    def test_ingest_rolls_back_when_upsert_fails(self, db_session: Session) -> None:
+    def test_worker_upsert_failure_retains_pending_content(self, db_session: Session) -> None:
         embeddings = MagicMock()
         embeddings.embed_with_metadata.return_value = EmbeddingResult(
             vectors=[[0.1] * 8],
@@ -415,6 +426,12 @@ class TestRagIngestFailClosed:
         qdrant = MagicMock(spec=QdrantVectorStore)
         qdrant.name = "qdrant"
         qdrant.using_qdrant = True
+        qdrant.status.return_value = ProviderStatus(
+            name="qdrant",
+            kind=ProviderKind.VECTOR,
+            health=ProviderHealth.HEALTHY,
+            using_fallback=False,
+        )
         qdrant.upsert.side_effect = ServiceUnavailableError(
             "Vector store is unavailable.",
             details={"reason": "qdrant_upsert_failed"},
@@ -425,19 +442,20 @@ class TestRagIngestFailClosed:
             vector_store=qdrant,
             settings=self._staging_settings(),
         )
-        with pytest.raises(ServiceUnavailableError):
-            svc.ingest(
-                IngestDocumentRequest(
-                    organization_id=ORG_ID,
-                    user_id=USER_ID,
-                    source_type=DocumentSourceType.RISK_POLICY,
-                    title="Policy",
-                    text="Capital preservation requires a stop loss on every trade.",
-                )
+        result = svc.ingest(
+            IngestDocumentRequest(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                source_type=DocumentSourceType.RISK_POLICY,
+                title="Policy",
+                text="Capital preservation requires a stop loss on every trade.",
             )
+        )
+        assert result.vector_index_status == "pending"
+        assert drain_indexing(svc) == ["pending"]
         from app.db.models import Document
 
-        assert db_session.query(Document).count() == 0
+        assert db_session.query(Document).count() == 1
 
     def test_search_retrieval_failure_fail_closed(self, db_session: Session) -> None:
         embeddings = MagicMock()
@@ -495,8 +513,13 @@ class TestRagIngestFailClosed:
             )
         )
         assert result.chunk_count >= 1
-        assert result.fallback_used is True
-        assert result.vector_backend == memory.name
+        assert result.vector_index_status == "pending"
+        assert result.vector_backend is None
+        assert drain_indexing(svc) == ["ready"]
+        from app.db.models import Document
+
+        duplicate = svc._duplicate_result(db_session.get(Document, result.document_id))
+        assert duplicate.fallback_used is True and duplicate.vector_backend == memory.name
 
 
 class TestReadinessFailClosed:
@@ -577,18 +600,18 @@ class TestRecoveryAfterRestore:
             model="gpt-4o-mini",
             fail_closed=True,
         )
-        with patch("httpx.Client") as client_cls:
+        with patch("app.providers.llm.OpenAI") as client_cls:
             client = MagicMock()
             client.__enter__.return_value = client
             client.__exit__.return_value = False
             response = MagicMock()
             response.raise_for_status = MagicMock()
-            response.json.return_value = {
+            response.model_dump.return_value = {
                 "model": "gpt-4o-mini",
                 "choices": [{"message": {"content": "ok"}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
             }
-            client.post.return_value = response
+            client.chat.completions.create.return_value = response
             client_cls.return_value = client
             result = p.complete(
                 LLMCompletionRequest(

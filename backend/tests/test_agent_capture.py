@@ -344,6 +344,26 @@ def test_provider_failure_never_saves_mock_analysis(capture_db):
                 conversation_id=conversation.id,
                 message_id=row.id,
             )
+
+
+def test_transaction_bound_legacy_planner_never_starts_live_reasoning(capture_db, monkeypatch):
+    from app.agent_capture.model import CaptureModel, CaptureUnavailableError
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Provider must run after the prepare Session closes")
+
+    monkeypatch.setattr(CaptureModel, "plan", forbidden)
+    factory, settings = capture_db
+    with factory() as session:
+        conversation, row = source(session, "My rule: wait for confirmation.")
+        session.commit()
+        with pytest.raises(CaptureUnavailableError, match="separate phases"):
+            CaptureService(session, settings).capture(
+                organization_id=ORG_A,
+                user_id=USER_A,
+                conversation_id=conversation.id,
+                message_id=row.id,
+            )
         assert list_entries(session, ORG_A, USER_A).total == 0
 
 
@@ -398,7 +418,8 @@ def test_http_receipt_commit_replay_undo_and_private_scope(capture_db, monkeypat
         membership_role=MembershipRole.OWNER,
     )
     with TestClient(app) as client:
-        response = client.post("/agent/turns", json={"message": text})
+        turn_headers = {"Idempotency-Key": str(uuid4())}
+        response = client.post("/agent/turns", json={"message": text}, headers=turn_headers)
         assert response.status_code == 200, response.text
         turn = response.json()
         assert turn["capture_status"] == "saved" and not turn["execution_attempted"]
@@ -416,10 +437,17 @@ def test_http_receipt_commit_replay_undo_and_private_scope(capture_db, monkeypat
         messages = client.get(f"/conversations/{turn['conversation_id']}/messages").json()["items"]
         receipt = messages[-1]["payload"]["interactive_agent"]["capture"]
         assert receipt["saved_entries"][0]["undone"] is True
+        replayed_turn = client.post("/agent/turns", json={"message": text}, headers=turn_headers)
+        assert replayed_turn.status_code == 200
+        assert replayed_turn.json()["saved_entries"][0]["undone"] is True
+        assert len(model.calls) == 1
         # A storage/model failure retains the original and has a durable retry path.
         failed_text = "My rule: respect the planned invalidation."
         model.result = CapturePlan(entries=[suggestion("Invented evidence.")], clarification=None)
-        failed = client.post("/agent/turns", json={"message": failed_text}).json()
+        failed_headers = {"Idempotency-Key": str(uuid4())}
+        failed = client.post(
+            "/agent/turns", json={"message": failed_text}, headers=failed_headers
+        ).json()
         assert failed["capture_status"] == "failed" and not failed["saved_entries"]
         model.result = CapturePlan(
             entries=[suggestion(failed_text, category="rules")], clarification=None
@@ -435,6 +463,11 @@ def test_http_receipt_commit_replay_undo_and_private_scope(capture_db, monkeypat
         replay = client.get(f"/conversations/{failed['conversation_id']}/messages").json()["items"]
         assert replay[-1]["payload"]["interactive_agent"]["capture"]["status"] == "saved"
         assert replay[-1]["payload"]["interactive_agent"]["capture"]["error"] is None
+        recovered = client.post(
+            "/agent/turns", json={"message": failed_text}, headers=failed_headers
+        ).json()
+        assert recovered["capture_status"] == "saved" and recovered["capture_error"] is None
+        assert recovered["saved_entries"][0]["id"] == retried.json()["items"][0]["id"]
         with factory() as session:
             assert session.scalar(select(func.count()).select_from(Order)) == 0
         owner[0] = USER_A2

@@ -14,7 +14,9 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
+import httpx2
 import structlog
+from openai import APIStatusError, APITimeoutError, OpenAI
 
 from app.providers.base import BaseMockProvider, ProviderHealth, ProviderKind, ProviderStatus
 
@@ -26,8 +28,6 @@ _GENERATION_PROBE_TIMEOUT_SECONDS = 10.0
 _GENERATION_PROBE_MAX_OUTPUT_TOKENS = 64
 _GENERATION_PROBE_PROMPT = "Reply with OK"
 _GENERATION_PROBE_MAX_RETRIES = 0
-_MAX_RETRIES = 2
-_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -93,21 +93,14 @@ def model_requires_responses_api(model: str) -> bool:
 
 def _sanitize_openai_http_error(exc: BaseException) -> dict[str, Any]:
     """Map provider failures to client-safe categories (no secrets / bodies)."""
-    if isinstance(exc, httpx.TimeoutException):
+    if isinstance(exc, (APITimeoutError, httpx.TimeoutException, httpx2.TimeoutException)):
         return {"reason": "openai_llm_timeout", "http_status": None, "error_code": None}
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = int(exc.response.status_code)
+    if isinstance(exc, (APIStatusError, httpx.HTTPStatusError)):
+        status = int(
+            exc.status_code if isinstance(exc, APIStatusError) else exc.response.status_code
+        )
+        # Remote codes/messages may contain arbitrary sensitive text. Export only categories.
         error_code: str | None = None
-        try:
-            payload = exc.response.json()
-            err = payload.get("error") if isinstance(payload, dict) else None
-            if isinstance(err, dict):
-                raw = err.get("code") or err.get("type")
-                if isinstance(raw, str) and raw.strip():
-                    # Keep short machine codes only (never full error messages).
-                    error_code = raw.strip()[:64]
-        except Exception:
-            error_code = None
         if status in {401, 403}:
             reason = "openai_llm_permission_denied"
         elif status == 404:
@@ -239,7 +232,7 @@ class MockLLMProvider(BaseMockProvider):
 
 
 class OpenAILLMProvider:
-    """OpenAI HTTP LLM with Chat Completions or Responses routing."""
+    """Official SDK adapter. Retry ownership is exclusively in ModelRouter."""
 
     name = "openai-llm"
     kind = ProviderKind.LLM
@@ -289,6 +282,7 @@ class OpenAILLMProvider:
 
         started = time.perf_counter()
         model = (request.model or self._default_model).strip() or self._default_model
+        payload: dict[str, Any] = {}
         try:
             if model_requires_responses_api(model):
                 payload = self._post_responses(request, model=model)
@@ -300,8 +294,16 @@ class OpenAILLMProvider:
                 content, input_tokens, output_tokens, resolved_model = (
                     self._parse_chat_completions_payload(payload, fallback_model=model)
                 )
+            if (request.response_format or {}).get("type") in {
+                "json_object",
+                "json_schema",
+            } and _try_parse_json(content) is None:
+                raise ValueError("structured output is not a JSON object")
         except Exception as exc:
             details = _sanitize_openai_http_error(exc)
+            usage = payload.get("usage") or {}
+            details["input_tokens"] = _usage_tokens(usage, "input_tokens", "prompt_tokens")
+            details["output_tokens"] = _usage_tokens(usage, "output_tokens", "completion_tokens")
             details["provider"] = self.name
             details["api"] = (
                 "responses" if model_requires_responses_api(model) else "chat_completions"
@@ -428,38 +430,23 @@ class OpenAILLMProvider:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> dict[str, Any]:
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+
+        # Each adapter call is one observable upstream attempt. SDK automatic retries
+        # would hide billable attempts from our ledger, so they stay disabled.
+        del max_retries
         timeout = self._timeout if timeout_seconds is None else timeout_seconds
-        retries = _MAX_RETRIES if max_retries is None else max(0, max_retries)
-        last_exc: BaseException | None = None
-        for attempt in range(retries + 1):
-            try:
-                with httpx.Client(timeout=timeout) as client:
-                    response = client.post(url, headers=headers, json=body)
-                    if response.status_code in _RETRYABLE_STATUS and attempt < retries:
-                        time.sleep(0.25 * (2**attempt))
-                        continue
-                    response.raise_for_status()
-                    payload = response.json()
-                    if not isinstance(payload, dict):
-                        raise ValueError("OpenAI response JSON must be an object")
-                    return payload
-            except httpx.TimeoutException as exc:
-                last_exc = exc
-                if attempt >= retries:
-                    raise
-                time.sleep(0.25 * (2**attempt))
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                if exc.response.status_code in _RETRYABLE_STATUS and attempt < retries:
-                    time.sleep(0.25 * (2**attempt))
-                    continue
-                raise
-        assert last_exc is not None
-        raise last_exc
+        with OpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            max_retries=0,
+            timeout=httpx2.Timeout(timeout, connect=min(5.0, timeout)),
+        ) as client:
+            if url.endswith("/responses"):
+                response = client.responses.create(**body)
+            else:
+                response = client.chat.completions.create(**body)
+            payload: dict[str, Any] = response.model_dump(mode="json")
+        return payload
 
     def _parse_chat_completions_payload(
         self, payload: dict[str, Any], *, fallback_model: str
@@ -470,7 +457,14 @@ class OpenAILLMProvider:
         message = choice.get("message") or {}
         if not isinstance(message, dict):
             raise ValueError("malformed message")
-        content = str(message.get("content") or "")
+        if message.get("refusal") or choice.get("finish_reason") in {"length", "content_filter"}:
+            raise ValueError("refused or incomplete generation")
+        raw_content = message.get("content")
+        if raw_content is not None and not isinstance(raw_content, str):
+            raise ValueError("malformed content")
+        content = raw_content or ""
+        if not content.strip():
+            raise ValueError("empty generation")
         usage = payload.get("usage") or {}
         if not isinstance(usage, dict):
             usage = {}
@@ -484,7 +478,17 @@ class OpenAILLMProvider:
     def _parse_responses_payload(
         self, payload: dict[str, Any], *, fallback_model: str
     ) -> tuple[str, int, int, str]:
+        if payload.get("status") in {"incomplete", "failed", "cancelled", "in_progress", "queued"}:
+            raise ValueError("incomplete generation")
+        for item in payload.get("output") or []:
+            if isinstance(item, dict) and any(
+                isinstance(block, dict) and block.get("type") == "refusal"
+                for block in item.get("content") or []
+            ):
+                raise ValueError("refused generation")
         content = _extract_responses_output_text(payload)
+        if not content.strip():
+            raise ValueError("empty generation")
         usage = payload.get("usage") or {}
         if not isinstance(usage, dict):
             usage = {}
@@ -550,35 +554,24 @@ class OpenAILLMProvider:
 
     def _probe_model_listing(self) -> tuple[bool, str]:
         try:
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(
-                    f"{self._base_url}/models",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+            with OpenAI(
+                api_key=self._api_key, base_url=self._base_url, max_retries=0, timeout=5.0
+            ) as client:
+                payload = client.models.list().model_dump(mode="json")
+            data = payload.get("data")
+            if (
+                not isinstance(data, list)
+                or not data
+                or not all(
+                    isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]
+                    for row in data
                 )
-                if response.status_code >= 500:
-                    return False, "OpenAI models endpoint unavailable."
-                if response.status_code in {401, 403}:
-                    return False, "OpenAI credentials rejected by models endpoint."
-                # Prefer confirming the configured model when the list is readable.
-                try:
-                    payload = response.json()
-                    data = payload.get("data") if isinstance(payload, dict) else None
-                    if isinstance(data, list) and data:
-                        ids = {str(row.get("id") or "") for row in data if isinstance(row, dict)}
-                        if self._default_model not in ids and ids:
-                            # Some accounts return a partial list; treat presence of
-                            # any models + non-auth failure as listing OK.
-                            return True, "OpenAI models endpoint reachable."
-                except Exception:
-                    pass
-                if response.status_code < 500:
-                    return True, "OpenAI models endpoint reachable."
-        except httpx.TimeoutException:
-            return False, "OpenAI models endpoint timed out."
+            ):
+                return False, "OpenAI models endpoint returned malformed data."
+            return True, "OpenAI models endpoint reachable."
         except Exception as exc:
-            logger.debug("openai_llm_status_listing_failed", error=type(exc).__name__)
-            return False, "OpenAI models endpoint unreachable."
-        return False, "OpenAI models endpoint unavailable."
+            reason = _sanitize_openai_http_error(exc)["reason"]
+            return False, f"OpenAI models endpoint unavailable ({reason})."
 
     def _probe_generation_cached(self) -> tuple[bool, str]:
         """Return cached generation readiness; coalesce concurrent probes.
@@ -747,3 +740,13 @@ def validate_llm_json(
     return all(
         isinstance(parsed.get(name), str) and parsed[name].strip() for name in required_fields
     )
+
+
+def _usage_tokens(usage: Any, *keys: str) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return 0

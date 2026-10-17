@@ -69,11 +69,11 @@ vi.mock("@/components/KillSwitchButton", () => ({
   KillSwitchButton: () => <button type="button">Kill</button>,
 }));
 
-function renderTopBar() {
+function renderTopBar(onOpenCommandMenu?: () => void) {
   return render(
     <ShellFreshnessProvider>
       <div className="w-[390px]">
-        <TopBar />
+        <TopBar onOpenCommandMenu={onOpenCommandMenu} />
       </div>
     </ShellFreshnessProvider>,
   );
@@ -144,11 +144,27 @@ describe("Compact truthful header", () => {
     );
     expect(summary).toHaveFocus();
   });
-  it("uses the consolidated journal identity", () => {
+  it("opens search from the secondary menu and dismisses it", () => {
+    const openSearch = vi.fn();
+    renderTopBar(openSearch);
+    expect(screen.getByRole("button", { name: "Search pages and destinations" })).not.toBeVisible();
+    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search pages and destinations" }));
+    expect(openSearch).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute("open");
+  });
+  it("dismisses the secondary menu on an outside pointer press", () => {
+    renderTopBar();
+    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute("open");
+  });
+  it("keeps the global identity separate from the page heading", () => {
     navigationState.pathname = "/knowledge";
     renderTopBar();
     expect(screen.getByTestId("topbar-page-identity")).toHaveTextContent(
-      "Journal & Knowledge",
+      "AlphaTrade",
     );
+    expect(screen.queryByText("Journal & Knowledge")).not.toBeInTheDocument();
   });
 });

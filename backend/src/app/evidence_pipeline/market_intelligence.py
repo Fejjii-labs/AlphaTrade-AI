@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
@@ -25,6 +25,12 @@ from app.market_contracts.errors import (
     WrongSourceError,
 )
 from app.market_contracts.identity import EvidenceMarketIdentity, InstrumentIdentity
+from app.market_contracts.order_book import (
+    OrderBookObservation,
+    book_identity,
+    hash_order_book,
+    order_book_observation,
+)
 from app.market_contracts.order_flow import (
     OrderFlowObservation,
     closed_order_flow_bounds,
@@ -42,6 +48,45 @@ DERIVATIVE_ROLES = {
 }
 
 
+def read_order_book(
+    source: PerpetualMarketSource,
+    *,
+    identity: EvidenceMarketIdentity,
+    instrument: InstrumentIdentity,
+    observed_at: datetime,
+    allow_later_observation: bool = False,
+) -> OrderBookObservation:
+    try:
+        fetch = getattr(source, "fetch_order_book_observation", None)
+        if not callable(fetch):
+            return order_book_observation(
+                identity=identity,
+                observed_at=observed_at,
+                availability=EvidenceAvailability.UNSUPPORTED,
+                reason="provider_has_no_resting_book_contract",
+            )
+        item = fetch(identity=identity, instrument=instrument, observed_at=observed_at)
+        if (
+            not isinstance(item, OrderBookObservation)
+            or item.identity != book_identity(identity)
+            or (item.observed_at != observed_at and not allow_later_observation)
+            or hash_order_book(item).content_hash != item.content_hash
+        ):
+            raise WrongSourceError("Resting book returned an incompatible observation.")
+        return OrderBookObservation.model_validate(item.model_dump())
+    except EvidenceSourceSwitchRequiredError:
+        raise
+    except (MarketContractError, ValueError, TypeError, KeyError, OverflowError) as exc:
+        return order_book_observation(
+            identity=identity,
+            observed_at=observed_at,
+            availability=EvidenceAvailability.MISSING
+            if isinstance(exc, RegionalProviderFailureError | RateLimitedError)
+            else EvidenceAvailability.INCOMPLETE,
+            reason=f"resting_book_failure:{type(exc).__name__}",
+        )
+
+
 def read_market_intelligence(
     source: PerpetualMarketSource,
     *,
@@ -49,7 +94,15 @@ def read_market_intelligence(
     instrument: InstrumentIdentity,
     observed_at: datetime,
     metrics: Sequence[DerivativeMetric] = tuple(DerivativeMetric),
+    allow_later_observation: bool = False,
+    acquisition_clock: Callable[[], datetime] | None = None,
 ) -> tuple[DerivativeObservation, ...]:
+    """Read exact provider facts, with bounded receipt time for current scans.
+
+    An acquisition clock permits later receipts, never events beyond the fixed
+    requested cutoff. Without it, the strict as-of observation contract remains.
+    The optional presentation reader separately validates its final context clock.
+    """
     observations = []
     for metric in metrics:
         try:
@@ -73,10 +126,26 @@ def read_market_intelligence(
             )
             if not isinstance(result, DerivativeObservation):
                 raise WrongSourceError("OI/funding provider returned an invalid observation.")
+            result = DerivativeObservation.model_validate(result.model_dump())
+            completed_at = acquisition_clock() if acquisition_clock is not None else observed_at
+            if acquisition_clock is not None and (
+                completed_at.tzinfo is None
+                or completed_at.utcoffset() is None
+                or completed_at < observed_at
+                or result.observed_at > completed_at
+                or result.collected_at is None
+                or result.collected_at > completed_at
+                or (result.event_time is not None and result.event_time > observed_at)
+            ):
+                raise WrongSourceError("OI/funding violates the acquisition clock or event cutoff.")
             if (
                 result.metric is not metric
                 or result.identity != derivative_identity(identity, metric)
-                or result.observed_at != observed_at
+                or (
+                    result.observed_at != observed_at
+                    and not allow_later_observation
+                    and acquisition_clock is None
+                )
                 or hash_derivative_observation(result).content_hash != result.content_hash
             ):
                 raise WrongSourceError("OI/funding result does not match the requested source.")

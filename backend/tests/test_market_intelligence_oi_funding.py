@@ -606,14 +606,21 @@ def test_malformed_json_is_incomplete(venue):
 
 @pytest.mark.parametrize("venue", VENUES)
 @pytest.mark.parametrize("metric", METRICS)
-def test_clock_skew_is_explicit_and_bounded(venue, metric):
-    result = fetch(venue, metric, source(venue, payload(venue, metric, stamp=MILLIS + 2000)))
-    assert result.availability is State.AVAILABLE
-    assert result.freshness.clock_skew_seconds == Decimal("2")
-    assert result.event_time == NOW + timedelta(seconds=2)
-    result = fetch(venue, metric, source(venue, payload(venue, metric, stamp=MILLIS + 2001)))
-    assert result.availability is State.INCOMPLETE
-    assert result.value is None
+def test_future_event_is_rejected_even_with_small_clock_skew(venue, metric):
+    for milliseconds in (1, 2000, 2001):
+        result = fetch(
+            venue, metric, source(venue, payload(venue, metric, stamp=MILLIS + milliseconds))
+        )
+        assert result.availability is State.INCOMPLETE
+        assert result.value is None
+        assert result.reason == "future_event_time"
+        with pytest.raises(MarketContractError):
+            require_derivative_observations(
+                (result,),
+                required_metrics=(metric,),
+                identity=identity(venue),
+                evaluated_at=NOW,
+            )
 
 
 @pytest.mark.parametrize("venue", VENUES)

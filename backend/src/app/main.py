@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.agent_capture import routes as saved_entry_routes
 from app.api.routes import (
+    agent_voice,
     alerts,
     analytics,
     approvals,
@@ -25,6 +26,7 @@ from app.api.routes import (
     auth,
     backtests,
     billing,
+    blofin_activity,
     canonical,
     chat,
     coaching,
@@ -33,6 +35,7 @@ from app.api.routes import (
     demo,
     exchange,
     execution,
+    experiments,
     governed_learning,
     health,
     human_vs_system,
@@ -64,6 +67,7 @@ from app.api.routes import (
     telegram_enrollment,
     tools,
     tradingview,
+    trendpulse_screening,
     usage,
     validation_priority,
     watcher_paper,
@@ -233,6 +237,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     for r in (
         health.router,
+        agent_voice.router,
         interactive_agent.router,
         saved_entry_routes.router,
         metrics.router,
@@ -264,6 +269,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         execution.router,
         canonical.router,
         exchange.router,
+        blofin_activity.router,
+        experiments.router,
+        trendpulse_screening.router,
         positions.router,
         journal.router,
         lessons.router,

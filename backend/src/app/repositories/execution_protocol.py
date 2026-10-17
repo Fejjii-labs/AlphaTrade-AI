@@ -219,10 +219,13 @@ class VenueSubmitEffectRepository(SQLAlchemyRepository[VenueSubmitEffect]):
         return self._session.scalar(stmt)
 
     def get_by_command_for_update(self, command_id: uuid.UUID) -> VenueSubmitEffect | None:
+        # The lock serializes competing workers, but the Session may already
+        # hold an older effect. Refresh state before granting a lease or send.
         stmt = (
             select(VenueSubmitEffect)
             .where(VenueSubmitEffect.command_id == command_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalar(stmt)
 

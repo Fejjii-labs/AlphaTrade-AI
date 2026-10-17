@@ -15,7 +15,7 @@ const document = (
 ): RagDocument => ({
   id: "doc",
   title: "Stored knowledge",
-  source_type,
+  source_type: source_type as RagDocument["source_type"],
   source_uri,
   version: 1,
   created_at: "2026-10-01T10:00:00Z",

@@ -72,6 +72,13 @@ class ManualLifecycleObservation:
             if self.exit_fills and all(f["fillPnl"] is not None for f in self.exit_fills)
             else None
         )
+        currencies = {f.get("fee_currency") for f in self.exit_fills}
+        fee_currency = next(iter(currencies)) if len(currencies) == 1 else None
+        fees_available = (
+            self.exit_fills
+            and fee_currency is not None
+            and all(f.get("fee") is not None for f in self.exit_fills)
+        )
         return {
             "position_status": self.position_status,
             "account_verified": self.account_verified,
@@ -91,8 +98,9 @@ class ManualLifecycleObservation:
             "exit_fees": decimal_text(
                 sum((Decimal(f["fee"]) for f in self.exit_fills), Decimal("0"))
             )
-            if self.exit_fills
+            if fees_available
             else None,
+            "exit_fee_currency": fee_currency if fees_available else None,
             "venue_reported_fill_pnl": decimal_text(pnl) if pnl is not None else None,
             "diagnostics": [d.model_dump(exclude_none=True) for d in self.diagnostics],
         }
@@ -348,9 +356,14 @@ def observe_lifecycle(
                         f.get("orderId") == oid
                         and f.get("instId") == plan.execution_instrument
                         and f.get("side") == opposite
-                        and f.get("positionSide") == "net"
-                        and f.get("feeCurrency", "USDT") == "USDT",
+                        and f.get("positionSide") == "net",
                         "exit_fill_identity_mismatch",
+                    )
+                    fee_currency = f.get("feeCurrency")
+                    require(
+                        fee_currency in (None, "")
+                        or (isinstance(fee_currency, str) and 0 < len(fee_currency) <= 128),
+                        "exit_fee_currency_invalid",
                     )
                     tid = identity(f.get("tradeId"))
                     ts = f.get("ts", f.get("fillTime"))
@@ -373,7 +386,10 @@ def observe_lifecycle(
                                 number(f.get("fillPrice"), field="fillPrice", positive=True)
                             ),
                             "occurred_at": at.isoformat(),
-                            "fee": decimal_text(number(f.get("fee"), field="fee")),
+                            "fee": decimal_text(number(f.get("fee"), field="fee"))
+                            if f.get("fee") not in (None, "")
+                            else None,
+                            "fee_currency": fee_currency or None,
                             "fillPnl": decimal_text(number(f["fillPnl"], field="fillPnl"))
                             if f.get("fillPnl") not in {None, ""}
                             else None,

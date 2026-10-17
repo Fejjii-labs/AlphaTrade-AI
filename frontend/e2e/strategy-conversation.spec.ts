@@ -85,20 +85,13 @@ test.describe("Strategy Lab conversation", () => {
     const marker = `Durable conversation ${Date.now()}`;
 
     await installSharedE2ESession(page, request);
-    await page.goto(`/strategy-lab/${strategy.id}`);
-    await expect(page.getByTestId("strategy-conversation-panel")).toBeVisible();
-    await expect(
-      page.getByText(/Confirm stores a draft. Compile and approve are separate/i),
-    ).toBeVisible();
-
-    await page.getByTestId("strategy-conversation-composer").fill(marker);
-    await page.getByTestId("strategy-conversation-send").click();
-    await expect(page.getByText(marker)).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByTestId("strategy-conversation-message-user")).toBeVisible();
-
+    await page.goto(`/agent?strategy_id=${strategy.id}`);
+    await expect(page.getByRole("link", { name: "Back to strategy" })).toBeVisible();
+    await page.getByLabel("Message", { exact: true }).fill(marker);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByTestId("agent-message").filter({ hasText: marker })).toBeVisible({ timeout: 60_000 });
     await page.reload();
-    await expect(page.getByTestId("strategy-conversation-panel")).toBeVisible();
-    await expect(page.getByText(marker)).toBeVisible();
+    await expect(page.getByTestId("agent-message").filter({ hasText: marker })).toBeVisible();
 
     const conversations = await request.get(`${API_URL}/conversations`, {
       headers,
@@ -126,49 +119,37 @@ test.describe("Strategy Lab conversation", () => {
   test("preview confirm compile approve stays on the explicit ladder", async ({ page, request }) => {
     const token = await getSharedE2EAccessToken(request);
     const headers = { Authorization: `Bearer ${token}` };
-    const created = await request.post(`${API_URL}/strategies`, {
-      headers,
-      data: {
-        name: "Conversation E2E Sweep",
-        setup_type: "liquidity_sweep_reversal",
-        card: {
-          ...SAMPLE_CARD,
-          strategy_name: "Conversation E2E Sweep",
-          timeframes: ["15m", "4h"],
-        },
-      },
-    });
-    expect(created.ok(), `create strategy HTTP ${created.status()}`).toBeTruthy();
-    const strategy = (await created.json()) as { id: string };
-    const conversation = await request.post(`${API_URL}/conversations`, {
-      headers,
-      data: { strategy_id: strategy.id, title: "E2E preview" },
-    });
-    expect(conversation.ok()).toBeTruthy();
-    const conv = (await conversation.json()) as { id: string };
-    const preview = await request.post(`${API_URL}/conversations/${conv.id}/proposals`, {
-      headers,
-      data: { text: FIRST_SLICE_PREVIEW, strategy_id: strategy.id },
-    });
-    expect(preview.ok(), `preview HTTP ${preview.status()}: ${await preview.text()}`).toBeTruthy();
-
     await installSharedE2ESession(page, request);
-    await page.goto(`/strategy-lab/${strategy.id}`);
-    await expect(page.getByTestId("strategy-conversation-panel")).toBeVisible();
-    await expect(page.getByTestId("strategy-conversation-confirmation-identity")).toBeVisible({
-      timeout: 30_000,
+    await page.goto("/strategy-lab/new");
+    await page.getByText("Strategy options", { exact: true }).click();
+    await page.getByLabel("Strategy setup type").selectOption("liquidity_sweep_reversal");
+    await page.getByRole("button", { name: "Attach document" }).click();
+    await page.getByLabel("Attach document", { exact: true }).setInputFiles({
+      name: "sweep-rules.txt", mimeType: "text/plain", buffer: Buffer.from(FIRST_SLICE_PREVIEW),
     });
-    await expect(page.getByTestId("strategy-conversation-confirm")).toBeVisible();
-    await page.getByTestId("strategy-conversation-confirm").click();
-    await expect(page.getByTestId("strategy-conversation-compile")).toBeVisible({ timeout: 60_000 });
-    await page.getByTestId("strategy-conversation-compile").click();
-    await expect(page.getByTestId("strategy-conversation-compile-status")).toContainText(
-      /executable/i,
-      { timeout: 60_000 },
-    );
-    await page.getByTestId("strategy-conversation-approve").click();
-    await expect(page.getByTestId("strategy-conversation-lifecycle")).toContainText(/approved/i, {
-      timeout: 60_000,
-    });
+    await page.getByRole("button", { name: "Preview attachment" }).click();
+    await expect(page.getByLabel("Attachment preview")).toHaveValue(FIRST_SLICE_PREVIEW);
+    await page.getByLabel("Message", { exact: true }).fill("Review these imported strategy rules.");
+    await page.getByRole("button", { name: "Review strategy draft" }).click();
+    const review = page.getByTestId("agent-strategy-draft");
+    await expect(review).toBeVisible({ timeout: 60_000 });
+    const conversationId = new URL(page.url()).searchParams.get("conversation");
+    const proposals = await request.get(`${API_URL}/conversations/${conversationId}/proposals`, { headers });
+    expect((await proposals.json()).items[0].resulting_version_id).toBeNull();
+    await review.getByRole("button", { name: "Confirm and save strategy version" }).click();
+    await expect(review.getByRole("link", { name: "Open saved strategy" })).toBeVisible();
+    const savedHref = await review.getByRole("link", { name: "Open saved strategy" }).getAttribute("href");
+    const strategy = { id: savedHref!.split("/").at(-1) };
+    await page.reload();
+    await expect(review.getByRole("link", { name: "Open saved strategy" })).toBeVisible();
+    const saved = await request.get(`${API_URL}/strategies/${strategy.id}`, { headers });
+    expect((await saved.json()).setup_type).toBe("liquidity_sweep_reversal");
+    const versions = await request.get(`${API_URL}/strategies/${strategy.id}/versions`, { headers });
+    expect((await versions.json()).total).toBe(2);
+    await review.getByRole("button", { name: "Compile saved version" }).click();
+    await expect(page.getByTestId("agent-strategy-compile-status")).toContainText(/executable/i, { timeout: 60_000 });
+    await review.getByRole("button", { name: "Approve compiled policy" }).click();
+    await expect(page.getByTestId("agent-strategy-lifecycle")).toContainText(/approved/i, { timeout: 60_000 });
+
   });
 });

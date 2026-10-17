@@ -6,8 +6,10 @@ import type { AuthResponse, HealthResponse, ProviderStatusResponse } from "@/lib
 
 import { AppProvider, useAppContext } from "./AppContext";
 import { AuthProvider, useAuth } from "./AuthContext";
+import { clearTokens } from "@/lib/auth/session";
 
 const replaceMock = vi.fn();
+const sessionState = vi.hoisted(() => ({ authenticated: false }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock, push: vi.fn() }),
@@ -32,11 +34,11 @@ vi.mock("@/lib/api", () => ({
   ApiError: class MockApiError extends Error {},
 }));
 
-vi.mock("@/lib/auth/session", () => ({
+vi.mock("@/lib/auth/session", async () => ({
   // Unauthenticated at mount: profile and kill-switch reads stay local.
-  isAuthenticated: () => false,
+  isAuthenticated: () => sessionState.authenticated,
   setTokens: vi.fn(),
-  clearTokens: vi.fn(),
+  clearTokens: vi.fn((await import("@/lib/auth/session-events")).sessionCleared),
   getRefreshToken: () => null,
 }));
 
@@ -88,6 +90,7 @@ function renderAuth() {
 
 describe("AuthContext verification policy from shared health source (FP2-105)", () => {
   beforeEach(() => {
+    sessionState.authenticated = false;
     vi.mocked(api.auth.login).mockResolvedValue(unverifiedLogin);
   });
 
@@ -132,5 +135,29 @@ describe("AuthContext verification policy from shared health source (FP2-105)", 
     });
 
     expect(replaceMock).toHaveBeenCalledWith("/verify-email");
+  });
+  it("a late failing old profile cannot clear a newly authenticated identity", async () => {
+    sessionState.authenticated = true;
+    let fail!: (error: Error) => void;
+    vi.mocked(api.auth.me).mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const { result } = renderAuth();
+    await act(async () => { await result.current.auth.login("new@example.com", "pw"); });
+    await act(async () => fail(new Error("Old profile failed")));
+    expect(result.current.auth.user?.id).toBe("user-1");
+    expect(clearTokens).not.toHaveBeenCalled();
+  });
+  it("clears identity immediately on logout and ignores completion after another login", async () => {
+    let finish!: () => void;
+    vi.mocked(api.auth.logout).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ message: "Logged out" }); }));
+    const { result } = renderAuth();
+    await act(async () => { await result.current.auth.login("old@example.com", "pw"); });
+    let logout!: Promise<void>;
+    act(() => { logout = result.current.auth.logout(); });
+    expect(result.current.auth.user).toBeNull();
+    await act(async () => { await result.current.auth.login("new@example.com", "pw"); });
+    replaceMock.mockClear();
+    await act(async () => { finish(); await logout; });
+    expect(result.current.auth.user?.id).toBe("user-1");
+    expect(replaceMock).not.toHaveBeenCalledWith("/login");
   });
 });

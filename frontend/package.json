@@ -11,9 +11,14 @@
     "test": "vitest run",
     "test:e2e": "playwright test --project=chromium",
     "test:e2e:webkit": "playwright test --project=webkit --project=iphone-15-pro --project=iphone-15-pro-landscape",
-    "capture:screenshots": "playwright test --project=screenshots"
+    "capture:screenshots": "playwright test --project=screenshots",
+    "api:generate": "node scripts/generate-api.mjs",
+    "api:check": "node scripts/generate-api.mjs --check"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.104.1",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.17.0",
@@ -24,8 +29,8 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0",
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.51.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
@@ -35,6 +40,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.18",
     "jsdom": "^29.1.1",
+    "openapi-typescript": "^7.13.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5",

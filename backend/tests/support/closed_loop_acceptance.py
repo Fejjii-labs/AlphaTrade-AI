@@ -112,6 +112,17 @@ class FixtureMarket:
             )
         if path == "/fapi/v1/klines":
             return httpx.Response(200, json=self.klines[params["interval"]])
+        if path == "/fapi/v1/depth":
+            return httpx.Response(
+                200,
+                json={
+                    "lastUpdateId": 1,
+                    "E": int(EVALUATED_AT.timestamp() * 1000),
+                    "T": int(EVALUATED_AT.timestamp() * 1000),
+                    "bids": [["100079", "1"]],
+                    "asks": [["100081", "1"]],
+                },
+            )
         if path == "/fapi/v1/aggTrades":
             if self.failure == "missing":
                 return httpx.Response(200, json=[])

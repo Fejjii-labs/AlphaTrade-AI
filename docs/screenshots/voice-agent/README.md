@@ -1,23 +1,17 @@
-# Voice Agent V1 screenshots
+# Actual Agent voice fixture evidence
 
-> **Historical speech-fixture snapshot:** voice controls are implemented in current source, but these images use the older five-workspace shell and synthetic speech callbacks. They do not verify real microphone/service/Safari/iOS behavior. See [screenshot review](../../screenshots_checklist.md).
+Captured from `/agent` with `frontend/ui-tests/voice-agent.spec.ts` in Chromium.
+The real browser provider receives simulated Web Speech events and the existing
+Agent API receives synthetic contract fixtures. These are not microphone, Safari,
+iPhone or live provider checks.
 
+| Viewport | Integrated speaking controls |
+| --- | --- |
+| 320×720 | [Narrow](narrow-integrated-speaking.png) |
+| 390×844 | [Phone size](phone-integrated-speaking.png) |
+| 1440×1000 | [Desktop](desktop-integrated-speaking.png) |
 
-These captures use **frontend and speech test fixtures**, not live market data or
-a real microphone. Chromium checks desktop 1440×1000, phone portrait 390×844,
-and phone landscape 844×390. Fallback fonts are shown; Google Fonts were blocked.
-
-| Layout | Recording | Speaking |
-| --- | --- | --- |
-| Desktop | [Recording](desktop-recording.png) | [Speaking](desktop-speaking.png) |
-| Phone portrait | [Recording](phone-recording.png) | [Speaking](phone-speaking.png) |
-| Phone landscape | [Recording](phone-landscape-recording.png) | [Speaking](phone-landscape-speaking.png) |
-
-Regenerate from `frontend/`:
-
-```sh
-XDG_CONFIG_HOME=/tmp/alphatrade-browser-config XDG_CACHE_HOME=/tmp/alphatrade-browser-cache PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium VOICE_SCREENSHOTS=1 npx playwright test --config playwright.voice.config.ts
-```
-
-Omit the executable override when an installed Playwright Chromium is available.
-Physical microphone access and Safari/iOS were not verified.
+Each case creates a conversation using the existing flow, completes two spoken
+turns, checks 44px controls and horizontal fit, then navigates away and back without
+leaving acknowledged voice blocked. Other cases cover editable empty review,
+typed-draft preservation, exact attachment recovery after reload and typed fallback.

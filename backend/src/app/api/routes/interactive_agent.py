@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Header, Request
 
 from app.core.dependencies import AuditServiceDep, SessionDep, SettingsDep
 from app.evidence_pipeline.service import CanonicalEvidenceService
@@ -29,9 +29,11 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.conversation import ModelConversationalResponder
 from app.interactive_agent.proposals import find_proposal
 from app.interactive_agent.service import InteractiveAgentService
+from app.interactive_agent.turn_contracts import TURN_CONFLICT_RESPONSES
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import TraderDep
 from app.services.agent_paper_execution import AgentPaperExecutionService
+from app.services.turn_policy import TURN_DEPENDENCIES
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 _knowledge_application_rate_limit = tenant_rate_limit_dependency(
@@ -82,45 +84,54 @@ async def agent_capabilities(
     return InteractiveAgentService(session, settings=settings).catalog()
 
 
-@router.post("/turns", response_model=AgentTurnResult, summary="Run one agent turn")
+@router.post(
+    "/turns",
+    response_model=AgentTurnResult,
+    summary="Run one agent turn",
+    dependencies=TURN_DEPENDENCIES,
+    responses=TURN_CONFLICT_RESPONSES,
+)
 async def agent_turn(
     body: AgentTurnRequest,
     tenant: TraderDep,
     session: SessionDep,
     settings: SettingsDep,
     request: Request,
+    idempotency_key: str | None = Header(
+        default=None, description="Stable UUID for turn recovery."
+    ),
 ) -> AgentTurnResult:
-    from app.interactive_agent.action_registry import route_action
+    from functools import partial
 
-    if body.source_document_id is not None:
-        from app.agent_capture.service import uploaded_text
-        from app.core.errors import ValidationAppError
+    from starlette.concurrency import run_in_threadpool
 
-        if body.action is not None:
-            raise ValidationAppError("An upload cannot carry a tool action.")
-        uploaded_text(session, body.source_document_id, tenant.organization_id, tenant.user_id)
-    action = route_action(body) if body.source_document_id is None else None
-    service = (
-        _service(
-            session,
-            settings,
-            tenant.organization_id,
-            paper_execution=_paper_authority(request, session, settings),
+    from app.interactive_agent.turn_runtime import run_interactive
+    from app.services.turn_coordinator import TurnCoordinator, request_key
+
+    key = request_key(idempotency_key)
+    coordinator = TurnCoordinator.from_request_session(session)
+    result = await run_in_threadpool(
+        partial(
+            coordinator.run,
+            channel="interactive",
+            key=key,
+            body=body.model_dump(mode="json"),
+            organization_id=tenant.organization_id,
+            user_id=tenant.user_id,
+            conversation_id=body.conversation_id,
+            strategy_id=body.strategy_id,
+            work=lambda reservation: run_interactive(
+                coordinator,
+                settings,
+                reservation,
+                body,
+                paper_factory=lambda phase_session: _paper_authority(
+                    request, phase_session, settings
+                ),
+            ),
         )
-        if action is not None and action.name == "paper_trade.prepare_execution"
-        else _service(session, settings, tenant.organization_id)
     )
-    result = service.handle_turn(
-        body,
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-        ordinary_capture=True,
-    )
-    from app.agent_capture.routes import capture_result
-
-    capture_result(session, settings, tenant.organization_id, tenant.user_id, result, body)
-    session.commit()
-    return result
+    return AgentTurnResult.model_validate(result)
 
 
 @router.post(

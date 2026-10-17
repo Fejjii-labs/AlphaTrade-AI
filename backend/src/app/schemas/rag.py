@@ -29,10 +29,16 @@ class FileProvenance(StrictModel):
 
 class IndexingObservation(StrictModel):
     sql_chunk_count: int = Field(ge=0)
-    vector_backend: str
-    vector_index_status: Literal["upsert_acknowledged"] = "upsert_acknowledged"
+    vector_backend: str | None = None
+    vector_index_status: Literal["pending", "ready", "failed", "unknown", "upsert_acknowledged"] = (
+        "unknown"
+    )
     fallback_used: bool
     observed_at: datetime
+    job_id: UUID | None = None
+    attempts: int = Field(default=0, ge=0)
+    next_attempt_at: datetime | None = None
+    error_code: str | None = None
 
 
 class DocumentIngestionMetadata(StrictModel):
@@ -127,6 +133,7 @@ class RagQuery(StrictModel):
     query: str = Field(min_length=1, max_length=2000)
     organization_id: UUID | None = None
     user_id: UUID | None = None
+    include_shared: bool = False
     top_k: int = Field(default=5, ge=1, le=50)
     source_types: list[DocumentSourceType] = Field(default_factory=list)
     strategy_tag: str | None = None
@@ -176,7 +183,9 @@ class IngestDocumentResponse(ORMModel):
     )
     fallback_used: bool = False
     sql_chunks_stored: bool = True
-    vector_index_status: Literal["upsert_acknowledged", "unknown"] = "unknown"
+    vector_index_status: Literal["pending", "ready", "failed", "upsert_acknowledged", "unknown"] = (
+        "unknown"
+    )
 
 
 class RetrievedChunk(ORMModel):

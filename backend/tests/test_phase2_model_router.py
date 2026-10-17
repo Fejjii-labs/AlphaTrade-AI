@@ -687,6 +687,48 @@ def test_retry_same_attempt_id_is_exactly_once(session: Session) -> None:
     assert session.scalar(select(func.count()).select_from(UsageEvent)) == 1
 
 
+@pytest.mark.parametrize(
+    "status,reason,expected_calls",
+    [
+        (429, "openai_llm_rate_limited", 2),
+        (500, "openai_llm_upstream_error", 2),
+        (401, "openai_llm_permission_denied", 1),
+        (403, "openai_llm_permission_denied", 1),
+        (404, "openai_llm_model_unavailable", 1),
+        (None, "openai_llm_timeout", 1),
+    ],
+)
+def test_application_retry_budget_accounts_each_real_attempt(
+    session: Session, status: int | None, reason: str, expected_calls: int
+) -> None:
+    provider = _FailingLLM(
+        error=ServiceUnavailableError(
+            "Provider request failed.",
+            details={
+                "http_status": status,
+                "reason": reason,
+                "input_tokens": 7,
+                "output_tokens": 2,
+            },
+        )
+    )
+    router = ModelRouter(
+        provider,
+        tier_a_model="unknown-frontier",
+        tier_b_model="unknown-frontier",
+        fail_closed=True,
+        telemetry=ModelCallTelemetryService(session),
+    )
+    result = router.complete(_request(ModelRoutingPurpose.GENERAL_AGENT_SYNTHESIS), _messages())
+    assert result.unavailable and len(provider.calls) == expected_calls
+    attempts = list(session.scalars(select(ModelCallAttempt)))
+    events = list(session.scalars(select(UsageEvent)))
+    assert len(attempts) == len(events) == expected_calls
+    assert len({row.id for row in attempts}) == expected_calls
+    assert all(row.input_tokens == 7 and row.output_tokens == 2 for row in attempts)
+    assert all(row.cost_source is CostSource.UNAVAILABLE for row in attempts)
+
+
 def test_usage_event_write_failure_is_surfaced(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

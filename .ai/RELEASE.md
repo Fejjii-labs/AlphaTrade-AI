@@ -19,13 +19,35 @@ npm run lint && npm run typecheck && npm run test && npm run build
   `EXECUTION_MODE=paper`, `ENABLE_REAL_TRADING=false`, `EXCHANGE_MODE=paper_internal`,
   Watcher/Telegram flags `false`.
 
-Ordinary push/PR CI keeps all six job names, dependencies and quality checks.
-Backend pytest runs `scripts/run_backend_focused.py`: a small config/deployment/
-workflow baseline, changed backend test files, matching module test names and an
-explicit SFP/receipt/logging regression group for those paths. This is a development
-selection, not exhaustive dependency analysis. For other cross-module changes,
-include their focused tests explicitly in the PR; the complete gate below remains
-required. A successful focused run is **not complete backend acceptance**.
+Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
+`backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
+`e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
+`frontend`. The workflow file has no concurrency group and no `permissions`
+block. The only `workflow_dispatch` input is `full_backend`, and its default is
+`true`. There is no `combined_validation` input.
+
+The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
+150-minute job timeout. On an ordinary push or pull request, and on a manual
+dispatch with `full_backend` false, it runs `scripts/run_backend_focused.py` as
+one pytest process. That selector always includes `tests/test_config.py`,
+`tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`. It also
+includes a changed `backend/tests/test_*.py` file, every
+`tests/test_<module stem>*.py` match when a `backend/src/app/**/*.py` file
+changes (that is a filename-prefix glob), and the SFP/receipt/logging group
+when a changed path is in the script's SFP path list. The diff is
+`git diff --name-only` from the pull request base SHA, or `github.event.before`
+on a push. This is a development selection, not exhaustive dependency analysis.
+A successful focused run is **not complete backend acceptance**. Include focused
+tests for other cross-module changes in the PR. The CI database URL is bound to
+`AT028_POSTGRES_URL`, `EXPERIMENT_TEST_POSTGRES_URL`,
+`BLOFIN_ACTIVITY_TEST_POSTGRES_URL`, and `PR237_ROLLBACK_POSTGRES_URL` so those
+disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
+
+The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
+`npm run test`, and `npm run build` on ordinary events. It does not run
+`scripts/run_frontend_focused.py`. The evaluation, Docker build, and Playwright
+smoke jobs also run on ordinary events; they are not skipped behind a second
+manual flag. No branch-protection settings are changed by this policy.
 
 ## Final consolidated release acceptance
 
@@ -41,10 +63,19 @@ manual dispatch. Ordinary push/PR events always use focused mode. A manual false
 value requests development checks only. Do not dispatch a full run during routine
 implementation or call a focused green check the complete release gate.
 
-The full dispatch runs unfiltered `uv run pytest` with PostgreSQL and all existing
-Ruff, frontend lint/type/unit/build, deployment-safety, Docker build, deterministic
-Agent/RAG/guardrail evaluation and Playwright browser smoke checks. Record the run
-URL, exact `head_sha`, full backend counts/skips and successful results for all
+The full step runs one pytest process:
+
+```sh
+uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+```
+
+The shell is `bash -eo pipefail`. The step timeout is 140 minutes, inside the
+150-minute backend job. JUnit and the pytest log are uploaded as the
+`full-backend-pytest` artifact. The same run still executes Ruff, the frontend
+lint/type/unit/build steps, deployment-safety, the Docker build, the
+deterministic Agent/RAG/guardrail evaluation, and the Playwright browser smoke
+job. The schedule is 02:00 UTC and runs from the default branch only. Record
+the run URL, exact `head_sha`, full backend counts/skips and successful results for all
 six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
 acceptance. Investigate skips and do not attribute counts from another commit.
 If the reviewed commit changes, its earlier full result is not final acceptance.

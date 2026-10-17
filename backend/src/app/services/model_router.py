@@ -163,7 +163,10 @@ class ModelRouter:
         messages: list[LLMMessage],
     ) -> ModelTaskResult:
         """Execute one routed completion and record actual-call telemetry."""
-        task_id = uuid.uuid4()
+        from app.services.turn_context import current_turn
+
+        turn = current_turn()
+        task_id = turn.next_task_id(request.purpose.value) if turn else uuid.uuid4()
         started = datetime.now(UTC)
         if not messages:
             raise ValidationAppError("Model task messages must not be empty.")
@@ -181,7 +184,25 @@ class ModelRouter:
             models_to_try.append(self._tier_b_model)
 
         last_error: BaseException | None = None
-        for index, model in enumerate(models_to_try):
+        # At most one retry for a retryable provider rejection. Timeout/connection
+        # outcomes are ambiguous: do not repeat potentially billable generation.
+        queue = [(model, index > 0, False) for index, model in enumerate(models_to_try)]
+        retry_available = True
+        for index, (model, model_fallback, retry) in enumerate(queue):
+            if turn is not None and request.context.organization_id is not None:
+                from app.core.errors import QuotaExceededError
+                from app.services.quota_service import QuotaService
+
+                with turn.sessions() as quota_session:
+                    quota = QuotaService(quota_session).check_feature(
+                        request.context.organization_id,
+                        _feature_for(request.purpose),
+                        request_id=str(turn.turn_id),
+                        user_id=request.context.user_id,
+                    )
+                    quota_session.commit()
+                if quota.hard_blocked:
+                    raise QuotaExceededError(quota.message)
             attempt_started = datetime.now(UTC)
             try:
                 llm_result = self._llm.complete(
@@ -211,20 +232,33 @@ class ModelRouter:
                     decision=decision,
                     requested_model=model,
                     resolved_model=model,
-                    fallback_used=index > 0,
-                    llm_result=None,
+                    fallback_used=model_fallback,
+                    llm_result=LLMCompletionResult(
+                        content="",
+                        model=model,
+                        provider=self._provider_name,
+                        input_tokens=_error_tokens(exc, "input_tokens"),
+                        output_tokens=_error_tokens(exc, "output_tokens"),
+                        latency_ms=_elapsed_ms(attempt_started),
+                    ),
                     success=False,
                     category=category,
                     started_at=attempt_started,
+                    attempt_number=index,
                 )
                 attempts.append(attempt)
                 if telemetry_error is not None:
                     return self._telemetry_failed_result(task_id, decision, attempts, None, started)
+                status = getattr(exc, "details", {}).get("http_status")
+                if retry_available and not retry and status in {408, 429, 500, 502, 503, 504}:
+                    retry_available = False
+                    queue.insert(index + 1, (model, model_fallback, True))
+                    continue
                 if self._fail_closed:
                     return self._unavailable_result(task_id, decision, attempts, category, started)
                 continue
 
-            fallback_used = index > 0 or llm_result.fallback_used
+            fallback_used = model_fallback or llm_result.fallback_used
             attempt, telemetry_error = self._record_attempt(
                 task_id=task_id,
                 request=request,
@@ -236,6 +270,7 @@ class ModelRouter:
                 success=True,
                 category=ModelFailureCategory.NONE,
                 started_at=attempt_started,
+                attempt_number=index,
             )
             attempts.append(attempt)
             if telemetry_error is not None:
@@ -280,6 +315,7 @@ class ModelRouter:
         success: bool,
         category: ModelFailureCategory,
         started_at: datetime,
+        attempt_number: int = 0,
     ) -> tuple[ModelCallAttempt, ModelTelemetryPersistenceError | None]:
         completed = datetime.now(UTC)
         input_tokens = llm_result.input_tokens if llm_result is not None else 0
@@ -291,7 +327,7 @@ class ModelRouter:
             output_tokens=output_tokens,
         )
         attempt = ModelCallAttempt(
-            attempt_id=uuid.uuid4(),
+            attempt_id=uuid.uuid5(task_id, f"attempt:{attempt_number}:{requested_model}"),
             task_request_id=task_id,
             correlation_id=request.correlation_id,
             purpose=request.purpose,
@@ -653,3 +689,8 @@ def _failure_category(exc: BaseException | None) -> ModelFailureCategory:
     if "timeout" in name:
         return ModelFailureCategory.TIMEOUT
     return ModelFailureCategory.UNKNOWN
+
+
+def _error_tokens(exc: BaseException, key: str) -> int:
+    value = getattr(exc, "details", {}).get(key, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0

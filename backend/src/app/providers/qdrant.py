@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -51,6 +52,7 @@ class VectorSearchHit:
 class VectorSearchFilters:
     organization_id: UUID | None = None
     user_id: UUID | None = None
+    include_shared: bool = False
     source_types: tuple[str, ...] = ()
     strategy_tag: str | None = None
     symbol_tag: str | None = None
@@ -77,6 +79,25 @@ class VectorStore(Protocol):
 
     def status(self) -> ProviderStatus: ...
 
+    def document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+    ) -> set[str]: ...
+
+    def delete_document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+        keep_ids: set[str],
+    ) -> None: ...
+
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=True))
@@ -95,7 +116,15 @@ def _matches_filters(payload: dict[str, Any], filters: VectorSearchFilters) -> b
         filters.organization_id
     ):
         return False
-    if filters.user_id is not None and payload.get("user_id") != str(filters.user_id):
+    if (
+        filters.user_id is not None
+        and payload.get("user_id") != str(filters.user_id)
+        and not (
+            filters.include_shared
+            and filters.organization_id is not None
+            and payload.get("user_id") is None
+        )
+    ):
         return False
     if filters.source_types and payload.get("source_type") not in filters.source_types:
         return False
@@ -108,6 +137,36 @@ def _matches_filters(payload: dict[str, Any], filters: VectorSearchFilters) -> b
     return not (filters.risk_tag is not None and payload.get("risk_tag") != filters.risk_tag)
 
 
+def _matches_document_scope(
+    payload: dict[str, Any], document_id: UUID, organization_id: UUID | None, user_id: UUID | None
+) -> bool:
+    return all(
+        payload.get(key) == (str(value) if value is not None else None)
+        for key, value in (
+            ("document_id", document_id),
+            ("organization_id", organization_id),
+            ("user_id", user_id),
+        )
+    )
+
+
+def _document_scope_filter(
+    document_id: UUID, organization_id: UUID | None, user_id: UUID | None
+) -> dict[str, Any]:
+    return {
+        "must": [
+            {"key": key, "match": {"value": str(value)}}
+            if value is not None
+            else {"is_empty": {"key": key}}
+            for key, value in (
+                ("document_id", document_id),
+                ("organization_id", organization_id),
+                ("user_id", user_id),
+            )
+        ]
+    }
+
+
 @dataclass
 class InMemoryVectorStore:
     """Deterministic in-memory vector store for tests and offline use."""
@@ -118,6 +177,40 @@ class InMemoryVectorStore:
 
     def clear(self) -> None:
         self._collections.clear()
+
+    def document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+    ) -> set[str]:
+        return {
+            identifier
+            for identifier, point in self._collections.get(collection, {}).items()
+            if _matches_document_scope(point.payload, document_id, organization_id, user_id)
+        }
+
+    def delete_document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+        keep_ids: set[str],
+    ) -> None:
+        for identifier in (
+            self.document_points(
+                collection,
+                document_id=document_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+            - keep_ids
+        ):
+            del self._collections[collection][identifier]
 
     def upsert(self, collection: str, points: list[VectorPoint]) -> None:
         bucket = self._collections.setdefault(collection, {})
@@ -183,7 +276,11 @@ def _build_qdrant_filter(filters: VectorSearchFilters) -> dict[str, Any] | None:
             }
         )
     if filters.user_id is not None:
-        must.append({"key": "user_id", "match": {"value": str(filters.user_id)}})
+        owner = {"key": "user_id", "match": {"value": str(filters.user_id)}}
+        if filters.include_shared and filters.organization_id is not None:
+            must.append({"should": [owner, {"is_empty": {"key": "user_id"}}]})
+        else:
+            must.append(owner)
     if filters.source_types:
         must.append({"key": "source_type", "match": {"any": list(filters.source_types)}})
     if filters.strategy_tag is not None:
@@ -239,10 +336,12 @@ class QdrantVectorStore:
         self._fail_closed = fail_closed
         self._fallback = fallback or InMemoryVectorStore()
         self._vector_size = vector_size
-        self._client = None
+        self._client: Any = None
         self._using_qdrant = False
         self._dimension_mismatch: tuple[str, int, int] | None = None
         self._payload_indexes_ready: set[str] = set()
+        self._reconnect_failures = 0
+        self._next_reconnect_at = 0.0
         self._connect()
 
     def _refuse_memory_substitute(self, *, reason: str, collection: str) -> None:
@@ -276,10 +375,25 @@ class QdrantVectorStore:
             client.get_collections()
             self._client = client
             self._using_qdrant = True
+            self._payload_indexes_ready.clear()
+            self._reconnect_failures = 0
         except Exception as exc:
-            logger.warning("qdrant_connect_failed", error=str(exc))
+            logger.warning("qdrant_connect_failed", error_type=type(exc).__name__)
             self._client = None
             self._using_qdrant = False
+            self._reconnect_failures += 1
+            self._next_reconnect_at = time.monotonic() + min(
+                300, 5 * 2 ** min(self._reconnect_failures - 1, 6)
+            )
+
+    def reconnect(self) -> bool:
+        """One bounded connect probe per backoff window, preserving this store."""
+        if self._using_qdrant:
+            return True
+        if time.monotonic() < self._next_reconnect_at:
+            return False
+        self._connect()
+        return self._using_qdrant
 
     def collection_vector_size(self, collection: str) -> int | None:
         """Return existing collection vector size, or None if missing/unreachable."""
@@ -303,6 +417,7 @@ class QdrantVectorStore:
             )
 
     _PAYLOAD_INDEX_FIELDS: tuple[str, ...] = (
+        "document_id",
         "organization_id",
         "user_id",
         "source_type",
@@ -423,7 +538,7 @@ class QdrantVectorStore:
                 )
                 for point in points
             ]
-            self._client.upsert(collection_name=collection, points=qdrant_points)
+            self._client.upsert(collection_name=collection, points=qdrant_points, wait=True)
             self._dimension_mismatch = None
         except VectorDimensionMismatchError as exc:
             self._dimension_mismatch = (exc.collection, exc.expected, exc.actual)
@@ -448,6 +563,79 @@ class QdrantVectorStore:
                     collection=collection,
                 )
             self._fallback.upsert(collection, points)
+
+    def document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+    ) -> set[str]:
+        if not self._using_qdrant or self._client is None:
+            if self._fail_closed:
+                self._refuse_memory_substitute(reason="qdrant_unavailable", collection=collection)
+            return self._fallback.document_points(
+                collection,
+                document_id=document_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+        from qdrant_client.http import models as qmodels
+
+        self._ensure_payload_indexes(collection)
+        query_filter = qmodels.Filter.model_validate(
+            _document_scope_filter(document_id, organization_id, user_id)
+        )
+        identifiers: set[str] = set()
+        offset = None
+        for _ in range(80):
+            points, offset = self._client.scroll(
+                collection_name=collection,
+                scroll_filter=query_filter,
+                limit=128,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            identifiers.update(str(point.id) for point in points)
+            if len(identifiers) > 10000:
+                raise RuntimeError("document_inventory_budget_exceeded")
+            if offset is None:
+                return identifiers
+        raise RuntimeError("document_inventory_page_budget_exceeded")
+
+    def delete_document_points(
+        self,
+        collection: str,
+        *,
+        document_id: UUID,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+        keep_ids: set[str],
+    ) -> None:
+        if not self._using_qdrant or self._client is None:
+            if self._fail_closed:
+                self._refuse_memory_substitute(reason="qdrant_unavailable", collection=collection)
+            self._fallback.delete_document_points(
+                collection,
+                document_id=document_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                keep_ids=keep_ids,
+            )
+            return
+        from qdrant_client.http import models as qmodels
+
+        self._ensure_payload_indexes(collection)
+        scoped = _document_scope_filter(document_id, organization_id, user_id)
+        if keep_ids:
+            scoped["must_not"] = [{"has_id": sorted(keep_ids)}]
+        self._client.delete(
+            collection_name=collection,
+            points_selector=qmodels.FilterSelector(filter=qmodels.Filter.model_validate(scoped)),
+            wait=True,
+        )
 
     def _query_vector_points(
         self,

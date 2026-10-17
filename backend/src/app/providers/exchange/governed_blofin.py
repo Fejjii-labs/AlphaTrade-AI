@@ -8,7 +8,7 @@ account-setting mutation, internal fill fallback, or real venue is supported.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from time import monotonic
@@ -41,6 +41,7 @@ class DemoVenueSnapshot:
     maximum: Decimal
     book: DemoOrderBook
     account_observed_at: datetime
+    native_account_uid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class DemoFill:
     price: Decimal
     occurred_at: datetime
     fee: Decimal
+    # Preserve the provider's explicit currency. Instrument settlement does not
+    # prove the currency of an omitted historical fee.
+    fee_currency: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class DemoOrderEvidence:
     diagnostics: tuple[DemoReconciliationDiagnostic, ...] = ()
     native_tpsl_id: str | None = None
     protection_configured: bool = False
+    native_account_uid: str | None = None
 
 
 def _rows(data: Any) -> list[dict[str, Any]]:
@@ -186,6 +191,7 @@ class GovernedBloFinDemoProvider:
             maximum=maximum,
             book=book,
             account_observed_at=account_observed_at,
+            native_account_uid=self._account.native_account_uid,
         )
 
     def verify_flat_account(self) -> None:
@@ -344,6 +350,13 @@ class GovernedBloFinDemoProvider:
         """Read by durable client id. Absence never authorizes another POST."""
         from app.providers.exchange.demo_reconciliation import reconcile_native
 
-        return reconcile_native(
+        # Read UID using this execution connection, never the activity key or an owner pin.
+        self.verify_permissions()
+        evidence = reconcile_native(
             self._client, plan=plan, client_order_id=client_order_id, clock=self._clock
+        )
+        return (
+            replace(evidence, native_account_uid=self._account.native_account_uid)
+            if evidence is not None
+            else None
         )

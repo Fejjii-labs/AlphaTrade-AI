@@ -292,6 +292,9 @@ def test_journal_auto_ingest_creates_searchable_content(
         )
         session.commit()
 
+        from tests.support.knowledge_indexing import drain_indexing
+
+        assert drain_indexing(rag) == ["ready"]
         results = rag.search(
             RagQuery(
                 query=unique_lesson,

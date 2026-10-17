@@ -1,3 +1,4 @@
+import { sessionGeneration } from "@/lib/auth/session-events";
 import { appConfig } from "@/lib/config";
 import { sanitizeNextPath } from "@/lib/auth/boundary";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens, usesCookieRefresh } from "@/lib/auth/session";
@@ -42,6 +43,7 @@ function parseErrorMessage(body: unknown, fallback: string): string {
 }
 
 async function requestRefreshedTokens(): Promise<boolean> {
+  const generation = sessionGeneration();
   const refreshToken = getRefreshToken();
   const body = refreshToken ? JSON.stringify({ refresh_token: refreshToken }) : JSON.stringify({});
   const response = await fetch(buildUrl("/auth/refresh"), {
@@ -51,29 +53,31 @@ async function requestRefreshedTokens(): Promise<boolean> {
     credentials: fetchCredentials(),
     cache: "no-store",
   });
-  if (!response.ok) {
-    clearTokens();
-    return false;
-  }
+  if (generation !== sessionGeneration()) return false;
+  if (!response.ok) return false;
   const payload = (await response.json()) as {
     access_token: string;
     refresh_token?: string;
   };
+  if (generation !== sessionGeneration()) return false;
   setTokens(payload.access_token, payload.refresh_token);
   return true;
 }
 
 // Single-flight guard: concurrent 401s share one refresh call so token rotation
 // (which invalidates the old refresh token) cannot race against itself.
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: { generation: number; promise: Promise<boolean> } | null = null;
 
 async function refreshAccessToken(): Promise<boolean> {
-  if (!refreshInFlight) {
-    refreshInFlight = requestRefreshedTokens().finally(() => {
-      refreshInFlight = null;
+  const generation = sessionGeneration();
+  if (!refreshInFlight || refreshInFlight.generation !== generation) {
+    const flight = { generation, promise: Promise.resolve(false) };
+    flight.promise = requestRefreshedTokens().finally(() => {
+      if (refreshInFlight === flight) refreshInFlight = null;
     });
+    refreshInFlight = flight;
   }
-  return refreshInFlight;
+  return refreshInFlight.promise;
 }
 
 function sessionExpiredLoginPath(): string {
@@ -99,6 +103,14 @@ export async function apiFetch<T>(
     ...rest
   } = options;
 
+  const generation = sessionGeneration();
+  const checkContext = () => {
+    rest.signal?.throwIfAborted();
+    if (auth && generation !== sessionGeneration()) {
+      throw new DOMException("Session changed", "AbortError");
+    }
+  };
+  checkContext();
   const requestHeaders: Record<string, string> = {
     Accept: "application/json",
     ...(rest.body && !(typeof FormData !== "undefined" && rest.body instanceof FormData)
@@ -119,8 +131,10 @@ export async function apiFetch<T>(
     cache: "no-store",
   });
 
+  checkContext();
   if (response.status === 401 && auth && retryOnUnauthorized) {
     const refreshed = await refreshAccessToken();
+    checkContext();
     if (refreshed) {
       return apiFetch<T>(path, { ...options, retryOnUnauthorized: false });
     }
@@ -136,7 +150,10 @@ export async function apiFetch<T>(
   }
 
   const text = await response.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  checkContext();
+  let body: unknown;
+  try { body = text ? JSON.parse(text) : null; }
+  catch { throw new ApiError("API returned an invalid response.", response.status, null); }
 
   if (!response.ok) {
     throw new ApiError(parseErrorMessage(body, response.statusText), response.status, body);

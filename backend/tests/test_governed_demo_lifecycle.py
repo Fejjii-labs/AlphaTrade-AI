@@ -22,6 +22,7 @@ from app.db.models import (
     AuditLog,
     ExecutionAccount,
     ExecutionCommand,
+    ExecutionIdempotencyBinding,
     GovernedDemoLifecycleResolution,
     JournalLifecycleEvent,
     JournalTrade,
@@ -35,6 +36,7 @@ from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
 from app.repositories.audit import AuditRepository
 from app.schemas.common import AuditEventType, JournalLifecycleEventType, JournalTradeStatus
 from app.services.demo_account_history import has_demo_entry_history
+from app.services.execution_claim import PaperPlanClaimService
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from app.signal_fusion.memory import FrozenClock
 from tests.support.phase5_market import EVALUATED_AT
@@ -52,6 +54,9 @@ class ClosingVenue(Venue):
     category: str = "normal"
     gross: str | None = "1.25"
     quote_ts: str = _TS
+    exit_fee: str | None = "0.03"
+    exit_fee_currency: str | None = "USDT"
+    child_tpsl_id: str | None = None
 
     def handle(self, request):
         endpoint = request.url.path.rsplit("/", 1)[1]
@@ -82,6 +87,7 @@ class ClosingVenue(Venue):
                 "state": "filled",
                 "orderCategory": self.category,
                 "createTime": str(int(self.quote_ts) + 1000),
+                **({"tpslId": self.child_tpsl_id} if self.child_tpsl_id else {}),
             }
             data = [parent, close]
         elif endpoint == "fills-history" and request.url.params.get("orderId") == "exit-1":
@@ -94,7 +100,8 @@ class ClosingVenue(Venue):
                     "positionSide": "net",
                     "fillSize": self.filled,
                     "fillPrice": str(self.price - 1),
-                    "fee": "0.03",
+                    "fee": self.exit_fee,
+                    "feeCurrency": self.exit_fee_currency,
                     "fillPnl": self.gross,
                     "ts": str(int(self.quote_ts) + 1000),
                 }
@@ -142,7 +149,17 @@ class ClosingVenue(Venue):
         return str(Decimal(self.order["size"]) / (2 if self.behavior == "partial_cancel" else 1))
 
 
-def open_world(monkeypatch, *, category="normal", partial=False, gross="1.25"):
+def open_world(
+    monkeypatch,
+    *,
+    category="normal",
+    partial=False,
+    gross="1.25",
+    entry_fee_currency="USDT",
+    exit_fee="0.03",
+    exit_fee_currency="USDT",
+    child_tpsl_id=None,
+):
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -153,7 +170,14 @@ def open_world(monkeypatch, *, category="normal", partial=False, gross="1.25"):
 
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
     venue = ClosingVenue(
-        price, "partial_cancel" if partial else "success", category=category, gross=gross
+        price,
+        "partial_cancel" if partial else "success",
+        category=category,
+        gross=gross,
+        entry_fee_currency=entry_fee_currency,
+        exit_fee=exit_fee,
+        exit_fee_currency=exit_fee_currency,
+        child_tpsl_id=child_tpsl_id,
     )
     client = BloFinClient(
         base_url=settings.blofin_demo_rest_base_url,
@@ -191,6 +215,19 @@ def open_world(monkeypatch, *, category="normal", partial=False, gross="1.25"):
     )
 
 
+def monetary_view(world, session):
+    binding = session.scalar(
+        select(ExecutionIdempotencyBinding).where(
+            ExecutionIdempotencyBinding.command_id == world.command_id
+        )
+    )
+    return (
+        PaperPlanClaimService(session, world.settings, world.loop._safety(session))
+        ._load_result(binding, replayed=True)
+        .projection
+    )
+
+
 @pytest.mark.parametrize(
     "category,partial,gross", [("normal", False, "1.25"), ("tp", False, "1.25"), ("sl", True, None)]
 )
@@ -214,6 +251,8 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         assert trade.status is JournalTradeStatus.CLOSED
         assert trade.exit_time == EVALUATED_AT + timedelta(seconds=1)
         assert trade.fees == Decimal("0.05")
+        view = monetary_view(world, session)
+        assert view.fees == Decimal("0.05") and view.funding is None
         assert trade.gross_pnl is None
         assert trade.funding is None and trade.net_pnl is None
         learning = session.scalar(select(LearningAttributionRecordRow))
@@ -227,6 +266,9 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         assert resolution is not None and resolution.released_notional > 0
         assert resolution.evidence_payload["exit_fills"][0]["trade_id"] == "exit-fill-1"
         assert resolution.evidence_payload["exit_fills"][0]["fillPnl"] == gross
+        assert resolution.evidence_payload["exit_fills"][0]["fee_currency"] == "USDT"
+        assert resolution.evidence_payload["fee_convention"] is None
+        assert resolution.evidence_payload["protective_parent_child_verified"] is None
         assert (
             session.get(AuditLog, resolution.audit_event_id).action
             is AuditEventType.DEMO_LIFECYCLE_RECONCILED
@@ -243,6 +285,82 @@ def test_actual_exit_projects_journal_learning_audit_and_releases_only_owned_exp
         assert "exit-1:exit-fill-1" in explained.recorded_evidence
         assert "funding, net PnL" in explained.recorded_evidence
         assert str(resolution.id) in {ref.record_id for ref in explained.connections}
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"entry_fee_currency": None},
+        {"entry_fee_currency": "BTC"},
+        {"exit_fee_currency": None},
+        {"exit_fee_currency": "BTC"},
+        {"exit_fee": None},
+    ],
+)
+def test_unknown_native_fee_money_does_not_invent_totals_or_block_proven_close(
+    monkeypatch, changes
+):
+    world = open_world(monkeypatch, **changes)
+    world.venue.exited = True
+    with world.factory() as session:
+        assert world.loop.reconcile_command(session, command_id=world.command_id) == (
+            "demo_closed_reconciled"
+        )
+        trade = session.scalar(select(JournalTrade))
+        assert trade.status is JournalTradeStatus.CLOSED and trade.fees is None
+        view = monetary_view(world, session)
+        assert view.fees is view.funding is None
+        assert trade.gross_pnl is trade.net_pnl is trade.funding is None
+        resolution = session.scalar(select(GovernedDemoLifecycleResolution))
+        fill = resolution.evidence_payload["exit_fills"][0]
+        assert fill["fee"] == changes.get("exit_fee", "0.03")
+        assert fill["fee_currency"] == changes.get("exit_fee_currency", "USDT")
+        assert fill["fillPnl"] == "1.25"
+        close = session.get(JournalLifecycleEvent, resolution.journal_close_event_id)
+        assert close.payload["fees"] is None
+        assert {"fees", "fee_currency", "fee_convention"} <= set(
+            close.payload["missing_outcome_fields"]
+        )
+        assert session.scalar(select(RiskReservation)).remaining_reserved_notional == 0
+        assert world.venue.post_count == 1
+
+
+def test_signed_exit_fee_and_raw_protection_pointer_retain_unknown_semantics(monkeypatch):
+    world = open_world(monkeypatch, category="tp", exit_fee="-0.03", child_tpsl_id="protect-1")
+    world.venue.exited = True
+    with world.factory() as session:
+        assert world.loop.reconcile_command(session, command_id=world.command_id) == (
+            "demo_closed_reconciled"
+        )
+        trade = session.scalar(select(JournalTrade))
+        assert trade.fees == Decimal("-0.01")
+        assert monetary_view(world, session).fees == Decimal("-0.01")
+        assert trade.net_pnl is trade.gross_pnl is trade.funding is None
+        resolution = session.scalar(select(GovernedDemoLifecycleResolution))
+        facts = resolution.evidence_payload
+        assert facts["exit_order_protection_ids"] == [
+            {"order_id": "exit-1", "tpsl_id": "protect-1"}
+        ]
+        assert facts["entry_protection_ids"] == []
+        assert facts["recorded_entry_protection_ids"] == ["protect-1"]
+        assert facts["protective_parent_child_verified"] is None
+        assert facts["fee_convention"] is facts["pnl_excludes_fees"] is None
+        assert facts["exit_fills"][0]["fee"] == "-0.03"
+        assert world.venue.post_count == 1
+
+
+def test_close_fee_total_uses_immutable_provider_receipts_over_editable_journal(monkeypatch):
+    world = open_world(monkeypatch)
+    with world.factory() as session:
+        session.scalar(select(JournalTrade)).fees = Decimal("999")
+        session.commit()
+        assert monetary_view(world, session).fees == Decimal("0.02")
+    world.venue.exited = True
+    with world.factory() as session:
+        assert world.loop.reconcile_command(session, command_id=world.command_id) == (
+            "demo_closed_reconciled"
+        )
+        assert session.scalar(select(JournalTrade)).fees == Decimal("0.05")
         count = session.scalar(select(func.count()).select_from(JournalLifecycleEvent))
         # A restarted reconciler does not reread/rewrite closed history or send again.
         restarted = GovernedBloFinDemoLoop(

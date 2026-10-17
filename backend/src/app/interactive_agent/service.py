@@ -159,6 +159,7 @@ class InteractiveAgentService:
         self._paper_execution = paper_execution
         self._conversations = ConversationService(session)
         self.confirmation_changed = False
+        self.pending_reply_warnings: tuple[str, ...] = ()
 
     def catalog(self) -> AgentCapabilityCatalog:
         catalog = capability_catalog(self._settings)
@@ -180,6 +181,14 @@ class InteractiveAgentService:
         """Persist a turn and prepare proposals through bounded canonical authorities."""
         safety = paper_safety_contract(self._settings)
         classification = classify_turn(request.message)
+        # Ordinary capture later rewrites proposals into reads. Reject a
+        # filter-bearing mutation or refusal first, or that rewrite would
+        # answer it as a strategy-analytics read.
+        if (
+            request.analytics_filters is not None
+            and classification.operation is not TurnOperation.READ
+        ):
+            raise ValidationAppError("Analytics filters require a read-only turn.")
         if request.conversation_id is not None:
             # Preserve scoped not-found refusal without rebinding or updating the transcript.
             self._conversations.require(
@@ -547,6 +556,7 @@ class InteractiveAgentService:
             and daily_review is None
             and not (action is not None and action[0].name == "paper_trade.prepare_execution")
         ):
+            self.pending_reply_warnings = recorded_trade.warnings if recorded_trade else ()
             model_text = self._responder.compose(
                 organization_id=organization_id,
                 user_id=user_id,
@@ -1181,6 +1191,10 @@ def _market_reply(bundle: ReadBundle) -> str:
         )
         if quote.is_stale:
             parts.append("The quote is stale and is not a current market price.")
+        if quote.evidence_context is not None:
+            from app.interactive_agent.market_context import market_context_text
+
+            parts.append(market_context_text(quote.evidence_context))
     elif bundle.market_availability:
         reason = bundle.market_reason or "No price was invented."
         parts.append(f"Canonical perpetual evidence is {bundle.market_availability}. {reason}")

@@ -11,6 +11,7 @@ import { NO_SERVER_FRESHNESS_TIMESTAMP_NOTE } from "./sourceFreshness";
 import { useValidationSources } from "./useValidationSources";
 import { SetupSuccessByDimension, ValidationOutcomeChart } from "./AnalyticsCharts";
 import { ValidationRankingTable } from "./ValidationRankingTable";
+import { SourceRefreshFailures } from "./SourceRefreshFailures";
 
 export type ValidationChartsProps = {
   apiParams: AnalyticsFilterParams;
@@ -24,6 +25,7 @@ export function ValidationCharts({
   onDimensionChange,
 }: ValidationChartsProps) {
   const {
+    refreshFailures = [],
     summary,
     summaryLoading,
     summaryRetryLoading,
@@ -54,12 +56,14 @@ export function ValidationCharts({
 
   return (
     <div className="space-y-6 max-w-full" data-testid="validation-charts">
+      <SourceRefreshFailures sources={refreshFailures} />
+      {summaryRetryLoading || setupPerformanceRetryLoading || setupRankingRetryLoading || strategyQualityRetryLoading ? <p role="status" className="text-caption text-text-muted">Refreshing requested sources…</p> : null}
       <p className="text-caption text-text-muted" data-testid="validation-freshness-limitation">
         {NO_SERVER_FRESHNESS_TIMESTAMP_NOTE}
       </p>
       <ValidationOutcomeChart
         source={summary}
-        loading={summaryLoading || summaryRetryLoading}
+        loading={summaryLoading}
         onRetry={() => void reloadSummary()}
         filtersSummary={summaryFilters}
       />
@@ -67,15 +71,15 @@ export function ValidationCharts({
         source={setupPerformance}
         dimension={apiParams.validation.dimension}
         onDimensionChange={onDimensionChange}
-        loading={setupPerformanceLoading || setupPerformanceRetryLoading}
+        loading={setupPerformanceLoading}
         onRetry={() => void reloadSetupPerformance()}
         filtersSummary={setupFilters}
       />
       <ValidationRankingTable
         rankingSource={setupRanking}
         strategyQualitySource={strategyQuality}
-        rankingLoading={setupRankingLoading || setupRankingRetryLoading}
-        strategyQualityLoading={strategyQualityLoading || strategyQualityRetryLoading}
+        rankingLoading={setupRankingLoading}
+        strategyQualityLoading={strategyQualityLoading}
         onRetryRanking={() => void reloadSetupRanking()}
         onRetryStrategyQuality={() => void reloadStrategyQuality()}
         rankingFiltersSummary={setupFilters}

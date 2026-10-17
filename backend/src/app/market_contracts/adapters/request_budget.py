@@ -24,6 +24,11 @@ def request_weight(path: str, params: Mapping[str, str | int] | None) -> int:
 
     if path == "/fapi/v1/aggTrades":
         return AGGTRADE_REQUEST_WEIGHT
+    if path == "/fapi/v1/depth":
+        limit = int((params or {}).get("limit", 500))
+        if limit not in {5, 10, 20, 50, 100, 500, 1000}:
+            raise ValueError("Uncontracted Binance depth limit.")
+        return 2 if limit <= 50 else 5 if limit == 100 else 10 if limit == 500 else 20
     if path == "/fapi/v1/klines":
         raw_limit = (params or {}).get("limit", 500)
         limit = int(raw_limit)

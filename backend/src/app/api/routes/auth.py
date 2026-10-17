@@ -32,13 +32,11 @@ from app.schemas.auth import (
     TokenPair,
 )
 from app.security.cookies import clear_refresh_cookie, set_refresh_cookie
-from app.security.rate_limit import public_rate_limit_dependency
+from app.security.rate_limit import auth_register_rate_limit, public_rate_limit_dependency
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_AUTH_REGISTER_LIMIT = Depends(
-    public_rate_limit_dependency("auth:register", limit=10, window_seconds=3600, ip_limit=10)
-)
+_AUTH_REGISTER_LIMIT = Depends(auth_register_rate_limit)
 _AUTH_LOGIN_LIMIT = Depends(
     public_rate_limit_dependency("auth:login", limit=20, window_seconds=3600, ip_limit=20)
 )
