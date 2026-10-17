@@ -18,6 +18,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.schemas.common import AuditEventType
 from app.security.rate_limit import reset_rate_limiter
+from tests.support.network_guard import block_outbound_network
 
 _BASE = {
     "environment": "local",
@@ -121,6 +122,13 @@ def _reset_limiter() -> None:
     reset_rate_limiter()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_network() -> Iterator[None]:
+    with block_outbound_network() as attempts:
+        yield
+    assert not attempts, f"test reached a real network host: {attempts}"
+
+
 def _build_client(settings: Settings, handler=_demo_handler) -> Iterator[TestClient]:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -149,10 +157,12 @@ def _build_client(settings: Settings, handler=_demo_handler) -> Iterator[TestCli
         mock_transport = transport or httpx.MockTransport(handler)
         return original_build(settings_obj, transport=mock_transport, **kwargs)
 
+    # Install the mock before create_app: the provider registry is built during
+    # app construction and the lifespan probe must never see a real client.
+    exchange_factory.build_blofin_client = _build
     get_settings.cache_clear()
     app = create_app(settings=settings)
     app.dependency_overrides[get_session] = _override_session
-    exchange_factory.build_blofin_client = _build
 
     with TestClient(app) as client:
         yield client
@@ -387,10 +397,12 @@ def test_order_status_after_cancel_falls_back_to_cancel_audit(
         mock_transport = transport or httpx.MockTransport(handler)
         return original_build(settings_obj, transport=mock_transport, **kwargs)
 
+    # Install the mock before create_app: the provider registry is built during
+    # app construction and the lifespan probe must never see a real client.
+    exchange_factory.build_blofin_client = _build
     get_settings.cache_clear()
     app = create_app(settings=settings)
     app.dependency_overrides[get_session] = _override_session
-    exchange_factory.build_blofin_client = _build
 
     with TestClient(app) as client:
         headers = _register_owner(client)

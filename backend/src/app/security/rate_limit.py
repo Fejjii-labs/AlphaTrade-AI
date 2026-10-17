@@ -331,6 +331,26 @@ def tenant_rate_limit_dependency(
     return _dependency
 
 
+def auth_register_rate_limit(
+    request: Request,
+    session: SessionDep,
+    audit_service: AuditServiceDep,
+) -> None:
+    """IP budget for registration. Staging and production keep the default of 10."""
+
+    settings = _request_settings(request)
+    _enforce_limits(
+        request=request,
+        session=session,
+        audit_service=audit_service,
+        scope="auth:register",
+        window_seconds=3600,
+        ip_limit=settings.auth_register_rate_limit,
+        user_limit=None,
+        tenant=None,
+    )
+
+
 # Backward-compatible alias used by older route wiring.
 def rate_limit_dependency(
     scope: str,

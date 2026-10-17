@@ -226,6 +226,8 @@ it("resolves an unavailable exact document independently of stalled library list
   expect(api.knowledge.listChunks).toHaveBeenCalledWith({
     document_id: "missing-for-readiness", limit: 50, offset: 0,
   });
+  fireEvent.change(screen.getByLabelText("Knowledge category"), { target: { value: "rules" } });
+  expect(state.replace).toHaveBeenCalledWith("/knowledge?category=rules", { scroll: false });
 });
 it("paginates preserved notes and sources without silently truncating history", async () => {
   vi.mocked(savedEntries.list).mockResolvedValue({ items: [entry], total: 80 });

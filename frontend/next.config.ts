@@ -5,6 +5,10 @@ import { buildSecurityHeaders, resolveApiOrigin } from "./src/lib/security-heade
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Playwright runs `next dev`. Strict Mode remounts abort in-flight queries and
+  // fetch them again, which the validation smoke counts as extra requests.
+  // Production (`next start`) does not double-invoke those effects.
+  reactStrictMode: process.env.E2E_DISABLE_REACT_STRICT_MODE !== "1",
   async redirects() {
     return PHASE_B_REDIRECTS.map((rule) => ({
       source: rule.source,

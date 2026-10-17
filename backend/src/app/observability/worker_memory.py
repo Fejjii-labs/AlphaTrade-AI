@@ -19,10 +19,9 @@ class WorkerMemoryDiagnostics:
     """One bounded post-cleanup series per component; process RSS is shared."""
 
     def __init__(self) -> None:
-        self._after: dict[str, deque[tuple[float, int]]] = {
-            name: deque(maxlen=32) for name in ("watcher", "telegram")
-        }
-        self._cycles = dict.fromkeys(self._after, 0)
+        # Components (watcher, telegram, indexing, activity, ...) register lazily.
+        self._after: dict[str, deque[tuple[float, int]]] = {}
+        self._cycles: dict[str, int] = {}
         memory = read_process_memory()
         logger.info(
             "paper_worker_memory_startup",
@@ -33,9 +32,9 @@ class WorkerMemoryDiagnostics:
         )
 
     def finish(self, component: str, sampler: CycleMemorySampler, after: ProcessMemory) -> None:
-        history = self._after[component]
+        history = self._after.setdefault(component, deque(maxlen=32))
         history.append((monotonic(), after.rss_bytes))
-        self._cycles[component] += 1
+        self._cycles[component] = self._cycles.get(component, 0) + 1
         elapsed = history[-1][0] - history[0][0]
         growth = history[-1][1] - history[0][1]
         logger.info(

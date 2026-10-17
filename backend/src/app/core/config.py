@@ -415,6 +415,9 @@ class Settings(BaseSettings):
     # --- Rate limiting ---
     rate_limit_use_redis: bool = True
     rate_limit_allow_in_memory_fallback: bool = True
+    # Production registration stays at 10/hour/IP. The disposable e2e server raises
+    # this because one loopback worker legitimately registers for the whole smoke suite.
+    auth_register_rate_limit: int = Field(default=10, ge=1, le=10_000)
     redis_connect_timeout_seconds: float = 1.0
     jwt_secret_min_length: int = 32
 

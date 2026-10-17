@@ -1018,7 +1018,7 @@ export function AgentWorkspace() {
                     </Select> : null}
                   </div>
                 </details>
-                <details className="text-sm text-text-muted">
+                <details open className="text-sm text-text-muted">
                   <summary className="min-h-11 cursor-pointer content-center">Browser dictation fallback</summary>
                   <VoiceConversationControls
                   conversationId={conversationId}

@@ -14,7 +14,7 @@ AlphaTrade uses unit/integration regressions, frontend browser checks, offline e
 
 ## Current CI contract
 
-[CI workflow](../.github/workflows/ci.yml) has backend, deployment-safety, frontend, evaluation, Docker-build and E2E-smoke jobs. Ordinary pull requests/pushes use [focused backend development selection](../scripts/run_backend_focused.py). The complete backend suite is a separate `workflow_dispatch` with `full_backend=true`.
+[CI workflow](../.github/workflows/ci.yml) has backend, deployment-safety, frontend, evaluation, Docker-build and E2E-smoke jobs. Ordinary pull requests/pushes use [focused backend development selection](../scripts/run_backend_focused.py). The complete backend suite runs on `workflow_dispatch` with `full_backend=true`, and on the default branch at 02:00 UTC.
 
 A green PR does not imply the entire backend suite ran. Complete release acceptance must record the intended SHA, jobs, result and environment-dependent skips. Do not start broad/manual CI for a documentation-only change or combine historical pass counts from different commits.
 

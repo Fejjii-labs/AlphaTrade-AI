@@ -26,9 +26,8 @@ from app.db.session import get_session
 from app.main import create_app
 from app.runtime.canonical import build_production_canonical_runtime
 from app.security.rate_limit import reset_rate_limiter
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
-
-CURRENT_HEAD = "a13voicemonitor001"
 
 
 def _alembic_config() -> Config:
@@ -56,7 +55,7 @@ def test_alembic_journal_trades_includes_orm_account_id() -> None:
     try:
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            assert version == CURRENT_HEAD
+            assert version == single_alembic_head()
             present = conn.execute(
                 text(
                     "SELECT 1 FROM information_schema.columns "

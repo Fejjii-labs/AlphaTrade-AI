@@ -101,3 +101,94 @@ def test_cgroup_limit_is_distinct_from_process_rss(raw_limit, expected, monkeypa
         "container_memory_bytes": 104857600,
         "container_memory_limit_bytes": expected,
     }
+
+
+@pytest.mark.parametrize("component", ["indexing", "activity"])
+def test_diagnostics_accept_components_beyond_watcher_and_telegram(component, monkeypatch):
+    """Regression: staging worker died with KeyError: 'indexing' after one cycle."""
+    events = []
+    monkeypatch.setattr(
+        "app.observability.worker_memory.logger",
+        SimpleNamespace(info=lambda name, **fields: events.append((name, fields))),
+    )
+    diagnostics = WorkerMemoryDiagnostics()
+    sampler = CycleMemorySampler(read=lambda: ProcessMemory(100, 900))
+    sampler.stop()
+    diagnostics.finish(component, sampler, ProcessMemory(120, 900))
+    diagnostics.finish(component, sampler, ProcessMemory(130, 900))
+    cycles = [fields for name, fields in events if name == "paper_worker_memory_cycle"]
+    assert [fields["component"] for fields in cycles] == [component, component]
+    assert cycles[-1]["cycle"] == 2
+    assert cycles[-1]["growth_window_cycles"] == 2
+
+
+def test_supervisor_records_indexing_and_activity_cycles(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "app.observability.worker_memory.logger",
+        SimpleNamespace(info=lambda name, **fields: events.append((name, fields))),
+    )
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome(status="running"),
+        telegram_cycle=lambda: CycleOutcome(status="disarmed"),
+        memory_diagnostics_enabled=True,
+    )
+    supervisor.attach_indexing(lambda: CycleOutcome(status="running"), close=lambda: None)
+    supervisor.attach_activity(
+        lambda: CycleOutcome(status="running"), poll_seconds=0.01, request_stop=lambda: None
+    )
+    supervisor.run_round()
+    health = supervisor.run_round()
+    assert health.indexing is not None and health.indexing.status == "running"
+    assert health.activity is not None and health.activity.status == "running"
+    cycles = [fields for name, fields in events if name == "paper_worker_memory_cycle"]
+    assert {fields["component"] for fields in cycles} == {
+        "watcher",
+        "telegram",
+        "indexing",
+        "activity",
+    }
+
+
+def test_diagnostics_failure_does_not_stop_component_loop(monkeypatch):
+    calls = []
+    warnings = []
+
+    def boom(*_args, **_kwargs):
+        raise KeyError("indexing")
+
+    monkeypatch.setattr(WorkerMemoryDiagnostics, "finish", boom)
+    monkeypatch.setattr(
+        "app.workers.paper_worker.logger.warning",
+        lambda name, **fields: warnings.append((name, fields)),
+    )
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome(status="running"),
+        telegram_cycle=lambda: CycleOutcome(status="disarmed"),
+        poll_seconds=0.01,
+        memory_diagnostics_enabled=True,
+    )
+    done = threading.Event()
+
+    def indexing():
+        calls.append(1)
+        if len(calls) >= 3:
+            done.set()
+        return CycleOutcome(status="running")
+
+    supervisor.attach_indexing(indexing, close=lambda: None)
+    indexing_component = supervisor._indexing
+    thread = threading.Thread(target=supervisor._loop, args=(indexing_component,), daemon=True)
+    thread.start()
+    try:
+        assert done.wait(5), "indexing loop died after a diagnostics failure"
+    finally:
+        supervisor.request_stop()
+        thread.join(5)
+    assert len(calls) >= 3
+    assert not thread.is_alive()
+    assert any(
+        name == "paper_worker_memory_diagnostics_failed" and fields["component"] == "indexing"
+        for name, fields in warnings
+    )
+    assert not any(t.name == "paper-memory-sampler" for t in threading.enumerate())

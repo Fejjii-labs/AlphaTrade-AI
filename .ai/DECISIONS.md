@@ -2,6 +2,54 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-105 — Analytics filters on a mutation turn return 422
+
+- Date: 2026-10-16
+- Decision: Owner Sofien decided that `analytics_filters` on a non-read turn
+  must return HTTP 422. `handle_turn` raises `ValidationAppError` when those
+  filters are present and `classify_turn` is not `TurnOperation.READ`, before
+  ordinary capture can rewrite a proposal or refusal into a read. A proposal
+  such as "Create a strategy", a paper-trade request, and a real-trading
+  refusal all stay rejected. No strategy-analytics reply is produced.
+- Correction: Commit `df0a12d3` wrongly changed
+  `test_analytics_filters_cannot_route_mutations` so "Create a strategy" with
+  `analytics_filters` expected 200. That expectation is restored to 422. This
+  ID is not the 2026-10-10 AT-ADR-099 and not the colliding AT-ADR-099 text on
+  `fix/strategy-analytics-422` (`4d1c7349`).
+- Safety: Fail closed. No order, mode change, or analytics reply is produced
+  for that input. Real trading stays disabled.
+- Reference: `backend/src/app/interactive_agent/service.py`;
+  `backend/tests/test_agent_strategy_analytics.py`; ported from
+  `4d1c734930081be2cc74259773c6193cba0182d5`.
+
+## AT-ADR-104 — Full backend report lists failures, not every pass
+
+- Date: 2026-10-15
+- Decision: The complete backend gate keeps the 300s thread timeout, the 50
+  slowest durations, and the junit/log artifacts. It reports failures and errors
+  (`-rfE`) instead of every passed test (`-rA`). Run 38765481172 reached 100%
+  of 4848 collected tests in about 70 minutes, then the all-pass captured-output
+  report was still running when the 150 minute job was cancelled, so no junit
+  artifact was uploaded.
+- Limit: This does not skip tests and does not change assertions. The known
+  analytics-filter 422 failure stays a real failure. No merge or dispatch is
+  authorized by this decision. This ID is not the 2026-10-10 AT-ADR-099.
+- Reference: `.github/workflows/ci.yml`; run 38765481172.
+
+## AT-ADR-103 — Full backend gate keeps diagnostics and a nightly run
+
+- Date: 2026-10-15
+- Decision: Owner Sofien approved hardening only the complete backend gate.
+  Focused push/PR selection stays as it is. `workflow_dispatch` with
+  `full_backend=true`, and the default-branch schedule at 02:00 UTC, run the
+  full suite with a 300s thread timeout, `-rfE`, the 50 slowest durations, junit
+  and pytest log artifacts, and a 150 minute backend job timeout.
+- Limit: The nightly schedule does not run until this workflow is on the default
+  branch. It is not release acceptance by itself. No merge, deploy, secret,
+  Render, or branch-protection change is authorized by this decision. This ID
+  is not the 2026-10-10 AT-ADR-098.
+- Reference: `.github/workflows/ci.yml`; approved 2026-10-15 15:51 CEST.
+
 ## AT-ADR-097 — Separate native closure from protection attribution
 
 - Date: 2026-10-09

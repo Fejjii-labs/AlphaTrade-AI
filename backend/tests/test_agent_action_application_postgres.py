@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import os
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
-from app.db.base import Base
 from app.db.models import (
     ConversationMessage,
     Document,
@@ -34,21 +31,13 @@ def application_postgres():
         "AT028_POSTGRES_URL",
         "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
     )
-    admin = create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 2})
-    schema = f"agent_application_{uuid.uuid4().hex}"
+    from tests.support.postgres_template import clone_database, drop_clone
+
     try:
-        with admin.begin() as connection:
-            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        engine = clone_database(url)
     except OperationalError:
-        admin.dispose()
         pytest.skip("PostgreSQL is unavailable for concurrent application tests.")
-    engine = create_engine(
-        url,
-        poolclass=NullPool,
-        connect_args={"options": f"-csearch_path={schema}", "connect_timeout": 2},
-    )
     try:
-        Base.metadata.create_all(engine)
         factory = sessionmaker(bind=engine, expire_on_commit=False)
         with factory() as session:
             session.add(Organization(id=ORG_A, name="Agent application concurrency"))
@@ -60,10 +49,7 @@ def application_postgres():
             session.commit()
         yield factory, _settings()
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+        drop_clone(engine)
 
 
 @pytest.mark.parametrize("action", ["knowledge", "watcher", "pretrade"])

@@ -1,0 +1,27 @@
+---
+description: File a Notion Agent Reports entry after every Codex or Cursor task
+alwaysApply: true
+---
+
+# Agent Reports
+
+After completing ANY task, prompt, or investigation — including a stop for
+review, a blocker, or a failed check — every Codex and Cursor agent writes a
+report to the Notion database **Agent Reports**. The canonical text is root
+`AGENTS.md`. Follow that section in full.
+
+Applies to all current active repos (SOF AI, DataPilot AI, AlphaTrade AI) and every future Simply AI project from day one.
+
+- Database title: Agent Reports
+- URL: https://app.notion.com/p/845cabc602864dcbb4b6898c1ca73197
+- Data source: `collection://187c021b-1ed0-45f6-b15a-e246fcea9f79`
+- Parent page: Simply AI Handoff
+- Repo for work in this repository: `AlphaTrade AI`. DataPilot AI uses `DataPilot AI`. SOF AI uses the database option `SOF`. Parent-level Simply AI work uses `Simply AI`. A future project with no `Repo` option still gets a report; name it in Task Name, Summary, and Findings.
+
+Properties, using these names: Task Name, Date, Agent (`Cursor` / `Codex` / `Grok Bot` / `Other`), Repo, Status (`Done` / `Blocked` / `In progress`), Summary, Findings, Files, Conditions Checked, Likely Culprits, Next Steps, PR / Agent Link, Full Transcript Included (checkbox), Transcript Source (URL).
+
+Put the COMPLETE raw output/transcript VERBATIM in the entry page body or in child page(s) titled `Full transcript`. Include code snippets, file paths, command outputs, test results, and ranked findings lists. Nothing trimmed. Redact only secret values; keep names.
+
+If the agent has no Notion access, append that same verbatim output to the final message and the pull request body under `Findings report — full transcript` so the orchestrator can file it.
+
+This duty does not authorize live trading, secret disclosure, merging, or deploying.
