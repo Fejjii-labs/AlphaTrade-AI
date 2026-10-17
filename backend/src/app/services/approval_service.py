@@ -552,9 +552,11 @@ class ApprovalService:
         row = self._authorizations.get(authorization_id)
         if row is None or row.organization_id != organization_id or row.user_id != user_id:
             raise NotFoundError("Approval authorization not found")
-        self._authorizations.revoke_available(authorization_id, at=self._aware(self._clock()))
+        revoked = self._authorizations.revoke_available(
+            authorization_id, at=self._aware(self._clock())
+        )
         self._session.refresh(row)
-        if reason is not None:
+        if reason is not None and revoked:
             channel = row.channel
             self._record_audit(
                 AuditEventType.APPROVAL_DECISION,

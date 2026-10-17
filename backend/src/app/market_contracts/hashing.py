@@ -45,6 +45,9 @@ RECEIVE_AND_TRANSPORT_FIELDS = frozenset(
     }
 )
 CONTENT_HASH_EXCLUDE = frozenset({"content_hash"})
+# Additive defaults that were not in previously stored preimages. A false value
+# is the legacy absence of the field, so it must not change AttributionFacts hashes.
+_OMIT_WHEN_FALSE = frozenset({"autonomous_approval"})
 
 
 def semantic_content_hash(
@@ -55,8 +58,29 @@ def semantic_content_hash(
     """SHA-256 of the canonical semantic preimage."""
     source = value.model_dump(mode="python") if isinstance(value, BaseModel) else dict(value)
     exclude = RECEIVE_AND_TRANSPORT_FIELDS | extra_exclude
-    preimage = {key: item for key, item in source.items() if key not in exclude}
+    preimage = {
+        key: _omit_legacy_default_false(item)
+        for key, item in source.items()
+        if key not in exclude and not _is_legacy_default_false(key, item)
+    }
     return canonical_sha256(preimage)
+
+
+def _omit_legacy_default_false(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _omit_legacy_default_false(item)
+            for key, item in value.items()
+            if not _is_legacy_default_false(key, item)
+        }
+    if isinstance(value, list | tuple):
+        mapped = [_omit_legacy_default_false(item) for item in value]
+        return tuple(mapped) if isinstance(value, tuple) else mapped
+    return value
+
+
+def _is_legacy_default_false(key: object, value: object) -> bool:
+    return key in _OMIT_WHEN_FALSE and value is False
 
 
 def with_content_hash[T: BaseModel](value: T, *, extra_exclude: frozenset[str] = frozenset()) -> T:
