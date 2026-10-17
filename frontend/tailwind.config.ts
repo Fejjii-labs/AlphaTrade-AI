@@ -36,7 +36,9 @@ export default {
           muted: "var(--color-accent-muted)",
           border: "var(--color-accent-border)",
           foreground: "var(--color-accent-foreground)",
+          solid: "var(--color-accent-solid)",
         },
+        highlight: "var(--color-highlight)",
         success: {
           DEFAULT: "var(--color-success)",
           muted: "var(--color-success-muted)",
@@ -69,6 +71,25 @@ export default {
           muted: "var(--color-paper-muted)",
           border: "var(--color-paper-border)",
         },
+        mode: {
+          paper: {
+            DEFAULT: "var(--color-mode-paper)",
+            muted: "var(--color-mode-paper-muted)",
+            border: "var(--color-mode-paper-border)",
+          },
+          demo: {
+            DEFAULT: "var(--color-mode-demo)",
+            muted: "var(--color-mode-demo-muted)",
+            border: "var(--color-mode-demo-border)",
+          },
+        },
+        risk: {
+          info: "var(--color-risk-info)",
+          low: "var(--color-risk-low)",
+          medium: "var(--color-risk-medium)",
+          high: "var(--color-risk-high)",
+          critical: "var(--color-risk-critical)",
+        },
         stale: {
           DEFAULT: "var(--color-stale)",
           muted: "var(--color-stale-muted)",
@@ -93,16 +114,23 @@ export default {
         "gutter-lg": "var(--page-gutter-desktop)",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["var(--font-figtree)", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       fontSize: {
-        caption: ["var(--text-caption)", { lineHeight: "1.4" }],
-        body: ["var(--text-body)", { lineHeight: "1.5" }],
-        label: ["var(--text-label)", { lineHeight: "1.4" }],
-        section: ["var(--text-section)", { lineHeight: "1.35" }],
-        title: ["var(--text-title)", { lineHeight: "1.25" }],
-        display: ["var(--text-display)", { lineHeight: "1.2" }],
+        eyebrow: [
+          "var(--text-eyebrow)",
+          { lineHeight: "1.3", fontWeight: "600", letterSpacing: "0.12em" },
+        ],
+        caption: ["var(--text-caption)", { lineHeight: "1.4", fontWeight: "400" }],
+        body: ["var(--text-body)", { lineHeight: "1.55", fontWeight: "400" }],
+        label: ["var(--text-label)", { lineHeight: "1.4", fontWeight: "500" }],
+        section: ["var(--text-section)", { lineHeight: "1.35", fontWeight: "600" }],
+        title: [
+          "var(--text-title)",
+          { lineHeight: "1.25", fontWeight: "650", letterSpacing: "-0.015em" },
+        ],
+        display: ["var(--text-display)", { lineHeight: "1.15", fontWeight: "700" }],
       },
       ringColor: {
         focus: "var(--color-focus-ring)",

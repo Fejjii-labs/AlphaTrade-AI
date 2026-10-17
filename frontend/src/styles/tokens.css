@@ -1,43 +1,50 @@
 /**
- * AlphaTrade AI design tokens — AT-040 Phase A
- * Dark-first semantic tokens; light theme via [data-theme="light"] token swap.
+ * AlphaTrade AI design tokens — phase 1.
+ * Dark navy is the default. Light theme swaps the same variable names.
+ * Colour carries meaning: blue is interactive, orange is an eyebrow only,
+ * green/red are profit and loss, violet is PAPER, cyan is DEMO.
  */
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Surfaces */
-  --color-background: #09090b;
-  --color-surface-0: #09090b;
-  --color-surface-1: #18181b;
-  --color-surface-2: #27272a;
-  --color-surface-raised: #1f1f23;
-  --color-border: #3f3f46;
-  --color-border-subtle: #27272a;
-  --color-border-strong: #52525b;
+  /* Surfaces — one step of depth, no heavy shadow */
+  --color-background: #080b14;
+  --color-surface-0: #080b14;
+  --color-surface-1: #0e1322;
+  --color-surface-2: #151b2e;
+  --color-surface-raised: #1a2136;
+  --color-border: #26304a;
+  --color-border-subtle: #1c2438;
+  --color-border-strong: #36415e;
 
-  /* Text hierarchy */
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
-  --color-text-inverse: #09090b;
-  --color-text-disabled: #52525b;
+  /* Text hierarchy. Muted is AA on surface 2. */
+  --color-text-primary: #e8ecf4;
+  --color-text-secondary: #a3aec2;
+  --color-text-muted: #8b97ab;
+  --color-text-inverse: #080b14;
+  --color-text-disabled: #5c6880;
 
-  /* Brand / accent (paper-safe emerald) */
-  --color-accent: #10b981;
-  --color-accent-hover: #34d399;
-  --color-accent-muted: rgba(16, 185, 129, 0.12);
-  --color-accent-border: rgba(16, 185, 129, 0.35);
-  --color-accent-foreground: #052e1c;
+  /* Brand / interactive. Primary button fill is accent-solid (white label). */
+  --color-accent: #4c8dff;
+  --color-accent-hover: #6ea2ff;
+  --color-accent-muted: rgba(76, 141, 255, 0.12);
+  --color-accent-border: rgba(76, 141, 255, 0.35);
+  /* Dark label: current buttons paint this on accent, which is too light for white. */
+  --color-accent-foreground: #071018;
+  --color-accent-solid: #2563eb;
 
-  /* Semantic status */
-  --color-success: #34d399;
-  --color-success-muted: rgba(52, 211, 153, 0.12);
-  --color-success-border: rgba(52, 211, 153, 0.35);
-  --color-warning: #fbbf24;
-  --color-warning-muted: rgba(251, 191, 36, 0.12);
-  --color-warning-border: rgba(251, 191, 36, 0.35);
+  /* Eyebrow / highlight. Decoration only, never status. */
+  --color-highlight: #fb923c;
+
+  /* Semantic status. Success shares the profit green until badges are restyled. */
+  --color-success: #22c55e;
+  --color-success-muted: rgba(34, 197, 94, 0.12);
+  --color-success-border: rgba(34, 197, 94, 0.35);
+  --color-warning: #facc15;
+  --color-warning-muted: rgba(250, 204, 21, 0.12);
+  --color-warning-border: rgba(250, 204, 21, 0.35);
   --color-danger: #f87171;
   --color-danger-muted: rgba(248, 113, 113, 0.12);
   --color-danger-border: rgba(248, 113, 113, 0.4);
@@ -46,22 +53,38 @@
   --color-info-border: rgba(56, 189, 248, 0.35);
   --color-blocked: #f87171;
   --color-blocked-muted: rgba(248, 113, 113, 0.16);
-  --color-blocked-border: rgba(248, 113, 113, 0.5);
+  --color-blocked-border: #ef4444;
 
-  /* Financial directional (never sole channel) */
-  --color-positive: #34d399;
+  /* Financial directional (always pair with ▲/▼ or a sign; never colour alone) */
+  --color-positive: #22c55e;
   --color-negative: #f87171;
 
-  /* Paper / stale indicators */
-  --color-paper: #34d399;
-  --color-paper-muted: rgba(52, 211, 153, 0.12);
-  --color-paper-border: rgba(52, 211, 153, 0.35);
-  --color-stale: #fbbf24;
-  --color-stale-muted: rgba(251, 191, 36, 0.12);
-  --color-stale-border: rgba(251, 191, 36, 0.4);
+  /* PAPER is violet so a mode never reads as profit. */
+  --color-paper: #a78bfa;
+  --color-paper-muted: rgba(167, 139, 250, 0.12);
+  --color-paper-border: rgba(167, 139, 250, 0.35);
+  --color-mode-paper: #a78bfa;
+  --color-mode-paper-muted: rgba(167, 139, 250, 0.12);
+  --color-mode-paper-border: rgba(167, 139, 250, 0.35);
+
+  /* DEMO is cyan. Tokens only until the mode pill is wired. */
+  --color-mode-demo: #22d3ee;
+  --color-mode-demo-muted: rgba(34, 211, 238, 0.12);
+  --color-mode-demo-border: rgba(34, 211, 238, 0.35);
+
+  --color-stale: #facc15;
+  --color-stale-muted: rgba(250, 204, 21, 0.12);
+  --color-stale-border: rgba(250, 204, 21, 0.4);
+
+  /* Risk levels. Each badge still shows its text label. */
+  --color-risk-info: #4c8dff;
+  --color-risk-low: #2dd4bf;
+  --color-risk-medium: #facc15;
+  --color-risk-high: #fb923c;
+  --color-risk-critical: #ef4444;
 
   /* Focus */
-  --color-focus-ring: rgba(16, 185, 129, 0.45);
+  --color-focus-ring: rgba(76, 141, 255, 0.55);
 
   /* Spacing (4px base) */
   --space-0: 0;
@@ -81,29 +104,30 @@
   --radius-card: 0.75rem; /* 12 */
   --radius-pill: 9999px;
 
-  /* Elevation — prefer surface step + border on dark */
+  /* Cards are flat (elevation 1). Menus and popovers keep one soft shadow. */
   --shadow-none: none;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: none;
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --elevation-0: none;
-  --elevation-1: var(--shadow-sm);
+  --elevation-1: none;
   --elevation-2: var(--shadow-md);
 
-  /* Typography sizes (rem) — restrained app hierarchy */
-  --text-caption: 0.75rem;
-  --text-body: 0.875rem;
-  --text-label: 0.875rem;
-  --text-section: 1.125rem;
-  --text-title: 1.5rem;
-  --text-display: 1.75rem;
+  /* Type scale */
+  --text-eyebrow: 0.6875rem; /* 11 */
+  --text-caption: 0.75rem; /* 12 */
+  --text-body: 0.875rem; /* 14 */
+  --text-label: 0.8125rem; /* 13 */
+  --text-section: 1rem; /* 16 */
+  --text-title: 1.5rem; /* 24 */
+  --text-display: 2rem; /* 32 */
 
   /* Layout */
-  --content-max: 80rem; /* max-w-7xl */
+  --content-max: 1200px;
   --page-gutter-mobile: 1rem;
   --page-gutter-desktop: 1.5rem;
   --section-gap: 1.5rem;
   --card-padding-mobile: 1rem;
-  --card-padding-desktop: 1.5rem;
+  --card-padding-desktop: 1.25rem;
 
   /* Breakpoints documented for JS consumers */
   --breakpoint-sm: 640px;
@@ -118,61 +142,79 @@
   --accent: var(--color-accent);
 }
 
-/* Future light theme — token swap only (Phase E); structure ready now */
+/* Light theme — token swap only. Text values are AA on white. */
 [data-theme="light"] {
   color-scheme: light;
 
-  --color-background: #fafafa;
-  --color-surface-0: #fafafa;
+  --color-background: #f7f8fb;
+  --color-surface-0: #f7f8fb;
   --color-surface-1: #ffffff;
-  --color-surface-2: #f4f4f5;
+  --color-surface-2: #eef1f6;
   --color-surface-raised: #ffffff;
-  --color-border: #d4d4d8;
-  --color-border-subtle: #e4e4e7;
-  --color-border-strong: #a1a1aa;
+  --color-border: #cfd5e1;
+  --color-border-subtle: #e2e6ee;
+  --color-border-strong: #b7c0d4;
 
-  --color-text-primary: #18181b;
-  --color-text-secondary: #52525b;
-  --color-text-muted: #71717a;
-  --color-text-inverse: #fafafa;
-  --color-text-disabled: #a1a1aa;
+  --color-text-primary: #0a0e1a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #556378;
+  --color-text-inverse: #ffffff;
+  --color-text-disabled: #94a3b8;
 
-  --color-accent: #059669;
-  --color-accent-hover: #047857;
-  --color-accent-muted: rgba(5, 150, 105, 0.1);
-  --color-accent-border: rgba(5, 150, 105, 0.35);
-  --color-accent-foreground: #ecfdf5;
+  --color-accent: #1d4ed8;
+  --color-accent-hover: #1e40af;
+  --color-accent-muted: rgba(29, 78, 216, 0.1);
+  --color-accent-border: rgba(29, 78, 216, 0.35);
+  --color-accent-foreground: #ffffff;
+  --color-accent-solid: #1d4ed8;
 
-  --color-success: #059669;
-  --color-success-muted: rgba(5, 150, 105, 0.1);
-  --color-success-border: rgba(5, 150, 105, 0.35);
-  --color-warning: #d97706;
-  --color-warning-muted: rgba(217, 119, 6, 0.1);
-  --color-warning-border: rgba(217, 119, 6, 0.35);
-  --color-danger: #dc2626;
-  --color-danger-muted: rgba(220, 38, 38, 0.1);
-  --color-danger-border: rgba(220, 38, 38, 0.35);
-  --color-info: #0284c7;
-  --color-info-muted: rgba(2, 132, 199, 0.1);
-  --color-info-border: rgba(2, 132, 199, 0.35);
-  --color-blocked: #dc2626;
-  --color-blocked-muted: rgba(220, 38, 38, 0.12);
-  --color-blocked-border: rgba(220, 38, 38, 0.45);
+  --color-highlight: #c2410c;
 
-  --color-positive: #059669;
-  --color-negative: #dc2626;
+  --color-success: #047857;
+  --color-success-muted: rgba(4, 120, 87, 0.1);
+  --color-success-border: rgba(4, 120, 87, 0.35);
+  /* #9a5b06 is the spec amber darkened so text stays AA on surface 2, not only on white. */
+  --color-warning: #9a5b06;
+  --color-warning-muted: rgba(154, 91, 6, 0.1);
+  --color-warning-border: rgba(154, 91, 6, 0.35);
+  --color-danger: #b91c1c;
+  --color-danger-muted: rgba(185, 28, 28, 0.1);
+  --color-danger-border: rgba(185, 28, 28, 0.35);
+  --color-info: #0369a1;
+  --color-info-muted: rgba(3, 105, 161, 0.1);
+  --color-info-border: rgba(3, 105, 161, 0.35);
+  --color-blocked: #b91c1c;
+  --color-blocked-muted: rgba(185, 28, 28, 0.12);
+  --color-blocked-border: #b91c1c;
 
-  --color-paper: #059669;
-  --color-paper-muted: rgba(5, 150, 105, 0.1);
-  --color-paper-border: rgba(5, 150, 105, 0.35);
-  --color-stale: #d97706;
-  --color-stale-muted: rgba(217, 119, 6, 0.1);
-  --color-stale-border: rgba(217, 119, 6, 0.4);
+  --color-positive: #047857;
+  --color-negative: #b91c1c;
 
-  --color-focus-ring: rgba(5, 150, 105, 0.45);
+  --color-paper: #6d28d9;
+  --color-paper-muted: rgba(109, 40, 217, 0.12);
+  --color-paper-border: rgba(109, 40, 217, 0.35);
+  --color-mode-paper: #6d28d9;
+  --color-mode-paper-muted: rgba(109, 40, 217, 0.12);
+  --color-mode-paper-border: rgba(109, 40, 217, 0.35);
 
-  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.06);
-  --shadow-md: 0 4px 12px rgba(24, 24, 27, 0.08);
+  --color-mode-demo: #0e7490;
+  --color-mode-demo-muted: rgba(14, 116, 144, 0.12);
+  --color-mode-demo-border: rgba(14, 116, 144, 0.35);
+
+  --color-stale: #9a5b06;
+  --color-stale-muted: rgba(154, 91, 6, 0.1);
+  --color-stale-border: rgba(154, 91, 6, 0.4);
+
+  --color-risk-info: #1d4ed8;
+  --color-risk-low: #0f766e;
+  --color-risk-medium: #9a5b06;
+  --color-risk-high: #c2410c;
+  --color-risk-critical: #b91c1c;
+
+  --color-focus-ring: rgba(29, 78, 216, 0.45);
+
+  --shadow-sm: none;
+  --shadow-md: 0 4px 12px rgba(8, 11, 20, 0.08);
 }
 
 @media (prefers-reduced-motion: reduce) {
