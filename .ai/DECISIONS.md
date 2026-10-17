@@ -25,6 +25,29 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   enable either flag, change deploy config, or authorize a merge. It does not
   reopen live trading. AT-ADR-020's rejection of an autonomous live path
   remains in force.
+- Risk gate, stated honestly (2026-10-17 review): `RiskEngine.evaluate()` does
+  not gate the demo order. Eligibility runs only some of its rules (daily loss,
+  weekly loss, cooldown, portfolio conflict, and open exposure against the 5%
+  equity cap) in `backend/src/app/signal_fusion/action_eligibility.py`. Demo
+  sizing may use up to 10% of equity as notional and 1% as loss
+  (`governed_blofin_demo.py`), which is above that 5% per-order cap. The claim
+  predicate remains the execution authority for the kill switch, daily lock,
+  total exposure, daily loss, trade slots, and symbol notional. The fallback
+  numbers used when no ledger row exists are unchanged; a later grade-based
+  risk-per-trade policy will replace that fallback.
+- Approval identity: an autonomous auto-approval is actor type `SYSTEM` on
+  channel `AUTONOMOUS`, not the plan user on the API channel. `actor_id` stays
+  the tenant user because that column is a user foreign key. The approval
+  audit row records the mode, both flag values, policy version
+  `at-adr-106/v1`, and the limit snapshot used. Demo records the account ledger
+  snapshot that passed. Paper records that the account ledger is enforced at
+  claim, not at this approval.
+- Environment: `environment=production` refuses both modes. BloFin demo
+  execution stays staging-only through the existing governed demo posture.
+- Kill switch: it stops new entries only. It does not close open demo
+  positions. An operator closes those on the BloFin demo account by hand and
+  confirms the account is flat. See
+  `docs/autonomous_blofin_demo_execution.md`.
 - Reference: PR #258; `backend/src/app/services/autonomous_trading.py`.
 
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422

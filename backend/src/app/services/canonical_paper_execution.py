@@ -4,9 +4,12 @@ EXECUTE_PAPER_PLAN for ``plan_authority=canonical`` must bind the exact approved
 immutable TradePlanRevision and re-verify Candidate, ActionEligibility, plan,
 approval, and account lineage immediately before the claim transaction.
 
-RiskEngine BLOCK and the kill switch remain final inside PaperPlanClaimService
-via ``evaluate_claim_predicate``. Missing Candidate, eligibility, or required
-lineage after ALLOW fails closed rather than skipping learning evidence.
+The claim predicate inside PaperPlanClaimService is final for the kill switch,
+daily lock, total exposure, daily loss, trade slots, and symbol exposure.
+``RiskEngine.evaluate()`` is not that gate. A kill switch that becomes active
+after approval and before claim still blocks the order. Missing Candidate,
+eligibility, or required lineage after ALLOW fails closed rather than skipping
+learning evidence.
 This module never calls an exchange.
 """
 

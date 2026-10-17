@@ -4117,7 +4117,8 @@
         "enum": [
           "WEB",
           "API",
-          "TELEGRAM"
+          "TELEGRAM",
+          "AUTONOMOUS"
         ],
         "title": "AuthorizationChannel",
         "type": "string"

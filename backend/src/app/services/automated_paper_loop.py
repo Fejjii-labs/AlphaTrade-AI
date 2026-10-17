@@ -336,6 +336,12 @@ class AutomatedPaperLoop:
         blocked = self._autonomous_approval_refusal(session, target.organization_id)
         if blocked is not None:
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        from app.services.autonomous_trading import (
+            AUTONOMOUS_ACTOR_TYPE,
+            AutonomousMode,
+            autonomous_decision_metadata,
+        )
+
         approval = ApprovalService(
             session,
             AuditService(session),
@@ -353,10 +359,20 @@ class AutomatedPaperLoop:
             ApprovalDecisionRequest(action=_approve_action(), modified_fields=None),
             principal_organization_id=target.organization_id,
             principal_user_id=target.user_id,
-            channel=AuthorizationChannel.API,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+            audit_metadata=autonomous_decision_metadata(
+                mode=AutonomousMode.INTERNAL_PAPER,
+                settings=self._settings,
+                limits=None,
+                limits_note=("account ledger limits are enforced at claim, not at this approval"),
+            ),
         )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         execution = ExecutionService(
             session,
             self._settings,
