@@ -59,6 +59,15 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   kill switch (or the same re-check) blocks after the authorization is
   issued, that authorization is revoked and an `approval_decision` audit
   row records `reason=post_approval_recheck`.
+- Existing governed demo flow: with both autonomous flags off, the governed
+  BloFin demo worker keeps its pre-existing API-channel approval. That path
+  is not an AUTONOMOUS approval and is not subject to the unverified-ledger
+  refusal. The refusal applies only when the demo flag resolves to the
+  autonomous BloFin mode. A contradictory autonomous configuration still
+  fails closed and does not fall through to the API approval. The
+  `approval_authorizations.channel` CHECK includes `AUTONOMOUS` so an
+  Alembic-migrated database can store that channel. Downgrade restores the
+  WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row exists.
 - Environment: `environment=production` refuses both modes. BloFin demo
   execution stays staging-only through the existing governed demo posture.
 - Kill switch: it stops new entries only. It does not close open demo

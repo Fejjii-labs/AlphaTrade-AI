@@ -1114,8 +1114,8 @@ and the operational handoff; no older CI result accepts it. Correction manifests
 Prior unchanged receipts are `/tmp/agent-realtime-worker-evidence.json`,
 `/tmp/alphatrade-assignments-*.xml` and `/tmp/voice-monitoring-*.{log,xml}`.
 
-The sole additive head is `a13voicemonitor001`, retaining a8→a9→a10→a11→a12→a13.
-It adds assignment rows, replacement receipts and bounded voice holds only;
+The sole Alembic head is now `a14autonomouschannel001` (the approval channel CHECK includes AUTONOMOUS), retaining a8→a9→a10→a11→a12→a13→a14.
+a13 adds assignment rows, replacement receipts and bounded voice holds only;
 historical migrations and existing operator rows are unchanged. Populated a13
 downgrade refuses before any drop. The exercised retained-schema rollback preserves
 documents/chunks/jobs/tombstones, native activity, research, assignments, receipts,
