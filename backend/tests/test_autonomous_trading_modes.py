@@ -482,6 +482,7 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
             captured["revoked_id"] = revoked_id
             captured["revoke_organization_id"] = kwargs.get("organization_id")
             captured["revoke_user_id"] = kwargs.get("user_id")
+            captured["revoke_reason"] = kwargs.get("reason")
 
     monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
     monkeypatch.setattr(
@@ -516,6 +517,7 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
     assert captured["revoked_id"] == authorization_id
     assert captured["revoke_organization_id"] is not None
     assert captured["revoke_user_id"] is not None
+    assert captured["revoke_reason"] == "post_approval_recheck"
 
 
 def test_demo_auto_approval_records_system_actor_and_limit_snapshot(
@@ -545,8 +547,9 @@ def test_demo_auto_approval_records_system_actor_and_limit_snapshot(
             captured.update(kwargs)
             return SimpleNamespace(authorization=SimpleNamespace(authorization_id=authorization_id))
 
-        def revoke_authorization(self, revoked_id: object, **_kwargs: object) -> None:
+        def revoke_authorization(self, revoked_id: object, **kwargs: object) -> None:
             captured["revoked_id"] = revoked_id
+            captured["revoke_reason"] = kwargs.get("reason")
 
     monkeypatch.setattr(
         "app.services.governed_blofin_demo.GovernedBloFinDemoLoop._demo_auto_approval_refusal",
@@ -570,6 +573,7 @@ def test_demo_auto_approval_records_system_actor_and_limit_snapshot(
     assert snapshot["max_symbol_notional"] == "250"
     assert snapshot["instrument"] == "BTCUSDT"
     assert captured["revoked_id"] == authorization_id
+    assert captured["revoke_reason"] == "post_approval_recheck"
 
 
 def test_unset_daily_loss_limit_refuses_demo_auto_approval(

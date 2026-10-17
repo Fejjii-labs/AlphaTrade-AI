@@ -536,12 +536,18 @@ class LearningAttributionService:
         if previous is None:
             return current
         prior = previous.facts.strategy_pattern
+        autonomous = prior.autonomous_approval or current.autonomous_approval
         return current.model_copy(
             update={
                 "candidate_confirmed": True,
                 "rejected": prior.rejected or current.rejected,
                 "skipped": prior.skipped or current.skipped,
-                "plan_approved": prior.plan_approved or current.plan_approved,
+                "autonomous_approval": autonomous,
+                # Autonomous stays sticky. A later fill or close with no channel
+                # must not OR plan_approved back to a human approval.
+                "plan_approved": (
+                    False if autonomous else (prior.plan_approved or current.plan_approved)
+                ),
                 "filled": prior.filled or current.filled,
                 "closed": prior.closed or current.closed,
                 "executed_outcome": prior.executed_outcome or current.executed_outcome,

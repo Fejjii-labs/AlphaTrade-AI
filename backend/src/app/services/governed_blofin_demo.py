@@ -731,6 +731,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 decided.authorization.authorization_id,
                 organization_id=target.organization_id,
                 user_id=target.user_id,
+                reason="post_approval_recheck",
             )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(

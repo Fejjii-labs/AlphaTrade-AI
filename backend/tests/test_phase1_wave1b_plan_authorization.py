@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -23,6 +23,7 @@ from app.db.models import (
     ApprovalAuthorization as ApprovalAuthorizationModel,
 )
 from app.db.models import (
+    AuditLog,
     ExchangeAccount,
     ExecutionAccount,
     Order,
@@ -52,6 +53,7 @@ from app.schemas.canonical_execution import (
 )
 from app.schemas.common import (
     ApprovalAction,
+    AuditEventType,
     ExchangeAccountStatus,
     PaperAlertType,
     RiskSeverity,
@@ -703,6 +705,29 @@ def test_wrong_plan_or_account_assertion_is_rejected(
             principal_user_id=plan.user_id,
         )
     assert session.query(ApprovalAuthorizationModel).count() == 0
+
+
+def test_post_approval_recheck_revoke_writes_an_audit_row(session: Session) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    issuing_service, authorization = _approve_plan(session, ids, plan)
+    revoked = issuing_service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="post_approval_recheck",
+    )
+    assert revoked.state is AuthorizationState.REVOKED
+    revoke_audits = [
+        row
+        for row in session.scalars(select(AuditLog)).all()
+        if row.action is AuditEventType.APPROVAL_DECISION
+        and (row.redacted_metadata or {}).get("reason") == "post_approval_recheck"
+        and (row.redacted_metadata or {}).get("action") == "revoke"
+    ]
+    assert len(revoke_audits) == 1
+    assert revoke_audits[0].resource_id == str(authorization.authorization_id)
+    assert revoke_audits[0].resource_type == "approval"
 
 
 def test_reject_and_skip_never_authorize(session: Session) -> None:

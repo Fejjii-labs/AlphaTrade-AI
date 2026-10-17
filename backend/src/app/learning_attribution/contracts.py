@@ -72,6 +72,7 @@ class TraderBehavior(StrEnum):
     REJECTED = "rejected"
     SKIPPED = "skipped"
     APPROVED_PLAN = "approved_plan"
+    AUTONOMOUS_APPROVAL = "autonomous_approval"
     EXECUTED = "executed"
     RECONCILED = "reconciled"
 
@@ -219,6 +220,7 @@ class StrategyPatternStatFacts(CanonicalModel):
     rejected: bool
     skipped: bool
     plan_approved: bool
+    autonomous_approval: bool = False
     filled: bool
     closed: bool
     executed_outcome: bool

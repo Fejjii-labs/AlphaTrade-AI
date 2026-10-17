@@ -46439,6 +46439,11 @@
         "additionalProperties": false,
         "description": "Increment-style facts for later strategy/pattern performance rollups.",
         "properties": {
+          "autonomous_approval": {
+            "default": false,
+            "title": "Autonomous Approval",
+            "type": "boolean"
+          },
           "breakeven": {
             "title": "Breakeven",
             "type": "boolean"
@@ -50119,6 +50124,7 @@
           "rejected",
           "skipped",
           "approved_plan",
+          "autonomous_approval",
           "executed",
           "reconciled"
         ],
