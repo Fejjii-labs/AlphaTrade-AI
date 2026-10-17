@@ -1,5 +1,5 @@
 ---
-description: Mandatory end-of-task and phase-boundary handoff generation (v2.0)
+description: Compact owner checkpoints and batched handoff publication
 alwaysApply: true
 ---
 
@@ -7,19 +7,22 @@ alwaysApply: true
 
 Authoritative standard: `.ai/MASTER_WORKFLOW.md` (§8–§14).
 
-- Regenerate root `HANDOFF.md` and `CHANGELOG_SESSION.md` from `.ai/HANDOFF_TEMPLATE.md` and
-  `.ai/SESSION_TEMPLATE.md` at: task start, every major phase boundary, every blocker, every
-  review/approval requirement, every failed validation, before/after any destructive action,
-  and final completion. Never wait for the final response to create or sync the handoff.
-- **Every Cursor agent run (Cloud or local) must regenerate `HANDOFF.md` and
-  `CHANGELOG_SESSION.md` at the end of the run**, whether the task succeeds, fails, is
-  blocked, stops early, or requires human action.
+- Keep the existing root HANDOFF.md and CHANGELOG_SESSION.md/templates as the owner checkpoint.
+  Update at meaningful milestones, blockers and interruption/completion boundaries; record
+  blockers promptly. Do not create another management system or a document after each edit.
+- One accountable owner collects scoped worker results directly and updates the checkpoint.
+  Up to two useful independent workers return commits, changed behavior, focused evidence
+  and limitations; do not make the user relay outputs or have workers overwrite owner state.
 - `HANDOFF.md` is a compact current-state snapshot with a top **Mobile Status block**
   (Status, Last Updated, Task, Current Phase, Progress, Blocker, Human Action Needed, Next Step;
   use `None`, never blanks) followed by the machine-readable METADATA block (Schema Version 2.0).
 - The handoff must include: current task, result, blocker/error if any, evidence, what was
   completed, what was not completed, repository safety state, exact human action required,
-  exact recommended next Cursor prompt, and a `Generated At UTC` timestamp.
+  current owner/environment, exact next executable operation, and a `Generated At UTC` timestamp.
+- Fix a small named acceptance checklist before implementation. Report accepted/total using
+  the same denominator or explain scope changes. Record implemented/integrated/deployed/
+  live-accepted states, candidate and installed revisions or unknown, and exact test evidence.
+  Resume from this checkpoint and reuse valid evidence instead of restarting an audit.
 - Use only these statuses: `IN_PROGRESS`, `REVIEW_REQUIRED`, `BLOCKED`, `FAILED`, `READY`.
   Never use `DRAFT`.
 - Use the host's actual IANA timezone in metadata; do not hardcode a timezone that is not the host's.
@@ -29,11 +32,16 @@ Authoritative standard: `.ai/MASTER_WORKFLOW.md` (§8–§14).
 - Durable decisions go to `.ai/DECISIONS.md`; the persistent backlog to `.ai/TASKS.md`.
 - `HANDOFF.md` and `CHANGELOG_SESSION.md` are gitignored in ordinary product work; do not stage
   them into product PRs.
-- **GitHub publish (required for mobile/cloud sync):** push the regenerated handoff to GitHub
-  so the Mac LaunchAgent `com.alphatrade.handoff-sync` can discover it. Prefer a dedicated
+- **GitHub publish for mobile/cloud sync:** when authorized and accessible, batch handoff
+  publication at meaningful milestones/blockers/completion so the existing Mac LaunchAgent
+  `com.alphatrade.handoff-sync` can discover it. Do not require an extra per-edit/phase push.
+  Prefer a dedicated
   `cursor/*handoff*` / `cursor/handoff-*` / `cursor/staging-ops-handoff-*` branch. Force-add
   only those two ignored files on that branch (`git add -f HANDOFF.md CHANGELOG_SESSION.md`).
   **Do not open a PR** for a handoff-only branch. If the current product branch already
   intentionally carries the handoff and opening/updating a product PR is already authorized,
   publishing on that branch is acceptable; never pollute an unrelated product PR just to ship
-  a handoff.
+  a handoff. Verify published revision and source bytes with SHA256 plus cmp/diff and the
+  normalized hash. Git equality proves publication, not the downstream Mac/iCloud copy.
+- Record unavailable publication/mobile access honestly; continue independent cloud work.
+  Do not require a user upload to ChatGPT or a new Cursor prompt before each internal phase.

@@ -7,5 +7,10 @@ alwaysApply: true
 
 - Use only verified repository facts. Mark unknowns explicitly as UNKNOWN.
 - Never invent test results, metrics, endpoints, or capabilities.
+- Fix named acceptance criteria before implementation; report accepted/total with a stable
+  denominator and explain scope changes. Keep implemented, integrated, deployed and live
+  acceptance separate, with exact revisions, evidence and explicit unknown/unexecuted checks.
+- A merge does not prove deployment; deployment does not prove a real user journey passed.
+  Reuse evidence only when its relevant inputs still cover the candidate.
 - Keep docs consistent with actual behavior; update docs when behavior/config changes.
 - Do not overstate capability (no "autonomous", "guaranteed", or live-trading claims).
