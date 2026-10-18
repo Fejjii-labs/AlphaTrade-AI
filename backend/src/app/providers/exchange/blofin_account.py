@@ -348,11 +348,14 @@ class BloFinAccountProvider:
         )
         row = data if isinstance(data, dict) else {}
         position_side_raw = row.get("positionSide")
+        venue_mode = row.get("marginMode")
+        supplied = venue_mode not in (None, "")
         return AccountLeverageInfo(
             inst_id=str(row.get("instId", inst_id)),
-            margin_mode=str(row.get("marginMode", margin_mode)),
+            margin_mode=str(venue_mode) if supplied else margin_mode,
             leverage=_to_decimal(row.get("leverage", "0")),
             position_side=str(position_side_raw) if position_side_raw not in (None, "") else None,
+            margin_mode_supplied=supplied,
         )
 
     def get_account_permissions(self) -> AccountPermissions:

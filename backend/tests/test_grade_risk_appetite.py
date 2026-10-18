@@ -10,7 +10,10 @@ import httpx
 import pytest
 
 from app.providers.exchange.blofin_client import BloFinClient
-from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+from app.providers.exchange.governed_blofin import (
+    GovernedBloFinDemoProvider,
+    demo_order_margin_mode,
+)
 from app.schemas.common import RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.trade_plan import EntrySide
@@ -331,6 +334,7 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     leverage_modes: list[str] = []
     account_leverage = {"value": "2"}
     force_cross = {"on": False}
+    omit_mode = {"on": False}
 
     def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -346,9 +350,10 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             leverage_modes.append(requested)
             data = {
                 "instId": "BTC-USDT",
-                "marginMode": "cross" if force_cross["on"] else requested,
                 "leverage": account_leverage["value"],
             }
+            if not omit_mode["on"]:
+                data["marginMode"] = "cross" if force_cross["on"] else requested
         elif path.endswith("instruments"):
             data = [
                 {
@@ -424,6 +429,16 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     assert isolated.margin_mode == "isolated"
     assert isolated.account_leverage == Decimal("1")
     assert leverage_modes[-1] == "isolated"
+    omit_mode["on"] = True
+    with pytest.raises(ValueError, match="omitted margin mode"):
+        provider.snapshot(
+            symbol="BTCUSDT",
+            now=EVALUATED_AT,
+            side=EntrySide.BUY,
+            required_leverage=None,
+            margin_mode="isolated",
+        )
+    omit_mode["on"] = False
     force_cross["on"] = True
     with pytest.raises(ValueError, match="not isolated"):
         provider.snapshot(
@@ -434,6 +449,9 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             margin_mode="isolated",
         )
     assert posts == []
+    assert demo_order_margin_mode("verified-demo-read-leverage") == "isolated"
+    assert demo_order_margin_mode("verified-demo-existing-1x") == "cross"
+    assert demo_order_margin_mode("paper-internal-cash") == "cross"
 
 
 def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:

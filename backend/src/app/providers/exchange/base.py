@@ -71,6 +71,7 @@ class AccountLeverageInfo:
     margin_mode: str
     leverage: Decimal
     position_side: str | None = None
+    margin_mode_supplied: bool = True
 
 
 @dataclass(frozen=True)

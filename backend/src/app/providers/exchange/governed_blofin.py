@@ -27,6 +27,17 @@ if TYPE_CHECKING:
     from app.providers.exchange.governed_blofin_exit import VerifiedDemoExit
 
 
+def demo_order_margin_mode(margin_assumption_id: str) -> str:
+    """Profile plans send the isolated mode that was read. Every other plan stays cross.
+
+    This is the existing order field. It is not a leverage or margin-mode setting call.
+    """
+
+    if margin_assumption_id == "verified-demo-read-leverage":
+        return "isolated"
+    return "cross"
+
+
 @dataclass(frozen=True)
 class DemoVenueSnapshot:
     instrument: str
@@ -162,7 +173,9 @@ class GovernedBloFinDemoProvider:
             # Read only. This provider never sends a leverage or margin-mode write.
             # A profile plan reads the isolated configuration. The default read stays cross.
             leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode=margin_mode)
-            observed_mode = str(getattr(leverage, "margin_mode", None) or margin_mode)
+            if not leverage.margin_mode_supplied:
+                raise ValueError("Demo leverage-info omitted margin mode; no margin-mode mutation.")
+            observed_mode = str(leverage.margin_mode)
             if margin_mode == "isolated" and observed_mode.lower() != "isolated":
                 raise ValueError(
                     "Demo account margin mode is not isolated; no margin-mode mutation."
@@ -223,7 +236,7 @@ class GovernedBloFinDemoProvider:
             account_observed_at=account_observed_at,
             native_account_uid=self._account.native_account_uid,
             account_leverage=leverage.leverage,
-            margin_mode=str(getattr(leverage, "margin_mode", None) or margin_mode),
+            margin_mode=str(leverage.margin_mode),
         )
 
     def verify_flat_account(self) -> None:
@@ -335,7 +348,7 @@ class GovernedBloFinDemoProvider:
             validate_manual_demo(plan, snapshot, now=self._clock())
         body = {
             "instId": plan.execution_instrument,
-            "marginMode": "cross",
+            "marginMode": demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id),
             "positionSide": "net",
             "side": "buy" if plan.side is EntrySide.BUY else "sell",
             "orderType": "market",
