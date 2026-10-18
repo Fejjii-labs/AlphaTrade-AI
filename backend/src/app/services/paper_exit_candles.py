@@ -1,24 +1,29 @@
 """Closed candles for the paper exit monitor.
 
-Uses the same perpetual evidence source the strategy assembler calls
-(``fetch_closed_ohlcv`` via :func:`resolve_perpetual_evidence_source`). A
-window that does not reach the entry is incomplete: the monitor must not
-close, because an earlier stop may sit outside the fetched bars.
+Live trades read the same public perpetual source the live watcher uses for
+that evidence identity (Binance USD-M, or Bybit when the trade's evidence is
+Bybit). Replay fixtures stay on the replay adapter and are used for tests and
+backtests. The process default ``perpetual_evidence_source=replay`` does not
+hide a live trade. A window that does not reach the entry is incomplete: the
+monitor must not close, because an earlier stop may sit outside the fetched
+bars.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
-from app.core.config import Settings
-from app.market_contracts.adapters.factory import (
-    perpetual_source_is_replay,
-    resolve_perpetual_evidence_source,
+from app.core.config import Environment, Settings
+from app.market_activation.profile import (
+    LIVE_SOURCE,
+    canonicalize_perpetual_evidence_source,
 )
+from app.market_contracts.adapters.factory import resolve_perpetual_evidence_source
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
-from app.market_contracts.enums import VenueId
+from app.market_contracts.enums import SourceFamily, VenueId
 from app.market_contracts.errors import MarketContractError
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
@@ -34,6 +39,9 @@ _MAX_PAGE_BARS = 1400
 _MAX_PAGES = 24
 _FALLBACK_PAGES = (200, 50, 1)
 
+CandleMode = Literal["replay", "binance_usdm", "bybit_usdt_perpetual"]
+CandleOrigin = Literal["trade", "process", "staging_live"]
+
 
 @dataclass(frozen=True, slots=True)
 class _CandleCache:
@@ -43,15 +51,20 @@ class _CandleCache:
 
 
 class PaperExitCandleLoader:
-    """Fetch once per symbol and timeframe, from the oldest entry in the pass."""
+    """Fetch once per symbol, timeframe, and candle source."""
 
-    def __init__(self, settings: Settings, source: PerpetualMarketSource) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        sources: dict[str, PerpetualMarketSource] | None = None,
+    ) -> None:
         self._settings = settings
-        self._source = source
-        self._cache: dict[tuple[str, str], _CandleCache] = {}
+        self._sources: dict[str, PerpetualMarketSource] = dict(sources or {})
+        self._cache: dict[tuple[str, str, str], _CandleCache] = {}
 
     def __call__(self, trade: OpenInternalPaperTrade, *, evaluated_at: datetime) -> FetchedBars:
-        key = (trade.symbol, trade.timeframe.value)
+        mode, origin = candle_mode_for_trade(trade, self._settings)
+        key = (mode, trade.symbol, trade.timeframe.value)
         cached = self._cache.get(key)
         if cached is not None and cached.earliest_requested <= trade.entry_time:
             return FetchedBars(
@@ -59,14 +72,15 @@ class PaperExitCandleLoader:
                 covers_entry=_covers(cached.bars, trade.entry_time),
                 source_name=cached.source_name,
             )
+        source = self._source_for(mode, origin)
         identity, instrument = identity_for_trade(
-            self._settings,
-            self._source,
+            source,
             symbol=trade.symbol,
             timeframe=trade.timeframe,
+            mode=mode,
         )
         fetched = fetch_closed_bars_since(
-            self._source,
+            source,
             identity=identity,
             instrument=instrument,
             timeframe=trade.timeframe,
@@ -80,24 +94,93 @@ class PaperExitCandleLoader:
         )
         return fetched
 
+    def _source_for(self, mode: CandleMode, origin: CandleOrigin) -> PerpetualMarketSource:
+        cache_key = f"{origin}:{mode}"
+        cached = self._sources.get(cache_key)
+        if cached is not None:
+            return cached
+        # Tests inject the live adapter under the mode name.
+        injected = self._sources.get(mode)
+        if injected is not None:
+            self._sources[cache_key] = injected
+            return injected
+        source = build_candle_source(self._settings, mode, origin)
+        self._sources[cache_key] = source
+        return source
 
-def build_exit_candle_source(settings: Settings) -> PerpetualMarketSource:
-    """The process evidence source. Replay stays replay; live stays that venue."""
 
-    return resolve_perpetual_evidence_source(settings, shared=True)
+def candle_mode_for_trade(
+    trade: OpenInternalPaperTrade,
+    settings: Settings,
+) -> tuple[CandleMode, CandleOrigin]:
+    """Pick the candle adapter from the trade, then from the environment.
+
+    A stored live identity wins over the process default. Replay and mock
+    evidence stay on replay even when the process is pointed at a live venue.
+    With no stored identity, a process that is already live keeps that source,
+    including its configured failover. Staging with the replay default uses
+    Binance USD-M, the live source the watcher uses for BTCUSDT. Local replay
+    stays replay so tests and backtests do not open a network read.
+    """
+
+    family = (trade.evidence_source_family or "").strip().lower()
+    venue = (trade.evidence_venue or "").strip().lower()
+    if trade.evidence_is_mock is True or family == SourceFamily.REPLAY_FIXTURE.value:
+        return "replay", "trade"
+    if trade.evidence_is_live is True and (
+        family == SourceFamily.BYBIT_USDT_PERPETUAL_PUBLIC.value or venue == VenueId.BYBIT.value
+    ):
+        return "bybit_usdt_perpetual", "trade"
+    if trade.evidence_is_live is True and (
+        family == SourceFamily.BINANCE_USDM_FUTURES_PUBLIC.value or venue == VenueId.BINANCE.value
+    ):
+        return "binance_usdm", "trade"
+    configured = canonicalize_perpetual_evidence_source(settings.perpetual_evidence_source)
+    if configured != "replay":
+        return configured, "process"
+    if settings.environment is Environment.STAGING:
+        return LIVE_SOURCE, "staging_live"
+    return "replay", "process"
+
+
+def build_candle_source(
+    settings: Settings,
+    mode: CandleMode,
+    origin: CandleOrigin,
+) -> PerpetualMarketSource:
+    """Construct the read-only adapter for one resolved mode.
+
+    ``process`` keeps the watcher's configured source, including secondary
+    failover. A trade identity or the staging live default builds that venue
+    alone and does not follow the replay default.
+    """
+
+    if mode == "replay":
+        from app.market_contracts.adapters.replay import ReplayPerpetualSource
+
+        return ReplayPerpetualSource()
+    if origin == "process":
+        return resolve_perpetual_evidence_source(settings, shared=True)
+    tuned = settings.model_copy(
+        update={
+            "perpetual_evidence_source": mode,
+            "perpetual_evidence_secondary_source": "none",
+        }
+    )
+    return resolve_perpetual_evidence_source(tuned, shared=True)
 
 
 def identity_for_trade(
-    settings: Settings,
     source: PerpetualMarketSource,
     *,
     symbol: str,
     timeframe: Timeframe,
+    mode: CandleMode,
 ) -> tuple[EvidenceMarketIdentity, InstrumentIdentity]:
     """Same identity construction the OHLCV strategy assembler uses."""
 
-    replay = perpetual_source_is_replay(settings)
-    catalog = catalog_for_symbols([symbol], venue=_venue_for(settings, source))
+    replay = mode == "replay"
+    catalog = catalog_for_symbols([symbol], venue=_venue_for(source, mode))
     instrument = instrument_for_source(source, catalog, symbol)
     identity = first_slice_identity(
         timeframe=timeframe,
@@ -220,13 +303,12 @@ def _source_name(source: PerpetualMarketSource) -> str:
     return name if isinstance(name, str) and name else "perpetual-evidence"
 
 
-def _venue_for(settings: Settings, source: object) -> VenueId:
+def _venue_for(source: object, mode: CandleMode) -> VenueId:
     active = getattr(source, "active_instrument", None)
     if callable(active):
         instrument = active()
         if isinstance(instrument, InstrumentIdentity):
             return instrument.venue
-    mode = settings.perpetual_evidence_source.strip().lower()
     if mode == "bybit_usdt_perpetual":
         return VenueId.BYBIT
     return VenueId.BINANCE

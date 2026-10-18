@@ -19,7 +19,7 @@ from app.core.config import Settings
 from app.guardrails.redaction import redact_text
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
-from app.services.paper_exit_candles import PaperExitCandleLoader, build_exit_candle_source
+from app.services.paper_exit_candles import PaperExitCandleLoader
 from app.services.paper_exit_monitor import (
     FetchedBars,
     MonitorReport,
@@ -90,8 +90,7 @@ def run_configured_exit_monitor(
         session.rollback()
     finally:
         session.close()
-    source = build_exit_candle_source(settings)
-    loader = PaperExitCandleLoader(settings, source)
+    loader = PaperExitCandleLoader(settings)
 
     def candles(trade: OpenInternalPaperTrade) -> FetchedBars:
         return loader(trade, evaluated_at=evaluated_at)

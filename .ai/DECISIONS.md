@@ -2,6 +2,29 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-108 — Paper exit candles follow the trade's live evidence
+
+- Date: 2026-10-18
+- Decision: The internal-paper exit monitor reads closed candles from the
+  trade's stored evidence identity. Live Binance evidence uses the Binance
+  USD-M public adapter (the live watcher source for BTCUSDT 15m and the
+  other watched perpetuals). Live Bybit evidence uses the Bybit public
+  adapter. Replay and mock evidence stay on the replay fixture, which is
+  for tests and backtests. `perpetual_evidence_source=replay` remains the
+  process default and does not select candles for a live trade. Staging
+  trades with no stored identity use Binance USD-M. A process already
+  configured on a live source keeps that source, including failover, only
+  when the trade has no stored identity.
+- Entry bar: live internal-paper fills are taken at a closed-bar boundary.
+  `entry_time` is that bar's `interval_end`. The fill bar is not eligible.
+  The next bar, whose `interval_start` equals `entry_time`, is the first
+  bar that can exit. A touch inside the fill bar does not close the trade.
+- Flags and scope are unchanged from AT-ADR-107. Both monitor flags default
+  false. This decision does not arm them, change deploy config, or
+  authorize a merge. Real-money trading stays rejected.
+- Reference: `docs/paper_exit_monitor.md`;
+  `backend/src/app/services/paper_exit_candles.py`.
+
 ## AT-ADR-107 — Internal paper trades exit at the stop or target
 
 - Date: 2026-10-18

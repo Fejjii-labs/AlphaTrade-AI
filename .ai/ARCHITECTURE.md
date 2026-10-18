@@ -78,8 +78,10 @@ The LLM layer only **explains**; it cannot change risk decisions or approval sta
   never enables live trading. See `docs/telegram_paper_agent.md`.
 - Internal paper exit monitor (`app.workers.paper_exit_monitor`): optional component
   of the paper worker. It closes canonical `PAPER_INTERNAL` /
-  `paper-internal-entry/v1` trades when a closed candle from the strategy
-  evidence source touches the stop or the single full-size target. Both-in-bar
+  `paper-internal-entry/v1` trades when a closed candle touches the stop or
+  the single full-size target. Live trades read the Binance USD-M (or Bybit)
+  public adapter that matches their evidence identity; replay stays on the
+  fixture. Both-in-bar
   uses the stop. Writes go through `ExecutionService.close_canonical_paper_plan`.
   `PAPER_EXIT_MONITOR_ENABLED` and `PAPER_EXIT_MONITOR_DRY_RUN` default false.
   Production refuses the enabled flag. BloFin demo trades are not in scope.

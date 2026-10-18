@@ -20,7 +20,11 @@ import structlog
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from app.db.canonical_trade_plans import PLAN_AUTHORITY_CANONICAL
+from app.db.canonical_candidates import CanonicalCandidateRow
+from app.db.canonical_trade_plans import (
+    PLAN_AUTHORITY_CANONICAL,
+    CanonicalTradePlanLineageRow,
+)
 from app.db.models import JournalTrade, TradePlanRevision
 from app.guardrails.redaction import redact_text
 from app.schemas.common import JournalTradeStatus, Timeframe, TradeDirection
@@ -90,6 +94,10 @@ class OpenInternalPaperTrade:
     fees: Decimal
     funding: Decimal
     slippage: Decimal
+    evidence_venue: str | None = None
+    evidence_source_family: str | None = None
+    evidence_is_live: bool | None = None
+    evidence_is_mock: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,12 +154,22 @@ def is_internal_paper_plan(
     )
 
 
-def open_internal_paper_statement() -> Select[tuple[JournalTrade, TradePlanRevision]]:
+def open_internal_paper_statement() -> Select[
+    tuple[JournalTrade, TradePlanRevision, dict[str, object]]
+]:
     """Open journal rows joined to canonical internal-paper plan revisions."""
 
     return (
-        select(JournalTrade, TradePlanRevision)
+        select(JournalTrade, TradePlanRevision, CanonicalCandidateRow.evidence_identity)
         .join(TradePlanRevision, TradePlanRevision.id == JournalTrade.trade_plan_revision_id)
+        .outerjoin(
+            CanonicalTradePlanLineageRow,
+            CanonicalTradePlanLineageRow.revision_id == TradePlanRevision.id,
+        )
+        .outerjoin(
+            CanonicalCandidateRow,
+            CanonicalCandidateRow.candidate_id == CanonicalTradePlanLineageRow.candidate_id,
+        )
         .where(
             JournalTrade.status == JournalTradeStatus.OPEN,
             JournalTrade.execution_lifecycle_id.is_not(None),
@@ -172,7 +190,7 @@ def load_open_internal_paper_trades(
     rows = session.execute(open_internal_paper_statement()).all()
     trades: list[OpenInternalPaperTrade] = []
     rejected = 0
-    for trade, plan in rows:
+    for trade, plan, evidence_identity in rows:
         parsed = parse_open_trade(
             journal_trade_id=trade.id,
             organization_id=trade.organization_id,
@@ -193,6 +211,7 @@ def load_open_internal_paper_trades(
             plan_account_id=plan.account_id,
             revision_id=plan.id,
             semantic_payload=plan.semantic_payload,
+            evidence_identity=evidence_identity,
         )
         if parsed is None:
             rejected += 1
@@ -226,6 +245,7 @@ def parse_open_trade(
     plan_account_id: UUID,
     revision_id: UUID,
     semantic_payload: object,
+    evidence_identity: object | None = None,
 ) -> OpenInternalPaperTrade | None:
     """Build one monitor trade, or return None when the row is out of scope.
 
@@ -271,6 +291,7 @@ def parse_open_trade(
         return None
     if direction not in {TradeDirection.LONG, TradeDirection.SHORT}:
         return None
+    venue, family, is_live, is_mock = evidence_flags(evidence_identity)
     return OpenInternalPaperTrade(
         journal_trade_id=journal_trade_id,
         organization_id=organization_id,
@@ -288,6 +309,34 @@ def parse_open_trade(
         fees=fees,
         funding=funding,
         slippage=slippage,
+        evidence_venue=venue,
+        evidence_source_family=family,
+        evidence_is_live=is_live,
+        evidence_is_mock=is_mock,
+    )
+
+
+def evidence_flags(
+    identity: object | None,
+) -> tuple[str | None, str | None, bool | None, bool | None]:
+    """Venue, source family, is_live, and is_mock from a stored evidence identity."""
+
+    if not isinstance(identity, dict):
+        return None, None, None, None
+    venue = identity.get("venue")
+    source = identity.get("source")
+    provenance = identity.get("provenance")
+    family = source.get("family") if isinstance(source, dict) else None
+    if not isinstance(family, str) and isinstance(provenance, dict):
+        recorded = provenance.get("source_family")
+        family = recorded if isinstance(recorded, str) else None
+    is_live = provenance.get("is_live") if isinstance(provenance, dict) else None
+    is_mock = provenance.get("is_mock") if isinstance(provenance, dict) else None
+    return (
+        venue if isinstance(venue, str) else None,
+        family if isinstance(family, str) else None,
+        is_live if isinstance(is_live, bool) else None,
+        is_mock if isinstance(is_mock, bool) else None,
     )
 
 
@@ -298,11 +347,17 @@ def decide_exit(
     source_name: str,
     evaluated_at: datetime,
 ) -> ExitDecision | None:
-    """First fully post-entry closed bar that touches a level.
+    """First closed bar that starts at or after the entry and touches a level.
 
-    The bar that contains the fill is excluded: its high and low are not known
-    to have printed after the entry. When one bar touches both levels, the
-    stop is the exit and the evidence records ``stop_first``.
+    Live internal-paper entries are taken at a closed-bar boundary. The entry
+    time is that bar's ``interval_end``, so the fill bar has an earlier
+    ``interval_start`` and is not eligible. The next bar, whose
+    ``interval_start`` equals the entry time, is the first bar that can exit
+    the trade. A touch inside the fill bar is ignored. The same comparison
+    also skips a partial bar when the fill is recorded inside it, because that
+    bar's range is not known to have printed after the fill. When one eligible
+    bar touches both levels, the stop is the exit and the evidence records
+    ``stop_first``.
     """
 
     eligible = [

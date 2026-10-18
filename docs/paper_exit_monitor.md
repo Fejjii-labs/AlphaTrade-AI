@@ -45,10 +45,23 @@ The component is attached to the existing paper worker
 
 ## Decision
 
-For each open trade the monitor loads closed candles from the same perpetual
-evidence source the strategies use (`perpetual_evidence_source` /
-`fetch_closed_ohlcv`). It walks bars whose interval starts at or after the
-entry time. The first bar whose range touches a level is the exit.
+For each open trade the monitor loads closed candles with
+`fetch_closed_ohlcv`, the same call the strategies use. The adapter is chosen
+from the trade, not from a separate monitor setting:
+
+- Live Binance evidence (`evidence_is_live` and venue `binance`, or source
+  family `binance_usdm_futures_public`) reads Binance USD-M public candles,
+  including `BTCUSDT` `15m`. This is the source the live watcher uses.
+- Live Bybit evidence reads the Bybit USDT perpetual adapter.
+- Replay or mock evidence stays on the replay fixture. Tests and backtests
+  use that path.
+- The process default `perpetual_evidence_source=replay` does not hide a live
+  trade. On staging, a trade with no stored identity also uses Binance USD-M.
+  A process that is already configured for a live source, including failover,
+  keeps that source when the trade has no stored identity.
+
+It walks bars whose interval starts at or after the entry time. The first bar
+whose range touches a level is the exit.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.
@@ -61,8 +74,13 @@ entry time. The first bar whose range touches a level is the exit.
   existing exact-price model is unchanged.
 - Exit time is the bar's `interval_end`, the time the closed bar made the
   touch knowable.
-- The bar that contains the fill is ignored, because its high and low are not
-  known to have printed after the entry.
+- A trade opened at bar close has `entry_time` equal to that bar's
+  `interval_end`. The fill bar's `interval_start` is earlier, so it is not
+  eligible. The next bar, whose `interval_start` equals the entry time, is
+  the first bar that can exit the trade. A touch inside the fill bar does
+  not close the trade. The same rule skips a bar when the fill is recorded
+  inside it, because that bar's range is not known to have printed after
+  the fill.
 - If the fetched history does not reach the entry, the trade is left open.
 
 On each run, a trade whose stop or target was already crossed in an earlier

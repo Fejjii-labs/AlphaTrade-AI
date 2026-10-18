@@ -11,15 +11,22 @@ import pytest
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from app.core.config import Settings
+from app.core.config import Environment, Settings
 from app.core.errors import ValidationAppError
+from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
 from app.market_contracts.adapters.replay import ReplayPerpetualSource
 from app.market_contracts.errors import FormingCandleError
 from app.market_contracts.ohlcv import require_closed_series
 from app.schemas.common import Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanHttpRequest, ClosePaperPlanRequest
 from app.services.canonical_paper_execution import paper_exit_audit_fields
-from app.services.paper_exit_candles import fetch_closed_bars_since, identity_for_trade
+from app.services.paper_exit_candles import (
+    PaperExitCandleLoader,
+    build_candle_source,
+    candle_mode_for_trade,
+    fetch_closed_bars_since,
+    identity_for_trade,
+)
 from app.services.paper_exit_monitor import (
     EXIT_ACTOR,
     EXIT_CHANNEL,
@@ -77,9 +84,14 @@ def _trade(
     funding: Decimal = Decimal("0"),
     slippage: Decimal = Decimal("0"),
     command_id: UUID = COMMAND,
+    journal_trade_id: UUID = JOURNAL,
+    evidence_venue: str | None = None,
+    evidence_source_family: str | None = None,
+    evidence_is_live: bool | None = None,
+    evidence_is_mock: bool | None = None,
 ) -> OpenInternalPaperTrade:
     return OpenInternalPaperTrade(
-        journal_trade_id=JOURNAL,
+        journal_trade_id=journal_trade_id,
         organization_id=ORG,
         user_id=USER,
         account_id=ACCOUNT,
@@ -95,6 +107,10 @@ def _trade(
         fees=fees,
         funding=funding,
         slippage=slippage,
+        evidence_venue=evidence_venue,
+        evidence_source_family=evidence_source_family,
+        evidence_is_live=evidence_is_live,
+        evidence_is_mock=evidence_is_mock,
     )
 
 
@@ -292,6 +308,38 @@ def test_historical_crossing_closes_at_the_first_bar_not_a_later_one() -> None:
     assert request.exit_evidence["bar_interval_start"] == crossing.isoformat()
 
 
+def test_trade_opened_at_bar_close_exits_on_the_next_bar() -> None:
+    """Entry at interval_end makes the following bar the first eligible bar."""
+
+    entry = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    fill_bar = datetime(2026, 10, 5, 23, 45, tzinfo=UTC)
+    next_bar = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    trade = _trade(entry_time=entry)
+    untouched, closer = _run(
+        trade,
+        (
+            _bar(fill_bar, low="90", high="101"),
+            _bar(next_bar, low="96", high="109"),
+        ),
+    )
+    assert untouched.closed == 0
+    assert closer.requests == []
+    report, closed = _run(
+        trade,
+        (
+            _bar(fill_bar, low="90", high="101"),
+            _bar(next_bar, low="94", high="109"),
+        ),
+    )
+    assert report.closed == 1
+    request = closed.requests[0]
+    assert request.exit_reason == "stop_hit"
+    assert request.exit_price == Decimal("95")
+    assert request.occurred_at == next_bar + timedelta(minutes=15)
+    assert request.exit_evidence is not None
+    assert request.exit_evidence["bar_interval_start"] == next_bar.isoformat()
+
+
 def test_bar_containing_the_entry_is_not_a_hit() -> None:
     entry = datetime(2026, 10, 6, 0, 7, tzinfo=UTC)
     entry_bar = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
@@ -472,13 +520,12 @@ def test_candle_fetch_pages_back_to_the_entry() -> None:
 
 
 def test_replay_source_is_the_strategy_evidence_source() -> None:
-    settings = Settings(_env_file=None, perpetual_evidence_source="replay")
     source = ReplayPerpetualSource()
     market, instrument = identity_for_trade(
-        settings,
         source,
         symbol="BTCUSDT",
         timeframe=Timeframe.M15,
+        mode="replay",
     )
     assert market.provenance.is_live is False
     fetched = fetch_closed_bars_since(
@@ -491,6 +538,139 @@ def test_replay_source_is_the_strategy_evidence_source() -> None:
     )
     assert fetched.source_name == source.name
     assert fetched.bars
+
+
+def _live_btc(command_id: UUID, **overrides: object) -> OpenInternalPaperTrade:
+    fields: dict[str, object] = {
+        "command_id": command_id,
+        "evidence_venue": "binance",
+        "evidence_source_family": "binance_usdm_futures_public",
+        "evidence_is_live": True,
+        "evidence_is_mock": False,
+    }
+    fields.update(overrides)
+    return _trade(**fields)  # type: ignore[arg-type]
+
+
+def test_live_identity_uses_binance_while_the_process_default_is_replay() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.perpetual_evidence_source == "replay"
+    trade = _live_btc(COMMAND)
+    mode, origin = candle_mode_for_trade(trade, settings)
+    assert mode == "binance_usdm"
+    assert origin == "trade"
+    source = build_candle_source(settings, mode, origin)
+    assert isinstance(source, BinanceUsdmPerpetualSource)
+    market, _instrument = identity_for_trade(
+        source,
+        symbol="BTCUSDT",
+        timeframe=Timeframe.M15,
+        mode=mode,
+    )
+    assert market.provenance.is_live is True
+    assert market.provenance.is_mock is False
+    assert market.timeframe is Timeframe.M15
+    assert market.instrument.provider_symbol == "BTCUSDT"
+
+
+def test_replay_identity_stays_on_replay_in_staging() -> None:
+    settings = Settings.model_construct(
+        environment=Environment.STAGING,
+        perpetual_evidence_source="replay",
+    )
+    trade = _trade(
+        evidence_venue="binance",
+        evidence_source_family="replay_fixture",
+        evidence_is_live=False,
+        evidence_is_mock=True,
+    )
+    mode, origin = candle_mode_for_trade(trade, settings)
+    assert mode == "replay"
+    assert origin == "trade"
+    assert isinstance(build_candle_source(settings, mode, origin), ReplayPerpetualSource)
+
+
+def test_staging_without_a_stored_identity_uses_binance_not_the_replay_default() -> None:
+    settings = Settings.model_construct(
+        environment=Environment.STAGING,
+        perpetual_evidence_source="replay",
+    )
+    mode, origin = candle_mode_for_trade(_trade(), settings)
+    assert mode == "binance_usdm"
+    assert origin == "staging_live"
+    built = build_candle_source(Settings(_env_file=None), mode, origin)
+    assert isinstance(built, BinanceUsdmPerpetualSource)
+
+
+def test_october_6_live_crossings_are_read_from_binance_not_replay() -> None:
+    """Short 85111.4 / 85720.8 / 84714.1 and long 86073.1 / 85618.0 / 86881.1.
+
+    Both open at the 6 Oct 00:00 bar close. The fill bar already touches a
+    level and must not exit. The 00:00 bar is the first eligible bar.
+    """
+
+    settings = Settings(_env_file=None)
+    entry = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    fill_bar = datetime(2026, 10, 5, 23, 45, tzinfo=UTC)
+    crossing = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    short = _live_btc(
+        COMMAND,
+        direction=TradeDirection.SHORT,
+        entry=Decimal("85111.4"),
+        stop=Decimal("85720.8"),
+        target=Decimal("84714.1"),
+        entry_time=entry,
+    )
+    long = _live_btc(
+        UUID("50000000-0000-4000-8000-000000000099"),
+        direction=TradeDirection.LONG,
+        entry=Decimal("86073.1"),
+        stop=Decimal("85618.0"),
+        target=Decimal("86881.1"),
+        entry_time=entry,
+        journal_trade_id=UUID("60000000-0000-4000-8000-000000000099"),
+    )
+    bars = (
+        _bar(fill_bar, low="85000", high="86000"),
+        _bar(crossing, low="85650", high="86881.1"),
+    )
+
+    class LiveBinance:
+        name = "binance-usdm-perpetual"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def fetch_closed_ohlcv(self, **kwargs: object) -> SimpleNamespace:
+            instrument = kwargs["instrument"]
+            timeframe = kwargs["timeframe"]
+            symbol = getattr(instrument, "provider_symbol", "")
+            value = getattr(timeframe, "value", "")
+            self.calls.append((str(symbol), str(value)))
+            return SimpleNamespace(bars=bars)
+
+    live = LiveBinance()
+    loader = PaperExitCandleLoader(settings, sources={"binance_usdm": live})  # type: ignore[arg-type]
+    report = run_paper_exit_monitor(
+        enabled=True,
+        dry_run=False,
+        trades=(short, long),
+        candles=lambda trade: loader(trade, evaluated_at=NOW),
+        closer=(closer := RecordingCloser()),
+        evaluated_at=NOW,
+    )
+    assert report.closed == 2
+    assert live.calls == [("BTCUSDT", "15m")]
+    by_reason = {item.exit_reason: item for item in closer.requests}
+    short_close = by_reason["stop_hit"]
+    long_close = by_reason["target_hit"]
+    assert short_close.exit_price == Decimal("85720.8")
+    assert long_close.exit_price == Decimal("86881.1")
+    assert short_close.occurred_at == crossing + timedelta(minutes=15)
+    assert long_close.occurred_at == crossing + timedelta(minutes=15)
+    assert short_close.exit_evidence is not None
+    assert short_close.exit_evidence["market_source"] == "binance-usdm-perpetual"
+    assert short_close.exit_evidence["bar_interval_start"] == crossing.isoformat()
 
 
 def test_disabled_cycle_does_not_open_a_session(monkeypatch: pytest.MonkeyPatch) -> None:
