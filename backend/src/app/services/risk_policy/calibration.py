@@ -20,9 +20,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from itertools import pairwise
 
+from app.services.risk_policy.ceilings import PAPER_DEMO_KINDS
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GRADER_VERSION
-from app.services.risk_policy.profile import TRADABLE_GRADES, Grade, PolicyKind, RiskPolicyProfile
+from app.services.risk_policy.profile import TRADABLE_GRADES, Grade, RiskPolicyProfile
 
 MIN_TRADES = 100
 PLACEHOLDER_RISK_PERCENT = Decimal("1")
@@ -112,12 +113,10 @@ def assert_promotion_allows(profile: RiskPolicyProfile, report: PromotionReport 
     above = any(profile.risk_percent(grade) > PLACEHOLDER_RISK_PERCENT for grade in TRADABLE_GRADES)
     if not above:
         return
-    # AT-ADR-110: paper and demo data collection is an explicit profile field.
-    # Applying it is audited. It is not a silent bypass, and it is not live.
-    if profile.paper_demo_data_collection and profile.kind in {
-        PolicyKind.INTERNAL_PAPER,
-        PolicyKind.DEMO,
-    }:
+    # AT-ADR-111 amends AT-ADR-109 (c) for data collection only. The kind is
+    # the server-set paper or demo kind, the same set as the 5% ceiling.
+    # A caller cannot open this by naming another kind. Promotion stays manual.
+    if profile.paper_demo_data_collection and profile.kind.value in PAPER_DEMO_KINDS:
         return
     if (
         report is None

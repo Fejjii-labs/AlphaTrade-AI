@@ -20,6 +20,7 @@ from app.services.risk_policy.ceilings import (
     HARD_MAX_COST_SHARE_OF_R,
     HARD_MAX_DAILY_LOSS_PERCENT,
     HARD_MAX_LEVERAGE,
+    PAPER_DEMO_KINDS,
     notional_ceiling_for,
     risk_ceiling_for,
 )
@@ -288,10 +289,7 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
         raise RiskPolicyRejected("default_leverage_invalid")
     if not isinstance(profile.paper_demo_data_collection, bool):
         raise RiskPolicyRejected("paper_demo_data_collection_invalid")
-    if profile.paper_demo_data_collection and profile.kind not in {
-        PolicyKind.INTERNAL_PAPER,
-        PolicyKind.DEMO,
-    }:
+    if profile.paper_demo_data_collection and profile.kind.value not in PAPER_DEMO_KINDS:
         raise RiskPolicyRejected("data_collection_not_paper_or_demo")
 
 
@@ -513,8 +511,8 @@ def sofien_aggressive_profile(kind: PolicyKind) -> RiskPolicyProfile:
 
     Sofien's instruction of 2026-10-18: A+ 5%, A 3%, B+ 2%, B 1%, C does not
     trade, default leverage 10x, maximum 20x. Loss is the grade risk at the
-    stop. Leverage sets margin. ``paper_demo_data_collection`` is explicit so
-    the calibration gate stays closed unless this audited setting is applied.
+    stop. Leverage sets margin. ``paper_demo_data_collection`` is the audited
+    AT-ADR-111 exception to the promotion report, and only for these kinds.
     Notional caps are margin at leverage, as a percent of equity: 100% margin
     times 10x per trade, and 100% margin times 20x in aggregate.
     """

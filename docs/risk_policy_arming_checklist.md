@@ -47,10 +47,12 @@ Trigger: before a route or any other caller can reset a drawdown latch.
 Trigger: before a tradable grade risk is allowed above the 1% placeholder,
 on apply or on sizing.
 
-The audited paper and demo field `paper_demo_data_collection` (AT-ADR-110,
-Sofien 2026-10-18) is the only exception, and only for an applied
-`internal_paper` or `demo` profile. It does not close this prerequisite
-for live trading or for arming either autonomous flag.
+AT-ADR-111 (Sofien, 2026-10-18 17:20 CEST) amends this section. The audited
+field `paper_demo_data_collection` is the only exception, and only on a
+stored `internal_paper` or `demo` profile. Other kinds stay on this
+prerequisite. It does not close (c) for live trading or for arming either
+autonomous flag. The human proof, loosening cooldown, breakers, daily and
+open-risk limits, and the real-money block stay in force.
 
 | Prerequisite | Required state |
 | --- | --- |

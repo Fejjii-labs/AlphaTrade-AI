@@ -186,6 +186,95 @@ def test_ceilings_allow_five_percent_only_for_paper_and_demo() -> None:
     assert flags.value.code == "autonomous_flags_must_stay_off"
 
 
+def test_promotion_bypass_is_limited_to_server_paper_and_demo_kinds() -> None:
+    from dataclasses import replace
+
+    from app.services.risk_policy.calibration import assert_promotion_allows, promote
+    from app.services.risk_policy.ceilings import PAPER_DEMO_KINDS
+
+    for kind in (PolicyKind.INTERNAL_PAPER, PolicyKind.DEMO):
+        profile = sofien_aggressive_profile(kind)
+        assert profile.kind.value in PAPER_DEMO_KINDS
+        assert profile.paper_demo_data_collection is True
+        assert profile.autonomous_internal_paper_enabled is False
+        assert profile.autonomous_blofin_demo_enabled is False
+        assert_promotion_allows(profile, None)
+        sized = size_trade(profile, _input(profile, Grade.A_PLUS))
+        assert sized.grade_risk_percent == Decimal("5")
+        assert sized.profile_risk_percent == Decimal("5")
+        plain = profile_with(
+            kind,
+            risk_percent_by_grade=_grades(kind, **{Grade.A_PLUS: Decimal("5")}),
+            paper_demo_data_collection=False,
+        )
+        with pytest.raises(RiskPolicyRejected) as missing_flag:
+            assert_promotion_allows(plain, None)
+        assert missing_flag.value.code == "grade_above_one_percent_requires_promotion"
+        held = decide_trade(
+            profile=profile,
+            profile_version_id=uuid4(),
+            grade=GradeDecision(
+                Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None
+            ),
+            adjusters=AdjusterInputs(
+                volatility_regime="normal", trend_aligned=True, momentum_aligned=True
+            ),
+            sizing=_input(profile, Grade.A_PLUS),
+            breaker=BreakerVerdict(
+                daily_loss_active=True,
+                drawdown_active=False,
+                consecutive_loss_active=False,
+                trip_kill_switch=False,
+                paused_until=None,
+                equity_peak=Decimal("10000"),
+                refuse_new_trades=True,
+                human_reset_required=False,
+            ),
+            tiers=PAPER_DEMO_MAINTENANCE_TIERS,
+            preserve_grade_risk=True,
+        )
+        assert held.accepted is False
+        assert held.reason == "breaker_active"
+        with pytest.raises(RiskPolicyRejected) as budget:
+            size_trade(
+                profile,
+                _input(
+                    profile,
+                    Grade.A_PLUS,
+                    remaining_daily_budget_percent=Decimal("0"),
+                    open_risk_percent=Decimal("6"),
+                ),
+            )
+        assert budget.value.code == "budget_exhausted"
+
+    for kind in (PolicyKind.CONSERVATIVE, PolicyKind.STANDARD, PolicyKind.AGGRESSIVE):
+        assert kind.value not in PAPER_DEMO_KINDS
+        with pytest.raises(RiskPolicyRejected) as flag:
+            profile_with(kind, paper_demo_data_collection=True)
+        assert flag.value.code == "data_collection_not_paper_or_demo"
+        raised = profile_with(
+            kind,
+            risk_percent_by_grade=_grades(kind, **{Grade.A_PLUS: Decimal("2")}),
+        )
+        with pytest.raises(RiskPolicyRejected) as refused:
+            assert_promotion_allows(raised, None)
+        assert refused.value.code == "grade_above_one_percent_requires_promotion"
+        with pytest.raises(RiskPolicyRejected) as sized_other:
+            size_trade(raised, _input(raised, Grade.A_PLUS))
+        assert sized_other.value.code == "grade_above_one_percent_requires_promotion"
+        forged = replace(
+            sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER),
+            kind=kind,
+        )
+        with pytest.raises(RiskPolicyRejected) as forged_gate:
+            assert_promotion_allows(forged, None)
+        assert forged_gate.value.code == "grade_above_one_percent_requires_promotion"
+
+    with pytest.raises(RiskPolicyRejected) as manual:
+        promote()
+    assert manual.value.code == "promotion_is_manual"
+
+
 def test_ten_thousand_dollar_grade_table_replaces_the_binding_notional_cap() -> None:
     # Before: 1% risk cash is $100, the 5% notional cap is $500, stop distance $2.
     # min(100/2, 500/100) = 5. Loss at the stop is $10, which is 0.1% of equity.

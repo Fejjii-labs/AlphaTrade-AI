@@ -2,6 +2,33 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-111 — Paper and demo may collect grades above 1% without a promotion report
+
+- Date: 2026-10-18
+- Decision: Sofien decided at 17:20 CEST on 2026-10-18 (15:20 UTC), in chat
+  with his AI Nerd agent, to allow grade risk up to 5% (A+) on internal
+  paper and BloFin demo now, and to skip the AT-ADR-109 (c) promotion gate
+  for those kinds only, so paper and demo can collect data. This amends
+  AT-ADR-109 (c). It does not replace (a), (b), (d), or (e).
+- Scope: the skip applies only when the stored profile kind is the
+  server-set `internal_paper` or `demo` kind (`PAPER_DEMO_KINDS`, the same
+  set as the 5% ceiling) and `paper_demo_data_collection` is true on that
+  stored profile. `conservative`, `standard`, and `aggressive` still require
+  a stored eligible promotion report before a tradable grade goes above 1%,
+  and they cannot set `paper_demo_data_collection`. A caller does not pass
+  an eligibility flag into sizing. `promote()` still refuses. The field is
+  not a live-trading or arming exemption.
+- What stays: the PR 278 human proof and the loosening cooldown still apply
+  before a profile version is applied. Breakers, the daily-loss limit, and
+  the open-risk limit still refuse a new trade. Real-money trading stays
+  blocked. Both autonomous flags stay false. The per-trade ceiling stays 5%
+  for paper and demo and 2% for every other kind.
+- Rationale: paper and demo need observed outcomes for grades above the 1%
+  placeholder before a server promotion report can exist. Collecting those
+  outcomes does not satisfy (c) for any other kind, for live trading, or
+  for arming either flag.
+- Reference: Sofien, 2026-10-18 17:20 CEST; AT-ADR-109 (c); AT-ADR-110.
+
 ## AT-ADR-110 — Paper and demo per-trade ceiling of 5%
 
 - Date: 2026-10-18
@@ -17,11 +44,14 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   `standard`, and `aggressive` stay at 2% per trade and 100% notional.
   There is no live policy kind. Real-money trading stays blocked. Both
   autonomous flags stay false and a profile that sets either flag is rejected.
-- Calibration: AT-ADR-109 (c) stays binding for live trading and for arming
-  either flag. Paper and demo data collection of a grade above 1% requires
-  the explicit profile field `paper_demo_data_collection`. Turning it on is
-  a loosening and is audited. It is not a silent bypass. `promote()` still
-  refuses. The field does not satisfy (c) for live or for arming.
+- Calibration: AT-ADR-111 amends AT-ADR-109 (c). An applied
+  `internal_paper` or `demo` profile with `paper_demo_data_collection` may
+  size a grade above 1%, up to the 5% ceiling, without a promotion report.
+  Turning the field on is a loosening and is audited. `promote()` still
+  refuses. Every other kind still requires the report. The field does not
+  satisfy (c) for live trading or for arming either flag. The human proof,
+  loosening cooldown, breakers, daily and open-risk limits, and the
+  real-money block stay in force.
 - Leverage sets margin only. Loss at the stop, the exit-leg taker fee,
   one funding period, and on demo the 0.2% book buffer, must fit inside
   the grade cash. Costs above the profile share of R refuse with
@@ -50,7 +80,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   risk refuses with `notional_cap_shrinks_grade_risk`. The previous fixed
   1% risk and 5% notional path remains only when no profile version row
   is active.
-- Reference: Sofien, 2026-10-18; `docs/risk_policy_arming_checklist.md` (c);
+- Reference: Sofien, 2026-10-18; AT-ADR-111; `docs/risk_policy_arming_checklist.md` (c);
   `docs/sfp_level_approach.md`.
 
 ## AT-ADR-109 — Hard prerequisites before arming the grade-based risk policy
@@ -91,6 +121,12 @@ Before a route or any other caller can reset a drawdown latch:
 - Legacy tokens with no `actor` claim are refused.
 
 ### (c) Trigger: before ANY grade goes above 1%
+
+Amended 2026-10-18 by AT-ADR-111. The promotion report is not required for
+a stored `internal_paper` or `demo` profile whose
+`paper_demo_data_collection` field is true. Every other kind still requires
+the report. This amendment does not change (a), (b), (d), or (e), and it
+does not cover live trading or arming.
 
 Before a tradable grade risk is allowed above the 1% placeholder, on apply
 or on sizing:
