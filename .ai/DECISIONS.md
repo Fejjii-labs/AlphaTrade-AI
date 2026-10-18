@@ -3354,7 +3354,7 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
   Sofien approves the worker env names.
 
-## AT-ADR-109 — Mirror BloFin demo hand trades from positions history, not fillPnl
+## AT-ADR-111 — Mirror BloFin demo hand trades from positions history, not fillPnl
 
 - Date: 2026-10-18
 - Decision: Sofien's hand trades on the BloFin demo account are mirrored into
