@@ -3322,3 +3322,21 @@ Synthetic untuned four-regime replay yields192 no-setups/zero signals; genuine
 original-arrival market replay remains unverified. Disabled defaults, gross1R,
 structural stops, no runner, no quantity/sample/performance or operator changes.
 See docs/trendpulse_screening_contract.md and verification handoff.
+
+## AT-ADR-107 — Demo snapshot worker and activity round-trip P&L
+
+- Date: 2026-10-18
+- Decision: The paper worker may call the existing read-only `BloFinSyncService.sync`
+  every 30–60 seconds when demo gates and the governed owner pin are set. Closed
+  gates skip without a database or venue call. Errors back off. A snapshot newer
+  than the interval is not fetched again. Real-money trading stays blocked. No
+  new BloFin order or write endpoint is added.
+- Performance: Win rate and realized P&L for the whole demo account come from
+  fills stored by the activity worker. A trade is a closed round-trip per
+  position. Partial fills accumulate. A crossing fill is split in proportion.
+  Realized P&L is native `fillPnl` plus the original signed fee only when the
+  fee currency matches the stored settlement currency. Order `pnl` is not added.
+  When `BLOFIN_ACTIVITY_ENABLED` is false, those figures are withheld.
+- Method id: `closed-round-trip-fillpnl-signed-fee/v1`.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Enabling the activity worker
+  still requires Sofien's approval and is not done by this decision.

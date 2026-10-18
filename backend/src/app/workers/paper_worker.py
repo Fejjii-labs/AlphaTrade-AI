@@ -110,6 +110,7 @@ class PaperWorkerHealth:
     authority_intact: bool
     indexing: ComponentHealth | None = None
     activity: ComponentHealth | None = None
+    demo_snapshot: ComponentHealth | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +197,8 @@ class PaperWorkerSupervisor:
         self._indexing_stop: Callable[[], None] | None = None
         self._activity: _Component | None = None
         self._activity_stop: Callable[[], None] | None = None
+        self._demo_snapshot: _Component | None = None
+        self._demo_snapshot_stop: Callable[[], None] | None = None
         self._memory_diagnostics = WorkerMemoryDiagnostics() if memory_diagnostics_enabled else None
 
     def attach_indexing(
@@ -230,11 +233,23 @@ class PaperWorkerSupervisor:
         self._activity = _Component("activity", cycle, None, poll_seconds=poll_seconds)
         self._activity_stop = request_stop
 
+    def attach_demo_snapshot(
+        self,
+        cycle: Callable[[], CycleOutcome],
+        *,
+        poll_seconds: float,
+        request_stop: Callable[[], None],
+    ) -> None:
+        """Read-only demo snapshot loop. It does not place orders."""
+        self._demo_snapshot = _Component("demo_snapshot", cycle, None, poll_seconds=poll_seconds)
+        self._demo_snapshot_stop = request_stop
+
     def _components(self) -> tuple[_Component, ...]:
         return (
             (self._watcher, self._telegram)
             + ((self._indexing,) if self._indexing else ())
             + ((self._activity,) if self._activity else ())
+            + ((self._demo_snapshot,) if self._demo_snapshot else ())
         )
 
     def snapshot(self) -> PaperWorkerHealth:
@@ -247,6 +262,7 @@ class PaperWorkerSupervisor:
             authority_intact=self._authority_intact,
             indexing=self._indexing.health() if self._indexing else None,
             activity=self._activity.health() if self._activity else None,
+            demo_snapshot=self._demo_snapshot.health() if self._demo_snapshot else None,
         )
 
     def run_round(self) -> PaperWorkerHealth:
@@ -272,13 +288,23 @@ class PaperWorkerSupervisor:
             self._indexing_stop()
         if self._activity_stop:
             self._activity_stop()
+        if self._demo_snapshot_stop:
+            self._demo_snapshot_stop()
 
     def join(self) -> None:
         for component in self._components():
             thread = component.thread
             if thread is not None:
                 thread.join(self._join_timeout_seconds)
-                if component in (self._indexing, self._activity) and thread.is_alive():
+                if (
+                    component
+                    in (
+                        self._indexing,
+                        self._activity,
+                        self._demo_snapshot,
+                    )
+                    and thread.is_alive()
+                ):
                     thread.join()
 
     def close(self) -> None:
@@ -286,7 +312,7 @@ class PaperWorkerSupervisor:
 
         if self._closed:
             return
-        if self._activity is not None:
+        if self._activity is not None or self._demo_snapshot is not None:
             self.request_stop()
             self.join()
         self._closed = True
@@ -464,6 +490,10 @@ class PaperWorkerSupervisor:
             indexing_error=health.indexing.last_error if health.indexing else "",
             activity_status=health.activity.status if health.activity else "disabled",
             activity_error=health.activity.last_error if health.activity else "",
+            demo_snapshot_status=(
+                health.demo_snapshot.status if health.demo_snapshot else "disabled"
+            ),
+            demo_snapshot_error=health.demo_snapshot.last_error if health.demo_snapshot else "",
             stopping=health.stopping,
             authority_intact=health.authority_intact,
             paper_only=True,
@@ -579,6 +609,14 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
         supervisor.attach_activity(
             activity, poll_seconds=activity_config.poll_seconds, request_stop=activity.request_stop
         )
+    from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
+
+    snapshot = BloFinDemoSnapshotCycle(settings.model_copy(deep=True))
+    supervisor.attach_demo_snapshot(
+        snapshot,
+        poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
+        request_stop=snapshot.request_stop,
+    )
     return supervisor
 
 
@@ -586,7 +624,8 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     """Start the supervised paper worker, or idle once when disarmed.
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
-    opening PostgreSQL, Redis, or provider clients. Armed startup does not
+    opening PostgreSQL, Redis, or provider clients unless the read-only demo
+    snapshot gates and owner pins are both set. Armed startup does not
     bind the disarmed role, so missing operational dependencies fail closed.
     """
 

@@ -258,6 +258,8 @@ class Settings(BaseSettings):
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---
     blofin_sync_stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+    # Worker read-only snapshot cadence. The browser polls the same interval.
+    blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
 

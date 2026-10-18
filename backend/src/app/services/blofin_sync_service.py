@@ -63,6 +63,8 @@ class BloFinSyncService:
         user_id: uuid.UUID,
         request_id: str | None = None,
         include_instrument_metadata: bool = False,
+        actor_type: ActorType = ActorType.USER,
+        sync_origin: str = "api",
     ) -> BloFinSyncResult:
         """Fetch demo account state and persist a bounded snapshot."""
         now = datetime.now(UTC)
@@ -87,6 +89,7 @@ class BloFinSyncService:
             ),
             "readonly_sync_enabled": self._settings.blofin_readonly_sync_enabled,
             "demo_active": self._settings.exchange_demo_active,
+            "sync_origin": sync_origin if sync_origin in {"api", "worker"} else "api",
         }
         configured = configured_demo_account(
             self._session, self._settings, organization_id=organization_id, user_id=user_id
@@ -258,7 +261,7 @@ class BloFinSyncService:
                 event_type=AuditEventType.BLOFIN_DEMO_SYNC,
                 resource_type="blofin_demo_sync_snapshot",
                 resource_id=str(row.id),
-                actor_type=ActorType.USER,
+                actor_type=actor_type,
                 result=(
                     AuditResult.SUCCESS
                     if health is BloFinSyncHealthStatus.OK
