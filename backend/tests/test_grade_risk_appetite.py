@@ -127,9 +127,7 @@ def test_placeholder_stays_conservative_and_aggressive_is_selectable() -> None:
     assert paper.paper_demo_data_collection is True
     assert paper.autonomous_internal_paper_enabled is False
     assert paper.autonomous_blofin_demo_enabled is False
-    assert (
-        classify_change(placeholder_profile(PolicyKind.DEMO), demo) is ChangeClass.LOOSENING
-    )
+    assert classify_change(placeholder_profile(PolicyKind.DEMO), demo) is ChangeClass.LOOSENING
     with pytest.raises(RiskPolicyRejected) as caught:
         sofien_aggressive_profile(PolicyKind.STANDARD)
     assert caught.value.code == "aggressive_profile_is_paper_or_demo_only"

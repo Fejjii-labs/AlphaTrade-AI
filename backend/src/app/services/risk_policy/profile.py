@@ -357,8 +357,7 @@ def profile_from_canonical(payload: dict[str, str]) -> RiskPolicyProfile:
             autonomous_blofin_demo_enabled=payload["autonomous_blofin_demo_enabled"] == "true",
             profile_name=_profile_name(payload.get("profile_name", "")),
             default_leverage=_decimal(payload.get("default_leverage", "1")),
-            paper_demo_data_collection=payload.get("paper_demo_data_collection", "false")
-            == "true",
+            paper_demo_data_collection=payload.get("paper_demo_data_collection", "false") == "true",
         )
     except (KeyError, ValueError) as exc:
         raise RiskPolicyRejected("profile_payload_invalid") from exc
@@ -523,9 +522,7 @@ def sofien_aggressive_profile(kind: PolicyKind) -> RiskPolicyProfile:
     if kind not in {PolicyKind.INTERNAL_PAPER, PolicyKind.DEMO}:
         raise RiskPolicyRejected("aggressive_profile_is_paper_or_demo_only")
     name = (
-        "sofien_aggressive_paper"
-        if kind is PolicyKind.INTERNAL_PAPER
-        else "sofien_aggressive_demo"
+        "sofien_aggressive_paper" if kind is PolicyKind.INTERNAL_PAPER else "sofien_aggressive_demo"
     )
     return profile_with(
         kind,

@@ -825,9 +825,7 @@ def profile_from_row(row: RiskPolicyVersion) -> RiskPolicyProfile:
             ),
             "profile_name": row.profile_name or "",
             "default_leverage": format(row.default_leverage, "f"),
-            "paper_demo_data_collection": (
-                "true" if row.paper_demo_data_collection else "false"
-            ),
+            "paper_demo_data_collection": ("true" if row.paper_demo_data_collection else "false"),
         }
     )
 

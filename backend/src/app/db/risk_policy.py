@@ -33,6 +33,7 @@ from app.db.base import Base, UUIDPrimaryKeyMixin
 
 _MONEY = Numeric(20, 8)
 
+
 # Kept in the migration as well. Tests compare the two texts.
 def _kind_risk_check(column: str) -> str:
     """5% only for paper and demo. Every other kind stays at 2%."""
