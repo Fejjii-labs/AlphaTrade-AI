@@ -9,8 +9,10 @@ the snapshot cycle. That failure is stored, and the card stays withheld.
 Positions history that finishes is kept when fills, funding, or orders hit
 the page cap. Those rows stay unverified, and the headline stays withheld
 unless the stored cycle marker's only cycle tag is `mirror-cycle:ok`.
-That marker cannot be created, edited, retagged, or deleted through the
-journal API. Two slices of one position that close at the same time do not
+That marker cannot be created, edited, annotated, retagged, or deleted
+through the journal API. A missing marker withholds the headline, including
+when there are no closed rows. Realized P&L stays empty until the marker's
+only cycle tag is `mirror-cycle:ok`. Two slices of one position that close at the same time do not
 verify funding. A funding timestamp that falls in more than one slice
 leaves every claimant unverified. A history row or funding bill that does
 not parse, a positions element that is not an object or does not parse, or
@@ -180,8 +182,11 @@ Win rate, realized P&L, average R, and count come from closed
   Win rate, realized P&L, count, wins, and losses are empty.
 - Flag on, and the latest mirror read failed or stopped at the page cap:
   status `withheld`, even when older closed rows are still in the journal.
-- Flag on, and every closed mirrored row is verified (including none):
-  status `ready`. A row counts only when its external ref is
+- Flag on, and every closed mirrored row is verified, and the cycle
+  marker's only cycle tag is `mirror-cycle:ok` (including a successful read
+  with no closed rows): status `ready`. A missing marker, or any other cycle
+  tag, withholds the headline and leaves realized P&L empty. A row counts
+  only when its external ref is
   `blofin-demo-history:{id}`, it carries `pnl-verified`, and its stored net
   equals price P&L minus fee minus funding. The card does not also print an
   activity sentence that

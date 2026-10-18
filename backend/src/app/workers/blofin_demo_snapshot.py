@@ -5,8 +5,9 @@ Demo gates and native identity checks stay inside that service. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
 browser refresh and this cycle do not both hit the venue. The hand-trade
-mirror still runs on that fresh path. A mirror read failure rolls back only
-its own write and does not back off the snapshot.
+mirror still runs on that fresh path, and also after a snapshot whose health
+is outside ok or degraded, before that unhealthy snapshot backs off. A mirror
+read failure rolls back only its own write and does not back off the snapshot.
 """
 
 from __future__ import annotations
@@ -98,6 +99,7 @@ class BloFinDemoSnapshotCycle:
         try:
             service = BloFinSyncService(session, self.settings)
             fresh = _fresh_snapshot(service, organization_id, self._clock(), self.settings)
+            unhealthy = False
             if not fresh:
                 result = service.sync(
                     organization_id=organization_id,
@@ -108,9 +110,10 @@ class BloFinDemoSnapshotCycle:
                     sync_origin="worker",
                 )
                 session.commit()
-                if result.snapshot.health_status not in _FRESH:
-                    return "unavailable"
+                unhealthy = result.snapshot.health_status not in _FRESH
             self._mirror_without_backing_off(session, organization_id, user_id)
+            if unhealthy:
+                return "unavailable"
             return "fresh" if fresh else "ok"
         except Exception:
             session.rollback()

@@ -518,10 +518,17 @@ def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
 
     empty = DashboardDemoAccount(status="ok", message="fixture")
     publish_mirror_performance(empty, session=session, tenant=tenant, settings=_settings())
-    assert empty.performance.manual_mirror_status == "ready"
-    assert empty.performance.trade_count == 0
+    assert empty.performance.manual_mirror_status == "withheld"
+    assert empty.performance.trade_count is None
     assert empty.performance.win_rate is None
-    assert empty.performance.realized_pnl == Decimal("0")
+    assert empty.performance.realized_pnl is None
+    record_mirror_cycle(session, organization_id=ORG, user_id=USER, outcome="ok")
+    session.commit()
+    quiet = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(quiet, session=session, tenant=tenant, settings=_settings())
+    assert quiet.performance.manual_mirror_status == "ready"
+    assert quiet.performance.trade_count == 0
+    assert quiet.performance.realized_pnl == Decimal("0")
 
     _apply(session, _FIXTURE["long"])
     ready = DashboardDemoAccount(status="ok", message="fixture")
@@ -707,6 +714,17 @@ def test_cycle_marker_cannot_be_rewritten_or_deleted(session: Session) -> None:
             organization_id=ORG,
         )
     assert rewritten.value.details["reason"] == "mirror_cycle_immutable"
+    with pytest.raises(ValidationAppError) as tagged:
+        service.annotate(
+            cycle.id,
+            JournalTradeAnnotation(strategy_label="Nope", grade="A", notes="no"),
+            organization_id=ORG,
+        )
+    assert tagged.value.details["reason"] == "mirror_cycle_immutable"
+    session.refresh(cycle)
+    assert cycle.strategy_label != "Nope"
+    assert cycle.notes != "no"
+    assert cycle.tags == ["mirror-cycle:ok"]
     with pytest.raises(ValidationAppError) as deleted:
         service.delete(cycle.id, organization_id=ORG)
     assert deleted.value.details["reason"] == "mirror_cycle_immutable"

@@ -39,8 +39,9 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const { trade, manual_demo: attempt } = data;
   const evidence = attempt?.evidence;
   const manual = trade.source === "manual_demo_test";
-  const mirrored = trade.source === "blofin_demo_manual"
-    || (trade.external_ref ?? "").startsWith("blofin-demo-");
+  const cycleMarker = (trade.external_ref ?? "") === "blofin-demo-mirror-cycle";
+  const mirrored = !cycleMarker && (trade.source === "blofin_demo_manual"
+    || (trade.external_ref ?? "").startsWith("blofin-demo-"));
   const currency = trade.exchange === "BLOFIN_DEMO" ? "USDT" : null;
   const money = (value: string | null | undefined) => `${formatMoney(value)}${currency ? ` ${currency}` : ""}`;
   const fields = [

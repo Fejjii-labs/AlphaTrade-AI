@@ -1137,6 +1137,8 @@ def record_mirror_cycle(
 
 def annotation_allowed(row: JournalTrade) -> bool:
     """Hand-mirrored rows, and AlphaTrade rows this mirror has already closed."""
+    if cycle_marker_locked(row):
+        return False
     if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
         return True
     ref = row.external_ref or ""
@@ -1228,7 +1230,7 @@ def publish_mirror_performance(
         ).all()
     )
     rows = [row for row in rows if row.external_ref != _CYCLE_REF]
-    if not cycle_marker_ok(cycle) and (rows or cycle is not None):
+    if not cycle_marker_ok(cycle):
         performance.manual_mirror_status = "withheld"
         performance.manual_mirror_reason = (
             "Win rate and realized P&L stay withheld. The latest hand-trade "

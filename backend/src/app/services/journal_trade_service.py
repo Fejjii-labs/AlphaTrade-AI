@@ -504,6 +504,11 @@ class JournalTradeService:
     ) -> JournalTradeRead:
         """Tag strategy, grade, and notes. Venue facts stay untouched."""
         row = self._get_row(trade_id, organization_id=organization_id)
+        if cycle_marker_locked(row):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
         if not annotation_allowed(row):
             raise ValidationAppError(
                 "Only a mirrored BloFin demo journal trade can be tagged here.",

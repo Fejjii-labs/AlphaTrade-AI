@@ -325,6 +325,54 @@ def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -
     assert cycle._next_attempt is None
 
 
+def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    applied: list[str] = []
+    commits: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None)
+    session.commit = lambda: commits.append("commit")
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object) -> None:
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(health_status=BloFinSyncHealthStatus.UNAVAILABLE)
+            )
+
+    class Mirror:
+        def __init__(self, client: object, *, now: datetime) -> None:
+            assert client == "readonly-client"
+            assert now.tzinfo is UTC
+
+        def apply(self, _session: object, **_kwargs: object) -> None:
+            applied.append("apply")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        Mirror,
+    )
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    outcome = cycle()
+    assert outcome.status == "degraded"
+    assert outcome.error == "snapshot_unavailable"
+    assert applied == ["apply"]
+    assert commits == ["commit", "commit"]
+    assert cycle._next_attempt is not None
+
+
 def test_mirror_read_failure_does_not_back_off_the_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

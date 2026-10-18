@@ -109,6 +109,22 @@ it("tags a mirrored BloFin demo trade without editing venue amounts", async () =
   expect(screen.getByText("82,234.40 USDT")).toBeInTheDocument();
 });
 
+it("does not offer strategy tags on the mirror cycle marker", async () => {
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    trade: {
+      ...fixture.trade,
+      source: "blofin_demo_manual",
+      external_ref: "blofin-demo-mirror-cycle",
+      symbol: "MIRROR",
+    },
+    manual_demo: null,
+  });
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-trade-detail");
+  expect(screen.queryByTestId("journal-mirror-annotation")).not.toBeInTheDocument();
+});
+
 it("shows the strategy form for a reconciled manual row", async () => {
   vi.mocked(journalTradeApi.detail).mockResolvedValue({
     ...fixture,
