@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -14,6 +15,7 @@ from app.schemas.common import RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.trade_plan import EntrySide
 from app.services.automated_paper_loop import _quantity
+from app.services.execution_claim import ReservationIntent, evaluate_claim_predicate
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
 from app.services.risk_policy.adjusters import AdjusterInputs
@@ -21,11 +23,14 @@ from app.services.risk_policy.breakers import BreakerVerdict
 from app.services.risk_policy.decision import decide_trade
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision
+from app.services.risk_policy.ledger import caps_for_ledger
 from app.services.risk_policy.plan_sizing import (
     PAPER_DEMO_MAINTENANCE_TIERS,
     ActiveProfile,
     demo_leverage_block,
     demo_margin_mode_block,
+    open_risk_from_stops,
+    remaining_daily_budget_percent,
     size_for_profile,
 )
 from app.services.risk_policy.profile import (
@@ -322,7 +327,9 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     assert demo_margin_mode_block("cross") == "demo_margin_mode_not_isolated"
     assert demo_margin_mode_block("isolated") is None
     posts: list[str] = []
+    leverage_modes: list[str] = []
     account_leverage = {"value": "2"}
+    force_cross = {"on": False}
 
     def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -334,9 +341,11 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
         elif path.endswith("leverage-info"):
+            requested = request.url.params.get("marginMode") or ""
+            leverage_modes.append(requested)
             data = {
                 "instId": "BTC-USDT",
-                "marginMode": "cross",
+                "marginMode": "cross" if force_cross["on"] else requested,
                 "leverage": account_leverage["value"],
             }
         elif path.endswith("instruments"):
@@ -403,4 +412,159 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     )
     assert snapshot.account_leverage == Decimal("1")
     assert snapshot.margin_mode == "cross"
+    assert leverage_modes[-1] == "cross"
+    isolated = provider.snapshot(
+        symbol="BTCUSDT",
+        now=EVALUATED_AT,
+        side=EntrySide.BUY,
+        required_leverage=None,
+        margin_mode="isolated",
+    )
+    assert isolated.margin_mode == "isolated"
+    assert isolated.account_leverage == Decimal("1")
+    assert leverage_modes[-1] == "isolated"
+    force_cross["on"] = True
+    with pytest.raises(ValueError, match="not isolated"):
+        provider.snapshot(
+            symbol="BTCUSDT",
+            now=EVALUATED_AT,
+            side=EntrySide.BUY,
+            required_leverage=None,
+            margin_mode="isolated",
+        )
     assert posts == []
+
+
+def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
+    assert (
+        remaining_daily_budget_percent(
+            daily_loss_limit_percent=Decimal("6"),
+            realized_pnl=None,
+            equity=Decimal("10000"),
+        )
+        == "daily_budget_uncomputed"
+    )
+    # A $500 realized loss on $10,000 uses 5 points of a 6% daily limit.
+    assert remaining_daily_budget_percent(
+        daily_loss_limit_percent=Decimal("6"),
+        realized_pnl=Decimal("-500"),
+        equity=Decimal("10000"),
+    ) == Decimal("1")
+    assert (
+        open_risk_from_stops(
+            equity=Decimal("10000"),
+            positions=[(Decimal("1"), Decimal("100"), None)],
+            open_notional=Decimal("100"),
+        )
+        == "open_risk_uncomputed"
+    )
+    flat = open_risk_from_stops(
+        equity=Decimal("10000"),
+        positions=[],
+        open_notional=Decimal("0"),
+    )
+    assert flat == (Decimal("0"), 0)
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    active = ActiveProfile(profile=profile, version_id=uuid4())
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    sized = size_for_profile(
+        active=active,
+        grade=grade,
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("98"),
+        target=Decimal("104"),
+        direction="long",
+        atr=Decimal("1"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("1"),
+        breaker_refusing=False,
+    )
+    assert not isinstance(sized, str)
+    assert sized.risk_percent == Decimal("1")
+    assert sized.quantity == Decimal("50")
+
+
+def test_claim_notional_ceiling_matches_the_profile() -> None:
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    equity = Decimal("10000")
+    caps = caps_for_ledger(profile, equity)
+    assert caps.max_symbol_notional == Decimal("100000.00000000")
+    assert caps.max_notional == Decimal("200000.00000000")
+    assert caps.max_daily_loss == Decimal("600.00000000")
+    intent = ReservationIntent(
+        pending_notional=Decimal("25000"),
+        daily_loss=Decimal("500"),
+        trade_slots=1,
+        instrument="BTCUSDT",
+        exposure_unit="USDT",
+        remaining_quantity=Decimal("250"),
+        quantity_unit="BASE",
+        contract_multiplier=Decimal("1"),
+        contract_type="LINEAR",
+    )
+
+    def accounting(**overrides: object) -> SimpleNamespace:
+        values: dict[str, object] = {
+            "max_notional": equity,
+            "reserved_notional": Decimal("0"),
+            "actual_notional": Decimal("0"),
+            "max_daily_loss": equity,
+            "reserved_daily_loss": Decimal("0"),
+            "actual_daily_loss": Decimal("0"),
+            "daily_locked": False,
+            "max_trade_slots": 10,
+            "reserved_trade_slots": 0,
+            "actual_trade_count": 0,
+            "max_symbol_notional": equity,
+            "symbol_reserved": {},
+            "symbol_actual": {},
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    cash = evaluate_claim_predicate(
+        blocking_epoch=False,
+        kill_active=False,
+        accounting=accounting(),  # type: ignore[arg-type]
+        intent=intent,
+    )
+    assert cash == "insufficient_total_exposure"
+    agreed = evaluate_claim_predicate(
+        blocking_epoch=False,
+        kill_active=False,
+        accounting=accounting(
+            max_notional=caps.max_notional,
+            max_symbol_notional=caps.max_symbol_notional,
+            max_daily_loss=caps.max_daily_loss,
+        ),  # type: ignore[arg-type]
+        intent=intent,
+    )
+    assert agreed is None
+    second = ReservationIntent(
+        pending_notional=Decimal("25000"),
+        daily_loss=Decimal("500"),
+        trade_slots=1,
+        instrument="BTCUSDT",
+        exposure_unit="USDT",
+        remaining_quantity=Decimal("250"),
+        quantity_unit="BASE",
+        contract_multiplier=Decimal("1"),
+        contract_type="LINEAR",
+    )
+    blocked = evaluate_claim_predicate(
+        blocking_epoch=False,
+        kill_active=False,
+        accounting=accounting(
+            max_notional=caps.max_notional,
+            max_symbol_notional=caps.max_symbol_notional,
+            max_daily_loss=caps.max_daily_loss,
+            reserved_daily_loss=Decimal("500"),
+        ),  # type: ignore[arg-type]
+        intent=second,
+    )
+    assert blocked == "insufficient_daily_loss_allocation"

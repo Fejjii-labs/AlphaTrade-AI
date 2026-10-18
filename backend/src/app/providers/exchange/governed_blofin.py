@@ -128,6 +128,7 @@ class GovernedBloFinDemoProvider:
         side: EntrySide,
         quantity: Decimal | None = None,
         required_leverage: Decimal | None = Decimal("1"),
+        margin_mode: str = "cross",
     ) -> DemoVenueSnapshot:
         self.verify_permissions()
         with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
@@ -158,8 +159,14 @@ class GovernedBloFinDemoProvider:
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
         with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
-            leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode="cross")
             # Read only. This provider never sends a leverage or margin-mode write.
+            # A profile plan reads the isolated configuration. The default read stays cross.
+            leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode=margin_mode)
+            observed_mode = str(getattr(leverage, "margin_mode", None) or margin_mode)
+            if margin_mode == "isolated" and observed_mode.lower() != "isolated":
+                raise ValueError(
+                    "Demo account margin mode is not isolated; no margin-mode mutation."
+                )
             if required_leverage is not None and leverage.leverage != required_leverage:
                 if required_leverage == Decimal("1"):
                     raise ValueError(
@@ -216,7 +223,7 @@ class GovernedBloFinDemoProvider:
             account_observed_at=account_observed_at,
             native_account_uid=self._account.native_account_uid,
             account_leverage=leverage.leverage,
-            margin_mode=str(getattr(leverage, "margin_mode", None) or "cross"),
+            margin_mode=str(getattr(leverage, "margin_mode", None) or margin_mode),
         )
 
     def verify_flat_account(self) -> None:
@@ -277,11 +284,14 @@ class GovernedBloFinDemoProvider:
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
+        profile_sized = plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage"
         snapshot = self.snapshot(
             symbol=plan.execution_instrument.replace("-", ""),
             now=self._clock(),
             side=plan.side,
             quantity=plan.quantity.value,
+            required_leverage=plan.risk_and_exits.leverage if profile_sized else Decimal("1"),
+            margin_mode="isolated" if profile_sized else "cross",
         )
         rules = plan.instrument_rules
         if (snapshot.tick, snapshot.lot, snapshot.minimum, snapshot.multiplier) != (

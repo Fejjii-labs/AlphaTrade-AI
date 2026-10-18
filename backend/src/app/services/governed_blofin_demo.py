@@ -380,9 +380,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         active = _load_active_profile(
             session, target.organization_id, self._risk_policy_kind(), self._clock.now()
         )
-        # A profile sizes leverage later. Do not require 1x before that comparison,
-        # and do not send a leverage write. No profile keeps the existing 1x read.
+        # A profile sizes leverage later and is compared to the isolated read.
+        # Do not require 1x before that comparison, and do not send a leverage write.
+        # No profile keeps the existing cross 1x read.
         required_leverage = None if active is not None else Decimal("1")
+        read_margin_mode = "isolated" if active is not None else "cross"
         try:
             self._snapshot = self._get_provider().snapshot(
                 symbol=target.symbol,
@@ -391,6 +393,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 if candidate.direction is TradeDirection.LONG
                 else EntrySide.SELL,
                 required_leverage=required_leverage,
+                margin_mode=read_margin_mode,
             )
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
@@ -473,6 +476,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         active_profile: object | None = None,
         open_exposure: Decimal = Decimal("0"),
         open_risk_percent: Decimal = Decimal("0"),
+        open_positions: int | None = None,
         remaining_daily_budget_percent: Decimal | None = None,
         breaker_refusing: bool = False,
         risk_records: list[object] | None = None,
@@ -533,6 +537,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
             if not isinstance(active_profile, ActiveProfile):
                 return "risk_profile_unavailable"
+            if open_positions is None or remaining_daily_budget_percent is None:
+                return "open_book_uncomputed"
             grade, atr = _grade_for_plan(candidate, assembled)
             sized = size_for_profile(
                 active=active_profile,
@@ -547,12 +553,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 min_quantity=snapshot.minimum * snapshot.multiplier,
                 open_risk_percent=open_risk_percent,
                 open_notional=open_exposure,
-                open_positions=0,
-                remaining_daily_budget_percent=(
-                    active_profile.profile.daily_loss_limit_percent
-                    if remaining_daily_budget_percent is None
-                    else remaining_daily_budget_percent
-                ),
+                open_positions=open_positions,
+                remaining_daily_budget_percent=remaining_daily_budget_percent,
                 breaker_refusing=breaker_refusing,
             )
             if isinstance(sized, str):
@@ -916,6 +918,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             ),
             clock=self._clock.now,
         )
+        if result.outcome is ExecutionCommandOutcome.ALLOW and result.command_id is not None:
+            from app.services.automated_paper_loop import _commit_risk_record
+
+            _commit_risk_record(
+                self,
+                session,
+                organization_id=target.organization_id,
+                trade_id=str(candidate.candidate_id),
+                now=self._clock.now(),
+            )
         if result.outcome is not ExecutionCommandOutcome.ALLOW:
             if use_autonomous:
                 approval.revoke_authorization(

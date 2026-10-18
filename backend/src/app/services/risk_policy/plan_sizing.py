@@ -41,6 +41,14 @@ class ActiveProfile:
 
 
 @dataclass(frozen=True)
+class ProfileOpenBook:
+    open_risk_percent: Decimal
+    open_notional: Decimal
+    open_positions: int
+    remaining_daily_budget_percent: Decimal
+
+
+@dataclass(frozen=True)
 class SizedPlan:
     quantity: Decimal
     leverage: Decimal
@@ -51,6 +59,65 @@ class SizedPlan:
     entry: Decimal
     stop: Decimal
     target: Decimal
+
+
+def remaining_daily_budget_percent(
+    *,
+    daily_loss_limit_percent: Decimal,
+    realized_pnl: Decimal | None,
+    equity: Decimal,
+) -> Decimal | str:
+    """Profile daily room after server realized loss. Missing inputs are not zero."""
+
+    if (
+        not isinstance(daily_loss_limit_percent, Decimal)
+        or not daily_loss_limit_percent.is_finite()
+        or not isinstance(equity, Decimal)
+        or not equity.is_finite()
+        or equity <= 0
+        or not isinstance(realized_pnl, Decimal)
+        or not realized_pnl.is_finite()
+    ):
+        return "daily_budget_uncomputed"
+    loss = -realized_pnl if realized_pnl < 0 else Decimal("0")
+    return daily_loss_limit_percent - (loss / equity * Decimal("100"))
+
+
+def open_risk_from_stops(
+    *,
+    equity: Decimal,
+    positions: Sequence[tuple[Decimal, Decimal, Decimal | None]],
+    open_notional: Decimal,
+) -> tuple[Decimal, int] | str:
+    """Open risk at the stored stops. A position without a stop is not zero risk."""
+
+    if (
+        not isinstance(equity, Decimal)
+        or not equity.is_finite()
+        or equity <= 0
+        or not isinstance(open_notional, Decimal)
+        or not open_notional.is_finite()
+        or open_notional < 0
+    ):
+        return "open_book_uncomputed"
+    risk_cash = Decimal("0")
+    explained = Decimal("0")
+    for size, entry, stop in positions:
+        if (
+            not isinstance(size, Decimal)
+            or not isinstance(entry, Decimal)
+            or size <= 0
+            or entry <= 0
+            or stop is None
+            or not isinstance(stop, Decimal)
+            or not stop.is_finite()
+        ):
+            return "open_risk_uncomputed"
+        risk_cash += size * abs(entry - stop)
+        explained += size * entry
+    if open_notional > explained:
+        return "open_risk_uncomputed"
+    return (risk_cash / equity * Decimal("100"), len(positions))
 
 
 def demo_leverage_block(account_leverage: Decimal, required: Decimal) -> str | None:

@@ -81,7 +81,7 @@ from app.workers.watcher_paper_targets import PaperScanTarget
 
 if TYPE_CHECKING:
     from app.services.risk_policy.grader import GradeDecision
-    from app.services.risk_policy.plan_sizing import ActiveProfile
+    from app.services.risk_policy.plan_sizing import ActiveProfile, ProfileOpenBook
 
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 _POLICY_VERSION = "paper-internal-entry/v1"
@@ -292,6 +292,31 @@ class AutomatedPaperLoop:
             session, target.organization_id, self._risk_policy_kind(), now
         )
         records: list[object] = []
+        open_exposure = Decimal("0")
+        open_risk_percent = Decimal("0")
+        open_positions: int | None = None
+        remaining_daily: Decimal | None = None
+        if active is None:
+            open_exposure = _open_exposure(session, target, now=now)
+        else:
+            book = _profile_open_book(
+                session,
+                target,
+                now=now,
+                daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
+            )
+            if isinstance(book, str):
+                return AutomatedPaperLoopProof(
+                    stage="skipped",
+                    reason_code=book,
+                    candidate_id=candidate.candidate_id,
+                    eligibility_id=eligibility.eligibility.eligibility_id,
+                    eligibility_state=state.value,
+                )
+            open_exposure = book.open_notional
+            open_risk_percent = book.open_risk_percent
+            open_positions = book.open_positions
+            remaining_daily = book.remaining_daily_budget_percent
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -302,7 +327,10 @@ class AutomatedPaperLoop:
             eligibility_valid_until=eligibility.eligibility.valid_until,
             eligibility_id=eligibility.eligibility.eligibility_id,
             active_profile=active,
-            open_exposure=_open_exposure(session, target, now=now),
+            open_exposure=open_exposure,
+            open_risk_percent=open_risk_percent,
+            open_positions=open_positions,
+            remaining_daily_budget_percent=remaining_daily,
             breaker_refusing=_breaker_refusing(session, target.organization_id, now),
             risk_records=records,
         )
@@ -314,13 +342,9 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
-        _persist_risk_record(
-            session,
-            organization_id=target.organization_id,
-            trade_id=str(candidate.candidate_id),
-            records=records,
-            now=now,
-        )
+        # The open row is written only after the claim accepts. A refused claim
+        # must not leave an outcome of open.
+        self._pending_risk_records = records
         envelope = self._plan_service().create(
             _plan_command(
                 target=target,
@@ -451,6 +475,13 @@ class AutomatedPaperLoop:
             clock=self._clock.now,
         )
         if result.outcome is ExecutionCommandOutcome.ALLOW and result.command_id is not None:
+            _commit_risk_record(
+                self,
+                session,
+                organization_id=target.organization_id,
+                trade_id=str(candidate.candidate_id),
+                now=self._clock.now(),
+            )
             already_open = _find_open_journal(
                 session,
                 organization_id=target.organization_id,
@@ -627,6 +658,7 @@ class AutomatedPaperLoop:
         active_profile: object | None = None,
         open_exposure: Decimal = Decimal("0"),
         open_risk_percent: Decimal = Decimal("0"),
+        open_positions: int | None = None,
         remaining_daily_budget_percent: Decimal | None = None,
         breaker_refusing: bool = False,
         risk_records: list[object] | None = None,
@@ -643,6 +675,7 @@ class AutomatedPaperLoop:
             active_profile=active_profile,
             open_exposure=open_exposure,
             open_risk_percent=open_risk_percent,
+            open_positions=open_positions,
             remaining_daily_budget_percent=remaining_daily_budget_percent,
             breaker_refusing=breaker_refusing,
             risk_records=risk_records,
@@ -789,6 +822,60 @@ def _paper_account(session: Session, target: PaperScanTarget) -> ExecutionAccoun
     )
 
 
+def _profile_open_book(
+    session: Session,
+    target: PaperScanTarget,
+    *,
+    now: datetime,
+    daily_loss_limit_percent: Decimal,
+) -> ProfileOpenBook | str:
+    """Server figures for one profile-sized plan. Never invents a full daily budget."""
+
+    from app.db.models import Position
+    from app.schemas.common import PositionStatus
+    from app.services.risk_policy.plan_sizing import (
+        ProfileOpenBook,
+        open_risk_from_stops,
+        remaining_daily_budget_percent,
+    )
+
+    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+    snapshot = accounting.sync_from_portfolio(
+        organization_id=target.organization_id,
+        user_id=target.user_id,
+    )
+    remaining = remaining_daily_budget_percent(
+        daily_loss_limit_percent=daily_loss_limit_percent,
+        realized_pnl=snapshot.realized_pnl,
+        equity=snapshot.account_equity,
+    )
+    if isinstance(remaining, str):
+        return remaining
+    rows = list(
+        session.scalars(
+            select(Position).where(
+                Position.organization_id == target.organization_id,
+                Position.user_id == target.user_id,
+                Position.status == PositionStatus.OPEN,
+            )
+        ).all()
+    )
+    measured = open_risk_from_stops(
+        equity=snapshot.account_equity,
+        positions=[(row.size, row.entry_price, row.stop_loss) for row in rows],
+        open_notional=snapshot.open_exposure_notional,
+    )
+    if isinstance(measured, str):
+        return measured
+    open_risk, count = measured
+    return ProfileOpenBook(
+        open_risk_percent=open_risk,
+        open_notional=snapshot.open_exposure_notional,
+        open_positions=count,
+        remaining_daily_budget_percent=remaining,
+    )
+
+
 def _open_exposure(session: Session, target: PaperScanTarget, *, now: datetime) -> Decimal:
     accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
     snapshot = accounting.sync_from_portfolio(
@@ -806,6 +893,27 @@ def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) ->
     )
 
 
+def _commit_risk_record(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    *,
+    organization_id: UUID,
+    trade_id: str,
+    now: datetime,
+) -> None:
+    records = getattr(loop, "_pending_risk_records", None)
+    if not isinstance(records, list) or not records:
+        return
+    _persist_risk_record(
+        session,
+        organization_id=organization_id,
+        trade_id=trade_id,
+        records=records,
+        now=now,
+    )
+    loop._pending_risk_records = []
+
+
 def _persist_risk_record(
     session: Session,
     *,
@@ -816,11 +924,20 @@ def _persist_risk_record(
 ) -> None:
     if not records:
         return
+    from app.db.risk_policy import RiskPolicyTradeRecord
     from app.services.risk_policy.persistence import RiskPolicyService
     from app.services.risk_policy.records import TradeRiskRecord
 
     record = records[-1]
     if not isinstance(record, TradeRiskRecord):
+        return
+    existing = session.scalar(
+        select(RiskPolicyTradeRecord.id).where(
+            RiskPolicyTradeRecord.organization_id == organization_id,
+            RiskPolicyTradeRecord.trade_id == trade_id,
+        )
+    )
+    if existing is not None:
         return
     RiskPolicyService(session, AuditService(session)).record_trade(
         organization_id=organization_id,
@@ -946,6 +1063,7 @@ def _plan_terms(
     active_profile: object | None = None,
     open_exposure: Decimal = Decimal("0"),
     open_risk_percent: Decimal = Decimal("0"),
+    open_positions: int | None = None,
     remaining_daily_budget_percent: Decimal | None = None,
     breaker_refusing: bool = False,
     risk_records: list[object] | None = None,
@@ -1013,6 +1131,8 @@ def _plan_terms(
 
         if not isinstance(active_profile, ActiveProfile):
             return "risk_profile_unavailable"
+        if open_positions is None or remaining_daily_budget_percent is None:
+            return "open_book_uncomputed"
         if open_exposure > 0 and open_risk_percent <= 0:
             return "open_risk_uncomputed"
         grade, atr = _grade_for_plan(candidate, assembled)
@@ -1029,12 +1149,8 @@ def _plan_terms(
             min_quantity=_LOT,
             open_risk_percent=open_risk_percent,
             open_notional=open_exposure,
-            open_positions=0,
-            remaining_daily_budget_percent=(
-                active_profile.profile.daily_loss_limit_percent
-                if remaining_daily_budget_percent is None
-                else remaining_daily_budget_percent
-            ),
+            open_positions=open_positions,
+            remaining_daily_budget_percent=remaining_daily_budget_percent,
             breaker_refusing=breaker_refusing,
         )
         if isinstance(sized, str):

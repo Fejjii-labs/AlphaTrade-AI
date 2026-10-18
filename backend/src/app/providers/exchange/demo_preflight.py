@@ -25,6 +25,9 @@ _VALIDATION_REASONS = {
     "Demo account leverage does not match required leverage; no leverage mutation.": (
         "leverage_mismatch"
     ),
+    "Demo account margin mode is not isolated; no margin-mode mutation.": (
+        "margin_mode_not_isolated"
+    ),
     "Demo account state incomplete or unreadable.": "account_state_incomplete",
     "Demo position already open or unreadable; new entry refused.": "account_not_flat",
     "Demo pending orders or protection; new entry refused.": "pending_orders_present",

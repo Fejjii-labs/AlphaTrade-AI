@@ -273,12 +273,24 @@ class PaperPlanClaimService:
                         plan=plan, authorization=authorization, request=request, at=now
                     )
             else:
-                blocked_reason = evaluate_claim_predicate(
-                    blocking_epoch=bool(epoch.blocking),
-                    kill_active=self._epochs.organization_kill_active(request.organization_id),
-                    accounting=accounting,
-                    intent=intent,
-                )
+                if blocked_reason is None:
+                    from app.services.risk_policy.claim_caps import bind_profile_claim_caps
+
+                    blocked_reason = bind_profile_claim_caps(
+                        self._session,
+                        accounting,
+                        plan,
+                        organization_id=request.organization_id,
+                        user_id=request.user_id,
+                        now=now,
+                    )
+                if blocked_reason is None:
+                    blocked_reason = evaluate_claim_predicate(
+                        blocking_epoch=bool(epoch.blocking),
+                        kill_active=self._epochs.organization_kill_active(request.organization_id),
+                        accounting=accounting,
+                        intent=intent,
+                    )
         if blocked_reason is not None:
             result = self._persist_blocked(
                 request=request,
