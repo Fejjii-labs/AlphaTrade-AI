@@ -2,6 +2,77 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-107 — Grade-based risk policy is versioned, and ceilings fail closed
+
+- Date: 2026-10-18
+- Decision: Owner Sofien's grade-based risk policy is infrastructure only.
+  Every risk number is a profile field. The shipped values are conservative
+  placeholders: 1% risk on A+, A, B+, and B; C and an ungraded setup do not
+  trade; leverage defaults to 1x; `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled` stay false and a profile that sets either
+  to true is rejected. Real-money trading stays permanently blocked. This
+  decision does not enable either autonomous flag, change deploy config, or
+  authorize a merge.
+- Ceilings, in code, not in the profile: 2% per trade, 6% daily loss, 6%
+  aggregate open risk (sum of risk-at-stop), 20x leverage, and 25% of R as
+  the maximum cost share. A profile outside a ceiling is rejected at
+  validation and again when a version row is inserted. The loader does not
+  clamp. Separate profile kinds (conservative, standard, aggressive,
+  internal paper, demo) exist so paper and demo can diverge later. They
+  start from the same placeholder.
+- Governance: proposals may come from an authenticated human, agent, or bot
+  token. Only an authenticated human access token can apply, and the version
+  row's `actor_channel` check is `human`. Tightening takes effect immediately.
+  Loosening needs `confirm=true`, takes effect at the next UTC midnight, and
+  is refused while a daily-loss, drawdown, or consecutive-loss breaker is
+  active. The active version is the highest version number whose
+  `effective_at` is already due, so a later tightening is not overwritten by
+  an earlier scheduled loosening. Versions are immutable. A change applies
+  to new trades only; the trade row keeps the version it was sized with.
+- Grading: `deterministic-grade/v1` uses only the trend and momentum scores
+  from `app.analysis.confidence`. The first grade bound to a setup stays
+  bound. AI text may explain that grade and cannot raise it.
+- Sizing: effective risk is the minimum of the adjusted grade risk, the
+  profile allowance, the 2% ceiling, and the room left in both the daily
+  budget and the aggregate open-risk cap after open risk-at-stop. Quantity
+  comes from the adverse stop distance (stop plus any gap past the stop)
+  with fees, absolute funding, and slippage inside R. Costs above the
+  profile's share of R refuse the trade. Notional caps can only reduce
+  quantity. Leverage sets isolated margin and does not change quantity.
+  A missing adjuster input or a missing maintenance tier refuses the trade.
+- Breakers: daily loss and four consecutive losses pause new trades until
+  the next UTC day. A 10% drawdown from the equity peak trips the kill
+  switch and stays latched until an authenticated human resets it, and the
+  reset does not stick while the drawdown is still outside the threshold.
+- Liquidation: isolated margin only. The buffer is the larger of twice the
+  stop distance and the stop distance plus 1.5 ATR, using the maintenance
+  tier for the position notional. The post-fill check can say
+  `close_or_reduce`. It does not call an exchange.
+- Exchange writes: this decision does **not** add a BloFin endpoint that
+  sets leverage or margin mode. `ExchangeMarginWriter` in
+  `app.services.risk_policy.exchange_margin` is unwired and raises if
+  called. Connecting that write needs its own pull request, a Griller
+  review, and a further ADR that covers the allowlist, the demo host, the
+  pinned account, and a read-back that matches. Until then the check is
+  local.
+- Ledger: PR 258's unverified fallback stores `max_symbol_notional` equal
+  to `max_notional`, and demo auto-approval already refuses that row. A
+  bound profile produces a symbol cap from per-trade notional that is
+  strictly below aggregate notional, and a daily-loss amount that is also
+  strictly below aggregate notional. The risk engine's `risk_percent` rule
+  blocks a stated risk above the ceiling or the active profile cap, and
+  blocks a ledger whose symbol cap is not independent of total notional.
+  Callers that omit both the field and the ledger are unchanged.
+- Calibration: the promotion report needs at least 100 out-of-sample trades
+  per tradable grade on one frozen grader version, strictly ordered
+  expectancy, a lower 90% bound above zero for A+ and A, walk-forward folds
+  that keep A+ and A positive, and the same results after the slippage
+  haircut. A full sample that then fails is flagged for auto-demotion on
+  the report. `promote()` always refuses. Promotion is manual.
+- Reference: Griller review 2026-10-18; PR #258; AT-ADR-106. Alembic
+  `a16riskpolicy001` revises `a15reissueauth001` and downgrades by dropping
+  the new tables, refusing while a trade record exists.
+
 ## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
 
 - Date: 2026-10-17

@@ -21,7 +21,8 @@ from tests.support.alembic_heads import single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 _REVISION = "a14autonomouschannel001"
-_HEAD = "a15reissueauth001"
+_A15 = "a15reissueauth001"
+_HEAD = "a16riskpolicy001"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -53,9 +54,12 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     revision = script.get_revision(_REVISION)
     assert revision is not None
     assert revision.down_revision == _PARENT
+    a15 = script.get_revision(_A15)
+    assert a15 is not None
+    assert a15.down_revision == _REVISION
     head = script.get_revision(_HEAD)
     assert head is not None
-    assert head.down_revision == _REVISION
+    assert head.down_revision == _A15
     assert single_alembic_head(script) == _HEAD
 
 

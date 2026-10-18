@@ -173,7 +173,7 @@ def _seed_org_user(session: Session) -> None:
             organization_id=ORG_ID,
             user_id=USER_ID,
             default_account_balance=Decimal("100000"),
-            max_risk_per_trade_percent=Decimal("5"),
+            max_risk_per_trade_percent=Decimal("1"),
         )
     )
 
