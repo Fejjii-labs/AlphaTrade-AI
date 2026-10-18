@@ -2,6 +2,96 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-109 — Hard prerequisites before arming the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: Griller's verdict on PR #278 at
+  `bc9041f09fef55517056a0da8238797ec9119cb8` is MERGE WITH BOTH FLAGS OFF.
+  `autonomous_internal_paper_enabled` and `autonomous_blofin_demo_enabled`
+  stay false. Real-money trading stays blocked. This record does not enable
+  either flag, does not change deploy config, and does not merge the pull
+  request. The checklist is `docs/risk_policy_arming_checklist.md`.
+- The items below are HARD PREREQUISITES. Each one names the trigger that
+  makes it binding. Writing them down does not satisfy them.
+
+### (a) Trigger: before ANY proof issuer or apply use
+
+Before a server issues an apply proof, and before apply is used, including
+a paper or demo profile apply:
+
+- Proofs are issued by the server and are single-use. Single-use means a
+  stored nonce. The TTL is 5 minutes or less.
+- The server checks a real verification: a TOTP or WebAuthn step-up, or a
+  Telegram confirmation from the pinned chat id.
+- The proof uses a signing key that is separate from `jwt_secret`.
+- `proposal_id` is required and matches the proposal being applied.
+- Current state on `bc9041f0`: the proof only fails closed. A missing or
+  invalid proof is rejected. There is no issuer, no stored nonce, and no
+  separate signing key. `decode_apply_proof` verifies with `jwt_secret`.
+  A token that omits `proposal_id` is filled with the request's proposal
+  id. `actor=user` is a label on the access token. It is not a TOTP,
+  WebAuthn, or Telegram check.
+
+### (b) Trigger: before exposing drawdown reset
+
+Before a route or any other caller can reset a drawdown latch:
+
+- The reset requires the same proof as apply.
+- Legacy tokens with no `actor` claim are refused.
+
+### (c) Trigger: before ANY grade goes above 1%
+
+Before a tradable grade risk is allowed above the 1% placeholder, on apply
+or on sizing:
+
+- The promotion report is computed by the server, per grade, from stored
+  samples.
+- The caller supplies no eligibility flags.
+- One report does not cover the whole organization.
+
+### (d) Trigger: before arming
+
+Before either autonomous flag is set true, in any environment:
+
+- Database triggers make breaker intervals, cancellations, promotion
+  reports, and breaker resets append-only.
+- A cancellation commits only its own work.
+- A breaker that opens and closes between apply and `effective_at` also
+  cancels that change.
+- On `bc9041f0`, profile versions have a Postgres immutability trigger.
+  Intervals, cancellations, promotion reports, and resets are refused by
+  ORM listeners. Those four tables do not have the database triggers this
+  prerequisite requires. `_cancel_version` commits the whole session. A
+  persisted window cancels a loosening when the window covers
+  `effective_at`. A window that has already closed before `effective_at`
+  does not.
+
+### (e) Follow-ups
+
+These follow-ups are required. They do not replace (a)–(d).
+
+- Trigger: before a downgrade of `a17riskpolicy002` is relied on. That
+  downgrade refuses while cancellation, promotion-report, or breaker-reset
+  rows exist. `a16` and `a18` already refuse when their guarded rows exist.
+- Trigger: before a client uses `/risk/policy/*`. Route tests cover those
+  routes.
+- Trigger: the next edit of `backend/src/app/core/config.py`. Correct the
+  stale comment at lines 205–209. This record does not edit that file.
+
+### Wiring pull request
+
+These stay in a later wiring pull request. This decision does not authorize
+that work:
+
+- an atomic budget reservation
+- server-side open-risk computation
+- the isolated-versus-cross margin mismatch on the demo path
+
+`ExchangeMarginWriter` stays unwired.
+
+- Reference: AT-ADR-107; AT-ADR-108; `docs/risk_policy_arming_checklist.md`;
+  Griller review of PR #278 at `bc9041f0`, 2026-10-18.
+
 ## AT-ADR-108 — Griller follow-up on the grade-based risk policy
 
 - Date: 2026-10-18
@@ -63,6 +153,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   margin mismatch on the demo path. Connecting `ExchangeMarginWriter` still
   needs its own pull request, a Griller review, and a further ADR.
 - Reference: AT-ADR-107; Griller review of PR #278, 2026-10-18.
+- Addendum 2026-10-18: Griller's verdict on `bc9041f0` is MERGE WITH BOTH
+  FLAGS OFF. The hard prerequisites and their triggers are AT-ADR-109 and
+  `docs/risk_policy_arming_checklist.md`. This addendum does not arm either
+  flag.
 
 ## AT-ADR-107 — Grade-based risk policy is versioned, and ceilings fail closed
 
