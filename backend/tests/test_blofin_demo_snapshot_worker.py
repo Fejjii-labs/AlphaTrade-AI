@@ -363,16 +363,26 @@ def test_mirror_read_failure_does_not_back_off_the_snapshot(
         "app.core.blofin_readonly_access.get_readonly_client",
         lambda *_args, **_kwargs: "readonly-client",
     )
+    recorded: list[str] = []
+
+    def remember(*_args: object, **kwargs: object) -> None:
+        recorded.append(str(kwargs.get("outcome")))
+
     monkeypatch.setattr(
         "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
         Mirror,
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.record_mirror_cycle",
+        remember,
     )
     cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
     outcome = cycle()
     assert outcome.status == "ok"
     assert outcome.error == ""
-    assert commits == []
+    assert commits == ["commit"]
     assert rollbacks == ["rollback"]
+    assert recorded == ["failed"]
     assert cycle._failures == 0
     assert cycle._next_attempt is None
     assert cycle().status == "ok"

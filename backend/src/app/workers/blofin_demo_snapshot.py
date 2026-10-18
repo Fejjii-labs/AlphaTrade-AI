@@ -136,6 +136,7 @@ class BloFinDemoSnapshotCycle:
                 "blofin_demo_manual_mirror_failed",
                 error_type=type(exc).__name__,
             )
+            self._record_failed_cycle(session, organization_id, user_id)
 
     def _run_mirror(
         self,
@@ -154,6 +155,30 @@ class BloFinDemoSnapshotCycle:
             user_id=user_id,
             settings=self.settings,
         )
+
+    def _record_failed_cycle(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Persist a withheld cycle after the mirror transaction has rolled back."""
+        from app.services.blofin_demo_manual_mirror import record_mirror_cycle
+
+        try:
+            record_mirror_cycle(
+                session,  # type: ignore[arg-type]
+                organization_id=organization_id,
+                user_id=user_id,
+                outcome="failed",
+            )
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning(
+                "blofin_demo_manual_mirror_status_unrecorded",
+                error_type=type(exc).__name__,
+            )
 
 
 def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:

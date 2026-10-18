@@ -3392,5 +3392,11 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   row whose external ref starts with `blofin-demo-` can still be tagged.
 - The mirror runs on the snapshot cadence even when the saved snapshot is
   still inside the refresh interval. A mirror read failure does not back off
-  the snapshot cycle.
+  the snapshot cycle. The latest read is stored on a cancelled journal
+  marker. A failed read or a page cap withholds the headline. Fills, funding,
+  and orders keep paging after positions history has succeeded. A capped
+  auxiliary read still stores that history and does not publish a net.
+- Headline rows are recomputed from stored entry, exit, size, fee, and
+  funding. The journal create route cannot mint `blofin_demo_manual`, and
+  the generic update cannot change that source's venue facts or P&L tags.
 - Reference: `docs/blofin_demo_manual_mirror.md`.

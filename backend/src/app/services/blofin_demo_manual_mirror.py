@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from typing import Any, Protocol
@@ -77,7 +77,11 @@ METHOD = "positions-history-price-pnl-fee-funding/v1"
 _Q = Decimal("0.00000001")
 _RATE = Decimal("0.0001")
 _WINDOW = timedelta(days=7) - timedelta(seconds=1)
-_MAX_PAGES = 4
+_MAX_PAGES = 40
+_CYCLE_REF = "blofin-demo-mirror-cycle"
+_CYCLE_OK = "mirror-cycle:ok"
+_CYCLE_FAILED = "mirror-cycle:failed"
+_CYCLE_PAGE_CAP = "mirror-cycle:page-cap"
 _HISTORY = "/api/v1/account/positions-history"
 _FILLS = "/api/v1/trade/fills-history"
 _FUNDING = "/api/v1/account/funding-fees"
@@ -636,7 +640,10 @@ def drafts_from_raw(
     )
 
 
-def _history_pages(client: _HistoryClient, path: str, begin: str, end: str) -> list[dict[str, Any]]:
+def _history_pages(
+    client: _HistoryClient, path: str, begin: str, end: str
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return rows and whether the safety cap stopped the cursor."""
     rows: list[dict[str, Any]] = []
     after: str | None = None
     seen: set[str] = set()
@@ -649,7 +656,7 @@ def _history_pages(client: _HistoryClient, path: str, begin: str, end: str) -> l
         if not isinstance(page, list):
             raise MirrorReadError("history page was not a list")
         if not page:
-            return rows
+            return rows, False
         last = page[-1]
         if not isinstance(last, dict):
             raise MirrorReadError("history row was not an object")
@@ -663,9 +670,9 @@ def _history_pages(client: _HistoryClient, path: str, begin: str, end: str) -> l
             else:
                 raise MirrorReadError("history row was not an object")
         if len(page) < 100:
-            return rows
+            return rows, False
         after = cursor
-    raise MirrorReadError("history page cap reached")
+    return rows, True
 
 
 def _window(now: datetime) -> tuple[datetime, datetime, str, str]:
@@ -791,17 +798,33 @@ class BloFinDemoManualMirror:
         positions = self._client.request("GET", _POSITIONS, params=None, signed=True)
         if not isinstance(instruments, list) or not isinstance(positions, list):
             raise MirrorReadError("instrument or position payload was not a list")
+        history, history_capped = _history_pages(self._client, _HISTORY, begin_ms, end_ms)
+        if history_capped:
+            raise MirrorReadError("positions-history page cap reached")
+        fills, fills_capped = _history_pages(self._client, _FILLS, begin_ms, end_ms)
+        funding, funding_capped = _history_pages(self._client, _FUNDING, begin_ms, end_ms)
+        orders, orders_capped = _history_pages(self._client, _ORDERS, begin_ms, end_ms)
         built = drafts_from_raw(
             instruments=[row for row in instruments if isinstance(row, dict)],
             positions=[row for row in positions if isinstance(row, dict)],
-            history=_history_pages(self._client, _HISTORY, begin_ms, end_ms),
-            fills=_history_pages(self._client, _FILLS, begin_ms, end_ms),
-            funding=_history_pages(self._client, _FUNDING, begin_ms, end_ms),
-            orders=_history_pages(self._client, _ORDERS, begin_ms, end_ms),
+            history=history,
+            fills=fills,
+            funding=funding,
+            orders=orders,
             window_begin=begin,
             window_end=end,
         )
-        return self._persist(session, built, organization_id=organization_id, user_id=user_id)
+        page_capped = fills_capped or funding_capped or orders_capped
+        if page_capped:
+            built = _without_verified_economics(built)
+        report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
+        record_mirror_cycle(
+            session,
+            organization_id=organization_id,
+            user_id=user_id,
+            outcome="page-cap" if page_capped else "ok",
+        )
+        return report
 
     def _persist(
         self,
@@ -909,6 +932,73 @@ class BloFinDemoManualMirror:
         )
 
 
+def _without_verified_economics(built: BuildResult) -> BuildResult:
+    """A capped fills, funding, or orders read cannot prove net."""
+    closed = tuple(
+        replace(
+            draft,
+            fees=None,
+            funding=None,
+            slippage=None,
+            gross_pnl=None,
+            net_pnl=None,
+            result=TradeResult.OPEN,
+            exit_reason="unverified",
+            verified=False,
+            planned_risk=None,
+        )
+        for draft in built.closed
+    )
+    return BuildResult(closed=closed, opens=built.opens, skipped=built.skipped)
+
+
+def record_mirror_cycle(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    user_id: uuid.UUID,
+    outcome: str,
+) -> None:
+    """Remember the latest mirror read. A failed read must not look ready."""
+    tag = {
+        "ok": _CYCLE_OK,
+        "failed": _CYCLE_FAILED,
+        "page-cap": _CYCLE_PAGE_CAP,
+    }.get(outcome)
+    if tag is None:
+        raise ValueError("unknown mirror cycle outcome")
+    row = session.scalar(
+        select(JournalTrade).where(
+            JournalTrade.organization_id == organization_id,
+            JournalTrade.external_ref == _CYCLE_REF,
+        )
+    )
+    if row is None:
+        row = JournalTrade(
+            organization_id=organization_id,
+            user_id=user_id,
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            status=JournalTradeStatus.CANCELLED,
+            symbol="MIRROR",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            external_ref=_CYCLE_REF,
+            result=TradeResult.OPEN,
+        )
+        session.add(row)
+    row.status = JournalTradeStatus.CANCELLED
+    row.result = TradeResult.OPEN
+    row.net_pnl = None
+    row.gross_pnl = None
+    row.fees = None
+    row.funding = None
+    row.tags = [tag]
+    row.exit_reason = "mirror_page_cap" if outcome == "page-cap" else "mirror_read_failed"
+    if outcome == "ok":
+        row.exit_reason = "mirror_ok"
+    session.flush()
+
+
 def annotation_allowed(row: JournalTrade) -> bool:
     """Hand-mirrored rows, and AlphaTrade rows this mirror has already closed."""
     if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
@@ -933,15 +1023,42 @@ def strategy_group_key(
     return label or None
 
 
+def _formula_net(row: JournalTrade) -> Decimal | None:
+    """Price P&L minus stored fee and funding. None when a price input is missing."""
+    if row.entry_price is None or row.exit_price is None or row.size is None:
+        return None
+    if row.fees is None or row.funding is None or row.gross_pnl is None or row.net_pnl is None:
+        return None
+    delta = row.exit_price - row.entry_price
+    if row.direction is TradeDirection.SHORT:
+        delta = -delta
+    gross = _money(delta * row.size)
+    if gross != _money(row.gross_pnl):
+        return None
+    return _money(gross - row.fees - row.funding)
+
+
 def _verified_row(row: JournalTrade) -> bool:
+    """A headline row is one this mirror verified, recomputed from stored prices."""
     tags = row.tags or []
+    ref = row.external_ref or ""
+    net = _formula_net(row)
+    if net is None or _money(row.net_pnl or Decimal("0")) != net:
+        return False
+    if net > 0:
+        expected = TradeResult.WIN
+    elif net < 0:
+        expected = TradeResult.LOSS
+    else:
+        expected = TradeResult.BREAKEVEN
     return (
         row.status is JournalTradeStatus.CLOSED
         and row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL
+        and ref.startswith("blofin-demo-history:")
+        and ref != _CYCLE_REF
         and _VERIFIED in tags
         and _UNVERIFIED not in tags
-        and row.net_pnl is not None
-        and row.result is not TradeResult.OPEN
+        and row.result is expected
     )
 
 
@@ -958,6 +1075,27 @@ def publish_mirror_performance(
         performance.manual_mirror_status = "disabled"
         performance.manual_mirror_reason = _DISABLED
         performance.average_r = None
+        return
+    cycle = session.scalar(
+        select(JournalTrade).where(
+            JournalTrade.organization_id == tenant.organization_id,
+            JournalTrade.external_ref == _CYCLE_REF,
+        )
+    )
+    cycle_tags = list(cycle.tags or []) if cycle is not None else []
+    if _CYCLE_FAILED in cycle_tags or _CYCLE_PAGE_CAP in cycle_tags:
+        performance.manual_mirror_status = "withheld"
+        performance.manual_mirror_reason = (
+            "Win rate and realized P&L stay withheld. The latest hand-trade "
+            "mirror read failed or stopped at the page cap, so the journal "
+            "is not a complete account."
+        )
+        performance.average_r = None
+        performance.win_rate = None
+        performance.trade_count = None
+        performance.wins = None
+        performance.losses = None
+        performance.realized_pnl = None
         return
     rows = list(
         session.scalars(

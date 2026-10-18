@@ -24,11 +24,16 @@ from app.schemas.common import (
     JournalTradeSource,
     JournalTradeStatus,
     MembershipRole,
+    Timeframe,
     TradeDirection,
     TradeResult,
 )
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
-from app.schemas.journal_trades import JournalTradeAnnotation
+from app.schemas.journal_trades import (
+    JournalTradeAnnotation,
+    JournalTradeCreate,
+    JournalTradeUpdate,
+)
 from app.security.tenant import TenantContext
 from app.services.audit_service import AuditService
 from app.services.blofin_demo_manual_mirror import (
@@ -37,6 +42,7 @@ from app.services.blofin_demo_manual_mirror import (
     MirrorReadError,
     drafts_from_raw,
     publish_mirror_performance,
+    record_mirror_cycle,
     strategy_group_key,
 )
 from app.services.journal_trade_service import JournalTradeService
@@ -147,7 +153,11 @@ def _apply(session: Session, bundle: dict[str, object], **settings: object) -> o
 
 
 def _rows(session: Session) -> list[JournalTrade]:
-    return list(session.scalars(select(JournalTrade).order_by(JournalTrade.external_ref)).all())
+    return [
+        row
+        for row in session.scalars(select(JournalTrade).order_by(JournalTrade.external_ref)).all()
+        if row.external_ref != "blofin-demo-mirror-cycle"
+    ]
 
 
 def _money(value: Decimal | None) -> Decimal | None:
@@ -257,7 +267,7 @@ def test_rerun_is_idempotent_and_keeps_strategy_grade_and_notes(session: Session
     assert rows[0].notes == "Held the plan"
     assert rows[0].grade == "A-"
     assert _money(rows[0].net_pnl) == Decimal("0.18600000")
-    assert func_count(session) == 1
+    assert func_count(session) == len(rows) + 1
 
 
 def func_count(session: Session) -> int:
@@ -536,6 +546,123 @@ def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
     assert held.performance.realized_pnl is None
     assert held.performance.trade_count is None
     assert "fillPnl" in held.performance.manual_mirror_reason
+
+
+def test_create_and_generic_update_cannot_change_mirror_economics(session: Session) -> None:
+    service = JournalTradeService(session, AuditService(session))
+    with pytest.raises(ValidationAppError) as created:
+        service.create(
+            JournalTradeCreate(
+                source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+                symbol="BTCUSDT",
+                timeframe=Timeframe.M15,
+                direction=TradeDirection.LONG,
+                tags=["pnl-verified"],
+                net_pnl=Decimal("1"),
+                result=TradeResult.WIN,
+            ),
+            organization_id=ORG,
+            user_id=USER,
+        )
+    assert created.value.details["reason"] == "mirror_source_immutable"
+    _apply(session, _FIXTURE["long"])
+    mirrored = _rows(session)[0]
+    with pytest.raises(ValidationAppError) as edited:
+        service.update(
+            mirrored.id,
+            JournalTradeUpdate(net_pnl=Decimal("5"), tags=["pnl-verified", "grade:A"]),
+            organization_id=ORG,
+        )
+    assert edited.value.details["reason"] == "mirror_venue_immutable"
+    tagged = service.annotate(
+        mirrored.id,
+        JournalTradeAnnotation(strategy_label="Breakout"),
+        organization_id=ORG,
+    )
+    assert tagged.strategy_label == "Breakout"
+    assert tagged.net_pnl == Decimal("0.18600000")
+
+
+def test_publish_ignores_a_hand_written_verified_net(session: Session) -> None:
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:forged",
+            entry_price=Decimal("1"),
+            exit_price=Decimal("2"),
+            size=Decimal("1"),
+            fees=Decimal("0"),
+            funding=Decimal("0"),
+            gross_pnl=Decimal("999"),
+            net_pnl=Decimal("999"),
+            result=TradeResult.WIN,
+            tags=["pnl-verified"],
+        )
+    )
+    session.commit()
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+    assert held.performance.realized_pnl is None
+    assert held.performance.win_rate is None
+
+
+def test_failed_cycle_withholds_even_when_older_rows_match(session: Session) -> None:
+    _apply(session, _FIXTURE["long"])
+    record_mirror_cycle(session, organization_id=ORG, user_id=USER, outcome="failed")
+    session.commit()
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+    assert held.performance.trade_count is None
+    assert "page cap" in held.performance.manual_mirror_reason
+
+
+def test_capped_fills_keep_positions_history_and_withhold(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror._MAX_PAGES", 1)
+    bundle = _paths(_FIXTURE["long"])
+    bundle["/api/v1/trade/fills-history"] = [
+        {
+            "tradeId": f"t{index}",
+            "instId": "BTC-USDT",
+            "ts": "1792195205000",
+            "orderId": "o-long",
+            "fillPnl": "999",
+        }
+        for index in range(100)
+    ]
+    client = _Client(bundle)
+    BloFinDemoManualMirror(client, now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(),
+    )
+    session.commit()
+    row = _rows(session)[0]
+    assert row.external_ref == "blofin-demo-history:h-long"
+    assert row.net_pnl is None
+    assert "pnl-unverified" in (row.tags or [])
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None
+    assert cycle.tags == ["mirror-cycle:page-cap"]
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+    assert held.performance.realized_pnl is None
 
 
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:

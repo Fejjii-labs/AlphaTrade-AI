@@ -134,6 +134,9 @@ that the live row matches a venue close.
 
 ## Tags after the mirror
 
+`POST /journal/trades` rejects source `blofin_demo_manual`. The generic
+trade update rejects venue prices, size, fees, funding, result, net, the
+external ref, and `pnl-verified` / `pnl-unverified` tags on a mirrored row.
 `PATCH /journal/trades/{id}/annotation` accepts `strategy_label`,
 `user_strategy_id`, `grade`, and `notes`. It does not accept prices, size,
 fees, or P&L. An empty string clears strategy, grade, or notes. Grade is
@@ -158,8 +161,13 @@ Win rate, realized P&L, average R, and count come from closed
   The reason still names the unresolved `fillPnl` basis.
 - Flag on, and any closed mirrored row is unverified: status `withheld`.
   Win rate, realized P&L, count, wins, and losses are empty.
+- Flag on, and the latest mirror read failed or stopped at the page cap:
+  status `withheld`, even when older closed rows are still in the journal.
 - Flag on, and every closed mirrored row is verified (including none):
-  status `ready`. The card does not also print an activity sentence that
+  status `ready`. A row counts only when its external ref is
+  `blofin-demo-history:{id}`, it carries `pnl-verified`, and its stored net
+  equals price P&L minus fee minus funding. The card does not also print an
+  activity sentence that
   says win rate and realized P&L are withheld, and it does not attach the
   mirror exit window to that sentence. Win rate is wins / (wins + losses).
   A net of zero is a scratch: it counts as a trade and it is not a win or a

@@ -114,6 +114,28 @@ VENUE_FACT_FIELDS = frozenset(
 )
 
 
+_MIRROR_LOCKED_FIELDS = VENUE_FACT_FIELDS | frozenset({"external_ref"})
+_PNL_TAGS = frozenset({"pnl-verified", "pnl-unverified"})
+
+
+def _reject_mirror_venue_edit(row: JournalTrade, updates: dict[str, Any]) -> None:
+    """The mirror owns venue facts. Annotation stays on strategy, grade, and notes."""
+    blocked = sorted(key for key in updates if key in _MIRROR_LOCKED_FIELDS)
+    if "tags" in updates and _pnl_tags(row.tags) != _pnl_tags(updates.get("tags")):
+        blocked.append("tags")
+    if blocked:
+        raise ValidationAppError(
+            "Venue facts on a mirrored BloFin demo trade cannot be edited here.",
+            details={"reason": "mirror_venue_immutable", "fields": blocked},
+        )
+
+
+def _pnl_tags(tags: object) -> set[str]:
+    if not isinstance(tags, list):
+        return set()
+    return {tag for tag in tags if isinstance(tag, str) and tag in _PNL_TAGS}
+
+
 class VenueFactImmutableError(ValidationAppError):
     """Raised when a reflective edit tries to overwrite projector-owned facts."""
 
@@ -142,6 +164,11 @@ class JournalTradeService:
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> JournalTradeRead:
+        if data.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
+            raise ValidationAppError(
+                "A BloFin demo hand-trade row is written only by the read-only mirror.",
+                details={"reason": "mirror_source_immutable"},
+            )
         self._validate_strategy_links(
             organization_id=organization_id,
             setup_id=data.setup_id,
@@ -413,6 +440,8 @@ class JournalTradeService:
     ) -> JournalTradeRead:
         row = self._get_row(trade_id, organization_id=organization_id)
         updates = data.model_dump(exclude_unset=True)
+        if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
+            _reject_mirror_venue_edit(row, updates)
         if row.execution_lifecycle_id is not None:
             blocked = sorted(key for key in updates if key in VENUE_FACT_FIELDS)
             if blocked:
