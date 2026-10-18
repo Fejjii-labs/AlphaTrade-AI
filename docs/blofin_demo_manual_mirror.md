@@ -5,7 +5,9 @@ enable real-money trading. It runs inside the existing BloFin demo snapshot
 worker on each cycle, including when the saved snapshot is still inside the
 refresh interval. The snapshot itself is not fetched again while it is fresh.
 A mirror read failure rolls back only the mirror write and does not back off
-the snapshot cycle.
+the snapshot cycle. That failure is stored, and the card stays withheld.
+Positions history that finishes is kept when fills, funding, or orders hit
+the page cap. Those rows stay unverified, and the headline stays withheld.
 
 The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change
