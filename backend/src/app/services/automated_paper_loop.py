@@ -39,7 +39,10 @@ from app.schemas.trade_plan import (
     AuthorizationChannel,
     TradePlanRevisionCreate,
 )
-from app.services.approval_service import ApprovalService
+from app.services.approval_service import (
+    ApprovalService,
+    revoke_leftover_autonomous_authorizations,
+)
 from app.services.audit_service import AuditService
 from app.services.canonical_trade_plan import CanonicalTradePlanService
 from app.services.execution_service import ExecutionService
@@ -335,6 +338,14 @@ class AutomatedPaperLoop:
             eligibility_state = envelope.lineage.eligibility_state.value
         blocked = self._autonomous_approval_refusal(session, target.organization_id)
         if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason="autonomous_precheck_blocked",
+                clock=self._clock.now,
+            )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         from app.services.autonomous_trading import (
             AUTONOMOUS_ACTOR_TYPE,
@@ -417,6 +428,12 @@ class AutomatedPaperLoop:
                     journal_status=_journal_status_value(already_open),
                 )
         if result.outcome is not ExecutionCommandOutcome.ALLOW or result.command_id is None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason="claim_blocked",
+            )
             self._audit(
                 session,
                 target=target,

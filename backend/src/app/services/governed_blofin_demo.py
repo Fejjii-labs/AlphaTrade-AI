@@ -47,7 +47,10 @@ from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitE
 from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import AuthorizationChannel, EntrySide, TradePlanRevisionCreate
 from app.security.tenant import TenantContext
-from app.services.approval_service import ApprovalService
+from app.services.approval_service import (
+    ApprovalService,
+    revoke_leftover_autonomous_authorizations,
+)
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import (
     AutomatedPaperLoop,
@@ -716,6 +719,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if use_autonomous:
             blocked, limits = self._demo_auto_approval_refusal(session, target, envelope.plan)
             if blocked is not None:
+                revoke_leftover_autonomous_authorizations(
+                    session,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    revision_id=revision_id,
+                    reason="autonomous_precheck_blocked",
+                    clock=self._clock.now,
+                )
                 return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         approval = ApprovalService(
             session, AuditService(session), clock=self._clock.now, plans=plans
@@ -785,6 +796,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             clock=self._clock.now,
         )
         if result.outcome is not ExecutionCommandOutcome.ALLOW:
+            if use_autonomous:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason="claim_blocked",
+                )
             return _proof(
                 candidate,
                 "blocked",
