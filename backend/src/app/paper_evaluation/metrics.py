@@ -511,10 +511,13 @@ def _missed_facts(
         if record.facts.setup_quality.confirmed and record.facts.strategy_pattern.skipped
     )
     latest = _latest_eligibility(eligibility)
+    # Autonomous approvals keep plan_approved false so they are not human
+    # approvals. They are still approvals, so an unfilled one is not missed.
     approved = {
         record.candidate_id
         for record in attributions
         if record.facts.strategy_pattern.plan_approved
+        or record.facts.strategy_pattern.autonomous_approval
     }
     executed = {
         record.candidate_id

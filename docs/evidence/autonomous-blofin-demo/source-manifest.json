@@ -1,7 +1,7 @@
 {
   "reviewed_candidate": "de5c010c7c85dfe5cde1ec8fabf60b6262500fe0",
-  "implementation_commit": "73765026d1b39e3564005a7f16deac838edc4f00",
-  "implementation_tree": "0b9051f8f4305de88843ae4a695e3111194eb73e",
+  "implementation_commit": "cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2",
+  "implementation_tree": "d28eb1ac802f56f09f930afd1ff4c46ad0ae9588",
   "files": [
     {
       "path": "backend/src/app/experiments/blofin_source.py",
@@ -33,7 +33,7 @@
     },
     {
       "path": "backend/src/app/experiments/outcomes.py",
-      "sha256": "e3924e90a0646f825615b9f94e8b076c72e61d8eb576bccc3fb8e4255840a361"
+      "sha256": "d434bfa7451c02c783388d5c55f80a590ac9d809fba58dc010efc2bf854974ba"
     },
     {
       "path": "backend/src/app/providers/exchange/governed_blofin.py",
@@ -53,7 +53,7 @@
     },
     {
       "path": "backend/src/app/services/demo_lifecycle_resolution.py",
-      "sha256": "20e0fef2ed9de01febe6b6991642ba6a5088bffa792d5116633c288af49dae19"
+      "sha256": "48811120c3932b2d098a7b6cf3d1e4ecdb881577f35e7b61b53fab37344603c5"
     },
     {
       "path": "backend/src/app/services/execution_claim.py",
@@ -61,7 +61,7 @@
     },
     {
       "path": "backend/src/app/services/governed_blofin_demo.py",
-      "sha256": "a3ff93a1a3cb43ea846408a2390e6ee60d71fd8395ee986573d1315cfa30f3b4"
+      "sha256": "5e6707b5b5672f9a5b796047a0b70c77d34dc0fa9e3065365cde3e110f767f0b"
     },
     {
       "path": "backend/src/app/services/venue_submit_dispatcher.py",
@@ -69,11 +69,11 @@
     },
     {
       "path": "backend/src/app/workers/watcher_paper.py",
-      "sha256": "aac5c5430d01e4098085741cdbc20624343d2682f4d5348ee53aadd9836223d2"
+      "sha256": "a8284b5a19e32b6dd093078fcbfd6708523381d7fffe5e3a4a8805282023ed37"
     },
     {
       "path": "backend/tests/test_autonomous_blofin_demo_postgres.py",
-      "sha256": "6f2637b25fed216e01e075f13d4e0c49f0bc55f15a1ee9e4b5b14ef36f2a5178"
+      "sha256": "beff6a66e57430701d0051e8be86d7b334a1493b7671af41b6b436b826b6af9f"
     },
     {
       "path": "backend/tests/test_governed_demo_exit_evidence.py",
@@ -89,19 +89,19 @@
     },
     {
       "path": "frontend/src/lib/api/generated/hashes.json",
-      "sha256": "d4ece2d54f34daf1a40531a9f82f0dfb7eb08a0815dffa076415151087a37e5a"
+      "sha256": "7d5e3cb8f9aa6e69a4dae79a6c513d596fe454ddbb3ce00e1765068fa7cb72c6"
     },
     {
       "path": "frontend/src/lib/api/generated/openapi.json",
-      "sha256": "eb9f188b454a8eb944705a7eec0d174212e70b2ddc59faef05ef27ef881546a7"
+      "sha256": "0609f8b3f088153e23e7f4ae52a2b5d99a0712f7e494b80ef13719d55f645155"
     },
     {
       "path": "frontend/src/lib/api/generated/types.ts",
-      "sha256": "273c8dd956b147ea162fe4a5a10619f97d9f1c95988fc8d7f8da032bb9419735"
+      "sha256": "be81a4b65e333705645a400e34391a5202687790d6c16da2b93234729ace9703"
     },
     {
       "path": "frontend/src/lib/api/generated/validators.js",
-      "sha256": "dae56919205b7511716cb94cea5e1ac1303565471591020a4785024788963292"
+      "sha256": "868d3912a29512b6d3db641c4c2bd90a7a1b4b121818ca7d7aa4ebc8b6c493b9"
     },
     {
       "path": "frontend/src/lib/api/native-outcomes.test.ts",

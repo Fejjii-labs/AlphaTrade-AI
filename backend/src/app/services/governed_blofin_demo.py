@@ -45,11 +45,19 @@ from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import ApprovalAction, MembershipRole, TradeDirection
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.risk import KillSwitchMutationRequest
-from app.schemas.trade_plan import AuthorizationChannel, EntrySide, TradePlanRevisionCreate
+from app.schemas.trade_plan import (
+    AuthorizationChannel,
+    AuthorizationState,
+    EntrySide,
+    TradePlanRevisionCreate,
+)
 from app.security.tenant import TenantContext
 from app.services.approval_service import (
+    CHANNEL_MISMATCH_REASON,
     ApprovalService,
+    human_execution_refused,
     revoke_leftover_autonomous_authorizations,
+    stored_issuance_matches,
 )
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import (
@@ -791,6 +799,30 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     reason="post_approval_recheck",
                 )
                 return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        if use_autonomous:
+            from app.services.autonomous_trading import AUTONOMOUS_ACTOR_TYPE
+
+            channel_refused = not stored_issuance_matches(
+                decided.authorization,
+                channel=AuthorizationChannel.AUTONOMOUS,
+                actor_type=AUTONOMOUS_ACTOR_TYPE,
+            )
+        else:
+            channel_refused = human_execution_refused(decided.authorization)
+        if channel_refused:
+            if getattr(decided.authorization, "state", None) is AuthorizationState.AVAILABLE:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason=CHANNEL_MISMATCH_REASON,
+                )
+            return _proof(
+                candidate,
+                "blocked",
+                CHANNEL_MISMATCH_REASON,
+                revision_id=revision_id,
+            )
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(
@@ -800,6 +832,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=use_autonomous,
             ),
             clock=self._clock.now,
         )

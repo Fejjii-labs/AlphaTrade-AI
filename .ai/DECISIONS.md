@@ -201,9 +201,19 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   A REVOKED or EXPIRED authorization is not reused. A later cycle whose
   pre-check passes issues a new authorization on the same approval, with a
   new binding and a new approval-decision audit that names the new
-  authorization id. AVAILABLE and CONSUMED rows are reused, so two workers
-  cannot hold two active authorizations for one approval. The claim remains
-  one entry execution per plan revision. The kill switch, unverified risk
+  authorization id. A CONSUMED row is reused, so a revision still has one
+  ALLOW. An AVAILABLE row is reused only when its channel and actor match
+  the issuance being requested. A leftover API, WEB, or TELEGRAM row is
+  revoked with an approval-decision audit before an autonomous authorization
+  is inserted, and a human issuance does the same to a leftover autonomous
+  row. Two workers still cannot hold two active authorizations for one
+  approval. The claim remains
+  one entry execution per plan revision. An autonomous execution idempotency
+  key is ``paper-exec:{candidate_id}:{authorization_id}``. The human and API
+  path keeps ``paper-exec:{candidate_id}``. A committed blocked command for a
+  revoked authorization therefore does not conflict with the reissued
+  authorization, and a second ALLOW for that revision is still refused. The
+  kill switch, unverified risk
   limits, and production refusal are unchanged. Downgrade of a15 refuses on
   every dialect when one approval has more than one authorization row.
 - Existing governed demo flow: with both autonomous flags off, the governed
