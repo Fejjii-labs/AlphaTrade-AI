@@ -714,6 +714,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return _proof(candidate, "closed", "demo_closed_reconciled", revision_id=revision_id)
         use_autonomous, autonomous_block = governed_demo_autonomous_gate(self._settings)
         if autonomous_block is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason="autonomous_precheck_blocked",
+                clock=self._clock.now,
+            )
             return _proof(candidate, "blocked", autonomous_block, revision_id=revision_id)
         limits = None
         if use_autonomous:

@@ -17,13 +17,15 @@ ADDED = {"experiments", "experiment_versions", "experiment_events", "experiment_
 def test_single_additive_migration_chain():
     cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["a14autonomouschannel001"]
+    assert script.get_heads() == ["a15reissueauth001"]
+    assert script.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
     assert script.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"
     assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
     assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
     assert len(script.get_bases()) == 1
     assert [r.revision for r in script.iterate_revisions("heads", "a10blofinactivity001")] == [
+        "a15reissueauth001",
         "a14autonomouschannel001",
         "a13voicemonitor001",
         "a12trendpulsescreen001",

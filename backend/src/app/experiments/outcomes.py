@@ -4,10 +4,10 @@ This performs stored reads/reconciliation only. Integration may wire the existin
 sample route and a Reader route to this facade; no runtime/exchange client is started.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,6 +24,49 @@ from app.experiments.service import ExperimentService, semantic_hash
 from app.market_contracts.models import parse_canonical_decimal
 from app.schemas.experiments import ExperimentSample, ExperimentSampleCreate, ExperimentSource
 from app.security.tenant import TenantContext
+
+
+class _VerifiedPriceOutcome(Protocol):
+    currency: str | None
+    price_pnl_excluding_fees_and_funding: object
+
+
+def price_pnl_fields(
+    outcomes: Sequence[_VerifiedPriceOutcome],
+    *,
+    minimum: int,
+    sample_count: int,
+) -> dict[str, object]:
+    """Price aggregates for one confirmed currency, otherwise nothing.
+
+    Mixed currencies, a missing currency, or a sample gate that does not pass
+    leave every price field unset. Callers must not label a sum with the first
+    outcome's currency.
+    """
+
+    if len(outcomes) < minimum or len(outcomes) != sample_count:
+        return {}
+    currencies = {outcome.currency for outcome in outcomes}
+    if len(currencies) != 1:
+        return {}
+    currency = next(iter(currencies))
+    if not isinstance(currency, str) or currency == "":
+        return {}
+    with localcontext() as context:
+        context.prec = 80
+        values = [
+            parse_canonical_decimal(outcome.price_pnl_excluding_fees_and_funding)
+            for outcome in outcomes
+        ]
+        return {
+            "price_pnl_sample_count": len(values),
+            "price_pnl_currency": currency,
+            "price_pnl_methodology": "verified-linear-fill-prices/v1",
+            "price_pnl_excluding_fees_and_funding": rounded(sum(values, Decimal(0))),
+            "price_pnl_win_rate": rounded(
+                Decimal(sum(value > 0 for value in values)) / Decimal(len(values))
+            ),
+        }
 
 
 class BloFinExperimentReads:
@@ -125,24 +168,13 @@ class BloFinExperimentReads:
                 valid.append(outcome)
         base.update(sample_count=len(valid), outcomes=tuple(outcomes))
         price_outcomes = [o for o in valid if o.closure_verified]
-        if len(price_outcomes) >= config.sample_target.minimum and len(price_outcomes) == len(
-            samples
-        ):
-            with localcontext() as context:
-                context.prec = 80
-                values = [
-                    parse_canonical_decimal(o.price_pnl_excluding_fees_and_funding)
-                    for o in price_outcomes
-                ]
-                base.update(
-                    price_pnl_sample_count=len(values),
-                    price_pnl_currency=price_outcomes[0].currency,
-                    price_pnl_methodology="verified-linear-fill-prices/v1",
-                    price_pnl_excluding_fees_and_funding=rounded(sum(values, Decimal(0))),
-                    price_pnl_win_rate=rounded(
-                        Decimal(sum(v > 0 for v in values)) / Decimal(len(values))
-                    ),
-                )
+        base.update(
+            price_pnl_fields(
+                price_outcomes,
+                minimum=config.sample_target.minimum,
+                sample_count=len(samples),
+            )
+        )
         reason = None
         if len(valid) != len(samples):
             reason = "sample_outcome_unavailable_or_changed"

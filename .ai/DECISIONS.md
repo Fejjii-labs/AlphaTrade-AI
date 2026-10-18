@@ -63,7 +63,16 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   `reason=autonomous_precheck_blocked`. A claim that blocks after issuance
   revokes that authorization with `reason=claim_blocked`. Both write the
   same approval-decision audit. A revoke that changes nothing writes no
-  second audit row.
+  second audit row. A contradictory autonomous gate refusal also revokes
+  leftover AVAILABLE AUTONOMOUS authorizations before it returns.
+  A REVOKED or EXPIRED authorization is not reused. A later cycle whose
+  pre-check passes issues a new authorization on the same approval, with a
+  new binding and a new approval-decision audit that names the new
+  authorization id. AVAILABLE and CONSUMED rows are reused, so two workers
+  cannot hold two active authorizations for one approval. The claim remains
+  one entry execution per plan revision. The kill switch, unverified risk
+  limits, and production refusal are unchanged. Downgrade of a15 refuses on
+  every dialect when one approval has more than one authorization row.
 - Existing governed demo flow: with both autonomous flags off, the governed
   BloFin demo worker keeps its pre-existing API-channel approval. That path
   is not an AUTONOMOUS approval and is not subject to the unverified-ledger
@@ -75,7 +84,11 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   (`create_all`) installs the same predicate as an explicit table CHECK.
   Other portable enums stay VARCHAR without a database CHECK. Downgrade
   restores the WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row
-  exists.
+  exists. That row check runs on every dialect. Replacing the CHECK uses
+  the PostgreSQL catalog because PostgreSQL is the migrated production
+  database. Experiment price PnL aggregates are written only when the
+  verified closures share one confirmed currency. Mixed or missing
+  currencies leave those fields unknown.
 - Environment: `environment=production` refuses both modes at startup in
   `deployment_safety.py` and again when the mode is resolved. Staging may
   still arm a flag. BloFin demo execution stays staging-only through the

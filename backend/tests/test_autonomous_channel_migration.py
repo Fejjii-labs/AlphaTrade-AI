@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from tests.support.alembic_heads import single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 _REVISION = "a14autonomouschannel001"
+_HEAD = "a15reissueauth001"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -51,7 +53,10 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     revision = script.get_revision(_REVISION)
     assert revision is not None
     assert revision.down_revision == _PARENT
-    assert single_alembic_head(script) == _REVISION
+    head = script.get_revision(_HEAD)
+    assert head is not None
+    assert head.down_revision == _REVISION
+    assert single_alembic_head(script) == _HEAD
 
 
 @requires_postgres
@@ -89,7 +94,42 @@ def test_alembic_upgrade_stores_autonomous_and_rejects_an_invalid_channel(
             )
         assert isinstance(definition, str)
         assert "AUTONOMOUS" in definition
+        with engine.connect() as connection:
+            indexdef = connection.scalar(
+                text(
+                    """
+                    SELECT indexdef FROM pg_indexes
+                    WHERE schemaname = current_schema()
+                      AND indexname = 'uq_reusable_approval_authorization'
+                    """
+                )
+            )
+            leftover_unique = connection.scalar(
+                text(
+                    """
+                    SELECT c.conname
+                    FROM pg_constraint c
+                    JOIN pg_class t ON t.oid = c.conrelid
+                    JOIN pg_namespace n ON n.oid = t.relnamespace
+                    WHERE n.nspname = current_schema()
+                      AND t.relname = 'approval_authorizations'
+                      AND c.contype = 'u'
+                      AND pg_get_constraintdef(c.oid) ILIKE '%approval_request_id%'
+                    """
+                )
+            )
+        assert isinstance(indexdef, str)
+        assert "AVAILABLE" in indexdef
+        assert "CONSUMED" in indexdef
+        assert leftover_unique is None
         _insert_channel(engine, "AUTONOMOUS")
+        with pytest.raises(IntegrityError):
+            _insert_sibling_authorization(engine, state="AVAILABLE")
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE approval_authorizations SET state = 'REVOKED'"))
+        _insert_sibling_authorization(engine, state="AVAILABLE")
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM approval_authorizations WHERE state = 'REVOKED'"))
         with pytest.raises(IntegrityError):
             _insert_channel(engine, "NOT_A_CHANNEL")
         with pytest.raises(RuntimeError, match="AUTONOMOUS approval authorizations exist"):
@@ -263,3 +303,102 @@ def _insert_channel(engine: object, channel: str) -> None:
                 "auth_hash": uuid4().hex + uuid4().hex,
             },
         )
+
+
+def _insert_sibling_authorization(engine: object, *, state: str) -> None:
+    """Insert another authorization for the approval already stored in this schema."""
+
+    from sqlalchemy.engine import Engine
+
+    assert isinstance(engine, Engine)
+    with engine.begin() as connection:
+        existing = connection.execute(
+            text(
+                """
+                SELECT approval_request_id, organization_id, user_id, account_id, plan_id,
+                       revision_id, plan_content_hash
+                FROM approval_authorizations
+                LIMIT 1
+                """
+            )
+        ).one()
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations ("
+                "id, approval_request_id, organization_id, user_id, account_id, "
+                "exchange_account_scope_key, operation, execution_mode, plan_id, revision_id, "
+                "plan_content_hash, execution_venue, execution_instrument, verified_account_mode, "
+                "permission_attestation_id, permission_attestation_version, expires_at, state, "
+                "channel, actor_type, actor_id, correlation_id, authorization_content_hash"
+                ") VALUES ("
+                ":id, :approval, :org, :user, :account, 'NONE', 'SUBMIT_ENTRY', 'PAPER', "
+                ":plan, :revision, :digest, 'BLOFIN_DEMO', 'BTCUSDT', 'NET', :attestation, "
+                "'v1', now() + interval '1 day', :state, 'AUTONOMOUS', 'SYSTEM', :user, "
+                ":correlation, :auth_hash)"
+            ),
+            {
+                "id": uuid4(),
+                "approval": existing.approval_request_id,
+                "org": existing.organization_id,
+                "user": existing.user_id,
+                "account": existing.account_id,
+                "plan": existing.plan_id,
+                "revision": existing.revision_id,
+                "digest": existing.plan_content_hash,
+                "attestation": uuid4(),
+                "state": state,
+                "correlation": uuid4(),
+                "auth_hash": uuid4().hex + uuid4().hex,
+            },
+        )
+
+
+def _migration_module(name: str):
+    path = Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions" / name
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_autonomous_downgrade_refusal_sees_rows_on_sqlite() -> None:
+    module = _migration_module("a14autonomouschannel001_autonomous_authorization_channel.py")
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE approval_authorizations (channel VARCHAR(40))"))
+        connection.execute(
+            text("INSERT INTO approval_authorizations (channel) VALUES ('AUTONOMOUS')")
+        )
+        assert module._autonomous_rows_exist(connection) is True
+        connection.execute(text("DELETE FROM approval_authorizations"))
+        assert module._autonomous_rows_exist(connection) is False
+
+
+def test_reissue_downgrade_refusal_sees_duplicate_rows_on_sqlite() -> None:
+    module = _migration_module("a15reissueauth001_reissue_authorization_after_revoke.py")
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    approval_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE approval_authorizations "
+                "(id VARCHAR(36) PRIMARY KEY, approval_request_id VARCHAR(36))"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations (id, approval_request_id) "
+                "VALUES (:id, :approval)"
+            ),
+            {"id": str(uuid4()), "approval": str(approval_id)},
+        )
+        assert module._duplicate_approval_authorizations(connection) is False
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations (id, approval_request_id) "
+                "VALUES (:id, :approval)"
+            ),
+            {"id": str(uuid4()), "approval": str(approval_id)},
+        )
+        assert module._duplicate_approval_authorizations(connection) is True

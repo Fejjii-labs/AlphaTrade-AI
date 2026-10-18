@@ -8,7 +8,10 @@ The original authorization column was a non-native enum of WEB, API, and
 TELEGRAM. Databases migrated while that enum created a CHECK still reject
 AUTONOMOUS. This revision replaces any channel CHECK with one that also
 allows AUTONOMOUS. Downgrade restores the three-value CHECK and refuses
-while an AUTONOMOUS row is still stored.
+while an AUTONOMOUS row is still stored. That row check runs on every
+dialect. Replacing the CHECK uses the PostgreSQL catalog because PostgreSQL
+is the migrated production database; SQLite tests build the same predicate
+with ``create_all``.
 """
 
 from __future__ import annotations
@@ -35,20 +38,30 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        stored = bind.execute(
-            sa.text("SELECT 1 FROM approval_authorizations WHERE channel = 'AUTONOMOUS' LIMIT 1")
-        ).first()
-        if stored is not None:
-            raise RuntimeError(
-                "AUTONOMOUS approval authorizations exist; downgrade would reject those rows."
-            )
+    if _autonomous_rows_exist(op.get_bind()):
+        raise RuntimeError(
+            "AUTONOMOUS approval authorizations exist; downgrade would reject those rows."
+        )
     _drop_channel_checks()
     op.create_check_constraint(_CONSTRAINT, "approval_authorizations", _LEGACY)
 
 
+def _autonomous_rows_exist(bind: sa.Connection) -> bool:
+    """True when any stored channel is AUTONOMOUS. The SELECT is dialect-independent."""
+
+    stored = bind.execute(
+        sa.text("SELECT 1 FROM approval_authorizations WHERE channel = 'AUTONOMOUS' LIMIT 1")
+    ).first()
+    return stored is not None
+
+
 def _drop_channel_checks() -> None:
+    """Replace channel CHECKs from the PostgreSQL catalog.
+
+    Production migrations run on PostgreSQL. Other dialects keep the row
+    refusal above and do not invent a second catalog query.
+    """
+
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
