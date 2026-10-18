@@ -332,6 +332,35 @@ class GovernedBloFinDemoProvider:
             ):
                 raise ValueError("Demo execution connection differs from the owned native account.")
 
+    def read_funding_rate(self, *, symbol: str) -> Decimal | None:
+        """Finite public funding print, or None when the GET fails.
+
+        A failure is not replaced with the mock 0.0001 fallback. Callers use
+        the documented floor instead. This does not place an order.
+        """
+
+        try:
+            data = self._client.request(
+                "GET",
+                "/api/v1/market/funding-rate",
+                params={"instId": to_blofin_inst_id(symbol)},
+            )
+        except Exception:
+            return None
+        row = data[0] if isinstance(data, list) and data else data
+        if not isinstance(row, dict):
+            return None
+        raw = row.get("fundingRate")
+        if raw is None or raw == "":
+            return None
+        try:
+            rate = Decimal(str(raw))
+        except Exception:
+            return None
+        if not rate.is_finite():
+            return None
+        return rate
+
     def read_open_liquidation(self, *, inst_id: str) -> Decimal | None:
         """Liquidation price of one open position. None when that market is flat.
 

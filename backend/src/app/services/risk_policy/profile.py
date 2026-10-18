@@ -87,6 +87,10 @@ class RiskPolicyProfile:
     max_cost_share_of_r: Decimal
     drawdown_breaker_percent: Decimal
     consecutive_loss_limit: int
+    # Hours the consecutive-loss pause lasts. Shortening it is a loosening.
+    # The pause is the later of the next UTC midnight and this many hours,
+    # and a later scan does not extend it. Default 24. Range 1..168.
+    consecutive_loss_cooldown_hours: int = 24
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
     profile_name: str = ""
@@ -125,6 +129,7 @@ def placeholder_profile(kind: PolicyKind) -> RiskPolicyProfile:
         max_cost_share_of_r=Decimal("0.20"),
         drawdown_breaker_percent=Decimal("10"),
         consecutive_loss_limit=4,
+        consecutive_loss_cooldown_hours=24,
         autonomous_internal_paper_enabled=False,
         autonomous_blofin_demo_enabled=False,
         profile_name="",
@@ -159,6 +164,9 @@ def profile_with(kind: PolicyKind, **overrides: object) -> RiskPolicyProfile:
         drawdown_breaker_percent=_decimal(data["drawdown_breaker_percent"]),
         consecutive_loss_limit=_positive_int(
             data["consecutive_loss_limit"], "consecutive_loss_limit"
+        ),
+        consecutive_loss_cooldown_hours=_cooldown_hours(
+            data.get("consecutive_loss_cooldown_hours", 24)
         ),
         autonomous_internal_paper_enabled=_bool_flag(
             data["autonomous_internal_paper_enabled"], "autonomous_internal_paper_enabled"
@@ -276,6 +284,13 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
         or profile.consecutive_loss_limit > 20
     ):
         raise RiskPolicyRejected("consecutive_loss_limit_invalid")
+    if (
+        not isinstance(profile.consecutive_loss_cooldown_hours, int)
+        or isinstance(profile.consecutive_loss_cooldown_hours, bool)
+        or profile.consecutive_loss_cooldown_hours < 1
+        or profile.consecutive_loss_cooldown_hours > 168
+    ):
+        raise RiskPolicyRejected("consecutive_loss_cooldown_invalid")
     if profile.autonomous_internal_paper_enabled or profile.autonomous_blofin_demo_enabled:
         raise RiskPolicyRejected("autonomous_flags_must_stay_off")
     _profile_name(profile.profile_name)
@@ -316,6 +331,7 @@ def canonical_profile(profile: RiskPolicyProfile) -> dict[str, str]:
         "max_cost_share_of_r": _text(profile.max_cost_share_of_r),
         "drawdown_breaker_percent": _text(profile.drawdown_breaker_percent),
         "consecutive_loss_limit": str(profile.consecutive_loss_limit),
+        "consecutive_loss_cooldown_hours": str(profile.consecutive_loss_cooldown_hours),
         "autonomous_internal_paper_enabled": "false",
         "autonomous_blofin_demo_enabled": "false",
         "profile_name": profile.profile_name,
@@ -350,6 +366,9 @@ def profile_from_canonical(payload: dict[str, str]) -> RiskPolicyProfile:
             max_cost_share_of_r=_decimal(payload["max_cost_share_of_r"]),
             drawdown_breaker_percent=_decimal(payload["drawdown_breaker_percent"]),
             consecutive_loss_limit=int(payload["consecutive_loss_limit"]),
+            consecutive_loss_cooldown_hours=int(
+                payload.get("consecutive_loss_cooldown_hours", "24")
+            ),
             autonomous_internal_paper_enabled=payload["autonomous_internal_paper_enabled"]
             == "true",
             autonomous_blofin_demo_enabled=payload["autonomous_blofin_demo_enabled"] == "true",
@@ -404,6 +423,8 @@ _LOOSENS_WHEN_INCREASED = (
 _LOOSENS_WHEN_DECREASED = (
     "min_stop_atr_multiple",
     "min_stop_absolute_floor",
+    # A shorter pause lets trading resume sooner.
+    "consecutive_loss_cooldown_hours",
 )
 
 
@@ -457,6 +478,7 @@ def _as_mapping(profile: RiskPolicyProfile) -> dict[str, object]:
         "max_cost_share_of_r": profile.max_cost_share_of_r,
         "drawdown_breaker_percent": profile.drawdown_breaker_percent,
         "consecutive_loss_limit": profile.consecutive_loss_limit,
+        "consecutive_loss_cooldown_hours": profile.consecutive_loss_cooldown_hours,
         "autonomous_internal_paper_enabled": profile.autonomous_internal_paper_enabled,
         "autonomous_blofin_demo_enabled": profile.autonomous_blofin_demo_enabled,
         "profile_name": profile.profile_name,
@@ -504,6 +526,16 @@ def _positive_int(value: object, code: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise RiskPolicyRejected(code)
     return value
+
+
+def _cooldown_hours(value: object) -> int:
+    if isinstance(value, bool):
+        raise RiskPolicyRejected("consecutive_loss_cooldown_invalid")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    raise RiskPolicyRejected("consecutive_loss_cooldown_invalid")
 
 
 def sofien_aggressive_profile(kind: PolicyKind) -> RiskPolicyProfile:

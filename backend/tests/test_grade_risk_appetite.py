@@ -819,9 +819,28 @@ def test_half_percent_stop_keeps_round_trip_fees_inside_the_grade() -> None:
         remaining_daily_budget_percent=Decimal("6"),
         breaker_refusing=False,
     )
-    assert not isinstance(sized, str), sized
-    unit = profile_unit_cost(Decimal("100"), Decimal("99.5"), include_book_buffer=False)
-    assert sized.quantity * (Decimal("0.5") + unit) <= Decimal("500")
+    # The 0.0001 per 8h funding floor puts a 0.5% stop over the 20% cost share.
+    assert sized == "costs_exceed_r"
+    wider = size_for_profile(
+        active=ActiveProfile(profile=profile, version_id=uuid4()),
+        grade=grade,
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("99"),
+        target=Decimal("102"),
+        direction="long",
+        atr=Decimal("0.4"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        breaker_refusing=False,
+    )
+    assert not isinstance(wider, str), wider
+    unit = profile_unit_cost(Decimal("100"), Decimal("99"), include_book_buffer=False)
+    assert wider.quantity * (Decimal("1") + unit) <= Decimal("500")
     demo = size_for_profile(
         active=ActiveProfile(
             profile=sofien_aggressive_profile(PolicyKind.DEMO), version_id=uuid4()
@@ -843,6 +862,58 @@ def test_half_percent_stop_keeps_round_trip_fees_inside_the_grade() -> None:
         include_book_buffer=True,
     )
     assert demo == "costs_exceed_r"
+
+
+def test_funding_uses_a_verified_live_rate_or_the_eight_hour_floor() -> None:
+    from app.services.risk_policy.plan_sizing import (
+        PAPER_DEMO_FUNDING_RATE_PER_8H,
+        paper_demo_funding,
+    )
+
+    floor, one = paper_demo_funding(None)
+    assert floor == PAPER_DEMO_FUNDING_RATE_PER_8H == Decimal("0.0001")
+    assert one == Decimal("1")
+    failed, failed_periods = paper_demo_funding(Decimal("0.0001"), live_verified=False)
+    assert failed == Decimal("0.0001") and failed_periods == Decimal("1")
+    tiny, _periods = paper_demo_funding(Decimal("0.00001"), live_verified=True)
+    assert tiny == Decimal("0.0001")
+    live, live_periods = paper_demo_funding(
+        Decimal("-0.0003"),
+        live_verified=True,
+        expected_hold_hours=Decimal("24"),
+    )
+    assert live == Decimal("0.0003")
+    assert live_periods == Decimal("3")
+    short_hold, short_periods = paper_demo_funding(None, expected_hold_hours=Decimal("4"))
+    assert short_hold == Decimal("0.0001") and short_periods == Decimal("1")
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    grade = GradeDecision(Grade.B, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    common = {
+        "active": ActiveProfile(profile=profile, version_id=uuid4()),
+        "grade": grade,
+        "equity": Decimal("10000"),
+        "entry": Decimal("100"),
+        "stop": Decimal("98"),
+        "target": Decimal("104"),
+        "direction": "long",
+        "atr": Decimal("1"),
+        "lot_step": Decimal("0.00000001"),
+        "min_quantity": Decimal("0.00000001"),
+        "open_risk_percent": Decimal("0"),
+        "open_notional": Decimal("0"),
+        "open_positions": 0,
+        "remaining_daily_budget_percent": Decimal("6"),
+        "breaker_refusing": False,
+    }
+    at_floor = size_for_profile(**common)
+    at_live = size_for_profile(**common, funding_rate=Decimal("0.001"), funding_rate_verified=True)
+    assert not isinstance(at_floor, str) and not isinstance(at_live, str)
+    assert at_live.funding_rate == Decimal("0.001")
+    assert at_live.quantity < at_floor.quantity
+    held = size_for_profile(**common, expected_hold_hours=Decimal("24"))
+    assert not isinstance(held, str)
+    assert held.funding_periods == Decimal("3")
+    assert held.quantity < at_floor.quantity
 
 
 def test_blocked_profile_claim_does_not_widen_the_ledger() -> None:

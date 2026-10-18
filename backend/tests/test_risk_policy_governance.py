@@ -1186,3 +1186,102 @@ def _sizing_order():
         leverage=Decimal("1"),
         margin_mode="isolated",
     )
+
+
+def test_consecutive_cooldown_round_trips_and_a_shorter_pause_is_a_loosening() -> None:
+    from app.schemas.common import AuditResult
+    from app.services.risk_policy.governance import consecutive_reset_binding
+    from app.services.risk_policy.profile import (
+        ChangeClass,
+        canonical_profile,
+        classify_change,
+        profile_from_canonical,
+    )
+
+    assert placeholder_profile(PolicyKind.INTERNAL_PAPER).consecutive_loss_cooldown_hours == 24
+    stored = canonical_profile(placeholder_profile(PolicyKind.DEMO))
+    del stored["consecutive_loss_cooldown_hours"]
+    assert profile_from_canonical(stored).consecutive_loss_cooldown_hours == 24
+    longer = profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=48)
+    shorter = profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=12)
+    assert (
+        classify_change(placeholder_profile(PolicyKind.INTERNAL_PAPER), longer)
+        is ChangeClass.TIGHTENING
+    )
+    assert (
+        classify_change(placeholder_profile(PolicyKind.INTERNAL_PAPER), shorter)
+        is ChangeClass.LOOSENING
+    )
+    with pytest.raises(RiskPolicyRejected) as invalid:
+        profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=0)
+    assert invalid.value.code == "consecutive_loss_cooldown_invalid"
+    session = _session()
+    service = _service(session)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=longer,
+        reason="Hold the consecutive pause for two days.",
+        now=NOW,
+    )
+    applied = _apply(service, proposal, _human())
+    active, row, _scheduled = service.read(
+        organization_id=ORG, kind=PolicyKind.INTERNAL_PAPER, now=NOW
+    )
+    assert row is not None and row.id == applied.id
+    assert active.consecutive_loss_cooldown_hours == 48
+    account = uuid.uuid4()
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=NOW + timedelta(hours=10),
+        drawdown_latched=True,
+        now=NOW,
+    )
+    proposal_id, content_hash = consecutive_reset_binding(account)
+    proof = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=NOW - timedelta(minutes=1),
+        step_up_at=NOW - timedelta(seconds=20),
+    )
+    with pytest.raises(RiskPolicyRejected) as agent:
+        service.reset_consecutive_losses(
+            organization_id=ORG,
+            account_id=account,
+            actor=_agent(),
+            proof=proof,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert agent.value.code == "apply_refuses_agent_token"
+    service.reset_consecutive_losses(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        proof=proof,
+        owner_user_id="sofien",
+        now=NOW,
+    )
+    state = service.load_breaker(organization_id=ORG, account_id=account)
+    assert state is not None
+    assert state.consecutive_losses == 0
+    assert state.consecutive_paused_until is None
+    assert state.drawdown_latched is True
+    audit = session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+            AuditLog.result == AuditResult.SUCCESS,
+        )
+    )
+    assert audit is not None
+    assert service.breaker_active(organization_id=ORG, now=NOW) is True

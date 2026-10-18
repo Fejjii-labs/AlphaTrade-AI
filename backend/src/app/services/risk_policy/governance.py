@@ -14,9 +14,11 @@ are immutable; this module only decides, it does not update an existing version.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from uuid import UUID
 
 from app.services.risk_policy.clock import loosening_effective_at
 from app.services.risk_policy.errors import RiskPolicyRejected
@@ -157,6 +159,18 @@ def assert_can_apply(
             raise RiskPolicyRejected("apply_proof_chat_mismatch")
         return
     raise RiskPolicyRejected("apply_proof_missing")
+
+
+def consecutive_reset_binding(account_id: UUID) -> tuple[str, str]:
+    """Proof subject for a consecutive-loss reset. Not a profile proposal.
+
+    The human proof is bound to this id and hash the same way an apply proof
+    is bound to a proposal. An agent cannot satisfy ``assert_can_apply``.
+    """
+
+    proposal_id = f"consecutive-reset:{account_id}"
+    content_hash = hashlib.sha256(proposal_id.encode()).hexdigest()
+    return proposal_id, content_hash
 
 
 def proposal_is_expired(created_at: datetime, now: datetime) -> bool:

@@ -54,6 +54,7 @@ from app.services.canonical_paper_execution import (
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
+from app.services.risk_policy.plan_sizing import PAPER_DEMO_FUNDING_RATE_PER_8H
 from app.services.risk_policy.profile import PolicyKind
 from app.services.safety_epoch import SafetyEpochService
 
@@ -66,18 +67,36 @@ def signed_verified_demo_pnl(
     quantity: Decimal,
     contract_multiplier: Decimal,
     reported_pnl: Decimal | None,
+    fees: Decimal | None = None,
+    funding: Decimal | None = None,
+    notional: Decimal | None = None,
 ) -> Decimal:
-    """Sign for the consecutive-loss rule. Does not write journal net PnL.
+    """Net sign for the consecutive-loss rule. Does not write journal net PnL.
 
-    Venue fill PnL is used when every exit fill reported one. Otherwise the
-    sign is the verified entry-to-exit price difference. Neither value is
-    stored as ``net_pnl``.
+    Gross is the venue fill PnL when every exit fill reported one, otherwise
+    the verified price difference. Verified fees are subtracted. A missing or
+    non-finite fee figure does not treat a non-negative gross as a win.
+    Verified funding cash is subtracted (a credit is negative). When no
+    funding cash was reported, one 8h window at the 0.0001 floor is subtracted
+    from ``notional`` so a scratch that loses only after funding counts as a
+    loss. That estimate is not stored as ``net_pnl`` or as journal funding.
     """
 
     if reported_pnl is not None and reported_pnl.is_finite():
-        return reported_pnl
-    cash = (exit_price - entry_price) * quantity * contract_multiplier
-    return cash if is_long else -cash
+        gross = reported_pnl
+    else:
+        cash = (exit_price - entry_price) * quantity * contract_multiplier
+        gross = cash if is_long else -cash
+    if fees is None or not fees.is_finite() or fees < 0:
+        if gross < 0:
+            return gross
+        return Decimal("-0.00000001")
+    net = gross - fees
+    if funding is not None and funding.is_finite():
+        return net - funding
+    if notional is not None and notional.is_finite() and notional > 0:
+        return net - notional * PAPER_DEMO_FUNDING_RATE_PER_8H
+    return net
 
 
 def resolve_verified_demo_exit(
@@ -427,6 +446,12 @@ def resolve_verified_demo_exit(
                 quantity=evidence.entry_quantity,
                 contract_multiplier=plan.instrument_rules.contract_multiplier,
                 reported_pnl=reported_pnl,
+                fees=fees,
+                notional=(
+                    entry_price
+                    * evidence.entry_quantity
+                    * plan.instrument_rules.contract_multiplier
+                ),
             ),
             now=evidence.observed_at,
             kind=PolicyKind.DEMO,

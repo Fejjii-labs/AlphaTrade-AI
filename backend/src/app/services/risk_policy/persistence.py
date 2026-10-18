@@ -39,6 +39,7 @@ from app.services.risk_policy.governance import (
     PolicyChannel,
     assert_can_apply,
     assert_can_propose,
+    consecutive_reset_binding,
     decide_apply,
     proposal_is_expired,
 )
@@ -91,7 +92,7 @@ class RiskPolicyService:
         scheduled = self._scheduled_row(organization_id, kind, moment)
         if active is None:
             return placeholder_profile(kind), None, scheduled
-        return profile_from_row(active), active, scheduled
+        return self._profile_from_version(active), active, scheduled
 
     def propose(
         self,
@@ -175,7 +176,7 @@ class RiskPolicyService:
         if previous_row is None:
             previous = placeholder_profile(kind)
         else:
-            previous = profile_from_row(previous_row)
+            previous = self._profile_from_version(previous_row)
         decision = decide_apply(
             actor=actor,
             previous=previous,
@@ -643,7 +644,7 @@ class RiskPolicyService:
         row.drawdown_latched = drawdown_latched
         row.updated_at = now
         self._note_pause(organization_id, account_id, "daily", now, daily_paused_until)
-        self._note_pause(organization_id, account_id, "consecutive", now, consecutive_paused_until)
+        self._note_consecutive_pause(organization_id, account_id, now, consecutive_paused_until)
         if drawdown_latched:
             self._open_breaker(organization_id, account_id, "drawdown", now)
         else:
@@ -712,6 +713,96 @@ class RiskPolicyService:
         row.drawdown_latched = False
         row.updated_at = now
         self._session.flush()
+
+    def reset_consecutive_losses(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        actor: PolicyActor,
+        proof: HumanApplyProof | None,
+        owner_user_id: str,
+        pinned_telegram_chat_id: str = "",
+        now: datetime,
+    ) -> None:
+        """Clear the consecutive streak. Same human proof as a loosening apply.
+
+        Agents, bots, and service tokens are refused. A drawdown latch is not
+        cleared. The audit row names the account and the proof method.
+        """
+
+        proposal_id, content_hash = consecutive_reset_binding(account_id)
+        try:
+            assert_can_apply(
+                actor,
+                proof,
+                owner_user_id=owner_user_id,
+                pinned_telegram_chat_id=pinned_telegram_chat_id,
+                proposal_id=proposal_id,
+                content_hash=content_hash,
+                now=now,
+            )
+        except RiskPolicyRejected as exc:
+            self._audit_event(
+                AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+                organization_id=organization_id,
+                actor=actor,
+                resource_id=str(account_id),
+                result=AuditResult.BLOCKED,
+                metadata={"reason": exc.code, "account_id": str(account_id)},
+            )
+            raise
+        row = self._session.scalar(
+            select(RiskPolicyBreakerState).where(
+                RiskPolicyBreakerState.organization_id == organization_id,
+                RiskPolicyBreakerState.account_id == account_id,
+            )
+        )
+        if row is None or (
+            int(row.consecutive_losses) == 0 and row.consecutive_paused_until is None
+        ):
+            raise RiskPolicyRejected("consecutive_not_active")
+        self._close_breaker(organization_id, account_id, "consecutive", now)
+        row.consecutive_losses = 0
+        row.consecutive_paused_until = None
+        row.updated_at = now
+        self._session.flush()
+        self._audit_event(
+            AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+            organization_id=organization_id,
+            actor=actor,
+            resource_id=str(account_id),
+            metadata={
+                "account_id": str(account_id),
+                "proof_method": proof.method if proof is not None else "",
+                "drawdown_latched": bool(row.drawdown_latched),
+            },
+        )
+
+    def _profile_from_version(self, row: RiskPolicyVersion) -> RiskPolicyProfile:
+        proposal = self._session.get(RiskPolicyProposal, row.proposal_id)
+        payload = proposal.payload if proposal is not None else None
+        stored = payload if isinstance(payload, dict) else None
+        return profile_from_row(row, payload=stored)
+
+    def _note_consecutive_pause(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        now: datetime,
+        paused_until: datetime | None,
+    ) -> None:
+        """Open the consecutive window once. Close it when the pause ends.
+
+        The close is not pre-written at the future expiry. A manual reset or
+        the expiry scan can then end the window at the real time.
+        """
+
+        if paused_until is not None and _pause_active(paused_until, now):
+            if self._open_started_at(organization_id, account_id, "consecutive") is None:
+                self._append_interval(organization_id, account_id, "consecutive", "open", now)
+            return
+        self._close_breaker(organization_id, account_id, "consecutive", now)
 
     def _scheduled_row(
         self, organization_id: uuid.UUID, kind: PolicyKind, now: datetime
@@ -807,37 +898,42 @@ class RiskPolicyService:
             raise RiskPolicyRejected("reason_invalid")
 
 
-def profile_from_row(row: RiskPolicyVersion) -> RiskPolicyProfile:
-    return profile_from_canonical(
-        {
-            "kind": row.kind,
-            "risk_percent_a_plus": format(row.risk_percent_a_plus, "f"),
-            "risk_percent_a": format(row.risk_percent_a, "f"),
-            "risk_percent_b_plus": format(row.risk_percent_b_plus, "f"),
-            "risk_percent_b": format(row.risk_percent_b, "f"),
-            "risk_percent_c": format(row.risk_percent_c, "f"),
-            "max_leverage": format(row.max_leverage, "f"),
-            "daily_loss_limit_percent": format(row.daily_loss_limit_percent, "f"),
-            "max_aggregate_open_risk_percent": format(row.max_aggregate_open_risk_percent, "f"),
-            "max_open_positions": str(row.max_open_positions),
-            "max_notional_per_trade_percent": format(row.max_notional_per_trade_percent, "f"),
-            "max_aggregate_notional_percent": format(row.max_aggregate_notional_percent, "f"),
-            "min_stop_atr_multiple": format(row.min_stop_atr_multiple, "f"),
-            "min_stop_absolute_floor": format(row.min_stop_absolute_floor, "f"),
-            "max_cost_share_of_r": format(row.max_cost_share_of_r, "f"),
-            "drawdown_breaker_percent": format(row.drawdown_breaker_percent, "f"),
-            "consecutive_loss_limit": str(row.consecutive_loss_limit),
-            "autonomous_internal_paper_enabled": (
-                "true" if row.autonomous_internal_paper_enabled else "false"
-            ),
-            "autonomous_blofin_demo_enabled": (
-                "true" if row.autonomous_blofin_demo_enabled else "false"
-            ),
-            "profile_name": row.profile_name or "",
-            "default_leverage": format(row.default_leverage, "f"),
-            "paper_demo_data_collection": ("true" if row.paper_demo_data_collection else "false"),
-        }
-    )
+def profile_from_row(
+    row: RiskPolicyVersion, *, payload: dict[str, object] | None = None
+) -> RiskPolicyProfile:
+    canonical = {
+        "kind": row.kind,
+        "risk_percent_a_plus": format(row.risk_percent_a_plus, "f"),
+        "risk_percent_a": format(row.risk_percent_a, "f"),
+        "risk_percent_b_plus": format(row.risk_percent_b_plus, "f"),
+        "risk_percent_b": format(row.risk_percent_b, "f"),
+        "risk_percent_c": format(row.risk_percent_c, "f"),
+        "max_leverage": format(row.max_leverage, "f"),
+        "daily_loss_limit_percent": format(row.daily_loss_limit_percent, "f"),
+        "max_aggregate_open_risk_percent": format(row.max_aggregate_open_risk_percent, "f"),
+        "max_open_positions": str(row.max_open_positions),
+        "max_notional_per_trade_percent": format(row.max_notional_per_trade_percent, "f"),
+        "max_aggregate_notional_percent": format(row.max_aggregate_notional_percent, "f"),
+        "min_stop_atr_multiple": format(row.min_stop_atr_multiple, "f"),
+        "min_stop_absolute_floor": format(row.min_stop_absolute_floor, "f"),
+        "max_cost_share_of_r": format(row.max_cost_share_of_r, "f"),
+        "drawdown_breaker_percent": format(row.drawdown_breaker_percent, "f"),
+        "consecutive_loss_limit": str(row.consecutive_loss_limit),
+        "autonomous_internal_paper_enabled": (
+            "true" if row.autonomous_internal_paper_enabled else "false"
+        ),
+        "autonomous_blofin_demo_enabled": (
+            "true" if row.autonomous_blofin_demo_enabled else "false"
+        ),
+        "profile_name": row.profile_name or "",
+        "default_leverage": format(row.default_leverage, "f"),
+        "paper_demo_data_collection": ("true" if row.paper_demo_data_collection else "false"),
+    }
+    if payload is not None and payload.get("consecutive_loss_cooldown_hours") is not None:
+        canonical["consecutive_loss_cooldown_hours"] = str(
+            payload["consecutive_loss_cooldown_hours"]
+        )
+    return profile_from_canonical(canonical)
 
 
 def _decision_from_binding(row: RiskPolicyGradeBinding) -> GradeDecision:

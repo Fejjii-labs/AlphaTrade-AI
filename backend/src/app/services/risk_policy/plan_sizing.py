@@ -36,11 +36,16 @@ PAPER_DEMO_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
 # BloFin public taker example. Charged on the entry and again at the stop.
 # This is not a live fee feed.
 PAPER_DEMO_TAKER_FEE_RATE = Decimal("0.0006")
-# One expected funding period. The published funding cap (0.00375) would refuse
-# a 0.5% stop under the 20% cost-share ceiling. 0.00005 keeps that example
-# inside the ceiling while the exit-leg fee is still inside the grade cash.
-# This is not a live funding feed.
-PAPER_DEMO_FUNDING_RATE = Decimal("0.00005")
+# Funding floor: 0.0001 per 8 hours (AT-ADR-110). A verified live print is
+# used when one exists, and never below this floor. The wired path has no
+# hold forecast, so the expected hold is one 8h window. A longer
+# caller-supplied hold scales the number of windows. A failed GET is not
+# replaced with the mock market-data fallback. A 0.5% stop can refuse with
+# ``costs_exceed_r`` at this floor; the 20% cost-share ceiling stays.
+PAPER_DEMO_FUNDING_RATE_PER_8H = Decimal("0.0001")
+PAPER_DEMO_FUNDING_PERIOD_HOURS = Decimal("8")
+PAPER_DEMO_EXPECTED_HOLD_HOURS = Decimal("8")
+PAPER_DEMO_FUNDING_RATE = PAPER_DEMO_FUNDING_RATE_PER_8H
 PAPER_DEMO_FUNDING_PERIODS = Decimal("1")
 # Same 0.2% book buffer the non-profile demo depth path uses (``upper * 0.002``).
 DEMO_BOOK_BUFFER_RATE = Decimal("0.002")
@@ -81,6 +86,8 @@ class SizedPlan:
     entry: Decimal
     stop: Decimal
     target: Decimal
+    funding_rate: Decimal
+    funding_periods: Decimal
     # Cash the sizer was allowed to spend (grade, ceiling, and budget room).
     # Stop-out loss plus round-trip costs must stay inside it.
     risk_cash_ceiling: Decimal
@@ -108,12 +115,44 @@ def remaining_daily_budget_percent(
     return daily_loss_limit_percent - (loss / equity * Decimal("100"))
 
 
+def paper_demo_funding(
+    live_rate: Decimal | None = None,
+    *,
+    live_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
+) -> tuple[Decimal, Decimal]:
+    """Return ``(rate per 8h, periods)`` for the paper and demo sizer.
+
+    A verified finite live rate is ``max(abs(rate), 0.0001)``. Anything else,
+    including a missing read and the mock fallback, uses 0.0001 per 8h.
+    Periods are ``max(1, expected_hold_hours / 8)``. The default expected
+    hold is 8 hours, which is one window. See AT-ADR-110.
+    """
+
+    hold = PAPER_DEMO_EXPECTED_HOLD_HOURS if expected_hold_hours is None else expected_hold_hours
+    if not isinstance(hold, Decimal) or not hold.is_finite() or hold <= 0:
+        hold = PAPER_DEMO_EXPECTED_HOLD_HOURS
+    periods = hold / PAPER_DEMO_FUNDING_PERIOD_HOURS
+    if periods < 1:
+        periods = Decimal("1")
+    floor = PAPER_DEMO_FUNDING_RATE_PER_8H
+    if live_verified and isinstance(live_rate, Decimal) and live_rate.is_finite():
+        rate = abs(live_rate)
+        if rate < floor:
+            rate = floor
+        return rate, periods
+    return floor, periods
+
+
 def open_risk_from_stops(
     *,
     equity: Decimal,
     positions: Sequence[tuple[Decimal, Decimal, Decimal | None]],
     open_notional: Decimal,
     include_book_buffer: bool = False,
+    funding_rate: Decimal | None = None,
+    live_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
 ) -> tuple[Decimal, int] | str:
     """Open risk at the stored stops, including the sizer's unit costs.
 
@@ -144,7 +183,15 @@ def open_risk_from_stops(
             or not stop.is_finite()
         ):
             return "open_risk_uncomputed"
-        risk_cash += stop_out_cash(size, entry, stop, include_book_buffer=include_book_buffer)
+        risk_cash += stop_out_cash(
+            size,
+            entry,
+            stop,
+            include_book_buffer=include_book_buffer,
+            funding_rate=funding_rate,
+            live_verified=live_verified,
+            expected_hold_hours=expected_hold_hours,
+        )
         explained += size * entry
     if open_notional > explained:
         return "open_risk_uncomputed"
@@ -169,11 +216,24 @@ def stop_out_cash(
     stop: Decimal,
     *,
     include_book_buffer: bool,
+    funding_rate: Decimal | None = None,
+    funding_periods: Decimal | None = None,
+    live_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
 ) -> Decimal:
     """Size times the stop distance plus the unit costs ``size_for_profile`` reserved."""
 
     return size * (
-        abs(entry - stop) + profile_unit_cost(entry, stop, include_book_buffer=include_book_buffer)
+        abs(entry - stop)
+        + profile_unit_cost(
+            entry,
+            stop,
+            include_book_buffer=include_book_buffer,
+            funding_rate=funding_rate,
+            funding_periods=funding_periods,
+            live_verified=live_verified,
+            expected_hold_hours=expected_hold_hours,
+        )
     )
 
 
@@ -184,6 +244,10 @@ def reserved_maximum_loss(
     stop: Decimal,
     worse_price: Decimal,
     profile_costs: bool,
+    funding_rate: Decimal | None = None,
+    funding_periods: Decimal | None = None,
+    live_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
 ) -> Decimal:
     """Cash stored as ``maximum_loss`` and reserved as daily loss.
 
@@ -193,18 +257,49 @@ def reserved_maximum_loss(
     """
 
     if profile_costs:
-        return stop_out_cash(size, adverse_entry, stop, include_book_buffer=True)
+        return stop_out_cash(
+            size,
+            adverse_entry,
+            stop,
+            include_book_buffer=True,
+            funding_rate=funding_rate,
+            funding_periods=funding_periods,
+            live_verified=live_verified,
+            expected_hold_hours=expected_hold_hours,
+        )
     return size * (abs(adverse_entry - stop) + worse_price * Decimal("0.002"))
 
 
-def profile_unit_cost(entry: Decimal, stop: Decimal, *, include_book_buffer: bool) -> Decimal:
-    """Entry fee, exit fee at the stop, one funding period, and the optional book buffer."""
+def profile_unit_cost(
+    entry: Decimal,
+    stop: Decimal,
+    *,
+    include_book_buffer: bool,
+    funding_rate: Decimal | None = None,
+    funding_periods: Decimal | None = None,
+    live_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
+) -> Decimal:
+    """Entry fee, exit fee at the stop, funding, and the optional book buffer.
 
+    Pass ``funding_periods`` only when the caller already resolved the rate
+    with ``paper_demo_funding``. Otherwise the floor or the verified live
+    rate is applied here.
+    """
+
+    if funding_periods is None:
+        funding_rate, funding_periods = paper_demo_funding(
+            funding_rate,
+            live_verified=live_verified,
+            expected_hold_hours=expected_hold_hours,
+        )
+    elif funding_rate is None:
+        funding_rate = PAPER_DEMO_FUNDING_RATE_PER_8H
     slippage = DEMO_BOOK_BUFFER_RATE if include_book_buffer else Decimal("0")
     return (
         entry * PAPER_DEMO_TAKER_FEE_RATE
         + stop * PAPER_DEMO_TAKER_FEE_RATE
-        + entry * PAPER_DEMO_FUNDING_RATE * PAPER_DEMO_FUNDING_PERIODS
+        + entry * abs(funding_rate) * funding_periods
         + entry * slippage
     )
 
@@ -279,6 +374,9 @@ def size_for_profile(
     leverage: Decimal | None = None,
     include_book_buffer: bool = False,
     maintenance_tiers: tuple[MaintenanceTier, ...] | list[MaintenanceTier] | None = None,
+    funding_rate: Decimal | None = None,
+    funding_rate_verified: bool = False,
+    expected_hold_hours: Decimal | None = None,
 ) -> SizedPlan | str:
     """Size one new paper or demo plan. Returns a reason code when refused.
 
@@ -296,6 +394,11 @@ def size_for_profile(
     if open_notional > 0 and open_risk_percent <= 0:
         # Open notional without a server-side risk-at-stop figure is not treated as zero.
         return "open_risk_uncomputed"
+    rate, periods = paper_demo_funding(
+        funding_rate,
+        live_verified=funding_rate_verified,
+        expected_hold_hours=expected_hold_hours,
+    )
     distance = abs(entry - stop)
     reward = abs(target - entry)
     if distance <= 0 or reward <= 0 or entry <= 0:
@@ -320,8 +423,8 @@ def size_for_profile(
             atr=atr,
             gap_beyond_stop=Decimal("0"),
             fee_rate=PAPER_DEMO_TAKER_FEE_RATE,
-            funding_rate=PAPER_DEMO_FUNDING_RATE,
-            funding_periods=PAPER_DEMO_FUNDING_PERIODS,
+            funding_rate=rate,
+            funding_periods=periods,
             slippage_rate=DEMO_BOOK_BUFFER_RATE if include_book_buffer else Decimal("0"),
             lot_step=lot_step,
             min_quantity=min_quantity,
@@ -376,6 +479,8 @@ def size_for_profile(
         stop=stop,
         target=target,
         risk_cash_ceiling=cash_ceiling,
+        funding_rate=rate,
+        funding_periods=periods,
     )
 
 

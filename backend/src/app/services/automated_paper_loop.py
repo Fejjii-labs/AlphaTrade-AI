@@ -299,12 +299,15 @@ class AutomatedPaperLoop:
         if active is None:
             open_exposure = _open_exposure(session, target, now=now)
         else:
+            funding_rate = self._verified_funding_rate()
             book = _profile_open_book(
                 session,
                 target,
                 now=now,
                 daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
                 include_book_buffer=self._risk_policy_kind() == "demo",
+                funding_rate=funding_rate,
+                live_verified=funding_rate is not None,
             )
             if isinstance(book, str):
                 return AutomatedPaperLoopProof(
@@ -627,6 +630,11 @@ class AutomatedPaperLoop:
     def _risk_policy_kind(self) -> str:
         return "internal_paper"
 
+    def _verified_funding_rate(self) -> Decimal | None:
+        """Paper has no venue funding read. Demo overrides this with a live GET."""
+
+        return None
+
     def _account(self, session: Session, target: PaperScanTarget) -> ExecutionAccount | None:
         return _paper_account(session, target)
 
@@ -840,6 +848,8 @@ def _profile_open_book(
     now: datetime,
     daily_loss_limit_percent: Decimal,
     include_book_buffer: bool = False,
+    funding_rate: Decimal | None = None,
+    live_verified: bool = False,
 ) -> ProfileOpenBook | str:
     """Server figures for one profile-sized plan. Never invents a full daily budget."""
 
@@ -877,6 +887,8 @@ def _profile_open_book(
         positions=[(row.size, row.entry_price, row.stop_loss) for row in rows],
         open_notional=snapshot.open_exposure_notional,
         include_book_buffer=include_book_buffer,
+        funding_rate=funding_rate,
+        live_verified=live_verified,
     )
     if isinstance(measured, str):
         return measured

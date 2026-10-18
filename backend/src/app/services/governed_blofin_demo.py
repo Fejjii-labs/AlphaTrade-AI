@@ -42,7 +42,13 @@ from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBl
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
-from app.schemas.common import ApprovalAction, MembershipRole, TradeDirection
+from app.schemas.common import (
+    ApprovalAction,
+    MembershipRole,
+    PaperAlertSeverity,
+    PaperAlertType,
+    TradeDirection,
+)
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import (
@@ -75,6 +81,7 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
+from app.services.paper_alert_service import PaperAlertService
 from app.services.planned_reward_risk import PlannedRewardRiskError, planned_reward_risk
 from app.services.risk.kill_switch import KillSwitchService
 from app.services.risk.settings_service import RiskSettingsService
@@ -270,6 +277,47 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     return "demo_post_fill_liquidation_inside_stop"
 
 
+def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
+    """Verified funding print, or None so the sizer uses the documented floor.
+
+    A missing method or a failed GET is not a live rate. The mock fallback
+    inside the public market-data provider is not called from here.
+    """
+
+    reader = getattr(provider, "read_funding_rate", None)
+    if reader is None:
+        return None
+    try:
+        rate = reader(symbol=symbol)
+    except Exception:
+        return None
+    if isinstance(rate, Decimal) and rate.is_finite():
+        return rate
+    return None
+
+
+def _alert_liquidation_through_stop(session: Session, command: ExecutionCommand) -> None:
+    """Loud alert on the existing notification path. Does not close or reduce.
+
+    Telegram stays off unless it was already enabled. This records a critical
+    alert and would deliver only through that existing, default-off path.
+    """
+
+    PaperAlertService(session, audit_service=AuditService(session)).create(
+        organization_id=command.organization_id,
+        user_id=command.user_id,
+        alert_type=PaperAlertType.DEMO_LIQUIDATION_THROUGH_STOP,
+        severity=PaperAlertSeverity.CRITICAL,
+        message=(
+            "LIQUIDATION THROUGH STOP: BloFin demo liquidation price is through "
+            "the stop after a fill. The kill switch is armed. No automatic close "
+            "or reduction. Operator action required."
+        ),
+        dedup_key=(f"demo_liquidation_through_stop:{command.organization_id}:{command.id}"),
+        metadata={"command_id": str(command.id), "auto_close": False},
+    )
+
+
 def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
     """Disposition, and whether the existing kill switch must run.
 
@@ -305,6 +353,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._snapshot: DemoVenueSnapshot | None = None
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
+        self._scan_funding_rate: Decimal | None = None
+
+    def _verified_funding_rate(self) -> Decimal | None:
+        rate = self._scan_funding_rate
+        if isinstance(rate, Decimal) and rate.is_finite():
+            return rate
+        return None
 
     def continue_experiment_setup(
         self,
@@ -454,6 +509,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
+        self._scan_funding_rate = _read_demo_funding(self._get_provider(), target.symbol)
         return super()._bound(
             session,
             target=target,
@@ -576,6 +632,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         margin_assumption = "verified-demo-existing-1x"
         profile_leverage: Decimal | None = None
         profile_cash_ceiling: Decimal | None = None
+        profile_funding_rate: Decimal | None = None
+        profile_funding_periods: Decimal | None = None
         if active_profile is None:
             cost_per_base = entry * Decimal("0.002")
             raw = (
@@ -602,6 +660,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             grade, atr = _grade_for_plan(candidate, assembled)
             from app.services.risk_policy.liquidation import MaintenanceTier
 
+            live_funding = self._verified_funding_rate()
             sized = size_for_profile(
                 active=active_profile,
                 grade=grade,
@@ -619,6 +678,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 remaining_daily_budget_percent=remaining_daily_budget_percent,
                 breaker_refusing=breaker_refusing,
                 include_book_buffer=True,
+                funding_rate=live_funding,
+                funding_rate_verified=live_funding is not None,
                 maintenance_tiers=tuple(
                     MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
                     for floor, rate in snapshot.maintenance_tiers
@@ -644,6 +705,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             margin_assumption = "verified-demo-read-leverage"
             profile_leverage = sized.leverage
             profile_cash_ceiling = sized.risk_cash_ceiling
+            profile_funding_rate = sized.funding_rate
+            profile_funding_periods = sized.funding_periods
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -667,6 +730,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             stop=stop,
             worse_price=upper,
             profile_costs=profile_leverage is not None,
+            funding_rate=profile_funding_rate,
+            funding_periods=profile_funding_periods,
         )
         if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
@@ -1118,14 +1183,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             protected=protected,
         )
         if arm_kill_switch:
+            through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
+            reason = (
+                "BloFin demo liquidation is through the stop; operator action required"
+                if through_stop
+                else "BloFin demo protection missing; operator action required"
+            )
             KillSwitchService(session, AuditService(session), self._settings).activate(
                 organization_id=command.organization_id,
                 actor_user_id=command.user_id,
-                payload=KillSwitchMutationRequest(
-                    confirm=True,
-                    reason="BloFin demo protection missing; operator action required",
-                ),
+                payload=KillSwitchMutationRequest(confirm=True, reason=reason),
             )
+            if through_stop:
+                _alert_liquidation_through_stop(session, command)
         effect.reconciliation_disposition = disposition
 
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:

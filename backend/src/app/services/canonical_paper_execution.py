@@ -665,6 +665,7 @@ def _note_profile_close(
     from app.services.risk_policy.breaker_trip import (
         persist_profile_breakers,
         profile_close_consecutive,
+        streak_after_expiry,
     )
     from app.services.risk_policy.persistence import RiskPolicyService
     from app.services.risk_policy.profile import PolicyKind as StoredPolicyKind
@@ -676,6 +677,8 @@ def _note_profile_close(
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
     current = 0 if row is None else int(row.consecutive_losses)
+    paused_until = None if row is None else getattr(row, "consecutive_paused_until", None)
+    current = streak_after_expiry(current, paused_until, now)
     consecutive = profile_close_consecutive(current, net_pnl)
     persist_profile_breakers(
         session,

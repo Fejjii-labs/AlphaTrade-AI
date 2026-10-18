@@ -53,9 +53,18 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   loosening cooldown, breakers, daily and open-risk limits, and the
   real-money block stay in force.
 - Leverage sets margin only. Loss at the stop, the exit-leg taker fee,
-  one funding period, and on demo the 0.2% book buffer, must fit inside
-  the grade cash. Costs above the profile share of R refuse with
-  `costs_exceed_r`. Those same costs are counted in open risk at existing
+  funding, and on demo the 0.2% book buffer, must fit inside the grade
+  cash. Costs above the profile share of R refuse with `costs_exceed_r`.
+  Funding is the verified live rate when a demo
+  `GET /api/v1/market/funding-rate` returns a finite rate, and otherwise
+  a floor of 0.0001 per 8 hours. The sized rate is never below that floor
+  (`max(abs(live), 0.0001)`). Periods are the expected hold divided by 8,
+  and at least one. The wired path has no hold forecast, so the expected
+  hold is 8 hours (one window). A caller that supplies a longer hold
+  scales the periods. A failed or missing GET is not replaced with the
+  mock funding fallback. Paper has no venue funding read and uses the
+  floor. A 0.5% stop can refuse at this floor; the 20% cost-share ceiling
+  is unchanged. Those same costs are counted in open risk at existing
   stops and in the `maximum_loss` reserved as daily loss. The shared
   organization-and-account ledger row is not rewritten. The wired paper
   and demo path refuses when liquidation is inside the buffer. It does
@@ -76,13 +85,23 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   plan is sized with `size_for_profile`. After a profile demo fill, the
   existing kill switch runs before a liquidation or unreadable-liquidation
   result, including when the observed liquidation price is through the
-  stop and protection is reported attached. An unreadable read is not
-  labeled as a price through the stop. That path does not close the
-  position and does not write leverage or margin mode. A verified demo
-  profile close advances that account's consecutive-loss count on the
-  demo breaker row with the same win-or-loss rule as paper. The next
-  demo entry stays refused while that pause is active. Drawdown reset
-  stays human-only.
+  stop and protection is reported attached. When that is the trigger, the
+  kill-switch reason says liquidation is through the stop, and a critical
+  alert is recorded on the existing notification path. Telegram stays off
+  unless it was already enabled. An unreadable read keeps the
+  protection-missing reason and is not labeled as a price through the
+  stop. That path does not close or reduce the position and does not
+  write leverage or margin mode. A verified demo profile close advances
+  that account's consecutive-loss count. The sign subtracts verified fees
+  and funding, so a trade that is flat or green on price and loses after
+  fees is a loss. Missing fees do not reset the streak. The consecutive
+  pause is set once, to the later of the next UTC midnight and the profile
+  cooldown (`consecutive_loss_cooldown_hours`, default 24, range 1 to 168).
+  Later scans do not push that expiry forward. When the expiry passes, the
+  streak clears. A manual reset requires the same human proof as a
+  loosening apply, writes an audit row, and does not clear a drawdown
+  latch. Shortening the cooldown is a loosening. The next demo entry stays
+  refused while that pause is active. Drawdown reset stays human-only.
 - Claim ceilings for a profile plan are a per-claim view. They are not
   written onto the shared organization-and-account ledger row, so a later
   manual claim keeps the stored cash ceilings.

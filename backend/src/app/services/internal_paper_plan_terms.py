@@ -2,7 +2,7 @@
 
 This is a pure terms builder. It grants no Candidate, sizing, approval, execution,
 or journal authority. Fee, funding, and slippage allowances stay zero. A profile
-isolated plan stores stop-out loss plus the round-trip fee and one funding period
+isolated plan stores stop-out loss plus the round-trip fee and the funding floor
 in ``maximum_loss``, which the claim reserves as daily loss. A cross plan stores
 price distance only. Neither path writes the shared ledger row.
 """

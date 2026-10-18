@@ -514,6 +514,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
 
 def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> None:
     armed: list[str] = []
+    alerts: list[tuple[str, str]] = []
 
     class _Switch:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -523,7 +524,15 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
             payload = kwargs["payload"]
             armed.append(str(getattr(payload, "reason", "")))
 
+    class _Alerts:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def create(self, **kwargs: object) -> None:
+            alerts.append((str(kwargs["alert_type"]), str(kwargs["severity"])))
+
     monkeypatch.setattr("app.services.governed_blofin_demo.KillSwitchService", _Switch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.PaperAlertService", _Alerts)
     monkeypatch.setattr("app.services.governed_blofin_demo.AuditService", lambda _session: None)
     disposition, arm = profile_liquidation_hold(
         liquidation_reason="demo_post_fill_liquidation_unreadable",
@@ -555,7 +564,7 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
     loop = object.__new__(GovernedBloFinDemoLoop)
     loop._settings = SimpleNamespace()
     effect = SimpleNamespace(reconciliation_disposition=None)
-    command = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
     loop._hold_profile_liquidation(
         object(),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]
@@ -565,6 +574,7 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
     )
     assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
     assert armed == ["BloFin demo protection missing; operator action required"]
+    assert alerts == []
     loop._hold_profile_liquidation(
         object(),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]
@@ -575,8 +585,9 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
     assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
     assert armed == [
         "BloFin demo protection missing; operator action required",
-        "BloFin demo protection missing; operator action required",
+        "BloFin demo liquidation is through the stop; operator action required",
     ]
+    assert alerts == [("demo_liquidation_through_stop", "critical")]
 
 
 def test_liquidation_hold_runs_before_exit_reconciliation() -> None:
@@ -586,11 +597,41 @@ def test_liquidation_hold_runs_before_exit_reconciliation() -> None:
     hold = source.index("_hold_profile_liquidation")
     exit_read = source.index("reconcile_exit")
     assert hold < exit_read
+    from app.services.governed_blofin_demo import _alert_liquidation_through_stop
+
     helper = inspect.getsource(GovernedBloFinDemoLoop._hold_profile_liquidation)
+    alert = inspect.getsource(_alert_liquidation_through_stop)
     assert "KillSwitchService" in helper
+    assert "_alert_liquidation_through_stop" in helper
     assert "trade/order" not in helper
     assert "setLeverage" not in helper
     assert "set-leverage" not in helper
+    assert "trade/order" not in alert
+    assert "set-leverage" not in alert
+    assert "No automatic close" in alert
+
+
+def test_funding_read_uses_the_live_print_and_not_the_mock_fallback() -> None:
+    from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+
+    provider = object.__new__(GovernedBloFinDemoProvider)
+
+    class _Down:
+        def request(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("funding unavailable")
+
+    provider._client = _Down()  # type: ignore[attr-defined]
+    assert provider.read_funding_rate(symbol="BTCUSDT") is None
+
+    class _Live:
+        def request(self, method: str, path: str, params: dict[str, str] | None = None) -> object:
+            assert method == "GET"
+            assert path == "/api/v1/market/funding-rate"
+            assert params is not None and params["instId"]
+            return [{"fundingRate": "0.00025"}]
+
+    provider._client = _Live()  # type: ignore[attr-defined]
+    assert provider.read_funding_rate(symbol="BTCUSDT") == Decimal("0.00025")
 
 
 def test_staging_settings_require_complete_scoped_demo_arm() -> None:
