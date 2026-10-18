@@ -806,6 +806,46 @@ def test_closed_mirror_row_cannot_be_deleted_and_a_bad_position_is_not_flat(
     assert tracker.exit_reason != "flat_on_venue"
 
 
+def test_non_dict_position_keeps_the_open_tracker(session: Session) -> None:
+    _apply(session, _FIXTURE["partial_open"])
+    tracker = next(row for row in _rows(session) if row.status is JournalTradeStatus.OPEN)
+    bundle = _paths(_FIXTURE["partial_open"])
+    bundle["positions"] = ["not-a-position"]
+    BloFinDemoManualMirror(_Client(bundle), now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(),
+    )
+    session.commit()
+    session.refresh(tracker)
+    assert tracker.status is JournalTradeStatus.OPEN
+    assert tracker.exit_reason != "flat_on_venue"
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None and cycle.tags == ["mirror-cycle:incomplete"]
+    bundle["positions"] = _FIXTURE["partial_open"]["positions"]
+    bundle["/api/v1/market/instruments"] = ["not-an-instrument", *_FIXTURE["instruments"]]
+    client = _Client(bundle)
+
+    def request(method: str, path: str, **kwargs: object) -> list[object]:
+        if path == "/api/v1/market/instruments":
+            return bundle["/api/v1/market/instruments"]
+        return _Client.request(client, method, path, **kwargs)
+
+    client.request = request  # type: ignore[method-assign]
+    BloFinDemoManualMirror(client, now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(),
+    )
+    session.commit()
+    session.refresh(cycle)
+    assert cycle.tags == ["mirror-cycle:incomplete"]
+
+
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:
     strategy = uuid.uuid4()
     assert strategy_group_key(

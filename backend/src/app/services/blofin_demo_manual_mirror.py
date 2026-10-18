@@ -864,6 +864,8 @@ class BloFinDemoManualMirror:
         positions = self._client.request("GET", _POSITIONS, params=None, signed=True)
         if not isinstance(instruments, list) or not isinstance(positions, list):
             raise MirrorReadError("instrument or position payload was not a list")
+        instrument_rows = [row for row in instruments if isinstance(row, dict)]
+        position_rows = [row for row in positions if isinstance(row, dict)]
         history, history_capped = _history_pages(self._client, _HISTORY, begin_ms, end_ms)
         if history_capped:
             raise MirrorReadError("positions-history page cap reached")
@@ -871,8 +873,8 @@ class BloFinDemoManualMirror:
         funding, funding_capped = _history_pages(self._client, _FUNDING, begin_ms, end_ms)
         orders, orders_capped = _history_pages(self._client, _ORDERS, begin_ms, end_ms)
         built = drafts_from_raw(
-            instruments=[row for row in instruments if isinstance(row, dict)],
-            positions=[row for row in positions if isinstance(row, dict)],
+            instruments=instrument_rows,
+            positions=position_rows,
             history=history,
             fills=fills,
             funding=funding,
@@ -880,12 +882,15 @@ class BloFinDemoManualMirror:
             window_begin=begin,
             window_end=end,
         )
+        if len(position_rows) != len(positions):
+            built = replace(built, positions_complete=False)
         page_capped = fills_capped or funding_capped or orders_capped
         incomplete = (
             page_capped
             or built.history_incomplete
             or built.funding_incomplete
             or not built.positions_complete
+            or len(instrument_rows) != len(instruments)
         )
         if incomplete:
             built = _without_verified_economics(built)
