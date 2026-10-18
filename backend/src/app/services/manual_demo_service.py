@@ -466,6 +466,9 @@ class ManualDemoService:
                 "authorization_id": str(authorization.authorization_id),
             },
         )
+        from app.services.approval_service import assert_human_may_execute
+
+        assert_human_may_execute(authorization)
         result = PaperPlanClaimService(
             self.session,
             self.settings,

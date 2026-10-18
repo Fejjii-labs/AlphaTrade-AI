@@ -37,11 +37,14 @@ from app.schemas.common import (
 from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCommandOutcome
 from app.schemas.trade_plan import (
     AuthorizationChannel,
+    AuthorizationState,
     TradePlanRevisionCreate,
 )
 from app.services.approval_service import (
+    CHANNEL_MISMATCH_REASON,
     ApprovalService,
     revoke_leftover_autonomous_authorizations,
+    stored_issuance_matches,
 )
 from app.services.audit_service import AuditService
 from app.services.canonical_trade_plan import CanonicalTradePlanService
@@ -390,6 +393,24 @@ class AutomatedPaperLoop:
                 reason="post_approval_recheck",
             )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        if not stored_issuance_matches(
+            decided.authorization,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+        ):
+            if getattr(decided.authorization, "state", None) is AuthorizationState.AVAILABLE:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason=CHANNEL_MISMATCH_REASON,
+                )
+            return _proof(
+                candidate,
+                "blocked",
+                CHANNEL_MISMATCH_REASON,
+                revision_id=revision_id,
+            )
         execution = ExecutionService(
             session,
             self._settings,

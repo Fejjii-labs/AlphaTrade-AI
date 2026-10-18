@@ -1,7 +1,7 @@
 {
   "reviewed_candidate": "de5c010c7c85dfe5cde1ec8fabf60b6262500fe0",
-  "implementation_commit": "61aa5331f5e7deeb118514cac15d63ba8083b236",
-  "implementation_tree": "036c375764f93b0a942cd32c54c1dc5a520e9c57",
+  "implementation_commit": "cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2",
+  "implementation_tree": "d28eb1ac802f56f09f930afd1ff4c46ad0ae9588",
   "files": [
     {
       "path": "backend/src/app/experiments/blofin_source.py",
@@ -61,7 +61,7 @@
     },
     {
       "path": "backend/src/app/services/governed_blofin_demo.py",
-      "sha256": "154468455e5b946f9853392b2e406461c082fe8e95c2ea0ca6987c4c1de89a81"
+      "sha256": "5e6707b5b5672f9a5b796047a0b70c77d34dc0fa9e3065365cde3e110f767f0b"
     },
     {
       "path": "backend/src/app/services/venue_submit_dispatcher.py",
