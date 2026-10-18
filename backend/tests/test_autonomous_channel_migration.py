@@ -9,16 +9,38 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, text
+from sqlalchemy import CheckConstraint, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
 
+from app.db.base import Base
+from app.db.models import ApprovalAuthorization
 from tests.support.alembic_heads import single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 _REVISION = "a14autonomouschannel001"
 _PARENT = "a13voicemonitor001"
+_CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
+
+
+def test_metadata_channel_check_matches_the_alembic_revision() -> None:
+    channel = ApprovalAuthorization.__table__.c.channel
+    operation = ApprovalAuthorization.__table__.c.operation
+    assert channel.type.create_constraint is False  # type: ignore[attr-defined]
+    assert operation.type.create_constraint is False  # type: ignore[attr-defined]
+    checks = [
+        item
+        for item in ApprovalAuthorization.__table__.constraints
+        if isinstance(item, CheckConstraint) and "channel IN" in str(item.sqltext)
+    ]
+    assert [str(item.sqltext) for item in checks] == [_CHANNEL_PREDICATE]
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src/app/db/migrations/versions"
+        / "a14autonomouschannel001_autonomous_authorization_channel.py"
+    ).read_text(encoding="utf-8")
+    assert _CHANNEL_PREDICATE in source
 
 
 def test_autonomous_channel_revision_follows_the_previous_head() -> None:
@@ -82,6 +104,45 @@ def test_alembic_upgrade_stores_autonomous_and_rejects_an_invalid_channel(
         _insert_channel(engine, "API")
         command.upgrade(config, "head")
         _insert_channel(engine, "AUTONOMOUS")
+    finally:
+        engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@requires_postgres
+def test_create_all_stores_autonomous_and_rejects_an_invalid_channel() -> None:
+    admin = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
+    schema = "autonomous_channel_meta_" + uuid4().hex
+    isolated = make_url(POSTGRES_URL).update_query_dict({"options": f"-csearch_path={schema}"})
+    engine = create_engine(isolated, poolclass=NullPool, future=True)
+    try:
+        with admin.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        Base.metadata.create_all(engine)
+        with engine.connect() as connection:
+            definition = connection.scalar(
+                text(
+                    """
+                    SELECT pg_get_constraintdef(c.oid)
+                    FROM pg_constraint c
+                    JOIN pg_class t ON t.oid = c.conrelid
+                    JOIN pg_namespace n ON n.oid = t.relnamespace
+                    WHERE n.nspname = current_schema()
+                      AND t.relname = 'approval_authorizations'
+                      AND c.contype = 'c'
+                      AND pg_get_constraintdef(c.oid) ILIKE '%channel%'
+                      AND pg_get_constraintdef(c.oid) ILIKE '%AUTONOMOUS%'
+                    """
+                )
+            )
+        assert isinstance(definition, str)
+        assert "AUTONOMOUS" in definition
+        assert "WEB" in definition
+        _insert_channel(engine, "AUTONOMOUS")
+        with pytest.raises(IntegrityError):
+            _insert_channel(engine, "NOT_A_CHANNEL")
     finally:
         engine.dispose()
         with admin.begin() as connection:

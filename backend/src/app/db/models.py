@@ -3,8 +3,10 @@
 PostgreSQL is the production target; SQLite is used only for tests. Types are
 chosen to be portable across both: ``Uuid`` for ids, ``Numeric(20, 8)`` for
 monetary/size values, ``JSON`` for small structured lists, and non-native
-``Enum`` (VARCHAR + CHECK) reusing the exact enums defined in
-:mod:`app.schemas.common` to prevent string drift between API and database.
+``Enum`` columns stored as VARCHAR. Those enums are checked in Python.
+``approval_authorizations.channel`` is the exception: an explicit CHECK allows
+WEB, API, TELEGRAM, and AUTONOMOUS, the same predicate Alembic revision
+``a14autonomouschannel001`` installs on a migrated database.
 
 Tenant-scoped resources carry ``organization_id``; vectors live in Qdrant while
 document/chunk metadata lives here.
@@ -233,8 +235,9 @@ _ENUM_LEN = 40
 def _enum(enum_cls: type) -> Enum:
     """Portable non-native enum column (VARCHAR).
 
-    ``create_constraint`` is false, so the database has no CHECK on the stored
-    value. ``validate_strings`` checks the value in Python only.
+    ``create_constraint`` is false, so the column itself adds no CHECK.
+    ``validate_strings`` checks the value in Python only. The authorization
+    channel is the exception and uses an explicit table CHECK instead.
     """
     return Enum(
         enum_cls,
@@ -1897,6 +1900,10 @@ class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "length(authorization_content_hash) = 64",
             name="ck_authorization_content_hash_length",
+        ),
+        CheckConstraint(
+            "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')",
+            name="ck_authorization_channel",
         ),
         Index(
             "uq_available_approval_authorization",

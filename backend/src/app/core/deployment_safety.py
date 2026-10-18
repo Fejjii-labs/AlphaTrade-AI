@@ -68,6 +68,11 @@ def validate_deployment_settings(settings: Settings) -> None:
         and settings.environment is Environment.PRODUCTION
     ):
         errors.append("exchange_mode=paper_exchange_demo is not allowed in production")
+    if settings.environment is Environment.PRODUCTION:
+        if settings.autonomous_internal_paper_enabled:
+            errors.append("autonomous_internal_paper_enabled must be false in production")
+        if settings.autonomous_blofin_demo_enabled:
+            errors.append("autonomous_blofin_demo_enabled must be false in production")
 
     # Dedicated disarmed workers bind a process-local role before this runs.
     # The API never binds it. Armed settings ignore it and keep every check below.
@@ -212,6 +217,8 @@ def deployment_posture(settings: Settings) -> dict[str, object]:
         "market_watcher_bridge_enabled": settings.market_watcher_bridge_enabled,
         "watcher_orchestration_enabled": settings.watcher_orchestration_enabled,
         "watcher_paper_staging_activation": settings.watcher_paper_staging_activation,
+        "autonomous_internal_paper_enabled": settings.autonomous_internal_paper_enabled,
+        "autonomous_blofin_demo_enabled": settings.autonomous_blofin_demo_enabled,
         **dict(perpetual_evidence_health(settings)),
     }
 

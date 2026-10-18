@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -762,6 +763,44 @@ class ApprovalService:
     @staticmethod
     def _aware(value: datetime) -> datetime:
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def revoke_leftover_autonomous_authorizations(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    user_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    reason: str,
+    clock: Callable[[], datetime],
+) -> None:
+    """Revoke AVAILABLE AUTONOMOUS authorizations for one revision.
+
+    An empty result does not construct an approval. A row that changes writes
+    the same approval-decision audit as ``revoke_authorization``.
+    """
+
+    rows = list(
+        session.scalars(
+            select(ApprovalAuthorizationModel).where(
+                ApprovalAuthorizationModel.organization_id == organization_id,
+                ApprovalAuthorizationModel.user_id == user_id,
+                ApprovalAuthorizationModel.revision_id == revision_id,
+                ApprovalAuthorizationModel.state == AuthorizationState.AVAILABLE,
+                ApprovalAuthorizationModel.channel == AuthorizationChannel.AUTONOMOUS,
+            )
+        ).all()
+    )
+    if not rows:
+        return
+    approval = ApprovalService(session, AuditService(session), clock=clock)
+    for row in rows:
+        approval.revoke_authorization(
+            row.id,
+            organization_id=organization_id,
+            user_id=user_id,
+            reason=reason,
+        )
 
 
 def _action_to_status(action: ApprovalAction) -> ApprovalStatus:

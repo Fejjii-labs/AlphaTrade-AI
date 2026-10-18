@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -741,6 +741,70 @@ def test_post_approval_recheck_revoke_writes_an_audit_row(session: Session) -> N
         and (row.redacted_metadata or {}).get("reason") == "post_approval_recheck"
     ]
     assert len(again) == 1
+
+
+def _approve_autonomous(
+    session: Session,
+    ids: dict[str, Any],
+    plan: TradePlanRevision,
+) -> tuple[ApprovalService, ApprovalAuthorization]:
+    service = ApprovalService(
+        session, AuditService(session), clock=lambda: NOW + timedelta(minutes=1)
+    )
+    approval = service.create_for_plan_revision(
+        revision_id=plan.revision_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+    )
+    decided = service.decide(
+        approval.id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert decided.authorization is not None
+    return service, decided.authorization
+
+
+def test_create_all_accepts_autonomous_and_rejects_an_invalid_channel(session: Session) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    _service, authorization = _approve_autonomous(session, ids, plan)
+    assert authorization.channel is AuthorizationChannel.AUTONOMOUS
+    table_sql = session.scalar(
+        text("SELECT sql FROM sqlite_master WHERE name = 'approval_authorizations'")
+    )
+    assert isinstance(table_sql, str)
+    assert "AUTONOMOUS" in table_sql
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.execute(text("UPDATE approval_authorizations SET channel = 'NOT_A_CHANNEL'"))
+
+
+def test_blocked_autonomous_revoke_reasons_write_an_audit_row(session: Session) -> None:
+    ids = _seed_support(session)
+    for reason in ("claim_blocked", "autonomous_precheck_blocked"):
+        plan = _persist_plan(session, ids)
+        service, authorization = _approve_autonomous(session, ids, plan)
+        revoked = service.revoke_authorization(
+            authorization.authorization_id,
+            organization_id=plan.organization_id,
+            user_id=plan.user_id,
+            reason=reason,
+        )
+        assert revoked.state is AuthorizationState.REVOKED
+        assert revoked.channel is AuthorizationChannel.AUTONOMOUS
+        matches = [
+            row
+            for row in session.scalars(select(AuditLog)).all()
+            if row.action is AuditEventType.APPROVAL_DECISION
+            and (row.redacted_metadata or {}).get("reason") == reason
+            and (row.redacted_metadata or {}).get("action") == "revoke"
+            and (row.redacted_metadata or {}).get("channel") == "AUTONOMOUS"
+        ]
+        assert len(matches) == 1
+        assert matches[0].resource_id == str(authorization.authorization_id)
 
 
 def test_reject_and_skip_never_authorize(session: Session) -> None:

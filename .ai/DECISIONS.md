@@ -58,7 +58,12 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   legacy event that was never autonomous stays a human approval. If the
   kill switch (or the same re-check) blocks after the authorization is
   issued, that authorization is revoked and an `approval_decision` audit
-  row records `reason=post_approval_recheck`.
+  row records `reason=post_approval_recheck`. A later pre-check that finds
+  an AVAILABLE AUTONOMOUS authorization for that revision revokes it with
+  `reason=autonomous_precheck_blocked`. A claim that blocks after issuance
+  revokes that authorization with `reason=claim_blocked`. Both write the
+  same approval-decision audit. A revoke that changes nothing writes no
+  second audit row.
 - Existing governed demo flow: with both autonomous flags off, the governed
   BloFin demo worker keeps its pre-existing API-channel approval. That path
   is not an AUTONOMOUS approval and is not subject to the unverified-ledger
@@ -66,10 +71,15 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   autonomous BloFin mode. A contradictory autonomous configuration still
   fails closed and does not fall through to the API approval. The
   `approval_authorizations.channel` CHECK includes `AUTONOMOUS` so an
-  Alembic-migrated database can store that channel. Downgrade restores the
-  WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row exists.
-- Environment: `environment=production` refuses both modes. BloFin demo
-  execution stays staging-only through the existing governed demo posture.
+  Alembic-migrated database can store that channel. Fresh metadata
+  (`create_all`) installs the same predicate as an explicit table CHECK.
+  Other portable enums stay VARCHAR without a database CHECK. Downgrade
+  restores the WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row
+  exists.
+- Environment: `environment=production` refuses both modes at startup in
+  `deployment_safety.py` and again when the mode is resolved. Staging may
+  still arm a flag. BloFin demo execution stays staging-only through the
+  existing governed demo posture.
 - Kill switch: it stops new entries only. It does not close open demo
   positions. An operator closes those on the BloFin demo account by hand and
   confirms the account is flat. See
