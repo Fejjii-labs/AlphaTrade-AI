@@ -9,8 +9,21 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
-from sqlalchemy import CheckConstraint, create_engine, text
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    MetaData,
+    String,
+    Table,
+    UniqueConstraint,
+    create_engine,
+    inspect,
+    text,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
@@ -373,6 +386,113 @@ def test_autonomous_downgrade_refusal_sees_rows_on_sqlite() -> None:
         assert module._autonomous_rows_exist(connection) is True
         connection.execute(text("DELETE FROM approval_authorizations"))
         assert module._autonomous_rows_exist(connection) is False
+
+
+@pytest.mark.parametrize("unique_name", [None, "approval_request_id_key"])
+def test_sqlite_a14_a15_upgrade_and_downgrade(unique_name: str | None) -> None:
+    """a14 and a15 run on SQLite without a hardcoded unique-constraint name."""
+
+    a14 = _migration_module("a14autonomouschannel001_autonomous_authorization_channel.py")
+    a15 = _migration_module("a15reissueauth001_reissue_authorization_after_revoke.py")
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    metadata = MetaData()
+    Table("approvals", metadata, Column("id", String(36), primary_key=True))
+    Table(
+        "approval_authorizations",
+        metadata,
+        Column("id", String(36), primary_key=True),
+        Column(
+            "approval_request_id",
+            String(36),
+            ForeignKey("approvals.id"),
+            nullable=False,
+        ),
+        Column("channel", String(40), nullable=False),
+        Column("state", String(20), nullable=False),
+        CheckConstraint(
+            "channel IN ('WEB', 'API', 'TELEGRAM')",
+            name="ck_legacy_channel",
+        ),
+        UniqueConstraint("approval_request_id", name=unique_name),
+    )
+    metadata.create_all(engine)
+
+    def migrate(revision: object, method: str) -> None:
+        with engine.begin() as connection:
+            context = MigrationContext.configure(connection)
+            with Operations.context(context):
+                getattr(revision, method)()
+
+    migrate(a14, "upgrade")
+    checks = inspect(engine).get_check_constraints("approval_authorizations")
+    assert any("AUTONOMOUS" in str(check["sqltext"]) for check in checks)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO approvals (id) VALUES ('approval-1')"))
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations "
+                "(id, approval_request_id, channel, state) "
+                "VALUES ('auth-1', 'approval-1', 'API', 'AVAILABLE')"
+            )
+        )
+    migrate(a15, "upgrade")
+    uniques = inspect(engine).get_unique_constraints("approval_authorizations")
+    assert all(item["column_names"] != ["approval_request_id"] for item in uniques)
+    indexes = inspect(engine).get_indexes("approval_authorizations")
+    reusable = next(
+        item for item in indexes if item["name"] == "uq_reusable_approval_authorization"
+    )
+    assert reusable["unique"] == 1
+    assert "AVAILABLE" in str(reusable["dialect_options"]["sqlite_where"])
+    assert "CONSUMED" in str(reusable["dialect_options"]["sqlite_where"])
+    foreign_keys = inspect(engine).get_foreign_keys("approval_authorizations")
+    assert any(item["referred_table"] == "approvals" for item in foreign_keys)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations "
+                "(id, approval_request_id, channel, state) "
+                "VALUES ('auth-2', 'approval-1', 'AUTONOMOUS', 'REVOKED')"
+            )
+        )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations "
+                "(id, approval_request_id, channel, state) "
+                "VALUES ('auth-3', 'approval-1', 'AUTONOMOUS', 'AVAILABLE')"
+            )
+        )
+    with pytest.raises(RuntimeError, match="AUTONOMOUS approval authorizations exist"):
+        migrate(a14, "downgrade")
+    with pytest.raises(RuntimeError, match="Multiple approval authorizations"):
+        migrate(a15, "downgrade")
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM approval_authorizations WHERE id = 'auth-2'"))
+        connection.execute(
+            text("UPDATE approval_authorizations SET channel = 'API' WHERE id = 'auth-1'")
+        )
+    migrate(a15, "downgrade")
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations "
+                "(id, approval_request_id, channel, state) "
+                "VALUES ('auth-4', 'approval-1', 'API', 'REVOKED')"
+            )
+        )
+    migrate(a14, "downgrade")
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO approval_authorizations "
+                "(id, approval_request_id, channel, state) "
+                "VALUES ('auth-5', 'approval-1', 'AUTONOMOUS', 'AVAILABLE')"
+            )
+        )
+    legacy = inspect(engine).get_check_constraints("approval_authorizations")
+    assert legacy
+    assert all("AUTONOMOUS" not in str(check["sqltext"]) for check in legacy)
 
 
 def test_reissue_downgrade_refusal_sees_duplicate_rows_on_sqlite() -> None:

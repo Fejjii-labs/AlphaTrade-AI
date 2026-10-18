@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.db.base import Base
 from app.db.models import (
     ApprovalAuthorization as ApprovalAuthorizationModel,
@@ -28,6 +28,8 @@ from app.db.models import (
     AuditLog,
     ExchangeAccount,
     ExecutionAccount,
+    ExecutionCommand,
+    ExecutionIdempotencyBinding,
     Order,
     Organization,
     PaperValidationAlert,
@@ -38,6 +40,7 @@ from app.db.models import (
     User,
     UserStrategy,
     UserStrategyVersion,
+    VenueSubmitEffect,
 )
 from app.db.models import (
     TradePlanRevision as TradePlanRevisionModel,
@@ -66,6 +69,7 @@ from app.schemas.common import (
 )
 from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCommandOutcome
 from app.schemas.proposal import ExitCriteria, TakeProfitLevel, TradeProposalCreate
+from app.schemas.risk import KillSwitchMutationRequest
 from app.schemas.trade_plan import (
     AccountMode,
     AuthorizationChannel,
@@ -85,11 +89,12 @@ from app.schemas.trade_plan import (
 from app.services.approval_authorization_hash import verify_authorization_issuance_hash
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
-from app.services.automated_paper_loop import AutomatedPaperLoop
+from app.services.automated_paper_loop import AutomatedPaperLoop, _execute_request
 from app.services.canonical_execution_payload import CanonicalExecutionPayloadSerializerV1
 from app.services.canonical_serialization import canonical_json_bytes, canonical_sha256
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
 from app.services.proposal_service import ProposalService
+from app.services.risk.kill_switch import KillSwitchService
 from tests.support.phase1_plan_fixtures import (
     EXECUTE_AT,
     execute_request,
@@ -1404,6 +1409,205 @@ def test_competing_workers_execute_the_reissued_authorization_once(session: Sess
     assert consumed.state is AuthorizationState.CONSUMED
 
 
+def test_human_execution_key_stays_on_the_candidate() -> None:
+    candidate_id = uuid.uuid4()
+    authorization_id = uuid.uuid4()
+    target = SimpleNamespace(organization_id=uuid.uuid4(), user_id=uuid.uuid4())
+    human = _execute_request(
+        target=target,  # type: ignore[arg-type]
+        account_id=uuid.uuid4(),
+        revision_id=uuid.uuid4(),
+        authorization_id=authorization_id,
+        candidate_id=candidate_id,
+    )
+    autonomous = _execute_request(
+        target=target,  # type: ignore[arg-type]
+        account_id=human.account_id,
+        revision_id=human.revision_id,
+        authorization_id=authorization_id,
+        candidate_id=candidate_id,
+        autonomous=True,
+    )
+    assert human.idempotency_key == f"paper-exec:{candidate_id}"
+    assert autonomous.idempotency_key == f"paper-exec:{candidate_id}:{authorization_id}"
+    assert len(autonomous.idempotency_key) <= 128
+
+
+def test_committed_block_then_reissue_allows_one_order(session: Session) -> None:
+    """A committed BLOCKED command must not seal the revision after reissue.
+
+    This drives ExecutionService and PaperPlanClaimService. The first claim is
+    committed while the kill switch is on. After revoke, a cleared switch, and
+    a new authorization, one ALLOW creates one submit effect. A retry and a
+    second worker reuse that effect. Another key cannot create a second one.
+    """
+
+    ids, plan, authorization = prepared_authorized_plan(session, execution_venue="PAPER_INTERNAL")
+    candidate_id = uuid.uuid4()
+    target = SimpleNamespace(
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+    )
+    execution = execution_service(session)
+    kill = KillSwitchService(session, AuditService(session), execution._settings)
+    kill.activate(
+        organization_id=ids["organization"].id,
+        actor_user_id=ids["user"].id,
+        payload=KillSwitchMutationRequest(confirm=True, reason="halt entries"),
+    )
+    session.commit()
+    blocked_request = _execute_request(
+        target=target,  # type: ignore[arg-type]
+        account_id=plan.account_id,
+        revision_id=plan.revision_id,
+        authorization_id=authorization.authorization_id,
+        candidate_id=candidate_id,
+        autonomous=True,
+    )
+    blocked = execution.execute_paper_plan(blocked_request, clock=lambda: EXECUTE_AT)
+    session.commit()
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "safety_epoch_blocking"
+    assert _effect_count(session) == 0
+    assert _claim_count(session) == 0
+    stored = session.scalar(
+        select(ExecutionIdempotencyBinding).where(
+            ExecutionIdempotencyBinding.opaque_key == blocked_request.idempotency_key
+        )
+    )
+    assert stored is not None
+    assert stored.outcome is ExecutionCommandOutcome.BLOCKED
+
+    service = ApprovalService(
+        session, AuditService(session), clock=lambda: NOW + timedelta(minutes=1)
+    )
+    service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="claim_blocked",
+    )
+    status = kill.get_status(organization_id=ids["organization"].id)
+    kill.deactivate(
+        organization_id=ids["organization"].id,
+        actor_user_id=ids["user"].id,
+        payload=KillSwitchMutationRequest(
+            confirm=True,
+            reason="entries may resume",
+            expected_version=status.version,
+        ),
+    )
+    session.commit()
+    reissued = service.decide(
+        authorization.approval_request_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert reissued.authorization is not None
+    assert reissued.authorization.authorization_id != authorization.authorization_id
+    session.commit()
+
+    stale = blocked_request.model_copy(
+        update={"authorization_id": reissued.authorization.authorization_id}
+    )
+    with pytest.raises(ConflictError) as conflict:
+        execution.execute_paper_plan(stale, clock=lambda: EXECUTE_AT)
+    assert conflict.value.details.get("reason") == "idempotency_payload_conflict"
+    session.rollback()
+
+    allow_request = _execute_request(
+        target=target,  # type: ignore[arg-type]
+        account_id=plan.account_id,
+        revision_id=plan.revision_id,
+        authorization_id=reissued.authorization.authorization_id,
+        candidate_id=candidate_id,
+        autonomous=True,
+    )
+    assert allow_request.idempotency_key != blocked_request.idempotency_key
+    allowed = execution.execute_paper_plan(allow_request, clock=lambda: EXECUTE_AT)
+    session.commit()
+    assert allowed.outcome is ExecutionCommandOutcome.ALLOW
+    assert allowed.replayed is False
+    assert allowed.command_id is not None
+    assert _effect_count(session) == 1
+    assert _claim_count(session) == 1
+    assert _allow_count(session) == 1
+
+    retry = execution.execute_paper_plan(allow_request, clock=lambda: EXECUTE_AT)
+    session.commit()
+    worker = execution.execute_paper_plan(allow_request, clock=lambda: EXECUTE_AT)
+    session.commit()
+    assert retry.replayed is True
+    assert worker.replayed is True
+    assert retry.command_id == allowed.command_id
+    assert worker.command_id == allowed.command_id
+    assert _effect_count(session) == 1
+    assert _claim_count(session) == 1
+    assert _allow_count(session) == 1
+
+    raced = execution.execute_paper_plan(
+        execute_request(ids, plan, reissued.authorization, key="worker-other-key"),
+        clock=lambda: EXECUTE_AT,
+    )
+    session.commit()
+    human_request = _execute_request(
+        target=target,  # type: ignore[arg-type]
+        account_id=plan.account_id,
+        revision_id=plan.revision_id,
+        authorization_id=reissued.authorization.authorization_id,
+        candidate_id=candidate_id,
+    )
+    human = execution.execute_paper_plan(human_request, clock=lambda: EXECUTE_AT)
+    session.commit()
+    assert raced.outcome is ExecutionCommandOutcome.BLOCKED
+    assert human.outcome is ExecutionCommandOutcome.BLOCKED
+    assert raced.blocked_reason_code in {
+        "plan_entry_already_claimed",
+        "authorization_unavailable",
+    }
+    assert human.blocked_reason_code in {
+        "plan_entry_already_claimed",
+        "authorization_unavailable",
+    }
+    assert human_request.idempotency_key == f"paper-exec:{candidate_id}"
+    assert _effect_count(session) == 1
+    assert _claim_count(session) == 1
+    assert _allow_count(session) == 1
+    session.expire_all()
+    revoked = session.get(ApprovalAuthorizationModel, authorization.authorization_id)
+    consumed = session.get(ApprovalAuthorizationModel, reissued.authorization.authorization_id)
+    assert revoked is not None and revoked.state is AuthorizationState.REVOKED
+    assert consumed is not None and consumed.state is AuthorizationState.CONSUMED
+    available = session.scalars(
+        select(ApprovalAuthorizationModel).where(
+            ApprovalAuthorizationModel.state == AuthorizationState.AVAILABLE
+        )
+    ).all()
+    assert available == []
+
+
+def _effect_count(session: Session) -> int:
+    return int(session.scalar(select(func.count()).select_from(VenueSubmitEffect)) or 0)
+
+
+def _claim_count(session: Session) -> int:
+    return int(session.scalar(select(func.count()).select_from(PlanEntryExecutionClaim)) or 0)
+
+
+def _allow_count(session: Session) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(ExecutionCommand)
+            .where(ExecutionCommand.outcome == ExecutionCommandOutcome.ALLOW)
+        )
+        or 0
+    )
+
+
 def _paper_cycle(
     session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -1414,6 +1618,7 @@ def _paper_cycle(
     plan = _persist_plan(session, ids)
     settings = Settings(_env_file=None, autonomous_internal_paper_enabled=True)
     calls: list[uuid.UUID] = []
+    requests: list[ExecutePaperPlanRequest] = []
 
     class _Execution:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -1424,6 +1629,7 @@ def _paper_cycle(
         ) -> SimpleNamespace:
             authorization_id = request.authorization_id
             calls.append(authorization_id)
+            requests.append(request)
             return outcomes[len(calls) - 1]
 
     monkeypatch.setattr("app.services.automated_paper_loop.ExecutionService", _Execution)
@@ -1453,6 +1659,7 @@ def _paper_cycle(
             "revision_id": plan.revision_id,
             "account_id": plan.account_id,
             "calls": calls,
+            "requests": requests,
             "plan": plan,
         },
     )
@@ -1507,6 +1714,11 @@ def test_second_cycle_reissues_after_a_blocked_claim(
     calls = context["calls"]
     assert isinstance(calls, list)
     assert calls == [revoked[0].id, available[0].id]
+    recorded = context["requests"]
+    assert isinstance(recorded, list)
+    assert recorded[0].idempotency_key == f"paper-exec:{candidate.candidate_id}:{revoked[0].id}"
+    assert recorded[1].idempotency_key == f"paper-exec:{candidate.candidate_id}:{available[0].id}"
+    assert recorded[0].idempotency_key != f"paper-exec:{candidate.candidate_id}"
     assert len(_approve_audits(session, available[0].id)) == 1
 
 

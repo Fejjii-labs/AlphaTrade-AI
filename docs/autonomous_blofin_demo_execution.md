@@ -2,8 +2,10 @@
 
 This implementation starts from reviewed PR249 candidate
 `de5c010c7c85dfe5cde1ec8fabf60b6262500fe0` (tree
-`2ebed239ecaeacbe32c4a4d50a1e8459c4ef4122`). Implementation source commit: `73765026d1b39e3564005a7f16deac838edc4f00`, source/test
-tree `0b9051f8f4305de88843ae4a695e3111194eb73e`.
+`2ebed239ecaeacbe32c4a4d50a1e8459c4ef4122`). The closure manifest now records
+implementation source commit `61aa5331f5e7deeb118514cac15d63ba8083b236`, source/test
+tree `036c375764f93b0a942cd32c54c1dc5a520e9c57`. The earlier receipt for
+`73765026d1b39e3564005a7f16deac838edc4f00` is not proof for this head.
 
 The controlling continuation was read
 from `cursor/experiments-market-handoff:HANDOFF.md`, updated 13 October 2026.
@@ -160,9 +162,15 @@ These steps require a separately authorized supervised session; none were run he
 
 ## Final focused evidence
 
-All final batches used implementation source `73765026d1b39e3564005a7f16deac838edc4f00`.
-The publication checkpoint adds documentation and retained evidence only. Both
-backend batches exited 0; **235 distinct tests passed, no skips**. No full CI ran.
+The closure manifest was refreshed from implementation source
+`61aa5331f5e7deeb118514cac15d63ba8083b236`. Listed file hashes match that
+source tree and this publication, which adds the refreshed receipt only.
+Focused pytest exited 0: 226 passed, 1 deselected, in 63.98s. The schema-drop
+alembic test was not run. The PostgreSQL demo suite, run alone, exited 0:
+20 passed in 44.35s. Ruff check and format exited 0. The historical batches
+below were run for `73765026d1b39e3564005a7f16deac838edc4f00` and are not
+proof for this head. Both of those backend batches exited 0; **235 distinct
+tests passed, no skips**. No full CI ran for that historical receipt.
 
 Disposable PostgreSQL 17.11 ran in `postgres:17-alpine` on loopback port 55432.
 Fixture schemas were created/dropped only in that disposable server. The container

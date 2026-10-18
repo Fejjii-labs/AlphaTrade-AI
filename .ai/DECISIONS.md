@@ -70,7 +70,12 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   new binding and a new approval-decision audit that names the new
   authorization id. AVAILABLE and CONSUMED rows are reused, so two workers
   cannot hold two active authorizations for one approval. The claim remains
-  one entry execution per plan revision. The kill switch, unverified risk
+  one entry execution per plan revision. An autonomous execution idempotency
+  key is ``paper-exec:{candidate_id}:{authorization_id}``. The human and API
+  path keeps ``paper-exec:{candidate_id}``. A committed blocked command for a
+  revoked authorization therefore does not conflict with the reissued
+  authorization, and a second ALLOW for that revision is still refused. The
+  kill switch, unverified risk
   limits, and production refusal are unchanged. Downgrade of a15 refuses on
   every dialect when one approval has more than one authorization row.
 - Existing governed demo flow: with both autonomous flags off, the governed

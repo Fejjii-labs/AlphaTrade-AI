@@ -403,6 +403,7 @@ class AutomatedPaperLoop:
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=True,
             ),
             clock=self._clock.now,
         )
@@ -992,14 +993,30 @@ def _execute_request(
     revision_id: UUID,
     authorization_id: UUID,
     candidate_id: UUID,
+    autonomous: bool = False,
 ) -> ExecutePaperPlanRequest:
+    """Build one paper execution request.
+
+    Human and API approvals keep ``paper-exec:{candidate_id}`` so an existing
+    human binding still replays. An autonomous attempt appends the authorization
+    id. The canonical payload hash includes that id, so a committed blocked
+    command for a revoked or expired authorization would conflict with the
+    reissued authorization if both reused the candidate key. The plan-entry
+    claim still admits one ALLOW per revision across keys, authorizations, and
+    workers. A consumed authorization is reused, so an allowed binding stays
+    single-use.
+    """
+
+    key = f"paper-exec:{candidate_id}"
+    if autonomous:
+        key = f"paper-exec:{candidate_id}:{authorization_id}"
     return ExecutePaperPlanRequest(
         organization_id=target.organization_id,
         user_id=target.user_id,
         account_id=account_id,
         authorization_id=authorization_id,
         revision_id=revision_id,
-        idempotency_key=f"paper-exec:{candidate_id}",
+        idempotency_key=key,
     )
 
 
