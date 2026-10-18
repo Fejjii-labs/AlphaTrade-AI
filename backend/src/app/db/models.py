@@ -6,7 +6,9 @@ monetary/size values, ``JSON`` for small structured lists, and non-native
 ``Enum`` columns stored as VARCHAR. Those enums are checked in Python.
 ``approval_authorizations.channel`` is the exception: an explicit CHECK allows
 WEB, API, TELEGRAM, and AUTONOMOUS, the same predicate Alembic revision
-``a14autonomouschannel001`` installs on a migrated database.
+``a14autonomouschannel001`` installs on a migrated database. One approval may
+keep revoked or expired authorizations. ``a15reissueauth001`` allows that
+history and keeps a single AVAILABLE or CONSUMED row per approval.
 
 Tenant-scoped resources carry ``organization_id``; vectors live in Qdrant while
 document/chunk metadata lives here.
@@ -1866,7 +1868,11 @@ class ApprovalRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """One exact, account-bound authorization issued by an APPROVE decision."""
+    """Account-bound authorization issued by an APPROVE decision.
+
+    REVOKED and EXPIRED rows remain as history. At most one AVAILABLE or
+    CONSUMED row exists for an approval.
+    """
 
     __tablename__ = "approval_authorizations"
     __table_args__ = (
@@ -1917,10 +1923,17 @@ class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=text("state = 'AVAILABLE'"),
             sqlite_where=text("state = 'AVAILABLE'"),
         ),
+        Index(
+            "uq_reusable_approval_authorization",
+            "approval_request_id",
+            unique=True,
+            postgresql_where=text("state IN ('AVAILABLE', 'CONSUMED')"),
+            sqlite_where=text("state IN ('AVAILABLE', 'CONSUMED')"),
+        ),
     )
 
     approval_request_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("approvals.id"), unique=True, nullable=False
+        ForeignKey("approvals.id"), nullable=False
     )
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id"), nullable=False

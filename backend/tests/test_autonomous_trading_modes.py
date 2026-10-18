@@ -313,6 +313,9 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
         def scalar(self, _statement: object) -> None:
             return None
 
+        def scalars(self, _statement: object) -> SimpleNamespace:
+            return SimpleNamespace(all=lambda: [])
+
     demo = GovernedBloFinDemoLoop(None, settings, SimpleNamespace(now=lambda: None))
     proof = demo._execute_existing(
         _NoClosedLifecycle(),  # type: ignore[arg-type]
@@ -347,6 +350,44 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
     )
     assert refused.stage == "blocked"
     assert refused.reason_code == "autonomous_mode_ambiguous"
+
+    authorization_id = uuid4()
+    captured: dict[str, object] = {}
+
+    class _Leftover:
+        def scalar(self, _statement: object) -> None:
+            return None
+
+        def scalars(self, _statement: object) -> SimpleNamespace:
+            return SimpleNamespace(all=lambda: [SimpleNamespace(id=authorization_id)])
+
+    class _RevokeOnly:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            captured["constructed"] = True
+
+        def revoke_authorization(self, revoked_id: object, **kwargs: object) -> None:
+            captured["revoked_id"] = revoked_id
+            captured["revoke_reason"] = kwargs.get("reason")
+
+        def create_for_plan_revision(self, **_kwargs: object) -> None:
+            raise AssertionError("a contradictory gate must not create an approval")
+
+        def decide(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a contradictory gate must not decide an approval")
+
+    monkeypatch.setattr("app.services.approval_service.ApprovalService", _RevokeOnly)
+    leftover = blocked._execute_existing(
+        _Leftover(),  # type: ignore[arg-type]
+        target=target,  # type: ignore[arg-type]
+        candidate=candidate,  # type: ignore[arg-type]
+        revision_id=revision_id,
+        account_id=uuid4(),
+    )
+    assert leftover.stage == "blocked"
+    assert leftover.reason_code == "autonomous_mode_ambiguous"
+    assert captured["constructed"] is True
+    assert captured["revoked_id"] == authorization_id
+    assert captured["revoke_reason"] == "autonomous_precheck_blocked"
 
 
 def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:

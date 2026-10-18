@@ -280,7 +280,8 @@ class ApprovalService:
         if row.status is ApprovalStatus.APPROVED and decision.action is ApprovalAction.APPROVE:
             if row.plan_revision_id is None:
                 return self._to_schema(row)
-            self.issue_authorization(
+            prior = self._authorizations.get_reusable_for_approval(row.id)
+            issued = self.issue_authorization(
                 approval_id=approval_id,
                 decision=AuthorizationDecision.APPROVE,
                 organization_id=row.organization_id,
@@ -289,6 +290,15 @@ class ApprovalService:
                 actor_type=actor_type,
                 assertion=decision.authorization_assertion,
             )
+            if prior is None or prior.id != issued.authorization_id:
+                self._audit_decision(
+                    row,
+                    decision,
+                    channel=channel,
+                    actor_type=actor_type,
+                    audit_metadata=audit_metadata,
+                    authorization_id=issued.authorization_id,
+                )
             return self._to_schema(row)
         if row.status is not ApprovalStatus.PENDING:
             raise ValidationAppError(
@@ -296,10 +306,11 @@ class ApprovalService:
                 details={"current_status": row.status.value},
             )
 
+        issued_authorization_id: uuid.UUID | None = None
         if decision.action is ApprovalAction.APPROVE and row.plan_revision_id is not None:
             if decision.modified_fields:
                 raise ValidationAppError("APPROVE cannot modify immutable plan fields.")
-            self.issue_authorization(
+            issued = self.issue_authorization(
                 approval_id=approval_id,
                 decision=AuthorizationDecision.APPROVE,
                 organization_id=row.organization_id,
@@ -308,6 +319,7 @@ class ApprovalService:
                 actor_type=actor_type,
                 assertion=decision.authorization_assertion,
             )
+            issued_authorization_id = issued.authorization_id
 
         row.status = _action_to_status(decision.action)
         row.proposed_action = decision.action
@@ -325,29 +337,14 @@ class ApprovalService:
             proposal.status = _proposal_status_for_action(decision.action)
             self._proposals.add(proposal)
 
-        metadata: dict[str, object] = {
-            "action": decision.action.value,
-            "proposal_id": str(row.proposal_id),
-            "revision_id": str(row.plan_revision_id) if row.plan_revision_id else None,
-            "modified_fields": decision.modified_fields or {},
-            "authorization_issued": decision.action is ApprovalAction.APPROVE
-            and row.plan_revision_id is not None,
-            "channel": channel.value,
-            "actor_type": actor_type,
-        }
-        if audit_metadata is not None:
-            metadata["autonomous_approval"] = audit_metadata
-        audit_record = self._record_audit(
-            AuditEventType.APPROVAL_DECISION,
-            organization_id=row.organization_id,
-            user_id=row.user_id,
-            resource_id=str(row.id),
-            actor_type=ActorType.SYSTEM if actor_type == "SYSTEM" else ActorType.USER,
-            metadata=metadata,
+        self._audit_decision(
+            row,
+            decision,
+            channel=channel,
+            actor_type=actor_type,
+            audit_metadata=audit_metadata,
+            authorization_id=issued_authorization_id,
         )
-        if audit_record is not None:
-            row.audit_event_id = audit_record.event_id
-            self._repo.add(row)
         return self._to_schema(row)
 
     def issue_authorization(
@@ -362,7 +359,11 @@ class ApprovalService:
         assertion: ApprovalAuthorizationAssertion | None = None,
         manual_demo_confirmation_hash: str | None = None,
     ) -> ApprovalAuthorization:
-        """Idempotently issue the sole authorization; reject non-APPROVE discriminators."""
+        """Reuse an AVAILABLE or CONSUMED authorization.
+
+        After REVOKED or EXPIRED, insert a new binding. Never return the
+        revoked or expired row. Reject non-APPROVE discriminators.
+        """
         operation_decision = get_operation_decision()
         if operation_decision is not None:
             assert_authorization_issuance_allowed(operation_decision)
@@ -434,12 +435,12 @@ class ApprovalService:
             user_id=user_id,
         )
 
-        existing = self._authorizations.get_for_approval(approval.id)
+        existing = self._authorizations.get_reusable_for_approval(approval.id)
         if existing is not None:
             self._validate_existing_authorization(existing, revision)
             self._mark_plan_approval_approved(approval, proposal)
             return self._authorization_to_schema(existing)
-        existing = self._authorizations.get_by_binding(
+        existing = self._authorizations.get_reusable_by_binding(
             organization_id=organization_id,
             account_id=revision.account_id,
             exchange_account_id=revision.exchange_account_id,
@@ -514,7 +515,7 @@ class ApprovalService:
             with self._session.begin_nested():
                 self._authorizations.add(row)
         except IntegrityError:
-            concurrent = self._authorizations.get_by_binding(
+            concurrent = self._authorizations.get_reusable_by_binding(
                 organization_id=organization_id,
                 account_id=revision.account_id,
                 exchange_account_id=revision.exchange_account_id,
@@ -684,8 +685,43 @@ class ApprovalService:
         ):
             raise ValidationAppError("Existing authorization issuance hash is invalid.")
 
+    def _audit_decision(
+        self,
+        row: ApprovalModel,
+        decision: ApprovalDecisionRequest,
+        *,
+        channel: AuthorizationChannel,
+        actor_type: str,
+        audit_metadata: dict[str, object] | None,
+        authorization_id: uuid.UUID | None,
+    ) -> None:
+        metadata: dict[str, object] = {
+            "action": decision.action.value,
+            "proposal_id": str(row.proposal_id),
+            "revision_id": str(row.plan_revision_id) if row.plan_revision_id else None,
+            "modified_fields": decision.modified_fields or {},
+            "authorization_issued": authorization_id is not None,
+            "channel": channel.value,
+            "actor_type": actor_type,
+        }
+        if authorization_id is not None:
+            metadata["authorization_id"] = str(authorization_id)
+        if audit_metadata is not None:
+            metadata["autonomous_approval"] = audit_metadata
+        audit_record = self._record_audit(
+            AuditEventType.APPROVAL_DECISION,
+            organization_id=row.organization_id,
+            user_id=row.user_id,
+            resource_id=str(row.id),
+            actor_type=ActorType.SYSTEM if actor_type == "SYSTEM" else ActorType.USER,
+            metadata=metadata,
+        )
+        if audit_record is not None:
+            row.audit_event_id = audit_record.event_id
+            self._repo.add(row)
+
     def _to_schema(self, row: ApprovalModel) -> ApprovalRequest:
-        authorization = self._authorizations.get_for_approval(row.id)
+        authorization = self._authorizations.get_reusable_for_approval(row.id)
         return ApprovalRequest(
             id=row.id,
             proposal_id=row.proposal_id,

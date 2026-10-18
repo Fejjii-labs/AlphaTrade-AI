@@ -8,15 +8,17 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, event, select, text
+from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import Settings
 from app.core.errors import NotFoundError, ValidationAppError
 from app.db.base import Base
 from app.db.models import (
@@ -31,6 +33,7 @@ from app.db.models import (
     PaperValidationAlert,
     PaperValidationCandidate,
     PaperValidationDraft,
+    PlanEntryExecutionClaim,
     SetupDefinition,
     User,
     UserStrategy,
@@ -55,11 +58,13 @@ from app.schemas.common import (
     ApprovalAction,
     AuditEventType,
     ExchangeAccountStatus,
+    JournalTradeStatus,
     PaperAlertType,
     RiskSeverity,
     SetupCategory,
     StrategyId,
 )
+from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCommandOutcome
 from app.schemas.proposal import ExitCriteria, TakeProfitLevel, TradeProposalCreate
 from app.schemas.trade_plan import (
     AccountMode,
@@ -80,10 +85,17 @@ from app.schemas.trade_plan import (
 from app.services.approval_authorization_hash import verify_authorization_issuance_hash
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
+from app.services.automated_paper_loop import AutomatedPaperLoop
 from app.services.canonical_execution_payload import CanonicalExecutionPayloadSerializerV1
 from app.services.canonical_serialization import canonical_json_bytes, canonical_sha256
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
 from app.services.proposal_service import ProposalService
+from tests.support.phase1_plan_fixtures import (
+    EXECUTE_AT,
+    execute_request,
+    execution_service,
+    prepared_authorized_plan,
+)
 
 NOW = datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
 CORRELATION_ID = uuid.UUID("09000000-0000-0000-0000-000000000001")
@@ -1136,3 +1148,407 @@ def test_canonical_payload_v1_golden_fixture_has_no_json_numbers_for_decimals() 
     assert decoded["price"] is None
     assert decoded["market_marker"] is True
     assert b":2.0" not in serialization.canonical_bytes
+
+
+def _approve_audits(session: Session, authorization_id: uuid.UUID) -> list[AuditLog]:
+    return [
+        row
+        for row in session.scalars(select(AuditLog)).all()
+        if row.action is AuditEventType.APPROVAL_DECISION
+        and (row.redacted_metadata or {}).get("action") == "approve"
+        and (row.redacted_metadata or {}).get("authorization_id") == str(authorization_id)
+    ]
+
+
+def test_revoked_and_expired_authorizations_can_be_reissued(session: Session) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    service, authorization = _approve_autonomous(session, ids, plan)
+    approval_id = authorization.approval_request_id
+    revoked = service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="claim_blocked",
+    )
+    assert revoked.state is AuthorizationState.REVOKED
+    assert service.get(approval_id).authorization is None
+    reissued = service.decide(
+        approval_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert reissued.authorization is not None
+    assert reissued.authorization.authorization_id != authorization.authorization_id
+    assert reissued.authorization.state is AuthorizationState.AVAILABLE
+    old = session.get(ApprovalAuthorizationModel, authorization.authorization_id)
+    assert old is not None
+    assert old.state is AuthorizationState.REVOKED
+    assert len(_approve_audits(session, reissued.authorization.authorization_id)) == 1
+    reused = service.decide(
+        approval_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert reused.authorization is not None
+    assert reused.authorization.authorization_id == reissued.authorization.authorization_id
+    assert session.query(ApprovalAuthorizationModel).count() == 2
+    assert len(_approve_audits(session, reissued.authorization.authorization_id)) == 1
+
+    expired_plan = _persist_plan(session, ids)
+    expired_service, expired = _approve_autonomous(session, ids, expired_plan)
+    expired_row = session.get(ApprovalAuthorizationModel, expired.authorization_id)
+    assert expired_row is not None
+    expired_row.state = AuthorizationState.EXPIRED
+    session.flush()
+    assert expired_service.get(expired.approval_request_id).authorization is None
+    late = ApprovalService(
+        session,
+        AuditService(session),
+        clock=lambda: NOW + timedelta(hours=2),
+    )
+    with pytest.raises(ValidationAppError, match="expired"):
+        late.issue_authorization(
+            approval_id=expired.approval_request_id,
+            decision=AuthorizationDecision.APPROVE,
+            organization_id=expired_plan.organization_id,
+            user_id=expired_plan.user_id,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type="SYSTEM",
+        )
+    assert session.get(ApprovalAuthorizationModel, expired.authorization_id).state is (  # type: ignore[union-attr]
+        AuthorizationState.EXPIRED
+    )
+    within_window = expired_service.decide(
+        expired.approval_request_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=expired_plan.organization_id,
+        principal_user_id=expired_plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert within_window.authorization is not None
+    assert within_window.authorization.authorization_id != expired.authorization_id
+    assert session.get(ApprovalAuthorizationModel, expired.authorization_id).state is (  # type: ignore[union-attr]
+        AuthorizationState.EXPIRED
+    )
+
+
+def test_only_one_reusable_authorization_can_exist(session: Session) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    _service, authorization = _approve_autonomous(session, ids, plan)
+    original = session.get(ApprovalAuthorizationModel, authorization.authorization_id)
+    assert original is not None
+
+    def clone(**overrides: object) -> ApprovalAuthorizationModel:
+        values = {
+            column.key: getattr(original, column.key) for column in original.__table__.columns
+        }
+        values.update(overrides)
+        return ApprovalAuthorizationModel(**values)
+
+    duplicate = clone(
+        id=uuid.uuid4(),
+        authorization_content_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+    )
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(duplicate)
+        session.flush()
+    original.state = AuthorizationState.REVOKED
+    session.flush()
+    replacement = clone(
+        id=uuid.uuid4(),
+        authorization_content_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+        state=AuthorizationState.AVAILABLE,
+    )
+    session.add(replacement)
+    session.flush()
+    replacement.state = AuthorizationState.CONSUMED
+    session.flush()
+    third = clone(
+        id=uuid.uuid4(),
+        authorization_content_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+        state=AuthorizationState.AVAILABLE,
+    )
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(third)
+        session.flush()
+    reusable = session.scalars(
+        select(ApprovalAuthorizationModel).where(
+            ApprovalAuthorizationModel.state.in_(
+                (AuthorizationState.AVAILABLE, AuthorizationState.CONSUMED)
+            )
+        )
+    ).all()
+    assert [row.id for row in reusable] == [replacement.id]
+
+
+def test_competing_issue_reuses_the_available_authorization(session: Session) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    service, authorization = _approve_autonomous(session, ids, plan)
+    service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="post_approval_recheck",
+    )
+    winner = service.issue_authorization(
+        approval_id=authorization.approval_request_id,
+        decision=AuthorizationDecision.APPROVE,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    lookups = {"for": 0, "by": 0}
+    original_for = service._authorizations.get_reusable_for_approval
+    original_by = service._authorizations.get_reusable_by_binding
+
+    def miss_for(approval_id: uuid.UUID) -> object:
+        lookups["for"] += 1
+        if lookups["for"] == 1:
+            return None
+        return original_for(approval_id)
+
+    def miss_by(**kwargs: object) -> object:
+        lookups["by"] += 1
+        if lookups["by"] == 1:
+            return None
+        return original_by(**kwargs)  # type: ignore[arg-type]
+
+    service._authorizations.get_reusable_for_approval = miss_for  # type: ignore[method-assign]
+    service._authorizations.get_reusable_by_binding = miss_by  # type: ignore[method-assign]
+    raced = service.issue_authorization(
+        approval_id=authorization.approval_request_id,
+        decision=AuthorizationDecision.APPROVE,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert raced.authorization_id == winner.authorization_id
+    assert raced.authorization_id != authorization.authorization_id
+    available = session.scalars(
+        select(ApprovalAuthorizationModel).where(
+            ApprovalAuthorizationModel.state == AuthorizationState.AVAILABLE
+        )
+    ).all()
+    assert [row.id for row in available] == [winner.authorization_id]
+
+
+def test_competing_workers_execute_the_reissued_authorization_once(session: Session) -> None:
+    ids, plan, authorization = prepared_authorized_plan(session)
+    service = ApprovalService(
+        session, AuditService(session), clock=lambda: NOW + timedelta(minutes=1)
+    )
+    service.revoke_authorization(
+        authorization.authorization_id,
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        reason="claim_blocked",
+    )
+    first = service.decide(
+        authorization.approval_request_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    second = service.decide(
+        authorization.approval_request_id,
+        ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+        principal_organization_id=plan.organization_id,
+        principal_user_id=plan.user_id,
+        channel=AuthorizationChannel.AUTONOMOUS,
+        actor_type="SYSTEM",
+    )
+    assert first.authorization is not None
+    assert second.authorization is not None
+    assert first.authorization.authorization_id == second.authorization.authorization_id
+    assert first.authorization.authorization_id != authorization.authorization_id
+    execution = execution_service(session)
+    allowed = execution.execute_paper_plan(
+        execute_request(ids, plan, first.authorization, key="worker-a"),
+        clock=lambda: EXECUTE_AT,
+    )
+    session.commit()
+    blocked = execution.execute_paper_plan(
+        execute_request(ids, plan, second.authorization, key="worker-b"),
+        clock=lambda: EXECUTE_AT,
+    )
+    session.commit()
+    assert allowed.outcome is ExecutionCommandOutcome.ALLOW
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code in {
+        "plan_entry_already_claimed",
+        "authorization_unavailable",
+    }
+    assert session.scalar(select(func.count()).select_from(PlanEntryExecutionClaim)) == 1
+    active = session.scalars(
+        select(ApprovalAuthorizationModel).where(
+            ApprovalAuthorizationModel.state == AuthorizationState.AVAILABLE
+        )
+    ).all()
+    assert active == []
+    consumed = session.get(ApprovalAuthorizationModel, first.authorization.authorization_id)
+    assert consumed is not None
+    assert consumed.state is AuthorizationState.CONSUMED
+
+
+def _paper_cycle(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outcomes: list[SimpleNamespace],
+) -> tuple[AutomatedPaperLoop, SimpleNamespace, dict[str, object]]:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    settings = Settings(_env_file=None, autonomous_internal_paper_enabled=True)
+    calls: list[uuid.UUID] = []
+
+    class _Execution:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def execute_paper_plan(
+            self, request: ExecutePaperPlanRequest, **_kwargs: object
+        ) -> SimpleNamespace:
+            authorization_id = request.authorization_id
+            calls.append(authorization_id)
+            return outcomes[len(calls) - 1]
+
+    monkeypatch.setattr("app.services.automated_paper_loop.ExecutionService", _Execution)
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._find_open_journal",
+        lambda *_args, **_kwargs: SimpleNamespace(id=uuid.uuid4(), status=JournalTradeStatus.OPEN),
+    )
+    loop = AutomatedPaperLoop(
+        None,  # type: ignore[arg-type]
+        settings,
+        SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
+    )
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+    )
+    target = SimpleNamespace(
+        organization_id=plan.organization_id,
+        user_id=plan.user_id,
+        scan_scope="scope",
+    )
+    candidate = SimpleNamespace(candidate_id=uuid.uuid4())
+    return (
+        loop,
+        target,
+        {
+            "candidate": candidate,
+            "revision_id": plan.revision_id,
+            "account_id": plan.account_id,
+            "calls": calls,
+            "plan": plan,
+        },
+    )
+
+
+def test_second_cycle_reissues_after_a_blocked_claim(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command_id = uuid.uuid4()
+    loop, target, context = _paper_cycle(
+        session,
+        monkeypatch,
+        outcomes=[
+            SimpleNamespace(
+                outcome=ExecutionCommandOutcome.BLOCKED,
+                blocked_reason_code="daily_loss_limit",
+                command_id=None,
+                replayed=False,
+            ),
+            SimpleNamespace(
+                outcome=ExecutionCommandOutcome.ALLOW,
+                blocked_reason_code=None,
+                command_id=command_id,
+                replayed=False,
+            ),
+        ],
+    )
+    candidate = context["candidate"]
+    common = {
+        "target": target,
+        "candidate": candidate,
+        "revision_id": context["revision_id"],
+        "account_id": context["account_id"],
+        "eligibility_id": uuid.uuid4(),
+        "eligibility_state": "eligible",
+    }
+    blocked = loop._execute_existing(session, **common)  # type: ignore[arg-type]
+    assert blocked.stage == "blocked"
+    assert blocked.reason_code == "daily_loss_limit"
+    revoked_rows = session.scalars(select(ApprovalAuthorizationModel)).all()
+    assert len(revoked_rows) == 1
+    assert revoked_rows[0].state is AuthorizationState.REVOKED
+    filled = loop._execute_existing(session, **common)  # type: ignore[arg-type]
+    assert filled.stage == "filled"
+    assert filled.execution_command_id == command_id
+    rows = session.scalars(select(ApprovalAuthorizationModel)).all()
+    available = [row for row in rows if row.state is AuthorizationState.AVAILABLE]
+    revoked = [row for row in rows if row.state is AuthorizationState.REVOKED]
+    assert len(available) == 1
+    assert len(revoked) == 1
+    assert available[0].id != revoked[0].id
+    calls = context["calls"]
+    assert isinstance(calls, list)
+    assert calls == [revoked[0].id, available[0].id]
+    assert len(_approve_audits(session, available[0].id)) == 1
+
+
+def test_kill_switch_still_blocks_a_new_authorization(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _seed_support(session)
+    plan = _persist_plan(session, ids)
+    _service, authorization = _approve_autonomous(session, ids, plan)
+    settings = Settings(_env_file=None, autonomous_internal_paper_enabled=True)
+
+    def _forbid(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a live kill switch must not execute")
+
+    monkeypatch.setattr("app.services.automated_paper_loop.ExecutionService", _forbid)
+    loop = AutomatedPaperLoop(
+        None,  # type: ignore[arg-type]
+        settings,
+        SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
+    )
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+    )
+    loop._autonomous_approval_refusal = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: "kill_switch_active"
+    )
+    proof = loop._execute_existing(
+        session,
+        target=SimpleNamespace(  # type: ignore[arg-type]
+            organization_id=plan.organization_id,
+            user_id=plan.user_id,
+            scan_scope="scope",
+        ),
+        candidate=SimpleNamespace(candidate_id=uuid.uuid4()),  # type: ignore[arg-type]
+        revision_id=plan.revision_id,
+        account_id=plan.account_id,
+        eligibility_id=uuid.uuid4(),
+        eligibility_state="eligible",
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "kill_switch_active"
+    rows = session.scalars(select(ApprovalAuthorizationModel)).all()
+    assert len(rows) == 1
+    assert rows[0].id == authorization.authorization_id
+    assert rows[0].state is AuthorizationState.REVOKED
