@@ -81,6 +81,7 @@ _EXECUTION_ACTOR_BY_SOURCE: Final[dict[JournalTradeSource, ExecutionActor]] = {
     JournalTradeSource.MANUAL: ExecutionActor.HUMAN,
     JournalTradeSource.IMPORTED: ExecutionActor.HUMAN,
     JournalTradeSource.PAPER_EXECUTION: ExecutionActor.HUMAN,
+    JournalTradeSource.BLOFIN_DEMO_MANUAL: ExecutionActor.HUMAN,
     JournalTradeSource.PAPER_VALIDATION: ExecutionActor.SYSTEM,
     JournalTradeSource.BACKTEST: ExecutionActor.SYSTEM,
     JournalTradeSource.SYSTEM: ExecutionActor.SYSTEM,
@@ -96,6 +97,7 @@ _COMPARISON_COHORTS: Final[
                 JournalTradeSource.MANUAL,
                 JournalTradeSource.IMPORTED,
                 JournalTradeSource.PAPER_EXECUTION,
+                JournalTradeSource.BLOFIN_DEMO_MANUAL,
             }
         ),
     ),
@@ -117,6 +119,7 @@ _SCORECARD_ACTORS: Final[tuple[tuple[ExecutionActor, frozenset[JournalTradeSourc
                 JournalTradeSource.MANUAL,
                 JournalTradeSource.IMPORTED,
                 JournalTradeSource.PAPER_EXECUTION,
+                JournalTradeSource.BLOFIN_DEMO_MANUAL,
             }
         ),
     ),

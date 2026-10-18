@@ -100,3 +100,16 @@ Method id: `closed-round-trip-fillpnl-fee-recorded/v1`.
   Open size is not a trade. That function is not what the dashboard publishes.
 - The published time window is the fill cursor coverage. It is context for the
   withheld figures, not a scored interval.
+
+## Hand-traded demo mirror
+
+The same snapshot cycle can mirror Sofien's hand trades into the journal.
+That path is separate from `fillPnl`. Official trade-history wording still
+does not say whether `fillPnl` is gross or net of fees or funding, so the
+activity win rate above stays withheld.
+
+The mirror flag is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off.
+This document names the flag only. Do not set it in `render.yaml` or in a
+deployed environment from this change. Contract, formulas, and the journal
+source `blofin_demo_manual` are in
+[blofin_demo_manual_mirror.md](blofin_demo_manual_mirror.md).

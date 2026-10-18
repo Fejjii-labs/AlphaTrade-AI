@@ -65,6 +65,7 @@ class JournalTradeStatsRow:
     planned_entry_price: Decimal | None
     entry_price: Decimal | None
     exit_reason: str | None
+    strategy_label: str | None
 
 
 class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
@@ -357,6 +358,7 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
                 JournalTrade.planned_entry_price,
                 JournalTrade.entry_price,
                 JournalTrade.exit_reason,
+                JournalTrade.strategy_label,
             )
             .where(*filters)
             .order_by(effective_time.asc(), JournalTrade.id.asc())

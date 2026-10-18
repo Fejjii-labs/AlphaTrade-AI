@@ -112,10 +112,31 @@ class BloFinDemoSnapshotCycle:
         else:
             health = result.snapshot.health_status
             if health in _FRESH:
+                if self.settings.blofin_demo_manual_mirror_enabled:
+                    self._run_mirror(session, organization_id, user_id)
+                    session.commit()
                 return "ok"
             return "unavailable"
         finally:
             session.close()
+
+    def _run_mirror(
+        self,
+        session: object,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Journal mirror. The flag stays off unless an operator sets it."""
+        from app.core.blofin_readonly_access import get_readonly_client
+        from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
+
+        client = get_readonly_client(self.settings, activity_history=True)
+        BloFinDemoManualMirror(client, now=self._clock()).apply(
+            session,  # type: ignore[arg-type]
+            organization_id=organization_id,
+            user_id=user_id,
+            settings=self.settings,
+        )
 
 
 def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:

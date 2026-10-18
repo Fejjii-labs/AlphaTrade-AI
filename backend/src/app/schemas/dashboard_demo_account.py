@@ -54,6 +54,11 @@ class DemoAccountPerformance(StrictModel):
     window_end: datetime | None = None
     unresolved_round_trips: int | None = None
     activity_coverage: str = ""
+    # Hand-traded BloFin demo journal. Headline numbers stay empty until
+    # positions-history price P&L, fee, and funding are verified.
+    manual_mirror_status: Literal["disabled", "withheld", "ready"] = "disabled"
+    manual_mirror_reason: str = ""
+    average_r: Decimal | None = None
 
 
 class DashboardDemoAccount(StrictModel):

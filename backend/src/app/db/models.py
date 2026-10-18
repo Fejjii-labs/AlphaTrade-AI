@@ -2914,6 +2914,14 @@ class JournalTrade(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
 
+    @property
+    def grade(self) -> str | None:
+        """Hand-assigned grade stored as a single ``grade:`` tag."""
+        for tag in self.tags or []:
+            if isinstance(tag, str) and tag.startswith("grade:") and len(tag) > len("grade:"):
+                return tag.split(":", 1)[1]
+        return None
+
     # Links to existing records (never duplicated, always tenant-checked)
     linked_position_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("positions.id"), nullable=True

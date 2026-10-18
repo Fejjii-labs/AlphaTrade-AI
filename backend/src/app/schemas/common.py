@@ -471,6 +471,7 @@ class JournalTradeSource(StrEnum):
     MANUAL = "manual"
     PAPER_EXECUTION = "paper_execution"
     MANUAL_DEMO_TEST = "manual_demo_test"
+    BLOFIN_DEMO_MANUAL = "blofin_demo_manual"
     PAPER_VALIDATION = "paper_validation"
     BACKTEST = "backtest"
     IMPORTED = "imported"

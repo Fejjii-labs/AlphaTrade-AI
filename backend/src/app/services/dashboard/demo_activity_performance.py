@@ -37,6 +37,9 @@ def present_demo_account(
     """Stamp the configured refresh interval and activity performance."""
     account.refresh_interval_seconds = settings.blofin_demo_snapshot_sync_seconds
     apply_activity_performance(account, session=session, tenant=tenant)
+    from app.services.blofin_demo_manual_mirror import publish_mirror_performance
+
+    publish_mirror_performance(account, session=session, tenant=tenant, settings=settings)
     return account
 
 

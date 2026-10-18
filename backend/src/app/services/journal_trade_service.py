@@ -11,6 +11,7 @@ Unit of work (AT-ADR-008): the service flushes; the route commits.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -54,6 +55,7 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.schemas.journal_trades import (
+    JournalTradeAnnotation,
     JournalTradeCreate,
     JournalTradeDetail,
     JournalTradeEvidenceCreate,
@@ -66,9 +68,28 @@ from app.schemas.journal_trades import (
     JournalTradeUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.blofin_demo_manual_mirror import annotation_allowed, grade_tag
 from app.services.canonical_serialization import canonical_sha256
 
 _REQUEST_TAG = "journal-trades-api"
+_GRADE = re.compile(r"^(?:[A-D][+-]?|F)$")
+
+
+def _clean_grade(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValidationAppError("Grade must be text.")
+    text = value.strip().upper()
+    if not text:
+        return None
+    if _GRADE.fullmatch(text) is None:
+        raise ValidationAppError(
+            "Grade must be A through D with an optional + or -, or F.",
+            details={"reason": "invalid_grade"},
+        )
+    return text
+
 
 VENUE_FACT_FIELDS = frozenset(
     {
@@ -413,6 +434,45 @@ class JournalTradeService:
         _derive_realized_vs_available(row, explicit="realized_vs_available_pct" in updates)
         self._trades.add(row)
         self._record_audit(row, AuditEventType.JOURNAL_TRADE_UPDATED, action="update")
+        return JournalTradeRead.model_validate(row)
+
+    def annotate(
+        self,
+        trade_id: uuid.UUID,
+        data: JournalTradeAnnotation,
+        *,
+        organization_id: uuid.UUID,
+    ) -> JournalTradeRead:
+        """Tag strategy, grade, and notes. Venue facts stay untouched."""
+        row = self._get_row(trade_id, organization_id=organization_id)
+        if not annotation_allowed(row):
+            raise ValidationAppError(
+                "Only a mirrored BloFin demo journal trade can be tagged here.",
+                details={"reason": "annotation_source"},
+            )
+        updates = data.model_dump(exclude_unset=True)
+        if "user_strategy_id" in updates:
+            self._validate_strategy_links(
+                organization_id=organization_id,
+                setup_id=None,
+                user_strategy_id=updates["user_strategy_id"],
+                strategy_version_id=None,
+            )
+            row.user_strategy_id = updates["user_strategy_id"]
+            if updates["user_strategy_id"] is not None and "strategy_label" not in updates:
+                strategy = self._session.get(UserStrategy, updates["user_strategy_id"])
+                if strategy is not None and not (row.strategy_label or "").strip():
+                    row.strategy_label = strategy.name
+        if "strategy_label" in updates:
+            label = updates["strategy_label"]
+            row.strategy_label = label.strip() if isinstance(label, str) and label.strip() else None
+        if "notes" in updates:
+            notes = updates["notes"]
+            row.notes = notes.strip() if isinstance(notes, str) and notes.strip() else None
+        if "grade" in updates:
+            row.tags = grade_tag(list(row.tags or []), _clean_grade(updates["grade"]))
+        self._trades.add(row)
+        self._record_audit(row, AuditEventType.JOURNAL_TRADE_UPDATED, action="annotate")
         return JournalTradeRead.model_validate(row)
 
     def correct_venue_facts(

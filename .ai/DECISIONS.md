@@ -3353,3 +3353,40 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `activity_sync_status` is not `ready`. The structural method id is
   `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
   Sofien approves the worker env names.
+
+## AT-ADR-109 — Mirror BloFin demo hand trades from positions history, not fillPnl
+
+- Date: 2026-10-18
+- Decision: Sofien's hand trades on the BloFin demo account are mirrored into
+  the canonical journal from read-only `GET /api/v1/account/positions-history`,
+  funding-fee history, fills (order ids only), and orders history. The flag
+  `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and is not set by this
+  change. New rows use source `blofin_demo_manual`. Grade is a `grade:` tag.
+  No Alembic revision.
+- Semantics, read from https://docs.blofin.com/index.html on 2026-10-18:
+  the published ETH positions-history row shows `realizedPnl` equal to
+  `(close - open) * contracts` and not net of `fee`. `fundingFee` is positive
+  when received and negative when paid. Positions history has no funding
+  field. `fillPnl` is still not documented as gross or net of fees or
+  funding, so AT-ADR-108 stands for the activity path. This mirror ignores
+  `fillPnl`.
+- A closed row is verified only when direction-aware price P&L times
+  `contractValue` equals `realizedPnl` at 1e-8, settlement is USDT, the fee
+  is present, and funding for that slice sits inside the seven-day window
+  and is not shared. Net is price P&L minus fee minus funding paid
+  (`-fundingFee`). A negative fee is stored as a rebate. That sign is
+  inferred from the order-history "Fee and rebate" label and the existing
+  reconciliation note, not from a positions-history sentence. The published
+  BCH `sell` example does not match the short formula, so it stays
+  unverified.
+- The dashboard publishes win rate, realized P&L, average R, and count from
+  closed `blofin_demo_manual` rows only when every one of those rows is
+  verified. Otherwise those headlines stay empty and the card says why.
+  Method id: `positions-history-price-pnl-fee-funding/v1`.
+- Idempotency key is `blofin-demo-history:{historyId}` for a closed slice and
+  `blofin-demo-open:{positionId}:{createTime}` for a remainder. An open
+  AlphaTrade manual demo row with the same symbol, direction, entry, and
+  size is closed in place and keeps its source, including
+  `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
+  Ambiguous matches are skipped.
+- Reference: `docs/blofin_demo_manual_mirror.md`.

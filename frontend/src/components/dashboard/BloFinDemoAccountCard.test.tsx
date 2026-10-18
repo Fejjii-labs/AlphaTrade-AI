@@ -437,6 +437,68 @@ it("shows activity win rate and withholds it when activity sync is disabled", as
   expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
 });
 
+it("shows mirrored win rate while activity sync stays disabled", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Manual coverage is separate.",
+      activity_sync_status: "disabled",
+      manual_mirror_status: "ready",
+      manual_mirror_reason: "Closed BloFin demo manual journal entries.",
+      win_rate: "1.0000",
+      trade_count: 1,
+      wins: 1,
+      losses: 0,
+      realized_pnl: "0.186",
+      average_r: "0.9300",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
+  expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("Average R 0.9300");
+  expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
+  expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
+});
+
+it("keeps win rate hidden when a mirrored trade is unverified", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Manual coverage is separate.",
+      activity_sync_status: "ready",
+      win_rate: "0.5000",
+      realized_pnl: "2.87",
+      manual_mirror_status: "withheld",
+      manual_mirror_reason: "Win rate stays withheld. fillPnl remains undocumented.",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  expect(await screen.findByTestId("manual-mirror-withheld")).toHaveTextContent("fillPnl");
+  expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("—");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("— USDT");
+});
+
 it("uses native scope and verified partial performance without rounding tiny PnL to zero", async () => {
   latest.mockResolvedValue(account({ can_refresh: false, performance: {
     status: "partial", currency: "USDT", gross_pnl: "0.007656", fees: "0.0099", funding: null, net_pnl: null,

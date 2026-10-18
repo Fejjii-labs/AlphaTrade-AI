@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JournalTradeScreen } from "./JournalTradeScreen";
 import { journalTradeApi, type JournalTradeDetail } from "@/lib/api/journal-trade";
 
-vi.mock("@/lib/api/journal-trade", () => ({ journalTradeApi: { detail: vi.fn(), reflect: vi.fn() } }));
+vi.mock("@/lib/api/journal-trade", () => ({
+  journalTradeApi: { detail: vi.fn(), reflect: vi.fn(), annotate: vi.fn() },
+}));
 const fixture: JournalTradeDetail = {
   trade: { id: "exact-trade", symbol: "BTCUSDT", timeframe: "manual", direction: "long", status: "open", result: "open", source: "manual_demo_test", exchange: "BLOFIN_DEMO", size: "0.0001", entry_price: "82234.40", exit_price: null, fees: "0.00493406", gross_pnl: null, net_pnl: null, funding: null, exit_time: null, execution_lifecycle_id: "exact-command" },
   manual_demo: {
@@ -23,6 +25,7 @@ it("loads only the exact linked trade with unknown outcomes and precise tiny fee
   expect(screen.getByText("0.00493406 USDT")).toBeInTheDocument();
   expect(screen.getAllByText("— USDT").length).toBeGreaterThan(0);
   expect(screen.getByText(/Account flatness alone/)).toBeInTheDocument();
+  expect(screen.queryByTestId("journal-mirror-annotation")).not.toBeInTheDocument();
 });
 it("attaches a personal reflection through observations without editing execution evidence", async () => {
   let finish!: () => void;
@@ -69,4 +72,39 @@ it("uses audited manual economics instead of legacy mutable Journal amounts", as
   expect(screen.getByText("0.00493406 USDT")).toBeInTheDocument();
   expect(screen.queryByText("999.00 USDT")).not.toBeInTheDocument();
   expect(screen.queryByText("200.00 USDT")).not.toBeInTheDocument();
+});
+
+it("tags a mirrored BloFin demo trade without editing venue amounts", async () => {
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    trade: {
+      ...fixture.trade,
+      source: "blofin_demo_manual",
+      external_ref: "blofin-demo-history:h-long",
+      leverage: "5",
+      planned_stop_price: "90",
+      strategy_label: null,
+      grade: null,
+      notes: null,
+    },
+    manual_demo: null,
+  });
+  vi.mocked(journalTradeApi.annotate).mockResolvedValue({
+    ...fixture.trade,
+    source: "blofin_demo_manual",
+  });
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-mirror-annotation");
+  expect(screen.getByText("5")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Strategy"), { target: { value: " Breakout " } });
+  fireEvent.change(screen.getByLabelText("Grade"), { target: { value: "A-" } });
+  fireEvent.change(screen.getByLabelText("Notes"), { target: { value: " Held the plan " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save strategy tag" }));
+  await screen.findByText("Strategy tag saved.");
+  expect(journalTradeApi.annotate).toHaveBeenCalledExactlyOnceWith("exact-trade", {
+    strategy_label: "Breakout",
+    grade: "A-",
+    notes: "Held the plan",
+  });
+  expect(screen.getByText("82,234.40 USDT")).toBeInTheDocument();
 });

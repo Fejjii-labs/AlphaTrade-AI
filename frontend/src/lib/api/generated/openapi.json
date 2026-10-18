@@ -21782,6 +21782,7 @@
           "manual",
           "paper_execution",
           "manual_demo_test",
+          "blofin_demo_manual",
           "paper_validation",
           "backtest",
           "imported",

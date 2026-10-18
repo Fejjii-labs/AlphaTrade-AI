@@ -94,6 +94,19 @@ class JournalTradeCreate(StrictModel):
     external_ref: str | None = Field(default=None, max_length=255)
 
 
+class JournalTradeAnnotation(StrictModel):
+    """Strategy, grade, and notes on a mirrored BloFin demo journal trade.
+
+    Omitted fields stay as they are. An empty string clears strategy, grade,
+    or notes. Venue prices, size, fees, and P&L are not accepted here.
+    """
+
+    strategy_label: str | None = Field(default=None, max_length=120)
+    user_strategy_id: UUID | None = None
+    grade: str | None = Field(default=None, max_length=2)
+    notes: str | None = Field(default=None, max_length=8000)
+
+
 class JournalTradeUpdate(StrictModel):
     """Partial update; only provided fields change."""
 
@@ -195,6 +208,7 @@ class JournalTradeRead(ORMModel):
     excursion_window_complete: bool | None = None
     excursion_computed_at: datetime | None = None
     notes: str | None = None
+    grade: str | None = None
     tags: list[str] = Field(default_factory=list)
     linked_position_id: UUID | None = None
     linked_paper_trade_id: UUID | None = None

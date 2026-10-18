@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label, Textarea } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { journalTradeApi } from "@/lib/api/journal-trade";
@@ -18,7 +18,20 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [strategy, setStrategy] = useState("");
+  const [grade, setGrade] = useState("");
+  const [notes, setNotes] = useState("");
+  const [tagSaved, setTagSaved] = useState(false);
+  const [tagError, setTagError] = useState<string | null>(null);
+  const [tagging, setTagging] = useState(false);
   const pending = useRef(false);
+  const tagPending = useRef(false);
+  useEffect(() => {
+    if (!data) return;
+    setStrategy(data.trade.strategy_label ?? "");
+    setGrade(data.trade.grade ?? "");
+    setNotes(data.trade.notes ?? "");
+  }, [data]);
   if (loading && !data) return <LoadingState label="Loading this Journal trade…" />;
   if (error || !data) return <ErrorState message={error ?? "This Journal trade is unavailable in your account."} onRetry={() => void reload()} />;
   // A mismatched response must never display another trade under the linked identity.
@@ -26,6 +39,8 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const { trade, manual_demo: attempt } = data;
   const evidence = attempt?.evidence;
   const manual = trade.source === "manual_demo_test";
+  const mirrored = trade.source === "blofin_demo_manual"
+    || (trade.external_ref ?? "").startsWith("blofin-demo-");
   const currency = trade.exchange === "BLOFIN_DEMO" ? "USDT" : null;
   const money = (value: string | null | undefined) => `${formatMoney(value)}${currency ? ` ${currency}` : ""}`;
   const fields = [
@@ -39,6 +54,10 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
     ["Fees", money(manual ? evidence?.fees : trade.fees)],
     ["Funding", money(manual ? evidence?.funding : trade.funding)],
     ["Net PnL", money(manual ? evidence?.net_pnl : trade.net_pnl)],
+    ...(mirrored ? [
+      ["Leverage", trade.leverage ?? "—"],
+      ["Stop", money(trade.planned_stop_price)],
+    ] as const : []),
   ];
   async function saveReflection(event: React.FormEvent) {
     event.preventDefault();
@@ -57,6 +76,28 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
     } finally {
       pending.current = false;
       setSaving(false);
+    }
+  }
+  async function saveTags(event: React.FormEvent) {
+    event.preventDefault();
+    if (tagPending.current) return;
+    tagPending.current = true;
+    setTagging(true);
+    setTagError(null);
+    setTagSaved(false);
+    try {
+      await journalTradeApi.annotate(tradeId, {
+        strategy_label: strategy.trim(),
+        grade: grade.trim(),
+        notes: notes.trim(),
+      });
+      setTagSaved(true);
+      await reload();
+    } catch (err) {
+      setTagError(err instanceof Error ? err.message : "Tags could not be saved.");
+    } finally {
+      tagPending.current = false;
+      setTagging(false);
     }
   }
   return <div className="space-y-5" data-testid="journal-trade-detail">
@@ -85,6 +126,32 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
         </details>
       </CardContent>
     </Card>
+    {mirrored ? (
+      <Card data-testid="journal-mirror-annotation">
+        <CardHeader><CardTitle>Strategy tag</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-text-secondary">
+            Tag this mirrored BloFin demo trade so it can be compared by strategy.
+            Prices, size, fees, and P&amp;L stay as recorded.
+          </p>
+          <form onSubmit={(event) => void saveTags(event)} className="space-y-3">
+            <Label htmlFor="mirror-strategy">Strategy</Label>
+            <Input id="mirror-strategy" value={strategy} maxLength={120} disabled={tagging}
+              onChange={(event) => { setStrategy(event.target.value); setTagSaved(false); }} />
+            <Label htmlFor="mirror-grade">Grade</Label>
+            <Input id="mirror-grade" value={grade} maxLength={2} disabled={tagging}
+              placeholder="A+ through D-, or F"
+              onChange={(event) => { setGrade(event.target.value); setTagSaved(false); }} />
+            <Label htmlFor="mirror-notes">Notes</Label>
+            <Textarea id="mirror-notes" value={notes} maxLength={8000} disabled={tagging}
+              onChange={(event) => { setNotes(event.target.value); setTagSaved(false); }} />
+            <Button type="submit" disabled={tagging}>{tagging ? "Saving…" : "Save strategy tag"}</Button>
+            {tagError ? <p role="alert" className="text-sm text-danger">{tagError}</p> : null}
+            {tagSaved ? <p role="status" className="text-sm text-success">Strategy tag saved.</p> : null}
+          </form>
+        </CardContent>
+      </Card>
+    ) : null}
     <Card>
       <CardHeader><CardTitle>Personal reflection</CardTitle></CardHeader>
       <CardContent className="space-y-4">
