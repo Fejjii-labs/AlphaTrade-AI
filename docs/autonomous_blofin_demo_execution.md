@@ -3,8 +3,9 @@
 This implementation starts from reviewed PR249 candidate
 `de5c010c7c85dfe5cde1ec8fabf60b6262500fe0` (tree
 `2ebed239ecaeacbe32c4a4d50a1e8459c4ef4122`). The closure manifest now records
-implementation source commit `cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2`, source/test
-tree `d28eb1ac802f56f09f930afd1ff4c46ad0ae9588`. The earlier receipts for
+implementation source commit `59f14dfe8bd4edd179e7794fdd055c7495fec99a`, source/test
+tree `f21b7fca9a8f5e1cbb84dba5926623b37c58ea66`. The earlier receipts for
+`cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2`,
 `61aa5331f5e7deeb118514cac15d63ba8083b236` and
 `73765026d1b39e3564005a7f16deac838edc4f00` are not proof for this head.
 
@@ -164,17 +165,28 @@ These steps require a separately authorized supervised session; none were run he
 ## Final focused evidence
 
 The closure manifest was refreshed from implementation source
-`cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2`. Listed file hashes match that
+`59f14dfe8bd4edd179e7794fdd055c7495fec99a`. Listed file hashes match that
 source tree and this publication, which adds the refreshed receipt only.
-Focused pytest exited 0: 324 passed, 1 deselected, in 70.29s. That command
+The manifest keeps the previous implementation files and now also lists
+`backend/tests/test_manual_blofin_demo.py`,
+`backend/tests/test_phase1_slices_7_9_execution_protocol.py`, and
+`docs/contracts/experiments_v1.openapi.json`. Those three files are the
+expectation refresh in that commit. The diagnostics test is not in the
+manifest because this commit does not change it.
+Focused pytest exited 0: 324 passed, 1 deselected, in 74.12s. That command
 added `tests/test_agent_paper_execution_v4.py` to the prior focused file list
 and used `-k "not upgrade_downgrade"`. The schema-drop alembic test was not
-run. The PostgreSQL demo suite, run alone, exited 0: 20 passed in 44.66s.
-Ruff check and format exited 0. The historical batches below were run for
-`73765026d1b39e3564005a7f16deac838edc4f00` and are not proof for this head.
-Both of those backend batches exited 0; **235 distinct tests passed, no
-skips**. No full CI ran for that historical receipt. The receipt for
-`61aa5331f5e7deeb118514cac15d63ba8083b236` is not proof for this head.
+run. Related modules covering the experiment contract, manual demo, phase-1
+reservation exposure, and worker diagnostics exited 0: 111 passed in 33.05s.
+The PostgreSQL demo suite, run alone, exited 0: 20 passed in 46.46s.
+Ruff check and format on the two edited test files exited 0.
+Pull-request CI [39130808875](https://github.com/Fejjii/AlphaTrade-AI/actions/runs/39130808875)
+on this SHA succeeded. Backend skipped complete release acceptance. No
+workflow_dispatch full run was started. The historical batches below were
+run for `73765026d1b39e3564005a7f16deac838edc4f00` and are not proof for this
+head. Both of those backend batches exited 0; **235 distinct tests passed, no
+skips**. The receipts for `cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2` and
+`61aa5331f5e7deeb118514cac15d63ba8083b236` are not proof for this head.
 
 Disposable PostgreSQL 17.11 ran in `postgres:17-alpine` on loopback port 55432.
 Fixture schemas were created/dropped only in that disposable server. The container

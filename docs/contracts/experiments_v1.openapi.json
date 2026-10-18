@@ -645,6 +645,59 @@
               }
             ],
             "title": "Win Rate"
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_win_rate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Win Rate"
+          },
+          "price_pnl_sample_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Price Pnl Sample Count",
+            "default": 0
+          },
+          "price_pnl_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Currency"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "verified-linear-fill-prices/v1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
           }
         },
         "required": [
@@ -1793,6 +1846,35 @@
           "funding": {
             "title": "Funding",
             "type": "null"
+          },
+          "closure_verified": {
+            "type": "boolean",
+            "title": "Closure Verified",
+            "default": false
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "verified-linear-fill-prices/v1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
           },
           "identity_verified_at": {
             "anyOf": [

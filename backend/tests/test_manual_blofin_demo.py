@@ -1039,7 +1039,9 @@ def test_local_uncertain_demo_reservation_consumes_preview_capacity(world, monke
     assert caught.value.details["reason"] == "manual_demo_notional_limit"
     with world[0]() as session:
         reservation = session.scalar(select(RiskReservation))
-        assert reservation.remaining_reserved_notional == Decimal("200.4004")
+        # Quote notional at the entry-zone upper (mark * 1.001), plus the existing
+        # 0.1% fee allowance and 0.1% slippage allowance: 200.2 + 0.2002 + 0.2002.
+        assert reservation.remaining_reserved_notional == Decimal("200.6004")
     assert world[3].post_count == 0
 
 
