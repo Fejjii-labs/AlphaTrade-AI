@@ -304,6 +304,7 @@ class AutomatedPaperLoop:
                 target,
                 now=now,
                 daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
+                include_book_buffer=self._risk_policy_kind() == "demo",
             )
             if isinstance(book, str):
                 return AutomatedPaperLoopProof(
@@ -838,6 +839,7 @@ def _profile_open_book(
     *,
     now: datetime,
     daily_loss_limit_percent: Decimal,
+    include_book_buffer: bool = False,
 ) -> ProfileOpenBook | str:
     """Server figures for one profile-sized plan. Never invents a full daily budget."""
 
@@ -874,6 +876,7 @@ def _profile_open_book(
         equity=snapshot.account_equity,
         positions=[(row.size, row.entry_price, row.stop_loss) for row in rows],
         open_notional=snapshot.open_exposure_notional,
+        include_book_buffer=include_book_buffer,
     )
     if isinstance(measured, str):
         return measured

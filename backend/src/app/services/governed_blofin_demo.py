@@ -270,6 +270,23 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     return "demo_post_fill_liquidation_inside_stop"
 
 
+def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
+    """Disposition, and whether the unprotected-fill kill switch must run.
+
+    An unreadable liquidation read is not labeled as a price through the stop.
+    The returned flag does not close the position and does not write leverage
+    or margin mode.
+    """
+
+    if liquidation_reason == "demo_post_fill_liquidation_unreadable":
+        disposition = "DEMO_LIQUIDATION_UNREADABLE"
+    elif liquidation_reason == "demo_post_fill_liquidation_inside_stop":
+        disposition = "DEMO_LIQUIDATION_INSIDE_STOP"
+    else:
+        raise ValueError("Unknown demo liquidation hold.")
+    return disposition, not protected
+
+
 class GovernedBloFinDemoLoop(AutomatedPaperLoop):
     """Existing canonical loop with venue-specific evidence and dispatch only."""
 
@@ -636,18 +653,22 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         base = quantity * snapshot.multiplier
         lower, upper = min(entry, worst_entry), max(entry, worst_entry)
         adverse_entry = upper if is_long else lower
-        cost_per_base = upper * Decimal("0.002")
-        maximum_loss = base * (abs(adverse_entry - stop) + cost_per_base)
+        from app.services.risk_policy.plan_sizing import reserved_maximum_loss
+
+        # Profile plans store the same unit costs the sizer reserved. Non-profile
+        # plans keep the previous 0.2% of the worse price. The shared ledger is
+        # not rewritten.
+        maximum_loss = reserved_maximum_loss(
+            size=base,
+            adverse_entry=adverse_entry,
+            stop=stop,
+            worse_price=upper,
+            profile_costs=profile_leverage is not None,
+        )
         if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
         if profile_leverage is not None:
-            # Stop distance plus the same round-trip costs and 0.2% book buffer
-            # the sizer already reserved. A flat book stays inside the grade cash.
-            from app.services.risk_policy.plan_sizing import profile_unit_cost
-
-            unit = profile_unit_cost(adverse_entry, stop, include_book_buffer=True)
-            depth_loss = base * (abs(adverse_entry - stop) + unit)
-            if profile_cash_ceiling is None or depth_loss > profile_cash_ceiling:
+            if profile_cash_ceiling is None or maximum_loss > profile_cash_ceiling:
                 return "demo_depth_exceeds_risk_limit"
         elif maximum_loss > risk_cap:
             return "demo_depth_exceeds_risk_limit"
@@ -1072,6 +1093,38 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session, self._settings, RiskSettingsService(session, AuditService(session))
         )
 
+    def _hold_profile_liquidation(
+        self,
+        session: Session,
+        *,
+        command: ExecutionCommand,
+        effect: VenueSubmitEffect,
+        liquidation_reason: str,
+        protected: bool,
+    ) -> None:
+        """Arm the existing unprotected-fill kill switch, then label the read.
+
+        A missing protection hold uses the same reason as the later fill path.
+        An unreadable liquidation price is not stored as a price through the
+        stop. This does not close the position and does not write leverage or
+        margin mode.
+        """
+
+        disposition, arm_kill_switch = profile_liquidation_hold(
+            liquidation_reason=liquidation_reason,
+            protected=protected,
+        )
+        if arm_kill_switch:
+            KillSwitchService(session, AuditService(session), self._settings).activate(
+                organization_id=command.organization_id,
+                actor_user_id=command.user_id,
+                payload=KillSwitchMutationRequest(
+                    confirm=True,
+                    reason="BloFin demo protection missing; operator action required",
+                ),
+            )
+        effect.reconciliation_disposition = disposition
+
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:
         """Read-only venue recovery runs despite the kill switch. Never resubmits."""
         with self._runtime.bind_session(session):
@@ -1204,7 +1257,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                             organization_id=command.organization_id,
                             account_id=command.account_id,
                         )
-                        effect.reconciliation_disposition = "DEMO_LIQUIDATION_INSIDE_STOP"
+                        self._hold_profile_liquidation(
+                            session,
+                            command=command,
+                            effect=effect,
+                            liquidation_reason=liquidation_reason,
+                            protected=evidence.protected,
+                        )
                         session.commit()
                         return liquidation_reason
                 try:

@@ -41,7 +41,10 @@ from app.schemas.execution_protocol import ClosePaperPlanRequest, VenueSubmitEff
 from app.schemas.risk import KillSwitchMutationRequest
 from app.services.audit_service import AuditService
 from app.services.execution_service import ExecutionService
-from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+from app.services.governed_blofin_demo import (
+    GovernedBloFinDemoLoop,
+    profile_liquidation_hold,
+)
 from app.services.risk.kill_switch import KillSwitchService
 from app.signal_fusion.memory import FrozenClock
 from tests.support.phase5_market import EVALUATED_AT
@@ -507,6 +510,78 @@ def test_worker_venue_fills_journal_restart_and_protection(
         assert (venue.post_count, venue.reads, venue.ticker_reads) == venue_counts
         assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == fill_count
         assert session.scalar(select(func.count()).select_from(JournalTrade)) == trade_count
+
+
+def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> None:
+    armed: list[str] = []
+
+    class _Switch:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def activate(self, **kwargs: object) -> None:
+            payload = kwargs["payload"]
+            armed.append(str(getattr(payload, "reason", "")))
+
+    monkeypatch.setattr("app.services.governed_blofin_demo.KillSwitchService", _Switch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.AuditService", lambda _session: None)
+    disposition, arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=False,
+    )
+    assert disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert arm is True
+    inside, armed_inside = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=False,
+    )
+    assert inside == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert armed_inside is True
+    protected_disposition, protected_arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=True,
+    )
+    assert protected_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert protected_arm is False
+    with pytest.raises(ValueError, match="Unknown demo liquidation hold"):
+        profile_liquidation_hold(liquidation_reason="other", protected=False)
+
+    loop = object.__new__(GovernedBloFinDemoLoop)
+    loop._settings = SimpleNamespace()
+    effect = SimpleNamespace(reconciliation_disposition=None)
+    command = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=False,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert armed == ["BloFin demo protection missing; operator action required"]
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert armed == ["BloFin demo protection missing; operator action required"]
+
+
+def test_liquidation_hold_runs_before_exit_reconciliation() -> None:
+    import inspect
+
+    source = inspect.getsource(GovernedBloFinDemoLoop.reconcile_command)
+    hold = source.index("_hold_profile_liquidation")
+    exit_read = source.index("reconcile_exit")
+    assert hold < exit_read
+    helper = inspect.getsource(GovernedBloFinDemoLoop._hold_profile_liquidation)
+    assert "KillSwitchService" in helper
+    assert "trade/order" not in helper
+    assert "setLeverage" not in helper
+    assert "set-leverage" not in helper
 
 
 def test_staging_settings_require_complete_scoped_demo_arm() -> None:

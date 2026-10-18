@@ -18,7 +18,11 @@ from app.schemas.common import RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.trade_plan import EntrySide
 from app.services.automated_paper_loop import _quantity
-from app.services.execution_claim import ReservationIntent, evaluate_claim_predicate
+from app.services.execution_claim import (
+    ReservationIntent,
+    conservative_reservation,
+    evaluate_claim_predicate,
+)
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
 from app.services.risk_policy.adjusters import AdjusterInputs
@@ -36,7 +40,9 @@ from app.services.risk_policy.plan_sizing import (
     open_risk_from_stops,
     profile_unit_cost,
     remaining_daily_budget_percent,
+    reserved_maximum_loss,
     size_for_profile,
+    stop_out_cash,
 )
 from app.services.risk_policy.profile import (
     ChangeClass,
@@ -770,3 +776,82 @@ def test_blocked_profile_claim_does_not_widen_the_ledger() -> None:
     assert written.value.code == "profile_caps_are_not_written_to_the_shared_ledger"
     assert stored.max_notional == Decimal("10000")
     assert stored.max_daily_loss == Decimal("10000")
+
+
+def test_open_risk_and_reserved_loss_include_the_sizer_costs() -> None:
+    from datetime import timedelta
+
+    from app.schemas.trade_plan import MarginMode
+    from app.services.internal_paper_plan_terms import build_internal_paper_terms
+    from tests.support.phase5_market import EVALUATED_AT
+    from tests.support.phase6_fusion import ACCOUNT_ID
+    from tests.support.phase7_trade_plan import make_world
+
+    size = Decimal("10")
+    entry = Decimal("100")
+    stop = Decimal("98")
+    equity = Decimal("10000")
+    price_only = size * (entry - stop)
+    paper_cash = stop_out_cash(size, entry, stop, include_book_buffer=False)
+    demo_cash = stop_out_cash(size, entry, stop, include_book_buffer=True)
+    assert paper_cash > price_only
+    assert demo_cash > paper_cash
+    assert demo_cash - paper_cash == size * entry * Decimal("0.002")
+    paper = open_risk_from_stops(
+        equity=equity,
+        positions=[(size, entry, stop)],
+        open_notional=size * entry,
+    )
+    demo = open_risk_from_stops(
+        equity=equity,
+        positions=[(size, entry, stop)],
+        open_notional=size * entry,
+        include_book_buffer=True,
+    )
+    assert paper == (paper_cash / equity * Decimal("100"), 1)
+    assert demo == (demo_cash / equity * Decimal("100"), 1)
+    # At the 0.20 cost-share ceiling, 6% of price risk is 7.5% once costs are in.
+    assert Decimal("6") / (Decimal("1") - Decimal("0.20")) == Decimal("7.5")
+    profile_loss = reserved_maximum_loss(
+        size=size,
+        adverse_entry=entry,
+        stop=stop,
+        worse_price=Decimal("101"),
+        profile_costs=True,
+    )
+    plain_loss = reserved_maximum_loss(
+        size=size,
+        adverse_entry=entry,
+        stop=stop,
+        worse_price=Decimal("101"),
+        profile_costs=False,
+    )
+    assert profile_loss == demo_cash
+    assert plain_loss == size * ((entry - stop) + Decimal("101") * Decimal("0.002"))
+    world = make_world()
+    common = {
+        "candidate": world.candidate,
+        "account_id": ACCOUNT_ID,
+        "entry": entry,
+        "stop": stop,
+        "target": Decimal("104"),
+        "quantity": size,
+        "observed": EVALUATED_AT,
+        "now": EVALUATED_AT,
+        "valid_until": EVALUATED_AT + timedelta(minutes=5),
+        "freshness": 30,
+        "symbol": "BTCUSDT",
+        "tick_size": Decimal("0.1"),
+        "target_formula": "paper-internal-1r",
+        "presentation": {"channel": "API"},
+    }
+    isolated = build_internal_paper_terms(**common, margin_mode=MarginMode.ISOLATED)
+    cross = build_internal_paper_terms(**common, margin_mode=MarginMode.CROSS)
+    assert isolated.risk_and_exits.maximum_loss.value == paper_cash
+    assert isolated.risk_and_exits.risk_budget.value == price_only
+    assert isolated.risk_and_exits.fee_allowance.value == 0
+    assert isolated.risk_and_exits.funding_allowance.value == 0
+    assert isolated.risk_and_exits.slippage_allowance.value == 0
+    assert cross.risk_and_exits.maximum_loss.value == price_only
+    assert conservative_reservation(isolated).daily_loss == paper_cash
+    assert conservative_reservation(cross).daily_loss == price_only

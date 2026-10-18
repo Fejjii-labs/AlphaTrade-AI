@@ -113,8 +113,14 @@ def open_risk_from_stops(
     equity: Decimal,
     positions: Sequence[tuple[Decimal, Decimal, Decimal | None]],
     open_notional: Decimal,
+    include_book_buffer: bool = False,
 ) -> tuple[Decimal, int] | str:
-    """Open risk at the stored stops. A position without a stop is not zero risk."""
+    """Open risk at the stored stops, including the sizer's unit costs.
+
+    A position without a stop is not zero risk. ``include_book_buffer`` adds
+    the demo 0.2% book buffer. Paper leaves it off. This does not write the
+    shared organization-and-account ledger row.
+    """
 
     if (
         not isinstance(equity, Decimal)
@@ -138,7 +144,7 @@ def open_risk_from_stops(
             or not stop.is_finite()
         ):
             return "open_risk_uncomputed"
-        risk_cash += size * abs(entry - stop)
+        risk_cash += stop_out_cash(size, entry, stop, include_book_buffer=include_book_buffer)
         explained += size * entry
     if open_notional > explained:
         return "open_risk_uncomputed"
@@ -155,6 +161,40 @@ def demo_leverage_block(account_leverage: Decimal, required: Decimal) -> str | N
     if account_leverage != required:
         return "demo_account_leverage_mismatch"
     return None
+
+
+def stop_out_cash(
+    size: Decimal,
+    entry: Decimal,
+    stop: Decimal,
+    *,
+    include_book_buffer: bool,
+) -> Decimal:
+    """Size times the stop distance plus the unit costs ``size_for_profile`` reserved."""
+
+    return size * (
+        abs(entry - stop) + profile_unit_cost(entry, stop, include_book_buffer=include_book_buffer)
+    )
+
+
+def reserved_maximum_loss(
+    *,
+    size: Decimal,
+    adverse_entry: Decimal,
+    stop: Decimal,
+    worse_price: Decimal,
+    profile_costs: bool,
+) -> Decimal:
+    """Cash stored as ``maximum_loss`` and reserved as daily loss.
+
+    A profile plan uses the sizer's unit costs, including the demo book buffer.
+    A non-profile demo plan keeps the previous 0.2% of the worse price. Neither
+    path writes the shared ledger row.
+    """
+
+    if profile_costs:
+        return stop_out_cash(size, adverse_entry, stop, include_book_buffer=True)
+    return size * (abs(adverse_entry - stop) + worse_price * Decimal("0.002"))
 
 
 def profile_unit_cost(entry: Decimal, stop: Decimal, *, include_book_buffer: bool) -> Decimal:
