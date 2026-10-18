@@ -73,20 +73,23 @@ def signed_verified_demo_pnl(
 ) -> Decimal:
     """Net sign for the consecutive-loss rule. Does not write journal net PnL.
 
-    Gross is the venue fill PnL when every exit fill reported one, otherwise
-    the verified price difference. Verified fees are subtracted. A missing or
-    non-finite fee figure does not treat a non-negative gross as a win.
-    Verified funding cash is subtracted (a credit is negative). When no
-    funding cash was reported, one 8h window at the 0.0001 floor is subtracted
-    from ``notional`` so a scratch that loses only after funding counts as a
-    loss. That estimate is not stored as ``net_pnl`` or as journal funding.
+    Gross is the verified entry-to-exit price difference. Venue ``fillPnl``
+    (``reported_pnl``) has no declared gross, net, or funding basis, so a
+    positive fill PnL cannot reset the streak. Verified fees are subtracted.
+    A missing or non-finite fee figure does not treat a non-negative price
+    result as a win. Verified funding cash is subtracted (a credit is
+    negative). When no funding cash was reported, one 8h window at the
+    0.0001 floor is subtracted from ``notional``. That estimate is not stored
+    as ``net_pnl`` or as journal funding.
     """
 
-    if reported_pnl is not None and reported_pnl.is_finite():
-        gross = reported_pnl
-    else:
-        cash = (exit_price - entry_price) * quantity * contract_multiplier
-        gross = cash if is_long else -cash
+    # ``reported_pnl`` is accepted so callers can pass the venue figure and
+    # tests can show it is ignored. It is not the streak gross.
+    if reported_pnl is not None and not reported_pnl.is_finite():
+        reported_pnl = None
+    del reported_pnl
+    cash = (exit_price - entry_price) * quantity * contract_multiplier
+    gross = cash if is_long else -cash
     if fees is None or not fees.is_finite() or fees < 0:
         if gross < 0:
             return gross

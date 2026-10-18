@@ -267,6 +267,28 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         kind=PolicyKind.DEMO,
     )
     assert paused == 4
+    # A positive venue fillPnl must not hide a price result that loses after fees.
+    misleading = signed_verified_demo_pnl(
+        is_long=True,
+        entry_price=Decimal("100"),
+        exit_price=Decimal("100.01"),
+        quantity=Decimal("1"),
+        contract_multiplier=Decimal("1"),
+        reported_pnl=Decimal("10"),
+        fees=Decimal("0.05"),
+        funding=Decimal("0"),
+    )
+    assert misleading < 0
+    counted = _note_profile_close(
+        object(),  # type: ignore[arg-type]
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        net_pnl=misleading,
+        now=NOW,
+        kind=PolicyKind.DEMO,
+    )
+    assert counted == 5
     fee_only_loss = signed_verified_demo_pnl(
         is_long=True,
         entry_price=Decimal("100"),
@@ -287,7 +309,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         now=NOW,
         kind=PolicyKind.DEMO,
     )
-    assert priced == 5
+    assert priced == 6
     unknown_fees = signed_verified_demo_pnl(
         is_long=True,
         entry_price=Decimal("100"),
