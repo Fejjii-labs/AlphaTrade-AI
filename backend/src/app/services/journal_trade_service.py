@@ -126,7 +126,7 @@ _PNL_TAGS = frozenset({"pnl-verified", "pnl-unverified"})
 def _reject_mirror_venue_edit(row: JournalTrade, updates: dict[str, Any]) -> None:
     """The mirror owns venue facts. Annotation stays on strategy, grade, and notes."""
     blocked = sorted(key for key in updates if key in _MIRROR_LOCKED_FIELDS)
-    if "tags" in updates and _pnl_tags(row.tags) != _pnl_tags(updates.get("tags")):
+    if "tags" in updates and _mirror_tags_changed(row.tags, updates.get("tags")):
         blocked.append("tags")
     if blocked:
         raise ValidationAppError(
@@ -139,6 +139,16 @@ def _pnl_tags(tags: object) -> set[str]:
     if not isinstance(tags, list):
         return set()
     return {tag for tag in tags if isinstance(tag, str) and tag in _PNL_TAGS}
+
+
+def _blofin_tags(tags: object) -> set[str]:
+    if not isinstance(tags, list):
+        return set()
+    return {tag for tag in tags if isinstance(tag, str) and tag.startswith("blofin-")}
+
+
+def _mirror_tags_changed(before: object, after: object) -> bool:
+    return _pnl_tags(before) != _pnl_tags(after) or _blofin_tags(before) != _blofin_tags(after)
 
 
 class VenueFactImmutableError(ValidationAppError):

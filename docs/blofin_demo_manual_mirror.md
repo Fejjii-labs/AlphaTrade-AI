@@ -149,7 +149,8 @@ that the live row matches a venue close.
 
 `POST /journal/trades` rejects source `blofin_demo_manual`. The generic
 trade update rejects venue prices, size, fees, funding, result, net, the
-external ref, and `pnl-verified` / `pnl-unverified` tags on a mirrored row.
+external ref, `pnl-verified` / `pnl-unverified` tags, and any change to a
+`blofin-` tag, including an added `blofin-history:` id, on a mirrored row.
 `PATCH /journal/trades/{id}/annotation` accepts `strategy_label`,
 `user_strategy_id`, `grade`, and `notes`. It does not accept prices, size,
 fees, or P&L. An empty string clears strategy, grade, or notes. Grade is

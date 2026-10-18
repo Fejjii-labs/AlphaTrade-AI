@@ -583,6 +583,23 @@ def test_create_and_generic_update_cannot_change_mirror_economics(session: Sessi
     assert tagged.net_pnl == Decimal("0.18600000")
 
 
+def test_extra_history_tag_cannot_freeze_the_next_recompute(session: Session) -> None:
+    service = JournalTradeService(session, AuditService(session))
+    _apply(session, _FIXTURE["long"])
+    mirrored = _rows(session)[0]
+    extra = [*(mirrored.tags or []), "blofin-history:not-in-the-fetch"]
+    with pytest.raises(ValidationAppError) as edited:
+        service.update(mirrored.id, JournalTradeUpdate(tags=extra), organization_id=ORG)
+    assert edited.value.details["reason"] == "mirror_venue_immutable"
+    session.refresh(mirrored)
+    assert "blofin-history:not-in-the-fetch" not in (mirrored.tags or [])
+    mirrored.net_pnl = Decimal("9")
+    session.commit()
+    _apply(session, _FIXTURE["long"])
+    session.refresh(mirrored)
+    assert mirrored.net_pnl == Decimal("0.18600000")
+
+
 def test_publish_ignores_a_hand_written_verified_net(session: Session) -> None:
     session.add(
         JournalTrade(
