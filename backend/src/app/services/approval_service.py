@@ -61,6 +61,7 @@ from app.schemas.trade_plan import (
 )
 from app.services.approval_authorization_hash import verify_authorization_issuance_hash
 from app.services.audit_service import AuditService
+from app.services.autonomous_trading import AUTONOMOUS_ACTOR_TYPE
 from app.services.canonical_serialization import canonical_sha256
 from app.services.canonical_trade_plan import CanonicalTradePlanService
 from app.services.canonical_trade_plan_errors import (
@@ -69,6 +70,75 @@ from app.services.canonical_trade_plan_errors import (
 )
 
 _DEFAULT_AUTHORIZATION_TTL = timedelta(minutes=15)
+CHANNEL_MISMATCH_REASON = "authorization_channel_mismatch"
+
+
+def _channel_name(value: object) -> str | None:
+    if value is None:
+        return None
+    raw = value.value if hasattr(value, "value") else value
+    if not isinstance(raw, str) or not raw:
+        return None
+    return raw
+
+
+def stored_issuance_matches(
+    authorization: object,
+    *,
+    channel: AuthorizationChannel,
+    actor_type: str,
+) -> bool:
+    """Whether a stored authorization is the issuance this caller requested.
+
+    An object with no channel is not a stored row (a test double) and is left
+    alone. A stored row always has a channel and an actor. Autonomous issuance
+    matches only AUTONOMOUS plus the system actor. A human issuance matches its
+    own channel and actor, and never an autonomous row.
+    """
+
+    stored_channel = _channel_name(getattr(authorization, "channel", None))
+    if stored_channel is None:
+        return True
+    stored_actor = getattr(authorization, "actor_type", None)
+    actor = stored_actor if isinstance(stored_actor, str) and stored_actor else None
+    # A stored channel with no actor is not a match. Reuse requires both.
+    if actor is None:
+        return False
+    requested_autonomous = (
+        channel is AuthorizationChannel.AUTONOMOUS and actor_type == AUTONOMOUS_ACTOR_TYPE
+    )
+    autonomous_row = (
+        stored_channel == AuthorizationChannel.AUTONOMOUS.value or actor == AUTONOMOUS_ACTOR_TYPE
+    )
+    if requested_autonomous:
+        return (
+            stored_channel == AuthorizationChannel.AUTONOMOUS.value
+            and actor == AUTONOMOUS_ACTOR_TYPE
+        )
+    if autonomous_row:
+        return False
+    return stored_channel == channel.value and actor == actor_type
+
+
+def human_execution_refused(authorization: object) -> bool:
+    """A human caller must not execute an autonomous or system authorization."""
+
+    stored_channel = _channel_name(getattr(authorization, "channel", None))
+    if stored_channel is None:
+        return False
+    stored_actor = getattr(authorization, "actor_type", None)
+    actor = stored_actor if isinstance(stored_actor, str) else None
+    return stored_channel == AuthorizationChannel.AUTONOMOUS.value or actor == AUTONOMOUS_ACTOR_TYPE
+
+
+def assert_human_may_execute(authorization: object) -> None:
+    """Refuse a human claim of an autonomous authorization before it is consumed."""
+
+    if human_execution_refused(authorization):
+        raise TradingPolicyError(
+            "A human execution cannot consume an autonomous authorization.",
+            details={"reason": CHANNEL_MISMATCH_REASON},
+        )
 
 
 class ApprovalService:
@@ -359,10 +429,14 @@ class ApprovalService:
         assertion: ApprovalAuthorizationAssertion | None = None,
         manual_demo_confirmation_hash: str | None = None,
     ) -> ApprovalAuthorization:
-        """Reuse an AVAILABLE or CONSUMED authorization.
+        """Reuse a matching AVAILABLE row, or any CONSUMED row.
 
-        After REVOKED or EXPIRED, insert a new binding. Never return the
-        revoked or expired row. Reject non-APPROVE discriminators.
+        An AVAILABLE row is reused only when its channel and actor are the
+        issuance being requested. A leftover API, WEB, or TELEGRAM row is not
+        an autonomous authorization, and an AUTONOMOUS row is not a human one.
+        That AVAILABLE row is revoked, with an approval-decision audit, and a
+        new binding is inserted. A CONSUMED row is reused so the revision still
+        has exactly one ALLOW. REVOKED and EXPIRED rows are not reused.
         """
         operation_decision = get_operation_decision()
         if operation_decision is not None:
@@ -435,29 +509,178 @@ class ApprovalService:
             user_id=user_id,
         )
 
-        existing = self._authorizations.get_reusable_for_approval(approval.id)
-        if existing is not None:
-            self._validate_existing_authorization(existing, revision)
-            self._mark_plan_approval_approved(approval, proposal)
-            return self._authorization_to_schema(existing)
-        existing = self._authorizations.get_reusable_by_binding(
-            organization_id=organization_id,
-            account_id=revision.account_id,
-            exchange_account_id=revision.exchange_account_id,
-            revision_id=revision.id,
-            plan_content_hash=revision.content_hash,
-            operation=revision.operation,
+        accepted = self._accept_or_replace_reusable(
+            self._authorizations.get_reusable_for_approval(approval.id),
+            revision=revision,
+            approval=approval,
+            proposal=proposal,
+            channel=channel,
+            actor_type=actor_type,
         )
-        if existing is not None:
-            self._validate_existing_authorization(existing, revision)
-            self._mark_plan_approval_approved(approval, proposal)
-            return self._authorization_to_schema(existing)
+        if accepted is not None:
+            return accepted
+        accepted = self._accept_or_replace_reusable(
+            self._authorizations.get_reusable_by_binding(
+                organization_id=organization_id,
+                account_id=revision.account_id,
+                exchange_account_id=revision.exchange_account_id,
+                revision_id=revision.id,
+                plan_content_hash=revision.content_hash,
+                operation=revision.operation,
+            ),
+            revision=revision,
+            approval=approval,
+            proposal=proposal,
+            channel=channel,
+            actor_type=actor_type,
+        )
+        if accepted is not None:
+            return accepted
 
         now = self._aware(self._clock())
         expires_at = self._aware(approval.authorization_expires_at)
         if expires_at <= now or self._aware(revision.valid_until) <= now:
             raise ValidationAppError("Approval authorization has expired.")
         self._mark_plan_approval_approved(approval, proposal)
+        return self._insert_authorization(
+            approval=approval,
+            revision=revision,
+            organization_id=organization_id,
+            user_id=user_id,
+            channel=channel,
+            actor_type=actor_type,
+            expires_at=expires_at,
+            now=now,
+            attempts_remaining=1,
+        )
+
+    def get_authorization(
+        self,
+        authorization_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> ApprovalAuthorization:
+        row = self._authorizations.get(authorization_id)
+        if row is None or row.organization_id != organization_id or row.user_id != user_id:
+            raise NotFoundError("Approval authorization not found")
+        self._authorizations.expire_due(authorization_id, at=self._aware(self._clock()))
+        self._session.refresh(row)
+        return self._authorization_to_schema(row)
+
+    def revoke_authorization(
+        self,
+        authorization_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        reason: str | None = None,
+    ) -> ApprovalAuthorization:
+        row = self._authorizations.get(authorization_id)
+        if row is None or row.organization_id != organization_id or row.user_id != user_id:
+            raise NotFoundError("Approval authorization not found")
+        revoked = self._authorizations.revoke_available(
+            authorization_id, at=self._aware(self._clock())
+        )
+        self._session.refresh(row)
+        if reason is not None and revoked:
+            channel = row.channel
+            self._record_audit(
+                AuditEventType.APPROVAL_DECISION,
+                organization_id=row.organization_id,
+                user_id=row.user_id,
+                resource_id=str(row.id),
+                actor_type=ActorType.SYSTEM if row.actor_type == "SYSTEM" else ActorType.USER,
+                metadata={
+                    "action": "revoke",
+                    "reason": reason,
+                    "authorization_id": str(row.id),
+                    "channel": channel.value if hasattr(channel, "value") else str(channel),
+                    "actor_type": row.actor_type,
+                },
+            )
+        return self._authorization_to_schema(row)
+
+    def is_authorization_available(
+        self,
+        authorization_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        account_id: uuid.UUID,
+    ) -> bool:
+        return (
+            self._authorizations.get_available_scoped(
+                authorization_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                account_id=account_id,
+                at=self._aware(self._clock()),
+            )
+            is not None
+        )
+
+    def _accept_or_replace_reusable(
+        self,
+        existing: ApprovalAuthorizationModel | None,
+        *,
+        revision: TradePlanRevisionModel,
+        approval: ApprovalModel,
+        proposal: TradeProposalModel,
+        channel: AuthorizationChannel,
+        actor_type: str,
+    ) -> ApprovalAuthorization | None:
+        """Return a reusable row, or revoke a mismatched AVAILABLE row.
+
+        ``None`` means the caller should insert. A CONSUMED row is returned
+        unchanged. An AVAILABLE row is returned only when it matches.
+        """
+
+        if existing is None:
+            return None
+        self._validate_existing_authorization(existing, revision)
+        matches = stored_issuance_matches(
+            existing,
+            channel=channel,
+            actor_type=actor_type,
+        )
+        if existing.state is AuthorizationState.CONSUMED:
+            self._mark_plan_approval_approved(approval, proposal)
+            return self._authorization_to_schema(existing)
+        now = self._aware(self._clock())
+        if (
+            existing.state is AuthorizationState.AVAILABLE
+            and matches
+            and self._aware(existing.expires_at) <= now
+        ):
+            self._authorizations.expire_due(existing.id, at=now)
+            self._session.refresh(existing)
+            return None
+        if matches:
+            self._mark_plan_approval_approved(approval, proposal)
+            return self._authorization_to_schema(existing)
+        if existing.state is AuthorizationState.AVAILABLE:
+            self.revoke_authorization(
+                existing.id,
+                organization_id=existing.organization_id,
+                user_id=existing.user_id,
+                reason=CHANNEL_MISMATCH_REASON,
+            )
+        return None
+
+    def _insert_authorization(
+        self,
+        *,
+        approval: ApprovalModel,
+        revision: TradePlanRevisionModel,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        channel: AuthorizationChannel,
+        actor_type: str,
+        expires_at: datetime,
+        now: datetime,
+        attempts_remaining: int,
+    ) -> ApprovalAuthorization:
         authorization_id = uuid.uuid4()
         issuance = ApprovalAuthorizationIssuance(
             authorization_id=authorization_id,
@@ -526,74 +749,42 @@ class ApprovalService:
             if concurrent is None:
                 raise
             self._validate_existing_authorization(concurrent, revision)
-            return self._authorization_to_schema(concurrent)
-        return self._authorization_to_schema(row)
-
-    def get_authorization(
-        self,
-        authorization_id: uuid.UUID,
-        *,
-        organization_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> ApprovalAuthorization:
-        row = self._authorizations.get(authorization_id)
-        if row is None or row.organization_id != organization_id or row.user_id != user_id:
-            raise NotFoundError("Approval authorization not found")
-        self._authorizations.expire_due(authorization_id, at=self._aware(self._clock()))
-        self._session.refresh(row)
-        return self._authorization_to_schema(row)
-
-    def revoke_authorization(
-        self,
-        authorization_id: uuid.UUID,
-        *,
-        organization_id: uuid.UUID,
-        user_id: uuid.UUID,
-        reason: str | None = None,
-    ) -> ApprovalAuthorization:
-        row = self._authorizations.get(authorization_id)
-        if row is None or row.organization_id != organization_id or row.user_id != user_id:
-            raise NotFoundError("Approval authorization not found")
-        revoked = self._authorizations.revoke_available(
-            authorization_id, at=self._aware(self._clock())
-        )
-        self._session.refresh(row)
-        if reason is not None and revoked:
-            channel = row.channel
-            self._record_audit(
-                AuditEventType.APPROVAL_DECISION,
-                organization_id=row.organization_id,
-                user_id=row.user_id,
-                resource_id=str(row.id),
-                actor_type=ActorType.SYSTEM if row.actor_type == "SYSTEM" else ActorType.USER,
-                metadata={
-                    "action": "revoke",
-                    "reason": reason,
-                    "authorization_id": str(row.id),
-                    "channel": channel.value if hasattr(channel, "value") else str(channel),
-                    "actor_type": row.actor_type,
-                },
+            matches = stored_issuance_matches(
+                concurrent,
+                channel=channel,
+                actor_type=actor_type,
             )
-        return self._authorization_to_schema(row)
-
-    def is_authorization_available(
-        self,
-        authorization_id: uuid.UUID,
-        *,
-        organization_id: uuid.UUID,
-        user_id: uuid.UUID,
-        account_id: uuid.UUID,
-    ) -> bool:
-        return (
-            self._authorizations.get_available_scoped(
-                authorization_id,
+            if concurrent.state is AuthorizationState.CONSUMED or (
+                matches and self._aware(concurrent.expires_at) > now
+            ):
+                return self._authorization_to_schema(concurrent)
+            if matches:
+                self._authorizations.expire_due(concurrent.id, at=now)
+                self._session.refresh(concurrent)
+                raise ValidationAppError("Approval authorization has expired.") from None
+            if attempts_remaining <= 0:
+                raise ValidationAppError(
+                    "Authorization channel conflict.",
+                    details={"reason": CHANNEL_MISMATCH_REASON},
+                ) from None
+            self.revoke_authorization(
+                concurrent.id,
+                organization_id=concurrent.organization_id,
+                user_id=concurrent.user_id,
+                reason=CHANNEL_MISMATCH_REASON,
+            )
+            return self._insert_authorization(
+                approval=approval,
+                revision=revision,
                 organization_id=organization_id,
                 user_id=user_id,
-                account_id=account_id,
-                at=self._aware(self._clock()),
+                channel=channel,
+                actor_type=actor_type,
+                expires_at=expires_at,
+                now=now,
+                attempts_remaining=attempts_remaining - 1,
             )
-            is not None
-        )
+        return self._authorization_to_schema(row)
 
     @staticmethod
     def _require_exact_principal(
