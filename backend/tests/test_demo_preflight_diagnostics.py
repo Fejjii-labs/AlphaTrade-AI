@@ -108,7 +108,8 @@ def test_every_snapshot_read_reports_its_failing_stage_without_secret_text(stage
         ("permissions", STAGES[0][1], {"readOnly": 1}, "permissions_not_read_trade_only"),
         ("position_mode", STAGES[1][1], {"positionMode": "hedge_mode"}, "position_mode_not_net"),
         ("instrument", STAGES[2][1], [], "instrument_unavailable"),
-        ("leverage", STAGES[3][1], {"leverage": "2"}, "leverage_not_one"),
+        ("leverage", STAGES[3][1], {"leverage": "2", "marginMode": "cross"}, "leverage_not_one"),
+        ("leverage", STAGES[3][1], {"leverage": "1"}, "margin_mode_omitted"),
         ("positions", STAGES[4][1], [{"positions": "1"}], "account_not_flat"),
         (
             "positions",
