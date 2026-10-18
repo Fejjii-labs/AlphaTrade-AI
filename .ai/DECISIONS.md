@@ -3340,3 +3340,16 @@ See docs/trendpulse_screening_contract.md and verification handoff.
 - Method id: `closed-round-trip-fillpnl-signed-fee/v1`.
 - Reference: `docs/blofin_demo_snapshot_worker.md`. Enabling the activity worker
   still requires Sofien's approval and is not done by this decision.
+
+## AT-ADR-108 — Demo win rate stays withheld until fee basis and a flat start exist
+
+- Date: 2026-10-18
+- Decision: Follow-up to AT-ADR-107 after review of the draft implementation.
+  Stored BloFin `fillPnl` is not established as gross or net of fees or funding,
+  and fee sign is not independently verified. The signed fee is recorded and is
+  not added to the decisive result. A complete activity cursor is not proof
+  that a position was flat before the first retained fill. Until both proofs
+  exist, the demo account API keeps `win_rate` and realized P&L empty and
+  `activity_sync_status` is not `ready`. The structural method id is
+  `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
+  Sofien approves the worker env names.

@@ -129,8 +129,8 @@ export function BloFinDemoAccountCard({
               activityDisabled
                 ? "Activity sync disabled"
                 : activityStatus === "ready"
-                  ? "Closed demo round-trips"
-                  : "Activity history incomplete"
+                  ? "Closed round-trips from stored fills"
+                  : "Withheld until fee basis and a flat start are verified"
             }
             testId="dashboard-win-rate"
           />
@@ -145,8 +145,8 @@ export function BloFinDemoAccountCard({
               activityDisabled
                 ? "Withheld until activity sync is enabled"
                 : performance?.realized_pnl == null
-                  ? "Withheld until closed round-trips have complete fees"
-                  : "Closed round-trips, fees included when verified"
+                  ? "Withheld. fillPnl fee basis and fee sign are not verified"
+                  : "Stored fillPnl. Fees are not added"
             }
             testId="dashboard-pnl"
           />

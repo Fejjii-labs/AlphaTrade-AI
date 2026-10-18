@@ -34,8 +34,9 @@ call BloFin. Identity, read-only permission, and UID checks stay inside
 | `EXCHANGE_MODE` | `paper_internal` for the read-only path. |
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
-A successful or degraded snapshot younger than the interval is reused, so an
-open dashboard and the worker do not both call BloFin. A failed sync backs off,
+A successful or degraded snapshot younger than the interval is reused, so the
+worker does not call BloFin again while that snapshot is fresh. An owner
+refresh from the dashboard still calls BloFin. A failed sync backs off,
 doubling from the interval up to 900 seconds. The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
 `ok`, `skipped`, `backing_off`, `degraded`, or `stopped`.
@@ -71,7 +72,7 @@ remain a separate partial coverage and are not the account win rate.
 
 ## Trade method
 
-Method id: `closed-round-trip-fillpnl-signed-fee/v1`.
+Method id: `closed-round-trip-fillpnl-fee-recorded/v1`.
 
 - A trade is one position going from flat back to flat. The position key is
   `(instrument, position_side)` where `position_side` is `long`, `short`, or `net`.
@@ -81,17 +82,21 @@ Method id: `closed-round-trip-fillpnl-signed-fee/v1`.
 - A fill that crosses zero is split by quantity. The closing share finishes the
   current trade. The remainder opens the next one. `fillPnl` and the signed fee
   are split by the same fraction.
-- Realized P&L is the sum of native `fillPnl` plus the original signed fee.
-  A negative fee reduces the result. This is used only when every slice has a
-  fee, one fee currency, and that currency equals the stored settlement
-  currency. Otherwise the round-trip is unresolved and is excluded from the
-  win rate.
+- The structural result is the sum of native `fillPnl`. The original signed
+  fee is recorded and is not added. Fee sign, and whether `fillPnl` is gross
+  or net of fees or funding, are not independently verified. A slice still
+  needs a fee, one fee currency, and that currency equal to the stored
+  settlement currency before the structural round-trip is complete. Otherwise
+  it is unresolved.
+- The dashboard does not publish `win_rate` or realized P&L from this method.
+  A stored fill cursor, including a complete lookback, is not proof that each
+  position started flat. Until both that proof and an independent fee basis
+  exist, the card withholds those figures and the status stays `partial`.
 - Order `pnl` is not added, so it cannot double-count `fillPnl`. If an order's
   `filled_quantity` disagrees with the sum of its fills, those round-trips are
   unresolved.
-- `win_rate` is wins / (wins + losses). A net of zero is a scratch: it is a
-  trade and it is not a win or a loss. Open size is not a trade.
-- The time window prefers the fill cursor coverage, then the earliest and latest
-  fill in the counted trades.
-- A gap, a row cap, a missing order, or an unresolved close is `partial`, not a
-  complete account result.
+- In the structural function, `win_rate` is wins / (wins + losses) on `fillPnl`.
+  A net of zero is a scratch: it is a trade and it is not a win or a loss.
+  Open size is not a trade. That function is not what the dashboard publishes.
+- The published time window is the fill cursor coverage. It is context for the
+  withheld figures, not a scored interval.

@@ -6,12 +6,14 @@ or ``net``. Partial fills accumulate until the signed size is zero. A fill that
 crosses zero closes the current trade with a proportional share of that fill's
 ``fillPnl`` and signed fee, and the remainder opens the next trade.
 
-Realized P&L is native ``fillPnl`` plus the original signed fee. A negative fee
-reduces the result. Fees are included only when every slice in the trade has a
-fee, one fee currency, and that currency matches the stored settlement currency.
-Otherwise the round-trip is unresolved and is left out of the win rate. Order
-``pnl`` is not added. An order whose ``filled_quantity`` disagrees with the sum
-of its fills makes those round-trips unresolved.
+The decisive result is native ``fillPnl`` only. The original signed fee is
+recorded and is not added: fee sign, and whether ``fillPnl`` is gross or net of
+fees or funding, are not independently verified. A trade still needs a fee on
+every slice, one fee currency, and that currency equal to the stored settlement
+currency. Otherwise the round-trip is unresolved. Order ``pnl`` is not added.
+An order whose ``filled_quantity`` disagrees with the sum of its fills makes
+those round-trips unresolved. The caller must already know the series starts
+flat. This function does not prove that.
 
 ``win_rate`` is wins / (wins + losses). A net of zero is a scratch: it counts
 as a trade and is not a win or a loss. This is demo-account history, not a
@@ -27,7 +29,7 @@ from typing import Literal
 
 _MONEY = Decimal("0.00000001")
 _RATE = Decimal("0.0001")
-METHOD = "closed-round-trip-fillpnl-signed-fee/v1"
+METHOD = "closed-round-trip-fillpnl-fee-recorded/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +131,7 @@ def _money(value: Decimal) -> Decimal:
 def _economics(
     slices: list[_Slice],
 ) -> tuple[Decimal, Decimal, Decimal] | None:
-    """Return net, signed fees, and gross fillPnl, or None when money is incomplete."""
+    """Return fillPnl, signed fees, and gross fillPnl. Fees are not added to the result."""
     gross = Decimal(0)
     fees = Decimal(0)
     currencies: set[str] = set()
@@ -147,8 +149,7 @@ def _economics(
         currencies.add(fill.fee_currency)
     if len(currencies) != 1:
         return None
-    net = _money(gross + fees)
-    return net, _money(fees), _money(gross)
+    return _money(gross), _money(fees), _money(gross)
 
 
 def account_round_trips(

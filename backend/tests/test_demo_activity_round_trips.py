@@ -105,7 +105,7 @@ def test_partial_fills_and_fees_make_one_win_and_one_loss() -> None:
     assert report.trade_count == 2
     assert report.wins == 1 and report.losses == 1 and report.scratches == 0
     assert report.win_rate == Decimal("0.5000")
-    assert report.realized_pnl == Decimal("2.87000000")
+    assert report.realized_pnl == Decimal("3.00000000")
     assert report.fees == Decimal("-0.13000000")
     assert report.unresolved == 0
     assert report.window_start == datetime.fromtimestamp(1, tz=UTC)
@@ -129,8 +129,28 @@ def test_crossing_fill_splits_fee_and_pnl_and_leaves_the_remainder_open() -> Non
         [ActivityOrder("open", Decimal("1")), ActivityOrder("cross", Decimal("2"))],
     )
     assert report.trade_count == 1 and report.wins == 1
-    assert report.realized_pnl == Decimal("1.80000000")
+    assert report.realized_pnl == Decimal("2.00000000")
     assert report.fees == Decimal("-0.20000000")
+
+
+def test_a_negative_fee_does_not_flip_a_fillpnl_win() -> None:
+    report = account_round_trips(
+        [
+            fill("open", quantity=Decimal("1"), fee=Decimal("-0.50"), occurred_at_ms=1),
+            fill(
+                "close",
+                side="sell",
+                quantity=Decimal("1"),
+                fee=Decimal("-0.50"),
+                realized_pnl=Decimal("0.01"),
+                occurred_at_ms=2,
+            ),
+        ],
+        [ActivityOrder("open", Decimal("1")), ActivityOrder("close", Decimal("1"))],
+    )
+    assert report.trade_count == 1 and report.wins == 1 and report.losses == 0
+    assert report.realized_pnl == Decimal("0.01000000")
+    assert report.fees == Decimal("-1.00000000")
 
 
 def test_missing_fee_or_currency_is_unresolved_and_a_size_mismatch_is_excluded() -> None:
@@ -199,7 +219,7 @@ def test_activity_disabled_withholds_numbers() -> None:
     assert "disabled" in account.performance.activity_coverage.lower()
 
 
-def test_verified_fixture_rows_report_the_win_rate() -> None:
+def test_stored_fills_do_not_publish_a_win_rate() -> None:
     org = uuid4()
     now = datetime(2026, 10, 18, tzinfo=UTC)
     account_row = BloFinActivityAccount(
@@ -246,13 +266,67 @@ def test_verified_fixture_rows_report_the_win_rate() -> None:
         ),
     )
     performance = view.performance
-    assert performance.activity_sync_status == "ready"
-    assert performance.win_rate == Decimal("0.5000")
-    assert performance.trade_count == 2
-    assert performance.wins == 1 and performance.losses == 1
-    assert performance.realized_pnl == Decimal("2.87000000")
+    assert performance.activity_sync_status == "partial"
+    assert performance.win_rate is None
+    assert performance.trade_count is None
+    assert performance.wins is None and performance.losses is None
+    assert performance.realized_pnl is None
+    assert "withheld" in performance.activity_coverage.lower()
+    assert "flat" in performance.activity_coverage.lower()
     assert performance.window_start == datetime.fromtimestamp(1, tz=UTC)
     assert performance.window_end == datetime.fromtimestamp(4, tz=UTC)
+
+
+def test_a_pre_window_close_is_not_scored() -> None:
+    """A sell then a buy would be a winning short if the window were assumed flat."""
+    org = uuid4()
+    now = datetime(2026, 10, 18, tzinfo=UTC)
+    account_row = BloFinActivityAccount(
+        organization_id=org,
+        environment="demo",
+        account_uid="demo-uid",
+        credential_binding="binding",
+        identity_verified_at=now,
+    )
+    cursor = BloFinActivityCursor(
+        organization_id=org,
+        environment="demo",
+        account_uid="demo-uid",
+        kind="fill",
+        window_begin_ms=1_000,
+        window_end_ms=2_000,
+        seen_cursors=[],
+        window_complete=True,
+        covered_begin_ms=1_000,
+        covered_end_ms=2_000,
+        gap_detected=False,
+        last_successful_sync=now,
+    )
+
+    class Session:
+        def get(self, model: object, _key: object) -> object:
+            if model is BloFinActivityAccount:
+                return account_row
+            if model is BloFinActivityCursor:
+                return cursor
+            raise AssertionError(model)
+
+        def scalars(self, _stmt: object) -> list[BloFinActivityFact]:
+            raise AssertionError("unproven window must not be scored from fills")
+
+    view = DashboardDemoAccount(status="ok", message="snapshot")
+    apply_activity_performance(
+        view,
+        session=Session(),  # type: ignore[arg-type]
+        tenant=TenantContext(uuid4(), org, "owner@example.test", MembershipRole.OWNER),
+        config=BloFinActivitySettings(
+            _env_file=None, enabled=True, organization_id=org, expected_uid="demo-uid"
+        ),
+    )
+    assert view.performance.activity_sync_status == "partial"
+    assert view.performance.win_rate is None
+    assert view.performance.trade_count is None
+    assert view.performance.realized_pnl is None
 
 
 def test_incomplete_history_does_not_invent_zero_pnl() -> None:
@@ -302,9 +376,10 @@ def test_incomplete_history_does_not_invent_zero_pnl() -> None:
         ),
     )
     assert view.performance.activity_sync_status == "partial"
-    assert view.performance.trade_count == 0
+    assert view.performance.trade_count is None
     assert view.performance.win_rate is None
     assert view.performance.realized_pnl is None
+    assert "flat" in view.performance.activity_coverage.lower()
 
 
 def _row(org: object, kind: str, native_id: str, payload: dict[str, object]) -> BloFinActivityFact:
