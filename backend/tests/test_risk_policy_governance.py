@@ -340,8 +340,9 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
             now=NOW,
         )
     assert unconfirmed.value.code == "apply_proof_missing"
+    account = uuid.uuid4()
     service.latch_drawdown(
-        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=NOW
+        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
     )
     with pytest.raises(RiskPolicyRejected) as blocked:
         _apply(service, loose_proposal, _human())
@@ -349,10 +350,15 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     session.query(RiskPolicyVersion).all()  # keep the import path honest
     state = session.scalars(select(RiskPolicyVersion)).all()
     latched = next(row for row in state if row.id)
-    breaker = session.scalar(select(RiskPolicyBreakerState))
-    assert breaker is not None
-    breaker.drawdown_latched = False
-    session.flush()
+    service.reset_drawdown_latch(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        owner_user_id="sofien",
+        equity=Decimal("9500"),
+        drawdown_breaker_percent=Decimal("10"),
+        now=NOW,
+    )
     scheduled = _apply(service, loose_proposal, _human())
     assert scheduled.change_class == "loosening"
     assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
@@ -1034,6 +1040,125 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
     reset = session.scalar(select(RiskPolicyBreakerReset))
     assert reset is not None
     assert reset.actor_channel == "human"
+
+
+def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None:
+    """A late read still cancels a loosening whose effective time was inside a breaker."""
+
+    effective = datetime(2026, 10, 19, 15, tzinfo=UTC)
+    session = _session()
+    service = _service(session)
+    _store_tight_then_loose(service)
+    account = uuid.uuid4()
+    service.latch_drawdown(
+        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=effective
+    )
+    service.reset_drawdown_latch(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        owner_user_id="sofien",
+        equity=Decimal("9500"),
+        drawdown_breaker_percent=Decimal("10"),
+        now=datetime(2026, 10, 19, 16, tzinfo=UTC),
+    )
+    read_at = datetime(2026, 10, 19, 17, tzinfo=UTC)
+    assert service.breaker_active(organization_id=ORG, now=read_at) is False
+    _current, active, _waiting = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=read_at
+    )
+    session.rollback()
+    assert active is not None
+    assert active.daily_loss_limit_percent == Decimal("0.5")
+    assert _current.daily_loss_limit_percent == Decimal("0.5")
+    cancelled = session.scalar(select(RiskPolicyVersionCancellation))
+    assert cancelled is not None
+    assert cancelled.reason == "breaker_active_at_activation"
+    again, active_again, _waiting_again = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=datetime(2026, 10, 19, 18, tzinfo=UTC)
+    )
+    assert active_again is not None and active_again.id == active.id
+    assert again.daily_loss_limit_percent == Decimal("0.5")
+
+    paused = _session()
+    paused_service = _service(paused)
+    _store_tight_then_loose(paused_service)
+    trip = datetime(2026, 10, 19, 10, tzinfo=UTC)
+    paused_service.record_breaker(
+        organization_id=ORG,
+        account_id=uuid.uuid4(),
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=datetime(2026, 10, 20, tzinfo=UTC),
+        consecutive_paused_until=None,
+        drawdown_latched=False,
+        now=trip,
+    )
+    paused_service.record_breaker(
+        organization_id=ORG,
+        account_id=uuid.uuid4(),
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
+        now=datetime(2026, 10, 20, 1, tzinfo=UTC),
+    )
+    held, held_active, _held_waiting = paused_service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=datetime(2026, 10, 20, 2, tzinfo=UTC)
+    )
+    assert held_active is not None
+    assert held.daily_loss_limit_percent == Decimal("0.5")
+    assert paused.scalar(select(RiskPolicyVersionCancellation)) is not None
+
+    later = _session()
+    later_service = _service(later)
+    loose = _store_tight_then_loose(later_service)
+    later_service.latch_drawdown(
+        organization_id=ORG,
+        account_id=uuid.uuid4(),
+        equity_peak=Decimal("10000"),
+        now=datetime(2026, 10, 19, 16, tzinfo=UTC),
+    )
+    current, active_later, _waiting_later = later_service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=datetime(2026, 10, 19, 16, tzinfo=UTC)
+    )
+    assert active_later is not None and active_later.id == loose.id
+    assert current.daily_loss_limit_percent == Decimal("1")
+    assert later.scalar(select(RiskPolicyVersionCancellation)) is None
+
+
+def _store_tight_then_loose(service: RiskPolicyService):
+    initial = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Initial before the historical breaker.",
+        now=NOW,
+    )
+    _apply(service, initial, _human())
+    tight = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5")),
+        reason="The version that must stay active.",
+        now=NOW,
+    )
+    _apply(service, tight, _human())
+    loose = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Loosening whose effective time may fall inside a breaker.",
+        now=NOW,
+    )
+    scheduled = _apply(service, loose, _human())
+    assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
+    return scheduled
 
 
 def _sizing_order():

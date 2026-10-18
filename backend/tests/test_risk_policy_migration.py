@@ -20,9 +20,11 @@ from tests.support.alembic_heads import alembic_script_directory, single_alembic
 
 _A16 = "a16riskpolicy001"
 _A17 = "a17riskpolicy002"
+_A18 = "a18riskpolicy003"
 _PARENT = "a15reissueauth001"
 _A16_MIGRATION = "a16riskpolicy001_grade_based_risk_policy.py"
 _A17_MIGRATION = "a17riskpolicy002_risk_policy_review_guards.py"
+_A18_MIGRATION = "a18riskpolicy003_breaker_intervals.py"
 
 
 def _load(filename: str):
@@ -42,10 +44,12 @@ def test_risk_policy_revision_is_the_only_head() -> None:
     script = alembic_script_directory()
     a16 = script.get_revision(_A16)
     a17 = script.get_revision(_A17)
-    assert a16 is not None and a17 is not None
+    a18 = script.get_revision(_A18)
+    assert a16 is not None and a17 is not None and a18 is not None
     assert a16.down_revision == _PARENT
     assert a17.down_revision == _A16
-    assert single_alembic_head(script) == _A17
+    assert a18.down_revision == _A17
+    assert single_alembic_head(script) == _A18
     versions = Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions"
     source = (versions / _A16_MIGRATION).read_text(encoding="utf-8")
     for check in VERSION_CHECKS:
@@ -53,6 +57,8 @@ def test_risk_policy_revision_is_the_only_head() -> None:
     guard = (versions / _A17_MIGRATION).read_text(encoding="utf-8")
     assert "risk_policy_versions_immutable" in guard
     assert "risk_policy_version_immutable" in guard
+    intervals = (versions / _A18_MIGRATION).read_text(encoding="utf-8")
+    assert "risk_policy_breaker_intervals" in intervals
 
 
 def test_upgrade_downgrade_roundtrip_on_sqlite() -> None:

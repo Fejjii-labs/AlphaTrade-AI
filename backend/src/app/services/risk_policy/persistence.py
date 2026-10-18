@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.risk_policy import (
+    RiskPolicyBreakerInterval,
     RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
     RiskPolicyCalibrationSample,
@@ -254,6 +255,142 @@ class RiskPolicyService:
                 return True
         return False
 
+    def breaker_covered(self, *, organization_id: uuid.UUID, moment: datetime) -> bool:
+        """Return whether any persisted breaker window covers ``moment``.
+
+        Windows come from open and close rows, not from the live latch. A
+        pause that has already expired, or a drawdown reset that has already
+        been stored, still covers the time between its open and its close.
+        """
+
+        point = _as_utc(moment)
+        rows = self._session.scalars(
+            select(RiskPolicyBreakerInterval)
+            .where(RiskPolicyBreakerInterval.organization_id == organization_id)
+            .order_by(
+                RiskPolicyBreakerInterval.account_id,
+                RiskPolicyBreakerInterval.kind,
+                RiskPolicyBreakerInterval.occurred_at,
+            )
+        ).all()
+        grouped: dict[tuple[uuid.UUID, str], list[RiskPolicyBreakerInterval]] = {}
+        for row in rows:
+            grouped.setdefault((row.account_id, row.kind), []).append(row)
+        for events in grouped.values():
+            ordered = sorted(
+                events,
+                key=lambda item: (
+                    _as_utc(item.occurred_at),
+                    0 if item.phase == "open" else 1,
+                ),
+            )
+            opened_at: datetime | None = None
+            for event in ordered:
+                occurred = _as_utc(event.occurred_at)
+                if event.phase == "open":
+                    if opened_at is None:
+                        opened_at = occurred
+                    continue
+                if opened_at is None:
+                    continue
+                if opened_at <= point < occurred:
+                    return True
+                opened_at = None
+            if opened_at is not None and opened_at <= point:
+                return True
+        return False
+
+    def _note_pause(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        kind: str,
+        now: datetime,
+        paused_until: datetime | None,
+    ) -> None:
+        if paused_until is None or not _pause_active(paused_until, now):
+            return
+        if self._open_started_at(organization_id, account_id, kind) is not None:
+            return
+        self._append_interval(organization_id, account_id, kind, "open", now)
+        self._append_interval(organization_id, account_id, kind, "close", paused_until)
+
+    def _open_breaker(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        kind: str,
+        started_at: datetime,
+    ) -> None:
+        if self._open_started_at(organization_id, account_id, kind) is not None:
+            return
+        self._append_interval(organization_id, account_id, kind, "open", started_at)
+
+    def _close_breaker(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        kind: str,
+        ended_at: datetime,
+    ) -> None:
+        if self._open_started_at(organization_id, account_id, kind) is None:
+            return
+        self._append_interval(organization_id, account_id, kind, "close", ended_at)
+
+    def _open_started_at(
+        self, organization_id: uuid.UUID, account_id: uuid.UUID, kind: str
+    ) -> datetime | None:
+        rows = self._session.scalars(
+            select(RiskPolicyBreakerInterval)
+            .where(
+                RiskPolicyBreakerInterval.organization_id == organization_id,
+                RiskPolicyBreakerInterval.account_id == account_id,
+                RiskPolicyBreakerInterval.kind == kind,
+            )
+            .order_by(RiskPolicyBreakerInterval.occurred_at)
+        ).all()
+        opened_at: datetime | None = None
+        for row in sorted(
+            rows,
+            key=lambda item: (_as_utc(item.occurred_at), 0 if item.phase == "open" else 1),
+        ):
+            if row.phase == "open":
+                if opened_at is None:
+                    opened_at = _as_utc(row.occurred_at)
+                continue
+            opened_at = None
+        return opened_at
+
+    def _append_interval(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        kind: str,
+        phase: str,
+        occurred_at: datetime,
+    ) -> None:
+        existing = self._session.scalar(
+            select(RiskPolicyBreakerInterval.id).where(
+                RiskPolicyBreakerInterval.organization_id == organization_id,
+                RiskPolicyBreakerInterval.account_id == account_id,
+                RiskPolicyBreakerInterval.kind == kind,
+                RiskPolicyBreakerInterval.phase == phase,
+                RiskPolicyBreakerInterval.occurred_at == occurred_at,
+            )
+        )
+        if existing is not None:
+            return
+        self._session.add(
+            RiskPolicyBreakerInterval(
+                organization_id=organization_id,
+                account_id=account_id,
+                kind=kind,
+                phase=phase,
+                occurred_at=occurred_at,
+            )
+        )
+        self._session.flush()
+
     def latch_drawdown(
         self,
         *,
@@ -266,6 +403,7 @@ class RiskPolicyService:
         row.drawdown_latched = True
         row.equity_peak = equity_peak
         row.updated_at = now
+        self._open_breaker(organization_id, account_id, "drawdown", now)
         self._session.flush()
 
     def bind_grade(
@@ -387,8 +525,8 @@ class RiskPolicyService:
         for row in rows:
             if row.id in cancelled:
                 continue
-            if row.change_class == "loosening" and self.breaker_active(
-                organization_id=organization_id, now=now
+            if row.change_class == "loosening" and self.breaker_covered(
+                organization_id=organization_id, moment=row.effective_at
             ):
                 self._cancel_version(row, now)
                 continue
@@ -399,8 +537,10 @@ class RiskPolicyService:
         """Cancel a due loosening and commit that row.
 
         The profile read path does not commit, and closing that session rolls
-        back. The cancellation has to survive that rollback, and it stays
-        cancelled after the breaker clears. A new proposal is required.
+        back. The cancellation has to survive that rollback. It is recorded
+        because a breaker window covered ``effective_at``, so a later read
+        after that window has closed still leaves the version cancelled.
+        A new proposal is required.
         """
 
         already = self._session.scalar(
@@ -486,6 +626,12 @@ class RiskPolicyService:
         row.consecutive_paused_until = consecutive_paused_until
         row.drawdown_latched = drawdown_latched
         row.updated_at = now
+        self._note_pause(organization_id, account_id, "daily", now, daily_paused_until)
+        self._note_pause(organization_id, account_id, "consecutive", now, consecutive_paused_until)
+        if drawdown_latched:
+            self._open_breaker(organization_id, account_id, "drawdown", now)
+        else:
+            self._close_breaker(organization_id, account_id, "drawdown", now)
         self._session.flush()
         return row
 
@@ -537,6 +683,7 @@ class RiskPolicyService:
         )
         if verdict.drawdown_active:
             raise RiskPolicyRejected("drawdown_still_active")
+        self._close_breaker(organization_id, account_id, "drawdown", now)
         self._session.add(
             RiskPolicyBreakerReset(
                 organization_id=organization_id,

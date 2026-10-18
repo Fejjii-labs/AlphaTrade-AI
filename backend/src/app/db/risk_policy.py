@@ -1,8 +1,9 @@
 """Immutable risk-policy versions, proposals, grades, and trade records.
 
-Versions, proposals, grade bindings, trade records, and calibration samples
-are append-only. Breaker state is the one mutable table: it is the live
-latch, not the audit of a profile change.
+Versions, proposals, grade bindings, trade records, calibration samples, and
+breaker intervals are append-only. Breaker state is the one mutable table: it
+is the live latch, not the audit of a profile change. Intervals keep the
+windows that latch was open, so a later read can evaluate a past moment.
 """
 
 from __future__ import annotations
@@ -180,6 +181,38 @@ class RiskPolicyTradeRecord(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RiskPolicyBreakerInterval(UUIDPrimaryKeyMixin, Base):
+    """One opening or closing of a daily, consecutive, or drawdown window."""
+
+    __tablename__ = "risk_policy_breaker_intervals"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "account_id",
+            "kind",
+            "phase",
+            "occurred_at",
+            name="uq_risk_policy_breaker_interval",
+        ),
+        CheckConstraint(
+            "kind IN ('daily', 'consecutive', 'drawdown')",
+            name="ck_risk_policy_breaker_interval_kind",
+        ),
+        CheckConstraint(
+            "phase IN ('open', 'close')",
+            name="ck_risk_policy_breaker_interval_phase",
+        ),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    phase: Mapped[str] = mapped_column(String(8), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RiskPolicyBreakerState(UUIDPrimaryKeyMixin, Base):
     """Live breaker latch. Not a profile version."""
 
@@ -335,6 +368,7 @@ for _model in (
     RiskPolicyVersionCancellation,
     RiskPolicyPromotionReportRow,
     RiskPolicyBreakerReset,
+    RiskPolicyBreakerInterval,
 ):
     event.listen(_model, "before_update", _reject_mutation)
     event.listen(_model, "before_delete", _reject_mutation)

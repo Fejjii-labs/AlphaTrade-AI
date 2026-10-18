@@ -13,6 +13,8 @@ history and keeps a single AVAILABLE or CONSUMED row per approval.
 versions are immutable and stay inside the code ceilings.
 ``a17riskpolicy002`` adds the Postgres immutability trigger, version
 cancellations, stored promotion reports, and breaker resets.
+``a18riskpolicy003`` stores breaker open and close intervals so a later
+read can evaluate the breaker at a loosening's effective time.
 
 Tenant-scoped resources carry ``organization_id``; vectors live in Qdrant while
 document/chunk metadata lives here.
@@ -99,6 +101,7 @@ from app.db.paper_evaluation import (
 )
 from app.db.public_market_observations import PublicMarketObservationRow  # noqa: F401
 from app.db.risk_policy import (  # noqa: F401
+    RiskPolicyBreakerInterval,
     RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
     RiskPolicyCalibrationSample,

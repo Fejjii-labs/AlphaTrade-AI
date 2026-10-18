@@ -39,6 +39,14 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   breaker-state rows exist. Breaker pause, loss count, realized P&L, and
   unrealized P&L are persisted. A drawdown reset is an append-only row
   carrying the actor. The daily breaker uses realized plus unrealized P&L.
+- Grok review of `38450d26` (2026-10-18) required one further correction.
+  A loosening is cancelled when its `effective_at` falls inside a persisted
+  breaker window, even if the first profile read happens after that window
+  has closed. The window is the append-only open and close history in
+  `risk_policy_breaker_intervals` (`a18riskpolicy003`), not the live latch.
+  A breaker that opens only after `effective_at` does not cancel that
+  version. `a18riskpolicy003` revises `a17riskpolicy002`. `a16` still
+  revises `a15reissueauth001`. Real-money trading stays blocked.
 - Grok review of `f06614c3` (2026-10-18) required four corrections, accepted
   on the same branch. The first stored profile is classified against the
   live placeholder: a looser result is a loosening, so the cooldown and the
