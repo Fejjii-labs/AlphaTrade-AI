@@ -163,14 +163,17 @@ These steps require a separately authorized supervised session; none were run he
 ## Final focused evidence
 
 The closure manifest was refreshed from implementation source
-`61aa5331f5e7deeb118514cac15d63ba8083b236`. Listed file hashes match that
+`cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2`. Listed file hashes match that
 source tree and this publication, which adds the refreshed receipt only.
-Focused pytest exited 0: 226 passed, 1 deselected, in 63.98s. The schema-drop
-alembic test was not run. The PostgreSQL demo suite, run alone, exited 0:
-20 passed in 44.35s. Ruff check and format exited 0. The historical batches
-below were run for `73765026d1b39e3564005a7f16deac838edc4f00` and are not
-proof for this head. Both of those backend batches exited 0; **235 distinct
-tests passed, no skips**. No full CI ran for that historical receipt.
+Focused pytest exited 0: 324 passed, 1 deselected, in 70.29s. That command
+added `tests/test_agent_paper_execution_v4.py` to the prior focused file list
+and used `-k "not upgrade_downgrade"`. The schema-drop alembic test was not
+run. The PostgreSQL demo suite, run alone, exited 0: 20 passed in 44.66s.
+Ruff check and format exited 0. The historical batches below were run for
+`73765026d1b39e3564005a7f16deac838edc4f00` and are not proof for this head.
+Both of those backend batches exited 0; **235 distinct tests passed, no
+skips**. No full CI ran for that historical receipt. The receipt for
+`61aa5331f5e7deeb118514cac15d63ba8083b236` is not proof for this head.
 
 Disposable PostgreSQL 17.11 ran in `postgres:17-alpine` on loopback port 55432.
 Fixture schemas were created/dropped only in that disposable server. The container
