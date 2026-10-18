@@ -47,6 +47,11 @@ Trigger: before a route or any other caller can reset a drawdown latch.
 Trigger: before a tradable grade risk is allowed above the 1% placeholder,
 on apply or on sizing.
 
+The audited paper and demo field `paper_demo_data_collection` (AT-ADR-110,
+Sofien 2026-10-18) is the only exception, and only for an applied
+`internal_paper` or `demo` profile. It does not close this prerequisite
+for live trading or for arming either autonomous flag.
+
 | Prerequisite | Required state |
 | --- | --- |
 | Server-computed report | The server computes the promotion report per grade from stored samples. |

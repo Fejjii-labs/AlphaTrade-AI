@@ -302,7 +302,7 @@ class CanonicalPaperExecutionService:
                     "Paper close requires an exit reason.",
                     details={"reason": "missing_exit_reason"},
                 )
-            payload = {
+            payload: dict[str, object] = {
                 "exit_price": str(request.exit_price),
                 "exit_time": request.occurred_at.isoformat(),
                 "exit_reason": exit_reason,
@@ -316,6 +316,14 @@ class CanonicalPaperExecutionService:
                     mode="json", exclude_none=True
                 ),
             }
+            payload.update(
+                _closed_risk_facts(
+                    self._session,
+                    organization_id=request.organization_id,
+                    candidate_id=trade.candidate_id,
+                    net_pnl=economics.net_pnl,
+                )
+            )
             command = self._session.get(ExecutionCommand, request.command_id)
             _attach_approval_channel(
                 self._session,
@@ -641,3 +649,41 @@ def _lineage_payload(
         fusion_policy_version=lineage.fusion_policy_version,
         uniqueness_tuple_hash=envelope.uniqueness_hash,
     )
+
+
+def _closed_risk_facts(
+    session: Session,
+    *,
+    organization_id: UUID,
+    candidate_id: UUID | None,
+    net_pnl: Decimal,
+) -> dict[str, str]:
+    """Copy grade facts onto the close payload. The trade row stays append-only."""
+
+    if candidate_id is None:
+        return {}
+    from app.db.risk_policy import RiskPolicyTradeRecord
+
+    row = session.scalar(
+        select(RiskPolicyTradeRecord).where(
+            RiskPolicyTradeRecord.organization_id == organization_id,
+            RiskPolicyTradeRecord.trade_id == str(candidate_id),
+        )
+    )
+    if row is None:
+        return {}
+    calculation = row.calculation if isinstance(row.calculation, dict) else {}
+    facts = {"grade": str(row.grade), "outcome": "closed"}
+    for key in ("effective_risk_percent", "leverage", "entry", "stop", "target", "planned_r"):
+        if key in calculation:
+            name = "risk_percent" if key == "effective_risk_percent" else key
+            facts[name] = str(calculation[key])
+    raw_risk = calculation.get("risk_amount")
+    if raw_risk is not None:
+        amount = Decimal(str(raw_risk))
+        if amount > 0:
+            facts["r_multiple"] = format(
+                (net_pnl / amount).quantize(Decimal("0.00000001")),
+                "f",
+            )
+    return facts

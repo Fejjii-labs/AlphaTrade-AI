@@ -22,7 +22,7 @@ from itertools import pairwise
 
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GRADER_VERSION
-from app.services.risk_policy.profile import TRADABLE_GRADES, Grade, RiskPolicyProfile
+from app.services.risk_policy.profile import TRADABLE_GRADES, Grade, PolicyKind, RiskPolicyProfile
 
 MIN_TRADES = 100
 PLACEHOLDER_RISK_PERCENT = Decimal("1")
@@ -111,6 +111,13 @@ def assert_promotion_allows(profile: RiskPolicyProfile, report: PromotionReport 
 
     above = any(profile.risk_percent(grade) > PLACEHOLDER_RISK_PERCENT for grade in TRADABLE_GRADES)
     if not above:
+        return
+    # AT-ADR-110: paper and demo data collection is an explicit profile field.
+    # Applying it is audited. It is not a silent bypass, and it is not live.
+    if profile.paper_demo_data_collection and profile.kind in {
+        PolicyKind.INTERNAL_PAPER,
+        PolicyKind.DEMO,
+    }:
         return
     if (
         report is None

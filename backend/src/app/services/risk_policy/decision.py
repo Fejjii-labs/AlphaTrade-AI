@@ -15,6 +15,7 @@ from app.services.risk_policy.liquidation import (
     LiquidationRecheck,
     MaintenanceTier,
     check_liquidation_buffer,
+    leverage_clearing_buffer,
     recheck_after_fill,
 )
 from app.services.risk_policy.profile import Grade, RiskPolicyProfile
@@ -42,8 +43,14 @@ def decide_trade(
     ai_suggested_grade: Grade | None = None,
     ai_explanation: str | None = None,
     promotion: PromotionReport | None = None,
+    preserve_grade_risk: bool = False,
 ) -> TradeDecision:
-    """Accept a new trade or return a refusal. Does not place an order."""
+    """Accept a new trade or return a refusal. Does not place an order.
+
+    When the requested leverage would put liquidation inside the buffer, leverage
+    is lowered until the buffer clears or the trade is refused. Quantity is not
+    increased. This function does not call an exchange.
+    """
 
     if breaker.refuse_new_trades:
         return TradeDecision(False, "breaker_active", None, None)
@@ -58,28 +65,56 @@ def decide_trade(
         return TradeDecision(False, "entry_missing", None, None)
     try:
         adjusted = apply_adjusters(profile.risk_percent(grade.grade), adjusters)
-        sized = size_trade(
-            profile,
-            replace(
-                sizing,
-                grade=grade.grade,
-                grade_risk_percent=adjusted.adjusted_risk_percent,
-            ),
-            promotion=promotion,
-        )
     except RiskPolicyRejected as exc:
         return TradeDecision(False, exc.code, None, None)
-    liquidation = check_liquidation_buffer(
-        entry=sizing.entry,
-        stop_distance=sized.stop_distance,
-        atr=sizing.atr,
-        leverage=sized.leverage,
-        notional=sized.notional,
-        margin_mode=sizing.margin_mode,
-        tiers=tiers,
+    requested = sizing.leverage if sizing.leverage is not None else profile.default_leverage
+    attempt = replace(
+        sizing,
+        grade=grade.grade,
+        grade_risk_percent=adjusted.adjusted_risk_percent,
+        leverage=requested,
     )
-    if not liquidation.accepted:
-        return TradeDecision(False, liquidation.reason, None, None)
+    sized = None
+    for _ in range(32):
+        try:
+            sized = size_trade(
+                profile,
+                attempt,
+                promotion=promotion,
+                preserve_grade_risk=preserve_grade_risk,
+            )
+        except RiskPolicyRejected as exc:
+            return TradeDecision(False, exc.code, None, None)
+        liquidation = check_liquidation_buffer(
+            entry=sizing.entry,
+            stop_distance=sized.stop_distance,
+            atr=sizing.atr,
+            leverage=sized.leverage,
+            notional=sized.notional,
+            margin_mode=sizing.margin_mode,
+            tiers=tiers,
+        )
+        if liquidation.accepted:
+            break
+        if (
+            liquidation.reason != "liquidation_inside_buffer"
+            or liquidation.required_buffer is None
+            or liquidation.maintenance_rate is None
+        ):
+            return TradeDecision(False, liquidation.reason, None, None)
+        lowered = leverage_clearing_buffer(
+            entry=sizing.entry,
+            buffer=liquidation.required_buffer,
+            maintenance_rate=liquidation.maintenance_rate,
+            requested=sized.leverage,
+        )
+        if lowered is None or lowered >= sized.leverage:
+            return TradeDecision(False, "liquidation_inside_buffer", None, None)
+        attempt = replace(attempt, leverage=lowered)
+    else:
+        return TradeDecision(False, "liquidation_inside_buffer", None, None)
+    if sized is None or sizing.equity is None or sized.margin > sizing.equity:
+        return TradeDecision(False, "margin_exceeds_equity", None, None)
     record = build_trade_record(
         profile_version_id=profile_version_id,
         decision=grade,

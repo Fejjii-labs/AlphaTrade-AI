@@ -43,6 +43,7 @@ MIGRATIONS = (
     "src/app/db/migrations/versions/a16riskpolicy001_grade_based_risk_policy.py",
     "src/app/db/migrations/versions/a17riskpolicy002_risk_policy_review_guards.py",
     "src/app/db/migrations/versions/a18riskpolicy003_breaker_intervals.py",
+    "src/app/db/migrations/versions/a19riskpolicy004_paper_demo_risk_ceiling.py",
 )
 QUOTA_COMPATIBILITY = (
     "src/app/db/voice_realtime.py",
@@ -438,7 +439,7 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "src/app/db/migrations"))
     head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "a18riskpolicy003"
+    assert head == "a19riskpolicy004"
     try:
         command.upgrade(config, "head")
         _seed(engine)

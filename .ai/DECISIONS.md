@@ -2,6 +2,40 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-110 — Paper and demo per-trade ceiling of 5%
+
+- Date: 2026-10-18
+- Decision: Sofien instructed on 2026-10-18 that paper and demo risk at the
+  stop may be chosen by setup grade, normally 1–3% and up to 5% for an A+
+  high-confidence setup. A selectable profile `sofien_aggressive_paper`
+  (and `sofien_aggressive_demo`) uses A+ 5%, A 3%, B+ 2%, B 1%, C 0%,
+  default leverage 10x, and maximum leverage 20x. It is not applied
+  automatically. The conservative placeholder stays the default, and a
+  profile is active only when a version row exists.
+- Ceilings: `PolicyKind.INTERNAL_PAPER` and `PolicyKind.DEMO` may store up
+  to 5% per trade and 2000% of equity as notional. `conservative`,
+  `standard`, and `aggressive` stay at 2% per trade and 100% notional.
+  There is no live policy kind. Real-money trading stays blocked. Both
+  autonomous flags stay false and a profile that sets either flag is rejected.
+- Calibration: AT-ADR-109 (c) stays binding for live trading and for arming
+  either flag. Paper and demo data collection of a grade above 1% requires
+  the explicit profile field `paper_demo_data_collection`. Turning it on is
+  a loosening and is audited. It is not a silent bypass. `promote()` still
+  refuses. The field does not satisfy (c) for live or for arming.
+- Leverage sets margin only. Loss is the grade risk divided by stop
+  distance. If liquidation is inside the buffer, leverage is lowered in
+  whole numbers and is never raised. If 1x still fails, or margin would
+  exceed equity, the trade is refused and quantity is not shrunk to fit.
+  BloFin demo does not send a leverage or margin-mode write. A leverage
+  mismatch blocks with `demo_account_leverage_mismatch`. A demo account
+  that is not isolated blocks with `demo_margin_mode_not_isolated`.
+- Notional: when a profile is active, a cap that would shrink the grade
+  risk refuses with `notional_cap_shrinks_grade_risk`. The previous fixed
+  1% risk and 5% notional path remains only when no profile version row
+  is active.
+- Reference: Sofien, 2026-10-18; `docs/risk_policy_arming_checklist.md` (c);
+  `docs/sfp_level_approach.md`.
+
 ## AT-ADR-109 — Hard prerequisites before arming the grade-based risk policy
 
 - Date: 2026-10-18

@@ -31,7 +31,7 @@ SFP_NAMESPACE = UUID("1ba10002-0000-4000-8000-000000000001")
 class SfpParameters(CanonicalModel):
     """Explicit research inputs. Ratios are relative to reference price, never win odds."""
 
-    version: Literal["sfp-research/v1"] = "sfp-research/v1"
+    version: Literal["sfp-research/v1", "sfp-research/v2"] = "sfp-research/v1"
     provisional: Literal[True] = True
     level_lookback: int = Field(ge=3, le=1000)
     pivot_width: int = Field(ge=1, le=20)
@@ -48,6 +48,9 @@ class SfpParameters(CanonicalModel):
     quality_lookback: int = Field(ge=2, le=500)
     htf_alignment_tolerance: NonNegativeCanonicalDecimal = Field(lt=1)
     confirmation: Literal["closed_break_of_reclaim_extreme"] = "closed_break_of_reclaim_extreme"
+    # None keeps stored v1 specs from alerting. A new version sets the distance.
+    approach_proximity: NonNegativeCanonicalDecimal | None = None
+    approach_cooldown_seconds: int = Field(default=900, ge=0, le=86400)
 
     @model_validator(mode="after")
     def ordered(self) -> Self:
@@ -58,7 +61,38 @@ class SfpParameters(CanonicalModel):
             and self.maximum_sweep_depth < self.minimum_sweep_depth
         ):
             raise ValueError("maximum_sweep_depth must be >= minimum_sweep_depth")
+        if self.approach_proximity is not None and self.approach_proximity >= 1:
+            raise ValueError("approach_proximity must be below 1")
         return self
+
+
+def sfp_research_v2_parameters() -> SfpParameters:
+    """New-version defaults. Does not rewrite a stored strategy version.
+
+    Lookback is 72 closed bars (inside the 48-96 band). Sweep depth is
+    0.2-0.3%. Approach proximity is 0.1% and stays off until this version
+    is created and approved.
+    """
+
+    return SfpParameters(
+        version="sfp-research/v2",
+        level_lookback=72,
+        pivot_width=2,
+        minimum_level_significance=Decimal("2"),
+        minimum_sweep_depth=Decimal("0.002"),
+        maximum_sweep_depth=Decimal("0.003"),
+        equal_level_tolerance=Decimal("0.001"),
+        reclaim_window=2,
+        confirmation_window=2,
+        breakout_confirmation_closes=2,
+        structural_invalidation_buffer=Decimal("0.005"),
+        expiry_bars=6,
+        required_evidence_max_age_bars=1,
+        quality_lookback=3,
+        htf_alignment_tolerance=Decimal("0.01"),
+        approach_proximity=Decimal("0.001"),
+        approach_cooldown_seconds=900,
+    )
 
 
 class SfpSpec(CanonicalModel):

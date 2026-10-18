@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -38,6 +39,7 @@ from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCom
 from app.schemas.trade_plan import (
     AuthorizationChannel,
     AuthorizationState,
+    MarginMode,
     TradePlanRevisionCreate,
 )
 from app.services.approval_service import (
@@ -76,6 +78,10 @@ from app.signal_fusion.evidence_window import CanonicalEvidenceWindowV1
 from app.signal_fusion.ports import Clock
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.workers.watcher_paper_targets import PaperScanTarget
+
+if TYPE_CHECKING:
+    from app.services.risk_policy.grader import GradeDecision
+    from app.services.risk_policy.plan_sizing import ActiveProfile
 
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 _POLICY_VERSION = "paper-internal-entry/v1"
@@ -281,15 +287,24 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
+        now = self._clock.now()
+        active = _load_active_profile(
+            session, target.organization_id, self._risk_policy_kind(), now
+        )
+        records: list[object] = []
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,
             policy=policy,
             account_id=account.id,
-            equity=_equity(session, target, now=self._clock.now()),
-            now=self._clock.now(),
+            equity=_equity(session, target, now=now),
+            now=now,
             eligibility_valid_until=eligibility.eligibility.valid_until,
             eligibility_id=eligibility.eligibility.eligibility_id,
+            active_profile=active,
+            open_exposure=_open_exposure(session, target, now=now),
+            breaker_refusing=_breaker_refusing(session, target.organization_id, now),
+            risk_records=records,
         )
         if isinstance(terms, str):
             return AutomatedPaperLoopProof(
@@ -299,6 +314,13 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
+        _persist_risk_record(
+            session,
+            organization_id=target.organization_id,
+            trade_id=str(candidate.candidate_id),
+            records=records,
+            now=now,
+        )
         envelope = self._plan_service().create(
             _plan_command(
                 target=target,
@@ -560,6 +582,9 @@ class AutomatedPaperLoop:
     def _policy_version(self) -> str:
         return _POLICY_VERSION
 
+    def _risk_policy_kind(self) -> str:
+        return "internal_paper"
+
     def _account(self, session: Session, target: PaperScanTarget) -> ExecutionAccount | None:
         return _paper_account(session, target)
 
@@ -599,6 +624,12 @@ class AutomatedPaperLoop:
         now: datetime,
         eligibility_valid_until: datetime,
         eligibility_id: UUID,
+        active_profile: object | None = None,
+        open_exposure: Decimal = Decimal("0"),
+        open_risk_percent: Decimal = Decimal("0"),
+        remaining_daily_budget_percent: Decimal | None = None,
+        breaker_refusing: bool = False,
+        risk_records: list[object] | None = None,
     ) -> TradePlanRevisionCreate | str:
         return _plan_terms(
             candidate=candidate,
@@ -609,6 +640,12 @@ class AutomatedPaperLoop:
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
+            active_profile=active_profile,
+            open_exposure=open_exposure,
+            open_risk_percent=open_risk_percent,
+            remaining_daily_budget_percent=remaining_daily_budget_percent,
+            breaker_refusing=breaker_refusing,
+            risk_records=risk_records,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -752,6 +789,47 @@ def _paper_account(session: Session, target: PaperScanTarget) -> ExecutionAccoun
     )
 
 
+def _open_exposure(session: Session, target: PaperScanTarget, *, now: datetime) -> Decimal:
+    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+    snapshot = accounting.sync_from_portfolio(
+        organization_id=target.organization_id,
+        user_id=target.user_id,
+    )
+    return snapshot.open_exposure_notional
+
+
+def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
+    from app.services.risk_policy.persistence import RiskPolicyService
+
+    return RiskPolicyService(session, AuditService(session)).breaker_active(
+        organization_id=organization_id, now=now
+    )
+
+
+def _persist_risk_record(
+    session: Session,
+    *,
+    organization_id: UUID,
+    trade_id: str,
+    records: list[object],
+    now: datetime,
+) -> None:
+    if not records:
+        return
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.records import TradeRiskRecord
+
+    record = records[-1]
+    if not isinstance(record, TradeRiskRecord):
+        return
+    RiskPolicyService(session, AuditService(session)).record_trade(
+        organization_id=organization_id,
+        trade_id=trade_id,
+        record=record,
+        now=now,
+    )
+
+
 def _equity(session: Session, target: PaperScanTarget, *, now: datetime) -> Decimal:
     accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
     snapshot = accounting.sync_from_portfolio(
@@ -865,6 +943,12 @@ def _plan_terms(
     now: datetime,
     eligibility_valid_until: datetime,
     eligibility_id: UUID,
+    active_profile: object | None = None,
+    open_exposure: Decimal = Decimal("0"),
+    open_risk_percent: Decimal = Decimal("0"),
+    remaining_daily_budget_percent: Decimal | None = None,
+    breaker_refusing: bool = False,
+    risk_records: list[object] | None = None,
 ) -> TradePlanRevisionCreate | str:
     from app.strategy_brain.sfp.contracts import SfpSpec
 
@@ -910,9 +994,6 @@ def _plan_terms(
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)
-    quantity = _quantity(equity=equity, entry=entry, distance=distance)
-    if quantity is None:
-        return "size_below_minimum"
     target = nested_target if nested else entry - distance
     if (
         target is None
@@ -921,6 +1002,48 @@ def _plan_terms(
         or (not is_long and target >= entry)
     ):
         return "invalidation_unavailable"
+    leverage = Decimal("1")
+    margin_mode = MarginMode.CROSS
+    if active_profile is None:
+        quantity = _quantity(equity=equity, entry=entry, distance=distance)
+        if quantity is None:
+            return "size_below_minimum"
+    else:
+        from app.services.risk_policy.plan_sizing import ActiveProfile, size_for_profile
+
+        if not isinstance(active_profile, ActiveProfile):
+            return "risk_profile_unavailable"
+        if open_exposure > 0 and open_risk_percent <= 0:
+            return "open_risk_uncomputed"
+        grade, atr = _grade_for_plan(candidate, assembled)
+        sized = size_for_profile(
+            active=active_profile,
+            grade=grade,
+            equity=equity,
+            entry=entry,
+            stop=stop,
+            target=target,
+            direction="long" if is_long else "short",
+            atr=atr,
+            lot_step=_LOT,
+            min_quantity=_LOT,
+            open_risk_percent=open_risk_percent,
+            open_notional=open_exposure,
+            open_positions=0,
+            remaining_daily_budget_percent=(
+                active_profile.profile.daily_loss_limit_percent
+                if remaining_daily_budget_percent is None
+                else remaining_daily_budget_percent
+            ),
+            breaker_refusing=breaker_refusing,
+        )
+        if isinstance(sized, str):
+            return sized
+        quantity = sized.quantity
+        leverage = sized.leverage
+        margin_mode = MarginMode.ISOLATED
+        if risk_records is not None:
+            risk_records.append(sized.record)
     observed = quote.source_time
     if observed > now:
         return "stale_evidence"
@@ -937,6 +1060,8 @@ def _plan_terms(
         target=target,
         quantity=quantity,
         observed=observed,
+        leverage=leverage,
+        margin_mode=margin_mode,
         now=now,
         valid_until=valid_until,
         freshness=freshness,
@@ -959,6 +1084,43 @@ def _plan_terms(
             "decision_reference": str(eligibility_id),
         },
     )
+
+
+def _grade_for_plan(
+    candidate: Candidate, assembled: AssembledCanonicalEvidence
+) -> tuple[GradeDecision, Decimal | None]:
+    """Grade from bars already on the assembly. Does not fetch another price."""
+
+    from app.services.risk_policy.grader import GradeDecision
+    from app.services.risk_policy.plan_sizing import grade_from_bars
+
+    direction = "long" if candidate.direction is TradeDirection.LONG else "short"
+    try:
+        return grade_from_bars(
+            direction=direction,
+            symbol=candidate.evidence_instrument.symbol
+            if hasattr(candidate.evidence_instrument, "symbol")
+            else str(candidate.evidence_instrument),
+            timeframe=candidate.timeframe.value,
+            bars=assembled.bundle.bars_15m,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return GradeDecision(None, "deterministic-grade/v1", None, None, "grade_unavailable"), None
+
+
+def _load_active_profile(
+    session: Session, organization_id: UUID, kind_value: str, now: datetime
+) -> ActiveProfile | None:
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.plan_sizing import ActiveProfile
+    from app.services.risk_policy.profile import PolicyKind
+
+    profile, row, _scheduled = RiskPolicyService(session, AuditService(session)).read(
+        organization_id=organization_id, kind=PolicyKind(kind_value), now=now
+    )
+    if row is None:
+        return None
+    return ActiveProfile(profile=profile, version_id=row.id)
 
 
 def _quantity(*, equity: Decimal, entry: Decimal, distance: Decimal) -> Decimal | None:

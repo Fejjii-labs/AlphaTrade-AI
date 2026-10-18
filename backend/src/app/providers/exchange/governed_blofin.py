@@ -42,6 +42,9 @@ class DemoVenueSnapshot:
     book: DemoOrderBook
     account_observed_at: datetime
     native_account_uid: str | None = None
+    # Read from leverage-info. This provider never writes leverage or margin mode.
+    account_leverage: Decimal = Decimal("1")
+    margin_mode: str = "cross"
 
 
 @dataclass(frozen=True)
@@ -118,7 +121,13 @@ class GovernedBloFinDemoProvider:
         self._expected_native_uid = native_uid
 
     def snapshot(
-        self, *, symbol: str, now: datetime, side: EntrySide, quantity: Decimal | None = None
+        self,
+        *,
+        symbol: str,
+        now: datetime,
+        side: EntrySide,
+        quantity: Decimal | None = None,
+        required_leverage: Decimal | None = Decimal("1"),
     ) -> DemoVenueSnapshot:
         self.verify_permissions()
         with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
@@ -150,8 +159,15 @@ class GovernedBloFinDemoProvider:
             maximum = venue_decimal(row.get("maxMarketSize"))
         with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
             leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode="cross")
-            if leverage.leverage != Decimal("1"):
-                raise ValueError("Demo account must already use leverage 1; no leverage mutation.")
+            # Read only. This provider never sends a leverage or margin-mode write.
+            if required_leverage is not None and leverage.leverage != required_leverage:
+                if required_leverage == Decimal("1"):
+                    raise ValueError(
+                        "Demo account must already use leverage 1; no leverage mutation."
+                    )
+                raise ValueError(
+                    "Demo account leverage does not match required leverage; no leverage mutation."
+                )
         account_observed_at = self._clock()
         self.verify_flat_account()
         with preflight_stage("balance", "GET /api/v1/account/balance"):
@@ -199,6 +215,8 @@ class GovernedBloFinDemoProvider:
             book=book,
             account_observed_at=account_observed_at,
             native_account_uid=self._account.native_account_uid,
+            account_leverage=leverage.leverage,
+            margin_mode=str(getattr(leverage, "margin_mode", None) or "cross"),
         )
 
     def verify_flat_account(self) -> None:

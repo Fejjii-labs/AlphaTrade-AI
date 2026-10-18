@@ -47,6 +47,8 @@ def build_internal_paper_terms(
     tick_size: Decimal,
     target_formula: str,
     presentation: dict[str, object],
+    leverage: Decimal = Decimal("1"),
+    margin_mode: MarginMode = MarginMode.CROSS,
 ) -> TradePlanRevisionCreate:
     """Shared internal paper semantics. No detector, sizing, approval, or execution."""
     is_long = candidate.direction is TradeDirection.LONG
@@ -97,7 +99,7 @@ def build_internal_paper_terms(
                 "maximum_bps": "0",
             },
             "reduce_only": False,
-            "margin_mode": MarginMode.CROSS.value,
+            "margin_mode": margin_mode.value,
             "position_mode": "NET",
             "instrument_rules": {
                 "contract_multiplier": "1",
@@ -147,8 +149,12 @@ def build_internal_paper_terms(
                     "rule_version": "1",
                     "expression": "disabled",
                 },
-                "leverage": "1",
-                "margin_assumption_id": "paper-internal-cash",
+                "leverage": format(leverage, "f"),
+                "margin_assumption_id": (
+                    "paper-profile-isolated"
+                    if margin_mode is MarginMode.ISOLATED
+                    else "paper-internal-cash"
+                ),
                 "margin_assumption_version": "1",
             },
             "valid_from": now,

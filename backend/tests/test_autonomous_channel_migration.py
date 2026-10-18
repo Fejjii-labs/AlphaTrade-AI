@@ -37,7 +37,8 @@ _REVISION = "a14autonomouschannel001"
 _A15 = "a15reissueauth001"
 _A16 = "a16riskpolicy001"
 _A17 = "a17riskpolicy002"
-_HEAD = "a18riskpolicy003"
+_A18 = "a18riskpolicy003"
+_HEAD = "a19riskpolicy004"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -78,9 +79,12 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     a17 = script.get_revision(_A17)
     assert a17 is not None
     assert a17.down_revision == _A16
+    a18 = script.get_revision(_A18)
+    assert a18 is not None
+    assert a18.down_revision == _A17
     head = script.get_revision(_HEAD)
     assert head is not None
-    assert head.down_revision == _A17
+    assert head.down_revision == _A18
     assert single_alembic_head(script) == _HEAD
 
 

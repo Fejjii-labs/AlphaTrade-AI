@@ -304,6 +304,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
     def _policy_version(self) -> str:
         return DEMO_POLICY
 
+    def _risk_policy_kind(self) -> str:
+        return "demo"
+
     def _get_provider(self) -> GovernedBloFinDemoProvider:
         if self._provider is None:
             self._provider = GovernedBloFinDemoProvider(build_blofin_client(self._settings))
@@ -372,6 +375,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
         session.commit()  # Persist Candidate; no DB transaction held over venue reads.
+        from app.services.automated_paper_loop import _load_active_profile
+
+        active = _load_active_profile(
+            session, target.organization_id, self._risk_policy_kind(), self._clock.now()
+        )
+        # A profile sizes leverage later. Do not require 1x before that comparison,
+        # and do not send a leverage write. No profile keeps the existing 1x read.
+        required_leverage = None if active is not None else Decimal("1")
         try:
             self._snapshot = self._get_provider().snapshot(
                 symbol=target.symbol,
@@ -379,6 +390,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 side=EntrySide.BUY
                 if candidate.direction is TradeDirection.LONG
                 else EntrySide.SELL,
+                required_leverage=required_leverage,
             )
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
@@ -458,9 +470,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         now: datetime,
         eligibility_valid_until: datetime,
         eligibility_id: UUID,
+        active_profile: object | None = None,
+        open_exposure: Decimal = Decimal("0"),
+        open_risk_percent: Decimal = Decimal("0"),
+        remaining_daily_budget_percent: Decimal | None = None,
+        breaker_refusing: bool = False,
+        risk_records: list[object] | None = None,
     ) -> TradePlanRevisionCreate | str:
         snapshot = self._require_snapshot()
         equity = min(equity, snapshot.equity, snapshot.available)
+        # Stops and targets stay on the existing path. Profile sizing replaces
+        # quantity only after that, and never falls back to the 1% formula.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -488,15 +508,72 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
         # Reserve fees+slippage conservatively; sizing uses base value per contract.
-        cost_per_base = entry * Decimal("0.002")
-        raw = (
-            min(
-                equity * Decimal("0.01") / (abs(entry - stop) + cost_per_base),
-                equity * Decimal("0.10") / entry,
+        risk_cap = equity * Decimal("0.01")
+        notional_cap = equity * Decimal("0.10")
+        margin_assumption = "verified-demo-existing-1x"
+        profile_leverage: Decimal | None = None
+        if active_profile is None:
+            cost_per_base = entry * Decimal("0.002")
+            raw = (
+                min(
+                    risk_cap / (abs(entry - stop) + cost_per_base),
+                    notional_cap / entry,
+                )
+                / snapshot.multiplier
             )
-            / snapshot.multiplier
-        )
-        raw = min(raw, snapshot.maximum)
+            raw = min(raw, snapshot.maximum)
+        else:
+            from app.services.automated_paper_loop import _grade_for_plan
+            from app.services.risk_policy.plan_sizing import (
+                ActiveProfile,
+                demo_leverage_block,
+                demo_margin_mode_block,
+                size_for_profile,
+            )
+
+            if not isinstance(active_profile, ActiveProfile):
+                return "risk_profile_unavailable"
+            grade, atr = _grade_for_plan(candidate, assembled)
+            sized = size_for_profile(
+                active=active_profile,
+                grade=grade,
+                equity=equity,
+                entry=entry,
+                stop=stop,
+                target=target,
+                direction="long" if is_long else "short",
+                atr=atr,
+                lot_step=snapshot.lot * snapshot.multiplier,
+                min_quantity=snapshot.minimum * snapshot.multiplier,
+                open_risk_percent=open_risk_percent,
+                open_notional=open_exposure,
+                open_positions=0,
+                remaining_daily_budget_percent=(
+                    active_profile.profile.daily_loss_limit_percent
+                    if remaining_daily_budget_percent is None
+                    else remaining_daily_budget_percent
+                ),
+                breaker_refusing=breaker_refusing,
+            )
+            if isinstance(sized, str):
+                return sized
+            mismatch = demo_leverage_block(snapshot.account_leverage, sized.leverage)
+            if mismatch is not None:
+                return mismatch
+            margin_block = demo_margin_mode_block(snapshot.margin_mode)
+            if margin_block is not None:
+                return margin_block
+            if risk_records is not None:
+                risk_records.append(sized.record)
+            raw = sized.quantity / snapshot.multiplier
+            if raw > snapshot.maximum:
+                return "demo_size_above_market_maximum"
+            risk_cap = equity * sized.risk_percent / Decimal("100")
+            notional_cap = (
+                equity * active_profile.profile.max_notional_per_trade_percent / Decimal("100")
+            )
+            margin_assumption = "verified-demo-read-leverage"
+            profile_leverage = sized.leverage
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -511,9 +588,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         adverse_entry = upper if is_long else lower
         cost_per_base = upper * Decimal("0.002")
         maximum_loss = base * (abs(adverse_entry - stop) + cost_per_base)
-        if base * upper > equity * Decimal("0.10"):
+        if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
-        if maximum_loss > equity * Decimal("0.01"):
+        if maximum_loss > risk_cap:
             return "demo_depth_exceeds_risk_limit"
         values = terms.model_dump(mode="python")
         values.update(
@@ -583,10 +660,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 "fee_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
                 "slippage_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
                 "stop": {"value": stop, "unit": "USDT"},
-                "margin_assumption_id": "verified-demo-existing-1x",
+                "margin_assumption_id": margin_assumption,
                 "margin_assumption_version": "1",
             }
         )
+        if profile_leverage is not None:
+            values["margin_mode"] = "ISOLATED"
+            values["risk_and_exits"]["leverage"] = format(profile_leverage, "f")
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
         revised = TradePlanRevisionCreate.model_validate(values)
         try:
@@ -647,9 +727,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         try:
             experiment = experiment_reservation_refusal(
                 session,
-                plan,
+                plan,  # type: ignore[arg-type]
                 intent,
-                self._clock.now(),  # type: ignore[arg-type]
+                self._clock.now(),
             )
         except Exception:
             return "risk_limits_unverified", None

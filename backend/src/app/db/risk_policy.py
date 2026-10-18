@@ -34,11 +34,23 @@ from app.db.base import Base, UUIDPrimaryKeyMixin
 _MONEY = Numeric(20, 8)
 
 # Kept in the migration as well. Tests compare the two texts.
+def _kind_risk_check(column: str) -> str:
+    """5% only for paper and demo. Every other kind stays at 2%."""
+
+    paper = "kind IN ('internal_paper', 'demo')"
+    other = "kind NOT IN ('internal_paper', 'demo')"
+    return (
+        f"(({paper} AND {column} > 0 AND {column} <= 5) OR "
+        f"({other} AND {column} > 0 AND {column} <= 2))"
+    )
+
+
+# Live and non-paper kinds stay at 2%. Paper and demo may reach 5% (AT-ADR-110).
 VERSION_CHECKS: tuple[str, ...] = (
-    "risk_percent_a_plus > 0 AND risk_percent_a_plus <= 2",
-    "risk_percent_a > 0 AND risk_percent_a <= 2",
-    "risk_percent_b_plus > 0 AND risk_percent_b_plus <= 2",
-    "risk_percent_b > 0 AND risk_percent_b <= 2",
+    _kind_risk_check("risk_percent_a_plus"),
+    _kind_risk_check("risk_percent_a"),
+    _kind_risk_check("risk_percent_b_plus"),
+    _kind_risk_check("risk_percent_b"),
     "risk_percent_c = 0",
     "max_leverage >= 1 AND max_leverage <= 20",
     "daily_loss_limit_percent > 0 AND daily_loss_limit_percent <= 6",
@@ -47,6 +59,8 @@ VERSION_CHECKS: tuple[str, ...] = (
     "max_cost_share_of_r > 0 AND max_cost_share_of_r <= 0.25",
     "actor_channel = 'human'",
     "change_class IN ('initial', 'tightening', 'loosening')",
+    "default_leverage >= 1 AND default_leverage <= max_leverage AND default_leverage <= 20",
+    "(paper_demo_data_collection = false OR kind IN ('internal_paper', 'demo'))",
 )
 
 
@@ -116,6 +130,15 @@ class RiskPolicyVersion(UUIDPrimaryKeyMixin, Base):
     consecutive_loss_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     autonomous_internal_paper_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     autonomous_blofin_demo_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    profile_name: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="", default=""
+    )
+    default_leverage: Mapped[Decimal] = mapped_column(
+        _MONEY, nullable=False, server_default="1", default=Decimal("1")
+    )
+    paper_demo_data_collection: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     change_class: Mapped[str] = mapped_column(String(16), nullable=False)
     effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -352,6 +375,9 @@ def _validate_version_insert(
             consecutive_loss_limit=target.consecutive_loss_limit,
             autonomous_internal_paper_enabled=target.autonomous_internal_paper_enabled,
             autonomous_blofin_demo_enabled=target.autonomous_blofin_demo_enabled,
+            profile_name=target.profile_name,
+            default_leverage=target.default_leverage,
+            paper_demo_data_collection=target.paper_demo_data_collection,
         )
     )
 

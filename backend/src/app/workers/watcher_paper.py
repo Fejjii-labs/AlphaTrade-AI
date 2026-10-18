@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from types import FrameType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 import structlog
@@ -240,6 +240,12 @@ def resolve_runtime_enabled(
     return paper_runtime_enabled(settings)
 
 
+def _quote_venue(assembled: object) -> str:
+    identity = getattr(assembled, "identity", None)
+    venue = getattr(identity, "venue", None)
+    return str(getattr(venue, "value", None) or "unspecified")
+
+
 class WatcherPaperRuntime:
     """Bounded polling worker. One active lease holder per tenant scan scope."""
 
@@ -288,7 +294,8 @@ class WatcherPaperRuntime:
         self._organization_id: UUID | None = None
         self._organization_cursor: UUID | None = None
         self._probes_completed = 0
-        self._assignment_observations: dict[str, list[dict]] = {}
+        self._assignment_observations: dict[str, list[dict[str, Any]]] = {}
+        self._approach_cooldowns: dict[UUID, dict[UUID, datetime]] = {}
         self._assignment_configured = False
         self._assignment_managed_symbols: set[str] = set()
         self._watchlist = watchlist
@@ -994,17 +1001,22 @@ class WatcherPaperRuntime:
         from app.strategy_brain.sfp_runtime.notifications import sfp_notification_summaries
 
         if target.fusion_policy_version == SFP_KIND:
-            report = replace(
-                report,
-                sfp_strategy=True,
-                sfp_alerts=()
+            now = self._clock.now()
+            sweep = (
+                ()
                 if session is None
                 else sfp_notification_summaries(
                     session,
                     organization_id=target.organization_id,
                     strategy_version_id=target.strategy_version_id,
-                    now=self._clock.now(),
-                ),
+                    now=now,
+                )
+            )
+            approach = () if session is None else self._sfp_approach_alerts(target, evidence, now)
+            report = replace(
+                report,
+                sfp_strategy=True,
+                sfp_alerts=sweep + approach,
             )
         observe_scan(report.reason_code)
         logger.info(
@@ -1023,6 +1035,53 @@ class WatcherPaperRuntime:
             paper_only=True,
         )
         return report
+
+    def _sfp_approach_alerts(
+        self,
+        target: PaperScanTarget,
+        evidence: object,
+        now: datetime,
+    ) -> tuple[SfpAlertSummary, ...]:
+        """Approach alert from the quote this scan already fetched. No extra poll."""
+
+        from app.strategy_brain.sfp.approach import approach_alert_summaries
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        last_assembly = getattr(evidence, "last_assembly", None)
+        if not callable(last_assembly):
+            return ()
+        loaded = last_assembly()
+        if loaded is None:
+            return ()
+        assembled, policy = loaded
+        spec = getattr(policy, "authored_spec", None)
+        if not isinstance(spec, SfpSpec) or spec.parameters.approach_proximity is None:
+            return ()
+        quote = getattr(assembled, "current_price", None)
+        if quote is None or not getattr(quote, "usable_as_current_market_price", False):
+            return ()
+        bars = tuple(assembled.bundle.bars_15m)
+        observations = tuple(assembled.assessment_command.public_observations)
+        if len(observations) == len(bars) + 1:
+            observations = observations[1:]
+        if len(observations) != len(bars):
+            return ()
+        bucket = self._approach_cooldowns.setdefault(target.strategy_version_id, {})
+        try:
+            return approach_alert_summaries(
+                organization_id=target.organization_id,
+                strategy_version_id=target.strategy_version_id,
+                spec=spec,
+                bars=bars,
+                observations=observations,
+                price=quote.price,
+                venue=_quote_venue(assembled),
+                now=now,
+                cooldowns=bucket,
+            )
+        except (TypeError, ValueError):
+            logger.warning("sfp_level_approach_skipped", symbol=target.symbol)
+            return ()
 
     def _build_evidence(self, session: Session | None, symbol: str) -> WatcherScanEvidencePort:
         if self._evidence_factory is None:

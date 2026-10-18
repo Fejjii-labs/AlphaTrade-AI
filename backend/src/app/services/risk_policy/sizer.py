@@ -16,7 +16,7 @@ from app.services.risk_policy.calibration import PromotionReport, assert_promoti
 from app.services.risk_policy.ceilings import (
     HARD_MAX_DAILY_LOSS_PERCENT,
     HARD_MAX_LEVERAGE,
-    HARD_MAX_RISK_PER_TRADE_PERCENT,
+    risk_ceiling_for,
 )
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.profile import Grade, RiskPolicyProfile, validate_profile
@@ -96,8 +96,13 @@ def size_trade(
     data: SizingInput,
     *,
     promotion: PromotionReport | None = None,
+    preserve_grade_risk: bool = False,
 ) -> SizingResult:
-    """Size one new trade. Leverage does not increase quantity."""
+    """Size one new trade. Leverage does not increase quantity.
+
+    ``preserve_grade_risk`` refuses when a notional cap would cut the grade
+    risk. The default still reduces quantity, which is the library contract.
+    """
 
     validate_profile(profile)
     assert_promotion_allows(profile, promotion)
@@ -156,7 +161,7 @@ def size_trade(
     minimum = max(profile.min_stop_atr_multiple * atr, floor)
     if stop_distance < minimum:
         raise RiskPolicyRejected("stop_too_tight")
-    leverage = data.leverage if data.leverage is not None else Decimal("1")
+    leverage = data.leverage if data.leverage is not None else profile.default_leverage
     if not isinstance(leverage, Decimal) or not leverage.is_finite():
         raise RiskPolicyRejected("leverage_invalid")
     if leverage < 1 or leverage > profile.max_leverage or leverage > HARD_MAX_LEVERAGE:
@@ -168,7 +173,8 @@ def size_trade(
     budget_room = min(daily_room, aggregate_room)
     if budget_room <= 0:
         raise RiskPolicyRejected("budget_exhausted")
-    effective = min(grade_risk, profile_risk, HARD_MAX_RISK_PER_TRADE_PERCENT, budget_room)
+    ceiling = risk_ceiling_for(profile.kind)
+    effective = min(grade_risk, profile_risk, ceiling, budget_room)
     if effective <= 0:
         raise RiskPolicyRejected("budget_exhausted")
     adverse = stop_distance + gap
@@ -190,6 +196,8 @@ def size_trade(
     room = min(notional_cap, notional_room)
     notional = quantity * entry
     if notional > room:
+        if preserve_grade_risk:
+            raise RiskPolicyRejected("notional_cap_shrinks_grade_risk")
         quantity = _round_lot(room / entry, lot_step)
         capped = True
     if quantity < min_quantity:
@@ -220,7 +228,7 @@ def size_trade(
         notional_capped=capped,
         grade_risk_percent=grade_risk,
         profile_risk_percent=profile_risk,
-        ceiling_percent=HARD_MAX_RISK_PER_TRADE_PERCENT,
+        ceiling_percent=ceiling,
         budget_room_percent=budget_room,
         leverage=leverage,
     )

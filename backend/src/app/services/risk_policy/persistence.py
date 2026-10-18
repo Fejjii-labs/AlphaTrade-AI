@@ -209,6 +209,9 @@ class RiskPolicyService:
             consecutive_loss_limit=int(canonical["consecutive_loss_limit"]),
             autonomous_internal_paper_enabled=False,
             autonomous_blofin_demo_enabled=False,
+            profile_name=canonical["profile_name"],
+            default_leverage=Decimal(canonical["default_leverage"]),
+            paper_demo_data_collection=canonical["paper_demo_data_collection"] == "true",
             change_class=decision.change_class.value,
             effective_at=decision.effective_at,
             actor_id=actor.actor_id,
@@ -235,6 +238,9 @@ class RiskPolicyService:
                 "effective_at": decision.effective_at.isoformat(),
                 "proposal_id": str(proposal.id),
                 "applies_to_new_trades_only": True,
+                "profile_name": canonical["profile_name"],
+                "paper_demo_data_collection": canonical["paper_demo_data_collection"] == "true",
+                "default_leverage": canonical["default_leverage"],
             },
         )
         return row
@@ -816,6 +822,11 @@ def profile_from_row(row: RiskPolicyVersion) -> RiskPolicyProfile:
             ),
             "autonomous_blofin_demo_enabled": (
                 "true" if row.autonomous_blofin_demo_enabled else "false"
+            ),
+            "profile_name": row.profile_name or "",
+            "default_leverage": format(row.default_leverage, "f"),
+            "paper_demo_data_collection": (
+                "true" if row.paper_demo_data_collection else "false"
             ),
         }
     )

@@ -14,7 +14,10 @@ from decimal import Decimal
 from app.schemas.common import RiskAction, RiskRuleId, RiskSeverity
 from app.schemas.risk import RiskCheckRequest, TriggeredRule
 from app.services.risk.limits import RiskLimits
-from app.services.risk_policy.ceilings import HARD_MAX_RISK_PER_TRADE_PERCENT
+from app.services.risk_policy.ceilings import (
+    HARD_MAX_RISK_PER_TRADE_PERCENT,
+    PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
+)
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.ledger import ledger_symbol_cap_equals_notional
 
@@ -44,6 +47,8 @@ class RiskEvaluationContext:
     # The grade-policy ceiling applies only when autonomous sizing opted in.
     # Human paper execution and strategy replays leave this false.
     autonomous_sizing: bool = False
+    # Paper and demo may use the 5% code ceiling. Live callers leave this false.
+    paper_or_demo_channel: bool = False
 
 
 def _rule(
@@ -307,7 +312,11 @@ def check_risk_percent(
     if req.risk_percent is None and not ledger_supplied:
         return None
     if req.risk_percent is not None:
-        cap = HARD_MAX_RISK_PER_TRADE_PERCENT
+        cap = (
+            PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT
+            if ctx.paper_or_demo_channel
+            else HARD_MAX_RISK_PER_TRADE_PERCENT
+        )
         if ctx.profile_risk_percent_cap is not None:
             if ctx.profile_risk_percent_cap <= 0:
                 return _rule(

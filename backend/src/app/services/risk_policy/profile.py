@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -19,8 +20,8 @@ from app.services.risk_policy.ceilings import (
     HARD_MAX_COST_SHARE_OF_R,
     HARD_MAX_DAILY_LOSS_PERCENT,
     HARD_MAX_LEVERAGE,
-    HARD_MAX_NOTIONAL_PERCENT,
-    HARD_MAX_RISK_PER_TRADE_PERCENT,
+    notional_ceiling_for,
+    risk_ceiling_for,
 )
 from app.services.risk_policy.errors import RiskPolicyRejected
 
@@ -87,6 +88,11 @@ class RiskPolicyProfile:
     consecutive_loss_limit: int
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
+    profile_name: str = ""
+    default_leverage: Decimal = Decimal("1")
+    # Explicit, audited paper/demo data-collection switch. Default off.
+    # It does not arm either autonomous flag and it does not apply to live.
+    paper_demo_data_collection: bool = False
 
     def risk_percent(self, grade: Grade) -> Decimal:
         try:
@@ -120,6 +126,9 @@ def placeholder_profile(kind: PolicyKind) -> RiskPolicyProfile:
         consecutive_loss_limit=4,
         autonomous_internal_paper_enabled=False,
         autonomous_blofin_demo_enabled=False,
+        profile_name="",
+        default_leverage=Decimal("1"),
+        paper_demo_data_collection=False,
     )
     validate_profile(profile)
     return profile
@@ -156,6 +165,11 @@ def profile_with(kind: PolicyKind, **overrides: object) -> RiskPolicyProfile:
         autonomous_blofin_demo_enabled=_bool_flag(
             data["autonomous_blofin_demo_enabled"], "autonomous_blofin_demo_enabled"
         ),
+        profile_name=_profile_name(data.get("profile_name", "")),
+        default_leverage=_decimal(data.get("default_leverage", Decimal("1"))),
+        paper_demo_data_collection=_bool_flag(
+            data.get("paper_demo_data_collection", False), "paper_demo_data_collection"
+        ),
     )
     validate_profile(profile)
     return profile
@@ -169,11 +183,12 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
     grades = profile.risk_percent_by_grade
     if set(grades) != set(GRADE_ORDER):
         raise RiskPolicyRejected("grade_map_invalid")
+    ceiling = risk_ceiling_for(profile.kind)
     for grade in TRADABLE_GRADES:
         _require_percent(
             grades[grade],
             lo=Decimal("0"),
-            hi=HARD_MAX_RISK_PER_TRADE_PERCENT,
+            hi=ceiling,
             code="risk_per_trade_exceeds_ceiling",
             positive=True,
         )
@@ -207,17 +222,18 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
         or profile.max_open_positions > 100
     ):
         raise RiskPolicyRejected("max_open_positions_invalid")
+    notional_ceiling = notional_ceiling_for(profile.kind)
     _require_percent(
         profile.max_notional_per_trade_percent,
         lo=Decimal("0"),
-        hi=HARD_MAX_NOTIONAL_PERCENT,
+        hi=notional_ceiling,
         code="notional_per_trade_invalid",
         positive=True,
     )
     _require_percent(
         profile.max_aggregate_notional_percent,
         lo=Decimal("0"),
-        hi=HARD_MAX_NOTIONAL_PERCENT,
+        hi=notional_ceiling,
         code="aggregate_notional_invalid",
         positive=True,
     )
@@ -261,6 +277,22 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
         raise RiskPolicyRejected("consecutive_loss_limit_invalid")
     if profile.autonomous_internal_paper_enabled or profile.autonomous_blofin_demo_enabled:
         raise RiskPolicyRejected("autonomous_flags_must_stay_off")
+    _profile_name(profile.profile_name)
+    if (
+        not isinstance(profile.default_leverage, Decimal)
+        or not profile.default_leverage.is_finite()
+        or profile.default_leverage < 1
+        or profile.default_leverage > profile.max_leverage
+        or profile.default_leverage > HARD_MAX_LEVERAGE
+    ):
+        raise RiskPolicyRejected("default_leverage_invalid")
+    if not isinstance(profile.paper_demo_data_collection, bool):
+        raise RiskPolicyRejected("paper_demo_data_collection_invalid")
+    if profile.paper_demo_data_collection and profile.kind not in {
+        PolicyKind.INTERNAL_PAPER,
+        PolicyKind.DEMO,
+    }:
+        raise RiskPolicyRejected("data_collection_not_paper_or_demo")
 
 
 def canonical_profile(profile: RiskPolicyProfile) -> dict[str, str]:
@@ -288,6 +320,9 @@ def canonical_profile(profile: RiskPolicyProfile) -> dict[str, str]:
         "consecutive_loss_limit": str(profile.consecutive_loss_limit),
         "autonomous_internal_paper_enabled": "false",
         "autonomous_blofin_demo_enabled": "false",
+        "profile_name": profile.profile_name,
+        "default_leverage": _text(profile.default_leverage),
+        "paper_demo_data_collection": "true" if profile.paper_demo_data_collection else "false",
     }
 
 
@@ -320,6 +355,10 @@ def profile_from_canonical(payload: dict[str, str]) -> RiskPolicyProfile:
             autonomous_internal_paper_enabled=payload["autonomous_internal_paper_enabled"]
             == "true",
             autonomous_blofin_demo_enabled=payload["autonomous_blofin_demo_enabled"] == "true",
+            profile_name=_profile_name(payload.get("profile_name", "")),
+            default_leverage=_decimal(payload.get("default_leverage", "1")),
+            paper_demo_data_collection=payload.get("paper_demo_data_collection", "false")
+            == "true",
         )
     except (KeyError, ValueError) as exc:
         raise RiskPolicyRejected("profile_payload_invalid") from exc
@@ -355,6 +394,7 @@ _LOOSENS_WHEN_INCREASED = (
     "risk_percent_b",
     "risk_percent_c",
     "max_leverage",
+    "default_leverage",
     "daily_loss_limit_percent",
     "max_aggregate_open_risk_percent",
     "max_open_positions",
@@ -398,6 +438,9 @@ def classify_change(
     for key in _LOOSENS_WHEN_DECREASED:
         if key in diff and _decimal(diff[key]["to"]) < _decimal(diff[key]["from"]):
             loosened = True
+    collection = diff.get("paper_demo_data_collection")
+    if collection is not None and collection["to"] == "true" and collection["from"] != "true":
+        loosened = True
     if loosened:
         return ChangeClass.LOOSENING
     return ChangeClass.TIGHTENING
@@ -419,6 +462,9 @@ def _as_mapping(profile: RiskPolicyProfile) -> dict[str, object]:
         "consecutive_loss_limit": profile.consecutive_loss_limit,
         "autonomous_internal_paper_enabled": profile.autonomous_internal_paper_enabled,
         "autonomous_blofin_demo_enabled": profile.autonomous_blofin_demo_enabled,
+        "profile_name": profile.profile_name,
+        "default_leverage": profile.default_leverage,
+        "paper_demo_data_collection": profile.paper_demo_data_collection,
     }
 
 
@@ -460,6 +506,53 @@ def _require_percent(
 def _positive_int(value: object, code: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise RiskPolicyRejected(code)
+    return value
+
+
+def sofien_aggressive_profile(kind: PolicyKind) -> RiskPolicyProfile:
+    """Selectable paper or demo profile. It is not the default and it is not applied.
+
+    Sofien's instruction of 2026-10-18: A+ 5%, A 3%, B+ 2%, B 1%, C does not
+    trade, default leverage 10x, maximum 20x. Loss is the grade risk at the
+    stop. Leverage sets margin. ``paper_demo_data_collection`` is explicit so
+    the calibration gate stays closed unless this audited setting is applied.
+    Notional caps are margin at leverage, as a percent of equity: 100% margin
+    times 10x per trade, and 100% margin times 20x in aggregate.
+    """
+
+    if kind not in {PolicyKind.INTERNAL_PAPER, PolicyKind.DEMO}:
+        raise RiskPolicyRejected("aggressive_profile_is_paper_or_demo_only")
+    name = (
+        "sofien_aggressive_paper"
+        if kind is PolicyKind.INTERNAL_PAPER
+        else "sofien_aggressive_demo"
+    )
+    return profile_with(
+        kind,
+        profile_name=name,
+        risk_percent_by_grade={
+            Grade.A_PLUS: Decimal("5"),
+            Grade.A: Decimal("3"),
+            Grade.B_PLUS: Decimal("2"),
+            Grade.B: Decimal("1"),
+            Grade.C: Decimal("0"),
+        },
+        max_leverage=Decimal("20"),
+        default_leverage=Decimal("10"),
+        daily_loss_limit_percent=Decimal("6"),
+        max_aggregate_open_risk_percent=Decimal("6"),
+        max_open_positions=3,
+        max_notional_per_trade_percent=Decimal("1000"),
+        max_aggregate_notional_percent=Decimal("2000"),
+        paper_demo_data_collection=True,
+    )
+
+
+def _profile_name(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 64:
+        raise RiskPolicyRejected("profile_name_invalid")
+    if value and re.fullmatch(r"[a-z0-9_]+", value) is None:
+        raise RiskPolicyRejected("profile_name_invalid")
     return value
 
 

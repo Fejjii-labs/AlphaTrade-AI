@@ -22,6 +22,9 @@ _VALIDATION_REASONS = {
     "Demo perpetual instrument required.": "instrument_not_perpetual",
     "Positive finite venue value required.": "invalid_instrument_or_quote_value",
     "Demo account must already use leverage 1; no leverage mutation.": "leverage_not_one",
+    "Demo account leverage does not match required leverage; no leverage mutation.": (
+        "leverage_mismatch"
+    ),
     "Demo account state incomplete or unreadable.": "account_state_incomplete",
     "Demo position already open or unreadable; new entry refused.": "account_not_flat",
     "Demo pending orders or protection; new entry refused.": "pending_orders_present",

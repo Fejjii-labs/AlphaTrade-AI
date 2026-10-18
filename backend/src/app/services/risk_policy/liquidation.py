@@ -10,7 +10,7 @@ not call an exchange.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from app.services.risk_policy.errors import RiskPolicyRejected
 
@@ -94,6 +94,34 @@ def liquidation_distance(
     if distance <= 0:
         raise RiskPolicyRejected("liquidation_distance_non_positive")
     return distance
+
+
+def leverage_clearing_buffer(
+    *,
+    entry: Decimal,
+    buffer: Decimal,
+    maintenance_rate: Decimal,
+    requested: Decimal,
+) -> Decimal | None:
+    """Highest whole-number leverage at or below ``requested`` that clears the buffer.
+
+    Returns None when even 1x does not put liquidation beyond the buffer.
+    Leverage is not raised above the requested value.
+    """
+
+    if entry <= 0 or buffer <= 0 or requested < 1:
+        return None
+    if maintenance_rate < 0 or maintenance_rate >= 1:
+        return None
+    denominator = buffer / entry + maintenance_rate
+    if denominator <= 0:
+        return requested
+    maximum = (Decimal("1") / denominator).to_integral_value(rounding=ROUND_DOWN)
+    if maximum < 1:
+        return None
+    if maximum >= requested:
+        return requested
+    return maximum
 
 
 def check_liquidation_buffer(
