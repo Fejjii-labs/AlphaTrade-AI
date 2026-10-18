@@ -707,6 +707,32 @@ def test_equal_close_times_leave_funding_unverified() -> None:
     assert all(draft.funding is None for draft in closed)
 
 
+def test_touching_positions_do_not_verify_a_shared_funding_bill() -> None:
+    left = dict(_FIXTURE["long"]["history"][0])
+    left["positionId"] = "p-left"
+    left["historyId"] = "h-left"
+    left["updateTime"] = "1792224000000"
+    right = dict(left)
+    right["positionId"] = "p-right"
+    right["historyId"] = "h-right"
+    right["createTime"] = "1792224000000"
+    right["updateTime"] = "1792238400000"
+    funding = [
+        {
+            "billId": "b-touch",
+            "instId": "BTC-USDT",
+            "fundingFee": "-0.004",
+            "fundingTime": "1792224000000",
+        }
+    ]
+    built = _drafts([left, right], funding=funding)
+    closed = built.closed  # type: ignore[attr-defined]
+    assert len(closed) == 2
+    assert {draft.position_id for draft in closed} == {"p-left", "p-right"}
+    assert all(draft.verified is False for draft in closed)
+    assert all(draft.funding is None for draft in closed)
+
+
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:
     strategy = uuid.uuid4()
     assert strategy_group_key(

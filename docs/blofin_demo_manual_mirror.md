@@ -11,7 +11,8 @@ the page cap. Those rows stay unverified, and the headline stays withheld
 unless the stored cycle marker's only cycle tag is `mirror-cycle:ok`.
 That marker cannot be created, edited, retagged, or deleted through the
 journal API. Two slices of one position that close at the same time do not
-verify funding.
+verify funding. A funding timestamp that falls in more than one slice
+leaves every claimant unverified.
 
 The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change

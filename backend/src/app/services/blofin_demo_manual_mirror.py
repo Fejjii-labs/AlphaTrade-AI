@@ -395,6 +395,7 @@ def _assign_funding(
                 if shared_close or shared_window:
                     ambiguous.add(id(left))
                     ambiguous.add(id(right))
+    windows: list[tuple[_Slice, datetime, bool]] = []
     for sliver in slices:
         if id(sliver) in ambiguous or sliver.opened_at < window_begin:
             sliver.funding = None
@@ -409,12 +410,32 @@ def _assign_funding(
             and other.closed_at <= sliver.closed_at
         ]
         start = max(previous) if previous else sliver.opened_at
+        windows.append((sliver, start, not previous))
+    claimed: dict[int, list[_Slice]] = {}
+    for index, (inst_id, when, _amount) in enumerate(parsed):
+        owners = [
+            sliver
+            for sliver, start, include_open in windows
+            if inst_id == sliver.inst_id
+            and (
+                start < when <= sliver.closed_at
+                or (include_open and sliver.opened_at <= when <= sliver.closed_at)
+            )
+        ]
+        if len(owners) > 1:
+            claimed[index] = owners
+    shared = {id(sliver) for owners in claimed.values() for sliver in owners}
+    for sliver, start, include_open in windows:
+        if id(sliver) in shared:
+            sliver.funding = None
+            sliver.funding_ok = False
+            continue
         total = Decimal("0")
         for inst_id, when, amount in parsed:
             if inst_id != sliver.inst_id:
                 continue
             in_window = start < when <= sliver.closed_at
-            at_open = not previous and sliver.opened_at <= when <= sliver.closed_at
+            at_open = include_open and sliver.opened_at <= when <= sliver.closed_at
             if in_window or at_open:
                 # Journal funding is the cost: paid is positive, received is negative.
                 total += -amount
