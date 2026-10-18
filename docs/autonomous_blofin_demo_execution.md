@@ -3,9 +3,10 @@
 This implementation starts from reviewed PR249 candidate
 `de5c010c7c85dfe5cde1ec8fabf60b6262500fe0` (tree
 `2ebed239ecaeacbe32c4a4d50a1e8459c4ef4122`). The closure manifest now records
-implementation source commit `61aa5331f5e7deeb118514cac15d63ba8083b236`, source/test
-tree `036c375764f93b0a942cd32c54c1dc5a520e9c57`. The earlier receipt for
-`73765026d1b39e3564005a7f16deac838edc4f00` is not proof for this head.
+implementation source commit `cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2`, source/test
+tree `d28eb1ac802f56f09f930afd1ff4c46ad0ae9588`. The earlier receipts for
+`61aa5331f5e7deeb118514cac15d63ba8083b236` and
+`73765026d1b39e3564005a7f16deac838edc4f00` are not proof for this head.
 
 The controlling continuation was read
 from `cursor/experiments-market-handoff:HANDOFF.md`, updated 13 October 2026.
