@@ -15,6 +15,8 @@ verify funding. A funding timestamp that falls in more than one slice
 leaves every claimant unverified. A history row or funding bill that does
 not parse, a positions element that is not an object or does not parse, or
 an instruments element that is not an object, withholds the cycle.
+Two rows for one instrument with a different contract value or settlement
+currency withhold the cycle as well.
 A repeated `historyId` does not. An open tracker is cancelled only when
 every positions row parsed, including when the positions list contains a
 non-object. A closed `blofin-demo-history:` row cannot be
@@ -140,7 +142,8 @@ empty or `BLOFIN_DEMO`, no `external_ref`, and the same normalized symbol,
 direction, entry, and size is updated in place. Source stays
 `manual_demo_test` or `manual`, so the row is not a second copy and it is
 not included in the hand-trade win rate. More than one match is logged and
-skipped. The stuck open example
+skipped, and that cycle is not `mirror-cycle:ok`, so the headline stays
+withheld. The stuck open example
 `912f2bfd-9061-4196-82bd-a17a0650c14e` is this shape when the venue slice
 matches. This repository change does not call BloFin, so it does not prove
 that the live row matches a venue close.

@@ -172,6 +172,7 @@ class BuildResult:
     history_incomplete: bool = False
     funding_incomplete: bool = False
     positions_complete: bool = True
+    instruments_incomplete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +185,7 @@ class MirrorReport:
     reconciled: int
     closed: int
     opens: int
+    ambiguous: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,8 +264,9 @@ def _direction_from_side(side: str, position_side: str) -> tuple[TradeDirection 
     return direction, position_side != expected
 
 
-def _instruments(rows: list[dict[str, Any]]) -> dict[str, _Instrument]:
+def _instruments(rows: list[dict[str, Any]]) -> tuple[dict[str, _Instrument], bool]:
     found: dict[str, _Instrument] = {}
+    conflict = False
     for row in rows:
         inst_id = row.get("instId")
         value = _decimal(row.get("contractValue"))
@@ -272,8 +275,14 @@ def _instruments(rows: list[dict[str, Any]]) -> dict[str, _Instrument]:
             continue
         if not isinstance(settle, str):
             continue
-        found[inst_id] = _Instrument(value, settle.upper())
-    return found
+        current = _Instrument(value, settle.upper())
+        previous = found.get(inst_id)
+        if previous is not None and (
+            previous.contract_value != current.contract_value or previous.settle != current.settle
+        ):
+            conflict = True
+        found[inst_id] = current
+    return found, conflict
 
 
 def _parse_slices(
@@ -691,7 +700,7 @@ def drafts_from_raw(
 ) -> BuildResult:
     """Build journal drafts. ``fills[*].fillPnl`` is intentionally unused."""
     del window_end
-    meta = _instruments(instruments)
+    meta, instruments_incomplete = _instruments(instruments)
     slices, skipped, history_incomplete = _parse_slices(history, meta)
     funding_incomplete = _assign_funding(slices, funding, window_begin=window_begin)
     _attach_orders(slices, fills, orders)
@@ -703,6 +712,7 @@ def drafts_from_raw(
         history_incomplete=history_incomplete,
         funding_incomplete=funding_incomplete,
         positions_complete=positions_complete,
+        instruments_incomplete=instruments_incomplete,
     )
 
 
@@ -890,11 +900,14 @@ class BloFinDemoManualMirror:
             or built.history_incomplete
             or built.funding_incomplete
             or not built.positions_complete
+            or built.instruments_incomplete
             or len(instrument_rows) != len(instruments)
         )
         if incomplete:
             built = _without_verified_economics(built)
         report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
+        if report.ambiguous:
+            incomplete = True
         if page_capped:
             outcome = "page-cap"
         elif incomplete:
@@ -929,7 +942,7 @@ class BloFinDemoManualMirror:
             ).all()
         )
         by_ref = {row.external_ref: row for row in rows if row.external_ref}
-        created = updated = reconciled = 0
+        created = updated = reconciled = ambiguous = 0
         for draft in built.closed:
             claimed = [row for row in rows if _claim_manual(row, draft)]
             target = by_ref.get(draft.external_ref)
@@ -941,6 +954,7 @@ class BloFinDemoManualMirror:
                     "blofin_demo_manual_mirror_ambiguous",
                     position_id=draft.position_id,
                 )
+                ambiguous += 1
                 continue
             if target is None:
                 target = JournalTrade(
@@ -1014,6 +1028,7 @@ class BloFinDemoManualMirror:
             reconciled=reconciled,
             closed=len(built.closed),
             opens=opens_written,
+            ambiguous=ambiguous,
         )
 
 
@@ -1041,6 +1056,7 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
         history_incomplete=built.history_incomplete,
         funding_incomplete=built.funding_incomplete,
         positions_complete=built.positions_complete,
+        instruments_incomplete=built.instruments_incomplete,
     )
 
 

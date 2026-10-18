@@ -92,7 +92,8 @@ class _Client:
         self.calls.append((method, path))
         if path == "/api/v1/market/instruments":
             assert signed is False and not params
-            return _FIXTURE["instruments"]
+            override = self.bundle.get(path)
+            return _FIXTURE["instruments"] if override is None else override
         if path == "/api/v1/account/positions":
             assert signed is True
             return self.bundle["positions"]
@@ -357,6 +358,16 @@ def test_ambiguous_manual_rows_are_not_duplicated(session: Session) -> None:
     assert len(rows) == 2
     assert all(row.status is JournalTradeStatus.OPEN for row in rows)
     assert all(row.external_ref is None for row in rows)
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None and cycle.tags == ["mirror-cycle:incomplete"]
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+    assert held.performance.win_rate is None
+    assert held.performance.realized_pnl is None
 
 
 def test_flag_off_does_not_read_or_write(session: Session) -> None:
@@ -861,6 +872,26 @@ def test_non_dict_position_keeps_the_open_tracker(session: Session) -> None:
     session.commit()
     session.refresh(cycle)
     assert cycle.tags == ["mirror-cycle:incomplete"]
+
+
+def test_conflicting_instrument_metadata_withholds_the_cycle(session: Session) -> None:
+    bundle = _paths(_FIXTURE["long"])
+    bundle["/api/v1/market/instruments"] = [
+        *_FIXTURE["instruments"],
+        {"instId": "BTC-USDT", "contractValue": "1", "settleCurrency": "USDT"},
+    ]
+    BloFinDemoManualMirror(_Client(bundle), now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(),
+    )
+    session.commit()
+    assert _rows(session)[0].net_pnl is None
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None and cycle.tags == ["mirror-cycle:incomplete"]
 
 
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:
