@@ -110,6 +110,7 @@ class PaperWorkerHealth:
     authority_intact: bool
     indexing: ComponentHealth | None = None
     activity: ComponentHealth | None = None
+    exit_monitor: ComponentHealth | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +197,8 @@ class PaperWorkerSupervisor:
         self._indexing_stop: Callable[[], None] | None = None
         self._activity: _Component | None = None
         self._activity_stop: Callable[[], None] | None = None
+        self._exit_monitor: _Component | None = None
+        self._exit_monitor_stop: Callable[[], None] | None = None
         self._memory_diagnostics = WorkerMemoryDiagnostics() if memory_diagnostics_enabled else None
 
     def attach_indexing(
@@ -230,11 +233,24 @@ class PaperWorkerSupervisor:
         self._activity = _Component("activity", cycle, None, poll_seconds=poll_seconds)
         self._activity_stop = request_stop
 
+    def attach_exit_monitor(
+        self,
+        cycle: Callable[[], CycleOutcome],
+        *,
+        poll_seconds: float,
+        request_stop: Callable[[], None],
+    ) -> None:
+        """Automatic internal-paper SL/TP exits. Absent unless the flag is on."""
+
+        self._exit_monitor = _Component("exit_monitor", cycle, None, poll_seconds=poll_seconds)
+        self._exit_monitor_stop = request_stop
+
     def _components(self) -> tuple[_Component, ...]:
         return (
             (self._watcher, self._telegram)
             + ((self._indexing,) if self._indexing else ())
             + ((self._activity,) if self._activity else ())
+            + ((self._exit_monitor,) if self._exit_monitor else ())
         )
 
     def snapshot(self) -> PaperWorkerHealth:
@@ -247,6 +263,7 @@ class PaperWorkerSupervisor:
             authority_intact=self._authority_intact,
             indexing=self._indexing.health() if self._indexing else None,
             activity=self._activity.health() if self._activity else None,
+            exit_monitor=self._exit_monitor.health() if self._exit_monitor else None,
         )
 
     def run_round(self) -> PaperWorkerHealth:
@@ -272,6 +289,8 @@ class PaperWorkerSupervisor:
             self._indexing_stop()
         if self._activity_stop:
             self._activity_stop()
+        if self._exit_monitor_stop:
+            self._exit_monitor_stop()
 
     def join(self) -> None:
         for component in self._components():
@@ -286,7 +305,7 @@ class PaperWorkerSupervisor:
 
         if self._closed:
             return
-        if self._activity is not None:
+        if self._activity is not None or self._exit_monitor is not None:
             self.request_stop()
             self.join()
         self._closed = True
@@ -464,6 +483,8 @@ class PaperWorkerSupervisor:
             indexing_error=health.indexing.last_error if health.indexing else "",
             activity_status=health.activity.status if health.activity else "disabled",
             activity_error=health.activity.last_error if health.activity else "",
+            exit_monitor_status=(health.exit_monitor.status if health.exit_monitor else "disabled"),
+            exit_monitor_error=health.exit_monitor.last_error if health.exit_monitor else "",
             stopping=health.stopping,
             authority_intact=health.authority_intact,
             paper_only=True,
@@ -578,6 +599,15 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
         activity = BloFinActivityCycle(settings.model_copy(deep=True), activity_config)
         supervisor.attach_activity(
             activity, poll_seconds=activity_config.poll_seconds, request_stop=activity.request_stop
+        )
+    if settings.paper_exit_monitor_enabled:
+        from app.workers.paper_exit_monitor import PaperExitMonitorCycle
+
+        exit_monitor = PaperExitMonitorCycle(settings.model_copy(deep=True))
+        supervisor.attach_exit_monitor(
+            exit_monitor,
+            poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
+            request_stop=exit_monitor.request_stop,
         )
     return supervisor
 

@@ -2,6 +2,38 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-107 — Internal paper trades exit at the stop or target
+
+- Date: 2026-10-18
+- Decision: Open canonical internal paper trades are closed by a paper-worker
+  component when a closed candle from the strategy evidence source touches the
+  stop or the single full-size target. The fill price is that level. Costs are
+  the plan's fee, funding, and slippage allowances (zero on
+  `paper-internal-entry/v1`). If one bar touches both levels, the stop wins and
+  the journal evidence records `same_bar_assumption=stop_first`. The exit time
+  is the crossing bar's `interval_end`.
+- Writer: `ExecutionService.close_canonical_paper_plan`, the same method as
+  `POST /paper-plan/close`. The monitor does not update journal rows itself
+  and does not call an exchange. Idempotency key
+  `paper-exit-monitor:{command_id}`. A rerun replays that close.
+- Journal identity: `exit_reason` is `stop_hit` or `target_hit`. The CLOSE
+  lifecycle payload adds `exit_channel=PAPER_EXIT_MONITOR` and
+  `exit_actor=paper_exit_monitor` plus bar evidence. The HTTP close body
+  cannot set those fields, so a human close stays distinct.
+- Scope: `plan_authority=canonical`, `execution_venue=PAPER_INTERNAL`,
+  `execution_policy_version=paper-internal-entry/v1`, runner disabled, one
+  target at fraction 1. Manual BloFin demo trades and governed BloFin demo
+  plans are not read for exit. A history window that does not reach the entry
+  does not close the trade.
+- Flags: `paper_exit_monitor_enabled` (`PAPER_EXIT_MONITOR_ENABLED`) and
+  `paper_exit_monitor_dry_run` (`PAPER_EXIT_MONITOR_DRY_RUN`). Both default
+  false. Production refuses the enabled flag. Dry-run logs
+  `paper_exit_monitor_would_close` and does not write. This decision does not
+  arm either flag, change deploy config, or authorize a merge. Real-money
+  trading stays rejected.
+- Reference: `docs/paper_exit_monitor.md`;
+  `backend/src/app/services/paper_exit_monitor.py`.
+
 ## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
 
 - Date: 2026-10-17

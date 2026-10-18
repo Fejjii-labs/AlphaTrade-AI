@@ -73,6 +73,8 @@ def validate_deployment_settings(settings: Settings) -> None:
             errors.append("autonomous_internal_paper_enabled must be false in production")
         if settings.autonomous_blofin_demo_enabled:
             errors.append("autonomous_blofin_demo_enabled must be false in production")
+        if settings.paper_exit_monitor_enabled:
+            errors.append("paper_exit_monitor_enabled must be false in production")
 
     # Dedicated disarmed workers bind a process-local role before this runs.
     # The API never binds it. Armed settings ignore it and keep every check below.
@@ -219,6 +221,8 @@ def deployment_posture(settings: Settings) -> dict[str, object]:
         "watcher_paper_staging_activation": settings.watcher_paper_staging_activation,
         "autonomous_internal_paper_enabled": settings.autonomous_internal_paper_enabled,
         "autonomous_blofin_demo_enabled": settings.autonomous_blofin_demo_enabled,
+        "paper_exit_monitor_enabled": settings.paper_exit_monitor_enabled,
+        "paper_exit_monitor_dry_run": settings.paper_exit_monitor_dry_run,
         **dict(perpetual_evidence_health(settings)),
     }
 

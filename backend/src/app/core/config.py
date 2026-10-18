@@ -222,6 +222,12 @@ class Settings(BaseSettings):
     # authorizes real-money trading. Setting both fails closed.
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
+    # Automatic stop/target exits for canonical internal paper only.
+    # Default off. Production refuses the enabled flag. Dry-run evaluates and
+    # logs without calling the paper close service. Neither flag is set in
+    # the deploy blueprint by the change that introduced them.
+    paper_exit_monitor_enabled: bool = False
+    paper_exit_monitor_dry_run: bool = False
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)

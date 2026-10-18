@@ -302,7 +302,7 @@ class CanonicalPaperExecutionService:
                     "Paper close requires an exit reason.",
                     details={"reason": "missing_exit_reason"},
                 )
-            payload = {
+            payload: dict[str, object] = {
                 "exit_price": str(request.exit_price),
                 "exit_time": request.occurred_at.isoformat(),
                 "exit_reason": exit_reason,
@@ -316,6 +316,7 @@ class CanonicalPaperExecutionService:
                     mode="json", exclude_none=True
                 ),
             }
+            payload.update(paper_exit_audit_fields(request))
             command = self._session.get(ExecutionCommand, request.command_id)
             _attach_approval_channel(
                 self._session,
@@ -569,6 +570,23 @@ class CanonicalPaperExecutionService:
 
 def is_canonical_plan_authority(plan_authority: str | None) -> bool:
     return plan_authority == PLAN_AUTHORITY_CANONICAL
+
+
+def paper_exit_audit_fields(request: ClosePaperPlanRequest) -> dict[str, object]:
+    """Journal fields that mark an automated exit. Absent on a human close.
+
+    Keys are added only when the caller set them, so an HTTP close payload
+    keeps the same shape and content hash as before this monitor existed.
+    """
+
+    fields: dict[str, object] = {}
+    if request.exit_channel is not None:
+        fields["exit_channel"] = request.exit_channel
+    if request.exit_actor is not None:
+        fields["exit_actor"] = request.exit_actor
+    if request.exit_evidence is not None:
+        fields["exit_evidence"] = dict(request.exit_evidence)
+    return fields
 
 
 def _attach_approval_channel(
