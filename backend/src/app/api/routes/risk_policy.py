@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
@@ -22,7 +22,7 @@ from app.schemas.risk_policy import (
     RiskPolicyView,
 )
 from app.security.rate_limit import tenant_rate_limit_dependency
-from app.security.rbac import OwnerDep, ReaderDep, TraderDep
+from app.security.rbac import ReaderDep, TraderDep
 from app.security.tenant import TenantContext
 from app.security.tokens import decode_access_token
 from app.services.audit_service import AuditService
@@ -30,6 +30,7 @@ from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.governance import PolicyActor, channel_from_access_payload
 from app.services.risk_policy.persistence import RiskPolicyService
 from app.services.risk_policy.profile import PolicyKind, canonical_profile, profile_from_canonical
+from app.services.risk_policy.proof import decode_apply_proof
 
 router = APIRouter(prefix="/policy", tags=["risk-policy"])
 _bearer = HTTPBearer(auto_error=False)
@@ -178,6 +179,20 @@ def propose_risk_policy(
     )
 
 
+_APPLY_REFUSAL = {
+    "apply_refuses_agent_token",
+    "apply_refuses_service_token",
+    "apply_refuses_bot_token",
+    "apply_requires_human_proof",
+    "apply_owner_mismatch",
+    "apply_proof_missing",
+    "apply_proof_expired",
+    "apply_proof_not_fresh",
+    "apply_proof_chat_mismatch",
+    "apply_proof_proposal_mismatch",
+}
+
+
 @router.post(
     "/proposals/{proposal_id}/apply",
     response_model=RiskPolicyVersionResponse,
@@ -185,38 +200,46 @@ def propose_risk_policy(
 )
 def apply_risk_policy(
     proposal_id: str,
-    payload: RiskPolicyApplyRequest,
-    tenant: OwnerDep,
+    tenant: ReaderDep,
     session: SessionDep,
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     settings: Settings = Depends(get_settings),
+    body: RiskPolicyApplyRequest | None = None,
 ) -> RiskPolicyVersionResponse:
     from uuid import UUID
 
+    del body
     actor = _actor(tenant, credentials, settings)
     try:
         proposal = UUID(proposal_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="proposal_id_invalid") from exc
+    proof_token = request.headers.get("x-risk-policy-proof")
+    now = datetime.now(UTC)
+    proof = None
+    if proof_token:
+        try:
+            proof = decode_apply_proof(proof_token, settings, proposal_id=proposal, now=now)
+        except RiskPolicyRejected as exc:
+            raise HTTPException(status_code=403, detail=exc.code) from exc
     try:
         row = _service(session).apply(
             organization_id=tenant.organization_id,
             proposal_id=proposal,
             actor=actor,
-            confirmed=payload.confirm,
-            now=datetime.now(UTC),
+            proof=proof,
+            owner_user_id=settings.risk_policy_owner_user_id,
+            pinned_telegram_chat_id=settings.telegram_chat_id,
+            now=now,
         )
         session.commit()
     except RiskPolicyRejected as exc:
-        # The refusal audit is flushed on the caller's session. Commit only the
-        # human-channel refusal so that row survives; every other rejection
-        # wrote no version and must not be committed.
-        if exc.code == "apply_requires_human":
+        if exc.code in _APPLY_REFUSAL:
             session.commit()
-        else:
-            session.rollback()
-        status = 403 if exc.code == "apply_requires_human" else 422
-        raise HTTPException(status_code=status, detail=exc.code) from exc
+            raise HTTPException(status_code=403, detail=exc.code) from exc
+        session.rollback()
+        raise HTTPException(status_code=422, detail=exc.code) from exc
     return RiskPolicyVersionResponse(
         id=row.id,
         kind=row.kind,

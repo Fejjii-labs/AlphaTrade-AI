@@ -105,7 +105,7 @@ def idem_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
                 organization_id=ORG_ID,
                 user_id=USER_ID,
                 default_account_balance=Decimal("100000"),
-                max_risk_per_trade_percent=Decimal("1"),
+                max_risk_per_trade_percent=Decimal("5"),
             )
         )
         session.commit()
@@ -437,7 +437,7 @@ def test_concurrent_identical_requests_remain_safe(
                 organization_id=ORG_ID,
                 user_id=USER_ID,
                 default_account_balance=Decimal("100000"),
-                max_risk_per_trade_percent=Decimal("1"),
+                max_risk_per_trade_percent=Decimal("5"),
             )
         )
         pid, aid = _seed_approved(session)

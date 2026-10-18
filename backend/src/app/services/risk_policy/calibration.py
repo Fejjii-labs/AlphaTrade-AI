@@ -22,9 +22,10 @@ from itertools import pairwise
 
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GRADER_VERSION
-from app.services.risk_policy.profile import TRADABLE_GRADES, Grade
+from app.services.risk_policy.profile import TRADABLE_GRADES, Grade, RiskPolicyProfile
 
 MIN_TRADES = 100
+PLACEHOLDER_RISK_PERCENT = Decimal("1")
 # One-sided 90% normal quantile.
 _Z_90 = Decimal("1.6448536269514722")
 
@@ -100,6 +101,26 @@ def promotion_report(
         auto_demotion=demotions,
         promotion_applied=False,
     )
+
+
+def assert_promotion_allows(profile: RiskPolicyProfile, report: PromotionReport | None) -> None:
+    """A tradable grade above the 1% placeholder needs a stored eligible report.
+
+    The report must be for the current grader version. Promotion itself stays manual.
+    """
+
+    above = any(profile.risk_percent(grade) > PLACEHOLDER_RISK_PERCENT for grade in TRADABLE_GRADES)
+    if not above:
+        return
+    if (
+        report is None
+        or report.grader_version != GRADER_VERSION
+        or not report.eligible
+        or not report.ordered
+        or not report.walk_forward_ok
+        or report.promotion_applied
+    ):
+        raise RiskPolicyRejected("grade_above_one_percent_requires_promotion")
 
 
 def promote(*_args: object, **_kwargs: object) -> None:

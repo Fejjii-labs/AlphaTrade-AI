@@ -11,6 +11,8 @@ keep revoked or expired authorizations. ``a15reissueauth001`` allows that
 history and keeps a single AVAILABLE or CONSUMED row per approval.
 ``a16riskpolicy001`` adds the grade-based risk-policy tables. Applied
 versions are immutable and stay inside the code ceilings.
+``a17riskpolicy002`` adds the Postgres immutability trigger, version
+cancellations, stored promotion reports, and breaker resets.
 
 Tenant-scoped resources carry ``organization_id``; vectors live in Qdrant while
 document/chunk metadata lives here.
@@ -97,12 +99,15 @@ from app.db.paper_evaluation import (
 )
 from app.db.public_market_observations import PublicMarketObservationRow  # noqa: F401
 from app.db.risk_policy import (  # noqa: F401
+    RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
     RiskPolicyCalibrationSample,
     RiskPolicyGradeBinding,
+    RiskPolicyPromotionReportRow,
     RiskPolicyProposal,
     RiskPolicyTradeRecord,
     RiskPolicyVersion,
+    RiskPolicyVersionCancellation,
 )
 from app.db.runtime_status import ControlledRuntimeStatusRow  # noqa: F401
 from app.db.setup_lifetime import SetupLifetimePin  # noqa: F401

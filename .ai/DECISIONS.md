@@ -2,6 +2,49 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-108 — Griller follow-up on the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: The follow-up review of the grade-based risk policy (PR #278 at
+  `895ca71f`) is accepted as changes, not as a merge. Real-money trading
+  stays blocked. Both autonomous flags stay off. No BloFin write path is
+  added. Alembic `a17riskpolicy002` revises `a16riskpolicy001`.
+- `risk_percent` in the rule engine applies only when the caller sets
+  `autonomous_sizing`. Human paper execution still copies
+  `max_risk_per_trade_percent` (the settings API allows up to 10%) and
+  strategy replays still pass 2-5%. Those paths do not opt in, so they
+  behave as they did before the policy tables existed.
+- Apply is not "any owner role" and a missing `actor` claim is not a human.
+  Apply requires the configured `risk_policy_owner_user_id` plus a separate
+  proof: a fresh interactive session with step-up or re-auth (15 minutes),
+  or a confirmation from the pinned Telegram owner chat
+  (`telegram_chat_id`). Service, agent, and bot tokens are refused. The
+  apply body has no `confirm` field. The stored version channel remains
+  `human` because the proof is what makes the apply human.
+- Loosening becomes effective at `max(next UTC midnight, apply time + 24h)`.
+  A proposal older than 72 hours cannot be applied. If a breaker is active
+  when a scheduled loosening comes due, that version is cancelled and does
+  not activate after the breaker clears.
+- A tradable grade above the 1% placeholder is refused, on apply and on
+  sizing, unless a stored promotion report for `deterministic-grade/v1`
+  meets the existing calibration criteria. `promote()` still always refuses.
+- R includes the exit-leg fee at the stop price. Funding is expected
+  holding periods times the funding rate. Quantity is rounded down to the
+  instrument lot step, refused below the minimum quantity, and R is
+  recomputed after that rounding. A non-positive stop is refused. The
+  remaining daily budget used for sizing is
+  `min(profile daily, 6% ceiling, remaining daily)`.
+- Postgres refuses UPDATE and DELETE of `risk_policy_versions` with a
+  trigger. Downgrade of `a16riskpolicy001` refuses when trade records or
+  breaker-state rows exist. Breaker pause, loss count, realized P&L, and
+  unrealized P&L are persisted. A drawdown reset is an append-only row
+  carrying the actor. The daily breaker uses realized plus unrealized P&L.
+- Left for a later wiring pull request, not this change: an atomic budget
+  reservation, server-side open-risk computation, and the isolated-versus-cross
+  margin mismatch on the demo path. Connecting `ExchangeMarginWriter` still
+  needs its own pull request, a Griller review, and a further ADR.
+- Reference: AT-ADR-107; Griller review of PR #278, 2026-10-18.
+
 ## AT-ADR-107 — Grade-based risk policy is versioned, and ceilings fail closed
 
 - Date: 2026-10-18

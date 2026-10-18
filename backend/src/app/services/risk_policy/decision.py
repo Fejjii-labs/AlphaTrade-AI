@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from uuid import UUID
 
 from app.services.risk_policy.adjusters import AdjusterInputs, apply_adjusters
 from app.services.risk_policy.breakers import BreakerVerdict
+from app.services.risk_policy.calibration import PromotionReport
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision, apply_ai_grade
 from app.services.risk_policy.liquidation import (
@@ -40,6 +41,7 @@ def decide_trade(
     tiers: tuple[MaintenanceTier, ...] | list[MaintenanceTier] | None,
     ai_suggested_grade: Grade | None = None,
     ai_explanation: str | None = None,
+    promotion: PromotionReport | None = None,
 ) -> TradeDecision:
     """Accept a new trade or return a refusal. Does not place an order."""
 
@@ -58,25 +60,12 @@ def decide_trade(
         adjusted = apply_adjusters(profile.risk_percent(grade.grade), adjusters)
         sized = size_trade(
             profile,
-            SizingInput(
-                equity=sizing.equity,
-                entry=sizing.entry,
-                stop=sizing.stop,
-                direction=sizing.direction,
+            replace(
+                sizing,
                 grade=grade.grade,
                 grade_risk_percent=adjusted.adjusted_risk_percent,
-                atr=sizing.atr,
-                gap_beyond_stop=sizing.gap_beyond_stop,
-                fee_rate=sizing.fee_rate,
-                funding_rate=sizing.funding_rate,
-                slippage_rate=sizing.slippage_rate,
-                remaining_daily_budget_percent=sizing.remaining_daily_budget_percent,
-                open_risk_percent=sizing.open_risk_percent,
-                open_notional=sizing.open_notional,
-                open_positions=sizing.open_positions,
-                leverage=sizing.leverage,
-                margin_mode=sizing.margin_mode,
             ),
+            promotion=promotion,
         )
     except RiskPolicyRejected as exc:
         return TradeDecision(False, exc.code, None, None)

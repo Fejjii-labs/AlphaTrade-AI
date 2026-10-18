@@ -37,9 +37,11 @@ class RiskPolicyProposeRequest(StrictModel):
 
 
 class RiskPolicyApplyRequest(StrictModel):
-    """``confirm`` is required when the change loosens a limit."""
+    """Apply has no confirmation field.
 
-    confirm: bool = False
+    Confirmation is a separate proof (step-up or the pinned Telegram owner
+    chat), not a boolean in this body.
+    """
 
 
 class RiskPolicyProposalResponse(StrictModel):

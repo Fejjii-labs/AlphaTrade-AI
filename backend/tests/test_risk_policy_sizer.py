@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from uuid import uuid4
 
 import pytest
@@ -39,7 +39,10 @@ def _order(**overrides: object) -> SizingInput:
         "gap_beyond_stop": Decimal("0"),
         "fee_rate": Decimal("0"),
         "funding_rate": Decimal("0"),
+        "funding_periods": Decimal("0"),
         "slippage_rate": Decimal("0"),
+        "lot_step": Decimal("0.00000001"),
+        "min_quantity": Decimal("0.00000001"),
         "remaining_daily_budget_percent": Decimal("6"),
         "open_risk_percent": Decimal("0"),
         "open_notional": Decimal("0"),
@@ -162,6 +165,88 @@ def test_concurrent_trades_that_each_fit_are_refused_together() -> None:
     assert sequential.value.code == "budget_exhausted"
 
 
+def test_exit_leg_fee_and_funding_periods_are_inside_r() -> None:
+    profile = _wide()
+    fee = Decimal("0.0006")
+    sized = size_trade(profile, _order(entry=Decimal("100"), stop=Decimal("98"), fee_rate=fee))
+    unit = Decimal("100") * fee + Decimal("98") * fee
+    assert unit == Decimal("0.1188")
+    adverse = Decimal("2")
+    step = Decimal("0.00000001")
+    quantity = ((Decimal("100") / (adverse + unit)) / step).to_integral_value(ROUND_DOWN) * step
+    cost = (quantity * unit).quantize(step, rounding=ROUND_DOWN)
+    price_risk = (quantity * adverse).quantize(step, rounding=ROUND_DOWN)
+    assert sized.quantity == quantity
+    assert sized.cost_amount == cost
+    assert sized.cost_share_of_r == cost / (price_risk + cost)
+    entry_only = Decimal("100") * fee
+    assert sized.cost_share_of_r > entry_only / (adverse + entry_only)
+    funded = size_trade(
+        profile,
+        _order(fee_rate=Decimal("0"), funding_rate=Decimal("0.0001"), funding_periods=Decimal("3")),
+    )
+    funding_unit = Decimal("100") * Decimal("0.0001") * Decimal("3")
+    assert funding_unit == Decimal("0.03")
+    funded_qty = ((Decimal("100") / (adverse + funding_unit)) / step).to_integral_value(
+        ROUND_DOWN
+    ) * step
+    assert funded.quantity == funded_qty
+    assert funded.cost_amount == (funded_qty * funding_unit).quantize(step, rounding=ROUND_DOWN)
+
+
+def test_lot_step_rounds_down_and_refuses_below_the_minimum() -> None:
+    profile = _wide()
+    sized = size_trade(
+        profile,
+        _order(stop=Decimal("97.9"), lot_step=Decimal("0.001"), min_quantity=Decimal("0.01")),
+    )
+    assert sized.quantity == Decimal("47.619")
+    assert sized.quantity % Decimal("0.001") == 0
+    assert sized.risk_amount == Decimal("99.9999")
+    assert sized.risk_amount < Decimal("100")
+    with pytest.raises(RiskPolicyRejected) as caught:
+        size_trade(
+            profile,
+            _order(
+                equity=Decimal("1.92"),
+                lot_step=Decimal("0.001"),
+                min_quantity=Decimal("0.01"),
+            ),
+        )
+    assert caught.value.code == "below_min_quantity"
+
+
+def test_negative_stop_is_refused_and_daily_room_is_capped() -> None:
+    profile = profile_with(
+        PolicyKind.DEMO,
+        daily_loss_limit_percent=Decimal("4"),
+        max_aggregate_open_risk_percent=Decimal("6"),
+        max_notional_per_trade_percent=Decimal("80"),
+        max_aggregate_notional_percent=Decimal("90"),
+        max_open_positions=2,
+        max_leverage=Decimal("5"),
+    )
+    with pytest.raises(RiskPolicyRejected) as negative:
+        size_trade(profile, _order(stop=Decimal("-1")))
+    assert negative.value.code == "stop_not_positive"
+    with pytest.raises(RiskPolicyRejected) as zero:
+        size_trade(profile, _order(stop=Decimal("0")))
+    assert zero.value.code == "stop_not_positive"
+    room = size_trade(profile, _order(remaining_daily_budget_percent=Decimal("10")))
+    assert room.budget_room_percent == Decimal("4")
+    ceiling = profile_with(
+        PolicyKind.DEMO,
+        daily_loss_limit_percent=Decimal("6"),
+        max_aggregate_open_risk_percent=Decimal("6"),
+        max_notional_per_trade_percent=Decimal("80"),
+        max_aggregate_notional_percent=Decimal("90"),
+        max_open_positions=2,
+        max_leverage=Decimal("5"),
+    )
+    capped = size_trade(ceiling, _order(remaining_daily_budget_percent=Decimal("10")))
+    assert capped.budget_room_percent == Decimal("6")
+
+
 def test_cross_margin_and_wrong_side_stop_refuse() -> None:
     profile = _wide()
     with pytest.raises(RiskPolicyRejected) as mode:
@@ -282,6 +367,7 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
             equity_peak=Decimal("100"),
             reference_equity=Decimal("100"),
             realized_pnl_today=Decimal("0"),
+            unrealized_pnl_today=Decimal("0"),
             consecutive_losses=0,
             drawdown_latched=False,
             now=datetime(2026, 10, 18, tzinfo=UTC),

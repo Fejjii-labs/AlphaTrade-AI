@@ -29,6 +29,7 @@ class BreakerSnapshot:
     equity_peak: Decimal
     reference_equity: Decimal
     realized_pnl_today: Decimal
+    unrealized_pnl_today: Decimal
     consecutive_losses: int
     drawdown_latched: bool
     now: datetime
@@ -69,8 +70,12 @@ def evaluate_breakers(config: BreakerConfig, snapshot: BreakerSnapshot) -> Break
         peak = snapshot.equity
     drawdown_percent = (peak - snapshot.equity) / peak * Decimal("100")
     drawdown_hit = snapshot.drawdown_latched or drawdown_percent >= config.drawdown_breaker_percent
+    unrealized = snapshot.unrealized_pnl_today
+    if not isinstance(unrealized, Decimal) or not unrealized.is_finite():
+        raise RiskPolicyRejected("unrealized_pnl_invalid")
+    daily_pnl = snapshot.realized_pnl_today + unrealized
     daily_limit = snapshot.reference_equity * config.daily_loss_limit_percent / Decimal("100")
-    daily_hit = snapshot.realized_pnl_today <= -daily_limit and snapshot.realized_pnl_today < 0
+    daily_hit = daily_pnl <= -daily_limit and daily_pnl < 0
     consecutive_hit = snapshot.consecutive_losses >= config.consecutive_loss_limit
     pause = next_utc_day(snapshot.now) if daily_hit or consecutive_hit else None
     return BreakerVerdict(

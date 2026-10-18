@@ -41,6 +41,9 @@ class RiskEvaluationContext:
     # PR 258 account ledger. Both must be set together. Equal caps fail closed.
     ledger_max_symbol_notional: Decimal | None = None
     ledger_max_notional: Decimal | None = None
+    # The grade-policy ceiling applies only when autonomous sizing opted in.
+    # Human paper execution and strategy replays leave this false.
+    autonomous_sizing: bool = False
 
 
 def _rule(
@@ -286,15 +289,18 @@ def check_overtrading(
 def check_risk_percent(
     req: RiskCheckRequest, _limits: RiskLimits, ctx: RiskEvaluationContext
 ) -> TriggeredRule | None:
-    """Enforce the optional ``risk_percent`` plug-in and the 258 symbol cap.
+    """Enforce grade-policy risk only for autonomous sizing.
 
-    The field is the trade's risk in percent points. Above the code ceiling
-    (or a tighter active profile cap) the trade is blocked. When the caller
-    supplies the account ledger, a symbol cap that is not strictly below total
-    notional is the unverified fallback and is also blocked. Missing both the
-    field and the ledger leaves this rule idle so older callers stay unchanged.
+    Human paper execution copies ``max_risk_per_trade_percent`` (the settings
+    API allows up to 10%) into ``risk_percent``. Strategy replays pass 2-5%.
+    Those callers leave ``autonomous_sizing`` false, and this rule stays idle
+    so their previous allow path is unchanged. Autonomous sizing opts in and
+    is then held to the code ceiling, the active profile cap, and the PR 258
+    ledger independence check.
     """
 
+    if not ctx.autonomous_sizing:
+        return None
     ledger_supplied = (
         ctx.ledger_max_symbol_notional is not None or ctx.ledger_max_notional is not None
     )

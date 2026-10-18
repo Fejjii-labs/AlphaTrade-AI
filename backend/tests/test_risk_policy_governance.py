@@ -4,20 +4,28 @@ from __future__ import annotations
 
 import ast
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.types import Indicators, MarketStructure
 from app.db.base import Base
 from app.db.models import AuditLog, Organization
-from app.db.risk_policy import RiskPolicyVersion
+from app.db.risk_policy import (
+    RiskPolicyBreakerReset,
+    RiskPolicyBreakerState,
+    RiskPolicyProposal,
+    RiskPolicyVersion,
+    RiskPolicyVersionCancellation,
+)
 from app.schemas.common import AuditEventType, RiskAction, RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
+from app.schemas.risk_policy import RiskPolicyApplyRequest
 from app.services.audit_service import AuditService
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
@@ -30,11 +38,19 @@ from app.services.risk_policy.breakers import (
 )
 from app.services.risk_policy.calibration import (
     CalibrationSample,
+    PromotionReport,
     promote,
     promotion_report,
 )
+from app.services.risk_policy.clock import loosening_effective_at
 from app.services.risk_policy.errors import RiskPolicyRejected
-from app.services.risk_policy.governance import PolicyActor, PolicyChannel
+from app.services.risk_policy.governance import (
+    HumanApplyProof,
+    PolicyActor,
+    PolicyChannel,
+    assert_can_apply,
+    channel_from_access_payload,
+)
 from app.services.risk_policy.grader import GRADER_VERSION, GradeBook, apply_ai_grade, grade_setup
 from app.services.risk_policy.ledger import caps_for_ledger
 from app.services.risk_policy.persistence import RiskPolicyService
@@ -56,6 +72,37 @@ def _human() -> PolicyActor:
 
 def _agent() -> PolicyActor:
     return PolicyActor("agent-1", PolicyChannel.AGENT, True)
+
+
+def _proof(proposal: RiskPolicyProposal, now: datetime = NOW) -> HumanApplyProof:
+    proposal_id = str(proposal.id)
+    content_hash = str(proposal.content_hash)
+    return HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=now + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=now - timedelta(minutes=1),
+        step_up_at=now - timedelta(seconds=20),
+    )
+
+
+def _apply(
+    service: RiskPolicyService,
+    proposal: RiskPolicyProposal,
+    actor: PolicyActor,
+    now: datetime = NOW,
+):
+    return service.apply(
+        organization_id=ORG,
+        proposal_id=proposal.id,
+        actor=actor,
+        proof=_proof(proposal, now),
+        owner_user_id="sofien",
+        now=now,
+    )
 
 
 def _indicators(rsi: float | None, hist: float | None) -> Indicators:
@@ -151,6 +198,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             equity_peak=Decimal("100"),
             reference_equity=Decimal("100"),
             realized_pnl_today=Decimal("-2"),
+            unrealized_pnl_today=Decimal("0"),
             consecutive_losses=0,
             drawdown_latched=False,
             now=NOW,
@@ -165,6 +213,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             equity_peak=Decimal("100"),
             reference_equity=Decimal("100"),
             realized_pnl_today=Decimal("0"),
+            unrealized_pnl_today=Decimal("0"),
             consecutive_losses=4,
             drawdown_latched=False,
             now=NOW,
@@ -179,6 +228,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             equity_peak=Decimal("100"),
             reference_equity=Decimal("100"),
             realized_pnl_today=Decimal("0"),
+            unrealized_pnl_today=Decimal("0"),
             consecutive_losses=0,
             drawdown_latched=False,
             now=NOW,
@@ -191,6 +241,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
         equity_peak=Decimal("100"),
         reference_equity=Decimal("100"),
         realized_pnl_today=Decimal("0"),
+        unrealized_pnl_today=Decimal("0"),
         consecutive_losses=0,
         drawdown_latched=True,
         now=NOW,
@@ -206,6 +257,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
         equity_peak=Decimal("100"),
         reference_equity=Decimal("100"),
         realized_pnl_today=Decimal("0"),
+        unrealized_pnl_today=Decimal("0"),
         consecutive_losses=0,
         drawdown_latched=True,
         now=NOW,
@@ -231,10 +283,11 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
             organization_id=ORG,
             proposal_id=proposal.id,
             actor=_agent(),
-            confirmed=True,
+            proof=_proof(proposal),
+            owner_user_id="sofien",
             now=NOW,
         )
-    assert refused.value.code == "apply_requires_human"
+    assert refused.value.code == "apply_refuses_agent_token"
     assert session.scalar(select(RiskPolicyVersion.id)) is None
     refusal = session.scalar(
         select(AuditLog).where(AuditLog.action == AuditEventType.RISK_POLICY_APPLY_REFUSED)
@@ -253,17 +306,12 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
             organization_id=ORG,
             proposal_id=bot.id,
             actor=PolicyActor("bot-1", PolicyChannel.BOT, True),
-            confirmed=True,
+            proof=None,
+            owner_user_id="sofien",
             now=NOW,
         )
-    assert bot_refused.value.code == "apply_requires_human"
-    applied = service.apply(
-        organization_id=ORG,
-        proposal_id=proposal.id,
-        actor=_human(),
-        confirmed=False,
-        now=NOW,
-    )
+    assert bot_refused.value.code == "apply_refuses_bot_token"
+    applied = _apply(service, proposal, _human())
     assert applied.change_class == "initial"
     assert applied.effective_at == NOW
     assert applied.actor_channel == "human"
@@ -271,13 +319,7 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     tight_proposal = service.propose(
         organization_id=ORG, actor=_human(), profile=tighter, reason="Cut the daily loss.", now=NOW
     )
-    tight = service.apply(
-        organization_id=ORG,
-        proposal_id=tight_proposal.id,
-        actor=_human(),
-        confirmed=False,
-        now=NOW,
-    )
+    tight = _apply(service, tight_proposal, _human())
     assert tight.change_class == "tightening"
     assert tight.effective_at == NOW
     looser = placeholder_profile(PolicyKind.DEMO)
@@ -293,40 +335,27 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
             organization_id=ORG,
             proposal_id=loose_proposal.id,
             actor=_human(),
-            confirmed=False,
+            proof=None,
+            owner_user_id="sofien",
             now=NOW,
         )
-    assert unconfirmed.value.code == "loosening_requires_confirmation"
+    assert unconfirmed.value.code == "apply_proof_missing"
     service.latch_drawdown(
         organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=NOW
     )
     with pytest.raises(RiskPolicyRejected) as blocked:
-        service.apply(
-            organization_id=ORG,
-            proposal_id=loose_proposal.id,
-            actor=_human(),
-            confirmed=True,
-            now=NOW,
-        )
+        _apply(service, loose_proposal, _human())
     assert blocked.value.code == "loosening_blocked_by_breaker"
     session.query(RiskPolicyVersion).all()  # keep the import path honest
     state = session.scalars(select(RiskPolicyVersion)).all()
     latched = next(row for row in state if row.id)
-    from app.db.risk_policy import RiskPolicyBreakerState
-
     breaker = session.scalar(select(RiskPolicyBreakerState))
     assert breaker is not None
     breaker.drawdown_latched = False
     session.flush()
-    scheduled = service.apply(
-        organization_id=ORG,
-        proposal_id=loose_proposal.id,
-        actor=_human(),
-        confirmed=True,
-        now=NOW,
-    )
+    scheduled = _apply(service, loose_proposal, _human())
     assert scheduled.change_class == "loosening"
-    assert scheduled.effective_at == datetime(2026, 10, 19, tzinfo=UTC)
+    assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
     current, active, waiting = service.read(organization_id=ORG, kind=PolicyKind.DEMO, now=NOW)
     assert active is not None and active.id == tight.id
     assert current.daily_loss_limit_percent == Decimal("0.5")
@@ -334,7 +363,7 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     later, active_later, _waiting = service.read(
         organization_id=ORG,
         kind=PolicyKind.DEMO,
-        now=datetime(2026, 10, 19, tzinfo=UTC),
+        now=datetime(2026, 10, 19, 15, tzinfo=UTC),
     )
     assert active_later is not None and active_later.id == scheduled.id
     assert later.daily_loss_limit_percent == Decimal("1")
@@ -368,6 +397,7 @@ def test_risk_percent_rule_enforces_the_ceiling_and_the_ledger() -> None:
         )
         context = RiskEvaluationContext(
             is_weekend=False,
+            autonomous_sizing=True,
             profile_risk_percent_cap=kwargs.get("cap"),  # type: ignore[arg-type]
             ledger_max_symbol_notional=kwargs.get("symbol_cap"),  # type: ignore[arg-type]
             ledger_max_notional=kwargs.get("notional"),  # type: ignore[arg-type]
@@ -444,3 +474,381 @@ def test_exchange_margin_module_imports_no_blofin_client() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.append(node.module)
     assert all("blofin" not in name for name in imported)
+
+
+def _grades(a_plus: str = "1") -> dict[Grade, Decimal]:
+    grades = {grade: Decimal("1") for grade in GRADE_ORDER}
+    grades[Grade.A_PLUS] = Decimal(a_plus)
+    grades[Grade.C] = Decimal("0")
+    return grades
+
+
+def _eligible_report() -> PromotionReport:
+    def samples(grade: Grade, r_multiple: str) -> list[CalibrationSample]:
+        return [
+            CalibrationSample(
+                grade=grade,
+                grader_version=GRADER_VERSION,
+                r_multiple=Decimal(r_multiple),
+                in_sample=False,
+                walk_forward_fold=1 if index < 50 else 2,
+                slippage_r=Decimal("0.01"),
+            )
+            for index in range(100)
+        ]
+
+    return promotion_report(
+        samples(Grade.A_PLUS, "0.40")
+        + samples(Grade.A, "0.30")
+        + samples(Grade.B_PLUS, "0.20")
+        + samples(Grade.B, "0.10")
+    )
+
+
+def test_human_paper_and_backtest_risk_percent_stay_idle() -> None:
+    """Settings allow 10% and replays use 2-5%. Only autonomous sizing is capped."""
+
+    engine = RiskEngine()
+
+    def check(risk: Decimal) -> object:
+        request = RiskCheckRequest(
+            symbol="BTCUSDT",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("60000"),
+            position_size=Decimal("0.005"),
+            leverage=Decimal("1"),
+            account_equity=Decimal("10000"),
+            stop_loss=Decimal("59000"),
+            volume_24h=Decimal("50000000"),
+            risk_percent=risk,
+        )
+        return engine.evaluate(request, context=RiskEvaluationContext(is_weekend=False))
+
+    paper = check(Decimal("3"))
+    backtest = check(Decimal("5"))
+    assert paper.action is RiskAction.ALLOW  # type: ignore[attr-defined]
+    assert backtest.action is RiskAction.ALLOW  # type: ignore[attr-defined]
+    assert all(item.rule_id is not RiskRuleId.RISK_PERCENT for item in paper.triggered_rules)
+    assert all(item.rule_id is not RiskRuleId.RISK_PERCENT for item in backtest.triggered_rules)
+
+
+def test_apply_requires_owner_proof_and_refuses_service_and_agent_tokens() -> None:
+    missing = channel_from_access_payload({"type": "access", "sub": "sofien"})
+    assert missing is PolicyChannel.UNDECLARED
+    agent = channel_from_access_payload({"type": "access", "actor": "agent"})
+    assert agent is PolicyChannel.AGENT
+    service_channel = channel_from_access_payload({"type": "access", "actor": "service"})
+    assert service_channel is PolicyChannel.SERVICE
+    with pytest.raises(ValidationError):
+        RiskPolicyApplyRequest.model_validate({"confirm": True})
+    session = _session()
+    service = _service(session)
+    with pytest.raises(RiskPolicyRejected) as service_token:
+        service.propose(
+            organization_id=ORG,
+            actor=PolicyActor("svc", PolicyChannel.SERVICE, True),
+            profile=placeholder_profile(PolicyKind.DEMO),
+            reason="Service tokens do not propose.",
+            now=NOW,
+        )
+    assert service_token.value.code == "service_token_refused"
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Owner apply with a proof.",
+        now=NOW,
+    )
+    stale = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=str(proposal.id),
+        content_hash=proposal.content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=NOW - timedelta(minutes=16),
+        step_up_at=NOW - timedelta(minutes=16),
+    )
+    with pytest.raises(RiskPolicyRejected) as fresh:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=_human(),
+            proof=stale,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert fresh.value.code == "apply_proof_not_fresh"
+    with pytest.raises(RiskPolicyRejected) as owner:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=PolicyActor("other-owner", PolicyChannel.HUMAN, True),
+            proof=_proof(proposal),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert owner.value.code == "apply_owner_mismatch"
+    wrong_chat = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=str(proposal.id),
+        content_hash=proposal.content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        telegram_chat_id="someone-else",
+        telegram_confirmation_id="confirm-1",
+    )
+    with pytest.raises(RiskPolicyRejected) as chat:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
+            proof=wrong_chat,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert chat.value.code == "apply_proof_chat_mismatch"
+    with pytest.raises(RiskPolicyRejected) as service_apply:
+        assert_can_apply(
+            PolicyActor("svc", PolicyChannel.SERVICE, True),
+            _proof(proposal),
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            proposal_id=str(proposal.id),
+            content_hash=proposal.content_hash,
+            now=NOW,
+        )
+    assert service_apply.value.code == "apply_refuses_service_token"
+    telegram = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=str(proposal.id),
+        content_hash=proposal.content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        telegram_chat_id="pinned-owner-chat",
+        telegram_confirmation_id="confirm-1",
+    )
+    applied = service.apply(
+        organization_id=ORG,
+        proposal_id=proposal.id,
+        actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
+        proof=telegram,
+        owner_user_id="sofien",
+        pinned_telegram_chat_id="pinned-owner-chat",
+        now=NOW,
+    )
+    assert applied.actor_channel == "human"
+    assert applied.change_class == "initial"
+
+
+def test_loosening_waits_for_midnight_and_twenty_four_hours_and_proposals_expire() -> None:
+    late = datetime(2026, 10, 18, 23, 59, 59, tzinfo=UTC)
+    assert loosening_effective_at(late) == datetime(2026, 10, 19, 23, 59, 59, tzinfo=UTC)
+    session = _session()
+    service = _service(session)
+    initial = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Initial profile before the late loosening.",
+        now=NOW,
+    )
+    _apply(service, initial, _human())
+    tighter = profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5"))
+    tight = service.propose(
+        organization_id=ORG, actor=_human(), profile=tighter, reason="Tighten before late.", now=NOW
+    )
+    _apply(service, tight, _human())
+    restore = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Restore after a late apply.",
+        now=late,
+    )
+    scheduled = _apply(service, restore, _human(), late)
+    assert scheduled.effective_at == datetime(2026, 10, 19, 23, 59, 59, tzinfo=UTC)
+    expired_at = NOW - timedelta(hours=72, seconds=1)
+    expired = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=profile_with(PolicyKind.STANDARD, daily_loss_limit_percent=Decimal("0.5")),
+        reason="This proposal is older than 72 hours.",
+        now=expired_at,
+    )
+    with pytest.raises(RiskPolicyRejected) as caught:
+        _apply(service, expired, _human())
+    assert caught.value.code == "proposal_expired"
+
+
+def test_activation_cancels_a_loosening_when_a_breaker_is_active() -> None:
+    session = _session()
+    service = _service(session)
+    initial = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Initial before the cancelled loosening.",
+        now=NOW,
+    )
+    _apply(service, initial, _human())
+    tighter = profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5"))
+    tight_proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=tighter,
+        reason="The version that must stay active.",
+        now=NOW,
+    )
+    tight = _apply(service, tight_proposal, _human())
+    loose = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Scheduled loosening that a breaker should cancel.",
+        now=NOW,
+    )
+    scheduled = _apply(service, loose, _human())
+    effective = datetime(2026, 10, 19, 15, tzinfo=UTC)
+    assert scheduled.effective_at == effective
+    service.latch_drawdown(
+        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=effective
+    )
+    current, active, _waiting = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=effective
+    )
+    assert active is not None and active.id == tight.id
+    assert current.daily_loss_limit_percent == Decimal("0.5")
+    cancelled = session.scalar(select(RiskPolicyVersionCancellation))
+    assert cancelled is not None
+    assert cancelled.version_id == scheduled.id
+    assert cancelled.reason == "breaker_active_at_activation"
+    breaker = session.scalar(select(RiskPolicyBreakerState))
+    assert breaker is not None
+    breaker.drawdown_latched = False
+    session.flush()
+    again, active_again, _waiting_again = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=effective
+    )
+    assert active_again is not None and active_again.id == tight.id
+    assert again.daily_loss_limit_percent == Decimal("0.5")
+    assert session.scalar(select(RiskPolicyVersionCancellation)) is not None
+
+
+def test_grade_above_one_percent_requires_a_stored_promotion_report() -> None:
+    raised = profile_with(PolicyKind.DEMO, risk_percent_by_grade=_grades("1.5"))
+    session = _session()
+    service = _service(session)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=raised,
+        reason="Raise A+ only after a stored report.",
+        now=NOW,
+    )
+    with pytest.raises(RiskPolicyRejected) as refused:
+        _apply(service, proposal, _human())
+    assert refused.value.code == "grade_above_one_percent_requires_promotion"
+    from app.services.risk_policy.sizer import size_trade
+
+    with pytest.raises(RiskPolicyRejected) as sized:
+        size_trade(raised, _sizing_order())
+    assert sized.value.code == "grade_above_one_percent_requires_promotion"
+    report = _eligible_report()
+    assert report.eligible
+    service.store_promotion_report(organization_id=ORG, report=report, now=NOW)
+    applied = _apply(service, proposal, _human())
+    assert applied.risk_percent_a_plus == Decimal("1.5")
+    allowed = size_trade(raised, _sizing_order(), promotion=report)
+    assert allowed.profile_risk_percent == Decimal("1.5")
+
+
+def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> None:
+    config = BreakerConfig(Decimal("1"), Decimal("10"), 4)
+    verdict = evaluate_breakers(
+        config,
+        BreakerSnapshot(
+            equity=Decimal("100"),
+            equity_peak=Decimal("100"),
+            reference_equity=Decimal("100"),
+            realized_pnl_today=Decimal("0"),
+            unrealized_pnl_today=Decimal("-2"),
+            consecutive_losses=0,
+            drawdown_latched=False,
+            now=NOW,
+        ),
+    )
+    assert verdict.daily_loss_active
+    assert verdict.paused_until == datetime(2026, 10, 19, tzinfo=UTC)
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    pause = datetime(2026, 10, 19, tzinfo=UTC)
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("-10"),
+        unrealized_pnl=Decimal("-5"),
+        daily_paused_until=pause,
+        consecutive_paused_until=pause,
+        drawdown_latched=True,
+        now=NOW,
+    )
+    assert service.breaker_active(organization_id=ORG, now=NOW)
+    with pytest.raises(RiskPolicyRejected) as agent:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_agent(),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert agent.value.code == "drawdown_reset_requires_human"
+    service.reset_drawdown_latch(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        owner_user_id="sofien",
+        now=NOW,
+    )
+    assert service.breaker_active(organization_id=ORG, now=NOW)
+    reset = session.scalar(select(RiskPolicyBreakerReset))
+    assert reset is not None
+    assert reset.actor_id == "sofien"
+    assert reset.actor_channel == "human"
+    state = session.scalar(select(RiskPolicyBreakerState))
+    assert state is not None
+    assert state.drawdown_latched is False
+    assert state.consecutive_losses == 4
+    assert state.realized_pnl == Decimal("-10")
+    assert state.unrealized_pnl == Decimal("-5")
+
+
+def _sizing_order():
+    from app.services.risk_policy.sizer import SizingInput
+
+    return SizingInput(
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("98"),
+        direction="long",
+        grade=Grade.A_PLUS,
+        grade_risk_percent=Decimal("1.5"),
+        atr=Decimal("1"),
+        gap_beyond_stop=Decimal("0"),
+        fee_rate=Decimal("0"),
+        funding_rate=Decimal("0"),
+        funding_periods=Decimal("0"),
+        slippage_rate=Decimal("0"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        remaining_daily_budget_percent=Decimal("6"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        leverage=Decimal("1"),
+        margin_mode="isolated",
+    )

@@ -30,7 +30,8 @@ def test_additive_migration_and_rollback_preserve_existing_organization(monkeypa
         "script_location", str(Path(__file__).parents[1] / "src/app/db/migrations")
     )
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["a16riskpolicy001"]
+    assert script.get_heads() == ["a17riskpolicy002"]
+    assert script.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
     assert script.get_revision("a16riskpolicy001").down_revision == "a15reissueauth001"
     assert script.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
     assert script.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"

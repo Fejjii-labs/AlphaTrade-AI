@@ -199,6 +199,8 @@ class RiskPolicyBreakerState(UUIDPrimaryKeyMixin, Base):
     equity_peak: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     drawdown_latched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     consecutive_losses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    unrealized_pnl: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     daily_paused_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -222,6 +224,59 @@ class RiskPolicyCalibrationSample(UUIDPrimaryKeyMixin, Base):
     in_sample: Mapped[bool] = mapped_column(Boolean, nullable=False)
     walk_forward_fold: Mapped[int] = mapped_column(Integer, nullable=False)
     slippage_r: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RiskPolicyVersionCancellation(UUIDPrimaryKeyMixin, Base):
+    """A due loosening that was cancelled because a breaker was active."""
+
+    __tablename__ = "risk_policy_version_cancellations"
+    __table_args__ = (UniqueConstraint("version_id", name="uq_risk_policy_version_cancellation"),)
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("risk_policy_versions.id"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RiskPolicyPromotionReportRow(UUIDPrimaryKeyMixin, Base):
+    """Stored promotion eligibility for one grader version. Append-only."""
+
+    __tablename__ = "risk_policy_promotion_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "grader_version",
+            name="uq_risk_policy_promotion_grader",
+        ),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    grader_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ordered: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    walk_forward_ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RiskPolicyBreakerReset(UUIDPrimaryKeyMixin, Base):
+    """A human reset of the drawdown latch. Append-only, and it names the actor."""
+
+    __tablename__ = "risk_policy_breaker_resets"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_channel: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -277,6 +332,9 @@ for _model in (
     RiskPolicyGradeBinding,
     RiskPolicyTradeRecord,
     RiskPolicyCalibrationSample,
+    RiskPolicyVersionCancellation,
+    RiskPolicyPromotionReportRow,
+    RiskPolicyBreakerReset,
 ):
     event.listen(_model, "before_update", _reject_mutation)
     event.listen(_model, "before_delete", _reject_mutation)

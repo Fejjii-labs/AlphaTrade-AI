@@ -14,25 +14,31 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.risk_policy import (
+    RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
     RiskPolicyCalibrationSample,
     RiskPolicyGradeBinding,
+    RiskPolicyPromotionReportRow,
     RiskPolicyProposal,
     RiskPolicyTradeRecord,
     RiskPolicyVersion,
+    RiskPolicyVersionCancellation,
 )
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
 from app.services.audit_service import AuditService
+from app.services.risk_policy.calibration import PromotionReport, assert_promotion_allows
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.governance import (
+    HumanApplyProof,
     PolicyActor,
     PolicyChannel,
     assert_can_apply,
     assert_can_propose,
     decide_apply,
+    proposal_is_expired,
 )
-from app.services.risk_policy.grader import GradeDecision
+from app.services.risk_policy.grader import GRADER_VERSION, GradeDecision
 from app.services.risk_policy.profile import (
     PolicyKind,
     RiskPolicyProfile,
@@ -43,6 +49,20 @@ from app.services.risk_policy.profile import (
 from app.services.risk_policy.records import TradeRiskRecord
 
 _KIND_VALUES = {kind.value for kind in PolicyKind}
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """SQLite returns naive UTC datetimes. Postgres returns aware ones."""
+
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
+
+
+def _pause_active(paused_until: datetime | None, now: datetime) -> bool:
+    if paused_until is None:
+        return False
+    return _as_utc(paused_until) > now
 
 
 class RiskPolicyService:
@@ -109,30 +129,43 @@ class RiskPolicyService:
         organization_id: uuid.UUID,
         proposal_id: uuid.UUID,
         actor: PolicyActor,
-        confirmed: bool,
+        proof: HumanApplyProof | None,
+        owner_user_id: str,
+        pinned_telegram_chat_id: str = "",
         now: datetime | None = None,
     ) -> RiskPolicyVersion:
         moment = now or datetime.now(UTC)
+        proposal = self._session.get(RiskPolicyProposal, proposal_id)
+        if proposal is None or proposal.organization_id != organization_id:
+            raise RiskPolicyRejected("proposal_not_found")
         try:
-            assert_can_apply(actor)
-        except RiskPolicyRejected:
+            assert_can_apply(
+                actor,
+                proof,
+                owner_user_id=owner_user_id,
+                pinned_telegram_chat_id=pinned_telegram_chat_id,
+                proposal_id=str(proposal.id),
+                content_hash=proposal.content_hash,
+                now=moment,
+            )
+        except RiskPolicyRejected as exc:
             self._audit_event(
                 AuditEventType.RISK_POLICY_APPLY_REFUSED,
                 organization_id=organization_id,
                 actor=actor,
                 resource_id=str(proposal_id),
                 result=AuditResult.BLOCKED,
-                metadata={"reason": "apply_requires_human"},
+                metadata={"reason": exc.code},
             )
             raise
-        proposal = self._session.get(RiskPolicyProposal, proposal_id)
-        if proposal is None or proposal.organization_id != organization_id:
-            raise RiskPolicyRejected("proposal_not_found")
+        if proposal_is_expired(proposal.created_at, moment):
+            raise RiskPolicyRejected("proposal_expired")
         if proposal.kind not in _KIND_VALUES:
             raise RiskPolicyRejected("kind_invalid")
         profile = profile_from_canonical(
             {str(key): str(value) for key, value in proposal.payload.items()}
         )
+        assert_promotion_allows(profile, self.stored_promotion_report(organization_id))
         kind = PolicyKind(proposal.kind)
         previous_row = self._active_row(organization_id, kind, moment)
         previous = profile_from_row(previous_row) if previous_row is not None else None
@@ -141,7 +174,6 @@ class RiskPolicyService:
             previous=previous,
             proposed=profile,
             now=moment,
-            confirmed=confirmed,
             breaker_active=self.breaker_active(organization_id=organization_id, now=moment),
         )
         version_number = self._next_version_number(organization_id, kind)
@@ -172,7 +204,7 @@ class RiskPolicyService:
             change_class=decision.change_class.value,
             effective_at=decision.effective_at,
             actor_id=actor.actor_id,
-            actor_channel=actor.channel.value,
+            actor_channel=PolicyChannel.HUMAN.value,
             reason=proposal.reason,
             diff=decision.diff,
             content_hash=profile_hash(profile),
@@ -205,12 +237,13 @@ class RiskPolicyService:
                 RiskPolicyBreakerState.organization_id == organization_id
             )
         ).all()
+        moment = _as_utc(now)
         for row in rows:
             if row.drawdown_latched:
                 return True
-            if row.daily_paused_until is not None and row.daily_paused_until > now:
+            if _pause_active(row.daily_paused_until, moment):
                 return True
-            if row.consecutive_paused_until is not None and row.consecutive_paused_until > now:
+            if _pause_active(row.consecutive_paused_until, moment):
                 return True
         return False
 
@@ -328,7 +361,7 @@ class RiskPolicyService:
     def _active_row(
         self, organization_id: uuid.UUID, kind: PolicyKind, now: datetime
     ) -> RiskPolicyVersion | None:
-        return self._session.scalar(
+        rows = self._session.scalars(
             select(RiskPolicyVersion)
             .where(
                 RiskPolicyVersion.organization_id == organization_id,
@@ -336,8 +369,138 @@ class RiskPolicyService:
                 RiskPolicyVersion.effective_at <= now,
             )
             .order_by(RiskPolicyVersion.version_number.desc())
+        ).all()
+        cancelled = set(
+            self._session.scalars(
+                select(RiskPolicyVersionCancellation.version_id).where(
+                    RiskPolicyVersionCancellation.organization_id == organization_id
+                )
+            ).all()
+        )
+        for row in rows:
+            if row.id in cancelled:
+                continue
+            if row.change_class == "loosening" and self.breaker_active(
+                organization_id=organization_id, now=now
+            ):
+                self._cancel_version(row, now)
+                continue
+            return row
+        return None
+
+    def _cancel_version(self, row: RiskPolicyVersion, now: datetime) -> None:
+        self._session.add(
+            RiskPolicyVersionCancellation(
+                organization_id=row.organization_id,
+                version_id=row.id,
+                reason="breaker_active_at_activation",
+                created_at=now,
+            )
+        )
+        self._session.flush()
+
+    def stored_promotion_report(self, organization_id: uuid.UUID) -> PromotionReport | None:
+        row = self._session.scalar(
+            select(RiskPolicyPromotionReportRow)
+            .where(
+                RiskPolicyPromotionReportRow.organization_id == organization_id,
+                RiskPolicyPromotionReportRow.grader_version == GRADER_VERSION,
+            )
             .limit(1)
         )
+        if row is None:
+            return None
+        return PromotionReport(
+            grader_version=row.grader_version,
+            grades=(),
+            ordered=row.ordered,
+            walk_forward_ok=row.walk_forward_ok,
+            eligible=row.eligible,
+            auto_demotion=(),
+            promotion_applied=False,
+        )
+
+    def store_promotion_report(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        report: PromotionReport,
+        now: datetime,
+    ) -> None:
+        if report.grader_version != GRADER_VERSION or not report.eligible:
+            raise RiskPolicyRejected("promotion_report_not_eligible")
+        self._session.add(
+            RiskPolicyPromotionReportRow(
+                organization_id=organization_id,
+                grader_version=report.grader_version,
+                eligible=report.eligible,
+                ordered=report.ordered,
+                walk_forward_ok=report.walk_forward_ok,
+                payload={"grader_version": report.grader_version, "eligible": report.eligible},
+                created_at=now,
+            )
+        )
+        self._session.flush()
+
+    def record_breaker(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        equity_peak: Decimal,
+        consecutive_losses: int,
+        realized_pnl: Decimal,
+        unrealized_pnl: Decimal,
+        daily_paused_until: datetime | None,
+        consecutive_paused_until: datetime | None,
+        drawdown_latched: bool,
+        now: datetime,
+    ) -> RiskPolicyBreakerState:
+        row = self._breaker_row(organization_id, account_id, equity_peak, now)
+        row.equity_peak = equity_peak
+        row.consecutive_losses = consecutive_losses
+        row.realized_pnl = realized_pnl
+        row.unrealized_pnl = unrealized_pnl
+        row.daily_paused_until = daily_paused_until
+        row.consecutive_paused_until = consecutive_paused_until
+        row.drawdown_latched = drawdown_latched
+        row.updated_at = now
+        self._session.flush()
+        return row
+
+    def reset_drawdown_latch(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        actor: PolicyActor,
+        owner_user_id: str,
+        now: datetime,
+    ) -> None:
+        if actor.channel in {PolicyChannel.AGENT, PolicyChannel.BOT, PolicyChannel.SERVICE}:
+            raise RiskPolicyRejected("drawdown_reset_requires_human")
+        if not owner_user_id or actor.actor_id != owner_user_id:
+            raise RiskPolicyRejected("apply_owner_mismatch")
+        row = self._session.scalar(
+            select(RiskPolicyBreakerState).where(
+                RiskPolicyBreakerState.organization_id == organization_id,
+                RiskPolicyBreakerState.account_id == account_id,
+            )
+        )
+        if row is None or not row.drawdown_latched:
+            raise RiskPolicyRejected("drawdown_not_latched")
+        self._session.add(
+            RiskPolicyBreakerReset(
+                organization_id=organization_id,
+                account_id=account_id,
+                actor_id=actor.actor_id,
+                actor_channel=actor.channel.value,
+                created_at=now,
+            )
+        )
+        row.drawdown_latched = False
+        row.updated_at = now
+        self._session.flush()
 
     def _scheduled_row(
         self, organization_id: uuid.UUID, kind: PolicyKind, now: datetime
@@ -404,8 +567,10 @@ class RiskPolicyService:
     ) -> None:
         actor_type = {
             PolicyChannel.HUMAN: ActorType.USER,
+            PolicyChannel.UNDECLARED: ActorType.USER,
             PolicyChannel.AGENT: ActorType.AGENT,
             PolicyChannel.BOT: ActorType.TOOL,
+            PolicyChannel.SERVICE: ActorType.TOOL,
         }[actor.channel]
         self._audit.record(
             AuditRecordCreate(

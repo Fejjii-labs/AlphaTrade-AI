@@ -22,7 +22,8 @@ from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 _REVISION = "a14autonomouschannel001"
 _A15 = "a15reissueauth001"
-_HEAD = "a16riskpolicy001"
+_A16 = "a16riskpolicy001"
+_HEAD = "a17riskpolicy002"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -57,9 +58,12 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     a15 = script.get_revision(_A15)
     assert a15 is not None
     assert a15.down_revision == _REVISION
+    a16 = script.get_revision(_A16)
+    assert a16 is not None
+    assert a16.down_revision == _A15
     head = script.get_revision(_HEAD)
     assert head is not None
-    assert head.down_revision == _A15
+    assert head.down_revision == _A16
     assert single_alembic_head(script) == _HEAD
 
 

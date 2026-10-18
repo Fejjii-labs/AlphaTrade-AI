@@ -12,7 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 
-from app.services.risk_policy.ceilings import HARD_MAX_LEVERAGE, HARD_MAX_RISK_PER_TRADE_PERCENT
+from app.services.risk_policy.calibration import PromotionReport, assert_promotion_allows
+from app.services.risk_policy.ceilings import (
+    HARD_MAX_DAILY_LOSS_PERCENT,
+    HARD_MAX_LEVERAGE,
+    HARD_MAX_RISK_PER_TRADE_PERCENT,
+)
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.profile import Grade, RiskPolicyProfile, validate_profile
 
@@ -33,7 +38,10 @@ class SizingInput:
     gap_beyond_stop: Decimal | None
     fee_rate: Decimal | None
     funding_rate: Decimal | None
+    funding_periods: Decimal | None
     slippage_rate: Decimal | None
+    lot_step: Decimal | None
+    min_quantity: Decimal | None
     remaining_daily_budget_percent: Decimal | None
     open_risk_percent: Decimal | None
     open_notional: Decimal | None
@@ -83,10 +91,16 @@ class SizingResult:
         }
 
 
-def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
+def size_trade(
+    profile: RiskPolicyProfile,
+    data: SizingInput,
+    *,
+    promotion: PromotionReport | None = None,
+) -> SizingResult:
     """Size one new trade. Leverage does not increase quantity."""
 
     validate_profile(profile)
+    assert_promotion_allows(profile, promotion)
     equity = _required(data.equity, "equity_missing")
     entry = _required(data.entry, "entry_missing")
     stop = _required(data.stop, "stop_missing")
@@ -94,7 +108,10 @@ def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
     gap = _required(data.gap_beyond_stop, "gap_missing")
     fee_rate = _required(data.fee_rate, "fee_rate_missing")
     funding_rate = _required(data.funding_rate, "funding_rate_missing")
+    funding_periods = _required(data.funding_periods, "funding_periods_missing")
     slippage_rate = _required(data.slippage_rate, "slippage_rate_missing")
+    lot_step = _required(data.lot_step, "lot_step_missing")
+    min_quantity = _required(data.min_quantity, "min_quantity_missing")
     remaining_daily = _required(data.remaining_daily_budget_percent, "daily_budget_missing")
     open_risk = _required(data.open_risk_percent, "open_risk_missing")
     open_notional = _required(data.open_notional, "open_notional_missing")
@@ -114,7 +131,12 @@ def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
     _positive(atr, "atr_invalid")
     _non_negative(gap, "gap_invalid")
     _non_negative(fee_rate, "fee_rate_invalid")
+    _non_negative(funding_periods, "funding_periods_invalid")
     _non_negative(slippage_rate, "slippage_rate_invalid")
+    _positive(lot_step, "lot_step_invalid")
+    _positive(min_quantity, "min_quantity_invalid")
+    if stop <= 0:
+        raise RiskPolicyRejected("stop_not_positive")
     _non_negative(open_risk, "open_risk_invalid")
     _non_negative(open_notional, "open_notional_invalid")
     _non_negative(remaining_daily, "daily_budget_invalid")
@@ -140,7 +162,8 @@ def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
     if leverage < 1 or leverage > profile.max_leverage or leverage > HARD_MAX_LEVERAGE:
         raise RiskPolicyRejected("leverage_exceeds_ceiling")
     profile_risk = profile.risk_percent(data.grade)
-    daily_room = remaining_daily - open_risk
+    daily_cap = min(profile.daily_loss_limit_percent, HARD_MAX_DAILY_LOSS_PERCENT, remaining_daily)
+    daily_room = daily_cap - open_risk
     aggregate_room = profile.max_aggregate_open_risk_percent - open_risk
     budget_room = min(daily_room, aggregate_room)
     if budget_room <= 0:
@@ -149,15 +172,15 @@ def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
     if effective <= 0:
         raise RiskPolicyRejected("budget_exhausted")
     adverse = stop_distance + gap
-    cost_rate = fee_rate + abs(funding_rate) + slippage_rate
-    share = _cost_share(entry, adverse, cost_rate)
+    unit_cost = _unit_cost(entry, stop, fee_rate, funding_rate, funding_periods, slippage_rate)
+    share = _cost_share(adverse, unit_cost)
     if share > profile.max_cost_share_of_r:
         raise RiskPolicyRejected("costs_exceed_r")
     risk_amount = equity * effective / Decimal("100")
-    denominator = adverse + entry * cost_rate
+    denominator = adverse + unit_cost
     if denominator <= 0:
         raise RiskPolicyRejected("sizing_denominator_invalid")
-    quantity = (risk_amount / denominator).quantize(_QUANTUM, rounding=ROUND_DOWN)
+    quantity = _round_lot(risk_amount / denominator, lot_step)
     notional_cap = equity * profile.max_notional_per_trade_percent / Decimal("100")
     aggregate_notional = equity * profile.max_aggregate_notional_percent / Decimal("100")
     notional_room = aggregate_notional - open_notional
@@ -165,14 +188,14 @@ def size_trade(profile: RiskPolicyProfile, data: SizingInput) -> SizingResult:
         raise RiskPolicyRejected("notional_cap")
     capped = False
     room = min(notional_cap, notional_room)
-    notional = (quantity * entry).quantize(_QUANTUM, rounding=ROUND_DOWN)
+    notional = quantity * entry
     if notional > room:
-        quantity = (room / entry).quantize(_QUANTUM, rounding=ROUND_DOWN)
+        quantity = _round_lot(room / entry, lot_step)
         capped = True
-    if quantity <= 0:
-        raise RiskPolicyRejected("quantity_zero")
+    if quantity < min_quantity:
+        raise RiskPolicyRejected("below_min_quantity")
     notional = (quantity * entry).quantize(_QUANTUM, rounding=ROUND_DOWN)
-    cost_amount = (notional * cost_rate).quantize(_QUANTUM, rounding=ROUND_DOWN)
+    cost_amount = (quantity * unit_cost).quantize(_QUANTUM, rounding=ROUND_DOWN)
     price_risk = (quantity * adverse).quantize(_QUANTUM, rounding=ROUND_DOWN)
     realized_r = price_risk + cost_amount
     if realized_r <= 0 or realized_r > risk_amount + _QUANTUM:
@@ -229,7 +252,9 @@ def size_concurrent(
     total_risk = open_risk + sum((item.effective_risk_percent for item in alone), Decimal("0"))
     if total_risk > profile.max_aggregate_open_risk_percent:
         raise RiskPolicyRejected("concurrent_budget_exhausted")
-    if total_risk > (orders[0].remaining_daily_budget_percent or Decimal("0")):
+    remaining = orders[0].remaining_daily_budget_percent or Decimal("0")
+    daily_cap = min(profile.daily_loss_limit_percent, HARD_MAX_DAILY_LOSS_PERCENT, remaining)
+    if total_risk > daily_cap:
         raise RiskPolicyRejected("concurrent_budget_exhausted")
     total_notional = open_notional + sum((item.notional for item in alone), Decimal("0"))
     aggregate_cap = equity * profile.max_aggregate_notional_percent / Decimal("100")
@@ -248,11 +273,33 @@ def _stop_distance(direction: str, entry: Decimal, stop: Decimal) -> Decimal:
     return stop - entry
 
 
-def _cost_share(entry: Decimal, adverse: Decimal, cost_rate: Decimal) -> Decimal:
+def _unit_cost(
+    entry: Decimal,
+    stop: Decimal,
+    fee_rate: Decimal,
+    funding_rate: Decimal,
+    funding_periods: Decimal,
+    slippage_rate: Decimal,
+) -> Decimal:
+    """Entry fee, exit fee at the stop, funding periods times the rate, and slippage."""
+
+    return (
+        entry * fee_rate
+        + stop * fee_rate
+        + entry * abs(funding_rate) * funding_periods
+        + entry * slippage_rate
+    )
+
+
+def _cost_share(adverse: Decimal, unit_cost: Decimal) -> Decimal:
     if adverse <= 0:
         raise RiskPolicyRejected("adverse_distance_invalid")
-    numerator = entry * cost_rate
-    return numerator / (adverse + numerator) if numerator else Decimal("0")
+    return unit_cost / (adverse + unit_cost) if unit_cost else Decimal("0")
+
+
+def _round_lot(quantity: Decimal, lot_step: Decimal) -> Decimal:
+    steps = (quantity / lot_step).to_integral_value(rounding=ROUND_DOWN)
+    return steps * lot_step
 
 
 def _required(value: Decimal | None, code: str) -> Decimal:

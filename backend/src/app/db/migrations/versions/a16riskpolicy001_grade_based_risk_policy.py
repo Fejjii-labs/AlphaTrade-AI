@@ -200,6 +200,8 @@ def downgrade() -> None:
     bind = op.get_bind()
     if _table_has_rows(bind, "risk_policy_trade_records"):
         raise RuntimeError("Risk-policy trade records exist; downgrade would delete them.")
+    if _table_has_rows(bind, "risk_policy_breaker_states"):
+        raise RuntimeError("Risk-policy breaker state exists; downgrade would delete it.")
     op.drop_table("risk_policy_calibration_samples")
     op.drop_table("risk_policy_breaker_states")
     op.drop_table("risk_policy_trade_records")
@@ -211,7 +213,7 @@ def downgrade() -> None:
 
 
 def _table_has_rows(bind: sa.Connection, table: str) -> bool:
-    if table != "risk_policy_trade_records":
+    if table not in {"risk_policy_trade_records", "risk_policy_breaker_states"}:
         raise RuntimeError("Unexpected risk-policy table.")
     stored = bind.execute(sa.text(f"SELECT 1 FROM {table} LIMIT 1")).first()
     return stored is not None
