@@ -592,7 +592,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         maximum_loss = base * (abs(adverse_entry - stop) + cost_per_base)
         if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
-        if maximum_loss > risk_cap:
+        if profile_leverage is not None:
+            # Grade risk is the stop loss. The 0.2% book buffer is not part of
+            # that loss, so it must not refuse a size that already matches the grade.
+            grade_loss = base * abs(adverse_entry - stop)
+            if grade_loss > risk_cap:
+                return "demo_depth_exceeds_risk_limit"
+        elif maximum_loss > risk_cap:
             return "demo_depth_exceeds_risk_limit"
         values = terms.model_dump(mode="python")
         values.update(

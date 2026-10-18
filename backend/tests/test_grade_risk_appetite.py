@@ -20,6 +20,7 @@ from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
 from app.services.risk_policy.adjusters import AdjusterInputs
 from app.services.risk_policy.breakers import BreakerVerdict
+from app.services.risk_policy.claim_caps import accounting_view
 from app.services.risk_policy.decision import decide_trade
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision
@@ -568,3 +569,81 @@ def test_claim_notional_ceiling_matches_the_profile() -> None:
         intent=second,
     )
     assert blocked == "insufficient_daily_loss_allocation"
+
+
+def test_flat_demo_book_keeps_grade_risk_past_the_fee_buffer() -> None:
+    profile = sofien_aggressive_profile(PolicyKind.DEMO)
+    active = ActiveProfile(profile=profile, version_id=uuid4())
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    sized = size_for_profile(
+        active=active,
+        grade=grade,
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("98"),
+        target=Decimal("104"),
+        direction="long",
+        atr=Decimal("1"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=profile.daily_loss_limit_percent,
+        breaker_refusing=False,
+    )
+    assert not isinstance(sized, str)
+    assert sized.risk_percent == Decimal("5")
+    assert sized.quantity == Decimal("250")
+    risk_cap = Decimal("10000") * sized.risk_percent / Decimal("100")
+    grade_loss = sized.quantity * abs(Decimal("100") - Decimal("98"))
+    fee_loss = sized.quantity * (
+        abs(Decimal("100") - Decimal("98")) + Decimal("100") * Decimal("0.002")
+    )
+    assert grade_loss <= risk_cap
+    assert fee_loss > risk_cap
+
+
+def test_blocked_profile_claim_does_not_widen_the_ledger() -> None:
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    caps = caps_for_ledger(profile, Decimal("10000"))
+    stored = SimpleNamespace(
+        daily_locked=False,
+        max_notional=Decimal("10000"),
+        reserved_notional=Decimal("0"),
+        actual_notional=Decimal("0"),
+        max_daily_loss=Decimal("10000"),
+        reserved_daily_loss=Decimal("0"),
+        actual_daily_loss=Decimal("0"),
+        max_trade_slots=10,
+        reserved_trade_slots=0,
+        actual_trade_count=0,
+        max_symbol_notional=Decimal("10000"),
+        symbol_reserved={},
+        symbol_actual={},
+    )
+    viewed = accounting_view(stored, caps)
+    intent = ReservationIntent(
+        pending_notional=Decimal("25000"),
+        daily_loss=Decimal("500"),
+        trade_slots=1,
+        instrument="BTCUSDT",
+        exposure_unit="USDT",
+        remaining_quantity=Decimal("250"),
+        quantity_unit="BASE",
+        contract_multiplier=Decimal("1"),
+        contract_type="LINEAR",
+    )
+    assert (
+        evaluate_claim_predicate(
+            blocking_epoch=True,
+            kill_active=False,
+            accounting=viewed,  # type: ignore[arg-type]
+            intent=intent,
+        )
+        == "safety_epoch_blocking"
+    )
+    assert stored.max_notional == Decimal("10000")
+    assert stored.max_symbol_notional == Decimal("10000")
+    assert stored.max_daily_loss == Decimal("10000")
+    assert viewed.max_notional == caps.max_notional

@@ -259,6 +259,7 @@ class PaperPlanClaimService:
             from app.experiments.execution_risk import experiment_reservation_refusal
 
             blocked_reason = experiment_reservation_refusal(self._session, plan, intent, now)
+        profile_caps = None
         if blocked_reason is None:
             if plan.schema_version == "ManualDemoTradePlanV1":
                 # The ledger keeps reservations/fill facts for every origin. Its
@@ -274,21 +275,28 @@ class PaperPlanClaimService:
                     )
             else:
                 if blocked_reason is None:
-                    from app.services.risk_policy.claim_caps import bind_profile_claim_caps
+                    from app.services.risk_policy.claim_caps import (
+                        accounting_view,
+                        preview_profile_claim_caps,
+                    )
+                    from app.services.risk_policy.ledger import LedgerCaps
 
-                    blocked_reason = bind_profile_claim_caps(
+                    preview = preview_profile_claim_caps(
                         self._session,
-                        accounting,
                         plan,
                         organization_id=request.organization_id,
                         user_id=request.user_id,
                         now=now,
                     )
+                    if isinstance(preview, str):
+                        blocked_reason = preview
+                    elif isinstance(preview, LedgerCaps):
+                        profile_caps = preview
                 if blocked_reason is None:
                     blocked_reason = evaluate_claim_predicate(
                         blocking_epoch=bool(epoch.blocking),
                         kill_active=self._epochs.organization_kill_active(request.organization_id),
-                        accounting=accounting,
+                        accounting=accounting_view(accounting, profile_caps),  # type: ignore[arg-type]
                         intent=intent,
                     )
         if blocked_reason is not None:
@@ -317,6 +325,7 @@ class PaperPlanClaimService:
             accounting=accounting,
             intent=intent,
             now=now,
+            profile_caps=profile_caps,
         )
         self._run_hook(self._hooks.before_return)
         return result
@@ -560,6 +569,7 @@ class PaperPlanClaimService:
         accounting: AccountRiskAccountingState,
         intent: ReservationIntent,
         now: datetime,
+        profile_caps: object | None = None,
     ) -> ExecutePaperPlanResult:
         command = ExecutionCommand(
             id=command_id,
@@ -637,6 +647,13 @@ class PaperPlanClaimService:
                 "Authorization was not AVAILABLE for consumption.",
                 details={"reason": "authorization_consume_conflict"},
             )
+        if profile_caps is not None:
+            from app.services.risk_policy.claim_caps import assign_profile_claim_caps
+            from app.services.risk_policy.ledger import LedgerCaps
+
+            if isinstance(profile_caps, LedgerCaps):
+                assign_profile_claim_caps(accounting, profile_caps)
+                self._session.flush()
         charge_reservation(accounting, intent)
         reservation = RiskReservation(
             organization_id=request.organization_id,
