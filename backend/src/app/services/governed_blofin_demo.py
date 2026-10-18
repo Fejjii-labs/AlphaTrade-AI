@@ -271,20 +271,20 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
 
 
 def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
-    """Disposition, and whether the unprotected-fill kill switch must run.
+    """Disposition, and whether the existing kill switch must run.
 
-    An unreadable liquidation read is not labeled as a price through the stop.
+    An unreadable liquidation read is not labeled as a price through the stop,
+    and it arms only when protection is missing. A price through the stop arms
+    even when protection is reported attached: that stop cannot fill first.
     The returned flag does not close the position and does not write leverage
     or margin mode.
     """
 
     if liquidation_reason == "demo_post_fill_liquidation_unreadable":
-        disposition = "DEMO_LIQUIDATION_UNREADABLE"
-    elif liquidation_reason == "demo_post_fill_liquidation_inside_stop":
-        disposition = "DEMO_LIQUIDATION_INSIDE_STOP"
-    else:
-        raise ValueError("Unknown demo liquidation hold.")
-    return disposition, not protected
+        return "DEMO_LIQUIDATION_UNREADABLE", not protected
+    if liquidation_reason == "demo_post_fill_liquidation_inside_stop":
+        return "DEMO_LIQUIDATION_INSIDE_STOP", True
+    raise ValueError("Unknown demo liquidation hold.")
 
 
 class GovernedBloFinDemoLoop(AutomatedPaperLoop):
@@ -539,8 +539,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
     ) -> TradePlanRevisionCreate | str:
         snapshot = self._require_snapshot()
         equity = min(equity, snapshot.equity, snapshot.available)
-        # Stops and targets stay on the existing path. Profile sizing replaces
-        # quantity only after that, and never falls back to the 1% formula.
+        # Stops and targets stay on the existing path. The unprofiled 1%
+        # minimum is not a gate once a profile is active: that plan is sized
+        # below with size_for_profile. Leverage and margin-mode reads still
+        # refuse, and this method does not write the venue.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -550,6 +552,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
+            accept_unprofiled_minimum=active_profile is not None,
         )
         if isinstance(terms, str):
             return terms
@@ -1102,12 +1105,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         liquidation_reason: str,
         protected: bool,
     ) -> None:
-        """Arm the existing unprotected-fill kill switch, then label the read.
+        """Arm the existing kill switch, then label the read.
 
-        A missing protection hold uses the same reason as the later fill path.
-        An unreadable liquidation price is not stored as a price through the
-        stop. This does not close the position and does not write leverage or
-        margin mode.
+        A missing protection hold and a liquidation price through the stop use
+        the same switch as the later unprotected fill. An unreadable price is
+        not stored as a price through the stop. This does not close the
+        position and does not write leverage or margin mode.
         """
 
         disposition, arm_kill_switch = profile_liquidation_hold(

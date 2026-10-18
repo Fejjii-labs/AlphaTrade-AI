@@ -1080,6 +1080,7 @@ def _plan_terms(
     remaining_daily_budget_percent: Decimal | None = None,
     breaker_refusing: bool = False,
     risk_records: list[object] | None = None,
+    accept_unprofiled_minimum: bool = False,
 ) -> TradePlanRevisionCreate | str:
     from app.strategy_brain.sfp.contracts import SfpSpec
 
@@ -1138,7 +1139,11 @@ def _plan_terms(
     if active_profile is None:
         quantity = _quantity(equity=equity, entry=entry, distance=distance)
         if quantity is None:
-            return "size_below_minimum"
+            if not accept_unprofiled_minimum:
+                return "size_below_minimum"
+            # Geometry only. GovernedBloFinDemoLoop replaces this with
+            # size_for_profile and does not submit the placeholder.
+            quantity = _LOT
     else:
         from app.services.risk_policy.plan_sizing import ActiveProfile, size_for_profile
 

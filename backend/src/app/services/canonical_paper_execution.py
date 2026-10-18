@@ -18,7 +18,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.services.risk_policy.profile import PolicyKind
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -647,22 +651,32 @@ def _note_profile_close(
     account_id: UUID,
     net_pnl: Decimal,
     now: datetime,
-) -> None:
-    """Advance consecutive losses, then persist the breaker verdict. No reset."""
+    kind: PolicyKind | None = None,
+) -> int | None:
+    """Advance consecutive losses, then persist the breaker verdict. No reset.
+
+    ``kind`` selects the active profile and the breaker row is the account's
+    row. Paper uses the internal-paper profile. Demo uses the demo profile.
+    A drawdown latch is not cleared.
+    """
 
     from app.services.audit_service import AuditService
     from app.services.automated_paper_loop import _load_active_profile
-    from app.services.risk_policy.breaker_trip import persist_profile_breakers
+    from app.services.risk_policy.breaker_trip import (
+        persist_profile_breakers,
+        profile_close_consecutive,
+    )
     from app.services.risk_policy.persistence import RiskPolicyService
-    from app.services.risk_policy.profile import PolicyKind
+    from app.services.risk_policy.profile import PolicyKind as StoredPolicyKind
 
-    active = _load_active_profile(session, organization_id, PolicyKind.INTERNAL_PAPER, now)
+    selected = StoredPolicyKind.INTERNAL_PAPER if kind is None else kind
+    active = _load_active_profile(session, organization_id, selected.value, now)
     if active is None:
-        return
+        return None
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
     current = 0 if row is None else int(row.consecutive_losses)
-    consecutive = 0 if net_pnl >= 0 else current + 1
+    consecutive = profile_close_consecutive(current, net_pnl)
     persist_profile_breakers(
         session,
         organization_id=organization_id,
@@ -672,6 +686,7 @@ def _note_profile_close(
         now=now,
         consecutive_losses=consecutive,
     )
+    return consecutive
 
 
 def _attach_approval_channel(

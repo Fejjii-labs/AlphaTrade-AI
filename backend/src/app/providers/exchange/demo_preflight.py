@@ -31,6 +31,9 @@ _VALIDATION_REASONS = {
     "Demo account margin mode is not cross; no margin-mode mutation.": "margin_mode_not_cross",
     "Demo margin-mode omitted; no margin-mode mutation.": "margin_mode_omitted",
     "Demo leverage-info omitted margin mode; no margin-mode mutation.": "margin_mode_omitted",
+    "Demo leverage-info margin mode does not match the account; no margin-mode mutation.": (
+        "leverage_info_margin_mode_mismatch"
+    ),
     "Demo maintenance tiers unavailable; no leverage mutation.": "maintenance_tiers_unavailable",
     "Demo account state incomplete or unreadable.": "account_state_incomplete",
     "Demo position already open or unreadable; new entry refused.": "account_not_flat",

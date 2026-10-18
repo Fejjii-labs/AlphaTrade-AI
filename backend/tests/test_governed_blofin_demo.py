@@ -543,6 +543,12 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
     )
     assert protected_disposition == "DEMO_LIQUIDATION_UNREADABLE"
     assert protected_arm is False
+    through, through_arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+    )
+    assert through == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert through_arm is True
     with pytest.raises(ValueError, match="Unknown demo liquidation hold"):
         profile_liquidation_hold(liquidation_reason="other", protected=False)
 
@@ -567,7 +573,10 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
         protected=True,
     )
     assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
-    assert armed == ["BloFin demo protection missing; operator action required"]
+    assert armed == [
+        "BloFin demo protection missing; operator action required",
+        "BloFin demo protection missing; operator action required",
+    ]
 
 
 def test_liquidation_hold_runs_before_exit_reconciliation() -> None:

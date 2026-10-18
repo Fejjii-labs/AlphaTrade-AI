@@ -112,7 +112,14 @@ def test_every_snapshot_read_reports_its_failing_stage_without_secret_text(stage
         ("instrument", STAGES[2][1], [], "instrument_unavailable"),
         ("margin_mode", STAGES[3][1], {}, "margin_mode_omitted"),
         ("margin_mode", STAGES[3][1], {"marginMode": "isolated"}, "margin_mode_not_cross"),
-        ("leverage", STAGES[4][1], {"leverage": "2"}, "leverage_not_one"),
+        ("leverage", STAGES[4][1], {"leverage": "2", "marginMode": "cross"}, "leverage_not_one"),
+        ("leverage", STAGES[4][1], {"leverage": "1"}, "margin_mode_omitted"),
+        (
+            "leverage",
+            STAGES[4][1],
+            {"leverage": "1", "marginMode": "isolated"},
+            "leverage_info_margin_mode_mismatch",
+        ),
         ("position_tiers", STAGES[5][1], [], "maintenance_tiers_unavailable"),
         ("positions", STAGES[6][1], [{"positions": "1"}], "account_not_flat"),
         (

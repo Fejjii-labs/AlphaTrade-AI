@@ -455,6 +455,8 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     account_mode = {"value": "cross"}
     force_cross = {"on": False}
     omit_mode = {"on": False}
+    omit_leverage_mode = {"on": False}
+    opposite_leverage_mode = {"on": False}
 
     def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -486,8 +488,13 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             data = {
                 "instId": "BTC-USDT",
                 "leverage": account_leverage["value"],
-                "marginMode": requested,
             }
+            if omit_leverage_mode["on"]:
+                pass
+            elif opposite_leverage_mode["on"]:
+                data["marginMode"] = "cross" if requested == "isolated" else "isolated"
+            else:
+                data["marginMode"] = requested
         elif path.endswith("instruments"):
             data = [
                 {
@@ -593,6 +600,27 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             side=EntrySide.BUY,
             required_leverage=None,
             margin_mode="cross",
+        )
+    account_mode["value"] = "isolated"
+    account_leverage["value"] = "10"
+    omit_leverage_mode["on"] = True
+    with pytest.raises(ValueError, match="leverage-info omitted margin mode"):
+        provider.snapshot(
+            symbol="BTCUSDT",
+            now=EVALUATED_AT,
+            side=EntrySide.BUY,
+            required_leverage=Decimal("10"),
+            margin_mode="isolated",
+        )
+    omit_leverage_mode["on"] = False
+    opposite_leverage_mode["on"] = True
+    with pytest.raises(ValueError, match="does not match the account"):
+        provider.snapshot(
+            symbol="BTCUSDT",
+            now=EVALUATED_AT,
+            side=EntrySide.BUY,
+            required_leverage=Decimal("10"),
+            margin_mode="isolated",
         )
     assert posts == []
     assert demo_order_margin_mode("verified-demo-read-leverage") == "isolated"
@@ -944,3 +972,130 @@ def test_open_risk_and_reserved_loss_include_the_sizer_costs() -> None:
     assert cross.risk_and_exits.maximum_loss.value == price_only
     assert conservative_reservation(isolated).daily_loss == paper_cash
     assert conservative_reservation(cross).daily_loss == price_only
+
+
+def test_demo_profile_does_not_stop_on_the_unprofiled_minimum(monkeypatch) -> None:
+    from dataclasses import replace
+
+    from app.services import governed_blofin_demo
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+    from app.services.risk_policy.liquidation import MaintenanceTier
+    from tests.support.phase7_trade_plan import make_world, plan_terms
+    from tests.test_demo_preflight_diagnostics import provider
+    from tests.test_governed_blofin_demo import Venue
+
+    entry = Decimal("3000000")
+    stop = Decimal("2880000")
+    distance = entry - stop
+    equity = Decimal("10000")
+    assert _quantity(equity=equity, entry=entry, distance=distance) is None
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    profile = sofien_aggressive_profile(PolicyKind.DEMO)
+    active = ActiveProfile(profile=profile, version_id=uuid4())
+    world = make_world()
+    drafted = plan_terms(world.candidate)
+    risk = drafted.risk_and_exits.model_copy(
+        update={
+            "stop": drafted.risk_and_exits.stop.model_copy(update={"value": stop}),
+            "targets": (
+                drafted.risk_and_exits.targets[0].model_copy(
+                    update={
+                        "quantity_fraction": Decimal("1"),
+                        "price": drafted.risk_and_exits.targets[0].price.model_copy(
+                            update={"value": entry + distance}
+                        ),
+                    }
+                ),
+            ),
+            "runner": drafted.risk_and_exits.runner.model_copy(
+                update={
+                    "enabled": False,
+                    "activation_target_order": None,
+                    "remaining_quantity_fraction": Decimal("0"),
+                }
+            ),
+        }
+    )
+    basis = drafted.basis_policy.model_copy(
+        update={
+            "evidence_price": drafted.basis_policy.evidence_price.model_copy(
+                update={"value": entry}
+            ),
+            "execution_price": drafted.basis_policy.execution_price.model_copy(
+                update={"value": entry}
+            ),
+        }
+    )
+    terms = drafted.model_copy(
+        update={"side": EntrySide.BUY, "risk_and_exits": risk, "basis_policy": basis}
+    )
+    venue = Venue(entry - Decimal("0.1"))
+    snapshot = provider(venue.handle).snapshot(
+        symbol="BTCUSDT", now=EVALUATED_AT, side=EntrySide.BUY, required_leverage=None
+    )
+    direct = size_for_profile(
+        active=active,
+        grade=grade,
+        equity=equity,
+        entry=entry,
+        stop=stop,
+        target=entry + distance,
+        direction="long",
+        atr=Decimal("1"),
+        lot_step=snapshot.lot * snapshot.multiplier,
+        min_quantity=snapshot.minimum * snapshot.multiplier,
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        breaker_refusing=False,
+        include_book_buffer=True,
+        maintenance_tiers=tuple(
+            MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
+            for floor, rate in snapshot.maintenance_tiers
+        ),
+    )
+    assert not isinstance(direct, str)
+    assert direct.quantity * entry >= Decimal("5")
+    accepted: list[bool] = []
+
+    def paper_terms(**kwargs: object) -> object:
+        accepted.append(bool(kwargs.get("accept_unprofiled_minimum")))
+        if not kwargs.get("accept_unprofiled_minimum"):
+            return "size_below_minimum"
+        return terms
+
+    monkeypatch.setattr(governed_blofin_demo, "_plan_terms", paper_terms)
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._grade_for_plan",
+        lambda _candidate, _assembled: (grade, Decimal("1")),
+    )
+    loop = GovernedBloFinDemoLoop(None, None, None)  # type: ignore[arg-type]
+    loop._snapshot = snapshot
+    common = {
+        "candidate": world.candidate,
+        "assembled": None,
+        "policy": None,
+        "account_id": uuid4(),
+        "equity": equity,
+        "now": EVALUATED_AT,
+        "eligibility_valid_until": terms.valid_until,
+        "eligibility_id": uuid4(),
+        "active_profile": active,
+        "open_exposure": Decimal("0"),
+        "open_risk_percent": Decimal("0"),
+        "open_positions": 0,
+        "remaining_daily_budget_percent": Decimal("6"),
+        "breaker_refusing": False,
+    }
+    assert paper_terms(accept_unprofiled_minimum=False) == "size_below_minimum"
+    blocked = loop._plan_terms(**common)  # type: ignore[arg-type]
+    assert blocked == "demo_account_leverage_mismatch"
+    assert True in accepted
+    loop._snapshot = replace(snapshot, account_leverage=Decimal("10"), margin_mode="isolated")
+    planned = loop._plan_terms(**common)  # type: ignore[arg-type]
+    assert not isinstance(planned, str)
+    assert planned.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage"
+    paused = loop._plan_terms(**{**common, "breaker_refusing": True})  # type: ignore[arg-type]
+    assert paused == "breaker_active"
+    assert venue.post_count == 0

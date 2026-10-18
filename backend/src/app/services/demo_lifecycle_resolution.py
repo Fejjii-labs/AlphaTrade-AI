@@ -39,7 +39,7 @@ from app.schemas.execution_protocol import (
     RiskReservationReleaseState,
 )
 from app.schemas.journal_lifecycle import JournalLifecycleEventInput
-from app.schemas.trade_plan import AuthorizationState
+from app.schemas.trade_plan import AuthorizationState, EntrySide
 from app.services.audit_service import AuditService
 from app.services.canonical_execution_journal import (
     CANONICAL_EXECUTION_SOURCE_SYSTEM,
@@ -49,11 +49,35 @@ from app.services.canonical_execution_learning import attribute_canonical_paper_
 from app.services.canonical_paper_execution import (
     _attach_approval_channel,
     _lineage_payload,
+    _note_profile_close,
 )
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
+from app.services.risk_policy.profile import PolicyKind
 from app.services.safety_epoch import SafetyEpochService
+
+
+def signed_verified_demo_pnl(
+    *,
+    is_long: bool,
+    entry_price: Decimal,
+    exit_price: Decimal,
+    quantity: Decimal,
+    contract_multiplier: Decimal,
+    reported_pnl: Decimal | None,
+) -> Decimal:
+    """Sign for the consecutive-loss rule. Does not write journal net PnL.
+
+    Venue fill PnL is used when every exit fill reported one. Otherwise the
+    sign is the verified entry-to-exit price difference. Neither value is
+    stored as ``net_pnl``.
+    """
+
+    if reported_pnl is not None and reported_pnl.is_finite():
+        return reported_pnl
+    cash = (exit_price - entry_price) * quantity * contract_multiplier
+    return cash if is_long else -cash
 
 
 def resolve_verified_demo_exit(
@@ -386,4 +410,25 @@ def resolve_verified_demo_exit(
     session.add(resolution)
     effect.reconciliation_disposition = "DEMO_CLOSED_RECONCILED"
     session.flush()
+    if plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage":
+        entry_price = (
+            sum((fill.quantity * fill.price for fill in fills), Decimal("0"))
+            / evidence.entry_quantity
+        )
+        _note_profile_close(
+            session,
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            account_id=command.account_id,
+            net_pnl=signed_verified_demo_pnl(
+                is_long=plan.side is EntrySide.BUY,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=evidence.entry_quantity,
+                contract_multiplier=plan.instrument_rules.contract_multiplier,
+                reported_pnl=reported_pnl,
+            ),
+            now=evidence.observed_at,
+            kind=PolicyKind.DEMO,
+        )
     return resolution

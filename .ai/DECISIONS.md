@@ -66,13 +66,23 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   uses a conservative 2% rate because there is no venue tier feed. Demo
   reads public position tiers and refuses when they are missing. BloFin
   demo does not send a leverage or margin-mode write. Account margin mode
-  is read from `GET /api/v1/account/margin-mode`. A leverage mismatch
-  blocks with `demo_account_leverage_mismatch`. A demo account that is
-  not isolated blocks with `demo_margin_mode_not_isolated`. After a
-  profile demo fill, the existing unprotected-fill kill switch runs before
-  a liquidation or unreadable-liquidation result. An unreadable read is
-  not labeled as a price through the stop. That path does not close the
-  position and does not write leverage or margin mode.
+  is read from `GET /api/v1/account/margin-mode`. Leverage-info counts
+  only when its payload includes `marginMode` and that mode equals the
+  account read. A missing mode is not replaced with the requested mode.
+  A leverage mismatch blocks with `demo_account_leverage_mismatch`. A
+  demo account that is not isolated blocks with
+  `demo_margin_mode_not_isolated`. An active demo profile does not treat
+  the unprofiled 1% `size_below_minimum` result as the plan result; that
+  plan is sized with `size_for_profile`. After a profile demo fill, the
+  existing kill switch runs before a liquidation or unreadable-liquidation
+  result, including when the observed liquidation price is through the
+  stop and protection is reported attached. An unreadable read is not
+  labeled as a price through the stop. That path does not close the
+  position and does not write leverage or margin mode. A verified demo
+  profile close advances that account's consecutive-loss count on the
+  demo breaker row with the same win-or-loss rule as paper. The next
+  demo entry stays refused while that pause is active. Drawdown reset
+  stays human-only.
 - Claim ceilings for a profile plan are a per-claim view. They are not
   written onto the shared organization-and-account ledger row, so a later
   manual claim keeps the stored cash ceilings.

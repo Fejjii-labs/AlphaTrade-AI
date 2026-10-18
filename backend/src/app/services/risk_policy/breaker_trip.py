@@ -40,6 +40,15 @@ class BreakerRecorder(Protocol):
     ) -> object: ...
 
 
+def profile_close_consecutive(current: int, net_pnl: Decimal) -> int:
+    """A loss increments the streak. A win or a flat close resets it.
+
+    This does not reset a drawdown latch and does not place an order.
+    """
+
+    return 0 if net_pnl >= 0 else current + 1
+
+
 def trip_breakers(
     recorder: BreakerRecorder,
     *,

@@ -199,8 +199,7 @@ class GovernedBloFinDemoProvider:
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
         with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
-            # Read only. leverage-info echoes the requested mode, so it cannot prove it.
-            # This provider never sends a margin-mode or leverage write.
+            # Read only. This provider never sends a margin-mode or leverage write.
             account_mode = self._account.get_account_margin_mode()
             if not account_mode.supplied or account_mode.margin_mode not in {"cross", "isolated"}:
                 raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
@@ -212,10 +211,18 @@ class GovernedBloFinDemoProvider:
             if margin_mode == "cross" and observed_mode != "cross":
                 raise ValueError("Demo account margin mode is not cross; no margin-mode mutation.")
         with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
-            # Ask for the mode the account endpoint reported. Ignore any echo.
+            # Ask with the mode the account endpoint reported. The payload must
+            # repeat that mode. A missing field is not replaced by the request.
             leverage = self._account.get_leverage_info(
                 inst_id=instrument, margin_mode=observed_mode
             )
+            if not leverage.margin_mode_supplied:
+                raise ValueError("Demo leverage-info omitted margin mode; no margin-mode mutation.")
+            if leverage.margin_mode != observed_mode:
+                raise ValueError(
+                    "Demo leverage-info margin mode does not match the account; "
+                    "no margin-mode mutation."
+                )
             if required_leverage is not None and leverage.leverage != required_leverage:
                 if required_leverage == Decimal("1"):
                     raise ValueError(

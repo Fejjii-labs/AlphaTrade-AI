@@ -366,9 +366,11 @@ class BloFinAccountProvider:
         position_side_raw = row.get("positionSide")
         venue_mode = row.get("marginMode")
         supplied = venue_mode not in (None, "")
+        # A missing marginMode is not filled in from the request. The caller
+        # cannot treat that echo as the account mode.
         return AccountLeverageInfo(
             inst_id=str(row.get("instId", inst_id)),
-            margin_mode=str(venue_mode) if supplied else margin_mode,
+            margin_mode=str(venue_mode).lower() if supplied else "",
             leverage=_to_decimal(row.get("leverage", "0")),
             position_side=str(position_side_raw) if position_side_raw not in (None, "") else None,
             margin_mode_supplied=supplied,
