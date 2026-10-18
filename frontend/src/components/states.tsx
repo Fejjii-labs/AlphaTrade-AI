@@ -1,29 +1,39 @@
+import type { ReactNode } from "react";
 import { AlertTriangle, Ban, Clock, Inbox, Info, ShieldOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { SkeletonCard } from "@/components/ui/skeleton";
+import { IconTile } from "@/components/ui/icon-tile";
+import { SkeletonCard, StatStripSkeleton, TableSkeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+
+const bodyText = "text-[length:var(--text-body)] leading-[1.55]";
 
 export function EmptyState({
   title,
   description,
+  action,
   className,
 }: {
   title: string;
   description?: string;
+  /** One next action. Existing callers omit it. */
+  action?: ReactNode;
   className?: string;
 }) {
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center rounded-card border border-dashed border-border bg-surface-0/40 px-6 py-12 text-center",
+        "flex flex-col items-center justify-center rounded-card border border-dashed border-border bg-surface-1 px-6 py-10 text-center",
         className,
       )}
       data-testid="empty-state"
     >
-      <Inbox className="mb-3 h-8 w-8 text-text-disabled" aria-hidden="true" />
-      <h3 className="text-base font-medium text-text-primary">{title}</h3>
-      {description ? <p className="mt-2 max-w-md text-sm text-text-muted">{description}</p> : null}
+      <IconTile icon={Inbox} tone="muted" />
+      <h3 className="text-section mt-3">{title}</h3>
+      {description ? (
+        <p className={cn("mt-1 max-w-md text-text-muted", bodyText)}>{description}</p>
+      ) : null}
+      {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
 }
@@ -31,9 +41,11 @@ export function EmptyState({
 export function LoadingState({
   label = "Loading…",
   className,
+  preset = "card",
 }: {
   label?: string;
   className?: string;
+  preset?: "card" | "stat-strip" | "table";
 }) {
   return (
     <div
@@ -42,8 +54,10 @@ export function LoadingState({
       className={cn("space-y-3", className)}
       data-testid="loading-state"
     >
-      <p className="text-sm text-text-muted">{label}</p>
-      <SkeletonCard />
+      <p className="text-[length:var(--text-caption)] leading-[1.4] text-text-muted">{label}</p>
+      {preset === "stat-strip" ? <StatStripSkeleton /> : null}
+      {preset === "table" ? <TableSkeleton /> : null}
+      {preset === "card" ? <SkeletonCard /> : null}
     </div>
   );
 }
@@ -52,7 +66,7 @@ export function SuccessState({ message, className }: { message: string; classNam
   return (
     <div
       className={cn(
-        "rounded-card border border-success-border bg-success-muted px-6 py-4 text-center text-sm text-success",
+        "rounded-card border border-success-border bg-success-muted px-6 py-4 text-center text-[length:var(--text-body)] leading-[1.55] text-success",
         className,
       )}
     >
@@ -84,7 +98,7 @@ export function ErrorState({
       )}
     >
       <AlertTriangle className="mx-auto mb-2 h-5 w-5 text-danger" aria-hidden="true" />
-      <p className="text-sm text-danger">{message}</p>
+      <p className="text-[length:var(--text-body)] leading-[1.55] text-danger">{message}</p>
       {onRetry ? (
         <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onRetry}>
           Retry
@@ -108,7 +122,7 @@ export function StaleState({
       role="status"
       data-testid="stale-state"
       className={cn(
-        "rounded-card border border-stale-border bg-stale-muted px-4 py-3 text-sm text-stale",
+        "rounded-card border border-stale-border bg-stale-muted px-4 py-3 text-[length:var(--text-body)] leading-[1.55] text-stale",
         className,
       )}
     >
@@ -143,7 +157,7 @@ export function LimitationsState({
       role="status"
       data-testid="limitations-state"
       className={cn(
-        "rounded-card border border-border bg-surface-1 px-4 py-3 text-sm text-text-primary",
+        "rounded-card border border-border bg-surface-1 px-4 py-3 text-[length:var(--text-body)] leading-[1.55] text-text-primary",
         className,
       )}
     >
@@ -153,7 +167,7 @@ export function LimitationsState({
           <p className="font-medium text-text-primary">{title}</p>
           <p className="text-text-secondary">{message}</p>
           {items && items.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-caption text-text-secondary">
+            <ul className="mt-2 space-y-1 text-[length:var(--text-caption)] leading-[1.4] text-text-secondary">
               {items.map((item) => (
                 <li key={item}>• {item}</li>
               ))}
@@ -177,7 +191,7 @@ export function BlockedState({
       role="alert"
       data-testid="blocked-state"
       className={cn(
-        "rounded-card border border-blocked-border bg-blocked-muted px-4 py-3 text-sm",
+        "rounded-card border border-blocked-border bg-blocked-muted px-4 py-3 text-[length:var(--text-body)] leading-[1.55]",
         className,
       )}
     >
@@ -211,7 +225,7 @@ export function UnavailableState({
       )}
     >
       <ShieldOff className="mx-auto mb-2 h-5 w-5 text-text-muted" aria-hidden="true" />
-      <p className="text-sm text-text-secondary">{message}</p>
+      <p className="text-[length:var(--text-body)] leading-[1.55] text-text-secondary">{message}</p>
       {onRetry ? (
         <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={onRetry}>
           Retry

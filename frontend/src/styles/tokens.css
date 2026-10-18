@@ -67,7 +67,7 @@
   --color-mode-paper-muted: rgba(167, 139, 250, 0.12);
   --color-mode-paper-border: rgba(167, 139, 250, 0.35);
 
-  /* DEMO is cyan. Tokens only until the mode pill is wired. */
+  /* DEMO is cyan. ModePill and the demo badge use these tokens. */
   --color-mode-demo: #22d3ee;
   --color-mode-demo-muted: rgba(34, 211, 238, 0.12);
   --color-mode-demo-border: rgba(34, 211, 238, 0.35);
