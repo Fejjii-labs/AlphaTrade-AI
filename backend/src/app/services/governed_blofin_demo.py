@@ -800,6 +800,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=use_autonomous,
             ),
             clock=self._clock.now,
         )
