@@ -169,6 +169,9 @@ class BuildResult:
     closed: tuple[MirrorDraft, ...]
     opens: tuple[MirrorDraft, ...]
     skipped: int
+    history_incomplete: bool = False
+    funding_incomplete: bool = False
+    positions_complete: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,9 +279,10 @@ def _instruments(rows: list[dict[str, Any]]) -> dict[str, _Instrument]:
 def _parse_slices(
     history: list[dict[str, Any]],
     instruments: dict[str, _Instrument],
-) -> tuple[list[_Slice], int]:
+) -> tuple[list[_Slice], int, bool]:
     slices: list[_Slice] = []
     skipped = 0
+    incomplete = False
     seen: set[str] = set()
     for row in history:
         history_id = row.get("historyId")
@@ -288,6 +292,7 @@ def _parse_slices(
         identity = (history_id, position_id, inst_id, side)
         if not all(isinstance(item, str) and item for item in identity):
             skipped += 1
+            incomplete = True
             continue
         if history_id in seen:
             skipped += 1
@@ -315,6 +320,7 @@ def _parse_slices(
             or not isinstance(position_id, str)
         ):
             skipped += 1
+            incomplete = True
             continue
         position_side = row.get("positionSide")
         direction, conflict = _direction_from_side(
@@ -322,12 +328,13 @@ def _parse_slices(
         )
         if direction is None:
             skipped += 1
+            incomplete = True
             continue
         meta = instruments.get(inst_id)
         leverage = _decimal(row.get("leverage"))
         if leverage is not None and leverage <= 0:
             leverage = None
-        seen.add(history_id)
+        seen.add(str(history_id))
         slices.append(
             _Slice(
                 history_id=history_id,
@@ -349,7 +356,7 @@ def _parse_slices(
                 side_conflict=conflict,
             )
         )
-    return slices, skipped
+    return slices, skipped, incomplete
 
 
 def _price_pnl(sliver: _Slice) -> Decimal | None:
@@ -372,14 +379,24 @@ def _assign_funding(
     bills: list[dict[str, Any]],
     *,
     window_begin: datetime,
-) -> None:
-    """Give each funding bill to one slice. Shared windows stay unverified."""
+) -> bool:
+    """Give each funding bill to one slice. Shared windows stay unverified.
+
+    Returns true when a bill could not be parsed. Those instruments stay
+    unverified so a dropped fee is not treated as zero.
+    """
     parsed: list[tuple[str, datetime, Decimal]] = []
+    unparsed_instruments: set[str] = set()
+    unparsed_unknown = False
     for row in bills:
         inst_id = row.get("instId")
         amount = _decimal(row.get("fundingFee"))
         when = _time(row.get("fundingTime"))
-        if not isinstance(inst_id, str) or amount is None or when is None:
+        if not isinstance(inst_id, str) or not inst_id or amount is None or when is None:
+            if isinstance(inst_id, str) and inst_id:
+                unparsed_instruments.add(inst_id)
+            else:
+                unparsed_unknown = True
             continue
         parsed.append((inst_id, when, amount))
     by_inst: dict[str, list[_Slice]] = {}
@@ -441,6 +458,16 @@ def _assign_funding(
                 total += -amount
         sliver.funding = _money(total)
         sliver.funding_ok = True
+    if unparsed_unknown:
+        for sliver in slices:
+            sliver.funding = None
+            sliver.funding_ok = False
+    else:
+        for sliver in slices:
+            if sliver.inst_id in unparsed_instruments:
+                sliver.funding = None
+                sliver.funding_ok = False
+    return bool(unparsed_instruments) or unparsed_unknown
 
 
 def _order_levels(
@@ -586,19 +613,31 @@ def _open_direction(row: dict[str, Any], quantity: Decimal) -> TradeDirection | 
 def _open_drafts(
     positions: list[dict[str, Any]],
     instruments: dict[str, _Instrument],
-) -> tuple[list[MirrorDraft], int]:
+) -> tuple[list[MirrorDraft], int, bool]:
     drafts: list[MirrorDraft] = []
     skipped = 0
+    complete = True
     for row in positions:
         position_id = row.get("positionId")
         inst_id = row.get("instId")
         quantity = _decimal(row.get("positions"))
-        if not isinstance(position_id, str) or not isinstance(inst_id, str) or quantity is None:
+        if (
+            not isinstance(position_id, str)
+            or not position_id
+            or not isinstance(inst_id, str)
+            or not inst_id
+            or quantity is None
+        ):
             skipped += 1
+            complete = False
             continue
         direction = _open_direction(row, quantity)
-        if direction is None or quantity == 0:
+        if quantity == 0:
             skipped += 1
+            continue
+        if direction is None:
+            skipped += 1
+            complete = False
             continue
         meta = instruments.get(inst_id)
         opened_at = _time(row.get("createTime"))
@@ -636,7 +675,7 @@ def _open_drafts(
                 open_tracker=True,
             )
         )
-    return drafts, skipped
+    return drafts, skipped, complete
 
 
 def drafts_from_raw(
@@ -653,14 +692,17 @@ def drafts_from_raw(
     """Build journal drafts. ``fills[*].fillPnl`` is intentionally unused."""
     del window_end
     meta = _instruments(instruments)
-    slices, skipped = _parse_slices(history, meta)
-    _assign_funding(slices, funding, window_begin=window_begin)
+    slices, skipped, history_incomplete = _parse_slices(history, meta)
+    funding_incomplete = _assign_funding(slices, funding, window_begin=window_begin)
     _attach_orders(slices, fills, orders)
-    opens, open_skipped = _open_drafts(positions, meta)
+    opens, open_skipped, positions_complete = _open_drafts(positions, meta)
     return BuildResult(
         closed=tuple(_draft_from_slice(sliver) for sliver in slices),
         opens=tuple(opens),
         skipped=skipped + open_skipped,
+        history_incomplete=history_incomplete,
+        funding_incomplete=funding_incomplete,
+        positions_complete=positions_complete,
     )
 
 
@@ -839,14 +881,26 @@ class BloFinDemoManualMirror:
             window_end=end,
         )
         page_capped = fills_capped or funding_capped or orders_capped
-        if page_capped:
+        incomplete = (
+            page_capped
+            or built.history_incomplete
+            or built.funding_incomplete
+            or not built.positions_complete
+        )
+        if incomplete:
             built = _without_verified_economics(built)
         report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
+        if page_capped:
+            outcome = "page-cap"
+        elif incomplete:
+            outcome = "incomplete"
+        else:
+            outcome = "ok"
         record_mirror_cycle(
             session,
             organization_id=organization_id,
             user_id=user_id,
-            outcome="page-cap" if page_capped else "ok",
+            outcome=outcome,
         )
         return report
 
@@ -928,6 +982,8 @@ class BloFinDemoManualMirror:
                 updated += 1
             opens_written += 1
         for row in list(by_ref.values()):
+            if not built.positions_complete:
+                break
             ref = row.external_ref or ""
             if not ref.startswith("blofin-demo-open:") or ref in open_refs:
                 continue
@@ -973,7 +1029,14 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
         )
         for draft in built.closed
     )
-    return BuildResult(closed=closed, opens=built.opens, skipped=built.skipped)
+    return BuildResult(
+        closed=closed,
+        opens=built.opens,
+        skipped=built.skipped,
+        history_incomplete=built.history_incomplete,
+        funding_incomplete=built.funding_incomplete,
+        positions_complete=built.positions_complete,
+    )
 
 
 def cycle_marker_ok(row: JournalTrade | None) -> bool:
@@ -1012,6 +1075,7 @@ def record_mirror_cycle(
         "ok": _CYCLE_OK,
         "failed": _CYCLE_FAILED,
         "page-cap": _CYCLE_PAGE_CAP,
+        "incomplete": "mirror-cycle:incomplete",
     }.get(outcome)
     if tag is None:
         raise ValueError("unknown mirror cycle outcome")
@@ -1041,9 +1105,12 @@ def record_mirror_cycle(
     row.fees = None
     row.funding = None
     row.tags = [tag]
-    row.exit_reason = "mirror_page_cap" if outcome == "page-cap" else "mirror_read_failed"
-    if outcome == "ok":
-        row.exit_reason = "mirror_ok"
+    reasons = {
+        "ok": "mirror_ok",
+        "page-cap": "mirror_page_cap",
+        "incomplete": "mirror_incomplete",
+    }
+    row.exit_reason = reasons.get(outcome, "mirror_read_failed")
     session.flush()
 
 

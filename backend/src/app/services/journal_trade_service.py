@@ -582,10 +582,16 @@ class JournalTradeService:
 
     def delete(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> None:
         row = self._get_row(trade_id, organization_id=organization_id)
+        ref = row.external_ref or ""
         if cycle_marker_locked(row):
             raise ValidationAppError(
                 "The hand-trade mirror cycle marker cannot be deleted here.",
                 details={"reason": "mirror_cycle_immutable"},
+            )
+        if ref.startswith("blofin-demo-history:"):
+            raise ValidationAppError(
+                "A mirrored BloFin demo close cannot be deleted here.",
+                details={"reason": "mirror_row_immutable"},
             )
         for child_repo in (self._evidence, self._rule_checks, self._observations):
             for child in child_repo.list_for_trade(row.id):

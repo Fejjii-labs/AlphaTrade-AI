@@ -12,7 +12,11 @@ unless the stored cycle marker's only cycle tag is `mirror-cycle:ok`.
 That marker cannot be created, edited, retagged, or deleted through the
 journal API. Two slices of one position that close at the same time do not
 verify funding. A funding timestamp that falls in more than one slice
-leaves every claimant unverified.
+leaves every claimant unverified. A history row or funding bill that does
+not parse, or a positions row that does not parse, withholds the cycle.
+A repeated `historyId` does not. An open tracker is cancelled only when
+every positions row parsed. A closed `blofin-demo-history:` row cannot be
+deleted through the journal API.
 
 The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change

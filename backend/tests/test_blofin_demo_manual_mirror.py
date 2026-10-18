@@ -733,6 +733,79 @@ def test_touching_positions_do_not_verify_a_shared_funding_bill() -> None:
     assert all(draft.funding is None for draft in closed)
 
 
+def test_unparsed_history_and_funding_withhold_and_a_duplicate_does_not(
+    session: Session,
+) -> None:
+    broken = dict(_FIXTURE["long"])
+    broken["history"] = [{"historyId": "", "side": "buy"}, *_FIXTURE["long"]["history"]]
+    _apply(session, broken)
+    row = _rows(session)[0]
+    assert row.net_pnl is None
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None
+    assert cycle.tags == ["mirror-cycle:incomplete"]
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+
+    session.delete(cycle)
+    for trade in _rows(session):
+        session.delete(trade)
+    session.commit()
+    duplicate = dict(_FIXTURE["long"])
+    duplicate["history"] = [*_FIXTURE["long"]["history"], dict(_FIXTURE["long"]["history"][0])]
+    _apply(session, duplicate)
+    verified = _rows(session)[0]
+    assert verified.net_pnl is not None
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None and cycle.tags == ["mirror-cycle:ok"]
+
+    bad_fee = dict(_FIXTURE["long"])
+    bad_fee["funding"] = [
+        {
+            "billId": "b-bad",
+            "instId": "BTC-USDT",
+            "fundingFee": 0.004,
+            "fundingTime": "1792224000000",
+        }
+    ]
+    _apply(session, bad_fee)
+    assert _rows(session)[0].net_pnl is None
+    session.refresh(cycle)
+    assert cycle.tags == ["mirror-cycle:incomplete"]
+
+
+def test_closed_mirror_row_cannot_be_deleted_and_a_bad_position_is_not_flat(
+    session: Session,
+) -> None:
+    _apply(session, _FIXTURE["partial_open"])
+    service = JournalTradeService(session, AuditService(session))
+    closed = next(row for row in _rows(session) if row.status is JournalTradeStatus.CLOSED)
+    tracker = next(row for row in _rows(session) if row.status is JournalTradeStatus.OPEN)
+    with pytest.raises(ValidationAppError) as blocked:
+        service.delete(closed.id, organization_id=ORG)
+    assert blocked.value.details["reason"] == "mirror_row_immutable"
+    session.refresh(closed)
+    assert closed.status is JournalTradeStatus.CLOSED
+    bundle = _paths(_FIXTURE["partial_open"])
+    bundle["positions"] = [{"positionId": 1}]
+    BloFinDemoManualMirror(_Client(bundle), now=NOW).apply(
+        session,
+        organization_id=ORG,
+        user_id=USER,
+        settings=_settings(),
+    )
+    session.commit()
+    session.refresh(tracker)
+    assert tracker.status is JournalTradeStatus.OPEN
+    assert tracker.exit_reason != "flat_on_venue"
+
+
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:
     strategy = uuid.uuid4()
     assert strategy_group_key(
