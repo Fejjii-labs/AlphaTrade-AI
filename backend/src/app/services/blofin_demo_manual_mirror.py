@@ -389,7 +389,10 @@ def _assign_funding(
     for group in by_inst.values():
         for index, left in enumerate(group):
             for right in group[index + 1 :]:
-                if left.position_id != right.position_id and _overlaps(left, right):
+                same_position = left.position_id == right.position_id
+                shared_close = same_position and left.closed_at == right.closed_at
+                shared_window = not same_position and _overlaps(left, right)
+                if shared_close or shared_window:
                     ambiguous.add(id(left))
                     ambiguous.add(id(right))
     for sliver in slices:
@@ -952,6 +955,30 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
     return BuildResult(closed=closed, opens=built.opens, skipped=built.skipped)
 
 
+def cycle_marker_ok(row: JournalTrade | None) -> bool:
+    """True only when the stored marker's sole cycle tag is a successful read."""
+    if row is None:
+        return False
+    tags = [
+        tag for tag in (row.tags or []) if isinstance(tag, str) and tag.startswith("mirror-cycle:")
+    ]
+    return tags == [_CYCLE_OK]
+
+
+def _cycle_tags(tags: object) -> set[str]:
+    if not isinstance(tags, list):
+        return set()
+    return {tag for tag in tags if isinstance(tag, str) and tag.startswith("mirror-cycle:")}
+
+
+def cycle_marker_locked(row: JournalTrade) -> bool:
+    return (row.external_ref or "") == _CYCLE_REF
+
+
+def cycle_tags_rewritten(before: object, after: object) -> bool:
+    return _cycle_tags(before) != _cycle_tags(after)
+
+
 def record_mirror_cycle(
     session: Session,
     *,
@@ -1082,21 +1109,6 @@ def publish_mirror_performance(
             JournalTrade.external_ref == _CYCLE_REF,
         )
     )
-    cycle_tags = list(cycle.tags or []) if cycle is not None else []
-    if _CYCLE_FAILED in cycle_tags or _CYCLE_PAGE_CAP in cycle_tags:
-        performance.manual_mirror_status = "withheld"
-        performance.manual_mirror_reason = (
-            "Win rate and realized P&L stay withheld. The latest hand-trade "
-            "mirror read failed or stopped at the page cap, so the journal "
-            "is not a complete account."
-        )
-        performance.average_r = None
-        performance.win_rate = None
-        performance.trade_count = None
-        performance.wins = None
-        performance.losses = None
-        performance.realized_pnl = None
-        return
     rows = list(
         session.scalars(
             select(JournalTrade).where(
@@ -1106,6 +1118,21 @@ def publish_mirror_performance(
             )
         ).all()
     )
+    rows = [row for row in rows if row.external_ref != _CYCLE_REF]
+    if not cycle_marker_ok(cycle) and (rows or cycle is not None):
+        performance.manual_mirror_status = "withheld"
+        performance.manual_mirror_reason = (
+            "Win rate and realized P&L stay withheld. The latest hand-trade "
+            "mirror read is missing, failed, or stopped at the page cap, so "
+            "the journal is not a complete account."
+        )
+        performance.average_r = None
+        performance.win_rate = None
+        performance.trade_count = None
+        performance.wins = None
+        performance.losses = None
+        performance.realized_pnl = None
+        return
     unverified = [row for row in rows if not _verified_row(row)]
     if unverified:
         performance.manual_mirror_status = "withheld"

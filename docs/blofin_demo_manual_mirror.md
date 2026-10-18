@@ -7,7 +7,11 @@ refresh interval. The snapshot itself is not fetched again while it is fresh.
 A mirror read failure rolls back only the mirror write and does not back off
 the snapshot cycle. That failure is stored, and the card stays withheld.
 Positions history that finishes is kept when fills, funding, or orders hit
-the page cap. Those rows stay unverified, and the headline stays withheld.
+the page cap. Those rows stay unverified, and the headline stays withheld
+unless the stored cycle marker's only cycle tag is `mirror-cycle:ok`.
+That marker cannot be created, edited, retagged, or deleted through the
+journal API. Two slices of one position that close at the same time do not
+verify funding.
 
 The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change

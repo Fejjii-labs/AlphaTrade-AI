@@ -68,7 +68,12 @@ from app.schemas.journal_trades import (
     JournalTradeUpdate,
 )
 from app.services.audit_service import AuditService
-from app.services.blofin_demo_manual_mirror import annotation_allowed, grade_tag
+from app.services.blofin_demo_manual_mirror import (
+    annotation_allowed,
+    cycle_marker_locked,
+    cycle_tags_rewritten,
+    grade_tag,
+)
 from app.services.canonical_serialization import canonical_sha256
 
 _REQUEST_TAG = "journal-trades-api"
@@ -168,6 +173,11 @@ class JournalTradeService:
             raise ValidationAppError(
                 "A BloFin demo hand-trade row is written only by the read-only mirror.",
                 details={"reason": "mirror_source_immutable"},
+            )
+        if data.external_ref == "blofin-demo-mirror-cycle" or cycle_tags_rewritten([], data.tags):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be created here.",
+                details={"reason": "mirror_cycle_immutable"},
             )
         self._validate_strategy_links(
             organization_id=organization_id,
@@ -440,6 +450,16 @@ class JournalTradeService:
     ) -> JournalTradeRead:
         row = self._get_row(trade_id, organization_id=organization_id)
         updates = data.model_dump(exclude_unset=True)
+        if cycle_marker_locked(row) or updates.get("external_ref") == "blofin-demo-mirror-cycle":
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
+        if "tags" in updates and cycle_tags_rewritten(row.tags, updates.get("tags")):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
         if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
             _reject_mirror_venue_edit(row, updates)
         if row.execution_lifecycle_id is not None:
@@ -562,6 +582,11 @@ class JournalTradeService:
 
     def delete(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> None:
         row = self._get_row(trade_id, organization_id=organization_id)
+        if cycle_marker_locked(row):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be deleted here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
         for child_repo in (self._evidence, self._rule_checks, self._observations):
             for child in child_repo.list_for_trade(row.id):
                 self._session.delete(child)

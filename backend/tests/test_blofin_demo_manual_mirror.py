@@ -665,6 +665,48 @@ def test_capped_fills_keep_positions_history_and_withhold(
     assert held.performance.realized_pnl is None
 
 
+def test_cycle_marker_cannot_be_rewritten_or_deleted(session: Session) -> None:
+    _apply(session, _FIXTURE["long"])
+    service = JournalTradeService(session, AuditService(session))
+    cycle = session.scalar(
+        select(JournalTrade).where(JournalTrade.external_ref == "blofin-demo-mirror-cycle")
+    )
+    assert cycle is not None
+    with pytest.raises(ValidationAppError) as rewritten:
+        service.update(
+            cycle.id,
+            JournalTradeUpdate(tags=["mirror-cycle:failed"]),
+            organization_id=ORG,
+        )
+    assert rewritten.value.details["reason"] == "mirror_cycle_immutable"
+    with pytest.raises(ValidationAppError) as deleted:
+        service.delete(cycle.id, organization_id=ORG)
+    assert deleted.value.details["reason"] == "mirror_cycle_immutable"
+    session.refresh(cycle)
+    assert cycle.tags == ["mirror-cycle:ok"]
+    cycle.tags = []
+    session.commit()
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    held = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(held, session=session, tenant=tenant, settings=_settings())
+    assert held.performance.manual_mirror_status == "withheld"
+    assert held.performance.realized_pnl is None
+
+
+def test_equal_close_times_leave_funding_unverified() -> None:
+    base = dict(_FIXTURE["long"]["history"][0])
+    second = dict(base)
+    second["historyId"] = "h-same-close"
+    second["closePositions"] = "1"
+    second["maxPositions"] = "2"
+    second["realizedPnl"] = "0.1"
+    built = _drafts([base, second], funding=_FIXTURE["long"]["funding"])
+    closed = built.closed  # type: ignore[attr-defined]
+    assert len(closed) == 2
+    assert all(draft.verified is False for draft in closed)
+    assert all(draft.funding is None for draft in closed)
+
+
 def test_strategy_group_uses_the_hand_label_only_for_mirrored_rows() -> None:
     strategy = uuid.uuid4()
     assert strategy_group_key(
