@@ -2615,5 +2615,5 @@ Status: in progress on `cursor/blofin-demo-manual-journal-c6b5`, draft against
 fills, and orders. Flag `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and
 is not set here. `fillPnl` stays unused. No migration, no env or Render edit,
 no live trading. Contract: `docs/blofin_demo_manual_mirror.md`. Decision:
-AT-ADR-111. Numbers 107–110 are already used by the open grade-risk, snapshot,
-and paper-exit pull requests.
+AT-ADR-112. Numbers 107–111 are already used by open PRs 278–281. PR 279
+uses AT-ADR-110 and AT-ADR-111 (paper and demo promotion exception).

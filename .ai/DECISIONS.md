@@ -3354,9 +3354,12 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
   Sofien approves the worker env names.
 
-## AT-ADR-111 — Mirror BloFin demo hand trades from positions history, not fillPnl
+## AT-ADR-112 — Mirror BloFin demo hand trades from positions history, not fillPnl
 
 - Date: 2026-10-18
+- Number: AT-ADR-112. PR 279 already uses AT-ADR-111 for Sofien's paper and
+  demo promotion exception, and AT-ADR-110 for the 5% per-trade ceiling.
+  PRs 278, 280, and 281 do not use 112.
 - Decision: Sofien's hand trades on the BloFin demo account are mirrored into
   the canonical journal from read-only `GET /api/v1/account/positions-history`,
   funding-fee history, fills (order ids only), and orders history. The flag
