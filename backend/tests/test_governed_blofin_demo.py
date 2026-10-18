@@ -83,6 +83,19 @@ class Venue:
             data = {"readOnly": 1 if self.behavior == "permissions" else 0}
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
+        elif path.endswith("/margin-mode"):
+            data = {"marginMode": "cross"}
+        elif path.endswith("position-tiers"):
+            data = [
+                {
+                    "instId": "BTC-USDT",
+                    "marginMode": "cross",
+                    "minSize": "0",
+                    "maxSize": "100000",
+                    "maintenanceMarginRate": "0.004",
+                    "maxLeverage": "125",
+                }
+            ]
         elif path.endswith("leverage-info"):
             data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": "1"}
         elif path.endswith("instruments"):

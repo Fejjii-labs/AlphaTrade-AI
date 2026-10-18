@@ -5,6 +5,9 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas.telegram_policy import NotificationEventType
 from app.strategy_brain.sfp.approach import (
     approach_alert_summaries,
@@ -106,3 +109,29 @@ def test_approach_fires_at_one_tenth_percent_once_and_before_a_sweep() -> None:
         cooldowns={},
     )
     assert silent == ()
+
+
+def test_approach_cooldown_rejects_zero_and_enforces_sixty_seconds() -> None:
+    from app.strategy_brain.sfp.contracts import SfpParameters
+
+    current = sfp_research_v2_parameters()
+    assert current.approach_cooldown_seconds == 900
+    payload = current.model_dump(mode="python")
+    with pytest.raises(ValidationError):
+        SfpParameters.model_validate({**payload, "approach_cooldown_seconds": 0})
+    with pytest.raises(ValidationError):
+        SfpParameters.model_validate({**payload, "approach_cooldown_seconds": 59})
+    accepted = SfpParameters.model_validate({**payload, "approach_cooldown_seconds": 60})
+    assert accepted.approach_cooldown_seconds == 60
+    assert (
+        approach_hits(
+            price=Decimal("100"),
+            levels=(),
+            proximity=Decimal("0.001"),
+            minimum_sweep_depth=Decimal("0.002"),
+            now=evidence()[0][-1].interval_end,
+            cooldowns={},
+            cooldown_seconds=0,
+        )
+        == ()
+    )

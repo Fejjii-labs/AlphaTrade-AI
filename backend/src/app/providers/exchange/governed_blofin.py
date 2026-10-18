@@ -53,9 +53,11 @@ class DemoVenueSnapshot:
     book: DemoOrderBook
     account_observed_at: datetime
     native_account_uid: str | None = None
-    # Read from leverage-info. This provider never writes leverage or margin mode.
+    # Read from the margin-mode endpoint and leverage-info. Never written.
     account_leverage: Decimal = Decimal("1")
     margin_mode: str = "cross"
+    # (notional floor, maintenance rate) from public position tiers. Empty refuses a profile plan.
+    maintenance_tiers: tuple[tuple[Decimal, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,33 @@ def _account_rows(data: Any) -> list[dict[str, Any]]:
     ):
         raise ValueError("Demo account state incomplete or unreadable.")
     return data
+
+
+def _tier_sizes(data: Any) -> tuple[tuple[Decimal, Decimal], ...]:
+    """Public position tiers as (minimum contracts, maintenance rate). No write."""
+
+    message = "Demo maintenance tiers unavailable; no leverage mutation."
+    if not isinstance(data, list) or not data:
+        raise ValueError(message)
+    tiers: list[tuple[Decimal, Decimal]] = []
+    for row in data:
+        if not isinstance(row, dict):
+            raise ValueError(message)
+        try:
+            rate = Decimal(str(row.get("maintenanceMarginRate")))
+            min_size = Decimal(str(row.get("minSize") or "0"))
+        except Exception as exc:
+            raise ValueError(message) from exc
+        if (
+            not rate.is_finite()
+            or rate < 0
+            or rate >= 1
+            or not min_size.is_finite()
+            or min_size < 0
+        ):
+            raise ValueError(message)
+        tiers.append((min_size, rate))
+    return tuple(tiers)
 
 
 def _positive(value: Any) -> Decimal:
@@ -169,17 +198,24 @@ class GovernedBloFinDemoProvider:
             minimum = venue_decimal(row.get("minSize"))
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
-        with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
-            # Read only. This provider never sends a leverage or margin-mode write.
-            # A profile plan reads the isolated configuration. The default read stays cross.
-            leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode=margin_mode)
-            if not leverage.margin_mode_supplied:
-                raise ValueError("Demo leverage-info omitted margin mode; no margin-mode mutation.")
-            observed_mode = str(leverage.margin_mode)
-            if margin_mode == "isolated" and observed_mode.lower() != "isolated":
+        with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
+            # Read only. leverage-info echoes the requested mode, so it cannot prove it.
+            # This provider never sends a margin-mode or leverage write.
+            account_mode = self._account.get_account_margin_mode()
+            if not account_mode.supplied or account_mode.margin_mode not in {"cross", "isolated"}:
+                raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
+            observed_mode = account_mode.margin_mode
+            if margin_mode == "isolated" and observed_mode != "isolated":
                 raise ValueError(
                     "Demo account margin mode is not isolated; no margin-mode mutation."
                 )
+            if margin_mode == "cross" and observed_mode != "cross":
+                raise ValueError("Demo account margin mode is not cross; no margin-mode mutation.")
+        with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
+            # Ask for the mode the account endpoint reported. Ignore any echo.
+            leverage = self._account.get_leverage_info(
+                inst_id=instrument, margin_mode=observed_mode
+            )
             if required_leverage is not None and leverage.leverage != required_leverage:
                 if required_leverage == Decimal("1"):
                     raise ValueError(
@@ -188,6 +224,13 @@ class GovernedBloFinDemoProvider:
                 raise ValueError(
                     "Demo account leverage does not match required leverage; no leverage mutation."
                 )
+        with preflight_stage("position_tiers", "GET /api/v1/market/position-tiers"):
+            tier_rows = self._client.request(
+                "GET",
+                "/api/v1/market/position-tiers",
+                params={"instId": instrument, "marginMode": observed_mode},
+            )
+            tier_sizes = _tier_sizes(tier_rows)
         account_observed_at = self._clock()
         self.verify_flat_account()
         with preflight_stage("balance", "GET /api/v1/account/balance"):
@@ -221,6 +264,9 @@ class GovernedBloFinDemoProvider:
             book.worst_price(
                 minimum if quantity is None else quantity, lot=lot, minimum=minimum, maximum=maximum
             )
+        maintenance_tiers = tuple(
+            (min_size * multiplier * book.price, rate) for min_size, rate in tier_sizes
+        )
         return DemoVenueSnapshot(
             instrument=instrument,
             price=book.price,
@@ -236,7 +282,8 @@ class GovernedBloFinDemoProvider:
             account_observed_at=account_observed_at,
             native_account_uid=self._account.native_account_uid,
             account_leverage=leverage.leverage,
-            margin_mode=str(leverage.margin_mode),
+            margin_mode=observed_mode,
+            maintenance_tiers=maintenance_tiers,
         )
 
     def verify_flat_account(self) -> None:
@@ -277,6 +324,20 @@ class GovernedBloFinDemoProvider:
                 and self._account.native_account_uid != self._expected_native_uid
             ):
                 raise ValueError("Demo execution connection differs from the owned native account.")
+
+    def read_open_liquidation(self, *, inst_id: str) -> Decimal | None:
+        """Liquidation price of one open position. None when that market is flat.
+
+        A missing price on an open position is not treated as safe. Callers
+        distinguish None (flat) from a read that raises.
+        """
+
+        for position in self._account.get_positions():
+            if position.inst_id == inst_id:
+                if position.liquidation_price is None or position.liquidation_price <= 0:
+                    raise ValueError("Demo liquidation price unavailable.")
+                return position.liquidation_price
+        return None
 
     def reconcile_exit(
         self, *, plan: TradePlanRevision, entry: DemoOrderEvidence

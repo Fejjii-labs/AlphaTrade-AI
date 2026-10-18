@@ -185,6 +185,11 @@ class CanonicalPaperExecutionService:
             payload["lineage"] = _lineage_payload(envelope, command_id, self._runtime).model_dump(
                 mode="json", exclude_none=True
             )
+            if (
+                envelope.plan.risk_and_exits.margin_assumption_id == "paper-profile-isolated"
+                and fill.weighted_price is not None
+            ):
+                _journal_paper_liquidation(payload, envelope.plan, fill.weighted_price)
             if fill.replayed:
                 # A verified immutable fill may be replayed after PostgreSQL has
                 # applied its numeric scale, or after later partial fills have
@@ -364,6 +369,19 @@ class CanonicalPaperExecutionService:
                     details={"reason": "missing_journal_trade"},
                 )
             self._session.refresh(trade)
+            if (
+                not projection.replayed
+                and envelope.plan.risk_and_exits.margin_assumption_id == "paper-profile-isolated"
+                and trade.net_pnl is not None
+            ):
+                _note_profile_close(
+                    self._session,
+                    organization_id=request.organization_id,
+                    user_id=request.user_id,
+                    account_id=request.account_id,
+                    net_pnl=trade.net_pnl,
+                    now=request.occurred_at,
+                )
             if (
                 trade.entry_price is None
                 or trade.exit_price is None
@@ -577,6 +595,83 @@ class CanonicalPaperExecutionService:
 
 def is_canonical_plan_authority(plan_authority: str | None) -> bool:
     return plan_authority == PLAN_AUTHORITY_CANONICAL
+
+
+def _journal_paper_liquidation(
+    payload: dict[str, object], plan: TradePlanRevision, fill_price: Decimal
+) -> None:
+    """Record a post-fill liquidation-versus-stop verdict. Does not close or write."""
+
+    from app.services.risk_policy.decision import post_fill_recheck
+    from app.services.risk_policy.errors import RiskPolicyRejected
+    from app.services.risk_policy.liquidation import isolated_liquidation_price
+    from app.services.risk_policy.plan_sizing import (
+        PAPER_CONSERVATIVE_MAINTENANCE_RATE,
+        PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+    )
+
+    direction = "long" if plan.side is EntrySide.BUY else "short"
+    try:
+        liquidation = isolated_liquidation_price(
+            entry=fill_price,
+            leverage=plan.risk_and_exits.leverage,
+            maintenance_rate=PAPER_CONSERVATIVE_MAINTENANCE_RATE,
+            direction=direction,
+        )
+    except RiskPolicyRejected:
+        liquidation = plan.risk_and_exits.stop.value
+    outcome = post_fill_recheck(
+        fill_price=fill_price,
+        stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
+        atr=None,
+        leverage=plan.risk_and_exits.leverage,
+        notional=fill_price,
+        margin_mode="isolated",
+        tiers=PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+        direction=direction,
+        stop_price=plan.risk_and_exits.stop.value,
+        observed_liquidation_price=liquidation,
+    )
+    if outcome.accepted or outcome.exchange_write_attempted:
+        return
+    payload["post_fill_action"] = outcome.action
+    payload["post_fill_reason"] = outcome.reason
+    payload["exchange_write_attempted"] = False
+
+
+def _note_profile_close(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    account_id: UUID,
+    net_pnl: Decimal,
+    now: datetime,
+) -> None:
+    """Advance consecutive losses, then persist the breaker verdict. No reset."""
+
+    from app.services.audit_service import AuditService
+    from app.services.automated_paper_loop import _load_active_profile
+    from app.services.risk_policy.breaker_trip import persist_profile_breakers
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.profile import PolicyKind
+
+    active = _load_active_profile(session, organization_id, PolicyKind.INTERNAL_PAPER, now)
+    if active is None:
+        return
+    service = RiskPolicyService(session, AuditService(session))
+    row = service.load_breaker(organization_id=organization_id, account_id=account_id)
+    current = 0 if row is None else int(row.consecutive_losses)
+    consecutive = 0 if net_pnl >= 0 else current + 1
+    persist_profile_breakers(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        profile=active.profile,
+        now=now,
+        consecutive_losses=consecutive,
+    )
 
 
 def _attach_approval_channel(

@@ -35,7 +35,7 @@ def approach_hits(
     is not an approach.
     """
 
-    if price <= 0 or proximity <= 0 or now.tzinfo is None:
+    if price <= 0 or proximity <= 0 or now.tzinfo is None or cooldown_seconds < 60:
         return ()
     found: list[StructuralLevel] = []
     window = timedelta(seconds=cooldown_seconds)

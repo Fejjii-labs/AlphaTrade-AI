@@ -96,6 +96,40 @@ def liquidation_distance(
     return distance
 
 
+def liquidation_crosses_stop(
+    *, direction: str, liquidation_price: Decimal, stop: Decimal
+) -> bool:
+    """True when the venue or formula liquidation price is through the stop.
+
+    Long: liquidation at or above the stop. Short: at or below the stop.
+    """
+
+    if direction == "long":
+        return liquidation_price >= stop
+    if direction == "short":
+        return liquidation_price <= stop
+    raise RiskPolicyRejected("direction_missing")
+
+
+def isolated_liquidation_price(
+    *,
+    entry: Decimal,
+    leverage: Decimal,
+    maintenance_rate: Decimal,
+    direction: str,
+) -> Decimal:
+    """Isolated liquidation price from the maintenance formula. No venue call."""
+
+    distance = liquidation_distance(
+        entry=entry, leverage=leverage, maintenance_rate=maintenance_rate
+    )
+    if direction == "long":
+        return entry - distance
+    if direction == "short":
+        return entry + distance
+    raise RiskPolicyRejected("direction_missing")
+
+
 def leverage_clearing_buffer(
     *,
     entry: Decimal,

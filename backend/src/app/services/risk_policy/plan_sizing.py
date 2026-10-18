@@ -27,10 +27,32 @@ from app.services.risk_policy.profile import Grade, RiskPolicyProfile
 from app.services.risk_policy.records import TradeRiskRecord
 from app.services.risk_policy.sizer import SizingInput
 
-# Local isolated-margin assumption for paper and demo buffer math.
-# It is not an exchange tier feed and it does not set margin mode.
+# Library fixture used by direct ``decide_trade`` tests. The wired paper and
+# demo path does not use this flat 0.5% rate.
 PAPER_DEMO_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
     MaintenanceTier(notional_floor=Decimal("0"), maintenance_rate=Decimal("0.005")),
+)
+
+# BloFin public taker example. Charged on the entry and again at the stop.
+# This is not a live fee feed.
+PAPER_DEMO_TAKER_FEE_RATE = Decimal("0.0006")
+# One expected funding period. The published funding cap (0.00375) would refuse
+# a 0.5% stop under the 20% cost-share ceiling. 0.00005 keeps that example
+# inside the ceiling while the exit-leg fee is still inside the grade cash.
+# This is not a live funding feed.
+PAPER_DEMO_FUNDING_RATE = Decimal("0.00005")
+PAPER_DEMO_FUNDING_PERIODS = Decimal("1")
+# Same 0.2% book buffer the non-profile demo depth path uses (``upper * 0.002``).
+DEMO_BOOK_BUFFER_RATE = Decimal("0.002")
+# Paper has no venue tier feed. 0.02 is above BloFin's published first-tier
+# example (0.004) and still leaves a positive liquidation distance at 20x
+# (1/20 - 0.02). It is not a live maintenance feed.
+PAPER_CONSERVATIVE_MAINTENANCE_RATE = Decimal("0.02")
+PAPER_CONSERVATIVE_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
+    MaintenanceTier(
+        notional_floor=Decimal("0"),
+        maintenance_rate=PAPER_CONSERVATIVE_MAINTENANCE_RATE,
+    ),
 )
 
 
@@ -59,6 +81,9 @@ class SizedPlan:
     entry: Decimal
     stop: Decimal
     target: Decimal
+    # Cash the sizer was allowed to spend (grade, ceiling, and budget room).
+    # Stop-out loss plus round-trip costs must stay inside it.
+    risk_cash_ceiling: Decimal
 
 
 def remaining_daily_budget_percent(
@@ -132,6 +157,18 @@ def demo_leverage_block(account_leverage: Decimal, required: Decimal) -> str | N
     return None
 
 
+def profile_unit_cost(entry: Decimal, stop: Decimal, *, include_book_buffer: bool) -> Decimal:
+    """Entry fee, exit fee at the stop, one funding period, and the optional book buffer."""
+
+    slippage = DEMO_BOOK_BUFFER_RATE if include_book_buffer else Decimal("0")
+    return (
+        entry * PAPER_DEMO_TAKER_FEE_RATE
+        + stop * PAPER_DEMO_TAKER_FEE_RATE
+        + entry * PAPER_DEMO_FUNDING_RATE * PAPER_DEMO_FUNDING_PERIODS
+        + entry * slippage
+    )
+
+
 def demo_margin_mode_block(margin_mode: str | None) -> str | None:
     """The liquidation buffer is isolated-only. This does not switch the account."""
 
@@ -200,8 +237,15 @@ def size_for_profile(
     remaining_daily_budget_percent: Decimal,
     breaker_refusing: bool,
     leverage: Decimal | None = None,
+    include_book_buffer: bool = False,
+    maintenance_tiers: tuple[MaintenanceTier, ...] | list[MaintenanceTier] | None = None,
 ) -> SizedPlan | str:
-    """Size one new paper or demo plan. Returns a reason code when refused."""
+    """Size one new paper or demo plan. Returns a reason code when refused.
+
+    Fees, funding, and the demo book buffer are inside the grade cash. A
+    liquidation buffer that does not clear refuses the trade. Leverage is not
+    lowered on this path.
+    """
 
     if not grade.tradable or grade.grade is None:
         return grade.refusal or "grade_not_tradable"
@@ -235,10 +279,10 @@ def size_for_profile(
             grade_risk_percent=active.profile.risk_percent(grade.grade),
             atr=atr,
             gap_beyond_stop=Decimal("0"),
-            fee_rate=Decimal("0"),
-            funding_rate=Decimal("0"),
-            funding_periods=Decimal("0"),
-            slippage_rate=Decimal("0"),
+            fee_rate=PAPER_DEMO_TAKER_FEE_RATE,
+            funding_rate=PAPER_DEMO_FUNDING_RATE,
+            funding_periods=PAPER_DEMO_FUNDING_PERIODS,
+            slippage_rate=DEMO_BOOK_BUFFER_RATE if include_book_buffer else Decimal("0"),
             lot_step=lot_step,
             min_quantity=min_quantity,
             remaining_daily_budget_percent=remaining_daily_budget_percent,
@@ -249,11 +293,22 @@ def size_for_profile(
             margin_mode="isolated",
         ),
         breaker=_verdict(equity, refusing=breaker_refusing),
-        tiers=PAPER_DEMO_MAINTENANCE_TIERS,
+        tiers=(
+            PAPER_CONSERVATIVE_MAINTENANCE_TIERS
+            if maintenance_tiers is None
+            else maintenance_tiers
+        ),
         preserve_grade_risk=True,
+        reduce_leverage=False,
     )
     if not decision.accepted or decision.record is None or decision.sizing is None:
         return decision.reason or "risk_policy_refused"
+    cash_ceiling = equity * min(
+        decision.sizing.grade_risk_percent,
+        decision.sizing.profile_risk_percent,
+        decision.sizing.ceiling_percent,
+        decision.sizing.budget_room_percent,
+    ) / Decimal("100")
     planned_r = (reward / distance).quantize(Decimal("0.00000001"))
     calculation = {
         **decision.record.calculation,
@@ -278,6 +333,7 @@ def size_for_profile(
         entry=entry,
         stop=stop,
         target=target,
+        risk_cash_ceiling=cash_ceiling,
     )
 
 

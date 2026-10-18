@@ -50,7 +50,7 @@ class SfpParameters(CanonicalModel):
     confirmation: Literal["closed_break_of_reclaim_extreme"] = "closed_break_of_reclaim_extreme"
     # None keeps stored v1 specs from alerting. A new version sets the distance.
     approach_proximity: NonNegativeCanonicalDecimal | None = None
-    approach_cooldown_seconds: int = Field(default=900, ge=0, le=86400)
+    approach_cooldown_seconds: int = Field(default=900, ge=60, le=86400)
 
     @model_validator(mode="after")
     def ordered(self) -> Self:

@@ -231,6 +231,46 @@ def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | No
     return "demo_closed_reconciled"
 
 
+def _demo_post_fill_liquidation(
+    provider: object, plan: object, fill_price: Decimal
+) -> str | None:
+    """Compare the open position's liquidation price with the stop. No order write.
+
+    A flat account has nothing to compare. An open position without a price,
+    or a price through the stop, returns a reason and does not close the trade.
+    """
+
+    from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+    from app.schemas.trade_plan import EntrySide, TradePlanRevision as PlanSchema
+    from app.services.risk_policy.decision import post_fill_recheck
+    from app.services.risk_policy.plan_sizing import PAPER_CONSERVATIVE_MAINTENANCE_TIERS
+
+    if not isinstance(provider, GovernedBloFinDemoProvider) or not isinstance(plan, PlanSchema):
+        return "demo_post_fill_liquidation_unreadable"
+    try:
+        liquidation = provider.read_open_liquidation(inst_id=plan.execution_instrument)
+    except Exception:
+        return "demo_post_fill_liquidation_unreadable"
+    if liquidation is None:
+        return None
+    direction = "long" if plan.side is EntrySide.BUY else "short"
+    outcome = post_fill_recheck(
+        fill_price=fill_price,
+        stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
+        atr=None,
+        leverage=plan.risk_and_exits.leverage,
+        notional=fill_price,
+        margin_mode="isolated",
+        tiers=PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+        direction=direction,
+        stop_price=plan.risk_and_exits.stop.value,
+        observed_liquidation_price=liquidation,
+    )
+    if outcome.exchange_write_attempted or outcome.accepted:
+        return None
+    return "demo_post_fill_liquidation_inside_stop"
+
+
 class GovernedBloFinDemoLoop(AutomatedPaperLoop):
     """Existing canonical loop with venue-specific evidence and dispatch only."""
 
@@ -516,6 +556,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         notional_cap = equity * Decimal("0.10")
         margin_assumption = "verified-demo-existing-1x"
         profile_leverage: Decimal | None = None
+        profile_cash_ceiling: Decimal | None = None
         if active_profile is None:
             cost_per_base = entry * Decimal("0.002")
             raw = (
@@ -540,6 +581,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             if open_positions is None or remaining_daily_budget_percent is None:
                 return "open_book_uncomputed"
             grade, atr = _grade_for_plan(candidate, assembled)
+            from app.services.risk_policy.liquidation import MaintenanceTier
+
             sized = size_for_profile(
                 active=active_profile,
                 grade=grade,
@@ -556,6 +599,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 open_positions=open_positions,
                 remaining_daily_budget_percent=remaining_daily_budget_percent,
                 breaker_refusing=breaker_refusing,
+                include_book_buffer=True,
+                maintenance_tiers=tuple(
+                    MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
+                    for floor, rate in snapshot.maintenance_tiers
+                ),
             )
             if isinstance(sized, str):
                 return sized
@@ -576,6 +624,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
             margin_assumption = "verified-demo-read-leverage"
             profile_leverage = sized.leverage
+            profile_cash_ceiling = sized.risk_cash_ceiling
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -593,10 +642,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
         if profile_leverage is not None:
-            # Grade risk is the stop loss. The 0.2% book buffer is not part of
-            # that loss, so it must not refuse a size that already matches the grade.
-            grade_loss = base * abs(adverse_entry - stop)
-            if grade_loss > risk_cap:
+            # Stop distance plus the same round-trip costs and 0.2% book buffer
+            # the sizer already reserved. A flat book stays inside the grade cash.
+            from app.services.risk_policy.plan_sizing import profile_unit_cost
+
+            unit = profile_unit_cost(adverse_entry, stop, include_book_buffer=True)
+            depth_loss = base * (abs(adverse_entry - stop) + unit)
+            if profile_cash_ceiling is None or depth_loss > profile_cash_ceiling:
                 return "demo_depth_exceeds_risk_limit"
         elif maximum_loss > risk_cap:
             return "demo_depth_exceeds_risk_limit"
@@ -1138,6 +1190,24 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
+                profile_fill = (
+                    envelope.plan.risk_and_exits.margin_assumption_id
+                    == "verified-demo-read-leverage"
+                )
+                if profile_fill:
+                    liquidation_reason = _demo_post_fill_liquidation(
+                        self._get_provider(),
+                        envelope.plan,
+                        evidence.fills[-1].price,
+                    )
+                    if liquidation_reason is not None:
+                        self._safety(session).lock_epoch(
+                            organization_id=command.organization_id,
+                            account_id=command.account_id,
+                        )
+                        effect.reconciliation_disposition = "DEMO_LIQUIDATION_INSIDE_STOP"
+                        session.commit()
+                        return liquidation_reason
                 try:
                     exit_evidence = self._get_provider().reconcile_exit(
                         plan=envelope.plan, entry=evidence

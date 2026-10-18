@@ -44,12 +44,14 @@ def decide_trade(
     ai_explanation: str | None = None,
     promotion: PromotionReport | None = None,
     preserve_grade_risk: bool = False,
+    reduce_leverage: bool = True,
 ) -> TradeDecision:
     """Accept a new trade or return a refusal. Does not place an order.
 
-    When the requested leverage would put liquidation inside the buffer, leverage
-    is lowered until the buffer clears or the trade is refused. Quantity is not
-    increased. This function does not call an exchange.
+    ``reduce_leverage`` is the library helper: it lowers leverage in whole
+    numbers until the buffer clears, and it never raises leverage or quantity.
+    The wired paper and demo path passes False and refuses instead. This
+    function does not call an exchange.
     """
 
     if breaker.refuse_new_trades:
@@ -96,6 +98,10 @@ def decide_trade(
         )
         if liquidation.accepted:
             break
+        if not reduce_leverage:
+            return TradeDecision(
+                False, liquidation.reason or "liquidation_inside_buffer", None, None
+            )
         if (
             liquidation.reason != "liquidation_inside_buffer"
             or liquidation.required_buffer is None
@@ -134,10 +140,51 @@ def post_fill_recheck(
     notional: Decimal,
     margin_mode: str | None,
     tiers: tuple[MaintenanceTier, ...] | list[MaintenanceTier] | None,
+    direction: str | None = None,
+    stop_price: Decimal | None = None,
+    observed_liquidation_price: Decimal | None = None,
 ) -> LiquidationRecheck:
-    """Post-fill buffer check. The exchange writer is not called."""
+    """Post-fill check. The exchange writer is not called.
 
-    return recheck_after_fill(
+    When a liquidation price and a stop are present, the position is
+    ``close_or_reduce`` if that price is through the stop (long: liquidation
+    at or above the stop; short: at or below). A missing ATR does not turn an
+    otherwise clear price into a close.
+    """
+
+    from app.services.risk_policy.liquidation import liquidation_crosses_stop
+
+    breach = None
+    if (
+        direction in {"long", "short"}
+        and stop_price is not None
+        and observed_liquidation_price is not None
+        and liquidation_crosses_stop(
+            direction=direction,
+            liquidation_price=observed_liquidation_price,
+            stop=stop_price,
+        )
+    ):
+        breach = LiquidationRecheck(
+            action="close_or_reduce",
+            accepted=False,
+            reason="liquidation_through_stop",
+            liquidation_distance=None,
+            required_buffer=None,
+            exchange_write_attempted=False,
+        )
+    if atr is None and observed_liquidation_price is not None:
+        if breach is not None:
+            return breach
+        return LiquidationRecheck(
+            action="hold",
+            accepted=True,
+            reason=None,
+            liquidation_distance=None,
+            required_buffer=None,
+            exchange_write_attempted=False,
+        )
+    outcome = recheck_after_fill(
         fill_price=fill_price,
         stop_distance=stop_distance,
         atr=atr,
@@ -146,3 +193,6 @@ def post_fill_recheck(
         margin_mode=margin_mode,
         tiers=tiers,
     )
+    if breach is not None:
+        return breach
+    return outcome

@@ -317,6 +317,16 @@ class AutomatedPaperLoop:
             open_risk_percent = book.open_risk_percent
             open_positions = book.open_positions
             remaining_daily = book.remaining_daily_budget_percent
+            from app.services.risk_policy.breaker_trip import persist_profile_breakers
+
+            persist_profile_breakers(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                account_id=account.id,
+                profile=active.profile,
+                now=now,
+            )
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,

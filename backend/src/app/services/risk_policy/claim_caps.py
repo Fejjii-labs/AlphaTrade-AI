@@ -1,9 +1,11 @@
-"""Bind an active paper or demo profile onto the claim ledger.
+"""Preview an active paper or demo profile against the claim ledger.
 
 The cash-balance fallback cap is the unverified epoch default. A profile-sized
-plan uses the profile notional and daily-loss amounts instead, so a grade that
-cleared ``decide_trade`` is not refused by a tighter cash ceiling. This does
-not call an exchange.
+plan is checked against the profile notional and daily-loss amounts on a
+per-claim view, so a grade that cleared ``decide_trade`` is not refused by a
+tighter cash ceiling. The shared organization-and-account row is not rewritten:
+a later manual or human claim keeps the stored ceilings. This does not call
+an exchange.
 """
 
 from __future__ import annotations
@@ -14,7 +16,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.db.models import AccountRiskAccountingState
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.ledger import LedgerCaps, caps_for_ledger
 
@@ -98,9 +99,14 @@ def accounting_view(accounting: object, caps: LedgerCaps | None) -> SimpleNamesp
     )
 
 
-def assign_profile_claim_caps(accounting: AccountRiskAccountingState, caps: LedgerCaps) -> None:
-    """Persist profile ceilings. Call only after the claim outcome is ALLOW."""
+def assign_profile_claim_caps(accounting: object, caps: LedgerCaps) -> None:
+    """Refuse to write profile ceilings onto the shared ledger row.
 
-    accounting.max_notional = caps.max_notional
-    accounting.max_symbol_notional = caps.max_symbol_notional
-    accounting.max_daily_loss = caps.max_daily_loss
+    The predicate uses :func:`accounting_view` for that one claim. Writing
+    ``max_notional`` or ``max_daily_loss`` here would loosen every later
+    manual claim on the same organization and account, and the row has no
+    day key to restore.
+    """
+
+    del accounting, caps
+    raise RiskPolicyRejected("profile_caps_are_not_written_to_the_shared_ledger")

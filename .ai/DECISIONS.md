@@ -22,13 +22,24 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   the explicit profile field `paper_demo_data_collection`. Turning it on is
   a loosening and is audited. It is not a silent bypass. `promote()` still
   refuses. The field does not satisfy (c) for live or for arming.
-- Leverage sets margin only. Loss is the grade risk divided by stop
-  distance. If liquidation is inside the buffer, leverage is lowered in
-  whole numbers and is never raised. If 1x still fails, or margin would
-  exceed equity, the trade is refused and quantity is not shrunk to fit.
-  BloFin demo does not send a leverage or margin-mode write. A leverage
-  mismatch blocks with `demo_account_leverage_mismatch`. A demo account
-  that is not isolated blocks with `demo_margin_mode_not_isolated`.
+- Leverage sets margin only. Loss at the stop, the exit-leg taker fee,
+  one funding period, and on demo the 0.2% book buffer, must fit inside
+  the grade cash. Costs above the profile share of R refuse with
+  `costs_exceed_r`. The wired paper and demo path refuses when liquidation
+  is inside the buffer. It does not silently lower leverage. A library
+  helper can still compute a lower whole-number leverage and never raises
+  it; that helper is not applied on the wired path. If 1x still fails, or
+  margin would exceed equity, the trade is refused and quantity is not
+  shrunk to fit. Paper maintenance uses a conservative 2% rate because
+  there is no venue tier feed. Demo reads public position tiers and
+  refuses when they are missing. BloFin demo does not send a leverage or
+  margin-mode write. Account margin mode is read from
+  `GET /api/v1/account/margin-mode`. A leverage mismatch blocks with
+  `demo_account_leverage_mismatch`. A demo account that is not isolated
+  blocks with `demo_margin_mode_not_isolated`.
+- Claim ceilings for a profile plan are a per-claim view. They are not
+  written onto the shared organization-and-account ledger row, so a later
+  manual claim keeps the stored cash ceilings.
 - Notional: when a profile is active, a cap that would shrink the grade
   risk refuses with `notional_cap_shrinks_grade_risk`. The previous fixed
   1% risk and 5% notional path remains only when no profile version row

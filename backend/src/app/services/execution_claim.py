@@ -325,7 +325,6 @@ class PaperPlanClaimService:
             accounting=accounting,
             intent=intent,
             now=now,
-            profile_caps=profile_caps,
         )
         self._run_hook(self._hooks.before_return)
         return result
@@ -569,7 +568,6 @@ class PaperPlanClaimService:
         accounting: AccountRiskAccountingState,
         intent: ReservationIntent,
         now: datetime,
-        profile_caps: object | None = None,
     ) -> ExecutePaperPlanResult:
         command = ExecutionCommand(
             id=command_id,
@@ -647,13 +645,6 @@ class PaperPlanClaimService:
                 "Authorization was not AVAILABLE for consumption.",
                 details={"reason": "authorization_consume_conflict"},
             )
-        if profile_caps is not None:
-            from app.services.risk_policy.claim_caps import assign_profile_claim_caps
-            from app.services.risk_policy.ledger import LedgerCaps
-
-            if isinstance(profile_caps, LedgerCaps):
-                assign_profile_claim_caps(accounting, profile_caps)
-                self._session.flush()
         charge_reservation(accounting, intent)
         reservation = RiskReservation(
             organization_id=request.organization_id,

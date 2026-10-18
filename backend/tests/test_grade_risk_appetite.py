@@ -23,7 +23,7 @@ from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
 from app.services.risk_policy.adjusters import AdjusterInputs
 from app.services.risk_policy.breakers import BreakerVerdict
-from app.services.risk_policy.claim_caps import accounting_view
+from app.services.risk_policy.claim_caps import accounting_view, assign_profile_claim_caps
 from app.services.risk_policy.decision import decide_trade
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision
@@ -34,6 +34,7 @@ from app.services.risk_policy.plan_sizing import (
     demo_leverage_block,
     demo_margin_mode_block,
     open_risk_from_stops,
+    profile_unit_cost,
     remaining_daily_budget_percent,
     size_for_profile,
 )
@@ -219,6 +220,9 @@ def test_ten_thousand_dollar_grade_table_replaces_the_binding_notional_cap() -> 
         breaker_refusing=False,
     )
     assert not isinstance(recorded, str)
+    unit = profile_unit_cost(Decimal("100"), Decimal("98"), include_book_buffer=False)
+    assert recorded.quantity < Decimal("250")
+    assert recorded.quantity * (Decimal("2") + unit) <= Decimal("500")
     assert recorded.record.calculation["entry"] == "100"
     assert recorded.record.calculation["stop"] == "98"
     assert recorded.record.calculation["target"] == "104"
@@ -260,6 +264,26 @@ def test_leverage_sets_margin_and_liquidation_can_lower_it() -> None:
     too_much_margin = _decide(profile, Grade.A_PLUS, leverage=Decimal("1"))
     assert too_much_margin.accepted is False
     assert too_much_margin.reason == "margin_exceeds_equity"
+    wired = size_for_profile(
+        active=ActiveProfile(profile=profile, version_id=uuid4()),
+        grade=GradeDecision(
+            Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None
+        ),
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("90"),
+        target=Decimal("120"),
+        direction="long",
+        atr=Decimal("1"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        breaker_refusing=False,
+    )
+    assert wired == "liquidation_inside_buffer"
 
 
 def test_notional_cap_refuses_instead_of_shrinking_grade_risk() -> None:
@@ -333,6 +357,7 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     posts: list[str] = []
     leverage_modes: list[str] = []
     account_leverage = {"value": "2"}
+    account_mode = {"value": "cross"}
     force_cross = {"on": False}
     omit_mode = {"on": False}
 
@@ -345,15 +370,29 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             data: object = {"readOnly": 0}
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
+        elif path.endswith("/margin-mode"):
+            if omit_mode["on"]:
+                data = {}
+            elif force_cross["on"]:
+                data = {"marginMode": "cross"}
+            else:
+                data = {"marginMode": account_mode["value"]}
+        elif path.endswith("position-tiers"):
+            data = [
+                {
+                    "instId": "BTC-USDT",
+                    "minSize": "0",
+                    "maintenanceMarginRate": "0.004",
+                }
+            ]
         elif path.endswith("leverage-info"):
             requested = request.url.params.get("marginMode") or ""
             leverage_modes.append(requested)
             data = {
                 "instId": "BTC-USDT",
                 "leverage": account_leverage["value"],
+                "marginMode": requested,
             }
-            if not omit_mode["on"]:
-                data["marginMode"] = "cross" if force_cross["on"] else requested
         elif path.endswith("instruments"):
             data = [
                 {
@@ -418,7 +457,9 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     )
     assert snapshot.account_leverage == Decimal("1")
     assert snapshot.margin_mode == "cross"
+    assert snapshot.maintenance_tiers
     assert leverage_modes[-1] == "cross"
+    account_mode["value"] = "isolated"
     isolated = provider.snapshot(
         symbol="BTCUSDT",
         now=EVALUATED_AT,
@@ -430,7 +471,7 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
     assert isolated.account_leverage == Decimal("1")
     assert leverage_modes[-1] == "isolated"
     omit_mode["on"] = True
-    with pytest.raises(ValueError, match="omitted margin mode"):
+    with pytest.raises(ValueError, match="margin-mode omitted"):
         provider.snapshot(
             symbol="BTCUSDT",
             now=EVALUATED_AT,
@@ -447,6 +488,16 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
             side=EntrySide.BUY,
             required_leverage=None,
             margin_mode="isolated",
+        )
+    account_mode["value"] = "isolated"
+    force_cross["on"] = False
+    with pytest.raises(ValueError, match="not cross"):
+        provider.snapshot(
+            symbol="BTCUSDT",
+            now=EVALUATED_AT,
+            side=EntrySide.BUY,
+            required_leverage=None,
+            margin_mode="cross",
         )
     assert posts == []
     assert demo_order_margin_mode("verified-demo-read-leverage") == "isolated"
@@ -504,8 +555,10 @@ def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
         breaker_refusing=False,
     )
     assert not isinstance(sized, str)
-    assert sized.risk_percent == Decimal("1")
-    assert sized.quantity == Decimal("50")
+    assert sized.risk_percent <= Decimal("1")
+    unit = profile_unit_cost(Decimal("100"), Decimal("98"), include_book_buffer=False)
+    assert sized.quantity < Decimal("50")
+    assert sized.quantity * (Decimal("2") + unit) <= Decimal("100")
 
 
 def test_claim_notional_ceiling_matches_the_profile() -> None:
@@ -609,17 +662,64 @@ def test_flat_demo_book_keeps_grade_risk_past_the_fee_buffer() -> None:
         open_positions=0,
         remaining_daily_budget_percent=profile.daily_loss_limit_percent,
         breaker_refusing=False,
+        include_book_buffer=True,
     )
     assert not isinstance(sized, str)
-    assert sized.risk_percent == Decimal("5")
-    assert sized.quantity == Decimal("250")
-    risk_cap = Decimal("10000") * sized.risk_percent / Decimal("100")
-    grade_loss = sized.quantity * abs(Decimal("100") - Decimal("98"))
-    fee_loss = sized.quantity * (
-        abs(Decimal("100") - Decimal("98")) + Decimal("100") * Decimal("0.002")
+    assert sized.quantity < Decimal("250")
+    unit = profile_unit_cost(Decimal("100"), Decimal("98"), include_book_buffer=True)
+    inclusive = sized.quantity * (Decimal("2") + unit)
+    assert inclusive <= sized.risk_cash_ceiling
+    assert inclusive <= Decimal("500")
+
+
+def test_half_percent_stop_keeps_round_trip_fees_inside_the_grade() -> None:
+    # Unadjusted A+ notional at a 0.5% stop is 10x equity. Two taker legs of
+    # 0.06% are 1.2% of equity before the sizer shrinks the quantity.
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    unadjusted = Decimal("10000") * Decimal("5") / Decimal("0.5")
+    assert unadjusted * (Decimal("0.0006") * 2) / Decimal("10000") == Decimal("0.012")
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    sized = size_for_profile(
+        active=ActiveProfile(profile=profile, version_id=uuid4()),
+        grade=grade,
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("99.5"),
+        target=Decimal("101"),
+        direction="long",
+        atr=Decimal("0.4"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        breaker_refusing=False,
     )
-    assert grade_loss <= risk_cap
-    assert fee_loss > risk_cap
+    assert not isinstance(sized, str), sized
+    unit = profile_unit_cost(Decimal("100"), Decimal("99.5"), include_book_buffer=False)
+    assert sized.quantity * (Decimal("0.5") + unit) <= Decimal("500")
+    demo = size_for_profile(
+        active=ActiveProfile(
+            profile=sofien_aggressive_profile(PolicyKind.DEMO), version_id=uuid4()
+        ),
+        grade=grade,
+        equity=Decimal("10000"),
+        entry=Decimal("100"),
+        stop=Decimal("99.5"),
+        target=Decimal("101"),
+        direction="long",
+        atr=Decimal("0.4"),
+        lot_step=Decimal("0.00000001"),
+        min_quantity=Decimal("0.00000001"),
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        breaker_refusing=False,
+        include_book_buffer=True,
+    )
+    assert demo == "costs_exceed_r"
 
 
 def test_blocked_profile_claim_does_not_widen_the_ledger() -> None:
@@ -665,3 +765,8 @@ def test_blocked_profile_claim_does_not_widen_the_ledger() -> None:
     assert stored.max_symbol_notional == Decimal("10000")
     assert stored.max_daily_loss == Decimal("10000")
     assert viewed.max_notional == caps.max_notional
+    with pytest.raises(RiskPolicyRejected) as written:
+        assign_profile_claim_caps(stored, caps)
+    assert written.value.code == "profile_caps_are_not_written_to_the_shared_ledger"
+    assert stored.max_notional == Decimal("10000")
+    assert stored.max_daily_loss == Decimal("10000")

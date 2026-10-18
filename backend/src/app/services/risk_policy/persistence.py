@@ -245,6 +245,16 @@ class RiskPolicyService:
         )
         return row
 
+    def load_breaker(
+        self, *, organization_id: uuid.UUID, account_id: uuid.UUID
+    ) -> RiskPolicyBreakerState | None:
+        return self._session.scalar(
+            select(RiskPolicyBreakerState).where(
+                RiskPolicyBreakerState.organization_id == organization_id,
+                RiskPolicyBreakerState.account_id == account_id,
+            )
+        )
+
     def breaker_active(self, *, organization_id: uuid.UUID, now: datetime) -> bool:
         rows = self._session.scalars(
             select(RiskPolicyBreakerState).where(

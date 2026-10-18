@@ -322,6 +322,47 @@ def test_post_fill_recheck_does_not_call_the_unwired_writer() -> None:
     )
     assert outcome.action == "close_or_reduce"
     assert outcome.exchange_write_attempted is False
+    clear = post_fill_recheck(
+        fill_price=Decimal("100"),
+        stop_distance=Decimal("2"),
+        atr=None,
+        leverage=Decimal("10"),
+        notional=Decimal("1000"),
+        margin_mode="isolated",
+        tiers=(MaintenanceTier(Decimal("0"), Decimal("0.02")),),
+        direction="long",
+        stop_price=Decimal("98"),
+        observed_liquidation_price=Decimal("92"),
+    )
+    assert clear.action == "hold" and clear.exchange_write_attempted is False
+    through = post_fill_recheck(
+        fill_price=Decimal("100"),
+        stop_distance=Decimal("8"),
+        atr=None,
+        leverage=Decimal("10"),
+        notional=Decimal("1000"),
+        margin_mode="isolated",
+        tiers=(MaintenanceTier(Decimal("0"), Decimal("0.02")),),
+        direction="long",
+        stop_price=Decimal("90"),
+        observed_liquidation_price=Decimal("92"),
+    )
+    assert through.action == "close_or_reduce"
+    assert through.reason == "liquidation_through_stop"
+    assert through.exchange_write_attempted is False
+    short = post_fill_recheck(
+        fill_price=Decimal("100"),
+        stop_distance=Decimal("8"),
+        atr=None,
+        leverage=Decimal("10"),
+        notional=Decimal("1000"),
+        margin_mode="isolated",
+        tiers=(MaintenanceTier(Decimal("0"), Decimal("0.02")),),
+        direction="short",
+        stop_price=Decimal("110"),
+        observed_liquidation_price=Decimal("108"),
+    )
+    assert short.reason == "liquidation_through_stop"
     writer = unwired_margin_writer()
     with pytest.raises(NotImplementedError):
         writer.set_leverage(symbol="BTC-USDT", leverage=Decimal("2"), margin_mode="isolated")

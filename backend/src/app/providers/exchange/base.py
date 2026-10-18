@@ -54,6 +54,7 @@ class ExchangePositionData:
     mark_price: Decimal | None = None
     unrealized_pnl: Decimal | None = None
     leverage: Decimal | None = None
+    liquidation_price: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,14 @@ class AccountPositionMode:
     """User position mode on the demo account (one-way vs hedge)."""
 
     position_mode: str
+
+
+@dataclass(frozen=True)
+class AccountMarginMode:
+    """Account margin mode from GET /api/v1/account/margin-mode. Read only."""
+
+    margin_mode: str
+    supplied: bool
 
 
 @dataclass(frozen=True)
