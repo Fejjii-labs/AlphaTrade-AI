@@ -4,7 +4,9 @@ Calls the existing ``BloFinSyncService.sync`` on a 30-60 second cadence.
 Demo gates and native identity checks stay inside that service. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
-browser refresh and this cycle do not both hit the venue.
+browser refresh and this cycle do not both hit the venue. The hand-trade
+mirror still runs on that fresh path. A mirror read failure rolls back only
+its own write and does not back off the snapshot.
 """
 
 from __future__ import annotations
@@ -95,30 +97,45 @@ class BloFinDemoSnapshotCycle:
         session = get_session_factory()()
         try:
             service = BloFinSyncService(session, self.settings)
-            if _fresh_snapshot(service, organization_id, self._clock(), self.settings):
-                return "fresh"
-            result = service.sync(
-                organization_id=organization_id,
-                user_id=user_id,
-                request_id=f"blofin-snapshot-worker-{organization_id}",
-                include_instrument_metadata=True,
-                actor_type=ActorType.SYSTEM,
-                sync_origin="worker",
-            )
-            session.commit()
+            fresh = _fresh_snapshot(service, organization_id, self._clock(), self.settings)
+            if not fresh:
+                result = service.sync(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    request_id=f"blofin-snapshot-worker-{organization_id}",
+                    include_instrument_metadata=True,
+                    actor_type=ActorType.SYSTEM,
+                    sync_origin="worker",
+                )
+                session.commit()
+                if result.snapshot.health_status not in _FRESH:
+                    return "unavailable"
+            self._mirror_without_backing_off(session, organization_id, user_id)
+            return "fresh" if fresh else "ok"
         except Exception:
             session.rollback()
             raise
-        else:
-            health = result.snapshot.health_status
-            if health in _FRESH:
-                if self.settings.blofin_demo_manual_mirror_enabled:
-                    self._run_mirror(session, organization_id, user_id)
-                    session.commit()
-                return "ok"
-            return "unavailable"
         finally:
             session.close()
+
+    def _mirror_without_backing_off(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Run the journal mirror. A read failure must not delay the snapshot."""
+        if not self.settings.blofin_demo_manual_mirror_enabled:
+            return
+        try:
+            self._run_mirror(session, organization_id, user_id)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning(
+                "blofin_demo_manual_mirror_failed",
+                error_type=type(exc).__name__,
+            )
 
     def _run_mirror(
         self,
@@ -149,6 +166,12 @@ def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:
         return uuid.UUID(org), uuid.UUID(user)
     except ValueError:
         return None
+
+
+class _UnitOfWork(Protocol):
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
 
 
 class _SnapshotReader(Protocol):

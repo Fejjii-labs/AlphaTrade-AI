@@ -35,9 +35,12 @@ call BloFin. Identity, read-only permission, and UID checks stay inside
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
 A successful or degraded snapshot younger than the interval is reused, so the
-worker does not call BloFin again while that snapshot is fresh. An owner
-refresh from the dashboard still calls BloFin. A failed sync backs off,
-doubling from the interval up to 900 seconds. The provider's existing request
+worker does not call BloFin again for that snapshot while it is fresh. An
+owner refresh from the dashboard still calls BloFin. When
+`BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` is on, the same cycle still mirrors hand
+trades while the snapshot is fresh. A mirror read failure does not back off
+the snapshot. A failed snapshot sync backs off, doubling from the interval
+up to 900 seconds. The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
 `ok`, `skipped`, `backing_off`, `degraded`, or `stopped`.
 

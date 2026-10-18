@@ -445,6 +445,41 @@ def test_annotation_rejects_other_sources_and_a_bad_grade(session: Session) -> N
     assert cleared.notes is None
 
 
+def test_annotation_allows_a_reconciled_manual_row(session: Session) -> None:
+    reconciled = JournalTrade(
+        organization_id=ORG,
+        user_id=USER,
+        source=JournalTradeSource.MANUAL,
+        status=JournalTradeStatus.CLOSED,
+        symbol="BTCUSDT",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        external_ref="blofin-demo-history:h-reconciled",
+    )
+    plain = JournalTrade(
+        organization_id=ORG,
+        user_id=USER,
+        source=JournalTradeSource.MANUAL,
+        status=JournalTradeStatus.OPEN,
+        symbol="ETHUSDT",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+    )
+    session.add_all([reconciled, plain])
+    session.commit()
+    service = JournalTradeService(session, AuditService(session))
+    tagged = service.annotate(
+        reconciled.id,
+        JournalTradeAnnotation(strategy_label="Breakout", grade="B+"),
+        organization_id=ORG,
+    )
+    assert tagged.strategy_label == "Breakout"
+    assert tagged.grade == "B+"
+    with pytest.raises(ValidationAppError) as blocked:
+        service.annotate(plain.id, JournalTradeAnnotation(grade="A"), organization_id=ORG)
+    assert blocked.value.details["reason"] == "annotation_source"
+
+
 def test_dashboard_publishes_only_when_every_closed_mirror_row_is_verified(
     session: Session,
 ) -> None:

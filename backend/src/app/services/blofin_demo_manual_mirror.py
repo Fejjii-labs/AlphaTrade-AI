@@ -914,7 +914,8 @@ def annotation_allowed(row: JournalTrade) -> bool:
     if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
         return True
     ref = row.external_ref or ""
-    return row.source is JournalTradeSource.MANUAL_DEMO_TEST and ref.startswith("blofin-demo-")
+    reconciled = row.source in {JournalTradeSource.MANUAL_DEMO_TEST, JournalTradeSource.MANUAL}
+    return reconciled and ref.startswith("blofin-demo-")
 
 
 def strategy_group_key(

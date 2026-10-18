@@ -3388,5 +3388,9 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   AlphaTrade manual demo row with the same symbol, direction, entry, and
   size is closed in place and keeps its source, including
   `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
-  Ambiguous matches are skipped.
+  Ambiguous matches are skipped. A reconciled `manual` or `manual_demo_test`
+  row whose external ref starts with `blofin-demo-` can still be tagged.
+- The mirror runs on the snapshot cadence even when the saved snapshot is
+  still inside the refresh interval. A mirror read failure does not back off
+  the snapshot cycle.
 - Reference: `docs/blofin_demo_manual_mirror.md`.

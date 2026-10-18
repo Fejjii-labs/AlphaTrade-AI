@@ -2,7 +2,10 @@
 
 Read-only. This path does not place, cancel, or amend orders, and it does not
 enable real-money trading. It runs inside the existing BloFin demo snapshot
-worker after a snapshot commit that comes back fresh.
+worker on each cycle, including when the saved snapshot is still inside the
+refresh interval. The snapshot itself is not fetched again while it is fresh.
+A mirror read failure rolls back only the mirror write and does not back off
+the snapshot cycle.
 
 The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change
@@ -139,8 +142,11 @@ tag so the journal table does not need a new column. There is no Alembic
 revision. The source value fits the existing portable VARCHAR enum.
 
 The journal entry shows the form when the source is `blofin_demo_manual` or
-the external ref starts with `blofin-demo-`, which covers a reconciled
-manual demo row. Strategy analytics groups a `blofin_demo_manual` row by its
+the external ref starts with `blofin-demo-`. The annotation route accepts
+the same reconciled rows: source `blofin_demo_manual`, or source
+`manual_demo_test` or `manual` whose external ref starts with
+`blofin-demo-`. Other sources are rejected. Strategy analytics groups a
+`blofin_demo_manual` row by its
 strategy id, or by the trimmed strategy label when no id is set.
 
 ## What the card shows
@@ -176,5 +182,6 @@ The activity `fillPnl` method id stays
 - Stops come from orders-history trigger prices, not from a separate TPSL
   history route.
 - Contract value and USDT settlement are required. Anything else is unverified.
-- The mirror runs on the worker cycle that refreshes the snapshot. A failed
-  mirror waits until that snapshot is stale before the next attempt.
+- The mirror runs on every snapshot-worker cycle while the flag is on,
+  including while the saved snapshot is still fresh. A failed mirror does
+  not delay the next snapshot.

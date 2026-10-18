@@ -108,3 +108,17 @@ it("tags a mirrored BloFin demo trade without editing venue amounts", async () =
   });
   expect(screen.getByText("82,234.40 USDT")).toBeInTheDocument();
 });
+
+it("shows the strategy form for a reconciled manual row", async () => {
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    trade: {
+      ...fixture.trade,
+      source: "manual",
+      external_ref: "blofin-demo-history:h-reconciled",
+    },
+    manual_demo: null,
+  });
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-mirror-annotation");
+});

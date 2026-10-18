@@ -453,6 +453,7 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
       strategy_closed_trades: null,
       coverage: "Manual coverage is separate.",
       activity_sync_status: "disabled",
+      activity_coverage: "Activity sync is disabled. Win rate and realized P&L for the whole demo account are withheld. Manual AlphaTrade trades are not a substitute.",
       manual_mirror_status: "ready",
       manual_mirror_reason: "Closed BloFin demo manual journal entries.",
       win_rate: "1.0000",
@@ -469,6 +470,9 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("Average R 0.9300");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
   expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("activity-coverage")).not.toBeInTheDocument();
+  expect(screen.queryByText(/are withheld/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/wins/)).not.toBeInTheDocument();
 });
 
 it("keeps win rate hidden when a mirrored trade is unverified", async () => {

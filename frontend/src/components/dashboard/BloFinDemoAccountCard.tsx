@@ -269,10 +269,10 @@ export function BloFinDemoAccountCard({
                 Activity sync disabled. Win rate and realized P&L are withheld
                 until the activity worker is enabled.
               </p>
-            ) : performance?.activity_coverage ? (
+            ) : performance?.activity_coverage && !(mirrorReady && activityDisabled) ? (
               <p className="text-xs text-text-secondary" data-testid="activity-coverage">
                 {performance.activity_coverage}
-                {performance.trade_count != null
+                {!mirrorReady && performance.trade_count != null
                   ? ` ${formatCount(performance.trade_count)} closed trades · ${formatCount(performance.wins)} wins · ${formatCount(performance.losses)} losses.`
                   : ""}
                 {performance.window_start
