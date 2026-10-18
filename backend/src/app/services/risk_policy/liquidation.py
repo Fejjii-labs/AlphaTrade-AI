@@ -96,9 +96,7 @@ def liquidation_distance(
     return distance
 
 
-def liquidation_crosses_stop(
-    *, direction: str, liquidation_price: Decimal, stop: Decimal
-) -> bool:
+def liquidation_crosses_stop(*, direction: str, liquidation_price: Decimal, stop: Decimal) -> bool:
     """True when the venue or formula liquidation price is through the stop.
 
     Long: liquidation at or above the stop. Short: at or below the stop.

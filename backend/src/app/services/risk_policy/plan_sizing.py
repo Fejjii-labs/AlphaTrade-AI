@@ -294,21 +294,23 @@ def size_for_profile(
         ),
         breaker=_verdict(equity, refusing=breaker_refusing),
         tiers=(
-            PAPER_CONSERVATIVE_MAINTENANCE_TIERS
-            if maintenance_tiers is None
-            else maintenance_tiers
+            PAPER_CONSERVATIVE_MAINTENANCE_TIERS if maintenance_tiers is None else maintenance_tiers
         ),
         preserve_grade_risk=True,
         reduce_leverage=False,
     )
     if not decision.accepted or decision.record is None or decision.sizing is None:
         return decision.reason or "risk_policy_refused"
-    cash_ceiling = equity * min(
-        decision.sizing.grade_risk_percent,
-        decision.sizing.profile_risk_percent,
-        decision.sizing.ceiling_percent,
-        decision.sizing.budget_room_percent,
-    ) / Decimal("100")
+    cash_ceiling = (
+        equity
+        * min(
+            decision.sizing.grade_risk_percent,
+            decision.sizing.profile_risk_percent,
+            decision.sizing.ceiling_percent,
+            decision.sizing.budget_room_percent,
+        )
+        / Decimal("100")
+    )
     planned_r = (reward / distance).quantize(Decimal("0.00000001"))
     calculation = {
         **decision.record.calculation,

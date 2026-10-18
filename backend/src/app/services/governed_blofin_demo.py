@@ -231,9 +231,7 @@ def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | No
     return "demo_closed_reconciled"
 
 
-def _demo_post_fill_liquidation(
-    provider: object, plan: object, fill_price: Decimal
-) -> str | None:
+def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Decimal) -> str | None:
     """Compare the open position's liquidation price with the stop. No order write.
 
     A flat account has nothing to compare. An open position without a price,
@@ -241,7 +239,8 @@ def _demo_post_fill_liquidation(
     """
 
     from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
-    from app.schemas.trade_plan import EntrySide, TradePlanRevision as PlanSchema
+    from app.schemas.trade_plan import EntrySide
+    from app.schemas.trade_plan import TradePlanRevision as PlanSchema
     from app.services.risk_policy.decision import post_fill_recheck
     from app.services.risk_policy.plan_sizing import PAPER_CONSERVATIVE_MAINTENANCE_TIERS
 
