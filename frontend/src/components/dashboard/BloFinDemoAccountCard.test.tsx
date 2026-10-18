@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -431,7 +432,9 @@ it("shows activity win rate and withholds it when activity sync is disabled", as
     },
   }));
   render(<BloFinDemoAccountCard />);
-  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("50.0%");
+  await waitFor(() => {
+    expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("50.0%");
+  });
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("2.87");
   expect(screen.getByTestId("activity-coverage")).toHaveTextContent("2 closed trades");
   expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
@@ -465,7 +468,9 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
     },
   }));
   render(<BloFinDemoAccountCard />);
-  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  await waitFor(() => {
+    expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  });
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("Average R 0.9300");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
@@ -505,7 +510,9 @@ it("does not pair a ready mirror with the activity fillPnl withhold sentence", a
     },
   }));
   render(<BloFinDemoAccountCard />);
-  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  await waitFor(() => {
+    expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  });
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
   expect(screen.queryByTestId("activity-coverage")).not.toBeInTheDocument();
