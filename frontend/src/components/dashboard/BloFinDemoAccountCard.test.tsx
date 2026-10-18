@@ -475,6 +475,44 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
   expect(screen.queryByText(/wins/)).not.toBeInTheDocument();
 });
 
+it("does not pair a ready mirror with the activity fillPnl withhold sentence", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Manual coverage is separate.",
+      activity_sync_status: "partial",
+      activity_coverage: "Win rate and realized P&L are withheld. fillPnl is not established as gross or net of fees or funding.",
+      manual_mirror_status: "ready",
+      manual_mirror_reason: "Closed BloFin demo manual journal entries.",
+      win_rate: "1.0000",
+      trade_count: 1,
+      wins: 1,
+      losses: 0,
+      realized_pnl: "0.186",
+      average_r: "0.9300",
+      window_start: "2026-10-17T12:00:00Z",
+      window_end: "2026-10-17T12:00:00Z",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
+  expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
+  expect(screen.queryByTestId("activity-coverage")).not.toBeInTheDocument();
+  expect(screen.queryByText(/fillPnl is not established/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Window /)).not.toBeInTheDocument();
+});
+
 it("keeps win rate hidden when a mirrored trade is unverified", async () => {
   latest.mockResolvedValue(account({
     can_refresh: false,

@@ -42,6 +42,9 @@ export function BloFinDemoAccountCard({
   const activityDisabled = activityStatus === "disabled";
   const mirrorStatus = performance?.manual_mirror_status ?? "disabled";
   const mirrorReady = mirrorStatus === "ready";
+  const activityCoverage = performance?.activity_coverage ?? "";
+  const activityCoverageWithheld =
+    /win rate and realized p&l are withheld/i.test(activityCoverage);
   const intervalSeconds =
     account?.refresh_interval_seconds ?? DEMO_REFRESH_INTERVAL_MS / 1000;
   const winRate =
@@ -269,13 +272,13 @@ export function BloFinDemoAccountCard({
                 Activity sync disabled. Win rate and realized P&L are withheld
                 until the activity worker is enabled.
               </p>
-            ) : performance?.activity_coverage && !(mirrorReady && activityDisabled) ? (
+            ) : activityCoverage && !(mirrorReady && (activityDisabled || activityCoverageWithheld)) ? (
               <p className="text-xs text-text-secondary" data-testid="activity-coverage">
-                {performance.activity_coverage}
-                {!mirrorReady && performance.trade_count != null
+                {activityCoverage}
+                {!mirrorReady && performance?.trade_count != null
                   ? ` ${formatCount(performance.trade_count)} closed trades · ${formatCount(performance.wins)} wins · ${formatCount(performance.losses)} losses.`
                   : ""}
-                {performance.window_start
+                {!mirrorReady && performance?.window_start
                   ? ` Window ${formatDateTime(performance.window_start)} – ${formatDateTime(performance.window_end)}.`
                   : ""}
               </p>

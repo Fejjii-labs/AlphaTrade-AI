@@ -159,8 +159,11 @@ Win rate, realized P&L, average R, and count come from closed
 - Flag on, and any closed mirrored row is unverified: status `withheld`.
   Win rate, realized P&L, count, wins, and losses are empty.
 - Flag on, and every closed mirrored row is verified (including none):
-  status `ready`. Win rate is wins / (wins + losses). A net of zero is a
-  scratch: it counts as a trade and it is not a win or a loss. Average R is
+  status `ready`. The card does not also print an activity sentence that
+  says win rate and realized P&L are withheld, and it does not attach the
+  mirror exit window to that sentence. Win rate is wins / (wins + losses).
+  A net of zero is a scratch: it counts as a trade and it is not a win or a
+  loss. Average R is
   the mean of `net / planned_risk` where risk is positive, quantized to
   0.0001. The method id is `positions-history-price-pnl-fee-funding/v1`.
 
