@@ -39,6 +39,17 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   breaker-state rows exist. Breaker pause, loss count, realized P&L, and
   unrealized P&L are persisted. A drawdown reset is an append-only row
   carrying the actor. The daily breaker uses realized plus unrealized P&L.
+- Grok review of `f06614c3` (2026-10-18) required four corrections, accepted
+  on the same branch. The first stored profile is classified against the
+  live placeholder: a looser result is a loosening, so the cooldown and the
+  human proof apply, and an unchanged placeholder stays an initial apply.
+  Breaker cancellation of a due loosening is committed, so closing the read
+  session cannot roll it back, and that version stays cancelled after the
+  breaker clears. A new proposal is required. Human access tokens are
+  stamped `actor=user` at issuance. Agent, bot, and service tokens keep
+  their own actor. An undeclared or missing actor is rejected before a
+  proposal insert. A persisted drawdown reset is refused while equity is
+  still outside the drawdown threshold.
 - Left for a later wiring pull request, not this change: an atomic budget
   reservation, server-side open-risk computation, and the isolated-versus-cross
   margin mismatch on the demo path. Connecting `ExchangeMarginWriter` still

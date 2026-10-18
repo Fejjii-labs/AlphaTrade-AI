@@ -179,6 +179,7 @@ def main() -> None:
                 organization_id=world.tenant.organization_id,
                 email=user.email,
                 settings=settings,
+                actor="user",
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             with open(

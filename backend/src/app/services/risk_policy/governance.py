@@ -103,11 +103,12 @@ def assert_can_propose(actor: PolicyActor) -> None:
         raise RiskPolicyRejected("actor_unauthenticated")
     if actor.channel is PolicyChannel.SERVICE:
         raise RiskPolicyRejected("service_token_refused")
+    if actor.channel is PolicyChannel.UNDECLARED:
+        raise RiskPolicyRejected("actor_undeclared")
     if actor.channel not in {
         PolicyChannel.HUMAN,
         PolicyChannel.AGENT,
         PolicyChannel.BOT,
-        PolicyChannel.UNDECLARED,
     }:
         raise RiskPolicyRejected("actor_channel_unknown")
 
@@ -171,8 +172,14 @@ def decide_apply(
     proposed: RiskPolicyProfile,
     now: datetime,
     breaker_active: bool,
+    first_store: bool = False,
 ) -> ApplyDecision:
-    """Decide the effect of an apply that has already passed the human proof."""
+    """Decide the effect of an apply that has already passed the human proof.
+
+    The first stored profile is classified against the live placeholder.
+    A looser result is a loosening: it waits for the cooldown and still
+    needs the human proof. An unchanged placeholder stays an initial apply.
+    """
 
     if actor.channel is PolicyChannel.AGENT:
         raise RiskPolicyRejected("apply_refuses_agent_token")
@@ -183,7 +190,11 @@ def decide_apply(
     validate_profile(proposed)
     if previous is not None and previous.kind is not proposed.kind:
         raise RiskPolicyRejected("kind_mismatch")
-    change = classify_change(previous, proposed)
+    change = classify_change(
+        previous,
+        proposed,
+        unchanged=ChangeClass.INITIAL if first_store else None,
+    )
     if now.tzinfo is None:
         raise RiskPolicyRejected("timestamp_must_be_aware")
     if change is ChangeClass.LOOSENING:

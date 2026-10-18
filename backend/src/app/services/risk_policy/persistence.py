@@ -1,6 +1,8 @@
 """Persist proposals, immutable versions, grade bindings, and trade records.
 
-The caller owns the transaction. This service flushes and does not commit.
+The caller owns the transaction. This service flushes and does not commit,
+except for a breaker cancellation of a due loosening. That row is committed
+on its own so closing the read session cannot roll it back.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from app.db.risk_policy import (
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
 from app.services.audit_service import AuditService
+from app.services.risk_policy.breakers import BreakerConfig, BreakerSnapshot, evaluate_breakers
 from app.services.risk_policy.calibration import PromotionReport, assert_promotion_allows
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.governance import (
@@ -43,6 +46,7 @@ from app.services.risk_policy.profile import (
     PolicyKind,
     RiskPolicyProfile,
     canonical_profile,
+    placeholder_profile,
     profile_from_canonical,
     profile_hash,
 )
@@ -85,8 +89,6 @@ class RiskPolicyService:
         active = self._active_row(organization_id, kind, moment)
         scheduled = self._scheduled_row(organization_id, kind, moment)
         if active is None:
-            from app.services.risk_policy.profile import placeholder_profile
-
             return placeholder_profile(kind), None, scheduled
         return profile_from_row(active), active, scheduled
 
@@ -158,7 +160,7 @@ class RiskPolicyService:
                 metadata={"reason": exc.code},
             )
             raise
-        if proposal_is_expired(proposal.created_at, moment):
+        if proposal_is_expired(_as_utc(proposal.created_at), moment):
             raise RiskPolicyRejected("proposal_expired")
         if proposal.kind not in _KIND_VALUES:
             raise RiskPolicyRejected("kind_invalid")
@@ -168,13 +170,18 @@ class RiskPolicyService:
         assert_promotion_allows(profile, self.stored_promotion_report(organization_id))
         kind = PolicyKind(proposal.kind)
         previous_row = self._active_row(organization_id, kind, moment)
-        previous = profile_from_row(previous_row) if previous_row is not None else None
+        first_store = previous_row is None
+        if previous_row is None:
+            previous = placeholder_profile(kind)
+        else:
+            previous = profile_from_row(previous_row)
         decision = decide_apply(
             actor=actor,
             previous=previous,
             proposed=profile,
             now=moment,
             breaker_active=self.breaker_active(organization_id=organization_id, now=moment),
+            first_store=first_store,
         )
         version_number = self._next_version_number(organization_id, kind)
         canonical = canonical_profile(profile)
@@ -389,6 +396,20 @@ class RiskPolicyService:
         return None
 
     def _cancel_version(self, row: RiskPolicyVersion, now: datetime) -> None:
+        """Cancel a due loosening and commit that row.
+
+        The profile read path does not commit, and closing that session rolls
+        back. The cancellation has to survive that rollback, and it stays
+        cancelled after the breaker clears. A new proposal is required.
+        """
+
+        already = self._session.scalar(
+            select(RiskPolicyVersionCancellation.id).where(
+                RiskPolicyVersionCancellation.version_id == row.id
+            )
+        )
+        if already is not None:
+            return
         self._session.add(
             RiskPolicyVersionCancellation(
                 organization_id=row.organization_id,
@@ -397,7 +418,7 @@ class RiskPolicyService:
                 created_at=now,
             )
         )
-        self._session.flush()
+        self._session.commit()
 
     def stored_promotion_report(self, organization_id: uuid.UUID) -> PromotionReport | None:
         row = self._session.scalar(
@@ -475,8 +496,12 @@ class RiskPolicyService:
         account_id: uuid.UUID,
         actor: PolicyActor,
         owner_user_id: str,
+        equity: Decimal,
+        drawdown_breaker_percent: Decimal,
         now: datetime,
     ) -> None:
+        """Clear the drawdown latch only after equity is back inside the threshold."""
+
         if actor.channel in {PolicyChannel.AGENT, PolicyChannel.BOT, PolicyChannel.SERVICE}:
             raise RiskPolicyRejected("drawdown_reset_requires_human")
         if not owner_user_id or actor.actor_id != owner_user_id:
@@ -489,6 +514,29 @@ class RiskPolicyService:
         )
         if row is None or not row.drawdown_latched:
             raise RiskPolicyRejected("drawdown_not_latched")
+        verdict = evaluate_breakers(
+            BreakerConfig(
+                daily_loss_limit_percent=Decimal("100"),
+                drawdown_breaker_percent=drawdown_breaker_percent,
+                consecutive_loss_limit=row.consecutive_losses + 1,
+            ),
+            BreakerSnapshot(
+                equity=equity,
+                equity_peak=row.equity_peak,
+                reference_equity=row.equity_peak,
+                realized_pnl_today=(
+                    row.realized_pnl if row.realized_pnl is not None else Decimal("0")
+                ),
+                unrealized_pnl_today=(
+                    row.unrealized_pnl if row.unrealized_pnl is not None else Decimal("0")
+                ),
+                consecutive_losses=0,
+                drawdown_latched=False,
+                now=now,
+            ),
+        )
+        if verdict.drawdown_active:
+            raise RiskPolicyRejected("drawdown_still_active")
         self._session.add(
             RiskPolicyBreakerReset(
                 organization_id=organization_id,

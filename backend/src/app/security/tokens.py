@@ -11,6 +11,8 @@ import jwt
 from app.core.config import Settings
 from app.core.errors import AuthError
 
+_ACCESS_ACTORS = frozenset({"user", "agent", "bot", "service"})
+
 
 def create_access_token(
     *,
@@ -18,7 +20,16 @@ def create_access_token(
     organization_id: uuid.UUID,
     email: str,
     settings: Settings,
+    actor: str = "user",
 ) -> tuple[str, int]:
+    """Issue an access token.
+
+    Human login tokens are stamped ``actor=user``. Agent, bot, and service
+    callers pass their own actor. A missing actor is not a valid issuance.
+    """
+
+    if actor not in _ACCESS_ACTORS:
+        raise ValueError("access token actor must be user, agent, bot, or service")
     expires_in = settings.access_token_expire_minutes * 60
     jti = str(uuid.uuid4())
     payload: dict[str, Any] = {
@@ -26,6 +37,7 @@ def create_access_token(
         "org_id": str(organization_id),
         "email": email,
         "type": "access",
+        "actor": actor,
         "jti": jti,
         "exp": datetime.now(UTC) + timedelta(seconds=expires_in),
         "iat": datetime.now(UTC),

@@ -804,6 +804,8 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             account_id=account,
             actor=_agent(),
             owner_user_id="sofien",
+            equity=Decimal("9500"),
+            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert agent.value.code == "drawdown_reset_requires_human"
@@ -812,6 +814,8 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
         account_id=account,
         actor=_human(),
         owner_user_id="sofien",
+        equity=Decimal("9500"),
+        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     assert service.breaker_active(organization_id=ORG, now=NOW)
@@ -825,6 +829,211 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
     assert state.consecutive_losses == 4
     assert state.realized_pnl == Decimal("-10")
     assert state.unrealized_pnl == Decimal("-5")
+
+
+def test_first_stored_profile_looser_than_the_placeholder_is_a_loosening() -> None:
+    session = _session()
+    service = _service(session)
+    same = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="The placeholder itself is not a loosening.",
+        now=NOW,
+    )
+    applied = _apply(service, same, _human())
+    assert applied.change_class == "initial"
+    assert applied.effective_at == NOW
+
+    fresh = _session()
+    service = _service(fresh)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("2")),
+        reason="First store above the placeholder daily limit.",
+        now=NOW,
+    )
+    with pytest.raises(RiskPolicyRejected) as unconfirmed:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=_human(),
+            proof=None,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert unconfirmed.value.code == "apply_proof_missing"
+    assert fresh.scalar(select(RiskPolicyVersion.id)) is None
+    service.latch_drawdown(
+        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=NOW
+    )
+    with pytest.raises(RiskPolicyRejected) as blocked:
+        _apply(service, proposal, _human())
+    assert blocked.value.code == "loosening_blocked_by_breaker"
+    assert fresh.scalar(select(RiskPolicyVersion.id)) is None
+    breaker = fresh.scalar(select(RiskPolicyBreakerState))
+    assert breaker is not None
+    breaker.drawdown_latched = False
+    fresh.flush()
+    scheduled = _apply(service, proposal, _human())
+    assert scheduled.change_class == "loosening"
+    assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
+    assert scheduled.autonomous_internal_paper_enabled is False
+    assert scheduled.autonomous_blofin_demo_enabled is False
+    current, active, waiting = service.read(organization_id=ORG, kind=PolicyKind.DEMO, now=NOW)
+    assert active is None
+    assert current.daily_loss_limit_percent == Decimal("1")
+    assert waiting is not None and waiting.id == scheduled.id
+
+
+def test_breaker_cancellation_survives_the_read_session_rollback() -> None:
+    session = _session()
+    service = _service(session)
+    initial = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Initial before the durable cancellation.",
+        now=NOW,
+    )
+    _apply(service, initial, _human())
+    tight = _apply(
+        service,
+        service.propose(
+            organization_id=ORG,
+            actor=_human(),
+            profile=profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5")),
+            reason="The version that must stay active.",
+            now=NOW,
+        ),
+        _human(),
+    )
+    loose = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Scheduled loosening that must stay cancelled.",
+        now=NOW,
+    )
+    scheduled = _apply(service, loose, _human())
+    effective = datetime(2026, 10, 19, 15, tzinfo=UTC)
+    scheduled_id = scheduled.id
+    tight_id = tight.id
+    service.latch_drawdown(
+        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=effective
+    )
+    _current, active, _waiting = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=effective
+    )
+    assert active is not None and active.id == tight_id
+    session.rollback()
+    cancelled = session.scalar(select(RiskPolicyVersionCancellation))
+    assert cancelled is not None
+    assert cancelled.version_id == scheduled_id
+    assert cancelled.reason == "breaker_active_at_activation"
+    breaker = session.scalar(select(RiskPolicyBreakerState))
+    assert breaker is not None
+    breaker.drawdown_latched = False
+    session.commit()
+    again, active_again, waiting = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=effective
+    )
+    assert active_again is not None and active_again.id == tight_id
+    assert again.daily_loss_limit_percent == Decimal("0.5")
+    assert waiting is None
+    with pytest.raises(RiskPolicyRejected) as conflict:
+        _apply(service, loose, _human(), effective)
+    assert conflict.value.code == "version_conflict"
+    session.rollback()
+    replacement = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="A new proposal is required after cancellation.",
+        now=effective,
+    )
+    rescheduled = _apply(service, replacement, _human(), effective)
+    assert rescheduled.id != scheduled_id
+    assert rescheduled.change_class == "loosening"
+    assert rescheduled.effective_at == datetime(2026, 10, 20, 15, tzinfo=UTC)
+    held, held_active, held_waiting = service.read(
+        organization_id=ORG, kind=PolicyKind.DEMO, now=effective
+    )
+    assert held_active is not None and held_active.id == tight_id
+    assert held.daily_loss_limit_percent == Decimal("0.5")
+    assert held_waiting is not None and held_waiting.id == rescheduled.id
+
+
+def test_undeclared_actor_is_rejected_before_a_proposal_insert() -> None:
+    session = _session()
+    service = _service(session)
+    with pytest.raises(RiskPolicyRejected) as undeclared:
+        service.propose(
+            organization_id=ORG,
+            actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
+            profile=placeholder_profile(PolicyKind.DEMO),
+            reason="A missing actor must not insert a proposal.",
+            now=NOW,
+        )
+    assert undeclared.value.code == "actor_undeclared"
+    assert session.scalar(select(RiskPolicyProposal.id)) is None
+    with pytest.raises(RiskPolicyRejected) as blank:
+        service.propose(
+            organization_id=ORG,
+            actor=PolicyActor("", PolicyChannel.HUMAN, True),
+            profile=placeholder_profile(PolicyKind.DEMO),
+            reason="A blank actor must not insert a proposal.",
+            now=NOW,
+        )
+    assert blank.value.code == "actor_unauthenticated"
+    assert session.scalar(select(RiskPolicyProposal.id)) is None
+
+
+def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold() -> None:
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=True,
+        now=NOW,
+    )
+    with pytest.raises(RiskPolicyRejected) as still:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            owner_user_id="sofien",
+            equity=Decimal("9000"),
+            drawdown_breaker_percent=Decimal("10"),
+            now=NOW,
+        )
+    assert still.value.code == "drawdown_still_active"
+    state = session.scalar(select(RiskPolicyBreakerState))
+    assert state is not None
+    assert state.drawdown_latched is True
+    assert session.scalar(select(RiskPolicyBreakerReset.id)) is None
+    service.reset_drawdown_latch(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        owner_user_id="sofien",
+        equity=Decimal("9500"),
+        drawdown_breaker_percent=Decimal("10"),
+        now=NOW,
+    )
+    assert state.drawdown_latched is False
+    reset = session.scalar(select(RiskPolicyBreakerReset))
+    assert reset is not None
+    assert reset.actor_channel == "human"
 
 
 def _sizing_order():

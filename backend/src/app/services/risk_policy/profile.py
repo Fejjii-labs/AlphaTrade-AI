@@ -370,14 +370,26 @@ _LOOSENS_WHEN_DECREASED = (
 )
 
 
-def classify_change(previous: RiskPolicyProfile | None, proposed: RiskPolicyProfile) -> ChangeClass:
-    """A mixed change is a loosening. Fail closed."""
+def classify_change(
+    previous: RiskPolicyProfile | None,
+    proposed: RiskPolicyProfile,
+    *,
+    unchanged: ChangeClass | None = None,
+) -> ChangeClass:
+    """A mixed change is a loosening. Fail closed.
+
+    ``unchanged`` lets the first stored profile match the live placeholder
+    without raising ``no_change``. Any real difference is classified normally,
+    so a looser first profile is a loosening.
+    """
 
     if previous is None:
         validate_profile(proposed)
         return ChangeClass.INITIAL
     diff = profile_diff(previous, proposed)
     if not diff:
+        if unchanged is not None:
+            return unchanged
         raise RiskPolicyRejected("no_change")
     loosened = False
     for key in _LOOSENS_WHEN_INCREASED:
