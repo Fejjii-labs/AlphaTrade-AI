@@ -54,7 +54,6 @@ from app.services.canonical_paper_execution import (
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
-from app.services.risk_policy.plan_sizing import PAPER_DEMO_FUNDING_RATE_PER_8H
 from app.services.risk_policy.profile import PolicyKind
 from app.services.safety_epoch import SafetyEpochService
 
@@ -78,9 +77,10 @@ def signed_verified_demo_pnl(
     positive fill PnL cannot reset the streak. Verified fees are subtracted.
     A missing or non-finite fee figure does not treat a non-negative price
     result as a win. Verified funding cash is subtracted (a credit is
-    negative). When no funding cash was reported, one 8h window at the
-    0.0001 floor is subtracted from ``notional``. That estimate is not stored
-    as ``net_pnl`` or as journal funding.
+    negative). Missing or non-finite funding is not a win either: the
+    0.0001-per-8h sizing floor is an estimate, not verified funding cash.
+    ``notional`` is accepted and ignored so a caller cannot turn that
+    estimate into a streak reset.
     """
 
     # ``reported_pnl`` is accepted so callers can pass the venue figure and
@@ -88,6 +88,7 @@ def signed_verified_demo_pnl(
     if reported_pnl is not None and not reported_pnl.is_finite():
         reported_pnl = None
     del reported_pnl
+    del notional
     cash = (exit_price - entry_price) * quantity * contract_multiplier
     gross = cash if is_long else -cash
     if fees is None or not fees.is_finite() or fees < 0:
@@ -95,11 +96,11 @@ def signed_verified_demo_pnl(
             return gross
         return Decimal("-0.00000001")
     net = gross - fees
-    if funding is not None and funding.is_finite():
-        return net - funding
-    if notional is not None and notional.is_finite() and notional > 0:
-        return net - notional * PAPER_DEMO_FUNDING_RATE_PER_8H
-    return net
+    if funding is None or not funding.is_finite():
+        if net < 0:
+            return net
+        return Decimal("-0.00000001")
+    return net - funding
 
 
 def resolve_verified_demo_exit(

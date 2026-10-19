@@ -169,6 +169,9 @@ def test_profile_close_consecutive_increments_a_loss_and_resets_a_win() -> None:
     assert profile_close_consecutive(3, Decimal("-1")) == 4
     assert profile_close_consecutive(3, Decimal("0")) == 0
     assert profile_close_consecutive(4, Decimal("2")) == 0
+    assert profile_close_consecutive(4, Decimal("2"), pause_in_force=True) == 4
+    assert profile_close_consecutive(4, Decimal("-1"), pause_in_force=True) == 5
+    assert profile_close_consecutive(3, Decimal("NaN")) == 4
 
 
 def test_stored_consecutive_count_still_refuses_the_next_entry() -> None:
@@ -320,6 +323,40 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         fees=None,
     )
     assert unknown_fees < 0
+    unverified_funding = signed_verified_demo_pnl(
+        is_long=True,
+        entry_price=Decimal("100"),
+        exit_price=Decimal("110"),
+        quantity=Decimal("1"),
+        contract_multiplier=Decimal("1"),
+        reported_pnl=Decimal("20"),
+        fees=Decimal("0.01"),
+        funding=None,
+        notional=Decimal("1000000"),
+    )
+    assert unverified_funding < 0
+    held = _note_profile_close(
+        object(),  # type: ignore[arg-type]
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        net_pnl=unverified_funding,
+        now=NOW,
+        kind=PolicyKind.DEMO,
+    )
+    assert held == 7
+    non_finite_funding = signed_verified_demo_pnl(
+        is_long=True,
+        entry_price=Decimal("100"),
+        exit_price=Decimal("110"),
+        quantity=Decimal("1"),
+        contract_multiplier=Decimal("1"),
+        reported_pnl=None,
+        fees=Decimal("0"),
+        funding=Decimal("NaN"),
+        notional=Decimal("100"),
+    )
+    assert non_finite_funding < 0
     price_win = signed_verified_demo_pnl(
         is_long=False,
         entry_price=Decimal("100"),
@@ -480,3 +517,108 @@ def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch)
     assert kept is True
     assert written["consecutive_losses"] == 4
     assert written["consecutive_paused_until"] == NOW + timedelta(hours=10)
+    cleared_attempt = persist_profile_breakers(
+        object(),  # type: ignore[arg-type]
+        organization_id=ORG,
+        user_id=uuid4(),
+        account_id=ACCOUNT,
+        profile=profile,
+        now=NOW,
+        consecutive_losses=0,
+    )
+    assert cleared_attempt is True
+    assert written["consecutive_losses"] == 4
+    assert written["consecutive_paused_until"] == NOW + timedelta(hours=10)
+
+
+def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None:
+    from datetime import timedelta
+
+    from app.services.canonical_paper_execution import _note_profile_close
+    from app.services.risk_policy.plan_sizing import ActiveProfile
+    from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
+
+    profile = sofien_aggressive_profile(PolicyKind.DEMO)
+    pause = NOW + timedelta(hours=10)
+    state: dict[str, object] = {"losses": 4, "paused": pause}
+    written: dict[str, object] = {}
+
+    class _Daily:
+        account_equity = Decimal("10000")
+        realized_pnl = Decimal("0")
+        unrealized_pnl = Decimal("0")
+
+    class _Accounting:
+        def __init__(self, _session: object, _settings: object, clock: object) -> None:
+            return None
+
+        def sync_from_portfolio(self, **_kwargs: object) -> _Daily:
+            return _Daily()
+
+    class _Row:
+        equity_peak = Decimal("10000")
+        drawdown_latched = False
+
+        @property
+        def consecutive_losses(self) -> int:
+            losses = state["losses"]
+            assert isinstance(losses, int)
+            return losses
+
+        @property
+        def consecutive_paused_until(self) -> datetime:
+            paused = state["paused"]
+            assert isinstance(paused, datetime)
+            return paused
+
+    class _Service:
+        def __init__(self, _session: object, _audit: object) -> None:
+            return None
+
+        def load_breaker(self, **_kwargs: object) -> _Row:
+            return _Row()
+
+        def record_breaker(self, **kwargs: object) -> object:
+            written.update(kwargs)
+            state["losses"] = kwargs["consecutive_losses"]
+            state["paused"] = kwargs["consecutive_paused_until"]
+            return kwargs
+
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._load_active_profile",
+        lambda *_args, **_kwargs: ActiveProfile(profile=profile, version_id=uuid4()),
+    )
+    monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    monkeypatch.setattr(
+        "app.services.risk.settings_service.RiskSettingsService", lambda _session, _audit: None
+    )
+    monkeypatch.setattr("app.services.audit_service.AuditService", lambda _session: None)
+    monkeypatch.setattr("app.services.risk_policy.persistence.RiskPolicyService", _Service)
+    org, user, account = uuid4(), uuid4(), uuid4()
+    for kind in (PolicyKind.DEMO, PolicyKind.INTERNAL_PAPER):
+        state["losses"] = 4
+        state["paused"] = pause
+        kept = _note_profile_close(
+            object(),  # type: ignore[arg-type]
+            organization_id=org,
+            user_id=user,
+            account_id=account,
+            net_pnl=Decimal("25"),
+            now=NOW,
+            kind=kind,
+        )
+        assert kept == 4
+        assert written["consecutive_losses"] == 4
+        assert written["consecutive_paused_until"] == pause
+        increased = _note_profile_close(
+            object(),  # type: ignore[arg-type]
+            organization_id=org,
+            user_id=user,
+            account_id=account,
+            net_pnl=Decimal("-1"),
+            now=NOW,
+            kind=kind,
+        )
+        assert increased == 5
+        assert written["consecutive_losses"] == 5
+        assert written["consecutive_paused_until"] == pause

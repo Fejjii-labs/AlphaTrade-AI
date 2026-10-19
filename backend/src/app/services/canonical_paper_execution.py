@@ -663,6 +663,7 @@ def _note_profile_close(
     from app.services.audit_service import AuditService
     from app.services.automated_paper_loop import _load_active_profile
     from app.services.risk_policy.breaker_trip import (
+        _as_utc,
         persist_profile_breakers,
         profile_close_consecutive,
         streak_after_expiry,
@@ -679,7 +680,8 @@ def _note_profile_close(
     current = 0 if row is None else int(row.consecutive_losses)
     paused_until = None if row is None else getattr(row, "consecutive_paused_until", None)
     current = streak_after_expiry(current, paused_until, now)
-    consecutive = profile_close_consecutive(current, net_pnl)
+    pause_in_force = paused_until is not None and _as_utc(paused_until) > _as_utc(now)
+    consecutive = profile_close_consecutive(current, net_pnl, pause_in_force=pause_in_force)
     persist_profile_breakers(
         session,
         organization_id=organization_id,

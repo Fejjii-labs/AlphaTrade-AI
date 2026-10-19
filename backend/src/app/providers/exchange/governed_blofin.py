@@ -104,8 +104,23 @@ def _account_rows(data: Any) -> list[dict[str, Any]]:
     return data
 
 
+def tier_notional_floor(min_size: Decimal) -> Decimal:
+    """Use a position-tier ``minSize`` as quote notional. Do not scale it.
+
+    https://docs.blofin.com/index.html (GET /api/v1/market/position-tiers)
+    calls ``minSize`` "Minimum position size" and does not say contracts.
+    GET Instruments on that page does say order ``minSize`` is in contracts.
+    The public BTC-USDT isolated ladder is 0, 2500, 5000, … USDT while
+    ``contractValue`` is 0.001. Scaling by contract value and price would
+    inflate those brackets and leave the lowest maintenance rate in force.
+    The conservative reading uses the published number unchanged.
+    """
+
+    return min_size
+
+
 def _tier_sizes(data: Any) -> tuple[tuple[Decimal, Decimal], ...]:
-    """Public position tiers as (minimum contracts, maintenance rate). No write."""
+    """Public position tiers as (quote-notional floor, maintenance rate). No write."""
 
     message = "Demo maintenance tiers unavailable; no leverage mutation."
     if not isinstance(data, list) or not data:
@@ -272,7 +287,7 @@ class GovernedBloFinDemoProvider:
                 minimum if quantity is None else quantity, lot=lot, minimum=minimum, maximum=maximum
             )
         maintenance_tiers = tuple(
-            (min_size * multiplier * book.price, rate) for min_size, rate in tier_sizes
+            (tier_notional_floor(min_size), rate) for min_size, rate in tier_sizes
         )
         return DemoVenueSnapshot(
             instrument=instrument,

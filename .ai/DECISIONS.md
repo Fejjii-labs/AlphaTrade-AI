@@ -73,7 +73,15 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   on the wired path. If 1x still fails, or margin would exceed equity, the
   trade is refused and quantity is not shrunk to fit. Paper maintenance
   uses a conservative 2% rate because there is no venue tier feed. Demo
-  reads public position tiers and refuses when they are missing. BloFin
+  reads public position tiers and refuses when they are missing. BloFin's
+  GET /api/v1/market/position-tiers
+  (https://docs.blofin.com/index.html) describes `minSize` as "Minimum
+  position size" and does not say contracts. Order `minSize` on GET
+  Instruments is in contracts. The public BTC-USDT isolated ladder
+  (0, 2500, 5000, … USDT, with `contractValue` 0.001) matches quote
+  notional. The tier floor is that number unchanged. Scaling it by
+  contract value and price would keep the lowest maintenance rate.
+  BloFin
   demo does not send a leverage or margin-mode write. Account margin mode
   is read from `GET /api/v1/account/margin-mode`. Leverage-info counts
   only when its payload includes `marginMode` and that mode equals the
@@ -94,11 +102,17 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   write leverage or margin mode. A verified demo profile close advances
   that account's consecutive-loss count. The sign subtracts verified fees
   and funding, so a trade that is flat or green on price and loses after
-  fees is a loss. Missing fees do not reset the streak. The consecutive
+  fees is a loss. Missing fees do not reset the streak. Missing or
+  non-finite demo funding cash does not reset it either. The 0.0001 per
+  8h figure stays a sizing cost estimate and is not verified funding for
+  the streak sign. Venue fill PnL stays ignored. The consecutive
   pause is set once, to the later of the next UTC midnight and the profile
   cooldown (`consecutive_loss_cooldown_hours`, default 24, range 1 to 168).
   Later scans do not push that expiry forward. When the expiry passes, the
-  streak clears. A manual reset requires the same human proof as a
+  streak clears. While that pause is still in the future, a paper or demo
+  close cannot zero the streak or clear the pause. A loss on that close
+  may still increment the count. Ending the pause early stays on the
+  human consecutive-loss reset. A manual reset requires the same human proof as a
   loosening apply, writes an audit row, and does not clear a drawdown
   latch. A Telegram proof without `iat` is rejected on that reset, the
   same as on apply. `decode_apply_proof` stays bound to a proposal UUID

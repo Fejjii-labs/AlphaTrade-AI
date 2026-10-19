@@ -66,6 +66,7 @@ class Venue:
     clock_delta: int = 0
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
+    tier_min_size: str = "0"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -93,7 +94,7 @@ class Venue:
                 {
                     "instId": "BTC-USDT",
                     "marginMode": "cross",
-                    "minSize": "0",
+                    "minSize": self.tier_min_size,
                     "maxSize": "100000",
                     "maintenanceMarginRate": "0.004",
                     "maxLeverage": "125",
@@ -632,6 +633,31 @@ def test_funding_read_uses_the_live_print_and_not_the_mock_fallback() -> None:
 
     provider._client = _Live()  # type: ignore[attr-defined]
     assert provider.read_funding_rate(symbol="BTCUSDT") == Decimal("0.00025")
+
+
+def test_position_tier_min_size_stays_quote_notional() -> None:
+    from app.schemas.trade_plan import EntrySide
+
+    venue = Venue(Decimal("100"), tier_min_size="2500")
+    client = BloFinClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="simulated-key",
+        api_secret="simulated-secret",
+        api_passphrase="simulated-pass",
+        transport=httpx.MockTransport(venue.handle),
+    )
+    provider = GovernedBloFinDemoProvider(client, clock=lambda: EVALUATED_AT)
+    snapshot = provider.snapshot(
+        symbol="BTCUSDT",
+        now=EVALUATED_AT,
+        side=EntrySide.BUY,
+        required_leverage=None,
+    )
+    floors = [floor for floor, _rate in snapshot.maintenance_tiers]
+    assert floors == [Decimal("2500")]
+    scaled = Decimal("2500") * snapshot.multiplier * snapshot.price
+    assert scaled != Decimal("2500")
+    assert scaled not in floors
 
 
 def test_staging_settings_require_complete_scoped_demo_arm() -> None:

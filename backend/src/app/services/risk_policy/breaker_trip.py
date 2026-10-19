@@ -92,13 +92,24 @@ def consecutive_pause_expiry(
     return max(next_utc_day(current), current + timedelta(hours=cooldown_hours))
 
 
-def profile_close_consecutive(current: int, net_pnl: Decimal) -> int:
-    """A loss increments the streak. A win or a flat close resets it.
+def profile_close_consecutive(
+    current: int,
+    net_pnl: Decimal,
+    *,
+    pause_in_force: bool = False,
+) -> int:
+    """A loss increments the streak. A win resets it only when no pause is in force.
 
-    This does not reset a drawdown latch and does not place an order.
+    An unexpired consecutive pause is not a win. Ending that pause stays on
+    ``reset_consecutive_losses``. This does not reset a drawdown latch and
+    does not place an order.
     """
 
-    return 0 if net_pnl >= 0 else current + 1
+    if not isinstance(net_pnl, Decimal) or not net_pnl.is_finite() or net_pnl < 0:
+        return current + 1
+    if pause_in_force:
+        return current
+    return 0
 
 
 def trip_breakers(
@@ -120,12 +131,19 @@ def trip_breakers(
     """
 
     verdict = evaluate_breakers(config, snapshot)
+    existing_pause = existing_consecutive_paused_until
+    pause_still_in_force = existing_pause is not None and _as_utc(existing_pause) > _as_utc(now)
     if verdict.consecutive_loss_active:
         consecutive_until = consecutive_pause_expiry(
             now,
             cooldown_hours=cooldown_hours,
-            existing_paused_until=existing_consecutive_paused_until,
+            existing_paused_until=existing_pause,
         )
+    elif pause_still_in_force:
+        # A close or a scan cannot end an unexpired pause. Only the human
+        # reset, or the expiry itself, does that.
+        assert existing_pause is not None
+        consecutive_until = _as_utc(existing_pause)
     else:
         consecutive_until = None
     recorder.record_breaker(
@@ -184,6 +202,10 @@ def persist_profile_breakers(
         if existing_pause is not None and _as_utc(existing_pause) > _as_utc(now)
         else None
     )
+    # A paper or demo close may pass a reset count. While the pause is in
+    # the future that count cannot fall. A loss, which is larger, still counts.
+    if kept_pause is not None and consecutive < stored:
+        consecutive = stored
     latched = False if row is None else bool(row.drawdown_latched)
     realized = daily.realized_pnl
     unrealized = daily.unrealized_pnl
