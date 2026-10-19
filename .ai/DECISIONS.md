@@ -71,6 +71,251 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.
 - Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`;
   `.ai/RELEASE.md`.
+## AT-ADR-109 — Hard prerequisites before arming the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: Griller's verdict on PR #278 at
+  `bc9041f09fef55517056a0da8238797ec9119cb8` is MERGE WITH BOTH FLAGS OFF.
+  `autonomous_internal_paper_enabled` and `autonomous_blofin_demo_enabled`
+  stay false. Real-money trading stays blocked. This record does not enable
+  either flag, does not change deploy config, and does not merge the pull
+  request. The checklist is `docs/risk_policy_arming_checklist.md`.
+- The items below are HARD PREREQUISITES. Each one names the trigger that
+  makes it binding. Writing them down does not satisfy them.
+
+### (a) Trigger: before ANY proof issuer or apply use
+
+Before a server issues an apply proof, and before apply is used, including
+a paper or demo profile apply:
+
+- Proofs are issued by the server and are single-use. Single-use means a
+  stored nonce. The TTL is 5 minutes or less.
+- The server checks a real verification: a TOTP or WebAuthn step-up, or a
+  Telegram confirmation from the pinned chat id.
+- The proof uses a signing key that is separate from `jwt_secret`.
+- `proposal_id` is required and matches the proposal being applied.
+- Current state on `bc9041f0`: the proof only fails closed. A missing or
+  invalid proof is rejected. There is no issuer, no stored nonce, and no
+  separate signing key. `decode_apply_proof` verifies with `jwt_secret`.
+  A token that omits `proposal_id` is filled with the request's proposal
+  id. `actor=user` is a label on the access token. It is not a TOTP,
+  WebAuthn, or Telegram check.
+- Follow-up to Grok review 5568860205: `decode_apply_proof` now rejects a
+  missing `proposal_id` and a `proposal_id` that does not match the
+  proposal. It does not copy the request id. A `telegram_owner` proof is
+  fresh only when its `iat` is not in the future and is no older than 5
+  minutes, even when `exp` is later. There is still no issuer, stored
+  nonce, or separate signing key. `actor=user` is still a label.
+- Follow-up to Grok review 5569113368: a step-up proof is rejected when
+  `auth_time` or `step_up_at` is later than now. `decode_apply_proof` and
+  `_require_fresh_step_up` both enforce that. The 15-minute maximum age
+  remains. There is no clock-skew allowance on this path. A non-numeric
+  or non-finite time claim is rejected instead of being parsed. `exp` does
+  not extend either freshness window. Blank or non-string `sub`,
+  `content_hash`, and `proposal_id` claims are rejected. An access token
+  cannot be used as an apply proof, and an apply proof cannot be used as
+  an access token. A human access token must include `exp`, `iat`, `sub`,
+  and `org_id`, and the risk-policy route checks those against the tenant.
+  Replaying a proof against another proposal is rejected. Applying the
+  same proposal twice is `version_conflict`. There is still no issuer,
+  stored nonce, or separate signing key. `actor=user` is still a label.
+
+### (b) Trigger: before exposing drawdown reset
+
+Before a route or any other caller can reset a drawdown latch:
+
+- The reset requires the same proof as apply.
+- Legacy tokens with no `actor` claim are refused.
+
+### (c) Trigger: before ANY grade goes above 1%
+
+Before a tradable grade risk is allowed above the 1% placeholder, on apply
+or on sizing:
+
+- The promotion report is computed by the server, per grade, from stored
+  samples.
+- The caller supplies no eligibility flags.
+- One report does not cover the whole organization.
+
+### (d) Trigger: before arming
+
+Before either autonomous flag is set true, in any environment:
+
+- Database triggers make breaker intervals, cancellations, promotion
+  reports, and breaker resets append-only.
+- A cancellation commits only its own work.
+- A breaker that opens and closes between apply and `effective_at` also
+  cancels that change.
+- On `bc9041f0`, profile versions have a Postgres immutability trigger.
+  Intervals, cancellations, promotion reports, and resets are refused by
+  ORM listeners. Those four tables do not have the database triggers this
+  prerequisite requires. `_cancel_version` commits the whole session. A
+  persisted window cancels a loosening when the window covers
+  `effective_at`. A window that has already closed before `effective_at`
+  does not.
+
+### (e) Follow-ups
+
+These follow-ups are required. They do not replace (a)–(d).
+
+- Trigger: before a downgrade of `a17riskpolicy002` is relied on. That
+  downgrade refuses while cancellation, promotion-report, or breaker-reset
+  rows exist. `a16` and `a18` already refuse when their guarded rows exist.
+- Trigger: before a client uses `/risk/policy/*`. Route tests cover those
+  routes.
+- Trigger: the next edit of `backend/src/app/core/config.py`. Correct the
+  stale comment at lines 205–209. This record does not edit that file.
+
+### Wiring pull request
+
+These stay in a later wiring pull request. This decision does not authorize
+that work:
+
+- an atomic budget reservation
+- server-side open-risk computation
+- the isolated-versus-cross margin mismatch on the demo path
+
+`ExchangeMarginWriter` stays unwired.
+
+- Reference: AT-ADR-107; AT-ADR-108; `docs/risk_policy_arming_checklist.md`;
+  Griller review of PR #278 at `bc9041f0`, 2026-10-18.
+
+## AT-ADR-108 — Griller follow-up on the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: The follow-up review of the grade-based risk policy (PR #278 at
+  `895ca71f`) is accepted as changes, not as a merge. Real-money trading
+  stays blocked. Both autonomous flags stay off. No BloFin write path is
+  added. Alembic `a17riskpolicy002` revises `a16riskpolicy001`.
+- `risk_percent` in the rule engine applies only when the caller sets
+  `autonomous_sizing`. Human paper execution still copies
+  `max_risk_per_trade_percent` (the settings API allows up to 10%) and
+  strategy replays still pass 2-5%. Those paths do not opt in, so they
+  behave as they did before the policy tables existed.
+- Apply is not "any owner role" and a missing `actor` claim is not a human.
+  Apply requires the configured `risk_policy_owner_user_id` plus a separate
+  proof: a fresh interactive session with step-up or re-auth (15 minutes),
+  or a confirmation from the pinned Telegram owner chat
+  (`telegram_chat_id`). Service, agent, and bot tokens are refused. The
+  apply body has no `confirm` field. The stored version channel remains
+  `human` because the proof is what makes the apply human.
+- Loosening becomes effective at `max(next UTC midnight, apply time + 24h)`.
+  A proposal older than 72 hours cannot be applied. If a breaker is active
+  when a scheduled loosening comes due, that version is cancelled and does
+  not activate after the breaker clears.
+- A tradable grade above the 1% placeholder is refused, on apply and on
+  sizing, unless a stored promotion report for `deterministic-grade/v1`
+  meets the existing calibration criteria. `promote()` still always refuses.
+- R includes the exit-leg fee at the stop price. Funding is expected
+  holding periods times the funding rate. Quantity is rounded down to the
+  instrument lot step, refused below the minimum quantity, and R is
+  recomputed after that rounding. A non-positive stop is refused. The
+  remaining daily budget used for sizing is
+  `min(profile daily, 6% ceiling, remaining daily)`.
+- Postgres refuses UPDATE and DELETE of `risk_policy_versions` with a
+  trigger. Downgrade of `a16riskpolicy001` refuses when trade records or
+  breaker-state rows exist. Breaker pause, loss count, realized P&L, and
+  unrealized P&L are persisted. A drawdown reset is an append-only row
+  carrying the actor. The daily breaker uses realized plus unrealized P&L.
+- Grok review of `38450d26` (2026-10-18) required one further correction.
+  A loosening is cancelled when its `effective_at` falls inside a persisted
+  breaker window, even if the first profile read happens after that window
+  has closed. The window is the append-only open and close history in
+  `risk_policy_breaker_intervals` (`a18riskpolicy003`), not the live latch.
+  A breaker that opens only after `effective_at` does not cancel that
+  version. `a18riskpolicy003` revises `a17riskpolicy002`. `a16` still
+  revises `a15reissueauth001`. Real-money trading stays blocked.
+- Grok review of `f06614c3` (2026-10-18) required four corrections, accepted
+  on the same branch. The first stored profile is classified against the
+  live placeholder: a looser result is a loosening, so the cooldown and the
+  human proof apply, and an unchanged placeholder stays an initial apply.
+  Breaker cancellation of a due loosening is committed, so closing the read
+  session cannot roll it back, and that version stays cancelled after the
+  breaker clears. A new proposal is required. Human access tokens are
+  stamped `actor=user` at issuance. Agent, bot, and service tokens keep
+  their own actor. An undeclared or missing actor is rejected before a
+  proposal insert. A persisted drawdown reset is refused while equity is
+  still outside the drawdown threshold.
+- Left for a later wiring pull request, not this change: an atomic budget
+  reservation, server-side open-risk computation, and the isolated-versus-cross
+  margin mismatch on the demo path. Connecting `ExchangeMarginWriter` still
+  needs its own pull request, a Griller review, and a further ADR.
+- Reference: AT-ADR-107; Griller review of PR #278, 2026-10-18.
+- Addendum 2026-10-18: Griller's verdict on `bc9041f0` is MERGE WITH BOTH
+  FLAGS OFF. The hard prerequisites and their triggers are AT-ADR-109 and
+  `docs/risk_policy_arming_checklist.md`. This addendum does not arm either
+  flag.
+
+## AT-ADR-107 — Grade-based risk policy is versioned, and ceilings fail closed
+
+- Date: 2026-10-18
+- Decision: Owner Sofien's grade-based risk policy is infrastructure only.
+  Every risk number is a profile field. The shipped values are conservative
+  placeholders: 1% risk on A+, A, B+, and B; C and an ungraded setup do not
+  trade; leverage defaults to 1x; `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled` stay false and a profile that sets either
+  to true is rejected. Real-money trading stays permanently blocked. This
+  decision does not enable either autonomous flag, change deploy config, or
+  authorize a merge.
+- Ceilings, in code, not in the profile: 2% per trade, 6% daily loss, 6%
+  aggregate open risk (sum of risk-at-stop), 20x leverage, and 25% of R as
+  the maximum cost share. A profile outside a ceiling is rejected at
+  validation and again when a version row is inserted. The loader does not
+  clamp. Separate profile kinds (conservative, standard, aggressive,
+  internal paper, demo) exist so paper and demo can diverge later. They
+  start from the same placeholder.
+- Governance: proposals may come from an authenticated human, agent, or bot
+  token. Only an authenticated human access token can apply, and the version
+  row's `actor_channel` check is `human`. Tightening takes effect immediately.
+  Loosening needs `confirm=true`, takes effect at the next UTC midnight, and
+  is refused while a daily-loss, drawdown, or consecutive-loss breaker is
+  active. The active version is the highest version number whose
+  `effective_at` is already due, so a later tightening is not overwritten by
+  an earlier scheduled loosening. Versions are immutable. A change applies
+  to new trades only; the trade row keeps the version it was sized with.
+- Grading: `deterministic-grade/v1` uses only the trend and momentum scores
+  from `app.analysis.confidence`. The first grade bound to a setup stays
+  bound. AI text may explain that grade and cannot raise it.
+- Sizing: effective risk is the minimum of the adjusted grade risk, the
+  profile allowance, the 2% ceiling, and the room left in both the daily
+  budget and the aggregate open-risk cap after open risk-at-stop. Quantity
+  comes from the adverse stop distance (stop plus any gap past the stop)
+  with fees, absolute funding, and slippage inside R. Costs above the
+  profile's share of R refuse the trade. Notional caps can only reduce
+  quantity. Leverage sets isolated margin and does not change quantity.
+  A missing adjuster input or a missing maintenance tier refuses the trade.
+- Breakers: daily loss and four consecutive losses pause new trades until
+  the next UTC day. A 10% drawdown from the equity peak trips the kill
+  switch and stays latched until an authenticated human resets it, and the
+  reset does not stick while the drawdown is still outside the threshold.
+- Liquidation: isolated margin only. The buffer is the larger of twice the
+  stop distance and the stop distance plus 1.5 ATR, using the maintenance
+  tier for the position notional. The post-fill check can say
+  `close_or_reduce`. It does not call an exchange.
+- Exchange writes: this decision does **not** add a BloFin endpoint that
+  sets leverage or margin mode. `ExchangeMarginWriter` in
+  `app.services.risk_policy.exchange_margin` is unwired and raises if
+  called. Connecting that write needs its own pull request, a Griller
+  review, and a further ADR that covers the allowlist, the demo host, the
+  pinned account, and a read-back that matches. Until then the check is
+  local.
+- Ledger: PR 258's unverified fallback stores `max_symbol_notional` equal
+  to `max_notional`, and demo auto-approval already refuses that row. A
+  bound profile produces a symbol cap from per-trade notional that is
+  strictly below aggregate notional, and a daily-loss amount that is also
+  strictly below aggregate notional. The risk engine's `risk_percent` rule
+  blocks a stated risk above the ceiling or the active profile cap, and
+  blocks a ledger whose symbol cap is not independent of total notional.
+  Callers that omit both the field and the ledger are unchanged.
+- Calibration: the promotion report needs at least 100 out-of-sample trades
+  per tradable grade on one frozen grader version, strictly ordered
+  expectancy, a lower 90% bound above zero for A+ and A, walk-forward folds
+  that keep A+ and A positive, and the same results after the slippage
+  haircut. A full sample that then fails is flagged for auto-demotion on
+  the report. `promote()` always refuses. Promotion is manual.
+- Reference: Griller review 2026-10-18; PR #258; AT-ADR-106. Alembic
+  `a16riskpolicy001` revises `a15reissueauth001` and downgrades by dropping
+  the new tables, refusing while a trade record exists.
 
 ## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
 

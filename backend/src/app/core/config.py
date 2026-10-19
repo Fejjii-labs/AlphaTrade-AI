@@ -222,6 +222,8 @@ class Settings(BaseSettings):
     # authorizes real-money trading. Setting both fails closed.
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
+    # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
+    risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)

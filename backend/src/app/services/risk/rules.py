@@ -14,6 +14,9 @@ from decimal import Decimal
 from app.schemas.common import RiskAction, RiskRuleId, RiskSeverity
 from app.schemas.risk import RiskCheckRequest, TriggeredRule
 from app.services.risk.limits import RiskLimits
+from app.services.risk_policy.ceilings import HARD_MAX_RISK_PER_TRADE_PERCENT
+from app.services.risk_policy.errors import RiskPolicyRejected
+from app.services.risk_policy.ledger import ledger_symbol_cap_equals_notional
 
 RuleFn = Callable[[RiskCheckRequest, RiskLimits, "RiskEvaluationContext"], TriggeredRule | None]
 
@@ -33,6 +36,14 @@ class RiskEvaluationContext:
     is_weekend: bool = False
     # Sum of open paper position notionals (size * entry) before this order.
     open_exposure_notional: Decimal = Decimal("0")
+    # Active grade-policy cap in percent points. None means the hard ceiling only.
+    profile_risk_percent_cap: Decimal | None = None
+    # PR 258 account ledger. Both must be set together. Equal caps fail closed.
+    ledger_max_symbol_notional: Decimal | None = None
+    ledger_max_notional: Decimal | None = None
+    # The grade-policy ceiling applies only when autonomous sizing opted in.
+    # Human paper execution and strategy replays leave this false.
+    autonomous_sizing: bool = False
 
 
 def _rule(
@@ -275,6 +286,73 @@ def check_overtrading(
     return None
 
 
+def check_risk_percent(
+    req: RiskCheckRequest, _limits: RiskLimits, ctx: RiskEvaluationContext
+) -> TriggeredRule | None:
+    """Enforce grade-policy risk only for autonomous sizing.
+
+    Human paper execution copies ``max_risk_per_trade_percent`` (the settings
+    API allows up to 10%) into ``risk_percent``. Strategy replays pass 2-5%.
+    Those callers leave ``autonomous_sizing`` false, and this rule stays idle
+    so their previous allow path is unchanged. Autonomous sizing opts in and
+    is then held to the code ceiling, the active profile cap, and the PR 258
+    ledger independence check.
+    """
+
+    if not ctx.autonomous_sizing:
+        return None
+    ledger_supplied = (
+        ctx.ledger_max_symbol_notional is not None or ctx.ledger_max_notional is not None
+    )
+    if req.risk_percent is None and not ledger_supplied:
+        return None
+    if req.risk_percent is not None:
+        cap = HARD_MAX_RISK_PER_TRADE_PERCENT
+        if ctx.profile_risk_percent_cap is not None:
+            if ctx.profile_risk_percent_cap <= 0:
+                return _rule(
+                    RiskRuleId.RISK_PERCENT,
+                    RiskAction.BLOCK,
+                    RiskSeverity.CRITICAL,
+                    "Profile risk cap is unreadable; risk percent fails closed.",
+                )
+            cap = min(cap, ctx.profile_risk_percent_cap)
+        if req.risk_percent > cap:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.HIGH,
+                f"Risk percent {req.risk_percent} exceeds the cap {cap}.",
+            )
+    if ledger_supplied:
+        if ctx.ledger_max_symbol_notional is None or ctx.ledger_max_notional is None:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.CRITICAL,
+                "Account ledger caps are incomplete; symbol cap fails closed.",
+            )
+        try:
+            equal = ledger_symbol_cap_equals_notional(
+                ctx.ledger_max_symbol_notional, ctx.ledger_max_notional
+            )
+        except RiskPolicyRejected:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.CRITICAL,
+                "Account ledger caps are unreadable; symbol cap fails closed.",
+            )
+        if equal:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.HIGH,
+                "Ledger symbol cap is not independent of total notional.",
+            )
+    return None
+
+
 def check_green_day_protection(
     _req: RiskCheckRequest, _limits: RiskLimits, ctx: RiskEvaluationContext
 ) -> TriggeredRule | None:
@@ -310,4 +388,5 @@ ALL_RULES: tuple[RuleFn, ...] = (
     check_sleep_test,
     check_overtrading,
     check_green_day_protection,
+    check_risk_percent,
 )

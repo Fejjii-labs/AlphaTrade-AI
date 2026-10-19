@@ -217,6 +217,7 @@ class RiskRuleId(StrEnum):
     STRONG_GREEN_DAY = "strong_green_day"
     COOLDOWN_AFTER_LOSS = "cooldown_after_loss"
     KILL_SWITCH = "kill_switch"
+    RISK_PERCENT = "risk_percent"
 
 
 class StrategyId(StrEnum):
@@ -399,6 +400,9 @@ class AuditEventType(StrEnum):
     POSITION_UPDATE = "position_update"
     JOURNAL_ENTRY = "journal_entry"
     KILL_SWITCH = "kill_switch"
+    RISK_POLICY_PROPOSED = "risk_policy_proposed"
+    RISK_POLICY_APPLIED = "risk_policy_applied"
+    RISK_POLICY_APPLY_REFUSED = "risk_policy_apply_refused"
 
 
 # Backward-compatible alias used by earlier slices

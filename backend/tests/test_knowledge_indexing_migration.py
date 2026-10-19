@@ -35,7 +35,10 @@ def test_indexing_migration_from_reviewed_head_and_roundtrip(monkeypatch):
     isolated = make_url(url).update_query_dict({"options": f"-csearch_path={schema}"})
     monkeypatch.setenv("ALEMBIC_DATABASE_URL", isolated.render_as_string(hide_password=False))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["a15reissueauth001"]
+    assert scripts.get_heads() == ["a18riskpolicy003"]
+    assert scripts.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
+    assert scripts.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
+    assert scripts.get_revision("a16riskpolicy001").down_revision == "a15reissueauth001"
     assert scripts.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
     assert scripts.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"
     assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
@@ -67,7 +70,7 @@ def test_indexing_migration_from_reviewed_head_and_roundtrip(monkeypatch):
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "a15reissueauth001"
+                == "a18riskpolicy003"
             )
             assert (
                 connection.scalar(
