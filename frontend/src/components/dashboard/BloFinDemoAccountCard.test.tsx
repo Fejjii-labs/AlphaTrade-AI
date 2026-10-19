@@ -467,7 +467,8 @@ it("hides a numeric win rate until activity sync is ready", async () => {
     },
   }));
   render(<BloFinDemoAccountCard />);
-  const winRate = await screen.findByTestId("dashboard-win-rate");
+  await screen.findByText("Withheld until fee basis and a flat start are verified");
+  const winRate = screen.getByTestId("dashboard-win-rate");
   expect(winRate).toHaveTextContent("—");
   expect(winRate).not.toHaveTextContent("50.0%");
   expect(winRate).toHaveTextContent("Withheld until fee basis and a flat start are verified");
