@@ -997,4 +997,21 @@ def test_drawdown_trip_arms_kill_switch_and_a_later_scan_does_not_clear_it(monke
         payload=KillSwitchMutationRequest(confirm=True, reason="human reset after review"),
     )
     assert kill.is_execution_blocked(organization_id=org) is False
+    after_reset = persist_profile_breakers(
+        session,
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        profile=profile,
+        now=now + timedelta(hours=3),
+        settings=settings,
+    )
+    assert after_reset is True
+    assert kill.is_execution_blocked(organization_id=org) is False
+    still_one = list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED)
+        ).all()
+    )
+    assert len(still_one) == 1
     engine.dispose()

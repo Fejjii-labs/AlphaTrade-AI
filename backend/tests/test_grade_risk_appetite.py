@@ -715,9 +715,15 @@ def test_canonical_open_lifecycle_is_priced_at_its_stop(monkeypatch) -> None:
     )
     assert excess == "open_risk_uncomputed"
     assert any(
-        "snapshot open notional exceeds the notional explained by stops" in item
+        "snapshot open notional does not match the notional explained by stops" in item
         for item in warnings
     )
+    short = open_risk_from_stops(
+        equity=Decimal("10000"),
+        positions=[(Decimal("1"), Decimal("100"), Decimal("90"))],
+        open_notional=Decimal("50"),
+    )
+    assert short == "open_risk_uncomputed"
 
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)

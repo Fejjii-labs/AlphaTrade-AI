@@ -55,12 +55,13 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   `paper_or_demo_channel` from the execution channel. Internal paper and
   BloFin demo use that 5% branch. Any other channel keeps
   `risk_ceiling_for` and is refused above 2%.
-- Drawdown kill switch: a profile scan whose breaker verdict sets
-  `trip_kill_switch` calls `KillSwitchService.activate` for the
-  organization, with an audited reason. A later scan does not deactivate
-  it, including a scan whose equity is back inside the drawdown threshold.
-  Only `KillSwitchService.deactivate` turns it off, and that is a human
-  reset. A repeat activate while the switch is already on does not write
+- Drawdown kill switch: the profile scan that newly sets the drawdown
+  latch calls `KillSwitchService.activate` for the organization, with an
+  audited reason. A later scan does not deactivate it and does not call
+  activate again while that latch remains, including after equity is back
+  inside the threshold and after a human deactivation. Only
+  `KillSwitchService.deactivate` turns it off. A new trip after
+  `reset_drawdown_latch` can arm it again. A repeat scan does not write
   another activation audit row.
 - Open stop risk: canonical open paper and demo lifecycle rows are priced
   at their planned stop together with Position rows. If a lifecycle row

@@ -197,9 +197,9 @@ def open_risk_from_stops(
             expected_hold_hours=expected_hold_hours,
         )
         explained += size * entry
-    if open_notional > explained:
+    if open_notional != explained:
         return _open_risk_uncomputed(
-            "snapshot open notional exceeds the notional explained by stops"
+            "snapshot open notional does not match the notional explained by stops"
         )
     return (risk_cash / equity * Decimal("100"), len(positions))
 

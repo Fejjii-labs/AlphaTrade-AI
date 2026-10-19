@@ -205,9 +205,10 @@ def persist_profile_breakers(
 ) -> bool:
     """Sync daily figures, then trip. Returns whether new trades are refused.
 
-    A drawdown verdict arms the organization kill switch. A later scan does
-    not deactivate it. Only ``KillSwitchService.deactivate`` does, and that
-    is a human reset.
+    A new drawdown trip arms the organization kill switch. A later scan
+    does not deactivate it and does not arm it again while the latch
+    remains, so a human deactivation stays off. Only
+    ``KillSwitchService.deactivate`` turns it off.
     """
 
     from app.services.audit_service import AuditService
@@ -271,7 +272,10 @@ def persist_profile_breakers(
         existing_daily_paused_until=kept_daily,
         cooldown_hours=profile.consecutive_loss_cooldown_hours,
     )
-    if verdict.trip_kill_switch:
+    # ``latched`` is the row from before this scan. Arm only on the trip
+    # that sets the latch. A later scan, including one after a human
+    # deactivation, does not call activate again.
+    if verdict.trip_kill_switch and not latched:
         _arm_drawdown_kill_switch(
             session,
             organization_id=organization_id,
