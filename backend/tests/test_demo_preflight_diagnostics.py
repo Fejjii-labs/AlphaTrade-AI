@@ -35,6 +35,7 @@ def fresh_preflight_logger(monkeypatch: pytest.MonkeyPatch) -> None:
         manual_demo_service, "logger", structlog.get_logger(manual_demo_service.__name__)
     )
 
+
 STAGES = (
     ("permissions", "/api/v1/user/query-apikey"),
     ("position_mode", "/api/v1/account/position-mode"),
