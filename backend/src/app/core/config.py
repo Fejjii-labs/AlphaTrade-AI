@@ -260,6 +260,10 @@ class Settings(BaseSettings):
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---
     blofin_sync_stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+    # Off until explicitly enabled. A disarmed worker never attaches the cycle.
+    blofin_demo_snapshot_sync_enabled: bool = False
+    # Worker read-only snapshot cadence. The browser polls the same interval.
+    blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
 
@@ -689,6 +693,11 @@ class Settings(BaseSettings):
             and self.blofin_readonly_api_secret.strip()
             and self.blofin_readonly_api_passphrase.strip()
         )
+
+    @property
+    def blofin_worker_readonly_ready(self) -> bool:
+        """Unattended snapshot sync may use only the dedicated read-only credentials."""
+        return self.blofin_readonly_sync_enabled and self.blofin_readonly_configured
 
     @property
     def blofin_demo_configured(self) -> bool:

@@ -63,8 +63,18 @@ class BloFinSyncService:
         user_id: uuid.UUID,
         request_id: str | None = None,
         include_instrument_metadata: bool = False,
+        actor_type: ActorType = ActorType.USER,
+        sync_origin: str = "api",
     ) -> BloFinSyncResult:
         """Fetch demo account state and persist a bounded snapshot."""
+        origin = sync_origin if sync_origin in {"api", "worker"} else "api"
+        if origin == "worker" and not self._settings.blofin_worker_readonly_ready:
+            logger.warning(
+                "blofin_worker_sync_readonly_required",
+                readonly_sync_enabled=self._settings.blofin_readonly_sync_enabled,
+                readonly_credentials_present=self._settings.blofin_readonly_configured,
+            )
+            raise ValueError("BloFin worker sync requires dedicated read-only credentials.")
         now = datetime.now(UTC)
         exchange_mode = self._settings.exchange_mode.value
         health = BloFinSyncHealthStatus.UNAVAILABLE
@@ -87,6 +97,7 @@ class BloFinSyncService:
             ),
             "readonly_sync_enabled": self._settings.blofin_readonly_sync_enabled,
             "demo_active": self._settings.exchange_demo_active,
+            "sync_origin": origin,
         }
         configured = configured_demo_account(
             self._session, self._settings, organization_id=organization_id, user_id=user_id
@@ -100,7 +111,7 @@ class BloFinSyncService:
             )
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
-            if self._settings.blofin_readonly_sync_enabled:
+            if origin == "worker" or self._settings.blofin_readonly_sync_enabled:
                 provider = get_readonly_account_provider(self._settings)
             else:
                 ensure_demo_exchange_access(self._settings)
@@ -258,7 +269,7 @@ class BloFinSyncService:
                 event_type=AuditEventType.BLOFIN_DEMO_SYNC,
                 resource_type="blofin_demo_sync_snapshot",
                 resource_id=str(row.id),
-                actor_type=ActorType.USER,
+                actor_type=actor_type,
                 result=(
                     AuditResult.SUCCESS
                     if health is BloFinSyncHealthStatus.OK

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { DEMO_REFRESH_INTERVAL_MS } from "../src/components/dashboard/demoAccountRefresh";
+
 // Browser fixtures prove presentation and request behavior; they are not venue evidence.
 for (const width of [1280, 390]) {
   test(`configured demo account is primary and refresh preserves evidence at ${width}px`, async ({
@@ -9,6 +11,7 @@ for (const width of [1280, 390]) {
     let refreshes = 0;
     let authenticated = false;
     let failRefresh = false;
+    let clearPositions = false;
     let fixtureNow = Date.now();
     await page.clock.install({ time: new Date(fixtureNow) });
     const snapshot = {
@@ -97,7 +100,8 @@ for (const width of [1280, 390]) {
           headers: { "Access-Control-Allow-Origin": "*" },
         });
         body = {
-          ...snapshot, positions: [], position_count: 0,
+          ...snapshot,
+          ...(clearPositions ? { positions: [], position_count: 0 } : {}),
           synced_at: new Date(fixtureNow).toISOString(),
           expires_at: new Date(fixtureNow + 300_000).toISOString(),
         };
@@ -133,11 +137,12 @@ for (const width of [1280, 390]) {
     await expect(card).toContainText("0.1 contracts");
     await expect(card).toContainText("Unrealized PnL —");
     expect(authenticated).toBe(true);
+    await expect.poll(() => refreshes).toBe(1);
     expect(reads).toBeGreaterThan(0);
     await expect(card).toContainText("1,001.50 USD");
     await expect(card).toContainText("Equity: 1,002.25 USDT");
     await expect(card).toContainText("Base quantity: 0.0001 BTC");
-    expect(refreshes).toBe(0);
+    expect(refreshes).toBe(1);
     await page.screenshot({ path: `../docs/screenshots/blofin-repair/fixture-dashboard-${width}.png`, fullPage: true });
     const initialReads = reads;
     const savedRead = page.waitForResponse((response) =>
@@ -150,29 +155,30 @@ for (const width of [1280, 390]) {
     // A request counter proves dispatch, not completion. Let the saved read
     // settle so single-flight can schedule its native poll before time advances.
     await expect(card.getByRole("button", { name: "Refresh demo account", exact: true })).toBeEnabled();
-    expect(refreshes).toBe(0);
+    expect(refreshes).toBe(1);
     // Exercise real browser timers and transport errors; values must survive.
     failRefresh = true;
-    fixtureNow += 180_000;
-    await page.clock.fastForward(180_000);
+    fixtureNow += DEMO_REFRESH_INTERVAL_MS;
+    await page.clock.fastForward(DEMO_REFRESH_INTERVAL_MS);
     await expect(card.getByRole("alert")).toContainText("refresh failed");
     await expect(card).toContainText("Stale snapshot");
     await expect(card).toContainText("0.1 contracts");
-    expect(refreshes).toBe(1);
-    fixtureNow += 180_000;
-    await page.clock.fastForward(180_000);
-    expect(refreshes).toBe(1); // Failure doubles the automatic retry interval.
+    expect(refreshes).toBe(2);
+    fixtureNow += DEMO_REFRESH_INTERVAL_MS;
+    await page.clock.fastForward(DEMO_REFRESH_INTERVAL_MS);
+    expect(refreshes).toBe(2); // Failure doubles the automatic retry interval.
     failRefresh = false;
+    clearPositions = true;
     await card.getByRole("button", { name: "Refresh demo account" }).click();
     await expect(card).toContainText(
       "No native open positions at this snapshot.",
     );
-    expect(refreshes).toBe(2);
+    expect(refreshes).toBe(3);
     await expect(card).toContainText("Fresh snapshot");
     await expect(card.getByRole("alert")).toHaveCount(0);
-    fixtureNow += 180_000;
-    await page.clock.fastForward(180_000);
-    await expect.poll(() => refreshes).toBe(3);
+    fixtureNow += DEMO_REFRESH_INTERVAL_MS;
+    await page.clock.fastForward(DEMO_REFRESH_INTERVAL_MS);
+    await expect.poll(() => refreshes).toBe(4);
     await expect(page.getByTestId("dashboard-equity")).toContainText("1,001.50 USD");
     await expect(page.getByTestId("dashboard-pnl")).toContainText("— USDT");
     await expect(page.getByTestId("dashboard-open-count")).toContainText("0");

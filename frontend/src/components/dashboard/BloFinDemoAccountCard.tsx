@@ -11,9 +11,11 @@ import {
   formatCount,
   formatDateTime,
   formatMoney,
+  formatPercent,
   formatPrice,
   formatQuantity,
 } from "@/lib/format";
+import { DEMO_REFRESH_INTERVAL_MS } from "./demoAccountRefresh";
 
 const statusLabel = {
   ok: "Fresh snapshot",
@@ -36,6 +38,14 @@ export function BloFinDemoAccountCard({
     : null;
   const performance = account?.performance;
   const verifiedPerformance = performance?.status === "partial";
+  const activityStatus = performance?.activity_sync_status ?? "disabled";
+  const activityDisabled = activityStatus === "disabled";
+  const intervalSeconds =
+    account?.refresh_interval_seconds ?? DEMO_REFRESH_INTERVAL_MS / 1000;
+  const winRate =
+    performance?.win_rate == null
+      ? null
+      : formatPercent(Number(performance.win_rate));
 
   return (
     <Card data-testid="dashboard-demo-account">
@@ -84,8 +94,8 @@ export function BloFinDemoAccountCard({
           <p className="text-xs text-text-secondary">
             Configured demo venue account · balances and native open positions.
             {account?.can_refresh
-              ? " Native data refreshes every 3 minutes while visible; retries slow down after failures."
-              : " Saved snapshots reload every 3 minutes while visible."}
+              ? ` Native data refreshes when this page opens, then every ${intervalSeconds} seconds while it is visible.`
+              : ` Saved snapshots reload every ${intervalSeconds} seconds while it is visible.`}
             All balances and positions below use this configured account.
           </p>
         </details>
@@ -114,14 +124,30 @@ export function BloFinDemoAccountCard({
           />
           <TradingMetric
             label="Win rate"
-            value="—"
-            note="Incomplete verified history"
+            value={activityStatus === "ready" && winRate != null ? winRate : "—"}
+            note={
+              activityDisabled
+                ? "Activity sync disabled"
+                : activityStatus === "ready"
+                  ? "Closed round-trips from stored fills"
+                  : "Withheld until fee basis and a flat start are verified"
+            }
             testId="dashboard-win-rate"
           />
           <TradingMetric
-            label="Verified net PnL"
-            value={`${formatMoney(verifiedPerformance ? performance.net_pnl : null)} USDT`}
-            note="Verified recorded closures only"
+            label="Realized PnL"
+            value={`${formatMoney(
+              activityDisabled || performance?.realized_pnl == null
+                ? null
+                : performance.realized_pnl,
+            )} USDT`}
+            note={
+              activityDisabled
+                ? "Withheld until activity sync is enabled"
+                : performance?.realized_pnl == null
+                  ? "Withheld. fillPnl fee basis and fee sign are not verified"
+                  : "Stored fillPnl. Fees are not added"
+            }
             testId="dashboard-pnl"
           />
         </div>
@@ -205,8 +231,32 @@ export function BloFinDemoAccountCard({
                 : account.message}
             </p>
             {account.synced_at ? (
-              <p className="text-xs text-text-secondary">
-                As of {formatDateTime(account.synced_at)}
+              <p
+                data-testid="demo-last-synced"
+                className={
+                  status === "stale"
+                    ? "text-sm text-warning"
+                    : "text-xs text-text-secondary"
+                }
+              >
+                Last synced {formatDateTime(account.synced_at)}
+                {status === "stale" ? " · stale" : ""}
+              </p>
+            ) : null}
+            {activityDisabled ? (
+              <p role="status" data-testid="activity-sync-disabled" className="text-sm text-warning">
+                Activity sync disabled. Win rate and realized P&L are withheld
+                until the activity worker is enabled.
+              </p>
+            ) : performance?.activity_coverage ? (
+              <p className="text-xs text-text-secondary" data-testid="activity-coverage">
+                {performance.activity_coverage}
+                {performance.trade_count != null
+                  ? ` ${formatCount(performance.trade_count)} closed trades · ${formatCount(performance.wins)} wins · ${formatCount(performance.losses)} losses.`
+                  : ""}
+                {performance.window_start
+                  ? ` Window ${formatDateTime(performance.window_start)} – ${formatDateTime(performance.window_end)}.`
+                  : ""}
               </p>
             ) : null}
             {account.last_attempt_at ? (

@@ -92,23 +92,26 @@ describe("BloFin demo Dashboard", () => {
     expect(
       screen.getByRole("link", { name: "Exchange settings" }),
     ).toHaveAttribute("href", "/settings/exchange");
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("demo-last-synced")).toHaveTextContent("Last synced");
+    expect(screen.getByTestId("activity-sync-disabled")).toBeInTheDocument();
   });
 
   it("deduplicates repeated explicit refresh clicks", async () => {
+    render(<BloFinDemoAccountCard />);
+    const button = await screen.findByRole("button", {
+      name: "Refresh demo account",
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
     let resolve!: (data: DashboardDemoAccount) => void;
     refresh.mockReturnValue(
       new Promise((done) => {
         resolve = done;
       }),
     );
-    render(<BloFinDemoAccountCard />);
-    const button = await screen.findByRole("button", {
-      name: "Refresh demo account",
-    });
     fireEvent.click(button);
     fireEvent.click(button);
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
     expect(button).toBeDisabled();
     expect(
       screen.getByText(/Showing the previous saved snapshot/),
@@ -129,7 +132,7 @@ describe("BloFin demo Dashboard", () => {
     view.rerender(<BloFinDemoAccountCard refreshKey={1} />);
     expect(await screen.findByText("Stale snapshot")).toBeInTheDocument();
     expect(latest).toHaveBeenCalledTimes(2);
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("does not let an older saved read overwrite newer saved evidence", async () => {
@@ -140,7 +143,9 @@ describe("BloFin demo Dashboard", () => {
       }),
     );
     const view = render(<BloFinDemoAccountCard />);
-    latest.mockResolvedValue(account({ positions: [], position_count: 0 }));
+    latest.mockResolvedValue(
+      account({ can_refresh: false, positions: [], position_count: 0 }),
+    );
     view.rerender(<BloFinDemoAccountCard refreshKey={1} />);
     expect(
       await screen.findByText("No native open positions at this snapshot."),
@@ -158,11 +163,10 @@ describe("BloFin demo Dashboard", () => {
       }),
     );
     const view = render(<BloFinDemoAccountCard />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Refresh demo account" }),
-    );
+    expect(await screen.findByRole("button", { name: "Refreshing…" })).toBeDisabled();
     view.rerender(<BloFinDemoAccountCard refreshKey={1} />);
     expect(latest).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
     await act(async () =>
       resolve(account({ positions: [], position_count: 0 })),
     );
@@ -216,21 +220,26 @@ describe("BloFin demo Dashboard", () => {
   it.each(["inactive", "not_synced"] as const)(
     "shows %s without empty account claims",
     async (status) => {
-      latest.mockResolvedValue(
-        account({
-          status,
-          positions: [],
-          balances: [],
-          position_count: null,
-          message: "Configure or refresh demo account.",
-          can_refresh: status !== "inactive",
-        }),
-      );
+      const payload = account({
+        status,
+        positions: [],
+        balances: [],
+        position_count: null,
+        message: "Configure or refresh demo account.",
+        can_refresh: status !== "inactive",
+      });
+      latest.mockResolvedValue(payload);
+      refresh.mockResolvedValue(payload);
       render(<BloFinDemoAccountCard />);
       await screen.findByText("Configure or refresh demo account.");
       expect(
         screen.queryByText(/No native open positions/),
       ).not.toBeInTheDocument();
+      if (status === "inactive") {
+        expect(refresh).not.toHaveBeenCalled();
+      } else {
+        expect(refresh).toHaveBeenCalled();
+      }
     },
   );
 
@@ -256,17 +265,22 @@ describe("BloFin demo Dashboard", () => {
   it("marks the snapshot stale when its freshness window expires while open", async () => {
     vi.useFakeTimers();
     latest.mockResolvedValue(
-      account({ expires_at: new Date(Date.now() + 1000).toISOString() }),
+      account({
+        can_refresh: false,
+        expires_at: new Date(Date.now() + 1000).toISOString(),
+      }),
     );
     render(<BloFinDemoAccountCard />);
     await act(async () => {
       await Promise.resolve();
     });
     expect(screen.getByText("Fresh snapshot")).toBeInTheDocument();
+    expect(screen.getByTestId("demo-last-synced")).not.toHaveTextContent("stale");
     await act(async () => {
       vi.advanceTimersByTime(1001);
     });
     expect(screen.getByText("Stale snapshot")).toBeInTheDocument();
+    expect(screen.getByTestId("demo-last-synced")).toHaveTextContent("stale");
     expect(latest).toHaveBeenCalledTimes(1);
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -275,20 +289,21 @@ describe("BloFin demo Dashboard", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     render(<BloFinDemoAccountCard />);
     await act(async () => {});
-    await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS); });
     expect(refresh).toHaveBeenCalledTimes(1);
+    await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS); });
+    expect(refresh).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue("hidden");
     fireEvent(document, new Event("visibilitychange"));
     await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS * 4); });
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue("visible");
     fireEvent(document, new Event("visibilitychange"));
     await act(async () => { vi.advanceTimersByTime(1); });
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(3);
     // Repeated visibility events do not create a burst of native requests.
     fireEvent(document, new Event("visibilitychange"));
     await act(async () => { vi.advanceTimersByTime(1); });
-    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 
   it("backs off failures up to fifteen minutes and recovers to normal cadence", async () => {
@@ -296,22 +311,29 @@ describe("BloFin demo Dashboard", () => {
     refresh.mockRejectedValue(new Error("raw upstream failure"));
     render(<BloFinDemoAccountCard />);
     await act(async () => {});
-    await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS); });
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByText("USDT balance")).toBeInTheDocument();
     expect(screen.getByText("Stale snapshot")).toBeInTheDocument();
-    for (const [delay, count] of [[360_000, 2], [720_000, 3], [DEMO_MAX_BACKOFF_MS, 4]]) {
+    const delayFor = (failures: number) =>
+      Math.min(
+        DEMO_MAX_BACKOFF_MS,
+        DEMO_REFRESH_INTERVAL_MS * 2 ** Math.min(failures, 3),
+      );
+    let count = 1;
+    for (const failures of [1, 2, 3]) {
+      const delay = delayFor(failures);
       await act(async () => { vi.advanceTimersByTime(delay - 1); });
-      expect(refresh).toHaveBeenCalledTimes(count - 1);
+      expect(refresh).toHaveBeenCalledTimes(count);
       await act(async () => { vi.advanceTimersByTime(1); });
+      count += 1;
       expect(refresh).toHaveBeenCalledTimes(count);
     }
     refresh.mockImplementation(async () => account());
-    await act(async () => { vi.advanceTimersByTime(DEMO_MAX_BACKOFF_MS); });
+    await act(async () => { vi.advanceTimersByTime(delayFor(4)); });
     expect(screen.getByText("Fresh snapshot")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS); });
-    expect(refresh).toHaveBeenCalledTimes(6);
+    expect(refresh).toHaveBeenCalledTimes(count + 2);
   });
 
   it("times out a hung request, aborts transport and ignores its late result", async () => {
@@ -320,7 +342,7 @@ describe("BloFin demo Dashboard", () => {
     refresh.mockReturnValue(new Promise((done) => { late = done; }));
     render(<BloFinDemoAccountCard />);
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Refresh demo account" }));
+    expect(refresh).toHaveBeenCalledTimes(1);
     await act(async () => { vi.advanceTimersByTime(DEMO_REQUEST_TIMEOUT_MS); });
     expect(refresh.mock.calls[0][0]?.aborted).toBe(true);
     expect(screen.getByRole("button", { name: "Refresh demo account" })).toBeEnabled();
@@ -335,7 +357,7 @@ describe("BloFin demo Dashboard", () => {
     refresh.mockReturnValue(new Promise(() => {}));
     const view = render(<BloFinDemoAccountCard />);
     await act(async () => {});
-    await act(async () => { vi.advanceTimersByTime(DEMO_REFRESH_INTERVAL_MS); });
+    expect(refresh).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Refreshing…" }));
     view.rerender(<BloFinDemoAccountCard refreshKey={1} />);
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -366,11 +388,13 @@ describe("BloFin demo Dashboard", () => {
 
   it("shows unknown equity and base quantity without inventing values", async () => {
     const data = account();
-    latest.mockResolvedValue(account({
+    const payload = account({
       total_equity_usd: null,
       balances: data.balances.map((b) => ({ ...b, equity: null })),
       positions: data.positions.map((p) => ({ ...p, base_asset: null, base_quantity: null })),
-    }));
+    });
+    latest.mockResolvedValue(payload);
+    refresh.mockResolvedValue(payload);
     render(<BloFinDemoAccountCard />);
     // Missing equity is also rendered before load; wait for the native balance row.
     expect(await screen.findByText("Equity: — USDT")).toBeInTheDocument();
@@ -380,8 +404,74 @@ describe("BloFin demo Dashboard", () => {
 
 });
 
+it("shows activity win rate and withholds it when activity sync is disabled", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Manual coverage is separate.",
+      activity_sync_status: "ready",
+      win_rate: "0.5000",
+      trade_count: 2,
+      wins: 1,
+      losses: 1,
+      realized_pnl: "2.87",
+      window_start: "2026-10-01T00:00:00Z",
+      window_end: "2026-10-18T00:00:00Z",
+      activity_coverage: "Closed round-trips from stored BloFin demo fills.",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  expect(await screen.findByTestId("dashboard-win-rate")).toHaveTextContent("50.0%");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("2.87");
+  expect(screen.getByTestId("activity-coverage")).toHaveTextContent("2 closed trades");
+  expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
+});
+
+it("hides a numeric win rate until activity sync is ready", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Fee basis is unverified.",
+      activity_sync_status: "partial",
+      win_rate: "0.5000",
+      trade_count: 2,
+      wins: 1,
+      losses: 1,
+      realized_pnl: "2.87",
+      window_start: "2026-10-01T00:00:00Z",
+      window_end: "2026-10-18T00:00:00Z",
+      activity_coverage: "Withheld until a flat start is proven.",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  const winRate = await screen.findByTestId("dashboard-win-rate");
+  expect(winRate).toHaveTextContent("—");
+  expect(winRate).not.toHaveTextContent("50.0%");
+  expect(winRate).toHaveTextContent("Withheld until fee basis and a flat start are verified");
+});
+
 it("uses native scope and verified partial performance without rounding tiny PnL to zero", async () => {
-  latest.mockResolvedValue(account({ performance: {
+  latest.mockResolvedValue(account({ can_refresh: false, performance: {
     status: "partial", currency: "USDT", gross_pnl: "0.007656", fees: "0.0099", funding: null, net_pnl: null,
     verified_closed_trades: 1, unresolved_trades: 2, manual_test_trades: 1, strategy_closed_trades: 0,
     coverage: "Partial history: only exact linked AlphaTrade activity.",
@@ -398,12 +488,16 @@ it("uses native scope and verified partial performance without rounding tiny PnL
 
 it("retains original successful timestamps after failed refresh", async () => {
   const synced = "2026-10-08T12:00:00Z";
-  latest.mockResolvedValue(account({ synced_at: synced }));
+  const payload = account({ synced_at: synced });
+  latest.mockResolvedValue(payload);
+  refresh.mockResolvedValue(payload);
   render(<BloFinDemoAccountCard />);
-  const timestamp = await screen.findByText(/^As of /);
-  const original = timestamp.textContent;
+  const timestamp = await screen.findByText(/^Last synced /);
+  const original = timestamp.textContent ?? "";
   refresh.mockRejectedValue(new Error("unavailable"));
   fireEvent.click(screen.getByRole("button", { name: "Refresh demo account" }));
   await screen.findByRole("alert");
-  expect(screen.getByText(/^As of /).textContent).toBe(original);
+  expect(screen.getByTestId("demo-last-synced").textContent?.replace(" · stale", "")).toBe(
+    original,
+  );
 });
