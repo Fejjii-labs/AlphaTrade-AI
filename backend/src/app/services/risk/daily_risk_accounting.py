@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import DailyRiskState, JournalTrade, Order, Position
@@ -181,9 +181,8 @@ class DailyRiskAccounting:
         Mirrored BloFin demo venue P&L is omitted from realized loss. The
         omission is source ``blofin_demo_manual`` or the exact server prefix
         ``blofin-demo-history:`` on ``external_ref``. Tags are not read. A
-        lifecycle row the mirror closes in place keeps its prior open notional
-        so the close cannot change exposure or, with entry time left as it was,
-        the day's trade count.
+        closed row contributes zero open exposure. The day's trade count still
+        includes that row when its entry time is inside the day.
         """
         scope = (
             JournalTrade.organization_id == organization_id,
@@ -211,22 +210,14 @@ class DailyRiskAccounting:
                 JournalTrade.status.in_((JournalTradeStatus.OPEN, JournalTradeStatus.CLOSED)),
             )
         )
-        # A mirror close keeps the notional the open lifecycle row already
-        # contributed. New blofin_demo_manual rows are outside ``scope``.
-        held_open = or_(
-            JournalTrade.status == JournalTradeStatus.OPEN,
-            and_(
-                JournalTrade.status == JournalTradeStatus.CLOSED,
-                JournalTrade.source == JournalTradeSource.MANUAL_DEMO_TEST,
-                journal_mirror_economics(),
-            ),
-        )
+        # A closed row, including a mirror-reconciled demo test, is not open
+        # exposure. New blofin_demo_manual rows are outside ``scope``.
         exposure = self._session.scalar(
             select(
                 func.sum(
                     JournalTrade.size * JournalTrade.entry_price,
                 )
-            ).where(*scope, held_open)
+            ).where(*scope, JournalTrade.status == JournalTradeStatus.OPEN)
         )
         return Decimal(str(realized or 0)), int(count or 0), Decimal(str(exposure or 0))
 

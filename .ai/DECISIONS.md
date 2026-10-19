@@ -3417,10 +3417,9 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `blofin-`. Candidate selection,
   in-place reconciliation, open-tracker cancellation, the cycle marker,
   and the headline read are limited to the pinned user, not the whole
-  organization. A lifecycle-backed row
-  keeps its entry time, size, and entry price so the close cannot move
-  those risk aggregates. Promotion continues to read paper-validation
-  trades only.
+  organization. A lifecycle-backed row keeps its entry time, so the day's
+  trade count still includes the close. A closed row contributes zero open
+  exposure. Promotion continues to read paper-validation trades only.
 - The mirror runs on the snapshot cadence only when
   `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the paper worker is armed, and
   `BLOFIN_READONLY_SYNC_ENABLED` with the three `BLOFIN_READONLY_API_*`

@@ -175,10 +175,10 @@ variant of `blofin-demo-`, and they reject a client tag that contains a
 double quote or starts with `blofin-` after trimming. `external_ref` is a
 venue fact, so a lifecycle row cannot change it through the generic update.
 Promotion reads paper-validation trades, and the mirror does not write
-those. A lifecycle-backed row keeps the entry time, size, and entry price
-the daily book already used, and a reconciled `manual_demo_test` row keeps
-that same open notional after it is closed. An unreconciled manual demo fill
-still counts toward the day's trade count and open exposure.
+those. A lifecycle-backed row keeps the entry time, so the day's trade count
+still includes the close. A closed row contributes zero open exposure,
+including a reconciled `manual_demo_test` row. An open manual demo fill still
+counts toward the day's trade count and open exposure.
 
 ## Tags after the mirror
 

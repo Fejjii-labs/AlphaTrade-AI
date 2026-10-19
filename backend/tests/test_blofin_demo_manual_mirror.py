@@ -38,6 +38,7 @@ from app.schemas.journal_trades import (
     JournalTradeCreate,
     JournalTradeUpdate,
 )
+from app.schemas.risk import RiskCheckRequest
 from app.security.tenant import TenantContext
 from app.services.audit_service import AuditService
 from app.services.blofin_demo_manual_mirror import (
@@ -57,8 +58,10 @@ from app.services.risk.daily_risk_accounting import (
     AuthoritativeDailySnapshot,
     DailyRiskAccounting,
 )
+from app.services.risk.limits import RiskLimits
 from app.services.risk.mirror_economics import RECONCILED_TAG
 from app.services.risk.paper_cooldown import paper_loss_cooldown_active
+from app.services.risk.rules import RiskEvaluationContext, check_max_position_size
 from app.services.risk.settings_service import RiskSettingsService
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
@@ -432,7 +435,7 @@ def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -
     assert after.daily_locked is False
     assert after.realized_pnl == before.realized_pnl
     assert after.trade_count == before.trade_count
-    assert after.open_exposure_notional == before.open_exposure_notional
+    assert after.open_exposure_notional == Decimal("0")
     assert after.daily_locked == before.daily_locked
     assert (
         paper_loss_cooldown_active(
@@ -476,6 +479,95 @@ def _closed_loss(
         external_ref=external_ref,
         tags=tags or [],
     )
+
+
+def test_closed_reconciled_row_adds_no_open_exposure(session: Session) -> None:
+    """A closed history-ref demo test adds nothing to open exposure."""
+    closed = _closed_loss(
+        source=JournalTradeSource.MANUAL_DEMO_TEST,
+        symbol="BTCUSDT",
+        net="-1",
+        external_ref="blofin-demo-history:stuck",
+        tags=[RECONCILED_TAG],
+    )
+    closed.entry_price = Decimal("100")
+    closed.size = Decimal("100")
+    session.add(closed)
+    session.commit()
+
+    snapshot = _daily(session)
+    assert snapshot.open_exposure_notional == Decimal("0")
+    assert snapshot.trade_count == 1
+    assert (
+        check_max_position_size(
+            RiskCheckRequest(
+                symbol="ETHUSDT",
+                direction=TradeDirection.LONG,
+                entry_price=Decimal("100"),
+                stop_loss=Decimal("90"),
+                position_size=Decimal("1"),
+                leverage=Decimal("1"),
+                account_equity=snapshot.account_equity,
+            ),
+            RiskLimits(),
+            RiskEvaluationContext(open_exposure_notional=snapshot.open_exposure_notional),
+        )
+        is None
+    )
+
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            status=JournalTradeStatus.OPEN,
+            symbol="ETHUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("100"),
+            entry_time=NOW,
+            size=Decimal("0.02"),
+            result=TradeResult.OPEN,
+            execution_lifecycle_id=uuid.uuid4(),
+        )
+    )
+    session.commit()
+    with_open = _daily(session)
+    assert with_open.open_exposure_notional == Decimal("2")
+    assert with_open.trade_count == 2
+
+
+def test_venue_correction_refuses_mirrored_rows(session: Session) -> None:
+    """Mirrored rows and history-ref rows reject venue corrections."""
+    mirrored = _closed_loss(
+        source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+        symbol="BTCUSDT",
+        net="1",
+        external_ref="blofin-demo-history:mirror",
+    )
+    reconciled = _closed_loss(
+        source=JournalTradeSource.MANUAL_DEMO_TEST,
+        symbol="ETHUSDT",
+        net="-1",
+        external_ref="blofin-demo-history:stuck",
+    )
+    session.add(mirrored)
+    session.add(reconciled)
+    session.commit()
+    service = JournalTradeService(session, AuditService(session))
+    for row in (mirrored, reconciled):
+        with pytest.raises(ValidationAppError) as refused:
+            service.correct_venue_facts(
+                row.id,
+                organization_id=ORG,
+                actor_user_id=USER,
+                reason="client rewrite",
+                fields={"net_pnl": Decimal("9")},
+            )
+        assert refused.value.status_code == 422
+        assert refused.value.details["reason"] == "mirror_venue_immutable"
+        session.refresh(row)
+        assert row.net_pnl != Decimal("9")
 
 
 def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:

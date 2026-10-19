@@ -75,7 +75,11 @@ from app.services.blofin_demo_manual_mirror import (
     grade_tag,
 )
 from app.services.canonical_serialization import canonical_sha256
-from app.services.risk.mirror_economics import client_mirror_ref, client_reserved_tag
+from app.services.risk.mirror_economics import (
+    HISTORY_REF_PREFIX,
+    client_mirror_ref,
+    client_reserved_tag,
+)
 
 _REQUEST_TAG = "journal-trades-api"
 _GRADE = re.compile(r"^(?:[A-D][+-]?|F)$")
@@ -597,6 +601,14 @@ class JournalTradeService:
         if not fields:
             raise ValidationAppError("Venue correction requires at least one field.")
         row = self._get_row(trade_id, organization_id=organization_id)
+        history_ref = isinstance(row.external_ref, str) and row.external_ref.startswith(
+            HISTORY_REF_PREFIX
+        )
+        if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL or history_ref:
+            raise ValidationAppError(
+                "Venue facts on a mirrored BloFin demo trade cannot be corrected here.",
+                details={"reason": "mirror_venue_immutable"},
+            )
         for field_name, new_value in fields.items():
             previous = getattr(row, field_name)
             correction = JournalTradeVenueCorrection(
