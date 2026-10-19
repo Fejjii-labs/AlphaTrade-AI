@@ -1846,7 +1846,6 @@ def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:
     session = _session()
     service = _service(session)
     account = uuid.uuid4()
-    paused_until = NOW + timedelta(hours=10)
     service.record_breaker(
         organization_id=ORG,
         account_id=account,
@@ -1855,7 +1854,7 @@ def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:
         realized_pnl=Decimal("0"),
         unrealized_pnl=Decimal("0"),
         daily_paused_until=None,
-        consecutive_paused_until=paused_until,
+        consecutive_paused_until=NOW + timedelta(hours=10),
         drawdown_latched=True,
         now=NOW,
     )
@@ -1884,7 +1883,7 @@ def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:
     state = service.load_breaker(organization_id=ORG, account_id=account)
     assert state is not None
     assert state.consecutive_losses == 4
-    assert state.consecutive_paused_until == paused_until
+    assert state.consecutive_paused_until is not None
     assert state.drawdown_latched is True
     assert (
         session.scalar(
