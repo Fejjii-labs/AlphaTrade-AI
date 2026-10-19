@@ -13,8 +13,12 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   A batch stacks onto an integration branch such as `integration/<date>`, gets
   one full dispatch, and merges in order only after that run. Draft pull
   requests do not run backend, evaluation, Docker build, or Playwright smoke
-  unless they are marked ready or labeled `run-ci`. `deployment-safety` still
-  runs on drafts. Frontend still runs on draft code changes. A change limited
+  unless they are marked ready or already carry `run-ci` on `opened`,
+  `synchronize`, `reopened`, or `ready_for_review`. The `labeled` activity is
+  not a workflow trigger. `deployment-safety` still runs on drafts and runs
+  the CI scope self-test. Frontend still runs on draft code changes. A rename
+  is not docs-only unless every old and new path is under `docs/**`, `.ai/**`,
+  or root markdown. A change limited
   to `docs/**`, `.ai/**`, or root markdown skips backend, frontend, and Docker,
   and also evaluation and browser work that depend on them. The six job names
   stay, with no job-level `if`, and a skipped heavy path exits success so a

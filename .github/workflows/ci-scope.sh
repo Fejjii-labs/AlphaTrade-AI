@@ -57,7 +57,8 @@ docs_only_diff() {
   if ! git cat-file -e "${head}^{commit}" >/dev/null 2>&1; then
     return 1
   fi
-  files="$(git diff --name-only "$base" "$head")" || return 1
+  # --no-renames keeps the old path, so a rename into docs/ or .ai/ is not docs-only.
+  files="$(git diff --name-only --no-renames "$base" "$head")" || return 1
   if [[ -z "$files" ]]; then
     return 1
   fi
@@ -92,18 +93,12 @@ decide() {
   if [[ "$event" == "pull_request" ]]; then
     case "$action" in
       opened | synchronize | reopened | ready_for_review) ;;
-      labeled)
-        if ! has_run_ci_label; then
-          app=false
-          heavy=false
-          reason=unrelated-label
-          return 0
-        fi
-        ;;
       *)
-        app=false
-        heavy=false
-        reason=ignored-activity
+        # The workflow does not subscribe to labeled. An unexpected activity
+        # must not skip work: a green skip would replace a real result.
+        app=true
+        heavy=true
+        reason=unexpected-activity
         return 0
         ;;
     esac
@@ -135,9 +130,10 @@ decide() {
 }
 
 self_test() {
-  local tmp root fail=0
+  local tmp root fail=0 script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  root="$(cd "$script_dir/../.." && pwd)"
   tmp="$(mktemp -d)"
-  root="$(pwd)"
   cd "$tmp"
   git init -q
   git config user.email "ci-scope@example.com"
@@ -190,10 +186,10 @@ self_test() {
   run_case draft-run-ci true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true \
     CI_SCOPE_PR_LABELS=run-ci
-  run_case labeled-run-ci true true \
+  run_case labeled-run-ci-does-not-skip true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=labeled CI_SCOPE_PR_DRAFT=true \
     CI_SCOPE_PR_LABEL=run-ci CI_SCOPE_PR_LABELS=run-ci
-  run_case labeled-other false false \
+  run_case labeled-other-does-not-skip true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=labeled CI_SCOPE_PR_DRAFT=false \
     CI_SCOPE_PR_LABEL=docs CI_SCOPE_PR_LABELS=docs
   run_case push-code true true \
@@ -205,6 +201,20 @@ self_test() {
   base="$(git rev-parse HEAD^)"
   head="$(git rev-parse HEAD)"
   run_case root-markdown false false \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false
+
+  git mv backend/app.py docs/from-backend.py
+  git commit -q -m 'rename into docs'
+  base="$(git rev-parse HEAD^)"
+  head="$(git rev-parse HEAD)"
+  run_case rename-into-docs true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false
+
+  git mv docs/readme.md docs/guide.md
+  git commit -q -m 'rename within docs'
+  base="$(git rev-parse HEAD^)"
+  head="$(git rev-parse HEAD)"
+  run_case rename-within-docs false false \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false
 
   cd "$root"

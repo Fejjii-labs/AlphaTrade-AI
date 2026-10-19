@@ -30,10 +30,13 @@ is `true`. There is no `combined_validation` input.
 
 Heavy steps in `backend`, `evaluation`, `docker-build`, and `e2e-smoke` do not
 run on a draft pull request. They run for a non-draft `opened`, `synchronize`,
-or `reopened` event, for `ready_for_review`, and when the pull request has the
-`run-ci` label (including `labeled` with that name). `deployment-safety` still
-runs on drafts. `frontend` still runs for draft changes that are not docs-only.
-A pull_request `labeled` event for any other label skips app and heavy work.
+or `reopened` event, for `ready_for_review`, and when the pull request already
+has the `run-ci` label on one of those events. The workflow does not subscribe
+to `labeled`, so adding an unrelated label does not start CI or cancel a run.
+`deployment-safety` still runs on drafts, and it runs `ci-scope.sh --self-test`.
+`frontend` still runs for draft changes that are not docs-only. A rename is
+classified with `git diff --name-only --no-renames`, so a move into `docs/` or
+`.ai/` does not count as docs-only.
 
 `docs/**`, `.ai/**`, and root-level markdown-only changes skip backend,
 frontend, Docker, evaluation, and browser work. Those jobs still finish

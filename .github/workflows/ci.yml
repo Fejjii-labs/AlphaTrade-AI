@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       full_backend:
@@ -112,6 +112,9 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      - name: CI scope self-test
+        working-directory: ${{ github.workspace }}
+        run: bash .github/workflows/ci-scope.sh --self-test
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

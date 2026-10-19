@@ -1,6 +1,7 @@
 """Development scope cannot replace the explicit complete release acceptance gate."""
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -111,6 +112,29 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "e2e-smoke",
     }
     assert "schedule" not in trigger
+    assert trigger["pull_request"]["types"] == [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+    ]
+    scope_script = (ROOT / ".github/workflows/ci-scope.sh").read_text()
+    assert "git diff --name-only --no-renames" in scope_script
+    assert "unrelated-label" not in scope_script
+    safety_runs = [
+        step.get("run") or ""
+        for step in jobs["deployment-safety"]["steps"]
+    ]
+    assert any("ci-scope.sh --self-test" in run for run in safety_runs)
+    self_test = subprocess.run(
+        ["bash", str(ROOT / ".github/workflows/ci-scope.sh"), "--self-test"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert self_test.returncode == 0, self_test.stderr + self_test.stdout
+    assert "rename-into-docs" in self_test.stdout
+    assert "labeled-other-does-not-skip" in self_test.stdout
     full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
