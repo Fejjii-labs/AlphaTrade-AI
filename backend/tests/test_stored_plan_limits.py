@@ -185,6 +185,23 @@ def test_stored_plan_without_a_sizing_grade_is_uncomputed(monkeypatch) -> None:
     assert proof.reason_code == "stored_plan_limits_uncomputed"
 
 
+def test_missing_clock_or_plan_refuses_without_raising(monkeypatch) -> None:
+    session = _session()
+    for cls in (AutomatedPaperLoop, GovernedBloFinDemoLoop):
+        missing_clock = _loop(cls, monkeypatch)
+        missing_clock._clock = SimpleNamespace(now=lambda: None)
+        proof = _execute(missing_clock, session)
+        assert proof.stage == "blocked"
+        assert proof.reason_code == "stored_plan_limits_uncomputed"
+        missing_plan = _loop(cls, monkeypatch)
+        missing_plan._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+            get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        )
+        proof = _execute(missing_plan, session)
+        assert proof.stage == "blocked"
+        assert proof.reason_code == "stored_plan_limits_uncomputed"
+
+
 def test_each_loop_resizes_a_stored_plan_against_the_current_book(monkeypatch) -> None:
     book = ProfileOpenBook(
         open_risk_percent=Decimal("0"),

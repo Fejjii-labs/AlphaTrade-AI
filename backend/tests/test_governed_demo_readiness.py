@@ -47,7 +47,7 @@ def test_existing_plan_cannot_acquire_authorization_for_another_venue(monkeypatc
     )
     plans = SimpleNamespace(get_scoped=lambda *args, **kwargs: envelope)
     monkeypatch.setattr(GovernedBloFinDemoLoop, "_plan_service", lambda _: plans)
-    loop = GovernedBloFinDemoLoop(None, None, None)
+    loop = GovernedBloFinDemoLoop(None, None, SimpleNamespace(now=lambda: EXECUTE_AT))  # type: ignore[arg-type]
     # No Session or provider is needed: refusal precedes any authorization or claim.
     proof = loop._execute_existing(
         None, target=target, candidate=candidate, revision_id=revision_id, account_id=uuid4()

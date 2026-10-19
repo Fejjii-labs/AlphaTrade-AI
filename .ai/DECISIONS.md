@@ -93,10 +93,12 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Reference: `docs/paper_exit_monitor.md`;
   `backend/src/app/services/paper_exit_monitor.py`.
 
-## AT-ADR-113 — Stored-plan grade cap, server drawdown reset, unverified fill funding
+## AT-ADR-120 — Stored-plan grade cap, server drawdown reset, unverified fill funding
 
 - Date: 2026-10-19
-- Decision: This amends AT-ADR-112. A stored plan is capped at the grade
+- Id: Renumbered from AT-ADR-113. PR 280 owns AT-ADR-113. PR 281 uses
+  AT-ADR-116 through AT-ADR-118.
+- Decision: This amends AT-ADR-119. A stored plan is capped at the grade
   written on it when it was sized (`profile_sizing_grade`). The cap is the
   tighter of that stored percent and the same grade on the profile in force.
   The widest grade on the profile is not used. A plan with no readable grade
@@ -115,14 +117,17 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   false. No live order is added.
 - Reference: Grok review 5575648400 on `cf67b559`.
 
-## AT-ADR-112 — Stored plans, open risk, and drawdown reset stay fail-closed
+## AT-ADR-119 — Stored plans, open risk, and drawdown reset stay fail-closed
 
 - Date: 2026-10-19
+- Id: Renumbered from AT-ADR-112. PR 282 owns AT-ADR-112.
 - Decision: A stored paper or demo plan is refused before approval and again
   before execution when `breaker_active` is true, including a daily or
   consecutive pause written after sizing and a drawdown latch that remains
-  after `KillSwitchService.deactivate`. When a profile is active, the stored
-  quantity is priced again against the current open book and is not rewritten.
+  after `KillSwitchService.deactivate`. A missing execution clock time, or a
+  missing stored plan, refuses with `stored_plan_limits_uncomputed` and does
+  not raise. When a profile is active, the stored quantity is priced again
+  against the current open book and is not rewritten.
   Open-risk notional uses only open positions and open lifecycles. Closed
   rows are excluded from both sides of that comparison, which allows a
   difference of at most `0.00000001`. `reset_drawdown_latch` accepts only an

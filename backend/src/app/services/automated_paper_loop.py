@@ -399,11 +399,16 @@ class AutomatedPaperLoop:
             organization_id=target.organization_id,
             user_id=target.user_id,
         )
+        plan = getattr(envelope, "plan", None)
+        if plan is None or _execution_moment(self) is None:
+            return _proof(
+                candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id
+            )
         if eligibility_id is None:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
             eligibility_state = envelope.lineage.eligibility_state.value
-        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
         if blocked is not None:
             revoke_leftover_autonomous_authorizations(
                 session,
@@ -486,7 +491,7 @@ class AutomatedPaperLoop:
                 CHANNEL_MISMATCH_REASON,
                 revision_id=revision_id,
             )
-        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
         if blocked is not None:
             approval.revoke_authorization(
                 decided.authorization.authorization_id,
@@ -981,7 +986,9 @@ def _stored_plan_execution_refusal(
     active, the stored quantity is priced again against the current open book.
     """
 
-    now = loop._clock.now()
+    now = _execution_moment(loop)
+    if now is None or plan is None:
+        return "stored_plan_limits_uncomputed"
     if _breaker_refusing(session, target.organization_id, now):
         return "breaker_active"
     active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
@@ -1057,6 +1064,19 @@ def _open_exposure(session: Session, target: PaperScanTarget, *, now: datetime) 
         user_id=target.user_id,
     )
     return snapshot.open_exposure_notional
+
+
+def _execution_moment(loop: AutomatedPaperLoop) -> datetime | None:
+    """Clock reading for a stored-plan recheck. A missing time is not guessed."""
+
+    clock = getattr(loop, "_clock", None)
+    now = getattr(clock, "now", None)
+    if not callable(now):
+        return None
+    moment = now()
+    if not isinstance(moment, datetime):
+        return None
+    return moment
 
 
 def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
