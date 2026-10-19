@@ -72,6 +72,7 @@ from app.services.automated_paper_loop import (
     AutomatedPaperLoopProof,
     _eligibility_command,
     _execute_request,
+    _execution_moment,
     _fill_id,
     _plan_terms,
     _proof,
@@ -931,14 +932,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         envelope = plans.get_scoped(
             revision_id, organization_id=target.organization_id, user_id=target.user_id
         )
-        if (
-            envelope.plan.execution_venue != "BLOFIN_DEMO"
-            or envelope.plan.execution_policy_version != DEMO_POLICY
-        ):
+        plan = getattr(envelope, "plan", None)
+        if plan is None or _execution_moment(self) is None:
+            return _proof(
+                candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id
+            )
+        if plan.execution_venue != "BLOFIN_DEMO" or plan.execution_policy_version != DEMO_POLICY:
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id
             )
-        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
         if blocked is not None:
             revoke_leftover_autonomous_authorizations(
                 session,
@@ -1093,7 +1096,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 CHANNEL_MISMATCH_REASON,
                 revision_id=revision_id,
             )
-        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
         if blocked is not None:
             approval.revoke_authorization(
                 decided.authorization.authorization_id,
