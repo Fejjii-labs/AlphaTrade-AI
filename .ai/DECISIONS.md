@@ -2,6 +2,70 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-107 — Non-pull_request runs cannot cancel or replace each other
+
+- Date: 2026-10-19
+- Decision: Every push and every `workflow_dispatch` run, including
+  `full_backend`, has its own concurrency group: `github.workflow` plus
+  `github.run_id`. `cancel-in-progress` stays true only for `pull_request`.
+  Pull requests share `pr-<number>`, so a newer review event cancels the older
+  run of that PR. A `pull_request` `edited` event that does not change the base
+  branch also uses `github.run_id`, and that run does the heavy work instead of
+  publishing a skip, so a title or body edit cannot cancel, replace, or paint a
+  green skip over the current head. A base-branch change, including a retarget
+  to `main`, joins the PR group, cancels the stale run, and classifies the diff
+  against the new base. That retarget runs the heavy jobs even when the pull
+  request is still a draft, unless the new diff is docs-only. `reopened` and
+  `ready_for_review` also run the heavy jobs on code when the draft flag is
+  set. A missing head SHA, including a fork pull request whose commits are not
+  local yet, fails open and runs the work. The docs-only skip remains
+  pull_request-only. It does not apply to push, `workflow_dispatch`, or a
+  non-base edit.
+- Limit: Supersedes the concurrency grouping in AT-ADR-106. Draft `opened` and
+  `synchronize` still skip heavy work unless the exact label `run-ci` is already
+  present. A label whose name only contains that text does not count. The scope
+  self-test ignores the calling `CI_SCOPE_*`, `GITHUB_*`, and `GIT_*` environment.
+  No
+  schedule, no job-level `if`, and `full_backend` stays manual. A green check
+  after a draft or docs skip is still not release acceptance (AT-ADR-084).
+- Safety: Real trading stays disabled. No workflow is dispatched by this change.
+- Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`.
+
+## AT-ADR-106 — Ordinary CI cancels stale runs; full backend is manual per batch
+
+- Date: 2026-10-19
+- Decision: Only pull_request CI cancels the previous run of that pull request.
+  Concurrency grouping is superseded by AT-ADR-107: a push or
+  `workflow_dispatch` uses its own `github.run_id` group, so it is not queued,
+  cancelled, or replaced while pending. The 02:00 UTC
+  schedule is removed. The complete
+  backend suite runs only when someone dispatches `ci.yml` with
+  `full_backend=true`. Pull requests and pushes run the focused selection only.
+  A batch stacks onto an integration branch such as `integration/<date>`, gets
+  one full dispatch, and merges in order only after that run. Draft `opened`
+  and `synchronize` events do not run backend, evaluation, Docker build, or
+  Playwright smoke unless they already carry `run-ci`. AT-ADR-107 runs that
+  heavy work for `reopened`, `ready_for_review`, and a base retarget even when
+  the pull request is still a draft. The `labeled` activity is
+  not a workflow trigger. `deployment-safety` still runs on drafts and runs
+  the CI scope self-test. Frontend still runs on draft code changes. A rename
+  is not docs-only unless every old and new path is under `docs/**`, `.ai/**`,
+  or root markdown. That docs-only skip applies to pull requests only. A push
+  to `main` or `master` always runs the heavy jobs. On a pull request, a change
+  limited to `docs/**`, `.ai/**`, or root markdown skips backend, frontend, and
+  Docker, and also evaluation and browser work that depend on them. The six job names
+  stay, with no job-level `if`, and a skipped heavy path exits success so a
+  required check is not left pending.
+- Limit: The `full_backend` input and the complete pytest command are unchanged.
+  A green check after a draft or docs skip is not release acceptance
+  (AT-ADR-084). This supersedes the nightly schedule in AT-ADR-103. No branch
+  protection, secrets, or trading mode changes. The Postgres service on the
+  backend job still starts when heavy steps are skipped, because a job-level
+  `if` would drop the required check name.
+- Safety: Real trading stays disabled. No workflow is dispatched by this change.
+- Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`;
+  `.ai/RELEASE.md`.
+
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422
 
 - Date: 2026-10-16

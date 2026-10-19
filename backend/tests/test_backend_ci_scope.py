@@ -1,6 +1,8 @@
 """Development scope cannot replace the explicit complete release acceptance gate."""
 
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -110,11 +112,52 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "docker-build",
         "e2e-smoke",
     }
-    assert trigger["schedule"] == [{"cron": "0 2 * * *"}]
-    full_gate = (
-        "github.event_name == 'schedule' || "
-        "(github.event_name == 'workflow_dispatch' && inputs.full_backend)"
+    assert "schedule" not in trigger
+    assert trigger["pull_request"]["types"] == [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "edited",
+    ]
+    scope_script = (ROOT / ".github/workflows/ci-scope.sh").read_text()
+    assert "git diff --name-only --no-renames" in scope_script
+    assert "unrelated-label" not in scope_script
+    safety_runs = [step.get("run") or "" for step in jobs["deployment-safety"]["steps"]]
+    assert any("ci-scope.sh --self-test" in run for run in safety_runs)
+    self_test = subprocess.run(
+        ["bash", str(ROOT / ".github/workflows/ci-scope.sh"), "--self-test"],
+        check=False,
+        capture_output=True,
+        text=True,
     )
+    assert self_test.returncode == 0, self_test.stderr + self_test.stdout
+    for case in (
+        "ok docs-push",
+        "ok edited-title-docs-does-not-skip",
+        "ok retarget-draft-code",
+        "ok reopened-draft-code",
+        "ok ready-draft-flag",
+        "ok fork-missing-head",
+        "ok draft-lookalike-label",
+        "rename-into-docs",
+        "labeled-other-does-not-skip",
+    ):
+        assert case in self_test.stdout
+    assert "env -i" in scope_script
+    assert "*,run-ci,*" not in scope_script
+    assert "edited-not-base" in scope_script
+    assert "pull/${CI_SCOPE_PR_NUMBER}/head" in scope_script
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.event_name == 'push'" not in concurrency["cancel-in-progress"]
+    group = concurrency["group"]
+    assert "format('pr-{0}', github.event.pull_request.number)" in group
+    assert "github.run_id" in group
+    assert "github.event.action != 'edited'" in group
+    assert "github.event.changes.base.ref.from" in group
+    assert "format('{0}-{1}', github.workflow, github.ref)" not in group
+    full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
@@ -135,8 +178,7 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
     assert steps["Focused backend development tests"]["if"] == (
-        "github.event_name != 'schedule' && "
-        "(github.event_name != 'workflow_dispatch' || !inputs.full_backend)"
+        "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
     )
     assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
     upload = steps["Upload full backend pytest artifacts"]
@@ -151,3 +193,45 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     for job in jobs.values():
         assert "if" not in job and "continue-on-error" not in job
         assert all("continue-on-error" not in step for step in job["steps"])
+
+
+def test_ci_scope_self_test_ignores_polluted_environment(tmp_path: Path) -> None:
+    script = ROOT / ".github/workflows/ci-scope.sh"
+    output = tmp_path / "github_output"
+    summary = tmp_path / "github_summary"
+    output.write_text("")
+    summary.write_text("")
+    env = os.environ.copy()
+    env.update(
+        {
+            "CI_SCOPE_EVENT_NAME": "pull_request",
+            "CI_SCOPE_PR_ACTION": "labeled",
+            "CI_SCOPE_PR_DRAFT": "true",
+            "CI_SCOPE_PR_LABEL": "run-ci",
+            "CI_SCOPE_PR_LABELS": "run-ci",
+            "CI_SCOPE_BASE_SHA": "0" * 40,
+            "CI_SCOPE_HEAD_SHA": "a" * 40,
+            "CI_SCOPE_PR_NUMBER": "9",
+            "CI_SCOPE_BASE_CHANGED": "true",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "GITHUB_ENV": str(tmp_path / "github_env"),
+            "GITHUB_PATH": str(tmp_path / "github_path"),
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GIT_DIR": str(tmp_path / "not-a-git-dir"),
+            "GIT_WORK_TREE": str(tmp_path),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(script), "--self-test"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "ok draft-code" in result.stdout
+    assert "ok draft-lookalike-label" in result.stdout
+    assert "ci-scope self-test passed" in result.stdout
+    assert output.read_text() == ""
+    assert summary.read_text() == ""
