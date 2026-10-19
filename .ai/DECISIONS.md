@@ -3406,6 +3406,11 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
   Ambiguous matches are skipped. A reconciled `manual` or `manual_demo_test`
   row whose external ref starts with `blofin-demo-` can still be tagged.
+  Mirrored venue P&L, including that in-place close, does not feed open
+  risk, daily realized loss, the daily lock, the paper loss cooldown, or
+  promotion. A lifecycle-backed row keeps its entry time, size, and entry
+  price so the close cannot move those risk aggregates. Promotion continues
+  to read paper-validation trades only.
 - The mirror runs on the snapshot cadence only when
   `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the paper worker is armed, and
   `BLOFIN_READONLY_SYNC_ENABLED` with the three `BLOFIN_READONLY_API_*`

@@ -807,14 +807,20 @@ def _apply_venue(row: JournalTrade, draft: MirrorDraft, *, fresh: bool) -> None:
         row.source = JournalTradeSource.BLOFIN_DEMO_MANUAL
         row.tags = []
         row.planned_targets = []
+    # A lifecycle-backed book already counts this entry. Keep the time, size,
+    # and entry that open risk and the daily trade count already used.
+    lifecycle_backed = row.execution_lifecycle_id is not None
+    kept_entry_price = row.entry_price
+    kept_entry_time = row.entry_time
+    kept_size = row.size
     row.external_ref = draft.external_ref
     row.status = draft.status
-    row.entry_price = draft.entry_price
-    row.entry_time = draft.entry_time
+    row.entry_price = kept_entry_price if lifecycle_backed else draft.entry_price
+    row.entry_time = kept_entry_time if lifecycle_backed else draft.entry_time
     row.exit_price = draft.exit_price
     row.exit_time = draft.exit_time
     row.exit_reason = draft.exit_reason
-    row.size = draft.size
+    row.size = kept_size if lifecycle_backed else draft.size
     row.leverage = draft.leverage
     row.fees = draft.fees
     row.funding = draft.funding

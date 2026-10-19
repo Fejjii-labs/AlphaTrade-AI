@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from collections.abc import Iterator
@@ -19,7 +20,7 @@ from app.core.blofin_readonly_access import BloFinReadOnlyClient
 from app.core.config import ExecutionMode, Settings
 from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
 from app.db.base import Base
-from app.db.models import JournalTrade, Organization, User
+from app.db.models import JournalTrade, Organization, PaperTrade, User, UserRiskSettings
 from app.repositories.journal_trades import assert_stats_projection_excludes_annotation_grade
 from app.schemas.common import (
     JournalTradeSource,
@@ -30,6 +31,7 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
+from app.schemas.journal_statistics import JournalStatsFilters, JournalStatsGroupBy
 from app.schemas.journal_trades import (
     JournalTradeAnnotation,
     JournalTradeCreate,
@@ -47,7 +49,14 @@ from app.services.blofin_demo_manual_mirror import (
     strategy_group_key,
     without_annotation_grade,
 )
+from app.services.journal_statistics_service import JournalStatisticsService
 from app.services.journal_trade_service import JournalTradeService
+from app.services.risk.daily_risk_accounting import (
+    AuthoritativeDailySnapshot,
+    DailyRiskAccounting,
+)
+from app.services.risk.paper_cooldown import paper_loss_cooldown_active
+from app.services.risk.settings_service import RiskSettingsService
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
 WINDOW_BEGIN = datetime(2026, 10, 11, 0, 0, 1, tzinfo=UTC)
@@ -333,6 +342,171 @@ def test_reconciles_the_stuck_open_manual_demo_row_in_place(session: Session) ->
     assert tagged.strategy_label == "Manual catch-up"
     assert tagged.grade == "B+"
     assert tagged.source is JournalTradeSource.MANUAL_DEMO_TEST
+
+
+def _daily(session: Session) -> AuthoritativeDailySnapshot:
+    return DailyRiskAccounting(
+        session,
+        RiskSettingsService(session, AuditService(session)),
+        clock=lambda: NOW,
+    ).sync_from_portfolio(organization_id=ORG, user_id=USER)
+
+
+def _loss_limit(session: Session) -> None:
+    session.add(
+        UserRiskSettings(
+            organization_id=ORG,
+            user_id=USER,
+            daily_loss_limit=Decimal("0.10"),
+            timezone="UTC",
+        )
+    )
+    session.commit()
+
+
+def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -> None:
+    """Venue net on a lifecycle row must not change the daily book or the lock."""
+    lifecycle = uuid.uuid4()
+    _loss_limit(session)
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            status=JournalTradeStatus.OPEN,
+            symbol="BTCUSDT",
+            exchange="BLOFIN_DEMO",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("100"),
+            entry_time=NOW,
+            size=Decimal("0.02"),
+            result=TradeResult.OPEN,
+            execution_lifecycle_id=lifecycle,
+        )
+    )
+    session.commit()
+    before = _daily(session)
+    assert before.daily_locked is False
+    assert before.realized_pnl == Decimal("0")
+    assert before.trade_count == 1
+    assert before.open_exposure_notional == Decimal("2")
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is False
+    )
+    assert session.scalar(select(func.count()).select_from(PaperTrade)) == 0
+
+    bundle = copy.deepcopy(_FIXTURE["long"])
+    bundle["history"][0]["closeAveragePrice"] = "90"
+    bundle["history"][0]["realizedPnl"] = "-0.2"
+    bundle["history"][0]["updateTime"] = str(int(NOW.timestamp() * 1000))
+    report = _apply(session, bundle)
+    assert report.reconciled == 1 and report.created == 0  # type: ignore[attr-defined]
+
+    row = session.get(
+        JournalTrade,
+        session.scalar(
+            select(JournalTrade.id).where(JournalTrade.execution_lifecycle_id == lifecycle)
+        ),
+    )
+    assert row is not None
+    assert row.source is JournalTradeSource.MANUAL_DEMO_TEST
+    assert row.status is JournalTradeStatus.CLOSED
+    assert row.execution_lifecycle_id == lifecycle
+    assert row.entry_time is not None
+    assert row.entry_time.replace(tzinfo=UTC) == NOW
+    assert _money(row.entry_price) == Decimal("100.00000000")
+    assert _money(row.size) == Decimal("0.02000000")
+    assert row.net_pnl is not None and row.net_pnl <= -before.daily_loss_limit  # type: ignore[operator]
+    assert row.external_ref == "blofin-demo-history:h-long"
+
+    after = _daily(session)
+    assert after.daily_locked is False
+    assert after.realized_pnl == before.realized_pnl
+    assert after.trade_count == before.trade_count
+    assert after.open_exposure_notional == before.open_exposure_notional
+    assert after.daily_locked == before.daily_locked
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is False
+    )
+    assert session.scalar(select(func.count()).select_from(PaperTrade)) == 0
+
+    stats = JournalStatisticsService(session, max_rows=50).compute(
+        organization_id=ORG,
+        user_id=USER,
+        group_by=JournalStatsGroupBy.EXECUTION_ACTOR,
+        filters=JournalStatsFilters(),
+    )
+    assert stats.overall.trade_count == 1
+    assert {bucket.key for bucket in stats.buckets} == {"human"}
+
+
+def test_paper_execution_close_still_locks_and_mirror_refs_do_not(session: Session) -> None:
+    _loss_limit(session)
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("100"),
+            entry_time=NOW,
+            exit_time=NOW,
+            size=Decimal("1"),
+            net_pnl=Decimal("-1"),
+            result=TradeResult.LOSS,
+            execution_lifecycle_id=uuid.uuid4(),
+            external_ref="blofin-demo-history:not-a-paper-loss",
+        )
+    )
+    session.commit()
+    held = _daily(session)
+    assert held.daily_locked is False
+    assert held.realized_pnl == Decimal("0")
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is False
+    )
+
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.CLOSED,
+            symbol="ETHUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("100"),
+            entry_time=NOW,
+            exit_time=NOW,
+            size=Decimal("1"),
+            net_pnl=Decimal("-1"),
+            result=TradeResult.LOSS,
+            execution_lifecycle_id=uuid.uuid4(),
+        )
+    )
+    session.commit()
+    locked = _daily(session)
+    assert locked.daily_locked is True
+    assert locked.realized_pnl <= Decimal("-0.10")
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is True
+    )
 
 
 def test_ambiguous_manual_rows_are_not_duplicated(session: Session) -> None:

@@ -16,9 +16,10 @@ Classification rules (deterministic, documented):
 - Rule compliance per trade is the worst recorded assessment:
   ``violated`` > ``partial`` > ``compliant`` (any ``followed``) > ``unassessed``.
 - Human-vs-system execution is derived from the trade source by decision
-  authority: manual, imported, and human-approved proposal-flow paper
-  executions are ``human``; paper-validation, backtest, and system-generated
-  trades are ``system``.
+  authority: manual, imported, human-approved proposal-flow paper
+  executions, manual demo tests, and BloFin demo hand trades are ``human``;
+  paper-validation, backtest, and system-generated trades are ``system``.
+  A source with no mapping is left out of the aggregate.
 - AT-036 extends cohort comparison with scorecards, decision-quality metrics,
   dimension buckets, setup/regime breakdowns, and frontend navigation links.
 """
@@ -81,6 +82,7 @@ _EXECUTION_ACTOR_BY_SOURCE: Final[dict[JournalTradeSource, ExecutionActor]] = {
     JournalTradeSource.MANUAL: ExecutionActor.HUMAN,
     JournalTradeSource.IMPORTED: ExecutionActor.HUMAN,
     JournalTradeSource.PAPER_EXECUTION: ExecutionActor.HUMAN,
+    JournalTradeSource.MANUAL_DEMO_TEST: ExecutionActor.HUMAN,
     JournalTradeSource.BLOFIN_DEMO_MANUAL: ExecutionActor.HUMAN,
     JournalTradeSource.PAPER_VALIDATION: ExecutionActor.SYSTEM,
     JournalTradeSource.BACKTEST: ExecutionActor.SYSTEM,
@@ -97,6 +99,7 @@ _COMPARISON_COHORTS: Final[
                 JournalTradeSource.MANUAL,
                 JournalTradeSource.IMPORTED,
                 JournalTradeSource.PAPER_EXECUTION,
+                JournalTradeSource.MANUAL_DEMO_TEST,
                 JournalTradeSource.BLOFIN_DEMO_MANUAL,
             }
         ),
@@ -119,6 +122,7 @@ _SCORECARD_ACTORS: Final[tuple[tuple[ExecutionActor, frozenset[JournalTradeSourc
                 JournalTradeSource.MANUAL,
                 JournalTradeSource.IMPORTED,
                 JournalTradeSource.PAPER_EXECUTION,
+                JournalTradeSource.MANUAL_DEMO_TEST,
                 JournalTradeSource.BLOFIN_DEMO_MANUAL,
             }
         ),
@@ -180,14 +184,18 @@ class JournalStatisticsService:
             organization_id=organization_id, user_id=user_id, filters=filters, rows=rows
         )
 
-        annotated = [
-            (
-                row,
-                compliance_by_trade.get(row.id, TradeRuleCompliance.UNASSESSED),
-                _EXECUTION_ACTOR_BY_SOURCE[row.source],
+        annotated: list[tuple[JournalTradeStatsRow, TradeRuleCompliance, ExecutionActor]] = []
+        for row in rows:
+            actor = _EXECUTION_ACTOR_BY_SOURCE.get(row.source)
+            if actor is None:
+                continue
+            annotated.append(
+                (
+                    row,
+                    compliance_by_trade.get(row.id, TradeRuleCompliance.UNASSESSED),
+                    actor,
+                )
             )
-            for row in rows
-        ]
         if filters.rule_compliance is not None:
             annotated = [a for a in annotated if a[1] == filters.rule_compliance]
         if filters.execution_actor is not None:

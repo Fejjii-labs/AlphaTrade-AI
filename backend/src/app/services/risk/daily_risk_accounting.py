@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import DailyRiskState, JournalTrade, Order, Position
@@ -24,6 +24,7 @@ from app.schemas.common import (
     OrderStatus,
     PositionStatus,
 )
+from app.services.risk.mirror_economics import journal_mirror_economics
 from app.services.risk.settings_service import RiskSettingsService, normalize_timezone
 
 
@@ -175,7 +176,13 @@ class DailyRiskAccounting:
         start_utc: datetime,
         end_utc: datetime,
     ) -> tuple[Decimal, int, Decimal]:
-        """Canonical fills and net outcomes, excluding legacy position mirrors."""
+        """Canonical fills and net outcomes, excluding legacy position mirrors.
+
+        Mirrored BloFin demo venue P&L is omitted from realized loss. A
+        lifecycle row the mirror closes in place keeps its prior open notional
+        so the close cannot change exposure or, with entry time left as it
+        was, the day's trade count.
+        """
         scope = (
             JournalTrade.organization_id == organization_id,
             JournalTrade.user_id == user_id,
@@ -191,6 +198,7 @@ class DailyRiskAccounting:
                 JournalTrade.status == JournalTradeStatus.CLOSED,
                 JournalTrade.exit_time >= start_utc,
                 JournalTrade.exit_time < end_utc,
+                ~journal_mirror_economics(),
             )
         )
         count = self._session.scalar(
@@ -201,12 +209,22 @@ class DailyRiskAccounting:
                 JournalTrade.status.in_((JournalTradeStatus.OPEN, JournalTradeStatus.CLOSED)),
             )
         )
+        # A mirror close keeps the notional the open lifecycle row already
+        # contributed. New blofin_demo_manual rows are outside ``scope``.
+        held_open = or_(
+            JournalTrade.status == JournalTradeStatus.OPEN,
+            and_(
+                JournalTrade.status == JournalTradeStatus.CLOSED,
+                JournalTrade.source == JournalTradeSource.MANUAL_DEMO_TEST,
+                journal_mirror_economics(),
+            ),
+        )
         exposure = self._session.scalar(
             select(
                 func.sum(
                     JournalTrade.size * JournalTrade.entry_price,
                 )
-            ).where(*scope, JournalTrade.status == JournalTradeStatus.OPEN)
+            ).where(*scope, held_open)
         )
         return Decimal(str(realized or 0)), int(count or 0), Decimal(str(exposure or 0))
 
