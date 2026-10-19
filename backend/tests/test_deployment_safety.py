@@ -133,6 +133,18 @@ def test_production_rejects_either_autonomous_flag() -> None:
         Settings(**{**_PRODUCTION_BASE, "autonomous_blofin_demo_enabled": True})
 
 
+def test_production_rejects_paper_exit_monitor() -> None:
+    with pytest.raises(ValidationError, match="paper_exit_monitor_enabled"):
+        Settings(**{**_PRODUCTION_BASE, "paper_exit_monitor_enabled": True})
+
+
+def test_staging_accepts_paper_exit_monitor_flag() -> None:
+    settings = Settings(**{**_STAGING_BASE, "paper_exit_monitor_enabled": True})
+    assert settings.paper_exit_monitor_enabled is True
+    assert settings.paper_exit_monitor_dry_run is False
+    validate_deployment_settings(settings)
+
+
 def test_staging_accepts_an_autonomous_internal_paper_flag() -> None:
     settings = Settings(**{**_STAGING_BASE, "autonomous_internal_paper_enabled": True})
     assert settings.autonomous_internal_paper_enabled is True
@@ -230,6 +242,8 @@ def test_deployment_posture_reports_at018_hardening() -> None:
     assert posture["real_trading_enabled"] is False
     assert posture["autonomous_internal_paper_enabled"] is False
     assert posture["autonomous_blofin_demo_enabled"] is False
+    assert posture["paper_exit_monitor_enabled"] is False
+    assert posture["paper_exit_monitor_dry_run"] is False
 
 
 def test_staging_rejects_market_watcher_enabled() -> None:

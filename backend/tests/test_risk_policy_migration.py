@@ -21,10 +21,18 @@ from tests.support.alembic_heads import alembic_script_directory, single_alembic
 _A16 = "a16riskpolicy001"
 _A17 = "a17riskpolicy002"
 _A18 = "a18riskpolicy003"
+_A19 = "a19riskpolicy004"
 _PARENT = "a15reissueauth001"
 _A16_MIGRATION = "a16riskpolicy001_grade_based_risk_policy.py"
 _A17_MIGRATION = "a17riskpolicy002_risk_policy_review_guards.py"
 _A18_MIGRATION = "a18riskpolicy003_breaker_intervals.py"
+_A19_MIGRATION = "a19riskpolicy004_paper_demo_risk_ceiling.py"
+_A16_RISK_CHECKS = (
+    "risk_percent_a_plus > 0 AND risk_percent_a_plus <= 2",
+    "risk_percent_a > 0 AND risk_percent_a <= 2",
+    "risk_percent_b_plus > 0 AND risk_percent_b_plus <= 2",
+    "risk_percent_b > 0 AND risk_percent_b <= 2",
+)
 
 
 def _load(filename: str):
@@ -45,15 +53,36 @@ def test_risk_policy_revision_is_the_only_head() -> None:
     a16 = script.get_revision(_A16)
     a17 = script.get_revision(_A17)
     a18 = script.get_revision(_A18)
-    assert a16 is not None and a17 is not None and a18 is not None
+    a19 = script.get_revision(_A19)
+    assert a16 is not None and a17 is not None and a18 is not None and a19 is not None
     assert a16.down_revision == _PARENT
     assert a17.down_revision == _A16
     assert a18.down_revision == _A17
-    assert single_alembic_head(script) == _A18
+    assert a19.down_revision == _A18
+    assert single_alembic_head(script) == _A19
     versions = Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions"
     source = (versions / _A16_MIGRATION).read_text(encoding="utf-8")
-    for check in VERSION_CHECKS:
+    for check in _A16_RISK_CHECKS:
         assert check in source
+    ceiling = _load(_A19_MIGRATION)
+    for column, check in zip(
+        (
+            "risk_percent_a_plus",
+            "risk_percent_a",
+            "risk_percent_b_plus",
+            "risk_percent_b",
+        ),
+        VERSION_CHECKS[:4],
+        strict=True,
+    ):
+        assert ceiling._kind_risk_check(column) == check
+    revised = (versions / _A19_MIGRATION).read_text(encoding="utf-8")
+    for check in (
+        "default_leverage >= 1 AND default_leverage <= max_leverage AND default_leverage <= 20",
+        "(paper_demo_data_collection = false OR kind IN ('internal_paper', 'demo'))",
+    ):
+        assert check in revised
+        assert check in VERSION_CHECKS
     guard = (versions / _A17_MIGRATION).read_text(encoding="utf-8")
     assert "risk_policy_versions_immutable" in guard
     assert "risk_policy_version_immutable" in guard

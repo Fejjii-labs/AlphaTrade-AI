@@ -1,8 +1,10 @@
 """Existing internal paper plan semantics, shared by governed entry adapters.
 
 This is a pure terms builder. It grants no Candidate, sizing, approval, execution,
-or journal authority. The policy preserves the existing exact-price internal
-paper model, with zero fee, funding and slippage allowances.
+or journal authority. Fee, funding, and slippage allowances stay zero. A profile
+isolated plan stores stop-out loss plus the round-trip fee and the funding floor
+in ``maximum_loss``, which the claim reserves as daily loss. A cross plan stores
+price distance only. Neither path writes the shared ledger row.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from app.schemas.trade_plan import (
     TimeInForce,
     TradePlanRevisionCreate,
 )
+from app.services.risk_policy.plan_sizing import stop_out_cash
 from app.signal_fusion.candidate import Candidate
 
 INTERNAL_PAPER_LOT_SIZE = Decimal("0.001")
@@ -47,10 +50,18 @@ def build_internal_paper_terms(
     tick_size: Decimal,
     target_formula: str,
     presentation: dict[str, object],
+    leverage: Decimal = Decimal("1"),
+    margin_mode: MarginMode = MarginMode.CROSS,
 ) -> TradePlanRevisionCreate:
     """Shared internal paper semantics. No detector, sizing, approval, or execution."""
     is_long = candidate.direction is TradeDirection.LONG
     distance = abs(stop - entry)
+    price_loss = quantity * distance
+    maximum_loss = (
+        stop_out_cash(quantity, entry, stop, include_book_buffer=False)
+        if margin_mode is MarginMode.ISOLATED
+        else price_loss
+    )
     evidence_ids = (
         uuid5(_NAMESPACE, f"{candidate.evidence_window_hash}:trigger"),
         uuid5(_NAMESPACE, f"{candidate.evidence_window_hash}:quote"),
@@ -97,7 +108,7 @@ def build_internal_paper_terms(
                 "maximum_bps": "0",
             },
             "reduce_only": False,
-            "margin_mode": MarginMode.CROSS.value,
+            "margin_mode": margin_mode.value,
             "position_mode": "NET",
             "instrument_rules": {
                 "contract_multiplier": "1",
@@ -122,8 +133,8 @@ def build_internal_paper_terms(
                 "freshness_seconds": freshness,
             },
             "risk_and_exits": {
-                "risk_budget": {"value": str(quantity * distance), "unit": "USDT"},
-                "maximum_loss": {"value": str(quantity * distance), "unit": "USDT"},
+                "risk_budget": {"value": str(price_loss), "unit": "USDT"},
+                "maximum_loss": {"value": str(maximum_loss), "unit": "USDT"},
                 "fee_allowance": {"value": "0", "unit": "USDT"},
                 "funding_allowance": {"value": "0", "unit": "USDT"},
                 "slippage_allowance": {"value": "0", "unit": "USDT"},
@@ -147,8 +158,12 @@ def build_internal_paper_terms(
                     "rule_version": "1",
                     "expression": "disabled",
                 },
-                "leverage": "1",
-                "margin_assumption_id": "paper-internal-cash",
+                "leverage": format(leverage, "f"),
+                "margin_assumption_id": (
+                    "paper-profile-isolated"
+                    if margin_mode is MarginMode.ISOLATED
+                    else "paper-internal-cash"
+                ),
                 "margin_assumption_version": "1",
             },
             "valid_from": now,

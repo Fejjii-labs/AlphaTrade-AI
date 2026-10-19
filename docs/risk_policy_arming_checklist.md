@@ -57,6 +57,13 @@ Trigger: before a route or any other caller can reset a drawdown latch.
 Trigger: before a tradable grade risk is allowed above the 1% placeholder,
 on apply or on sizing.
 
+AT-ADR-111 (Sofien, 2026-10-18 17:20 CEST) amends this section. The audited
+field `paper_demo_data_collection` is the only exception, and only on a
+stored `internal_paper` or `demo` profile. Other kinds stay on this
+prerequisite. It does not close (c) for live trading or for arming either
+autonomous flag. The human proof, loosening cooldown, breakers, daily and
+open-risk limits, and the real-money block stay in force.
+
 | Prerequisite | Required state |
 | --- | --- |
 | Server-computed report | The server computes the promotion report per grade from stored samples. |
@@ -87,6 +94,7 @@ These follow-ups are required. They do not replace (a)–(d).
 | Trigger | Work |
 | --- | --- |
 | Before a downgrade of `a17riskpolicy002` is relied on | Refuse that downgrade while cancellation, promotion-report, or breaker-reset rows exist. `a16` and `a18` already refuse when their guarded rows exist. |
+| Before a consecutive-loss reset route | Use a strict decoder of its own that accepts only a human actor. Do not widen `decode_apply_proof` to accept `consecutive-reset:<account_id>`. A Telegram proof without `iat` stays rejected. |
 | Before a client uses `/risk/policy/*` | Add route tests for those routes. |
 | The next edit of `backend/src/app/core/config.py` | Correct the stale comment at lines 205–209. This checklist does not edit that file. |
 

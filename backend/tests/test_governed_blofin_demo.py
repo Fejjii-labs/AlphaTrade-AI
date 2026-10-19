@@ -41,7 +41,10 @@ from app.schemas.execution_protocol import ClosePaperPlanRequest, VenueSubmitEff
 from app.schemas.risk import KillSwitchMutationRequest
 from app.services.audit_service import AuditService
 from app.services.execution_service import ExecutionService
-from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+from app.services.governed_blofin_demo import (
+    GovernedBloFinDemoLoop,
+    profile_liquidation_hold,
+)
 from app.services.risk.kill_switch import KillSwitchService
 from app.signal_fusion.memory import FrozenClock
 from tests.support.phase5_market import EVALUATED_AT
@@ -63,6 +66,7 @@ class Venue:
     clock_delta: int = 0
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
+    tier_min_size: str = "0"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -83,6 +87,19 @@ class Venue:
             data = {"readOnly": 1 if self.behavior == "permissions" else 0}
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
+        elif path.endswith("/margin-mode"):
+            data = {"marginMode": "cross"}
+        elif path.endswith("position-tiers"):
+            data = [
+                {
+                    "instId": "BTC-USDT",
+                    "marginMode": "cross",
+                    "minSize": self.tier_min_size,
+                    "maxSize": "100000",
+                    "maintenanceMarginRate": "0.004",
+                    "maxLeverage": "125",
+                }
+            ]
         elif path.endswith("leverage-info"):
             data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": "1"}
         elif path.endswith("instruments"):
@@ -494,6 +511,171 @@ def test_worker_venue_fills_journal_restart_and_protection(
         assert (venue.post_count, venue.reads, venue.ticker_reads) == venue_counts
         assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == fill_count
         assert session.scalar(select(func.count()).select_from(JournalTrade)) == trade_count
+
+
+def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> None:
+    armed: list[str] = []
+    alerts: list[tuple[str, str]] = []
+
+    class _Switch:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def activate(self, **kwargs: object) -> None:
+            payload = kwargs["payload"]
+            armed.append(str(getattr(payload, "reason", "")))
+
+    class _Alerts:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def create(self, **kwargs: object) -> None:
+            alerts.append((str(kwargs["alert_type"]), str(kwargs["severity"])))
+
+    warnings: list[str] = []
+
+    def _warn(message: str, *args: object) -> None:
+        warnings.append(message % args if args else message)
+
+    monkeypatch.setattr("app.services.governed_blofin_demo.KillSwitchService", _Switch)
+    monkeypatch.setattr("app.services.governed_blofin_demo.PaperAlertService", _Alerts)
+    monkeypatch.setattr("app.services.governed_blofin_demo.AuditService", lambda _session: None)
+    monkeypatch.setattr("app.services.governed_blofin_demo.logger.warning", _warn)
+    disposition, arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=False,
+    )
+    assert disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert arm is True
+    inside, armed_inside = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=False,
+    )
+    assert inside == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert armed_inside is True
+    protected_disposition, protected_arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=True,
+    )
+    assert protected_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert protected_arm is False
+    through, through_arm = profile_liquidation_hold(
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+    )
+    assert through == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert through_arm is True
+    with pytest.raises(ValueError, match="Unknown demo liquidation hold"):
+        profile_liquidation_hold(liquidation_reason="other", protected=False)
+
+    loop = object.__new__(GovernedBloFinDemoLoop)
+    loop._settings = SimpleNamespace()
+    effect = SimpleNamespace(reconciliation_disposition=None)
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=False,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert armed == ["BloFin demo protection missing; operator action required"]
+    assert alerts == []
+    assert warnings and "unreadable" in warnings[-1]
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=True,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert armed == ["BloFin demo protection missing; operator action required"]
+    assert alerts == []
+    assert "protected=True" in warnings[-1]
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert armed == [
+        "BloFin demo protection missing; operator action required",
+        "BloFin demo liquidation is through the stop; operator action required",
+    ]
+    assert alerts == [("demo_liquidation_through_stop", "critical")]
+
+
+def test_liquidation_hold_runs_before_exit_reconciliation() -> None:
+    import inspect
+
+    source = inspect.getsource(GovernedBloFinDemoLoop.reconcile_command)
+    hold = source.index("_hold_profile_liquidation")
+    exit_read = source.index("reconcile_exit")
+    assert hold < exit_read
+    from app.services.governed_blofin_demo import _alert_liquidation_through_stop
+
+    helper = inspect.getsource(GovernedBloFinDemoLoop._hold_profile_liquidation)
+    alert = inspect.getsource(_alert_liquidation_through_stop)
+    assert "KillSwitchService" in helper
+    assert "_alert_liquidation_through_stop" in helper
+    assert "trade/order" not in helper
+    assert "setLeverage" not in helper
+    assert "set-leverage" not in helper
+    assert "trade/order" not in alert
+    assert "set-leverage" not in alert
+    assert "No automatic close" in alert
+
+
+def test_funding_read_uses_the_live_print_and_not_the_mock_fallback() -> None:
+    from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+
+    provider = object.__new__(GovernedBloFinDemoProvider)
+
+    class _Down:
+        def request(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("funding unavailable")
+
+    provider._client = _Down()  # type: ignore[attr-defined]
+    assert provider.read_funding_rate(symbol="BTCUSDT") is None
+
+    class _Live:
+        def request(self, method: str, path: str, params: dict[str, str] | None = None) -> object:
+            assert method == "GET"
+            assert path == "/api/v1/market/funding-rate"
+            assert params is not None and params["instId"]
+            return [{"fundingRate": "0.00025"}]
+
+    provider._client = _Live()  # type: ignore[attr-defined]
+    assert provider.read_funding_rate(symbol="BTCUSDT") == Decimal("0.00025")
+
+
+def test_position_tier_min_size_stays_quote_notional() -> None:
+    from app.schemas.trade_plan import EntrySide
+
+    venue = Venue(Decimal("100"), tier_min_size="2500")
+    client = BloFinClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="simulated-key",
+        api_secret="simulated-secret",
+        api_passphrase="simulated-pass",
+        transport=httpx.MockTransport(venue.handle),
+    )
+    provider = GovernedBloFinDemoProvider(client, clock=lambda: EVALUATED_AT)
+    snapshot = provider.snapshot(
+        symbol="BTCUSDT",
+        now=EVALUATED_AT,
+        side=EntrySide.BUY,
+        required_leverage=None,
+    )
+    floors = [floor for floor, _rate in snapshot.maintenance_tiers]
+    assert floors == [Decimal("2500")]
+    scaled = Decimal("2500") * snapshot.multiplier * snapshot.price
+    assert scaled != Decimal("2500")
+    assert scaled not in floors
 
 
 def test_staging_settings_require_complete_scoped_demo_arm() -> None:

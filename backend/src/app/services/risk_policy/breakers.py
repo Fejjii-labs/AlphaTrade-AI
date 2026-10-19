@@ -2,7 +2,10 @@
 
 Drawdown from the equity peak trips the kill switch and stays tripped until
 a human reset, and only once equity is back inside the threshold. Daily loss
-and consecutive losses pause new trades until the next UTC day.
+pauses new trades until the next UTC day. A later scan does not clear that
+stored pause before the boundary. Consecutive losses pause until the
+profile cooldown; that expiry is stored by the trip writer and is not
+recomputed here.
 """
 
 from __future__ import annotations
@@ -77,6 +80,8 @@ def evaluate_breakers(config: BreakerConfig, snapshot: BreakerSnapshot) -> Break
     daily_limit = snapshot.reference_equity * config.daily_loss_limit_percent / Decimal("100")
     daily_hit = daily_pnl <= -daily_limit and daily_pnl < 0
     consecutive_hit = snapshot.consecutive_losses >= config.consecutive_loss_limit
+    # ``paused_until`` is the daily boundary. The consecutive expiry is a
+    # separate stored timestamp so a later scan cannot push it forward.
     pause = next_utc_day(snapshot.now) if daily_hit or consecutive_hit else None
     return BreakerVerdict(
         daily_loss_active=daily_hit,

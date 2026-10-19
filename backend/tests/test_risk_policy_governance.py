@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.types import Indicators, MarketStructure
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import AuditLog, Organization
+from app.db.models import AuditLog, ExecutionAccount, Organization, User
 from app.db.risk_policy import (
     RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
@@ -28,6 +28,7 @@ from app.db.risk_policy import (
 from app.schemas.common import AuditEventType, RiskAction, RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.risk_policy import RiskPolicyApplyRequest
+from app.schemas.trade_plan import AccountMode, ExecutionMode
 from app.services.audit_service import AuditService
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
@@ -52,6 +53,7 @@ from app.services.risk_policy.governance import (
     PolicyChannel,
     assert_can_apply,
     channel_from_access_payload,
+    drawdown_reset_binding,
 )
 from app.services.risk_policy.grader import GRADER_VERSION, GradeBook, apply_ai_grade, grade_setup
 from app.services.risk_policy.ledger import caps_for_ledger
@@ -67,6 +69,31 @@ from app.services.risk_policy.proof import decode_apply_proof
 
 NOW = datetime(2026, 10, 18, 15, 0, tzinfo=UTC)
 ORG = uuid.UUID("00000000-0000-4000-8000-000000000107")
+USER = uuid.UUID("00000000-0000-4000-8000-000000000108")
+
+
+def _own_account(session: Session, account_id: uuid.UUID) -> None:
+    """Bind the portfolio user that reset equity must read from the server."""
+
+    session.add(
+        User(
+            id=USER,
+            email="drawdown-reset@test.example",
+            hashed_password="not-a-real-hash",
+        )
+    )
+    session.add(
+        ExecutionAccount(
+            id=account_id,
+            organization_id=ORG,
+            user_id=USER,
+            name="Drawdown reset account",
+            execution_mode=ExecutionMode.PAPER,
+            account_mode=AccountMode.NET,
+            enabled=True,
+        )
+    )
+    session.flush()
 
 
 def _human() -> PolicyActor:
@@ -80,6 +107,20 @@ def _agent() -> PolicyActor:
 def _proof(proposal: RiskPolicyProposal, now: datetime = NOW) -> HumanApplyProof:
     proposal_id = str(proposal.id)
     content_hash = str(proposal.content_hash)
+    return HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=now + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=now - timedelta(minutes=1),
+        step_up_at=now - timedelta(seconds=20),
+    )
+
+
+def _drawdown_proof(account_id: uuid.UUID, now: datetime = NOW) -> HumanApplyProof:
+    proposal_id, content_hash = drawdown_reset_binding(account_id)
     return HumanApplyProof(
         method="interactive_step_up",
         subject_user_id="sofien",
@@ -353,13 +394,13 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     session.query(RiskPolicyVersion).all()  # keep the import path honest
     state = session.scalars(select(RiskPolicyVersion)).all()
     latched = next(row for row in state if row.id)
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     scheduled = _apply(service, loose_proposal, _human())
@@ -1353,19 +1394,48 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             organization_id=ORG,
             account_id=account,
             actor=_agent(),
+            proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            equity=Decimal("9500"),
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert agent.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as bot:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=PolicyActor("bot-1", PolicyChannel.BOT, True),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert bot.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as undeclared:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert undeclared.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as missing:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=None,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert missing.value.code == "apply_proof_missing"
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     assert service.breaker_active(organization_id=ORG, now=NOW)
@@ -1540,6 +1610,27 @@ def test_undeclared_actor_is_rejected_before_a_proposal_insert() -> None:
     assert session.scalar(select(RiskPolicyProposal.id)) is None
 
 
+def test_drawdown_reset_refuses_when_the_account_has_no_server_owner() -> None:
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    service.latch_drawdown(
+        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
+    )
+    with pytest.raises(RiskPolicyRejected) as unbound:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert unbound.value.code == "drawdown_account_unbound"
+    state = session.scalar(select(RiskPolicyBreakerState))
+    assert state is not None and state.drawdown_latched is True
+
+
 def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold() -> None:
     session = _session()
     service = _service(session)
@@ -1547,7 +1638,7 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
     service.record_breaker(
         organization_id=ORG,
         account_id=account,
-        equity_peak=Decimal("10000"),
+        equity_peak=Decimal("20000"),
         consecutive_losses=0,
         realized_pnl=Decimal("0"),
         unrealized_pnl=Decimal("0"),
@@ -1556,14 +1647,14 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
         drawdown_latched=True,
         now=NOW,
     )
+    _own_account(session, account)
     with pytest.raises(RiskPolicyRejected) as still:
         service.reset_drawdown_latch(
             organization_id=ORG,
             account_id=account,
             actor=_human(),
+            proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            equity=Decimal("9000"),
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert still.value.code == "drawdown_still_active"
@@ -1571,13 +1662,14 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
     assert state is not None
     assert state.drawdown_latched is True
     assert session.scalar(select(RiskPolicyBreakerReset.id)) is None
+    state.equity_peak = Decimal("10000")
+    session.flush()
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     assert state.drawdown_latched is False
@@ -1597,14 +1689,15 @@ def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None
     service.latch_drawdown(
         organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=effective
     )
+    reset_at = datetime(2026, 10, 19, 16, tzinfo=UTC)
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account, reset_at),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
-        drawdown_breaker_percent=Decimal("10"),
-        now=datetime(2026, 10, 19, 16, tzinfo=UTC),
+        now=reset_at,
     )
     read_at = datetime(2026, 10, 19, 17, tzinfo=UTC)
     assert service.breaker_active(organization_id=ORG, now=read_at) is False
@@ -1729,4 +1822,168 @@ def _sizing_order():
         open_positions=0,
         leverage=Decimal("1"),
         margin_mode="isolated",
+    )
+
+
+def test_consecutive_cooldown_round_trips_and_a_shorter_pause_is_a_loosening() -> None:
+    from app.schemas.common import AuditResult
+    from app.services.risk_policy.governance import consecutive_reset_binding
+    from app.services.risk_policy.profile import (
+        ChangeClass,
+        canonical_profile,
+        classify_change,
+        profile_from_canonical,
+    )
+
+    assert placeholder_profile(PolicyKind.INTERNAL_PAPER).consecutive_loss_cooldown_hours == 24
+    stored = canonical_profile(placeholder_profile(PolicyKind.DEMO))
+    del stored["consecutive_loss_cooldown_hours"]
+    assert profile_from_canonical(stored).consecutive_loss_cooldown_hours == 24
+    longer = profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=48)
+    shorter = profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=12)
+    assert (
+        classify_change(placeholder_profile(PolicyKind.INTERNAL_PAPER), longer)
+        is ChangeClass.TIGHTENING
+    )
+    assert (
+        classify_change(placeholder_profile(PolicyKind.INTERNAL_PAPER), shorter)
+        is ChangeClass.LOOSENING
+    )
+    with pytest.raises(RiskPolicyRejected) as invalid:
+        profile_with(PolicyKind.INTERNAL_PAPER, consecutive_loss_cooldown_hours=0)
+    assert invalid.value.code == "consecutive_loss_cooldown_invalid"
+    session = _session()
+    service = _service(session)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=longer,
+        reason="Hold the consecutive pause for two days.",
+        now=NOW,
+    )
+    applied = _apply(service, proposal, _human())
+    active, row, _scheduled = service.read(
+        organization_id=ORG, kind=PolicyKind.INTERNAL_PAPER, now=NOW
+    )
+    assert row is not None and row.id == applied.id
+    assert active.consecutive_loss_cooldown_hours == 48
+    account = uuid.uuid4()
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=NOW + timedelta(hours=10),
+        drawdown_latched=True,
+        now=NOW,
+    )
+    proposal_id, content_hash = consecutive_reset_binding(account)
+    proof = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=NOW - timedelta(minutes=1),
+        step_up_at=NOW - timedelta(seconds=20),
+    )
+    with pytest.raises(RiskPolicyRejected) as agent:
+        service.reset_consecutive_losses(
+            organization_id=ORG,
+            account_id=account,
+            actor=_agent(),
+            proof=proof,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert agent.value.code == "apply_refuses_agent_token"
+    service.reset_consecutive_losses(
+        organization_id=ORG,
+        account_id=account,
+        actor=_human(),
+        proof=proof,
+        owner_user_id="sofien",
+        now=NOW,
+    )
+    state = service.load_breaker(organization_id=ORG, account_id=account)
+    assert state is not None
+    assert state.consecutive_losses == 0
+    assert state.consecutive_paused_until is None
+    assert state.drawdown_latched is True
+    audit = session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+            AuditLog.result == AuditResult.SUCCESS,
+        )
+    )
+    assert audit is not None
+    assert service.breaker_active(organization_id=ORG, now=NOW) is True
+
+
+def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:
+    """Freshness from apply covers this reset. The UUID decoder stays closed."""
+
+    import inspect
+
+    from app.schemas.common import AuditResult
+    from app.services.risk_policy.governance import consecutive_reset_binding
+    from app.services.risk_policy.proof import decode_apply_proof
+
+    source = inspect.getsource(decode_apply_proof)
+    assert "proposal_id: UUID" in source
+    assert "consecutive-reset" not in source
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=NOW + timedelta(hours=10),
+        drawdown_latched=True,
+        now=NOW,
+    )
+    proposal_id, content_hash = consecutive_reset_binding(account)
+    proof = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        issued_at=None,
+        telegram_chat_id="pinned-owner-chat",
+        telegram_confirmation_id="confirm-1",
+    )
+    with pytest.raises(RiskPolicyRejected) as rejected:
+        service.reset_consecutive_losses(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=proof,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert rejected.value.code == "apply_proof_not_fresh"
+    state = service.load_breaker(organization_id=ORG, account_id=account)
+    assert state is not None
+    assert state.consecutive_losses == 4
+    assert state.consecutive_paused_until is not None
+    assert state.drawdown_latched is True
+    assert (
+        session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+                AuditLog.result == AuditResult.SUCCESS,
+            )
+        )
+        is None
     )

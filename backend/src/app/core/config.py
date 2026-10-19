@@ -222,6 +222,12 @@ class Settings(BaseSettings):
     # authorizes real-money trading. Setting both fails closed.
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
+    # Automatic stop/target exits for canonical internal paper only.
+    # Default off. Production refuses the enabled flag. Dry-run evaluates and
+    # logs without calling the paper close service. Neither flag is set in
+    # the deploy blueprint by the change that introduced them.
+    paper_exit_monitor_enabled: bool = False
+    paper_exit_monitor_dry_run: bool = False
     # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
     risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits

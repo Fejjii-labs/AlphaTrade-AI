@@ -22,7 +22,8 @@ from tests.test_trendpulse_screening import request, service
 def test_one_additive_revision_follows_reserved_a11():
     cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_heads() == ["a18riskpolicy003"]
+    assert scripts.get_heads() == ["a19riskpolicy004"]
+    assert scripts.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
     assert scripts.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
     assert scripts.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
     assert scripts.get_revision("a16riskpolicy001").down_revision == "a15reissueauth001"
@@ -31,6 +32,7 @@ def test_one_additive_revision_follows_reserved_a11():
     assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert len(scripts.get_bases()) == 1
     assert [r.revision for r in scripts.iterate_revisions("heads", "a11experiments001")] == [
+        "a19riskpolicy004",
         "a18riskpolicy003",
         "a17riskpolicy002",
         "a16riskpolicy001",

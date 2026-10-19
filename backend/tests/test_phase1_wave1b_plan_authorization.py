@@ -1656,7 +1656,7 @@ def _paper_cycle(
         SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
     )
     loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
-        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace())
     )
     target = SimpleNamespace(
         organization_id=plan.organization_id,
@@ -1753,7 +1753,7 @@ def test_kill_switch_still_blocks_a_new_authorization(
         SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
     )
     loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
-        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace())
     )
     loop._autonomous_approval_refusal = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: "kill_switch_active"
@@ -2228,7 +2228,7 @@ def test_armed_paper_cycle_does_not_execute_or_journal_a_leftover_api_authorizat
         SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
     )
     loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
-        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace())
     )
     candidate_id = uuid.uuid4()
     proof = loop._execute_existing(
@@ -2339,7 +2339,7 @@ def test_consumed_human_authorization_is_not_executed_by_an_armed_cycle(
         SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
     )
     loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
-        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace())
     )
     proof = loop._execute_existing(
         session,
@@ -2529,7 +2529,7 @@ def test_kill_switch_leaves_a_leftover_api_authorization_unconsumed(
         SimpleNamespace(now=lambda: NOW + timedelta(minutes=1)),
     )
     loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
-        get_scoped=lambda *_args, **_kwargs: SimpleNamespace()
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=SimpleNamespace())
     )
     loop._autonomous_approval_refusal = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: "kill_switch_active"

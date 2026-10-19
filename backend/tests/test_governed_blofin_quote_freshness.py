@@ -76,7 +76,7 @@ def test_quote_generated_during_preflight_is_fresh_when_received() -> None:
     provider, venue, clock = _provider()
     started = clock.now()
     snapshot = provider.snapshot(symbol="BTCUSDT", now=started, side=EntrySide.BUY)
-    assert clock.current - started == timedelta(milliseconds=4500)
+    assert clock.current - started == timedelta(milliseconds=5500)
     assert snapshot.observed_at > started
     assert clock.current - snapshot.observed_at == timedelta(milliseconds=250)
     assert snapshot.price == venue.price + Decimal("0.1")

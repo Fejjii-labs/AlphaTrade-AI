@@ -36,6 +36,8 @@ Arrows describe requests and dependencies, not a claim that every provider is cu
 
 [render.yaml](../render.yaml) defines the FastAPI web service and one independent paper worker, both using the backend image. The worker runs `python -m app.workers.paper_worker`; it supervises Watcher and Telegram with independent authority and health state. It does not run inside a Next.js request. API and worker coordinate through PostgreSQL records, leases and fences. The Blueprint supplies connection settings for data services rather than provisioning their whole inventory.
 
+When `PAPER_EXIT_MONITOR_ENABLED` is true, that same worker also runs an internal-paper stop/target exit component. Live trades read the same public perpetual candles the live watcher uses for that evidence identity. The flag defaults false, production refuses it, and the blueprint does not set it. See [paper exit monitor](paper_exit_monitor.md).
+
 Redis supports applicable security and caching functions; it is not the trade ledger. Qdrant serves knowledge indexing/search. The current Agent's default retrieval reads SQL chunks lexically; the Qdrant edge belongs to the knowledge service, not every conversational turn. No worker-to-LLM or worker-to-Qdrant dependency is asserted merely because provider settings exist in its template.
 
 BloFin account sync is a read path. Manual demo submission belongs to the API's owner-confirmed capability; strategy-driven governed demo continuation belongs to a separately armed worker path. Telegram notification receipt is independent of either execution venue. [Hosting and operational detail](deployment.md).

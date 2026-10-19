@@ -16,6 +16,7 @@ from app.providers.exchange.governed_blofin import (
     _account_rows,
     _positive,
     _time,
+    demo_order_margin_mode,
 )
 from app.schemas.trade_plan import EntrySide, TradePlanRevision
 
@@ -35,6 +36,7 @@ class DemoExitFill:
     reported_pnl: Decimal | None
     category: str
     fee_currency: str | None = None
+    funding: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class VerifiedDemoExit:
     # Raw provider pointers are retained without assuming an undocumented edge.
     exit_order_protection_ids: tuple[tuple[str, str], ...] = ()
     native_account_uid: str | None = None
+    funding: Decimal | None = None
 
     def facts(self) -> dict[str, Any]:
         """Stable economic evidence; receipt clock is persisted separately."""
@@ -87,7 +90,11 @@ class VerifiedDemoExit:
             "monetary_methodology_version": None,
             "positions": "flat_account_wide",
             "pending_orders": "none_account_wide",
-            "funding": None,
+            "funding": (
+                format(self.funding, "f")
+                if isinstance(self.funding, Decimal) and self.funding.is_finite()
+                else None
+            ),
             "net_pnl": None,
         }
 
@@ -99,6 +106,7 @@ def reconcile_demo_exit(
     entry: DemoOrderEvidence,
     clock: Callable[[], datetime],
 ) -> VerifiedDemoExit | None:
+    expected_margin = demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id)
     if not entry.fills or entry.status not in {"filled", "canceled", "cancelled", "expired"}:
         return None  # A live entry remainder can still add exposure.
     positions = _account_rows(client.request("GET", "/api/v1/account/positions", signed=True))
@@ -118,7 +126,7 @@ def reconcile_demo_exit(
         if (
             row.get("instId") != plan.execution_instrument
             or row.get("positionSide") != "net"
-            or row.get("marginMode") != "cross"
+            or row.get("marginMode") != expected_margin
             or not 0 < signed_quantity <= entry_quantity
         ):
             raise DemoPositionLineageError("Demo position exceeds or differs from owned fills.")
@@ -156,7 +164,7 @@ def reconcile_demo_exit(
                 or row.get("instId") != plan.execution_instrument
                 or row.get("side") != ("buy" if plan.side is EntrySide.BUY else "sell")
                 or row.get("positionSide") != "net"
-                or row.get("marginMode") != "cross"
+                or row.get("marginMode") != expected_margin
                 or row.get("state") != entry.status
                 or Decimal(str(row.get("size"))) != plan.quantity.value
                 or Decimal(str(row.get("filledSize")))
@@ -173,7 +181,7 @@ def reconcile_demo_exit(
             row.get("instId") != plan.execution_instrument
             or row.get("side") != opposite
             or row.get("positionSide") != "net"
-            or row.get("marginMode") != "cross"
+            or row.get("marginMode") != expected_margin
             or not (row.get("reduceOnly") is True or row.get("reduceOnly") == "true")
             or row.get("state") not in {"filled", "canceled", "cancelled", "expired"}
             or filled <= 0
@@ -242,6 +250,11 @@ def reconcile_demo_exit(
                     gross,
                     category,
                     fee_currency or None,
+                    # TODO: BloFin GET /api/v1/trade/fills-history does not document
+                    # a funding field or its sign (https://docs.blofin.com/index.html).
+                    # fundingFee on GET /api/v1/account/funding-fees is a separate
+                    # bill (positive means received). Leave fill funding unverified.
+                    None,
                 )
             )
         if sum((f.quantity for f in order_fills), Decimal("0")) != filled:
@@ -276,7 +289,7 @@ def reconcile_demo_exit(
             or row.get("instId") != plan.execution_instrument
             or row.get("side") != opposite
             or row.get("positionSide") != "net"
-            or row.get("marginMode") != "cross"
+            or row.get("marginMode") != expected_margin
             or _positive(row.get("actualSize")) != quantity
             or _time(row.get("createTime")) < plan.valid_from
         ):
@@ -319,4 +332,5 @@ def reconcile_demo_exit(
         entry.native_tpsl_id,
         tuple(sorted(exit_order_protection_ids)),
         entry.native_account_uid,
+        None,
     )

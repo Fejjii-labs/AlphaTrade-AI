@@ -24,6 +24,7 @@ ALERT_TYPE_LABELS: dict[str, str] = {
     "paper_validation_restricted": "Paper validation restricted",
     "overtrading_warning": "Overtrading warning",
     "daily_loss_lock_warning": "Daily loss lock warning",
+    "demo_liquidation_through_stop": "LIQUIDATION THROUGH STOP",
 }
 
 

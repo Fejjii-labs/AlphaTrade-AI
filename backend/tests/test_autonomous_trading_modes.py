@@ -6,6 +6,7 @@ The kill switch blocks every mode. Real-money settings never resolve.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -25,6 +26,20 @@ from app.services.autonomous_trading import (
 )
 from app.services.governed_blofin_demo import DEMO_POLICY, GovernedBloFinDemoLoop
 from app.workers.watcher_paper import WatcherPaperRuntime, WatcherPaperScanReport
+
+_NOW = datetime(2026, 10, 19, 12, tzinfo=UTC)
+
+
+def _clock() -> SimpleNamespace:
+    return SimpleNamespace(now=lambda: _NOW)
+
+
+def _query_rows(statement: object, rows: list[object]) -> SimpleNamespace:
+    """Risk-policy reads stay empty. Other reads return the test rows."""
+
+    if "risk_policy_" in str(statement):
+        return SimpleNamespace(all=lambda: [])
+    return SimpleNamespace(all=lambda: rows)
 
 
 def _view(**updates: object) -> SimpleNamespace:
@@ -316,7 +331,7 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
         def scalars(self, _statement: object) -> SimpleNamespace:
             return SimpleNamespace(all=lambda: [])
 
-    demo = GovernedBloFinDemoLoop(None, settings, SimpleNamespace(now=lambda: None))
+    demo = GovernedBloFinDemoLoop(None, settings, _clock())
     proof = demo._execute_existing(
         _NoClosedLifecycle(),  # type: ignore[arg-type]
         target=target,  # type: ignore[arg-type]
@@ -340,7 +355,7 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
             "autonomous_blofin_demo_enabled": True,
         }
     )
-    blocked = GovernedBloFinDemoLoop(None, contradictory, SimpleNamespace(now=lambda: None))
+    blocked = GovernedBloFinDemoLoop(None, contradictory, _clock())
     refused = blocked._execute_existing(
         _NoClosedLifecycle(),  # type: ignore[arg-type]
         target=target,  # type: ignore[arg-type]
@@ -358,8 +373,8 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
         def scalar(self, _statement: object) -> None:
             return None
 
-        def scalars(self, _statement: object) -> SimpleNamespace:
-            return SimpleNamespace(all=lambda: [SimpleNamespace(id=authorization_id)])
+        def scalars(self, statement: object) -> SimpleNamespace:
+            return _query_rows(statement, [SimpleNamespace(id=authorization_id)])
 
     class _RevokeOnly:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -388,6 +403,57 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
     assert captured["constructed"] is True
     assert captured["revoked_id"] == authorization_id
     assert captured["revoke_reason"] == "autonomous_precheck_blocked"
+
+
+def test_demo_execute_existing_ignores_entry_occurred_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Demo venue fills keep the venue clock when the parent passes a bar end."""
+
+    occurred = datetime(2020, 1, 1, tzinfo=UTC)
+    captured: dict[str, object] = {}
+
+    def _refusal(loop: object, *_args: object, **_kwargs: object) -> str:
+        clock = getattr(loop, "_clock", None)
+        now = getattr(clock, "now", None)
+        captured["moment"] = now() if callable(now) else None
+        return "breaker_active"
+
+    def _revoke(*_args: object, **kwargs: object) -> None:
+        captured["clock"] = kwargs.get("clock")
+
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo._stored_plan_execution_refusal",
+        _refusal,
+    )
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo.revoke_leftover_autonomous_authorizations",
+        _revoke,
+    )
+    demo = GovernedBloFinDemoLoop(None, Settings(_env_file=None), _clock())  # type: ignore[arg-type]
+    demo._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(
+            plan=SimpleNamespace(
+                execution_venue="BLOFIN_DEMO",
+                execution_policy_version=DEMO_POLICY,
+            )
+        )
+    )
+    proof = demo._execute_existing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        revision_id=uuid4(),
+        account_id=uuid4(),
+        entry_occurred_at=occurred,
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "breaker_active"
+    assert captured["moment"] == _NOW
+    revoke_clock = captured["clock"]
+    assert callable(revoke_clock)
+    assert revoke_clock() == _NOW
+    assert revoke_clock() != occurred
 
 
 def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:
@@ -612,6 +678,9 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
         def scalar(self, _statement: object) -> SimpleNamespace:
             return SimpleNamespace(active=self.active)
 
+        def scalars(self, statement: object) -> SimpleNamespace:
+            return _query_rows(statement, [])
+
     kill = _Kill()
 
     authorization_id = uuid4()
@@ -641,8 +710,10 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
             AssertionError("claim must not run after the kill switch turns on")
         ),
     )
-    loop = AutomatedPaperLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop = AutomatedPaperLoop(None, settings, _clock())  # type: ignore[arg-type]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         kill,  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -784,8 +855,8 @@ def test_precheck_block_revokes_a_leftover_autonomous_demo_authorization(
         def scalar(self, _statement: object) -> None:
             return None
 
-        def scalars(self, _statement: object) -> SimpleNamespace:
-            return SimpleNamespace(all=lambda: [SimpleNamespace(id=authorization_id)])
+        def scalars(self, statement: object) -> SimpleNamespace:
+            return _query_rows(statement, [SimpleNamespace(id=authorization_id)])
 
     class _Approval:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -829,6 +900,9 @@ def test_claim_block_revokes_the_autonomous_paper_authorization(
         def scalar(self, _statement: object) -> SimpleNamespace:
             return SimpleNamespace(active=False)
 
+        def scalars(self, statement: object) -> SimpleNamespace:
+            return _query_rows(statement, [])
+
     class _Approval:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -859,8 +933,10 @@ def test_claim_block_revokes_the_autonomous_paper_authorization(
     monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
     monkeypatch.setattr("app.services.automated_paper_loop.ExecutionService", _Execution)
     monkeypatch.setattr(AutomatedPaperLoop, "_audit", lambda *_args, **_kwargs: None)
-    loop = AutomatedPaperLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop = AutomatedPaperLoop(None, settings, _clock())  # type: ignore[arg-type]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         _Idle(),  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -884,8 +960,11 @@ def test_precheck_block_revokes_a_leftover_autonomous_paper_authorization(
     captured: dict[str, object] = {}
 
     class _Session:
-        def scalars(self, _statement: object) -> SimpleNamespace:
-            return SimpleNamespace(all=lambda: [SimpleNamespace(id=authorization_id)])
+        def scalar(self, _statement: object) -> None:
+            return None
+
+        def scalars(self, statement: object) -> SimpleNamespace:
+            return _query_rows(statement, [SimpleNamespace(id=authorization_id)])
 
     class _Approval:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -899,8 +978,10 @@ def test_precheck_block_revokes_a_leftover_autonomous_paper_authorization(
             raise AssertionError("a blocked pre-check must not create an approval")
 
     monkeypatch.setattr("app.services.approval_service.ApprovalService", _Approval)
-    loop = AutomatedPaperLoop(None, Settings(_env_file=None), SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop = AutomatedPaperLoop(None, Settings(_env_file=None), _clock())  # type: ignore[arg-type]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         _Session(),  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -1037,7 +1118,9 @@ def _ledger_session(row: SimpleNamespace, *, always: bool = False) -> object:
         def __init__(self) -> None:
             self.calls = 0
 
-        def scalar(self, _statement: object) -> SimpleNamespace | None:
+        def scalar(self, statement: object) -> SimpleNamespace | None:
+            if "risk_policy_" in str(statement):
+                return None
             self.calls += 1
             if always or self.calls >= 3:
                 return row
@@ -1049,14 +1132,17 @@ def _ledger_session(row: SimpleNamespace, *, always: bool = False) -> object:
     return _Session()
 
 
-def _run_disarmed_style_demo(settings: object, session: object | None = None):  # type: ignore[no-untyped-def]
+def _run_disarmed_style_demo(  # type: ignore[no-untyped-def]
+    settings: object,
+    session: object | None = None,
+):
     revision_id = uuid4()
     candidate = SimpleNamespace(candidate_id=uuid4())
     target = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())
     envelope = SimpleNamespace(
         plan=SimpleNamespace(execution_venue="BLOFIN_DEMO", execution_policy_version=DEMO_POLICY)
     )
-    demo = GovernedBloFinDemoLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
+    demo = GovernedBloFinDemoLoop(None, settings, _clock())  # type: ignore[arg-type]
     demo._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
         get_scoped=lambda *_args, **_kwargs: envelope
     )

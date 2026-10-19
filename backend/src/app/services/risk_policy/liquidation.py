@@ -10,7 +10,7 @@ not call an exchange.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from app.services.risk_policy.errors import RiskPolicyRejected
 
@@ -94,6 +94,66 @@ def liquidation_distance(
     if distance <= 0:
         raise RiskPolicyRejected("liquidation_distance_non_positive")
     return distance
+
+
+def liquidation_crosses_stop(*, direction: str, liquidation_price: Decimal, stop: Decimal) -> bool:
+    """True when the venue or formula liquidation price is through the stop.
+
+    Long: liquidation at or above the stop. Short: at or below the stop.
+    """
+
+    if direction == "long":
+        return liquidation_price >= stop
+    if direction == "short":
+        return liquidation_price <= stop
+    raise RiskPolicyRejected("direction_missing")
+
+
+def isolated_liquidation_price(
+    *,
+    entry: Decimal,
+    leverage: Decimal,
+    maintenance_rate: Decimal,
+    direction: str,
+) -> Decimal:
+    """Isolated liquidation price from the maintenance formula. No venue call."""
+
+    distance = liquidation_distance(
+        entry=entry, leverage=leverage, maintenance_rate=maintenance_rate
+    )
+    if direction == "long":
+        return entry - distance
+    if direction == "short":
+        return entry + distance
+    raise RiskPolicyRejected("direction_missing")
+
+
+def leverage_clearing_buffer(
+    *,
+    entry: Decimal,
+    buffer: Decimal,
+    maintenance_rate: Decimal,
+    requested: Decimal,
+) -> Decimal | None:
+    """Highest whole-number leverage at or below ``requested`` that clears the buffer.
+
+    Returns None when even 1x does not put liquidation beyond the buffer.
+    Leverage is not raised above the requested value.
+    """
+
+    if entry <= 0 or buffer <= 0 or requested < 1:
+        return None
+    if maintenance_rate < 0 or maintenance_rate >= 1:
+        return None
+    denominator = buffer / entry + maintenance_rate
+    if denominator <= 0:
+        return requested
+    maximum = (Decimal("1") / denominator).to_integral_value(rounding=ROUND_DOWN)
+    if maximum < 1:
+        return None
+    if maximum >= requested:
+        return requested
+    return maximum
 
 
 def check_liquidation_buffer(
