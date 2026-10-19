@@ -19,10 +19,12 @@ from uuid import UUID
 from app.analysis.engine import analyze
 from app.analysis.types import Indicators
 from app.providers.market_data import OHLCVBar
+from app.schemas.trade_plan import CalculationInput, TradePlanRevisionCreate
 from app.services.risk_policy.adjusters import AdjusterInputs
 from app.services.risk_policy.breakers import BreakerVerdict
 from app.services.risk_policy.ceilings import PAPER_DEMO_KINDS
 from app.services.risk_policy.decision import decide_trade
+from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision, grade_setup
 from app.services.risk_policy.liquidation import MaintenanceTier
 from app.services.risk_policy.profile import Grade, RiskPolicyProfile
@@ -67,6 +69,16 @@ PAPER_CONSERVATIVE_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
 # open rows are summed twice. A larger gap is a different book.
 OPEN_NOTIONAL_MATCH_TOLERANCE = Decimal("0.00000001")
 STORED_PLAN_EXCEEDS_LIMITS = "stored_plan_exceeds_current_limits"
+PROFILE_SIZING_GRADE = "profile_sizing_grade"
+# Stable codes on the immutable plan. The letter is not a decimal, and the
+# recheck does not accept a caller-supplied percent in place of this code.
+_GRADE_CODE: dict[Grade, Decimal] = {
+    Grade.A_PLUS: Decimal("1"),
+    Grade.A: Decimal("2"),
+    Grade.B_PLUS: Decimal("3"),
+    Grade.B: Decimal("4"),
+}
+_GRADE_BY_CODE: dict[Decimal, Grade] = {code: grade for grade, code in _GRADE_CODE.items()}
 
 
 @dataclass(frozen=True)
@@ -237,6 +249,88 @@ def canonical_open_stop_positions(
     return priced
 
 
+def profile_sizing_grade_payload(grade: Grade, risk_percent: Decimal) -> dict[str, object]:
+    """Immutable calculation input naming the grade that sized a plan.
+
+    ``input_value`` is the grade code. ``result_value`` is that grade's risk
+    percent at sizing time. The recheck uses the tighter of that stored
+    percent and the same grade on the profile now in force.
+    """
+
+    return {
+        "name": PROFILE_SIZING_GRADE,
+        "input_value": _GRADE_CODE[grade],
+        "result_value": risk_percent,
+        "unit": "PERCENT",
+        "formula_id": "profile-grade-cap",
+        "formula_version": "1",
+        "precision": 8,
+        "rounding_mode": "ROUND_FLOOR",
+        "conservative_remainder": Decimal("0"),
+    }
+
+
+def with_profile_sizing_grade(
+    terms: TradePlanRevisionCreate, grade: Grade, risk_percent: Decimal
+) -> TradePlanRevisionCreate:
+    """Append the sizing grade to a plan. The quantity input stays first."""
+
+    payload = profile_sizing_grade_payload(grade, risk_percent)
+    marker = CalculationInput(
+        name=str(payload["name"]),
+        input_value=cast(Decimal, payload["input_value"]),
+        result_value=cast(Decimal, payload["result_value"]),
+        unit=str(payload["unit"]),
+        formula_id=str(payload["formula_id"]),
+        formula_version=str(payload["formula_version"]),
+        precision=int(cast(int, payload["precision"])),
+        rounding_mode=str(payload["rounding_mode"]),
+        conservative_remainder=cast(Decimal, payload["conservative_remainder"]),
+    )
+    return terms.model_copy(update={"calculation_inputs": (*terms.calculation_inputs, marker)})
+
+
+def stored_sizing_grade_cap(plan: object, profile: RiskPolicyProfile) -> Decimal | None:
+    """Cap for the grade written on the plan, or None when that grade is absent.
+
+    A missing, duplicated, or unreadable marker is not treated as the widest
+    grade on the current profile. The stored percent cannot raise the cap
+    above the same grade's percent now.
+    """
+
+    inputs = getattr(plan, "calculation_inputs", None)
+    if not isinstance(inputs, list | tuple):
+        return None
+    found: list[tuple[Decimal, Decimal]] = []
+    for item in inputs:
+        if isinstance(item, dict):
+            name = item.get("name")
+            code = item.get("input_value")
+            stored = item.get("result_value")
+        else:
+            name = getattr(item, "name", None)
+            code = getattr(item, "input_value", None)
+            stored = getattr(item, "result_value", None)
+        if name != PROFILE_SIZING_GRADE:
+            continue
+        if not isinstance(code, Decimal) or not isinstance(stored, Decimal):
+            return None
+        found.append((code, stored))
+    if len(found) != 1:
+        return None
+    code, stored = found[0]
+    grade = _GRADE_BY_CODE.get(code)
+    if grade is None or not stored.is_finite() or stored <= 0 or not code.is_finite():
+        return None
+    try:
+        current = profile.risk_percent(grade)
+    except RiskPolicyRejected:
+        return None
+    if not isinstance(current, Decimal) or not current.is_finite() or current <= 0:
+        return None
+    return min(stored, current)
+
+
 def stored_plan_limit_refusal(
     *,
     quantity: Decimal,
@@ -248,6 +342,7 @@ def stored_plan_limit_refusal(
     profile: RiskPolicyProfile,
     execution_channel: str,
     include_book_buffer: bool,
+    sizing_grade_cap: Decimal | None,
     funding_rate: Decimal | None = None,
     live_verified: bool = False,
 ) -> str | None:
@@ -255,6 +350,8 @@ def stored_plan_limit_refusal(
 
     The stored quantity is not rewritten. Cash uses the same unit costs as
     ``size_for_profile``. Equality with the remaining room is allowed.
+    ``sizing_grade_cap`` is the grade that sized the plan. The widest grade
+    on the profile is not a substitute.
     """
 
     if (
@@ -273,6 +370,9 @@ def stored_plan_limit_refusal(
         or stop <= 0
         or contract_multiplier <= 0
         or equity <= 0
+        or not isinstance(sizing_grade_cap, Decimal)
+        or not sizing_grade_cap.is_finite()
+        or sizing_grade_cap <= 0
     ):
         return "stored_plan_limits_uncomputed"
     size = quantity * contract_multiplier
@@ -305,11 +405,10 @@ def stored_plan_limit_refusal(
         return STORED_PLAN_EXCEEDS_LIMITS
     if book.open_notional + notional > aggregate + OPEN_NOTIONAL_MATCH_TOLERANCE:
         return STORED_PLAN_EXCEEDS_LIMITS
-    profile_cap = max(profile.risk_percent_by_grade.values(), default=Decimal("0"))
     if _sized_risk_blocked_for_channel(
         channel=execution_channel,
         risk_percent=added,
-        profile_cap=profile_cap,
+        profile_cap=sizing_grade_cap,
     ):
         return "risk_percent_exceeds_channel_ceiling"
     return None

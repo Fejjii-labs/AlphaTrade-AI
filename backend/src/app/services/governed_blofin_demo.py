@@ -321,6 +321,36 @@ def _alert_liquidation_through_stop(session: Session, command: ExecutionCommand)
     )
 
 
+def _demo_calculation_inputs(
+    *,
+    raw: Decimal,
+    quantity: Decimal,
+    grade: object,
+    grade_cap: Decimal | None,
+) -> list[dict[str, object]]:
+    """Lot rounding plus the grade that sized a profile plan."""
+
+    from app.services.risk_policy.plan_sizing import profile_sizing_grade_payload
+    from app.services.risk_policy.profile import Grade
+
+    inputs: list[dict[str, object]] = [
+        {
+            "name": "rounded_contract_quantity",
+            "input_value": raw,
+            "result_value": quantity,
+            "unit": "CONTRACTS",
+            "formula_id": "floor-to-venue-lot",
+            "formula_version": "1",
+            "precision": 12,
+            "rounding_mode": "ROUND_FLOOR",
+            "conservative_remainder": raw - quantity,
+        }
+    ]
+    if isinstance(grade, Grade) and isinstance(grade_cap, Decimal):
+        inputs.append(profile_sizing_grade_payload(grade, grade_cap))
+    return inputs
+
+
 def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
     """Disposition, and whether the existing kill switch must run.
 
@@ -637,6 +667,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         profile_cash_ceiling: Decimal | None = None
         profile_funding_rate: Decimal | None = None
         profile_funding_periods: Decimal | None = None
+        profile_grade = None
+        profile_grade_cap: Decimal | None = None
         if active_profile is None:
             cost_per_base = entry * Decimal("0.002")
             raw = (
@@ -711,6 +743,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             profile_cash_ceiling = sized.risk_cash_ceiling
             profile_funding_rate = sized.funding_rate
             profile_funding_periods = sized.funding_periods
+            profile_grade = sized.grade
+            profile_grade_cap = active_profile.profile.risk_percent(sized.grade)
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -787,19 +821,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "freshness_seconds": 10,
                 },
                 "valid_until": min(terms.valid_until, snapshot.observed_at + timedelta(seconds=10)),
-                "calculation_inputs": [
-                    {
-                        "name": "rounded_contract_quantity",
-                        "input_value": raw,
-                        "result_value": quantity,
-                        "unit": "CONTRACTS",
-                        "formula_id": "floor-to-venue-lot",
-                        "formula_version": "1",
-                        "precision": 12,
-                        "rounding_mode": "ROUND_FLOOR",
-                        "conservative_remainder": raw - quantity,
-                    }
-                ],
+                "calculation_inputs": _demo_calculation_inputs(
+                    raw=raw,
+                    quantity=quantity,
+                    grade=profile_grade,
+                    grade_cap=profile_grade_cap,
+                ),
             }
         )
         values["risk_and_exits"].update(

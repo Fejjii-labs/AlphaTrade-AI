@@ -107,16 +107,17 @@ def exit_world(category="normal", *, partial=False):
     return plan, entry, provider, responses, calls
 
 
-def test_verified_funding_cash_is_kept_only_when_every_closing_fill_has_it():
+def test_undocumented_fill_funding_fields_stay_unverified():
+    """BloFin fills-history does not document funding or its sign."""
+
     plan, entry, provider, responses, _calls = exit_world()
     responses["fills-history"][0]["funding"] = "-0.4"
+    responses["fills-history"][0]["fundingFee"] = "0.4"
     closed = provider.reconcile_exit(plan=plan, entry=entry)
     assert closed is not None
-    assert closed.funding == Decimal("-0.4")
-    assert closed.facts()["funding"] == "-0.4"
-    plan, entry, provider, _responses, _calls = exit_world()
-    closed = provider.reconcile_exit(plan=plan, entry=entry)
-    assert closed is not None and closed.funding is None
+    assert closed.funding is None
+    assert closed.fills[0].funding is None
+    assert closed.facts()["funding"] is None
 
 
 @pytest.mark.parametrize("category,partial", [("normal", False), ("tp", False), ("sl", True)])

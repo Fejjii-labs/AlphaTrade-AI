@@ -4,10 +4,10 @@ No order mutations. Flat balances, acknowledgments and trigger acknowledgments
 are insufficient. Unexplained activity or incomplete pages remain operator holds.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 from app.providers.exchange.blofin_client import BloFinClient
@@ -97,39 +97,6 @@ class VerifiedDemoExit:
             ),
             "net_pnl": None,
         }
-
-
-def _optional_funding_cash(fill: dict[str, Any]) -> Decimal | None:
-    """Finite funding cash on one fill, or None when the venue did not send it."""
-
-    raw = fill.get("funding")
-    if raw in (None, ""):
-        raw = fill.get("fundingFee")
-    if raw in (None, ""):
-        return None
-    try:
-        value = Decimal(str(raw))
-    except (InvalidOperation, ValueError):
-        return None
-    if not value.is_finite():
-        return None
-    return value
-
-
-def _verified_fill_funding(fills: Sequence[DemoExitFill]) -> Decimal | None:
-    """Sum funding only when every closing fill carries a finite cash figure.
-
-    A missing fill is not zero. The streak then stays unverified.
-    """
-
-    if not fills:
-        return None
-    total = Decimal("0")
-    for fill in fills:
-        if fill.funding is None or not fill.funding.is_finite():
-            return None
-        total += fill.funding
-    return total
 
 
 def reconcile_demo_exit(
@@ -283,7 +250,11 @@ def reconcile_demo_exit(
                     gross,
                     category,
                     fee_currency or None,
-                    _optional_funding_cash(fill),
+                    # TODO: BloFin GET /api/v1/trade/fills-history does not document
+                    # a funding field or its sign (https://docs.blofin.com/index.html).
+                    # fundingFee on GET /api/v1/account/funding-fees is a separate
+                    # bill (positive means received). Leave fill funding unverified.
+                    None,
                 )
             )
         if sum((f.quantity for f in order_fills), Decimal("0")) != filled:
@@ -361,5 +332,5 @@ def reconcile_demo_exit(
         entry.native_tpsl_id,
         tuple(sorted(exit_order_protection_ids)),
         entry.native_account_uid,
-        _verified_fill_funding(fills),
+        None,
     )

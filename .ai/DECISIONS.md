@@ -2,6 +2,28 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-113 — Stored-plan grade cap, server drawdown reset, unverified fill funding
+
+- Date: 2026-10-19
+- Decision: This amends AT-ADR-112. A stored plan is capped at the grade
+  written on it when it was sized (`profile_sizing_grade`). The cap is the
+  tighter of that stored percent and the same grade on the profile in force.
+  The widest grade on the profile is not used. A plan with no readable grade
+  is refused with `stored_plan_limits_uncomputed`. `reset_drawdown_latch`
+  reads equity for the user stored on `ExecutionAccount` and reads the
+  drawdown threshold as the tighter of the internal-paper and demo profiles
+  in force. The caller does not pass either value. The proof owner stays the
+  configured risk-policy owner, the same value `apply` uses.
+- Fill funding: official `GET /api/v1/trade/fills-history`
+  (https://docs.blofin.com/index.html) lists `fillPnl` and `fee` and does
+  not list a funding field or its sign. `GET /api/v1/account/funding-fees`
+  has `fundingFee` ("a positive value means received; a negative value means
+  paid") on a separate bill, not on the fill. Fill funding stays unverified,
+  so the demo close streak stays negative. A TODO marks the fill parser.
+- What stays: real-money trading stays blocked. Both autonomous flags stay
+  false. No live order is added.
+- Reference: Grok review 5575648400 on `cf67b559`.
+
 ## AT-ADR-112 — Stored plans, open risk, and drawdown reset stay fail-closed
 
 - Date: 2026-10-19

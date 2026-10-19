@@ -981,7 +981,10 @@ def _stored_plan_execution_refusal(
     active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
     if active is None:
         return None
-    from app.services.risk_policy.plan_sizing import stored_plan_limit_refusal
+    from app.services.risk_policy.plan_sizing import (
+        stored_plan_limit_refusal,
+        stored_sizing_grade_cap,
+    )
 
     funding_rate = loop._verified_funding_rate()
     book = _profile_open_book(
@@ -999,6 +1002,9 @@ def _stored_plan_execution_refusal(
     if terms is None:
         return "stored_plan_limits_uncomputed"
     quantity, entry, stop, multiplier = terms
+    grade_cap = stored_sizing_grade_cap(plan, active.profile)
+    if grade_cap is None:
+        return "stored_plan_limits_uncomputed"
     return stored_plan_limit_refusal(
         quantity=quantity,
         entry=entry,
@@ -1009,6 +1015,7 @@ def _stored_plan_execution_refusal(
         profile=active.profile,
         execution_channel=loop._risk_policy_kind(),
         include_book_buffer=loop._risk_policy_kind() == "demo",
+        sizing_grade_cap=grade_cap,
         funding_rate=funding_rate,
         live_verified=funding_rate is not None,
     )
@@ -1284,6 +1291,8 @@ def _plan_terms(
         return "invalidation_unavailable"
     leverage = Decimal("1")
     margin_mode = MarginMode.CROSS
+    sizing_grade = None
+    sizing_cap = None
     if active_profile is None:
         quantity = _quantity(equity=equity, entry=entry, distance=distance)
         if quantity is None:
@@ -1325,6 +1334,8 @@ def _plan_terms(
         quantity = sized.quantity
         leverage = sized.leverage
         margin_mode = MarginMode.ISOLATED
+        sizing_grade = sized.grade
+        sizing_cap = active_profile.profile.risk_percent(sized.grade)
         if risk_records is not None:
             risk_records.append(sized.record)
     observed = quote.source_time
@@ -1335,7 +1346,7 @@ def _plan_terms(
     valid_until = min(candidate.valid_until, eligibility_valid_until)
     if valid_until <= now:
         return "candidate_expired"
-    return build_internal_paper_terms(
+    terms = build_internal_paper_terms(
         candidate=candidate,
         account_id=account_id,
         entry=entry,
@@ -1367,6 +1378,11 @@ def _plan_terms(
             "decision_reference": str(eligibility_id),
         },
     )
+    if sizing_grade is not None and sizing_cap is not None:
+        from app.services.risk_policy.plan_sizing import with_profile_sizing_grade
+
+        return with_profile_sizing_grade(terms, sizing_grade, sizing_cap)
+    return terms
 
 
 def _grade_for_plan(

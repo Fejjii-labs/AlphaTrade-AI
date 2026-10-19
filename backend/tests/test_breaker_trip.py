@@ -794,7 +794,8 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     from sqlalchemy.orm import sessionmaker
 
     from app.db.base import Base
-    from app.db.models import Organization
+    from app.db.models import ExecutionAccount, Organization, User
+    from app.schemas.trade_plan import AccountMode, ExecutionMode
     from app.services.audit_service import AuditService
     from app.services.risk_policy.governance import (
         HumanApplyProof,
@@ -808,6 +809,19 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, expire_on_commit=False)()
     session.add(Organization(id=ORG, name="Latch org"))
+    owner = uuid4()
+    session.add(User(id=owner, email="latch-reset@test.example", hashed_password="not-a-real-hash"))
+    session.add(
+        ExecutionAccount(
+            id=ACCOUNT,
+            organization_id=ORG,
+            user_id=owner,
+            name="Latch account",
+            execution_mode=ExecutionMode.PAPER,
+            account_mode=AccountMode.NET,
+            enabled=True,
+        )
+    )
     session.commit()
     service = RiskPolicyService(session, AuditService(session))
     pause = NOW + timedelta(hours=10)
@@ -878,8 +892,6 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
             step_up_at=pause - timedelta(seconds=20),
         ),
         owner_user_id="sofien",
-        user_id=uuid4(),
-        drawdown_breaker_percent=Decimal("10"),
         now=pause,
     )
     session.expire_all()

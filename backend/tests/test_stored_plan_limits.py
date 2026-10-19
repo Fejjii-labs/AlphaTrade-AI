@@ -25,8 +25,13 @@ from app.services.demo_lifecycle_resolution import (
 from app.services.governed_blofin_demo import DEMO_POLICY, GovernedBloFinDemoLoop
 from app.services.risk_policy.governance import PolicyActor, PolicyChannel
 from app.services.risk_policy.persistence import RiskPolicyService
-from app.services.risk_policy.plan_sizing import ActiveProfile, ProfileOpenBook
-from app.services.risk_policy.profile import PolicyKind, placeholder_profile
+from app.services.risk_policy.plan_sizing import (
+    ActiveProfile,
+    ProfileOpenBook,
+    stored_plan_limit_refusal,
+    stored_sizing_grade_cap,
+)
+from app.services.risk_policy.profile import Grade, PolicyKind, placeholder_profile, profile_with
 
 NOW = datetime(2026, 10, 19, 12, tzinfo=UTC)
 ORG = uuid4()
@@ -45,7 +50,15 @@ def _amount(value: str) -> SimpleNamespace:
     return SimpleNamespace(value=Decimal(value))
 
 
-def _plan() -> SimpleNamespace:
+def _grade_marker(code: str = "4", percent: str = "1") -> SimpleNamespace:
+    return SimpleNamespace(
+        name="profile_sizing_grade",
+        input_value=Decimal(code),
+        result_value=Decimal(percent),
+    )
+
+
+def _plan(*, grade: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         execution_venue="BLOFIN_DEMO",
         execution_policy_version=DEMO_POLICY,
@@ -54,6 +67,7 @@ def _plan() -> SimpleNamespace:
         risk_and_exits=SimpleNamespace(stop=_amount("90"), leverage=Decimal("2")),
         instrument_rules=SimpleNamespace(contract_multiplier=Decimal("1")),
         side=EntrySide.BUY,
+        calculation_inputs=(_grade_marker(),) if grade else (),
     )
 
 
@@ -141,6 +155,36 @@ def test_demo_stored_plan_refuses_a_drawdown_latch_after_the_kill_switch_is_off(
     assert proof.reason_code == "breaker_active"
 
 
+def test_stored_plan_without_a_sizing_grade_is_uncomputed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._load_active_profile",
+        lambda *_args, **_kwargs: ActiveProfile(
+            profile=placeholder_profile(PolicyKind.INTERNAL_PAPER),
+            version_id=uuid4(),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._profile_open_book",
+        lambda *_args, **_kwargs: ProfileOpenBook(
+            open_risk_percent=Decimal("0"),
+            open_notional=Decimal("0"),
+            open_positions=0,
+            remaining_daily_budget_percent=Decimal("1"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._equity",
+        lambda *_args, **_kwargs: Decimal("10000"),
+    )
+    session = _session()
+    loop = _loop(AutomatedPaperLoop, monkeypatch)
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_args, **_kwargs: SimpleNamespace(plan=_plan(grade=False))
+    )
+    proof = _execute(loop, session)
+    assert proof.reason_code == "stored_plan_limits_uncomputed"
+
+
 def test_each_loop_resizes_a_stored_plan_against_the_current_book(monkeypatch) -> None:
     book = ProfileOpenBook(
         open_risk_percent=Decimal("0"),
@@ -167,6 +211,58 @@ def test_each_loop_resizes_a_stored_plan_against_the_current_book(monkeypatch) -
     for cls in (AutomatedPaperLoop, GovernedBloFinDemoLoop):
         proof = _execute(_loop(cls, monkeypatch), session)
         assert proof.reason_code == "stored_plan_exceeds_current_limits"
+
+
+def test_stored_plan_cap_is_the_grade_that_sized_it_not_the_widest_grade() -> None:
+    profile = profile_with(
+        PolicyKind.INTERNAL_PAPER,
+        risk_percent_by_grade={
+            Grade.A_PLUS: Decimal("5"),
+            Grade.A: Decimal("3"),
+            Grade.B_PLUS: Decimal("2"),
+            Grade.B: Decimal("1"),
+            Grade.C: Decimal("0"),
+        },
+        daily_loss_limit_percent=Decimal("6"),
+        max_aggregate_open_risk_percent=Decimal("6"),
+        max_open_positions=2,
+        max_notional_per_trade_percent=Decimal("50"),
+        max_aggregate_notional_percent=Decimal("100"),
+        paper_demo_data_collection=True,
+    )
+    book = ProfileOpenBook(
+        open_risk_percent=Decimal("0"),
+        open_notional=Decimal("0"),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+    )
+    # About 4% at the stop: inside an A+ 5% cap and outside a B 1% cap.
+    plan = SimpleNamespace(
+        calculation_inputs=(_grade_marker("4", "1"),),
+    )
+    assert stored_sizing_grade_cap(plan, profile) == Decimal("1")
+    forged = SimpleNamespace(calculation_inputs=(_grade_marker("4", "5"),))
+    assert stored_sizing_grade_cap(forged, profile) == Decimal("1")
+    common = {
+        "quantity": Decimal("1"),
+        "entry": Decimal("100"),
+        "stop": Decimal("20"),
+        "contract_multiplier": Decimal("1"),
+        "equity": Decimal("2000"),
+        "book": book,
+        "profile": profile,
+        "execution_channel": "internal_paper",
+        "include_book_buffer": False,
+    }
+    assert (
+        stored_plan_limit_refusal(**common, sizing_grade_cap=Decimal("1"))
+        == "risk_percent_exceeds_channel_ceiling"
+    )
+    assert stored_plan_limit_refusal(**common, sizing_grade_cap=Decimal("5")) is None
+    assert (
+        stored_plan_limit_refusal(**common, sizing_grade_cap=None)
+        == "stored_plan_limits_uncomputed"
+    )
 
 
 def test_paper_unreadable_liquidation_is_not_labeled_through_the_stop() -> None:

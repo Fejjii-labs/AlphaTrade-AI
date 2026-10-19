@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.analysis.types import Indicators, MarketStructure
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import AuditLog, Organization
+from app.db.models import AuditLog, ExecutionAccount, Organization, User
 from app.db.risk_policy import (
     RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
@@ -28,6 +28,7 @@ from app.db.risk_policy import (
 from app.schemas.common import AuditEventType, RiskAction, RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.risk_policy import RiskPolicyApplyRequest
+from app.schemas.trade_plan import AccountMode, ExecutionMode
 from app.services.audit_service import AuditService
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import RiskEvaluationContext
@@ -69,6 +70,30 @@ from app.services.risk_policy.proof import decode_apply_proof
 NOW = datetime(2026, 10, 18, 15, 0, tzinfo=UTC)
 ORG = uuid.UUID("00000000-0000-4000-8000-000000000107")
 USER = uuid.UUID("00000000-0000-4000-8000-000000000108")
+
+
+def _own_account(session: Session, account_id: uuid.UUID) -> None:
+    """Bind the portfolio user that reset equity must read from the server."""
+
+    session.add(
+        User(
+            id=USER,
+            email="drawdown-reset@test.example",
+            hashed_password="not-a-real-hash",
+        )
+    )
+    session.add(
+        ExecutionAccount(
+            id=account_id,
+            organization_id=ORG,
+            user_id=USER,
+            name="Drawdown reset account",
+            execution_mode=ExecutionMode.PAPER,
+            account_mode=AccountMode.NET,
+            enabled=True,
+        )
+    )
+    session.flush()
 
 
 def _human() -> PolicyActor:
@@ -369,14 +394,13 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     session.query(RiskPolicyVersion).all()  # keep the import path honest
     state = session.scalars(select(RiskPolicyVersion)).all()
     latched = next(row for row in state if row.id)
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
         proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        user_id=USER,
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     scheduled = _apply(service, loose_proposal, _human())
@@ -1372,8 +1396,6 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             actor=_agent(),
             proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            user_id=USER,
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert agent.value.code == "drawdown_reset_requires_human"
@@ -1384,8 +1406,6 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             actor=PolicyActor("bot-1", PolicyChannel.BOT, True),
             proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            user_id=USER,
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert bot.value.code == "drawdown_reset_requires_human"
@@ -1396,8 +1416,6 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
             proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            user_id=USER,
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert undeclared.value.code == "drawdown_reset_requires_human"
@@ -1408,19 +1426,16 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             actor=_human(),
             proof=None,
             owner_user_id="sofien",
-            user_id=USER,
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert missing.value.code == "apply_proof_missing"
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
         proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        user_id=USER,
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     assert service.breaker_active(organization_id=ORG, now=NOW)
@@ -1595,6 +1610,27 @@ def test_undeclared_actor_is_rejected_before_a_proposal_insert() -> None:
     assert session.scalar(select(RiskPolicyProposal.id)) is None
 
 
+def test_drawdown_reset_refuses_when_the_account_has_no_server_owner() -> None:
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    service.latch_drawdown(
+        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
+    )
+    with pytest.raises(RiskPolicyRejected) as unbound:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert unbound.value.code == "drawdown_account_unbound"
+    state = session.scalar(select(RiskPolicyBreakerState))
+    assert state is not None and state.drawdown_latched is True
+
+
 def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold() -> None:
     session = _session()
     service = _service(session)
@@ -1611,6 +1647,7 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
         drawdown_latched=True,
         now=NOW,
     )
+    _own_account(session, account)
     with pytest.raises(RiskPolicyRejected) as still:
         service.reset_drawdown_latch(
             organization_id=ORG,
@@ -1618,8 +1655,6 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
             actor=_human(),
             proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            user_id=USER,
-            drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert still.value.code == "drawdown_still_active"
@@ -1635,8 +1670,6 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
         actor=_human(),
         proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        user_id=USER,
-        drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
     assert state.drawdown_latched is False
@@ -1657,14 +1690,13 @@ def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None
         organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=effective
     )
     reset_at = datetime(2026, 10, 19, 16, tzinfo=UTC)
+    _own_account(session, account)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
         proof=_drawdown_proof(account, reset_at),
         owner_user_id="sofien",
-        user_id=USER,
-        drawdown_breaker_percent=Decimal("10"),
         now=reset_at,
     )
     read_at = datetime(2026, 10, 19, 17, tzinfo=UTC)

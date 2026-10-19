@@ -707,17 +707,17 @@ class RiskPolicyService:
         actor: PolicyActor,
         proof: HumanApplyProof | None,
         owner_user_id: str,
-        user_id: uuid.UUID,
-        drawdown_breaker_percent: Decimal,
         pinned_telegram_chat_id: str = "",
         now: datetime,
     ) -> None:
         """Clear the drawdown latch after a human step-up and server equity.
 
-        Equity is the portfolio accounting figure. A caller cannot supply it.
-        Undeclared, agent, bot, and service actors are refused before the proof
-        is checked. The proof is the same fresh step-up or pinned Telegram
-        confirmation required to apply a profile.
+        Equity is the portfolio accounting figure for the user bound to
+        ``account_id``. The drawdown threshold is the tighter of the
+        internal-paper and demo profiles in force. A caller cannot supply
+        either number. ``owner_user_id`` is the configured proof owner, the
+        same value ``apply`` uses, not an equity selector. Undeclared, agent,
+        bot, and service actors are refused before the proof is checked.
         """
 
         if actor.channel is not PolicyChannel.HUMAN:
@@ -755,6 +755,21 @@ class RiskPolicyService:
         )
         if row is None or not row.drawdown_latched:
             raise RiskPolicyRejected("drawdown_not_latched")
+        try:
+            user_id = self._account_owner_user_id(
+                organization_id=organization_id, account_id=account_id
+            )
+            drawdown_breaker_percent = self._server_drawdown_breaker_percent(
+                organization_id=organization_id, now=now
+            )
+        except RiskPolicyRejected as exc:
+            self._audit_drawdown_reset_refusal(
+                organization_id=organization_id,
+                account_id=account_id,
+                actor=actor,
+                reason=exc.code,
+            )
+            raise
         equity = self._server_account_equity(
             organization_id=organization_id, user_id=user_id, now=now
         )
@@ -800,6 +815,45 @@ class RiskPolicyService:
         row.drawdown_latched = False
         row.updated_at = now
         self._session.flush()
+
+    def _account_owner_user_id(
+        self, *, organization_id: uuid.UUID, account_id: uuid.UUID
+    ) -> uuid.UUID:
+        """User stored on the execution account. A caller cannot name another."""
+
+        from app.db.models import ExecutionAccount
+
+        row = self._session.scalar(
+            select(ExecutionAccount).where(
+                ExecutionAccount.id == account_id,
+                ExecutionAccount.organization_id == organization_id,
+            )
+        )
+        if row is None:
+            raise RiskPolicyRejected("drawdown_account_unbound")
+        return row.user_id
+
+    def _server_drawdown_breaker_percent(
+        self, *, organization_id: uuid.UUID, now: datetime
+    ) -> Decimal:
+        """Tighter drawdown threshold of the paper and demo profiles in force.
+
+        ``read`` supplies the applied version or the conservative placeholder.
+        The wider of the two is not used.
+        """
+
+        from app.services.risk_policy.profile import PolicyKind
+
+        percents: list[Decimal] = []
+        for kind in (PolicyKind.INTERNAL_PAPER, PolicyKind.DEMO):
+            profile, _active, _scheduled = self.read(
+                organization_id=organization_id, kind=kind, now=now
+            )
+            value = profile.drawdown_breaker_percent
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+                raise RiskPolicyRejected("drawdown_threshold_uncomputed")
+            percents.append(value)
+        return min(percents)
 
     def _server_account_equity(
         self, *, organization_id: uuid.UUID, user_id: uuid.UUID, now: datetime
