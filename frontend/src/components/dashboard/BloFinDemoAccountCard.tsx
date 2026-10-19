@@ -124,7 +124,7 @@ export function BloFinDemoAccountCard({
           />
           <TradingMetric
             label="Win rate"
-            value={activityDisabled || winRate == null ? "—" : winRate}
+            value={activityStatus === "ready" && winRate != null ? winRate : "—"}
             note={
               activityDisabled
                 ? "Activity sync disabled"

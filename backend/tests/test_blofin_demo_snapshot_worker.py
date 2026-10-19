@@ -294,6 +294,86 @@ def test_fresh_snapshot_does_not_call_blofin(monkeypatch: pytest.MonkeyPatch) ->
     assert session.committed is False
 
 
+def test_fresh_degraded_snapshot_skips_blofin_and_reports_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _open_settings()
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    synced: list[dict[str, object]] = []
+    session = SimpleNamespace(committed=False, closed=False, rollback=lambda: None)
+
+    def close() -> None:
+        session.closed = True
+
+    session.commit = lambda: None
+    session.close = close
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object) -> SimpleNamespace:
+            assert organization_id
+            return SimpleNamespace(
+                health_status=BloFinSyncHealthStatus.DEGRADED,
+                synced_at=now - timedelta(seconds=10),
+            )
+
+        def sync(self, **kwargs: object) -> SimpleNamespace:
+            synced.append(kwargs)
+            raise AssertionError("fresh degraded snapshot called BloFin")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    outcome = cycle()
+    assert outcome.status == "degraded"
+    assert outcome.error == "snapshot_degraded"
+    assert synced == []
+    assert session.committed is False
+    assert session.closed is True
+    assert cycle().status == "degraded"
+    assert synced == []
+
+
+def test_synced_degraded_snapshot_is_unhealthy_without_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _open_settings()
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    synced: list[dict[str, object]] = []
+    session = SimpleNamespace(committed=False, closed=False)
+
+    def commit() -> None:
+        session.committed = True
+
+    session.commit = commit
+    session.rollback = lambda: None
+    session.close = lambda: None
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object) -> None:
+            raise NotFoundError("none")
+
+        def sync(self, **kwargs: object) -> SimpleNamespace:
+            synced.append(kwargs)
+            health = BloFinSyncHealthStatus.DEGRADED
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    outcome = cycle()
+    assert outcome.status == "degraded"
+    assert outcome.error == "snapshot_degraded"
+    assert session.committed is True
+    assert cycle().status == "degraded"
+    assert len(synced) == 2
+
+
 def test_stale_connection_syncs_and_commits(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _open_settings()
     now = datetime(2026, 10, 18, 12, tzinfo=UTC)

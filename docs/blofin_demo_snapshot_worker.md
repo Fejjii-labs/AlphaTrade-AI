@@ -43,8 +43,9 @@ existing demo path; that path is not the unattended worker.
 | `EXCHANGE_MODE` | `paper_internal` for the read-only path. |
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
-A successful or degraded snapshot younger than the interval is reused, so the
-worker does not call BloFin again while that snapshot is fresh. An owner
+A successful snapshot younger than the interval is reused and the cycle stays
+ok. A degraded snapshot in that window is also reused, and the cycle reports
+degraded, so the worker does not call BloFin again while it is fresh. An owner
 refresh from the dashboard still calls BloFin. A failed sync backs off,
 doubling from the interval up to 900 seconds. The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
@@ -82,6 +83,7 @@ remain a separate partial coverage and are not the account win rate.
 ## Trade method
 
 Method id: `closed-round-trip-fillpnl-fee-recorded/v1`.
+Decisions: AT-ADR-113, AT-ADR-114, and AT-ADR-115.
 
 - A trade is one position going from flat back to flat. The position key is
   `(instrument, position_side)` where `position_side` is `long`, `short`, or `net`.

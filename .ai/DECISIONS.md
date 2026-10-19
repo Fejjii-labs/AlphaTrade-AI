@@ -3323,7 +3323,7 @@ original-arrival market replay remains unverified. Disabled defaults, gross1R,
 structural stops, no runner, no quantity/sample/performance or operator changes.
 See docs/trendpulse_screening_contract.md and verification handoff.
 
-## AT-ADR-107 — Demo snapshot worker and activity round-trip P&L
+## AT-ADR-113 — Demo snapshot worker and activity round-trip P&L
 
 - Date: 2026-10-18
 - Decision: The paper worker may call the existing read-only `BloFinSyncService.sync`
@@ -3341,10 +3341,10 @@ See docs/trendpulse_screening_contract.md and verification handoff.
 - Reference: `docs/blofin_demo_snapshot_worker.md`. Enabling the activity worker
   still requires Sofien's approval and is not done by this decision.
 
-## AT-ADR-108 — Demo win rate stays withheld until fee basis and a flat start exist
+## AT-ADR-114 — Demo win rate stays withheld until fee basis and a flat start exist
 
 - Date: 2026-10-18
-- Decision: Follow-up to AT-ADR-107 after review of the draft implementation.
+- Decision: Follow-up to AT-ADR-113 after review of the draft implementation.
   Stored BloFin `fillPnl` is not established as gross or net of fees or funding,
   and fee sign is not independently verified. The signed fee is recorded and is
   not added to the decisive result. A complete activity cursor is not proof
@@ -3354,7 +3354,7 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
   Sofien approves the worker env names.
 
-## AT-ADR-109 — Demo snapshot worker stays off unless explicitly enabled
+## AT-ADR-115 — Demo snapshot worker stays off unless explicitly enabled
 
 - Date: 2026-10-19
 - Decision: `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` defaults false. The paper
