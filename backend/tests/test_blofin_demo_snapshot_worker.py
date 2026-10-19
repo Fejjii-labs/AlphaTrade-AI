@@ -144,6 +144,7 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
+
     def forbidden_mirror(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("mirror ran on trading keys")
 

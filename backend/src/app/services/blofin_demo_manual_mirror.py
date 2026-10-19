@@ -1182,11 +1182,7 @@ def without_annotation_grade(tags: Iterable[object] | None) -> list[str]:
     The grade is a journal annotation. It is not an input to win rate, realized
     P&L, average R, journal statistics, discipline scoring, or calibration.
     """
-    return [
-        tag
-        for tag in tags or []
-        if isinstance(tag, str) and not tag.startswith("grade:")
-    ]
+    return [tag for tag in tags or [] if isinstance(tag, str) and not tag.startswith("grade:")]
 
 
 def _verified_row(row: JournalTrade) -> bool:
