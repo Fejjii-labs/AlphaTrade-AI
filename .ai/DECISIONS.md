@@ -3411,7 +3411,10 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   promotion. The exclusion is the `blofin_demo_manual` source or the
   server tag `blofin-reconciled` the mirror writes on an in-place close.
   An `external_ref` prefix alone does not exclude a row. Clients cannot
-  set a `blofin-demo-` external ref or that tag. A lifecycle-backed row
+  set a `blofin-demo-` external ref or that tag. Candidate selection,
+  in-place reconciliation, open-tracker cancellation, the cycle marker,
+  and the headline read are limited to the pinned user, not the whole
+  organization. A lifecycle-backed row
   keeps its entry time, size, and entry price so the close cannot move
   those risk aggregates. Promotion continues to read paper-validation
   trades only.

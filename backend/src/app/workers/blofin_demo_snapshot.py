@@ -114,7 +114,7 @@ class BloFinDemoSnapshotCycle:
         session = get_session_factory()()
         try:
             service = BloFinSyncService(session, self.settings)
-            fresh = _fresh_snapshot(service, organization_id, self._clock(), self.settings)
+            fresh = _fresh_snapshot(service, organization_id, user_id, self._clock(), self.settings)
             if fresh is BloFinSyncHealthStatus.DEGRADED:
                 self._mirror_without_backing_off(session, organization_id, user_id)
                 return "degraded"
@@ -225,19 +225,22 @@ class _UnitOfWork(Protocol):
 
 
 class _SnapshotReader(Protocol):
-    def latest(self, *, organization_id: uuid.UUID) -> BloFinSyncSnapshotItem: ...
+    def latest(
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID
+    ) -> BloFinSyncSnapshotItem: ...
 
 
 def _fresh_snapshot(
     service: _SnapshotReader,
     organization_id: uuid.UUID,
+    user_id: uuid.UUID,
     now: datetime,
     settings: Settings,
 ) -> BloFinSyncHealthStatus | None:
     from app.core.errors import NotFoundError
 
     try:
-        snapshot = service.latest(organization_id=organization_id)
+        snapshot = service.latest(organization_id=organization_id, user_id=user_id)
     except NotFoundError:
         return None
     health = snapshot.health_status

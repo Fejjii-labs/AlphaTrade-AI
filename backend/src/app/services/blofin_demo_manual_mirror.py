@@ -782,8 +782,10 @@ def _same_money(left: Decimal | None, right: Decimal | None) -> bool:
     return _money(left) == _money(right)
 
 
-def _claim_manual(row: JournalTrade, draft: MirrorDraft) -> bool:
-    """Match an AlphaTrade open row to a venue close without guessing."""
+def _claim_manual(row: JournalTrade, draft: MirrorDraft, *, user_id: uuid.UUID) -> bool:
+    """Match this user's open row to a venue close without guessing."""
+    if row.user_id != user_id:
+        return False
     if row.status is not JournalTradeStatus.OPEN:
         return False
     if row.source not in {JournalTradeSource.MANUAL_DEMO_TEST, JournalTradeSource.MANUAL}:
@@ -944,6 +946,7 @@ class BloFinDemoManualMirror:
             session.scalars(
                 select(JournalTrade).where(
                     JournalTrade.organization_id == organization_id,
+                    JournalTrade.user_id == user_id,
                     or_(
                         JournalTrade.external_ref.like("blofin-demo-%"),
                         JournalTrade.source.in_(_MIRROR_SOURCES),
@@ -954,8 +957,10 @@ class BloFinDemoManualMirror:
         by_ref = {row.external_ref: row for row in rows if row.external_ref}
         created = updated = reconciled = ambiguous = 0
         for draft in built.closed:
-            claimed = [row for row in rows if _claim_manual(row, draft)]
+            claimed = [row for row in rows if _claim_manual(row, draft, user_id=user_id)]
             target = by_ref.get(draft.external_ref)
+            if target is not None and target.user_id != user_id:
+                target = None
             if target is None and len(claimed) == 1:
                 target = claimed[0]
                 reconciled += 1
@@ -1011,6 +1016,8 @@ class BloFinDemoManualMirror:
                 updated += 1
             opens_written += 1
         for row in list(by_ref.values()):
+            if row.user_id != user_id:
+                continue
             if not built.positions_complete:
                 break
             ref = row.external_ref or ""
@@ -1113,10 +1120,21 @@ def record_mirror_cycle(
     row = session.scalar(
         select(JournalTrade).where(
             JournalTrade.organization_id == organization_id,
+            JournalTrade.user_id == user_id,
             JournalTrade.external_ref == _CYCLE_REF,
         )
     )
     if row is None:
+        occupied = session.scalar(
+            select(JournalTrade.id).where(
+                JournalTrade.organization_id == organization_id,
+                JournalTrade.external_ref == _CYCLE_REF,
+                JournalTrade.user_id != user_id,
+            )
+        )
+        if occupied is not None:
+            logger.warning("blofin_demo_manual_mirror_cycle_owner_mismatch")
+            return
         row = JournalTrade(
             organization_id=organization_id,
             user_id=user_id,
@@ -1236,6 +1254,7 @@ def publish_mirror_performance(
     cycle = session.scalar(
         select(JournalTrade).where(
             JournalTrade.organization_id == tenant.organization_id,
+            JournalTrade.user_id == tenant.user_id,
             JournalTrade.external_ref == _CYCLE_REF,
         )
     )
@@ -1243,6 +1262,7 @@ def publish_mirror_performance(
         session.scalars(
             select(JournalTrade).where(
                 JournalTrade.organization_id == tenant.organization_id,
+                JournalTrade.user_id == tenant.user_id,
                 JournalTrade.source == JournalTradeSource.BLOFIN_DEMO_MANUAL,
                 JournalTrade.status == JournalTradeStatus.CLOSED,
             )

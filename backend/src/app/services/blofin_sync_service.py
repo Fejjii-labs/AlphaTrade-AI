@@ -290,6 +290,7 @@ class BloFinSyncService:
         self,
         *,
         organization_id: uuid.UUID,
+        user_id: uuid.UUID | None = None,
         successful_only: bool = False,
     ) -> BloFinSyncSnapshotItem:
         try:
@@ -318,7 +319,11 @@ class BloFinSyncService:
             raise NotFoundError("Current BloFin connection is unverified.")
         assert uid is not None
         row = self._snapshots.latest_for_connection(
-            organization_id, native_uid=uid, binding=binding, successful_only=successful_only
+            organization_id,
+            native_uid=uid,
+            binding=binding,
+            successful_only=successful_only,
+            user_id=user_id,
         )
         if row is None:
             raise NotFoundError("No BloFin demo sync snapshot found for this organization.")

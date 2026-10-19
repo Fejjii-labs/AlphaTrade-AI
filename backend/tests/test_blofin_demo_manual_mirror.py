@@ -64,6 +64,7 @@ WINDOW_BEGIN = datetime(2026, 10, 11, 0, 0, 1, tzinfo=UTC)
 STUCK = uuid.UUID("912f2bfd-9061-4196-82bd-a17a0650c14e")
 ORG = uuid.UUID("00000000-0000-0000-0000-00000000b101")
 USER = uuid.UUID("00000000-0000-0000-0000-00000000b111")
+USER_B = uuid.UUID("00000000-0000-0000-0000-00000000b222")
 _FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "blofin_demo_manual_mirror.json").read_text()
 )
@@ -345,12 +346,12 @@ def test_reconciles_the_stuck_open_manual_demo_row_in_place(session: Session) ->
     assert tagged.source is JournalTradeSource.MANUAL_DEMO_TEST
 
 
-def _daily(session: Session) -> AuthoritativeDailySnapshot:
+def _daily(session: Session, user_id: uuid.UUID = USER) -> AuthoritativeDailySnapshot:
     return DailyRiskAccounting(
         session,
         RiskSettingsService(session, AuditService(session)),
         clock=lambda: NOW,
-    ).sync_from_portfolio(organization_id=ORG, user_id=USER)
+    ).sync_from_portfolio(organization_id=ORG, user_id=user_id)
 
 
 def _loss_limit(session: Session) -> None:
@@ -573,6 +574,136 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
     counted = _daily(session)
     assert counted.realized_pnl == before.realized_pnl + Decimal("-3")
     assert counted.daily_locked is True
+
+
+def test_other_members_open_match_stays_out_of_the_mirror(session: Session) -> None:
+    """The pinned user's mirror must not close or retag another member's row."""
+    session.add(User(id=USER_B, email="other@test.example", hashed_password="not-a-real-hash"))
+    session.commit()
+    session.add(
+        UserRiskSettings(
+            organization_id=ORG,
+            user_id=USER_B,
+            daily_loss_limit=Decimal("0.10"),
+            timezone="UTC",
+        )
+    )
+    open_match = JournalTrade(
+        organization_id=ORG,
+        user_id=USER_B,
+        source=JournalTradeSource.MANUAL_DEMO_TEST,
+        status=JournalTradeStatus.OPEN,
+        symbol="BTCUSDT",
+        exchange="BLOFIN_DEMO",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        entry_price=Decimal("100"),
+        entry_time=NOW,
+        size=Decimal("0.02"),
+        result=TradeResult.OPEN,
+        execution_lifecycle_id=uuid.uuid4(),
+    )
+    tracker = JournalTrade(
+        organization_id=ORG,
+        user_id=USER_B,
+        source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+        status=JournalTradeStatus.OPEN,
+        symbol="ETHUSDT",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        external_ref="blofin-demo-open:p-other:1792195200000",
+        result=TradeResult.OPEN,
+    )
+    session.add(open_match)
+    session.add(tracker)
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER_B,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.CLOSED,
+            symbol="LTCUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            entry_time=NOW,
+            exit_time=NOW,
+            net_pnl=Decimal("-1"),
+            result=TradeResult.LOSS,
+            execution_lifecycle_id=uuid.uuid4(),
+        )
+    )
+    session.commit()
+    before = _daily(session, USER_B)
+    assert before.daily_locked is True
+    assert before.realized_pnl == Decimal("-1")
+    assert before.open_exposure_notional == Decimal("2")
+    assert before.trade_count == 2
+
+    report = _apply(session, _FIXTURE["long"])
+    assert report.reconciled == 0 and report.created == 1  # type: ignore[attr-defined]
+    session.refresh(open_match)
+    session.refresh(tracker)
+    assert open_match.status is JournalTradeStatus.OPEN
+    assert open_match.external_ref is None
+    assert open_match.net_pnl is None
+    assert RECONCILED_TAG not in (open_match.tags or [])
+    assert open_match.user_id == USER_B
+    assert tracker.status is JournalTradeStatus.OPEN
+    assert tracker.exit_reason != "flat_on_venue"
+    assert tracker.user_id == USER_B
+    after = _daily(session, USER_B)
+    assert after.daily_locked is True
+    assert after.realized_pnl == before.realized_pnl
+    assert after.open_exposure_notional == before.open_exposure_notional
+    assert after.trade_count == before.trade_count
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER_B, seconds=3600, now=NOW
+        )
+        is True
+    )
+    created = next(row for row in _rows(session) if row.user_id == USER)
+    assert created.id != open_match.id
+    assert created.source is JournalTradeSource.BLOFIN_DEMO_MANUAL
+
+    record_mirror_cycle(session, organization_id=ORG, user_id=USER, outcome="ok")
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER_B,
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BCHUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:other-member",
+            result=TradeResult.LOSS,
+            net_pnl=Decimal("-4"),
+            tags=["pnl-unverified"],
+        )
+    )
+    session.commit()
+    owner = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        owner,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert owner.performance.manual_mirror_status == "ready"
+    assert owner.performance.trade_count == 1
+    other = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        other,
+        session=session,
+        tenant=TenantContext(USER_B, ORG, "other@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert other.performance.manual_mirror_status == "withheld"
+    assert other.performance.realized_pnl is None
+    still = _daily(session, USER_B)
+    assert still.realized_pnl == before.realized_pnl
+    assert still.daily_locked is True
 
 
 def test_ambiguous_manual_rows_are_not_duplicated(session: Session) -> None:

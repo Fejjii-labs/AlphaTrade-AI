@@ -149,8 +149,9 @@ Its result stays `OPEN` and its net stays empty, so it is not a second trade
 and it is not a win or a loss.
 
 An open AlphaTrade row with source `manual_demo_test` or `manual`, exchange
-empty or `BLOFIN_DEMO`, no `external_ref`, and the same normalized symbol,
-direction, entry, and size is updated in place. Source stays
+empty or `BLOFIN_DEMO`, no `external_ref`, the same user as the pinned
+mirror, and the same normalized symbol, direction, entry, and size is
+updated in place. Another member's matching row is left open. Source stays
 `manual_demo_test` or `manual`, so the row is not a second copy and it is
 not included in the hand-trade win rate. More than one match is logged and
 skipped, and that cycle is not `mirror-cycle:ok`, so the headline stays
@@ -199,8 +200,11 @@ strategy id, or by the trimmed strategy label when no id is set.
 
 ## What the card shows
 
-Win rate, realized P&L, average R, and count come from closed
-`blofin_demo_manual` rows for the organization.
+Win rate, realized P&L, average R, and count come from the signed-in user's
+closed `blofin_demo_manual` rows. Another member's rows and cycle marker
+are not part of that headline. The snapshot freshness check used by the
+worker reads the pinned user's saved snapshot. The BloFin connection
+itself stays an organization credential.
 
 - Flag off: `manual_mirror_status=disabled`. Headline numbers stay empty.
   The reason still names the unresolved `fillPnl` basis.

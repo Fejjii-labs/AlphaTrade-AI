@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import structlog
@@ -283,8 +283,9 @@ def test_fresh_snapshot_does_not_call_blofin(monkeypatch: pytest.MonkeyPatch) ->
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
-            assert organization_id
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id == UUID(settings.governed_blofin_demo_organization_id)
+            assert user_id == UUID(settings.governed_blofin_demo_user_id)
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.OK,
                 synced_at=now - timedelta(seconds=10),
@@ -322,8 +323,8 @@ def test_fresh_degraded_snapshot_skips_blofin_and_reports_unhealthy(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
-            assert organization_id
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.DEGRADED,
                 synced_at=now - timedelta(seconds=10),
@@ -365,7 +366,8 @@ def test_synced_degraded_snapshot_is_unhealthy_without_backoff(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **kwargs: object) -> SimpleNamespace:
@@ -404,7 +406,8 @@ def test_stale_connection_syncs_and_commits(monkeypatch: pytest.MonkeyPatch) -> 
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **kwargs: object) -> SimpleNamespace:
@@ -438,7 +441,8 @@ def test_flag_off_does_not_construct_the_readonly_client(monkeypatch: pytest.Mon
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **_kwargs: object) -> SimpleNamespace:
@@ -471,7 +475,8 @@ def test_flag_on_runs_the_mirror_after_the_snapshot_commit(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **_kwargs: object) -> SimpleNamespace:
@@ -518,8 +523,8 @@ def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
-            assert organization_id
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.OK,
                 synced_at=now - timedelta(seconds=10),
@@ -569,7 +574,8 @@ def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatc
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **_kwargs: object) -> SimpleNamespace:
@@ -620,7 +626,8 @@ def test_mirror_read_failure_does_not_back_off_the_snapshot(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.OK,
                 synced_at=now - timedelta(seconds=10),
