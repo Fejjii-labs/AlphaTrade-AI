@@ -7,22 +7,31 @@ values in the repository, logs, or pull requests.
 
 ## Snapshot cycle
 
-The paper worker runs `BloFinSyncService.sync()` when both of these are true:
+The paper worker attaches `BloFinSyncService.sync()` only when all of these
+are true:
 
-- the existing demo gates are open (`demo_account_active`: paper execution,
-  real trading off, allowlisted demo host, and either dedicated read-only sync
-  or demo exchange mode with credentials present);
+- `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is true. The default is false, so a
+  merge does not start polling.
+- The worker is armed. A disarmed staging boot does not construct the cycle,
+  a database session, or an exchange client.
+- The existing demo gates are open (`demo_account_active`).
 - `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` and `GOVERNED_BLOFIN_DEMO_USER_ID`
   are set. The cycle does not guess an organization.
+- `BLOFIN_READONLY_SYNC_ENABLED` is true and `BLOFIN_READONLY_API_KEY`,
+  `BLOFIN_READONLY_API_SECRET`, and `BLOFIN_READONLY_API_PASSPHRASE` are
+  present. The unattended worker never falls back to the demo trading keys.
+  A missing read-only credential skips with a log of booleans only.
 
-Otherwise the cycle status is `skipped` and it does not open the database or
-call BloFin. Identity, read-only permission, and UID checks stay inside
+Otherwise the cycle is not attached, or its status is `skipped`, and it does
+not open the database or call BloFin. Identity and UID checks stay inside
 `BloFinSyncService.sync`. The worker records actor `system` and provenance
-`sync_origin=worker`.
+`sync_origin=worker`. The interactive dashboard refresh can still use the
+existing demo path; that path is not the unattended worker.
 
 | Name | Role |
 | --- | --- |
-| `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` | Cadence, 30–60. Default 45. |
+| `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` | Default false. Required before the worker attaches the cycle. |
+| `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` | Cadence, 30–60. Default 45. Used only after the flag is on. |
 | `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` | Owner organization pin. |
 | `GOVERNED_BLOFIN_DEMO_USER_ID` | Owner user pin. |
 | `BLOFIN_READONLY_SYNC_ENABLED` | Use the dedicated read-only sync path. |

@@ -619,14 +619,17 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
         supervisor.attach_activity(
             activity, poll_seconds=activity_config.poll_seconds, request_stop=activity.request_stop
         )
-    from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
+    if settings.blofin_demo_snapshot_sync_enabled and not settings_are_disarmed_paper_worker(
+        settings
+    ):
+        from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 
-    snapshot = BloFinDemoSnapshotCycle(settings.model_copy(deep=True))
-    supervisor.attach_demo_snapshot(
-        snapshot,
-        poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
-        request_stop=snapshot.request_stop,
-    )
+        snapshot = BloFinDemoSnapshotCycle(settings.model_copy(deep=True))
+        supervisor.attach_demo_snapshot(
+            snapshot,
+            poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
+            request_stop=snapshot.request_stop,
+        )
     return supervisor
 
 
@@ -634,9 +637,10 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     """Start the supervised paper worker, or idle once when disarmed.
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
-    opening PostgreSQL, Redis, or provider clients unless the read-only demo
-    snapshot gates and owner pins are both set. Armed startup does not
-    bind the disarmed role, so missing operational dependencies fail closed.
+    opening PostgreSQL, Redis, or provider clients. The demo snapshot cycle
+    is not attached while this flag is off or the worker is disarmed. Armed
+    startup does not bind the disarmed role, so missing operational
+    dependencies fail closed.
     """
 
     from app.core.disarmed_worker_boot import (

@@ -2,13 +2,16 @@
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+import structlog
 
 from app.core.config import Settings
 from app.core.errors import NotFoundError
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
+from app.services.blofin_sync_service import BloFinSyncService
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -33,9 +36,145 @@ def _closed_settings() -> Settings:
 def _open_settings() -> Settings:
     org, user = uuid4(), uuid4()
     return readonly_settings(
+        blofin_demo_snapshot_sync_enabled=True,
         governed_blofin_demo_organization_id=str(org),
         governed_blofin_demo_user_id=str(user),
     )
+
+
+def _trading_key_settings(**updates: object) -> Settings:
+    org, user = uuid4(), uuid4()
+    values: dict[str, object] = {
+        "environment": "local",
+        "execution_mode": "paper",
+        "enable_real_trading": False,
+        "exchange_mode": "paper_exchange_demo",
+        "blofin_demo_enabled": True,
+        "provider_mode": "mock",
+        "blofin_demo_snapshot_sync_enabled": True,
+        "blofin_readonly_sync_enabled": False,
+        "blofin_api_key": "fixture-trading-key",
+        "blofin_api_secret": "fixture-trading-secret",
+        "blofin_api_passphrase": "fixture-trading-pass",
+        "blofin_demo_rest_base_url": "https://demo-trading-openapi.blofin.com",
+        "governed_blofin_demo_organization_id": str(org),
+        "governed_blofin_demo_user_id": str(user),
+    }
+    values.update(updates)
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
+
+
+def test_snapshot_flag_off_does_not_construct_a_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BLOFIN_ACTIVITY_ENABLED", "false")
+    monkeypatch.setattr(
+        "app.workers.paper_worker._build_armed_supervisor",
+        lambda *_args: _idle_supervisor(),
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("disabled snapshot sync constructed a cycle")
+
+    monkeypatch.setattr("app.workers.blofin_demo_snapshot.BloFinDemoSnapshotCycle", forbidden)
+    worker = build_paper_worker_supervisor(_closed_settings())
+    health = worker.run_round()
+    assert health.demo_snapshot is None
+    worker.close()
+
+
+def test_disarmed_worker_does_not_construct_a_cycle_even_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.disarmed_worker_boot import (
+        WorkerBootRole,
+        bind_worker_boot_role,
+        reset_disarmed_worker_boot,
+        settings_are_disarmed_paper_worker,
+    )
+
+    monkeypatch.setenv("BLOFIN_ACTIVITY_ENABLED", "false")
+    bind_worker_boot_role(WorkerBootRole.PAPER_WORKER)
+    try:
+        settings = Settings(
+            _env_file=None,
+            environment="staging",
+            execution_mode="paper",
+            enable_real_trading=False,
+            exchange_mode="paper_internal",
+            provider_mode="fallback",
+            blofin_demo_snapshot_sync_enabled=True,
+            auth_refresh_cookie_enabled=True,
+            auth_cookie_secure=True,
+            auth_cookie_samesite="none",
+            cors_origins="https://app.example.com",
+            rate_limit_use_redis=True,
+            rate_limit_allow_in_memory_fallback=False,
+            trusted_proxy_hops=1,
+            access_token_denylist_enabled=True,
+            access_token_denylist_use_redis=True,
+            access_token_denylist_fail_closed=True,
+            perpetual_evidence_source="binance_usdm",
+            market_data_futures_base_url="https://fapi.binance.com",
+            debug=False,
+        )
+        assert settings_are_disarmed_paper_worker(settings) is True
+
+        def forbidden(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("disarmed worker constructed a snapshot cycle")
+
+        monkeypatch.setattr("app.workers.blofin_demo_snapshot.BloFinDemoSnapshotCycle", forbidden)
+        worker = build_paper_worker_supervisor(settings)
+        assert worker.run_round().demo_snapshot is None
+        worker.close()
+    finally:
+        reset_disarmed_worker_boot()
+
+
+def test_trading_keys_skip_without_a_database_or_a_secret_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden() -> None:
+        raise AssertionError("trading-key cycle opened a database")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    with structlog.testing.capture_logs() as logs:
+        outcome = BloFinDemoSnapshotCycle(_trading_key_settings())()
+    assert outcome.status == "skipped"
+    assert outcome.error == "readonly_credentials_required"
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert "fixture-trading-pass" not in rendered
+    assert any(item.get("event") == "blofin_demo_snapshot_readonly_required" for item in logs)
+
+
+def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    service = BloFinSyncService(MagicMock(), _trading_key_settings())
+    with structlog.testing.capture_logs() as logs, pytest.raises(ValueError, match="read-only"):
+        service.sync(
+            organization_id=uuid4(),
+            user_id=uuid4(),
+            sync_origin="worker",
+        )
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert any(item.get("event") == "blofin_worker_sync_readonly_required" for item in logs)
 
 
 def test_closed_gates_skip_without_a_database(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +220,9 @@ def test_supervisor_reports_snapshot_health_when_gates_are_closed(
         raise AssertionError("skipped snapshot opened a database")
 
     monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
-    worker = build_paper_worker_supervisor(_closed_settings())
+    worker = build_paper_worker_supervisor(
+        _closed_settings().model_copy(update={"blofin_demo_snapshot_sync_enabled": True})
+    )
     health = worker.run_round()
     assert health.demo_snapshot is not None
     assert health.demo_snapshot.status == "skipped"
