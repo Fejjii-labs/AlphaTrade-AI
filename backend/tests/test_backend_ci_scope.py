@@ -121,10 +121,7 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     scope_script = (ROOT / ".github/workflows/ci-scope.sh").read_text()
     assert "git diff --name-only --no-renames" in scope_script
     assert "unrelated-label" not in scope_script
-    safety_runs = [
-        step.get("run") or ""
-        for step in jobs["deployment-safety"]["steps"]
-    ]
+    safety_runs = [step.get("run") or "" for step in jobs["deployment-safety"]["steps"]]
     assert any("ci-scope.sh --self-test" in run for run in safety_runs)
     self_test = subprocess.run(
         ["bash", str(ROOT / ".github/workflows/ci-scope.sh"), "--self-test"],
