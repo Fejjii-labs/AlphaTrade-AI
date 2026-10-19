@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
+import jwt
 import pytest
 
 from app.core.config import Settings
+from app.core.errors import AuthError
 from app.security.tokens import create_access_token, decode_access_token
 
 
@@ -58,3 +61,48 @@ def test_human_access_tokens_are_stamped_user_and_other_actors_keep_theirs() -> 
         issue("")
     with pytest.raises(ValueError, match="access token actor"):
         issue("undeclared")
+
+
+def test_access_token_rejects_missing_future_and_non_numeric_time_and_bindings() -> None:
+    settings = _settings()
+    user_id = str(uuid.uuid4())
+    organization_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+
+    def encoded(claims: dict[str, object]) -> str:
+        token = jwt.encode(claims, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        assert isinstance(token, str)
+        return token
+
+    valid = {
+        "sub": user_id,
+        "org_id": organization_id,
+        "type": "access",
+        "actor": "user",
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+        "iat": int(now.timestamp()),
+    }
+    assert decode_access_token(encoded(valid), settings)["sub"] == user_id
+    for drop in ("exp", "iat", "sub", "org_id"):
+        omitted = dict(valid)
+        del omitted[drop]
+        with pytest.raises(AuthError):
+            decode_access_token(encoded(omitted), settings)
+    future = dict(valid)
+    future["iat"] = int((now + timedelta(minutes=5)).timestamp())
+    with pytest.raises(AuthError):
+        decode_access_token(encoded(future), settings)
+    for bad_exp in ("later", True):
+        with pytest.raises(AuthError):
+            decode_access_token(encoded({**valid, "exp": bad_exp}), settings)
+    with pytest.raises(AuthError):
+        decode_access_token(encoded({**valid, "sub": ""}), settings)
+    with pytest.raises(AuthError):
+        decode_access_token(encoded({**valid, "org_id": 12345}), settings)
+    with pytest.raises(AuthError):
+        decode_access_token(encoded({**valid, "actor": ["user"]}), settings)
+    with pytest.raises(AuthError):
+        decode_access_token(
+            encoded({**valid, "type": "risk_policy_step_up"}),
+            settings,
+        )

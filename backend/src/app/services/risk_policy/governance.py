@@ -32,6 +32,7 @@ from app.services.risk_policy.profile import (
 
 PROPOSAL_TTL = timedelta(hours=72)
 FRESH_PROOF = timedelta(minutes=15)
+TELEGRAM_PROOF_MAX_AGE = timedelta(minutes=5)
 
 
 class PolicyChannel(StrEnum):
@@ -63,6 +64,7 @@ class HumanApplyProof:
     proposal_id: str
     content_hash: str
     expires_at: datetime
+    issued_at: datetime | None = None
     session_id: str | None = None
     authenticated_at: datetime | None = None
     step_up_at: datetime | None = None
@@ -143,6 +145,8 @@ def assert_can_apply(
         raise RiskPolicyRejected("apply_proof_missing")
     if now.tzinfo is None or proof.expires_at.tzinfo is None:
         raise RiskPolicyRejected("timestamp_must_be_aware")
+    if not proof.subject_user_id or not proof.proposal_id or not proof.content_hash:
+        raise RiskPolicyRejected("apply_proof_missing")
     if proof.subject_user_id != owner_user_id:
         raise RiskPolicyRejected("apply_owner_mismatch")
     if proof.expires_at <= now:
@@ -157,6 +161,7 @@ def assert_can_apply(
             raise RiskPolicyRejected("apply_proof_chat_mismatch")
         if not proof.telegram_confirmation_id:
             raise RiskPolicyRejected("apply_proof_chat_mismatch")
+        _require_fresh_telegram(proof, now)
         return
     raise RiskPolicyRejected("apply_proof_missing")
 
@@ -227,9 +232,40 @@ def decide_apply(
 def _require_fresh_step_up(proof: HumanApplyProof, now: datetime) -> None:
     if not proof.session_id or proof.authenticated_at is None or proof.step_up_at is None:
         raise RiskPolicyRejected("apply_proof_not_fresh")
-    if proof.authenticated_at.tzinfo is None or proof.step_up_at.tzinfo is None:
+    _require_fresh_step_up_times(proof.authenticated_at, proof.step_up_at, now)
+
+
+def _require_fresh_step_up_times(
+    authenticated_at: datetime,
+    step_up_at: datetime,
+    now: datetime,
+) -> None:
+    """Keep a step-up inside the last 15 minutes, and never after ``now``.
+
+    No clock skew is allowed: this path has no skew constant. A later ``exp``
+    does not move the window.
+    """
+
+    if now.tzinfo is None or authenticated_at.tzinfo is None or step_up_at.tzinfo is None:
         raise RiskPolicyRejected("timestamp_must_be_aware")
-    if proof.step_up_at < proof.authenticated_at:
+    if authenticated_at > now or step_up_at > now:
         raise RiskPolicyRejected("apply_proof_not_fresh")
-    if now - proof.authenticated_at > FRESH_PROOF or now - proof.step_up_at > FRESH_PROOF:
+    if step_up_at < authenticated_at:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+    if now - authenticated_at > FRESH_PROOF or now - step_up_at > FRESH_PROOF:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+
+
+def _require_fresh_telegram(proof: HumanApplyProof, now: datetime) -> None:
+    """Cap a Telegram proof from its issued time, whatever ``exp`` says.
+
+    A proof issued in the future, or older than five minutes, is rejected.
+    """
+
+    issued = proof.issued_at
+    if issued is None:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+    if now.tzinfo is None or issued.tzinfo is None:
+        raise RiskPolicyRejected("timestamp_must_be_aware")
+    if issued > now or now - issued > TELEGRAM_PROOF_MAX_AGE:
         raise RiskPolicyRejected("apply_proof_not_fresh")

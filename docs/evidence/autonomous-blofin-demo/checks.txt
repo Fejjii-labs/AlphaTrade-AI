@@ -1,14 +1,34 @@
-Implementation commit: cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2
-Implementation tree: d28eb1ac802f56f09f930afd1ff4c46ad0ae9588
+Implementation commit: 59f14dfe8bd4edd179e7794fdd055c7495fec99a
+Implementation tree: f21b7fca9a8f5e1cbb84dba5926623b37c58ea66
 Listed file hashes were recomputed from that source tree. The publication commit
 changes this evidence directory and the execution note only, so those hashes
 also match the publication head. The earlier receipt for
-61aa5331f5e7deeb118514cac15d63ba8083b236 is not proof for this head.
-Changed Python Ruff check: exit 0; all checks passed.
-Changed Python format: exit 0; 1308 files already formatted.
-Focused pytest, schema-drop alembic test not run: exit 0; 324 passed, 1 deselected, 70.29s.
-The command added tests/test_agent_paper_execution_v4.py to the prior focused file list and used -k "not upgrade_downgrade".
-PostgreSQL demo suite, run alone: exit 0; 20 passed, 44.66s.
-Local PostgreSQL on 127.0.0.1:5432. No full CI in this receipt.
+cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2 is not proof for this head.
+The manifest now also lists the reservation expectation tests and the scoped
+experiment contract refreshed in this commit:
+backend/tests/test_manual_blofin_demo.py
+backend/tests/test_phase1_slices_7_9_execution_protocol.py
+docs/contracts/experiments_v1.openapi.json
+The diagnostics test is unchanged versus main 37ba0412337839d0011ad07e192b1698766f110c.
+test_scoped_openapi_matches_published_interface: exit 0.
+test_local_uncertain_demo_reservation_consumes_preview_capacity,
+test_linear_contract_multiplier_fill_exposure, and
+test_linear_base_quantity_ignores_contract_multiplier: exit 0; 3 passed in 2.87s.
+test_diagnostics_failure_does_not_stop_component_loop: exit 0; 8/8 on this branch
+and 8/8 on 37ba0412337839d0011ad07e192b1698766f110c.
+Related modules (test_experiment_api.py, test_manual_blofin_demo.py,
+test_phase1_slices_7_9_execution_protocol.py, test_worker_memory_diagnostics.py):
+exit 0; 111 passed in 33.05s.
+Focused pytest, schema-drop alembic test not run: exit 0; 324 passed, 1 deselected, 74.12s.
+The command was the prior focused file list plus tests/test_agent_paper_execution_v4.py and used -k "not upgrade_downgrade".
+PostgreSQL demo suite, run alone: exit 0; 20 passed, 46.46s.
+Local PostgreSQL on 127.0.0.1:5432.
+Ruff check and format on the two edited test files: exit 0.
+PR CI run 39130808875 on this commit succeeded. Jobs: docker-build success 37s
+(117685397215), deployment-safety success 29s (117685397328), backend success
+12m11s (117685397362), frontend success 5m10s (117685397380), evaluation success
+21s (117688019406), e2e-smoke success 4m26s (117688019535). The backend job
+skipped Complete backend release acceptance. No workflow_dispatch full run was
+started.
 No deployment, settings changes, exchange requests/orders, paid model calls, or voice/workflow edits.
 Flags remained default off. Alembic a14 and a15 were not edited.

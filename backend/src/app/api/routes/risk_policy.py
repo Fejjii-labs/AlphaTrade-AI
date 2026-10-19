@@ -51,8 +51,10 @@ def _actor(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise ForbiddenError("Missing bearer token.")
     payload = decode_access_token(credentials.credentials, settings)
-    if str(payload.get("sub")) != str(tenant.user_id):
+    if payload.get("sub") != str(tenant.user_id):
         raise ForbiddenError("Token subject does not match the authenticated user.")
+    if payload.get("org_id") != str(tenant.organization_id):
+        raise ForbiddenError("Token organization does not match the authenticated user.")
     try:
         channel = channel_from_access_payload(payload)
     except RiskPolicyRejected as exc:

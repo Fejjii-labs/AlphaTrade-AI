@@ -47,14 +47,32 @@ def create_access_token(
 
 
 def decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
+    """Decode an access token.
+
+    ``exp`` and ``iat`` are required, so a missing lifetime cannot be treated
+    as never-expiring and a future ``iat`` is rejected by verification.
+    ``sub`` and ``org_id`` are required strings. A present ``actor`` must be
+    one of the issued actors; an omitted actor is left for the caller.
+    """
+
     try:
         payload = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
+            options={"require": ["exp", "iat", "sub", "org_id", "type"]},
         )
     except jwt.PyJWTError as exc:
         raise AuthError("Invalid or expired access token.") from exc
     if payload.get("type") != "access":
+        raise AuthError("Invalid access token type.")
+    subject = payload.get("sub")
+    organization = payload.get("org_id")
+    if not isinstance(subject, str) or not subject.strip():
+        raise AuthError("Invalid or expired access token.")
+    if not isinstance(organization, str) or not organization.strip():
+        raise AuthError("Invalid or expired access token.")
+    actor = payload.get("actor", None)
+    if "actor" in payload and (not isinstance(actor, str) or actor not in _ACCESS_ACTORS):
         raise AuthError("Invalid access token type.")
     return payload
