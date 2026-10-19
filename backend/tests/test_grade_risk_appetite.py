@@ -684,8 +684,7 @@ def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
     assert sized.quantity * (Decimal("2") + unit) <= Decimal("100")
 
 
-def test_canonical_open_lifecycle_is_priced_at_its_stop(caplog, monkeypatch) -> None:
-    import logging
+def test_canonical_open_lifecycle_is_priced_at_its_stop(monkeypatch) -> None:
     from datetime import UTC, datetime
 
     from sqlalchemy import create_engine
@@ -698,16 +697,27 @@ def test_canonical_open_lifecycle_is_priced_at_its_stop(caplog, monkeypatch) -> 
     from app.services.risk_policy.plan_sizing import canonical_open_stop_positions, stop_out_cash
     from app.workers.watcher_paper_targets import PaperScanTarget
 
+    warnings: list[str] = []
+
+    def _record(message: str, *args: object) -> None:
+        warnings.append(message % args if args else message)
+
+    monkeypatch.setattr("app.services.risk_policy.plan_sizing.logger.warning", _record)
     missing = canonical_open_stop_positions([(Decimal("1"), Decimal("100"), None)])
     assert missing == "open_risk_uncomputed"
-    with caplog.at_level(logging.WARNING):
-        excess = open_risk_from_stops(
-            equity=Decimal("10000"),
-            positions=[],
-            open_notional=Decimal("100"),
-        )
+    assert any(
+        "canonical open lifecycle row is missing size, entry, or stop" in item for item in warnings
+    )
+    excess = open_risk_from_stops(
+        equity=Decimal("10000"),
+        positions=[],
+        open_notional=Decimal("100"),
+    )
     assert excess == "open_risk_uncomputed"
-    assert "snapshot open notional exceeds the notional explained by stops" in caplog.text
+    assert any(
+        "snapshot open notional exceeds the notional explained by stops" in item
+        for item in warnings
+    )
 
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
