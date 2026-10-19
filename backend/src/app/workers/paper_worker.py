@@ -389,7 +389,14 @@ class PaperWorkerSupervisor:
         self._mark_stopped(component)
 
     def _step(self, component: _Component) -> None:
-        sampler = CycleMemorySampler() if self._memory_diagnostics is not None else None
+        # Sampler startup reads process memory before the cycle. A failure there
+        # is diagnostics, same as finish/sample/cleanup, and must not kill the loop.
+        sampler: CycleMemorySampler | None = None
+        if self._memory_diagnostics is not None:
+            try:
+                sampler = CycleMemorySampler()
+            except Exception as exc:
+                self._warn_memory_diagnostics(component, exc)
         try:
             if self._stop.is_set():
                 self._mark_stopped(component)
@@ -419,11 +426,14 @@ class PaperWorkerSupervisor:
             if sampler is not None and self._memory_diagnostics is not None:
                 self._memory_diagnostics.finish(component.name, sampler, after)
         except Exception as exc:
-            logger.warning(
-                "paper_worker_memory_diagnostics_failed",
-                component=component.name,
-                error=_safe_error(exc),
-            )
+            self._warn_memory_diagnostics(component, exc)
+
+    def _warn_memory_diagnostics(self, component: _Component, exc: BaseException) -> None:
+        logger.warning(
+            "paper_worker_memory_diagnostics_failed",
+            component=component.name,
+            error=_safe_error(exc),
+        )
 
     def _revert(self, component: _Component) -> None:
         guard = component.guard
@@ -609,14 +619,17 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
         supervisor.attach_activity(
             activity, poll_seconds=activity_config.poll_seconds, request_stop=activity.request_stop
         )
-    from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
+    if settings.blofin_demo_snapshot_sync_enabled and not settings_are_disarmed_paper_worker(
+        settings
+    ):
+        from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 
-    snapshot = BloFinDemoSnapshotCycle(settings.model_copy(deep=True))
-    supervisor.attach_demo_snapshot(
-        snapshot,
-        poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
-        request_stop=snapshot.request_stop,
-    )
+        snapshot = BloFinDemoSnapshotCycle(settings.model_copy(deep=True))
+        supervisor.attach_demo_snapshot(
+            snapshot,
+            poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
+            request_stop=snapshot.request_stop,
+        )
     return supervisor
 
 
@@ -624,9 +637,10 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     """Start the supervised paper worker, or idle once when disarmed.
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
-    opening PostgreSQL, Redis, or provider clients unless the read-only demo
-    snapshot gates and owner pins are both set. Armed startup does not
-    bind the disarmed role, so missing operational dependencies fail closed.
+    opening PostgreSQL, Redis, or provider clients. The demo snapshot cycle
+    is not attached while this flag is off or the worker is disarmed. Armed
+    startup does not bind the disarmed role, so missing operational
+    dependencies fail closed.
     """
 
     from app.core.disarmed_worker_boot import (

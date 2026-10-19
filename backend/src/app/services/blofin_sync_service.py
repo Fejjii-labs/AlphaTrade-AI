@@ -67,6 +67,14 @@ class BloFinSyncService:
         sync_origin: str = "api",
     ) -> BloFinSyncResult:
         """Fetch demo account state and persist a bounded snapshot."""
+        origin = sync_origin if sync_origin in {"api", "worker"} else "api"
+        if origin == "worker" and not self._settings.blofin_worker_readonly_ready:
+            logger.warning(
+                "blofin_worker_sync_readonly_required",
+                readonly_sync_enabled=self._settings.blofin_readonly_sync_enabled,
+                readonly_credentials_present=self._settings.blofin_readonly_configured,
+            )
+            raise ValueError("BloFin worker sync requires dedicated read-only credentials.")
         now = datetime.now(UTC)
         exchange_mode = self._settings.exchange_mode.value
         health = BloFinSyncHealthStatus.UNAVAILABLE
@@ -89,7 +97,7 @@ class BloFinSyncService:
             ),
             "readonly_sync_enabled": self._settings.blofin_readonly_sync_enabled,
             "demo_active": self._settings.exchange_demo_active,
-            "sync_origin": sync_origin if sync_origin in {"api", "worker"} else "api",
+            "sync_origin": origin,
         }
         configured = configured_demo_account(
             self._session, self._settings, organization_id=organization_id, user_id=user_id
@@ -103,7 +111,7 @@ class BloFinSyncService:
             )
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
-            if self._settings.blofin_readonly_sync_enabled:
+            if origin == "worker" or self._settings.blofin_readonly_sync_enabled:
                 provider = get_readonly_account_provider(self._settings)
             else:
                 ensure_demo_exchange_access(self._settings)

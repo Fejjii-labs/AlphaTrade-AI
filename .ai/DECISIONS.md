@@ -3354,6 +3354,18 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
   Sofien approves the worker env names.
 
+## AT-ADR-109 — Demo snapshot worker stays off unless explicitly enabled
+
+- Date: 2026-10-19
+- Decision: `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` defaults false. The paper
+  worker does not construct the snapshot cycle while the flag is off or while
+  the worker is disarmed, so a disarmed staging boot still opens no database
+  and no exchange client for this cycle. When the flag is on, the unattended
+  sync requires `BLOFIN_READONLY_SYNC_ENABLED` and the three
+  `BLOFIN_READONLY_API_*` credentials. It does not fall back to demo trading
+  keys. A refusal logs only those two booleans. This does not enable the flag
+  or real-money trading.
+
 ## AT-ADR-112 — Mirror BloFin demo hand trades from positions history, not fillPnl
 
 - Date: 2026-10-18

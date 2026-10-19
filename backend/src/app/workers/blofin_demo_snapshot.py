@@ -64,6 +64,18 @@ class BloFinDemoSnapshotCycle:
         owner = snapshot_owner(self.settings)
         if owner is None:
             return CycleOutcome("skipped", error="demo_owner_unpinned")
+        from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
+
+        disarmed = settings_are_disarmed_paper_worker(self.settings)
+        if not self.settings.blofin_demo_snapshot_sync_enabled or disarmed:
+            return CycleOutcome("skipped", error="snapshot_sync_disabled")
+        if not self.settings.blofin_worker_readonly_ready:
+            logger.warning(
+                "blofin_demo_snapshot_readonly_required",
+                readonly_sync_enabled=self.settings.blofin_readonly_sync_enabled,
+                readonly_credentials_present=self.settings.blofin_readonly_configured,
+            )
+            return CycleOutcome("skipped", error="readonly_credentials_required")
         try:
             outcome = self._sync_once(*owner)
         except Exception as exc:
