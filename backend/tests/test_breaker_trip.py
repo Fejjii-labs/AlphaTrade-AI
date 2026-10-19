@@ -871,3 +871,130 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     assert reset is not None
     assert reset.drawdown_latched is False
     assert service.breaker_active(organization_id=ORG, now=pause) is False
+
+
+def test_drawdown_trip_arms_kill_switch_and_a_later_scan_does_not_clear_it(monkeypatch) -> None:
+    from datetime import timedelta
+
+    import pytest
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.core.config import Settings
+    from app.core.errors import TradingPolicyError
+    from app.db.base import Base
+    from app.db.models import AuditLog, Organization
+    from app.schemas.common import AuditEventType
+    from app.schemas.risk import KillSwitchMutationRequest
+    from app.services.audit_service import AuditService
+    from app.services.risk.kill_switch import KillSwitchService
+    from app.services.risk_policy.breaker_trip import persist_profile_breakers
+    from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    org = uuid4()
+    user = uuid4()
+    account = uuid4()
+    session.add(Organization(id=org, name="Drawdown kill org"))
+    session.commit()
+    settings = Settings(
+        environment="local",
+        log_json=False,
+        execution_mode="paper",
+        enable_real_trading=False,
+        exchange_mode="paper_internal",
+        provider_mode="mock",
+        market_data_provider="mock",
+        global_kill_switch_active=False,
+        database_url="sqlite+pysqlite:///:memory:",
+        jwt_secret="drawdown-kill-switch-secret-32bytes",
+        rate_limit_use_redis=False,
+        access_token_denylist_use_redis=False,
+    )
+    figures = {"equity": Decimal("10000"), "realized": Decimal("0"), "unrealized": Decimal("0")}
+
+    class _Daily:
+        @property
+        def account_equity(self) -> Decimal:
+            return figures["equity"]
+
+        @property
+        def realized_pnl(self) -> Decimal:
+            return figures["realized"]
+
+        @property
+        def unrealized_pnl(self) -> Decimal:
+            return figures["unrealized"]
+
+    class _Accounting:
+        def __init__(self, _session: object, _settings: object, clock: object) -> None:
+            return None
+
+        def sync_from_portfolio(self, **_kwargs: object) -> _Daily:
+            return _Daily()
+
+    monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    now = datetime(2026, 10, 19, 12, tzinfo=UTC)
+    opened = persist_profile_breakers(
+        session,
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        profile=profile,
+        now=now,
+        settings=settings,
+    )
+    kill = KillSwitchService(session, AuditService(session), settings)
+    assert opened is False
+    assert kill.is_execution_blocked(organization_id=org) is False
+
+    figures["equity"] = Decimal("8000")
+    figures["realized"] = Decimal("-2000")
+    tripped = persist_profile_breakers(
+        session,
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        profile=profile,
+        now=now + timedelta(hours=1),
+        settings=settings,
+    )
+    assert tripped is True
+    with pytest.raises(TradingPolicyError):
+        kill.assert_execution_allowed(organization_id=org, user_id=user)
+    activated = list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED)
+        ).all()
+    )
+    assert len(activated) == 1
+
+    figures["equity"] = Decimal("9700")
+    figures["realized"] = Decimal("-300")
+    held = persist_profile_breakers(
+        session,
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        profile=profile,
+        now=now + timedelta(hours=2),
+        settings=settings,
+    )
+    assert held is True
+    assert kill.get_status(organization_id=org).active is True
+    repeat = list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED)
+        ).all()
+    )
+    assert len(repeat) == 1
+    kill.deactivate(
+        organization_id=org,
+        actor_user_id=user,
+        payload=KillSwitchMutationRequest(confirm=True, reason="human reset after review"),
+    )
+    assert kill.is_execution_blocked(organization_id=org) is False
+    engine.dispose()

@@ -684,6 +684,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
                     for floor, rate in snapshot.maintenance_tiers
                 ),
+                execution_channel="demo",
             )
             if isinstance(sized, str):
                 return sized

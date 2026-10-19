@@ -684,6 +684,129 @@ def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
     assert sized.quantity * (Decimal("2") + unit) <= Decimal("100")
 
 
+def test_canonical_open_lifecycle_is_priced_at_its_stop(caplog, monkeypatch) -> None:
+    import logging
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    from app.db.models import JournalTrade, Organization
+    from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeDirection
+    from app.services.automated_paper_loop import _profile_open_book
+    from app.services.risk_policy.plan_sizing import canonical_open_stop_positions, stop_out_cash
+    from app.workers.watcher_paper_targets import PaperScanTarget
+
+    missing = canonical_open_stop_positions([(Decimal("1"), Decimal("100"), None)])
+    assert missing == "open_risk_uncomputed"
+    with caplog.at_level(logging.WARNING):
+        excess = open_risk_from_stops(
+            equity=Decimal("10000"),
+            positions=[],
+            open_notional=Decimal("100"),
+        )
+    assert excess == "open_risk_uncomputed"
+    assert "snapshot open notional exceeds the notional explained by stops" in caplog.text
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    org = uuid4()
+    user = uuid4()
+    session.add(Organization(id=org, name="Canonical open risk"))
+    session.add(
+        JournalTrade(
+            organization_id=org,
+            user_id=user,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.OPEN,
+            symbol="BTCUSDT",
+            timeframe="15m",
+            direction=TradeDirection.LONG,
+            size=Decimal("1"),
+            entry_price=Decimal("100"),
+            planned_stop_price=Decimal("90"),
+            execution_lifecycle_id=uuid4(),
+        )
+    )
+    session.commit()
+
+    class _Snapshot:
+        realized_pnl = Decimal("0")
+        account_equity = Decimal("10000")
+        open_exposure_notional = Decimal("100")
+
+    class _Accounting:
+        def __init__(self, _session: object, _settings: object, clock: object) -> None:
+            return None
+
+        def sync_from_portfolio(self, **_kwargs: object) -> _Snapshot:
+            return _Snapshot()
+
+    monkeypatch.setattr("app.services.automated_paper_loop.DailyRiskAccounting", _Accounting)
+    target = PaperScanTarget(
+        organization_id=org,
+        user_id=user,
+        strategy_id=uuid4(),
+        strategy_version_id=uuid4(),
+        compiled_setup_definition_id=uuid4(),
+        compiled_content_hash="a" * 64,
+        fusion_policy_version="test",
+        symbol="BTCUSDT",
+    )
+    book = _profile_open_book(
+        session,
+        target,
+        now=datetime(2026, 10, 19, tzinfo=UTC),
+        daily_loss_limit_percent=Decimal("6"),
+    )
+    assert not isinstance(book, str)
+    cash = stop_out_cash(Decimal("1"), Decimal("100"), Decimal("90"), include_book_buffer=False)
+    assert book.open_risk_percent == cash / Decimal("10000") * Decimal("100")
+    assert book.open_positions == 1
+    engine.dispose()
+
+
+def test_profile_sizer_uses_the_execution_channel_for_the_five_percent_branch() -> None:
+    from app.services.risk_policy.ceilings import risk_ceiling_for
+
+    def sized(kind: PolicyKind, channel: str):
+        profile = sofien_aggressive_profile(kind)
+        return size_for_profile(
+            active=ActiveProfile(profile=profile, version_id=uuid4()),
+            grade=GradeDecision(
+                Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None
+            ),
+            equity=Decimal("10000"),
+            entry=Decimal("100"),
+            stop=Decimal("90"),
+            target=Decimal("120"),
+            direction="long",
+            atr=Decimal("2"),
+            lot_step=Decimal("0.00000001"),
+            min_quantity=Decimal("0.00000001"),
+            open_risk_percent=Decimal("0"),
+            open_notional=Decimal("0"),
+            open_positions=0,
+            remaining_daily_budget_percent=Decimal("6"),
+            breaker_refusing=False,
+            leverage=Decimal("1"),
+            include_book_buffer=channel == "demo",
+            execution_channel=channel,
+        )
+
+    paper = sized(PolicyKind.INTERNAL_PAPER, "internal_paper")
+    demo = sized(PolicyKind.DEMO, "demo")
+    assert not isinstance(paper, str)
+    assert not isinstance(demo, str)
+    assert Decimal("2") < paper.risk_percent <= Decimal("5")
+    assert Decimal("2") < demo.risk_percent <= Decimal("5")
+    assert sized(PolicyKind.INTERNAL_PAPER, "live") == "risk_percent_exceeds_channel_ceiling"
+    assert risk_ceiling_for(PolicyKind.AGGRESSIVE) == Decimal("2")
+    assert risk_ceiling_for("live") == Decimal("2")
+
+
 def test_claim_notional_ceiling_matches_the_profile() -> None:
     profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
     equity = Decimal("10000")

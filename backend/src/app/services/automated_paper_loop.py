@@ -32,6 +32,7 @@ from app.schemas.common import (
     AuditEventType,
     AuditResult,
     AuditSeverity,
+    JournalTradeSource,
     JournalTradeStatus,
     TradeDirection,
 )
@@ -857,6 +858,7 @@ def _profile_open_book(
     from app.schemas.common import PositionStatus
     from app.services.risk_policy.plan_sizing import (
         ProfileOpenBook,
+        canonical_open_stop_positions,
         open_risk_from_stops,
         remaining_daily_budget_percent,
     )
@@ -882,9 +884,20 @@ def _profile_open_book(
             )
         ).all()
     )
+    canonical = canonical_open_stop_positions(
+        [
+            (row.size, row.entry_price, row.planned_stop_price)
+            for row in _canonical_open_lifecycles(session, target)
+        ]
+    )
+    if isinstance(canonical, str):
+        return canonical
     measured = open_risk_from_stops(
         equity=snapshot.account_equity,
-        positions=[(row.size, row.entry_price, row.stop_loss) for row in rows],
+        positions=[
+            *[(row.size, row.entry_price, row.stop_loss) for row in rows],
+            *canonical,
+        ],
         open_notional=snapshot.open_exposure_notional,
         include_book_buffer=include_book_buffer,
         funding_rate=funding_rate,
@@ -898,6 +911,29 @@ def _profile_open_book(
         open_notional=snapshot.open_exposure_notional,
         open_positions=count,
         remaining_daily_budget_percent=remaining,
+    )
+
+
+def _canonical_open_lifecycles(session: Session, target: PaperScanTarget) -> list[JournalTrade]:
+    """Open paper and demo lifecycles that are not already a Position row.
+
+    The same scope as daily-risk exposure, so stop risk can explain that
+    notional. A missing stop is refused by the caller.
+    """
+
+    return list(
+        session.scalars(
+            select(JournalTrade).where(
+                JournalTrade.organization_id == target.organization_id,
+                JournalTrade.user_id == target.user_id,
+                JournalTrade.source.in_(
+                    (JournalTradeSource.PAPER_EXECUTION, JournalTradeSource.MANUAL_DEMO_TEST)
+                ),
+                JournalTrade.execution_lifecycle_id.is_not(None),
+                JournalTrade.linked_position_id.is_(None),
+                JournalTrade.status == JournalTradeStatus.OPEN,
+            )
+        ).all()
     )
 
 
@@ -1182,6 +1218,7 @@ def _plan_terms(
             open_positions=open_positions,
             remaining_daily_budget_percent=remaining_daily_budget_percent,
             breaker_refusing=breaker_refusing,
+            execution_channel="internal_paper",
         )
         if isinstance(sized, str):
             return sized

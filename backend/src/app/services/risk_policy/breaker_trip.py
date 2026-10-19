@@ -15,6 +15,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.services.risk_policy.breakers import (
     BreakerConfig,
     BreakerSnapshot,
@@ -113,6 +114,14 @@ def profile_close_consecutive(
     return 0
 
 
+# Audited reason stored on the organization kill switch. A later scan does
+# not replace it and does not clear the switch.
+DRAWDOWN_KILL_REASON = (
+    "Profile drawdown breaker tripped; new entries stay blocked until a human "
+    "deactivates the kill switch"
+)
+
+
 def _pause_still_in_force(paused_until: datetime | None, now: datetime) -> bool:
     return paused_until is not None and _as_utc(paused_until) > _as_utc(now)
 
@@ -192,8 +201,14 @@ def persist_profile_breakers(
     profile: RiskPolicyProfile,
     now: datetime,
     consecutive_losses: int | None = None,
+    settings: Settings | None = None,
 ) -> bool:
-    """Sync daily figures, then trip. Returns whether new trades are refused."""
+    """Sync daily figures, then trip. Returns whether new trades are refused.
+
+    A drawdown verdict arms the organization kill switch. A later scan does
+    not deactivate it. Only ``KillSwitchService.deactivate`` does, and that
+    is a human reset.
+    """
 
     from app.services.audit_service import AuditService
     from app.services.risk.daily_risk_accounting import DailyRiskAccounting
@@ -256,4 +271,38 @@ def persist_profile_breakers(
         existing_daily_paused_until=kept_daily,
         cooldown_hours=profile.consecutive_loss_cooldown_hours,
     )
+    if verdict.trip_kill_switch:
+        _arm_drawdown_kill_switch(
+            session,
+            organization_id=organization_id,
+            user_id=user_id,
+            settings=settings,
+        )
     return verdict.refuse_new_trades
+
+
+def _arm_drawdown_kill_switch(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    settings: Settings | None,
+) -> None:
+    """Arm the existing organization switch. Already-on is a no-op.
+
+    ``KillSwitchService.activate`` returns the current row without a new
+    audit event when the switch is already active. This function never
+    calls deactivate.
+    """
+
+    from app.core.config import get_settings
+    from app.schemas.risk import KillSwitchMutationRequest
+    from app.services.audit_service import AuditService
+    from app.services.risk.kill_switch import KillSwitchService
+
+    resolved = get_settings() if settings is None else settings
+    KillSwitchService(session, AuditService(session), resolved).activate(
+        organization_id=organization_id,
+        actor_user_id=user_id,
+        payload=KillSwitchMutationRequest(confirm=True, reason=DRAWDOWN_KILL_REASON),
+    )

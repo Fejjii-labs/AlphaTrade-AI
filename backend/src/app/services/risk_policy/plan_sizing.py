@@ -8,6 +8,7 @@ does not fall back to the fixed 1% path.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -20,6 +21,7 @@ from app.analysis.types import Indicators
 from app.providers.market_data import OHLCVBar
 from app.services.risk_policy.adjusters import AdjusterInputs
 from app.services.risk_policy.breakers import BreakerVerdict
+from app.services.risk_policy.ceilings import PAPER_DEMO_KINDS
 from app.services.risk_policy.decision import decide_trade
 from app.services.risk_policy.grader import GradeDecision, grade_setup
 from app.services.risk_policy.liquidation import MaintenanceTier
@@ -29,6 +31,8 @@ from app.services.risk_policy.sizer import SizingInput
 
 # Library fixture used by direct ``decide_trade`` tests. The wired paper and
 # demo path does not use this flat 0.5% rate.
+logger = logging.getLogger(__name__)
+
 PAPER_DEMO_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
     MaintenanceTier(notional_floor=Decimal("0"), maintenance_rate=Decimal("0.005")),
 )
@@ -182,7 +186,7 @@ def open_risk_from_stops(
             or not isinstance(stop, Decimal)
             or not stop.is_finite()
         ):
-            return "open_risk_uncomputed"
+            return _open_risk_uncomputed("position size, entry, or stop is missing or not finite")
         risk_cash += stop_out_cash(
             size,
             entry,
@@ -194,8 +198,43 @@ def open_risk_from_stops(
         )
         explained += size * entry
     if open_notional > explained:
-        return "open_risk_uncomputed"
+        return _open_risk_uncomputed(
+            "snapshot open notional exceeds the notional explained by stops"
+        )
     return (risk_cash / equity * Decimal("100"), len(positions))
+
+
+def canonical_open_stop_positions(
+    rows: Sequence[tuple[Decimal | None, Decimal | None, Decimal | None]],
+) -> list[tuple[Decimal, Decimal, Decimal]] | str:
+    """Price open lifecycle rows that carry a stop.
+
+    Each tuple is size, entry, and planned stop. A row that cannot be priced
+    fails closed. The caller keeps the ``open_risk_uncomputed`` refusal.
+    """
+
+    priced: list[tuple[Decimal, Decimal, Decimal]] = []
+    for size, entry, stop in rows:
+        if (
+            not isinstance(size, Decimal)
+            or not isinstance(entry, Decimal)
+            or not isinstance(stop, Decimal)
+            or not size.is_finite()
+            or not entry.is_finite()
+            or not stop.is_finite()
+            or size <= 0
+            or entry <= 0
+        ):
+            return _open_risk_uncomputed(
+                "canonical open lifecycle row is missing size, entry, or stop"
+            )
+        priced.append((size, entry, stop))
+    return priced
+
+
+def _open_risk_uncomputed(reason: str) -> str:
+    logger.warning("open risk at stops cannot be computed: %s", reason)
+    return "open_risk_uncomputed"
 
 
 def demo_leverage_block(account_leverage: Decimal, required: Decimal) -> str | None:
@@ -377,12 +416,17 @@ def size_for_profile(
     funding_rate: Decimal | None = None,
     funding_rate_verified: bool = False,
     expected_hold_hours: Decimal | None = None,
+    execution_channel: str | None = None,
 ) -> SizedPlan | str:
     """Size one new paper or demo plan. Returns a reason code when refused.
 
     Fees, funding, and the demo book buffer are inside the grade cash. A
     liquidation buffer that does not clear refuses the trade. Leverage is not
-    lowered on this path.
+    lowered on this path. ``execution_channel`` is the real path: internal
+    paper or BloFin demo. Those two set the risk-engine paper/demo channel,
+    so an A+ may use 5% and the promotion report stays optional. Any other
+    channel keeps the non-paper ``risk_ceiling_for`` cap. When the channel
+    is omitted, the profile kind is used.
     """
 
     if not grade.tradable or grade.grade is None:
@@ -444,6 +488,13 @@ def size_for_profile(
     )
     if not decision.accepted or decision.record is None or decision.sizing is None:
         return decision.reason or "risk_policy_refused"
+    channel = active.profile.kind.value if execution_channel is None else execution_channel
+    if _sized_risk_blocked_for_channel(
+        channel=channel,
+        risk_percent=decision.sizing.effective_risk_percent,
+        profile_cap=active.profile.risk_percent(grade.grade),
+    ):
+        return "risk_percent_exceeds_channel_ceiling"
     cash_ceiling = (
         equity
         * min(
@@ -515,3 +566,44 @@ def _verdict(equity: Decimal, *, refusing: bool) -> BreakerVerdict:
         refuse_new_trades=refusing,
         human_reset_required=False,
     )
+
+
+def _sized_risk_blocked_for_channel(
+    *,
+    channel: str,
+    risk_percent: Decimal,
+    profile_cap: Decimal,
+) -> bool:
+    """Apply the risk-engine percent rule for this execution channel.
+
+    The full engine is not consulted. Its leverage and notional rules are a
+    different contract from profile sizing. This is the 5% branch that was
+    previously set only in tests.
+    """
+
+    from app.schemas.common import TradeDirection
+    from app.schemas.risk import RiskCheckRequest
+    from app.services.risk.limits import RiskLimits
+    from app.services.risk.rules import RiskEvaluationContext, check_risk_percent
+
+    request = RiskCheckRequest(
+        symbol="BTCUSDT",
+        direction=TradeDirection.LONG,
+        entry_price=Decimal("100"),
+        stop_loss=Decimal("99"),
+        position_size=Decimal("1"),
+        leverage=Decimal("1"),
+        account_equity=Decimal("10000"),
+        risk_percent=risk_percent,
+    )
+    rule = check_risk_percent(
+        request,
+        RiskLimits(),
+        RiskEvaluationContext(
+            is_weekend=False,
+            autonomous_sizing=True,
+            paper_or_demo_channel=channel in PAPER_DEMO_KINDS,
+            profile_risk_percent_cap=profile_cap,
+        ),
+    )
+    return rule is not None

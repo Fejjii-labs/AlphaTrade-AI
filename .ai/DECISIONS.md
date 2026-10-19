@@ -51,7 +51,21 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   refuses. Every other kind still requires the report. The field does not
   satisfy (c) for live trading or for arming either flag. The human proof,
   loosening cooldown, breakers, daily and open-risk limits, and the
-  real-money block stay in force.
+  real-money block stay in force. The profile sizer sets
+  `paper_or_demo_channel` from the execution channel. Internal paper and
+  BloFin demo use that 5% branch. Any other channel keeps
+  `risk_ceiling_for` and is refused above 2%.
+- Drawdown kill switch: a profile scan whose breaker verdict sets
+  `trip_kill_switch` calls `KillSwitchService.activate` for the
+  organization, with an audited reason. A later scan does not deactivate
+  it, including a scan whose equity is back inside the drawdown threshold.
+  Only `KillSwitchService.deactivate` turns it off, and that is a human
+  reset. A repeat activate while the switch is already on does not write
+  another activation audit row.
+- Open stop risk: canonical open paper and demo lifecycle rows are priced
+  at their planned stop together with Position rows. If a lifecycle row
+  or the snapshot notional cannot be priced, the plan is refused with
+  `open_risk_uncomputed` and the reason is logged.
 - Leverage sets margin only. Loss at the stop, the exit-leg taker fee,
   funding, and on demo the 0.2% book buffer, must fit inside the grade
   cash. Costs above the profile share of R refuse with `costs_exceed_r`.
