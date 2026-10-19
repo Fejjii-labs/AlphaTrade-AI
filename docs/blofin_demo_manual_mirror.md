@@ -28,6 +28,15 @@ The flag name is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off. This
 document names the flag only. It is not set in `render.yaml` and this change
 does not edit environment variables or Render.
 
+The mirror runs only inside the snapshot cycle. That cycle, and therefore
+the mirror, starts only when `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is true,
+the paper worker is armed, and `BLOFIN_READONLY_SYNC_ENABLED` plus
+`BLOFIN_READONLY_API_KEY`, `BLOFIN_READONLY_API_SECRET`, and
+`BLOFIN_READONLY_API_PASSPHRASE` are set. Demo trading keys do not start it.
+A trading-key configuration skips with `readonly_credentials_required`
+before any database or venue call. The snapshot flag, the armed-worker
+check, and the read-only credentials all default closed.
+
 While the flag is off, the demo card does not publish a hand-trade win rate.
 The activity-worker `fillPnl` figures stay withheld for the reason in
 [blofin_demo_snapshot_worker.md](blofin_demo_snapshot_worker.md).
@@ -160,8 +169,11 @@ external ref, `pnl-verified` / `pnl-unverified` tags, and any change to a
 `user_strategy_id`, `grade`, and `notes`. It does not accept prices, size,
 fees, or P&L. An empty string clears strategy, grade, or notes. Grade is
 `A` through `D` with an optional `+` or `-`, or `F`, stored as one `grade:`
-tag so the journal table does not need a new column. There is no Alembic
-revision. The source value fits the existing portable VARCHAR enum.
+tag so the journal table does not need a new column. That grade is a hand
+annotation. It is removed before a row is treated as verified, and it is not
+selected into journal statistics, discipline scoring, or confidence
+calibration. There is no Alembic revision. The source value fits the existing
+portable VARCHAR enum.
 
 The journal entry shows the form when the source is `blofin_demo_manual` or
 the external ref starts with `blofin-demo-`. The annotation route accepts
@@ -215,6 +227,8 @@ The activity `fillPnl` method id stays
 - Stops come from orders-history trigger prices, not from a separate TPSL
   history route.
 - Contract value and USDT settlement are required. Anything else is unverified.
-- The mirror runs on every snapshot-worker cycle while the flag is on,
-  including while the saved snapshot is still fresh. A failed mirror does
-  not delay the next snapshot.
+- The mirror runs on a snapshot-worker cycle only when
+  `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the worker is armed, and the
+  `BLOFIN_READONLY_*` credentials are set, and only when
+  `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` is also on. A fresh snapshot still
+  mirrors. A failed mirror does not delay the next snapshot.

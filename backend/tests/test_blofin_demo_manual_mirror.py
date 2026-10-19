@@ -20,6 +20,7 @@ from app.core.config import ExecutionMode, Settings
 from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
 from app.db.base import Base
 from app.db.models import JournalTrade, Organization, User
+from app.repositories.journal_trades import assert_stats_projection_excludes_annotation_grade
 from app.schemas.common import (
     JournalTradeSource,
     JournalTradeStatus,
@@ -44,6 +45,7 @@ from app.services.blofin_demo_manual_mirror import (
     publish_mirror_performance,
     record_mirror_cycle,
     strategy_group_key,
+    without_annotation_grade,
 )
 from app.services.journal_trade_service import JournalTradeService
 
@@ -464,6 +466,41 @@ def test_annotation_rejects_other_sources_and_a_bad_grade(session: Session) -> N
     assert cleared.strategy_label is None
     assert cleared.grade is None
     assert cleared.notes is None
+
+
+def test_annotation_grade_does_not_change_headline_or_statistics(session: Session) -> None:
+    assert_stats_projection_excludes_annotation_grade()
+    assert without_annotation_grade(["pnl-verified", "grade:A+", "not-a-grade"]) == [
+        "pnl-verified",
+        "not-a-grade",
+    ]
+    tenant = TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER)
+    _apply(session, _FIXTURE["long"])
+    mirrored = _rows(session)[0]
+    before = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(before, session=session, tenant=tenant, settings=_settings())
+    JournalTradeService(session, AuditService(session)).annotate(
+        mirrored.id,
+        JournalTradeAnnotation(grade="F", notes="<img src=x onerror=alert(1)> **bold**"),
+        organization_id=ORG,
+    )
+    after = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(after, session=session, tenant=tenant, settings=_settings())
+    assert after.performance.model_dump() == before.performance.model_dump()
+    assert mirrored.grade == "F"
+    root = Path(__file__).resolve().parents[1] / "src" / "app" / "services"
+    scoring = [
+        root / "analytics" / "discipline_score.py",
+        root / "strategy_quality" / "service.py",
+        root / "strategy_quality" / "scoring.py",
+        root / "learning_analytics" / "service.py",
+        root / "learning_analytics" / "scoring.py",
+        root / "journal_statistics_service.py",
+    ]
+    for path in scoring:
+        text = path.read_text()
+        assert "grade_from_tags" not in text
+        assert "grade:" not in text
 
 
 def test_annotation_allows_a_reconciled_manual_row(session: Session) -> None:

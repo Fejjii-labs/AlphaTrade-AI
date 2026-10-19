@@ -1176,9 +1176,22 @@ def _formula_net(row: JournalTrade) -> Decimal | None:
     return _money(gross - row.fees - row.funding)
 
 
+def without_annotation_grade(tags: Iterable[object] | None) -> list[str]:
+    """Drop hand-assigned ``grade:`` tags before verification or a headline.
+
+    The grade is a journal annotation. It is not an input to win rate, realized
+    P&L, average R, journal statistics, discipline scoring, or calibration.
+    """
+    return [
+        tag
+        for tag in tags or []
+        if isinstance(tag, str) and not tag.startswith("grade:")
+    ]
+
+
 def _verified_row(row: JournalTrade) -> bool:
     """A headline row is one this mirror verified, recomputed from stored prices."""
-    tags = row.tags or []
+    tags = without_annotation_grade(row.tags)
     ref = row.external_ref or ""
     net = _formula_net(row)
     if net is None or _money(row.net_pnl or Decimal("0")) != net:

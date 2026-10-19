@@ -125,6 +125,29 @@ it("does not offer strategy tags on the mirror cycle marker", async () => {
   expect(screen.queryByTestId("journal-mirror-annotation")).not.toBeInTheDocument();
 });
 
+it("renders annotation notes as plain text", async () => {
+  const notes = "<img src=x onerror=alert(1)> **bold** <script>alert(1)</script>";
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    trade: {
+      ...fixture.trade,
+      source: "blofin_demo_manual",
+      external_ref: "blofin-demo-history:h-long",
+      notes,
+      grade: "B",
+    },
+    manual_demo: null,
+  });
+  const view = render(<JournalTradeScreen tradeId="exact-trade" />);
+  const field = await screen.findByLabelText("Notes");
+  expect(field.tagName).toBe("TEXTAREA");
+  expect(field).toHaveValue(notes);
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.container.querySelector("script")).toBeNull();
+  expect(view.container.innerHTML).not.toContain("<img");
+  expect(view.container.innerHTML).not.toContain("<script");
+});
+
 it("shows the strategy form for a reconciled manual row", async () => {
   vi.mocked(journalTradeApi.detail).mockResolvedValue({
     ...fixture,

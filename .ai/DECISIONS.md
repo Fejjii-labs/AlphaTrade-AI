@@ -3405,9 +3405,12 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
   Ambiguous matches are skipped. A reconciled `manual` or `manual_demo_test`
   row whose external ref starts with `blofin-demo-` can still be tagged.
-- The mirror runs on the snapshot cadence even when the saved snapshot is
-  still inside the refresh interval. A mirror read failure does not back off
-  the snapshot cycle. The latest read is stored on a cancelled journal
+- The mirror runs on the snapshot cadence only when
+  `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the paper worker is armed, and
+  `BLOFIN_READONLY_SYNC_ENABLED` with the three `BLOFIN_READONLY_API_*`
+  credentials are set. Demo trading keys are not a fallback. It still runs
+  when the saved snapshot is inside the refresh interval. A mirror read
+  failure does not back off the snapshot cycle. The latest read is stored on a cancelled journal
   marker. A failed read or a page cap withholds the headline. Fills, funding,
   and orders keep paging after positions history has succeeded. A capped
   auxiliary read still stores that history and does not publish a net.

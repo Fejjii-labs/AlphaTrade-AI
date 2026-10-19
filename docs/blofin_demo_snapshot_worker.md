@@ -48,8 +48,11 @@ worker does not call BloFin again for that snapshot while it is fresh. An
 owner refresh from the dashboard still calls BloFin. When
 `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` is on, the same cycle still mirrors hand
 trades while the snapshot is fresh, and also when the snapshot sync returns
-a health status outside ok or degraded. That unhealthy snapshot still backs
-off. A mirror read failure does not back off the snapshot. A failed snapshot sync backs off, doubling from the interval
+a health status outside ok or degraded. The mirror does not run unless this
+cycle is attached: the snapshot flag is on, the worker is armed, and the
+read-only credentials above are present. Trading keys skip with
+`readonly_credentials_required` and do not open the mirror. That unhealthy
+snapshot still backs off. A mirror read failure does not back off the snapshot. A failed snapshot sync backs off, doubling from the interval
 up to 900 seconds. The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
 `ok`, `skipped`, `backing_off`, `degraded`, or `stopped`.
@@ -122,6 +125,8 @@ does not say whether `fillPnl` is gross or net of fees or funding, so the
 activity win rate above stays withheld.
 
 The mirror flag is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off.
+Turning it on does not attach the cycle by itself. The snapshot flag, an
+armed worker, and the `BLOFIN_READONLY_*` setup above are still required.
 This document names the flag only. Do not set it in `render.yaml` or in a
 deployed environment from this change. Contract, formulas, and the journal
 source `blofin_demo_manual` are in
