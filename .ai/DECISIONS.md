@@ -5,18 +5,23 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 ## AT-ADR-118 — Backfilled paper exits stay out of the breakers
 
 - Date: 2026-10-19
-- Decision: An exit-monitor close whose bar ended before the evaluation UTC
-  day is a backfill. The open October 6 short stop and long target are that
-  case. The journal still records the close, with `exit_origin=backfill` and
-  `calibration_sample=excluded`. That close does not advance the
+- Decision: An exit-monitor close is a historical backfill only when the
+  crossing bar ended at least 24 hours before evaluation, or a timestamp is
+  naive. That is a close from before the monitor tracked the trade. The open
+  October 6 short stop and long target, reconstructed on a later day, are
+  that case. The journal still records the close, with `exit_origin=backfill`
+  and `calibration_sample=excluded`. That close does not advance the
   consecutive-loss breaker, does not sync the daily lock, and is not an
-  AT-ADR-109 calibration sample. A crossing on the evaluation UTC day is
-  `exit_origin=live`. A live close of a `paper-profile-isolated` plan uses
-  the same profile-close note as any other profile close, so the result
-  counts toward the consecutive streak and the daily lock. A human close is
-  unchanged. A live close does not insert a calibration row on this path,
-  because the walk-forward fold is not known here. Both monitor flags stay
-  false. This record does not arm them. Real-money trading stays rejected.
+  AT-ADR-109 calibration sample. A crossing processed within 24 hours is
+  `exit_origin=live`, including when the bar ended on the previous UTC date
+  and the worker runs after midnight. A live close of a
+  `paper-profile-isolated` plan uses the same profile-close note as any
+  other profile close, with the bar's end as the note time, so the result
+  counts toward the consecutive streak and the daily lock for the day the
+  bar closed. A human close is unchanged. A live close does not insert a
+  calibration row on this path, because the walk-forward fold is not known
+  here. Both monitor flags stay false. This record does not arm them.
+  Real-money trading stays rejected.
 - Reference: AT-ADR-109; AT-ADR-110; AT-ADR-116;
   `docs/paper_exit_monitor.md`.
 
@@ -34,9 +39,13 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   configured on a live source keeps that source, including failover, only
   when the trade has no stored identity.
 - Entry bar: live internal-paper fills are taken at a closed-bar boundary.
-  `entry_time` is that bar's `interval_end`. The fill bar is not eligible.
-  The next bar, whose `interval_start` equals `entry_time`, is the first
-  bar that can exit. A touch inside the fill bar does not close the trade.
+  The journal `entry_time` is that bar's `interval_end`, not the watcher
+  clock. A stored time within 90 seconds after the boundary is the same
+  boundary. The fill bar is not eligible. The next bar, whose
+  `interval_start` equals that boundary, is the first bar that can exit.
+  A touch inside the fill bar does not close the trade. A fill deeper
+  inside a bar still skips that bar. A bar that opens through the stop
+  exits at that open.
 - Flags and scope are unchanged from AT-ADR-116. Both monitor flags default
   false. This decision does not arm them, change deploy config, or
   authorize a merge. Real-money trading stays rejected.
@@ -52,7 +61,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Date: 2026-10-18
 - Decision: Open canonical internal paper trades are closed by a paper-worker
   component when a closed candle from the strategy evidence source touches the
-  stop or the single full-size target. The fill price is that level. Costs are
+  stop or the single full-size target. The fill price is that level, except
+  when the bar opens through the stop: that fill is the open. Costs are
   the plan's fee, funding, and slippage allowances (zero on
   `paper-internal-entry/v1`). If one bar touches both levels, the stop wins and
   the journal evidence records `same_bar_assumption=stop_first`. The exit time

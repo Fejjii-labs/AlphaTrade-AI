@@ -60,8 +60,8 @@ from the trade, not from a separate monitor setting:
   A process that is already configured for a live source, including failover,
   keeps that source when the trade has no stored identity.
 
-It walks bars whose interval starts at or after the entry time. The first bar
-whose range touches a level is the exit.
+It walks bars that start at or after the entry boundary. The first bar whose
+range touches a level is the exit.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.
@@ -69,18 +69,24 @@ whose range touches a level is the exit.
   below the target.
 - Both levels in one bar: exit at the stop. The journal evidence records
   `same_bar_assumption=stop_first`.
-- Fill price is that level. Costs are the plan's fee, funding, and slippage
+- Fill price is that level, or the open when the bar opens through the stop.
+  Costs are the plan's fee, funding, and slippage
   allowances. The internal-paper plan records those allowances as zero, so the
   existing exact-price model is unchanged.
 - Exit time is the bar's `interval_end`, the time the closed bar made the
   touch knowable.
 - A trade opened at bar close has `entry_time` equal to that bar's
-  `interval_end`. The fill bar's `interval_start` is earlier, so it is not
-  eligible. The next bar, whose `interval_start` equals the entry time, is
-  the first bar that can exit the trade. A touch inside the fill bar does
-  not close the trade. The same rule skips a bar when the fill is recorded
-  inside it, because that bar's range is not known to have printed after
-  the fill.
+  `interval_end`. The journal stores that bar end, not the watcher clock.
+  A stored time a few seconds after the boundary is treated as the boundary.
+  The fill bar's `interval_start` is earlier, so it is not eligible. The next
+  bar, whose `interval_start` equals the entry boundary, is the first bar
+  that can exit the trade. A touch inside the fill bar does not close the
+  trade. A fill recorded deeper inside a bar still skips that bar, because
+  its range is not known to have printed after the fill.
+- A bar that opens through the stop exits at that open
+  (`same_bar_assumption=gap_through_open`). A touch that does not gap fills
+  at the stop or the target. Both levels in one bar, without that gap, still
+  exit at the stop.
 - If the fetched history does not reach the entry, the trade is left open.
 
 On each run, a trade whose stop or target was already crossed in an earlier
@@ -100,16 +106,19 @@ the crossing bar's end. The CLOSE lifecycle payload also stores:
 - `exit_actor`: `paper_exit_monitor`
 - `exit_evidence`: bar times, OHLC, source event id, content hash, level, and
   the same-bar assumption
-- `exit_origin`: `live` when the crossing bar ended on the evaluation UTC day,
-  `backfill` when it ended on an earlier UTC day. The October 6 open trades
-  are backfills. A naive timestamp is also labelled `backfill`.
+- `exit_origin`: `live` when the crossing bar ended less than 24 hours before
+  evaluation, including a bar processed after UTC midnight. `backfill` when
+  the bar ended 24 hours or more earlier, which is the October 6
+  reconstruction, or when a timestamp is naive.
 - `calibration_sample`: `eligible` on a live close and `excluded` on a backfill
 
 A live close of a `paper-profile-isolated` plan uses the same profile-close
-note as any other profile close. That note advances the consecutive-loss
-streak and syncs the daily lock. A backfill is journaled and does not call
-that note, so it does not move the streak or the daily lock, and it is not
-an ADR-109 calibration sample. This path does not insert a calibration row
-for a live close either: the walk-forward fold is not known here.
+note as any other profile close. The note is called with the bar's end, so
+it advances the consecutive-loss streak and syncs the daily lock for the day
+the bar closed. A close processed just after midnight still does that for
+the previous UTC day. A backfill is journaled and does not call that note,
+so it does not move the streak or the daily lock, and it is not an ADR-109
+calibration sample. This path does not insert a calibration row for a live
+close either: the walk-forward fold is not known here.
 
 A human close leaves those fields unset.

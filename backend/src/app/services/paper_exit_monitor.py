@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 from uuid import UUID
@@ -27,6 +27,7 @@ from app.db.canonical_trade_plans import (
 )
 from app.db.models import JournalTrade, TradePlanRevision
 from app.guardrails.redaction import redact_text
+from app.market_contracts.identity import interval_timedelta
 from app.schemas.common import JournalTradeStatus, Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanRequest
 
@@ -36,8 +37,13 @@ INTERNAL_PAPER_VENUE = "PAPER_INTERNAL"
 INTERNAL_PAPER_POLICY = "paper-internal-entry/v1"
 EXIT_CHANNEL = "PAPER_EXIT_MONITOR"
 EXIT_ACTOR = "paper_exit_monitor"
-# A crossing on an earlier UTC day is a reconstruction. It is journaled and
-# kept out of the consecutive-loss breaker, the daily lock, and ADR-109 samples.
+# A crossing whose bar ended long before this evaluation is a reconstruction.
+# It is journaled and kept out of the breaker, the daily lock, and ADR-109.
+# A close processed within this window is live, including across UTC midnight.
+HISTORICAL_BACKFILL_AFTER = timedelta(hours=24)
+# A fill recorded in this gap after a closed-bar boundary still belongs to
+# that boundary. The bar that opens there is the first post-entry bar.
+ENTRY_SETTLEMENT_GAP = timedelta(seconds=90)
 EXIT_ORIGIN_BACKFILL = "backfill"
 EXIT_ORIGIN_LIVE = "live"
 CALIBRATION_EXCLUDED = "excluded"
@@ -46,6 +52,7 @@ EXIT_REASON_STOP: Literal["stop_hit"] = "stop_hit"
 EXIT_REASON_TARGET: Literal["target_hit"] = "target_hit"
 SAME_BAR_ASSUMPTION = "stop_first"
 SAME_BAR_NONE = "none"
+GAP_THROUGH_OPEN = "gap_through_open"
 
 ExitReason = Literal["stop_hit", "target_hit"]
 _SKIP_CLOSE_REASONS = frozenset(
@@ -171,20 +178,64 @@ def counts_for_adr109_calibration(request: ClosePaperPlanRequest) -> bool:
 
 
 def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:
-    """Label a crossing that happened before the evaluation UTC day as a backfill.
+    """Label a reconstruction from before the monitor tracked the trade.
 
-    The open October 6 trades close on the first armed run at those historical
-    bars. A naive timestamp fails closed to ``backfill`` so it cannot move the
-    breaker. A crossing on the evaluation UTC day is live.
+    The open October 6 trades close on a later armed run, more than a day
+    after those bars. That is a historical backfill. A naive timestamp fails
+    closed to ``backfill`` so it cannot move the breaker. A crossing processed
+    within ``HISTORICAL_BACKFILL_AFTER`` is live, including when the worker
+    crosses UTC midnight. The close then feeds the breaker and the daily lock
+    for the bar's own end time.
     """
 
     if occurred_at.tzinfo is None or evaluated_at.tzinfo is None:
         return EXIT_ORIGIN_BACKFILL
     occurred = occurred_at.astimezone(UTC)
     evaluated = evaluated_at.astimezone(UTC)
-    if occurred.date() < evaluated.date():
+    if evaluated - occurred >= HISTORICAL_BACKFILL_AFTER:
         return EXIT_ORIGIN_BACKFILL
     return EXIT_ORIGIN_LIVE
+
+
+def fill_entry_time(*, trigger_end: datetime, clock: datetime) -> datetime:
+    """Journal entry time is the signal bar's end, not the watcher clock.
+
+    The clock is the scan's evaluation instant, a few seconds after the bar
+    close. Storing that instant makes the first post-entry bar look like it
+    opened before the fill. A naive trigger end falls back to the clock.
+    """
+
+    if trigger_end.tzinfo is None:
+        return clock
+    return trigger_end.astimezone(UTC)
+
+
+def entry_eligibility_time(entry_time: datetime, timeframe: Timeframe) -> datetime:
+    """The earliest bar start that may exit this fill.
+
+    A fill at a closed-bar boundary, or in the short settlement gap after it,
+    uses that boundary. The bar which opens there is the first post-entry bar.
+    A fill deeper inside a bar keeps its own timestamp, so that bar's range
+    is not treated as having printed after the fill.
+    """
+
+    if entry_time.tzinfo is None:
+        return entry_time
+    moment = entry_time.astimezone(UTC)
+    boundary = _boundary_at_or_before(moment, interval_timedelta(timeframe))
+    if moment - boundary <= ENTRY_SETTLEMENT_GAP:
+        return boundary
+    return moment
+
+
+def _boundary_at_or_before(moment: datetime, step: timedelta) -> datetime:
+    size = step.total_seconds()
+    if size <= 0:
+        return moment
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    elapsed = (moment - epoch).total_seconds()
+    floored = elapsed - (elapsed % size)
+    return epoch + timedelta(seconds=floored)
 
 
 def is_internal_paper_plan(
@@ -395,41 +446,50 @@ def decide_exit(
     source_name: str,
     evaluated_at: datetime,
 ) -> ExitDecision | None:
-    """First closed bar that starts at or after the entry and touches a level.
+    """First closed bar after the entry that touches a level.
 
     Live internal-paper entries are taken at a closed-bar boundary. The entry
     time is that bar's ``interval_end``, so the fill bar has an earlier
     ``interval_start`` and is not eligible. The next bar, whose
     ``interval_start`` equals the entry time, is the first bar that can exit
-    the trade. A touch inside the fill bar is ignored. The same comparison
-    also skips a partial bar when the fill is recorded inside it, because that
-    bar's range is not known to have printed after the fill. When one eligible
-    bar touches both levels, the stop is the exit and the evidence records
+    the trade. A fill stored a few seconds later, from the watcher clock,
+    still uses that boundary. A touch inside the fill bar is ignored. A fill
+    recorded deeper inside a bar skips that bar, because its range is not
+    known to have printed after the fill. A bar that opens through the stop
+    exits at that open. When one eligible bar touches both levels without
+    gapping through the stop, the stop is the exit and the evidence records
     ``stop_first``.
     """
 
+    eligible_from = entry_eligibility_time(trade.entry_time, trade.timeframe)
     eligible = [
         bar
         for bar in bars
-        if bar.interval_start >= trade.entry_time
+        if bar.interval_start >= eligible_from
         and bar.interval_end <= evaluated_at
         and bar.interval_start.tzinfo is not None
         and bar.interval_end.tzinfo is not None
     ]
     for bar in sorted(eligible, key=lambda item: item.interval_start):
+        gapped = _opens_through_stop(trade, bar)
         touch = _touch(trade, bar)
-        if touch is None:
+        if touch is None and not gapped:
             continue
-        stop_exit = touch in {"stop", "both"}
+        stop_exit = gapped or touch in {"stop", "both"}
         reason: ExitReason = EXIT_REASON_STOP if stop_exit else EXIT_REASON_TARGET
-        price = trade.stop if stop_exit else trade.target
+        if gapped:
+            price = bar.open
+            assumption = GAP_THROUGH_OPEN
+        else:
+            price = trade.stop if stop_exit else trade.target
+            assumption = SAME_BAR_ASSUMPTION if touch == "both" else SAME_BAR_NONE
         origin = classify_exit_origin(bar.interval_end, evaluated_at)
         evidence = _evidence(
             trade,
             bar,
             source_name=source_name,
             level="stop" if stop_exit else "target",
-            assumption=SAME_BAR_ASSUMPTION if touch == "both" else SAME_BAR_NONE,
+            assumption=assumption,
         )
         evidence["exit_origin"] = origin
         evidence["calibration_sample"] = (
@@ -640,6 +700,19 @@ def _non_negative(value: object) -> Decimal | None:
     if amount is None or amount < 0:
         return None
     return amount
+
+
+def _opens_through_stop(trade: OpenInternalPaperTrade, bar: ExitBar) -> bool:
+    """True when the bar open is already through the stop.
+
+    The fill is the open. Later extrema in the same bar are not used.
+    """
+
+    if trade.direction is TradeDirection.LONG:
+        return bar.open <= trade.stop
+    if trade.direction is TradeDirection.SHORT:
+        return bar.open >= trade.stop
+    return False
 
 
 def _touch(trade: OpenInternalPaperTrade, bar: ExitBar) -> Literal["stop", "target", "both"] | None:

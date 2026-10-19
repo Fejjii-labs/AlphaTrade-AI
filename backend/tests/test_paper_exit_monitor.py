@@ -41,6 +41,7 @@ from app.services.paper_exit_monitor import (
     counts_for_adr109_calibration,
     exit_idempotency_key,
     exit_monitor_backfill,
+    fill_entry_time,
     is_internal_paper_plan,
     open_internal_paper_statement,
     parse_open_trade,
@@ -426,6 +427,117 @@ def test_trade_opened_at_bar_close_exits_on_the_next_bar() -> None:
     assert request.exit_evidence["bar_interval_start"] == next_bar.isoformat()
 
 
+def test_settlement_gap_after_the_boundary_exits_on_the_opening_bar() -> None:
+    """A watcher clock a few seconds after the close still uses that bar.
+
+    The signal bar is not eligible. The bar that opens at the boundary is,
+    including when its open is already through the stop.
+    """
+
+    boundary = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    entry = boundary + timedelta(seconds=4)
+    evaluated = boundary + timedelta(minutes=20)
+    signal = boundary - timedelta(minutes=15)
+    trade = _trade(entry_time=entry)
+    missed, idle = _run(
+        trade,
+        (_bar(signal, low="90", high="101"),),
+        evaluated_at=evaluated,
+    )
+    assert missed.closed == 0
+    assert idle.requests == []
+    report, closer = _run(
+        trade,
+        (
+            _bar(signal, low="90", high="101"),
+            _bar(boundary, low="94", high="101"),
+        ),
+        evaluated_at=evaluated,
+    )
+    assert report.closed == 1
+    request = closer.requests[0]
+    assert request.exit_reason == "stop_hit"
+    assert request.exit_price == Decimal("95")
+    assert request.occurred_at == boundary + timedelta(minutes=15)
+    assert request.exit_evidence is not None
+    assert request.exit_evidence["bar_interval_start"] == boundary.isoformat()
+    assert request.exit_evidence["same_bar_assumption"] == "none"
+    assert request.exit_evidence["exit_origin"] == "live"
+
+
+def test_bar_that_opens_through_the_stop_exits_at_the_open() -> None:
+    boundary = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    entry = boundary + timedelta(seconds=4)
+    evaluated = boundary + timedelta(minutes=20)
+    report, closer = _run(
+        _trade(entry_time=entry),
+        (_bar(boundary, low="90", high="120", open_="93"),),
+        evaluated_at=evaluated,
+    )
+    assert report.closed == 1
+    request = closer.requests[0]
+    assert request.exit_reason == "stop_hit"
+    assert request.exit_price == Decimal("93")
+    assert request.occurred_at == boundary + timedelta(minutes=15)
+    assert request.exit_evidence is not None
+    assert request.exit_evidence["same_bar_assumption"] == "gap_through_open"
+    short, short_closer = _run(
+        _trade(
+            direction=TradeDirection.SHORT,
+            entry=Decimal("100"),
+            stop=Decimal("105"),
+            target=Decimal("90"),
+            entry_time=entry,
+        ),
+        (_bar(boundary, low="80", high="110", open_="107"),),
+        evaluated_at=evaluated,
+    )
+    assert short.closed == 1
+    short_request = short_closer.requests[0]
+    assert short_request.exit_reason == "stop_hit"
+    assert short_request.exit_price == Decimal("107")
+    assert short_request.exit_evidence is not None
+    assert short_request.exit_evidence["same_bar_assumption"] == "gap_through_open"
+
+
+def test_live_close_across_midnight_feeds_the_breaker_for_the_close_day() -> None:
+    """A bar that ended yesterday, processed just after midnight, is live.
+
+    The note uses the bar end, so the daily lock is the day the bar closed.
+    """
+
+    bar_start = datetime(2026, 10, 17, 23, 30, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 18, 0, 10, tzinfo=UTC)
+    entry = datetime(2026, 10, 17, 22, 0, tzinfo=UTC)
+    _report, closer = _run(
+        _trade(entry_time=entry),
+        (_bar(bar_start, low="94", high="101"),),
+        evaluated_at=evaluated,
+    )
+    request = closer.requests[0]
+    assert request.occurred_at == bar_start + timedelta(minutes=15)
+    assert request.occurred_at.astimezone(UTC).date() < evaluated.date()
+    assert request.exit_evidence is not None
+    assert request.exit_evidence["exit_origin"] == "live"
+    assert request.exit_evidence["calibration_sample"] == "eligible"
+    assert exit_monitor_backfill(request) is False
+    assert counts_for_adr109_calibration(request) is True
+    assert profile_close_should_note(
+        request,
+        replayed=False,
+        margin_assumption_id="paper-profile-isolated",
+        net_pnl=Decimal("-5"),
+    )
+
+
+def test_fill_entry_time_uses_the_signal_bar_end() -> None:
+    trigger = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    clock = trigger + timedelta(seconds=6)
+    assert fill_entry_time(trigger_end=trigger, clock=clock) == trigger
+    naive = datetime(2026, 10, 18, 12, 0)
+    assert fill_entry_time(trigger_end=naive, clock=clock) == clock
+
+
 def test_bar_containing_the_entry_is_not_a_hit() -> None:
     entry = datetime(2026, 10, 6, 0, 7, tzinfo=UTC)
     entry_bar = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
@@ -718,7 +830,7 @@ def test_october_6_live_crossings_are_read_from_binance_not_replay() -> None:
     )
     bars = (
         _bar(fill_bar, low="85000", high="86000"),
-        _bar(crossing, low="85650", high="86881.1"),
+        _bar(crossing, low="85650", high="86881.1", open_="85680"),
     )
 
     class LiveBinance:

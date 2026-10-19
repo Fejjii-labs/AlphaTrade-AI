@@ -250,6 +250,7 @@ class AutomatedPaperLoop:
                 candidate=candidate,
                 revision_id=existing.plan.revision_id,
                 account_id=account.id,
+                entry_occurred_at=assembled.trigger_bar.interval_end,
             )
         eligibility = self._eligibility_service().evaluate(
             self._eligibility_command(
@@ -377,6 +378,7 @@ class AutomatedPaperLoop:
             account_id=account.id,
             eligibility_id=eligibility.eligibility.eligibility_id,
             eligibility_state=state.value,
+            entry_occurred_at=assembled.trigger_bar.interval_end,
         )
 
     def _execute_existing(
@@ -389,6 +391,7 @@ class AutomatedPaperLoop:
         account_id: UUID,
         eligibility_id: UUID | None = None,
         eligibility_state: str | None = None,
+        entry_occurred_at: datetime | None = None,
     ) -> AutomatedPaperLoopProof:
         plans = self._plan_service()
         envelope = plans.get_scoped(
@@ -570,12 +573,15 @@ class AutomatedPaperLoop:
                 trade_plan_revision_id=revision_id,
                 execution_command_id=result.command_id,
             )
+        from app.services.paper_exit_monitor import fill_entry_time
+
+        trigger_end = self._clock.now() if entry_occurred_at is None else entry_occurred_at
         filled = execution.apply_paper_plan_fill(
             command_id=result.command_id,
             fill_quantity=envelope.plan.quantity.value,
             fill_price=envelope.plan.basis_policy.execution_price.value,
             source_identity=f"paper-internal:{candidate.candidate_id}",
-            occurred_at=self._clock.now(),
+            occurred_at=fill_entry_time(trigger_end=trigger_end, clock=self._clock.now()),
             venue_source="paper_internal",
         )
         trade = _open_journal(
