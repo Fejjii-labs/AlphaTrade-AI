@@ -179,10 +179,11 @@ class DailyRiskAccounting:
         """Canonical fills and net outcomes, excluding legacy position mirrors.
 
         Mirrored BloFin demo venue P&L is omitted from realized loss. The
-        omission is the mirror source or the server reconciliation tag, never
-        an external-ref prefix. A lifecycle row the mirror closes in place
-        keeps its prior open notional so the close cannot change exposure or,
-        with entry time left as it was, the day's trade count.
+        omission is source ``blofin_demo_manual`` or the exact server prefix
+        ``blofin-demo-history:`` on ``external_ref``. Tags are not read. A
+        lifecycle row the mirror closes in place keeps its prior open notional
+        so the close cannot change exposure or, with entry time left as it was,
+        the day's trade count.
         """
         scope = (
             JournalTrade.organization_id == organization_id,
