@@ -132,6 +132,13 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert self_test.returncode == 0, self_test.stderr + self_test.stdout
     assert "rename-into-docs" in self_test.stdout
     assert "labeled-other-does-not-skip" in self_test.stdout
+    assert "ok docs-push" in self_test.stdout
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.event_name == 'push'" not in concurrency["cancel-in-progress"]
+    group = concurrency["group"]
+    assert "format('{0}-{1}-dispatch-{2}', github.workflow, github.ref, github.run_id)" in group
+    assert "format('{0}-{1}', github.workflow, github.ref)" in group
     full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"

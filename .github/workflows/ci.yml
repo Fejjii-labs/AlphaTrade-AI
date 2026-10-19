@@ -13,12 +13,12 @@ on:
         required: true
         default: true
 
-# A new push or pull_request event cancels the older run on that ref.
-# workflow_dispatch uses a unique group so a manual full_backend run is neither
-# queued behind nor cancelled by ordinary CI. There is no schedule.
+# Only a newer pull_request run cancels the older one on that ref.
+# A push never cancels another run. workflow_dispatch uses a unique group so a
+# manual full_backend run is neither queued behind nor cancelled. No schedule.
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}-dispatch-{2}', github.workflow, github.ref, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CI_SCOPE_EVENT_NAME: ${{ github.event_name }}

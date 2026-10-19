@@ -107,7 +107,9 @@ decide() {
     return 0
   fi
 
-  if docs_only_diff "${CI_SCOPE_BASE_SHA:-}" "${CI_SCOPE_HEAD_SHA:-}"; then
+  # Push always runs heavy work. A docs-only push must not replace an
+  # in-progress code run with a green skip. Pull requests still skip.
+  if [[ "$event" == "pull_request" ]] && docs_only_diff "${CI_SCOPE_BASE_SHA:-}" "${CI_SCOPE_HEAD_SHA:-}"; then
     app=false
     heavy=false
     reason=docs-or-ai-only
@@ -167,7 +169,7 @@ self_test() {
 
   run_case docs-pr false false \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false
-  run_case docs-push false false \
+  run_case docs-push true true \
     CI_SCOPE_EVENT_NAME=push CI_SCOPE_PR_ACTION= CI_SCOPE_PR_DRAFT=
   run_case dispatch-keeps-full true true \
     CI_SCOPE_EVENT_NAME=workflow_dispatch CI_SCOPE_PR_ACTION= CI_SCOPE_PR_DRAFT=

@@ -23,10 +23,11 @@ Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
 `backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
 `e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
 `frontend`. The workflow file has no `permissions` block and no `schedule`.
-A concurrency group cancels an older push or pull_request run on the same ref.
-`workflow_dispatch` uses a unique group, so a manual full run is not queued or
-cancelled. The only `workflow_dispatch` input is `full_backend`, and its default
-is `true`. There is no `combined_validation` input.
+A concurrency group cancels an older pull_request run on the same ref.
+`cancel-in-progress` is true only for `pull_request`, so a push cannot cancel
+another run. `workflow_dispatch` uses a unique group, so a manual full run is
+not queued or cancelled. The only `workflow_dispatch` input is `full_backend`,
+and its default is `true`. There is no `combined_validation` input.
 
 Heavy steps in `backend`, `evaluation`, `docker-build`, and `e2e-smoke` do not
 run on a draft pull request. They run for a non-draft `opened`, `synchronize`,
@@ -38,9 +39,10 @@ to `labeled`, so adding an unrelated label does not start CI or cancel a run.
 classified with `git diff --name-only --no-renames`, so a move into `docs/` or
 `.ai/` does not count as docs-only.
 
-`docs/**`, `.ai/**`, and root-level markdown-only changes skip backend,
-frontend, Docker, evaluation, and browser work. Those jobs still finish
-successfully, so a required check is not left pending or skipped.
+On a pull request, `docs/**`, `.ai/**`, and root-level markdown-only changes
+skip backend, frontend, Docker, evaluation, and browser work. Those jobs still
+finish successfully, so a required check is not left pending. A push to `main`
+or `master` always runs the heavy jobs, including when that push is docs-only.
 `workflow_dispatch` ignores that path filter and the draft filter. The
 `full_backend` input still selects only the complete backend pytest step, and
 only a manual dispatch can select it. Pull requests and pushes never run that
@@ -64,13 +66,15 @@ tests for other cross-module changes in the PR. The CI database URL is bound to
 disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
 
 The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
-`npm run test`, and `npm run build` when the change is not docs-only or
-`.ai`-only. It does not run `scripts/run_frontend_focused.py`. The evaluation,
+`npm run test`, and `npm run build` on every push, and on a pull request whose
+change is not docs-only or `.ai`-only. It does not run
+`scripts/run_frontend_focused.py`. The evaluation,
 Docker build, and Playwright smoke jobs run for the same non-draft code events
 as the heavy backend steps. They are not gated by a second manual flag.
 No branch-protection settings are changed by this policy. A green required
-check on a draft or a docs-only change means that heavy work was skipped, not
-that the suite passed. Complete acceptance is one manual `full_backend=true`
+check on a draft or a docs-only pull request means that heavy work was
+skipped, not that the suite passed. A docs-only push still runs the heavy
+jobs. Complete acceptance is one manual `full_backend=true`
 dispatch on the integration batch SHA, not a nightly run.
 
 ## Final consolidated release acceptance
