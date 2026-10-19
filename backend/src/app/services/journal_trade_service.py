@@ -75,9 +75,35 @@ from app.services.blofin_demo_manual_mirror import (
     grade_tag,
 )
 from app.services.canonical_serialization import canonical_sha256
+from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
 
 _REQUEST_TAG = "journal-trades-api"
 _GRADE = re.compile(r"^(?:[A-D][+-]?|F)$")
+
+
+def _reject_client_mirror_ref(value: object) -> None:
+    if isinstance(value, str) and value.startswith(MIRROR_REF_PREFIX):
+        raise ValidationAppError(
+            "A blofin-demo- external ref is written only by the read-only mirror.",
+            details={"reason": "mirror_ref_immutable"},
+        )
+
+
+def _tag_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [tag for tag in value if isinstance(tag, str)]
+
+
+def _reject_reconcile_tag_change(before: object, after: object) -> None:
+    had = RECONCILED_TAG in _tag_list(before)
+    has = RECONCILED_TAG in _tag_list(after)
+    if had == has:
+        return
+    raise ValidationAppError(
+        "The mirror reconciliation marker is written only by the read-only mirror.",
+        details={"reason": "mirror_reconciled_immutable"},
+    )
 
 
 def _clean_grade(value: object) -> str | None:
@@ -115,6 +141,7 @@ VENUE_FACT_FIELDS = frozenset(
         "linked_order_id",
         "linked_position_id",
         "linked_paper_trade_id",
+        "external_ref",
     }
 )
 
@@ -184,6 +211,8 @@ class JournalTradeService:
                 "A BloFin demo hand-trade row is written only by the read-only mirror.",
                 details={"reason": "mirror_source_immutable"},
             )
+        _reject_client_mirror_ref(data.external_ref)
+        _reject_reconcile_tag_change([], data.tags)
         if data.external_ref == "blofin-demo-mirror-cycle" or cycle_tags_rewritten([], data.tags):
             raise ValidationAppError(
                 "The hand-trade mirror cycle marker cannot be created here.",
@@ -460,6 +489,10 @@ class JournalTradeService:
     ) -> JournalTradeRead:
         row = self._get_row(trade_id, organization_id=organization_id)
         updates = data.model_dump(exclude_unset=True)
+        if "external_ref" in updates:
+            _reject_client_mirror_ref(updates.get("external_ref"))
+        if "tags" in updates:
+            _reject_reconcile_tag_change(row.tags, updates.get("tags"))
         if cycle_marker_locked(row) or updates.get("external_ref") == "blofin-demo-mirror-cycle":
             raise ValidationAppError(
                 "The hand-trade mirror cycle marker cannot be edited here.",
@@ -559,6 +592,11 @@ class JournalTradeService:
             raise ValidationAppError(
                 "Correction includes fields that are not venue facts.",
                 details={"fields": unknown},
+            )
+        if "external_ref" in fields:
+            raise ValidationAppError(
+                "external_ref is written only by the server.",
+                details={"reason": "mirror_ref_immutable"},
             )
         if not fields:
             raise ValidationAppError("Venue correction requires at least one field.")

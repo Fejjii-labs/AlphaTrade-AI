@@ -55,6 +55,7 @@ from app.services.risk.daily_risk_accounting import (
     AuthoritativeDailySnapshot,
     DailyRiskAccounting,
 )
+from app.services.risk.mirror_economics import RECONCILED_TAG
 from app.services.risk.paper_cooldown import paper_loss_cooldown_active
 from app.services.risk.settings_service import RiskSettingsService
 
@@ -422,6 +423,7 @@ def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -
     assert _money(row.size) == Decimal("0.02000000")
     assert row.net_pnl is not None and row.net_pnl <= -before.daily_loss_limit  # type: ignore[operator]
     assert row.external_ref == "blofin-demo-history:h-long"
+    assert RECONCILED_TAG in (row.tags or [])
 
     after = _daily(session)
     assert after.daily_locked is False
@@ -447,66 +449,130 @@ def test_reconciled_close_does_not_move_the_paper_daily_lock(session: Session) -
     assert {bucket.key for bucket in stats.buckets} == {"human"}
 
 
-def test_paper_execution_close_still_locks_and_mirror_refs_do_not(session: Session) -> None:
-    _loss_limit(session)
-    session.add(
-        JournalTrade(
-            organization_id=ORG,
-            user_id=USER,
-            source=JournalTradeSource.PAPER_EXECUTION,
-            status=JournalTradeStatus.CLOSED,
-            symbol="BTCUSDT",
-            timeframe="manual",
-            direction=TradeDirection.LONG,
-            entry_price=Decimal("100"),
-            entry_time=NOW,
-            exit_time=NOW,
-            size=Decimal("1"),
-            net_pnl=Decimal("-1"),
-            result=TradeResult.LOSS,
-            execution_lifecycle_id=uuid.uuid4(),
-            external_ref="blofin-demo-history:not-a-paper-loss",
-        )
-    )
-    session.commit()
-    held = _daily(session)
-    assert held.daily_locked is False
-    assert held.realized_pnl == Decimal("0")
-    assert (
-        paper_loss_cooldown_active(
-            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
-        )
-        is False
+def _closed_loss(
+    *,
+    source: JournalTradeSource,
+    symbol: str,
+    net: str,
+    external_ref: str | None = None,
+    tags: list[str] | None = None,
+) -> JournalTrade:
+    return JournalTrade(
+        organization_id=ORG,
+        user_id=USER,
+        source=source,
+        status=JournalTradeStatus.CLOSED,
+        symbol=symbol,
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        entry_time=NOW,
+        exit_time=NOW,
+        net_pnl=Decimal(net),
+        result=TradeResult.LOSS,
+        execution_lifecycle_id=uuid.uuid4(),
+        external_ref=external_ref,
+        tags=tags or [],
     )
 
-    session.add(
-        JournalTrade(
-            organization_id=ORG,
-            user_id=USER,
-            source=JournalTradeSource.PAPER_EXECUTION,
-            status=JournalTradeStatus.CLOSED,
-            symbol="ETHUSDT",
-            timeframe="manual",
-            direction=TradeDirection.LONG,
-            entry_price=Decimal("100"),
-            entry_time=NOW,
-            exit_time=NOW,
-            size=Decimal("1"),
-            net_pnl=Decimal("-1"),
-            result=TradeResult.LOSS,
-            execution_lifecycle_id=uuid.uuid4(),
-        )
-    )
+
+def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
+    """A client ref or tag must not take a paper loss out of the daily book."""
+    _loss_limit(session)
+    loss = _closed_loss(source=JournalTradeSource.PAPER_EXECUTION, symbol="BTCUSDT", net="-1")
+    session.add(loss)
     session.commit()
-    locked = _daily(session)
-    assert locked.daily_locked is True
-    assert locked.realized_pnl <= Decimal("-0.10")
+    before = _daily(session)
+    assert before.daily_locked is True
+    assert before.realized_pnl <= Decimal("-0.10")
     assert (
         paper_loss_cooldown_active(
             session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
         )
         is True
     )
+
+    service = JournalTradeService(session, AuditService(session))
+    with pytest.raises(ValidationAppError) as forged_ref:
+        service.update(
+            loss.id,
+            JournalTradeUpdate(external_ref="blofin-demo-history:forged"),
+            organization_id=ORG,
+        )
+    assert forged_ref.value.status_code == 422
+    with pytest.raises(ValidationAppError) as forged_tag:
+        service.update(
+            loss.id,
+            JournalTradeUpdate(tags=[RECONCILED_TAG]),
+            organization_id=ORG,
+        )
+    assert forged_tag.value.status_code == 422
+    with pytest.raises(ValidationAppError) as created:
+        service.create(
+            JournalTradeCreate(
+                source=JournalTradeSource.PAPER_EXECUTION,
+                symbol="ETHUSDT",
+                timeframe=Timeframe.H1,
+                direction=TradeDirection.LONG,
+                external_ref="blofin-demo-history:created",
+                net_pnl=Decimal("-9"),
+                result=TradeResult.LOSS,
+            ),
+            organization_id=ORG,
+            user_id=USER,
+        )
+    assert created.value.status_code == 422
+
+    loss.external_ref = "blofin-demo-history:forged"
+    session.commit()
+    prefixed = _daily(session)
+    assert prefixed.daily_locked is True
+    assert prefixed.realized_pnl == before.realized_pnl
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is True
+    )
+
+    session.add(
+        _closed_loss(
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            symbol="ETHUSDT",
+            net="-5",
+            external_ref="blofin-demo-history:mirror",
+        )
+    )
+    session.add(
+        _closed_loss(
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            symbol="BCHUSDT",
+            net="-5",
+            tags=[RECONCILED_TAG],
+        )
+    )
+    session.commit()
+    excluded = _daily(session)
+    assert excluded.daily_locked is True
+    assert excluded.realized_pnl == before.realized_pnl
+    assert (
+        paper_loss_cooldown_active(
+            session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
+        )
+        is True
+    )
+
+    session.add(
+        _closed_loss(
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            symbol="LTCUSDT",
+            net="-3",
+            external_ref="blofin-demo-history:prefix-only",
+        )
+    )
+    session.commit()
+    counted = _daily(session)
+    assert counted.realized_pnl == before.realized_pnl + Decimal("-3")
+    assert counted.daily_locked is True
 
 
 def test_ambiguous_manual_rows_are_not_duplicated(session: Session) -> None:

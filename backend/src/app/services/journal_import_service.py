@@ -55,6 +55,7 @@ from app.schemas.journal_import import (
     PaginatedJournalImportBatches,
 )
 from app.services.audit_service import AuditService
+from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
 
 _REQUEST_TAG = "journal-import-api"
 _FINGERPRINT_PREFIX = "fp-sha256:"
@@ -81,13 +82,24 @@ class JournalImportService:
         user_id: uuid.UUID,
     ) -> JournalImportResult:
         parsed = _parse_rows(request.rows)
-        refs = [_effective_ref(row) for _, row, _ in parsed if row is not None]
+        reserved: dict[int, str] = {}
+        for index, row, _errors in parsed:
+            if row is None:
+                continue
+            message = _reserved_mirror_identity(row)
+            if message is not None:
+                reserved[index] = message
+        refs = [
+            _effective_ref(row)
+            for index, row, _ in parsed
+            if row is not None and index not in reserved
+        ]
         existing = self._trades.existing_external_refs(
             organization_id=organization_id, external_refs=refs
         )
 
         commit = request.mode is JournalImportMode.COMMIT
-        any_invalid = any(row is None for _, row, _ in parsed)
+        any_invalid = any(row is None for _, row, _ in parsed) or bool(reserved)
         # All-or-nothing: invalid rows downgrade a commit to a validation report.
         persist = commit and not any_invalid
 
@@ -103,6 +115,17 @@ class JournalImportService:
                         index=index,
                         outcome=JournalImportRowOutcome.INVALID,
                         errors=errors,
+                    )
+                )
+                continue
+            reserved_error = reserved.get(index)
+            if reserved_error is not None:
+                invalid += 1
+                results.append(
+                    JournalImportRowResult(
+                        index=index,
+                        outcome=JournalImportRowOutcome.INVALID,
+                        errors=[reserved_error],
                     )
                 )
                 continue
@@ -294,6 +317,14 @@ def _parse_rows(
             ]
             parsed.append((index, None, errors))
     return parsed
+
+
+def _reserved_mirror_identity(row: JournalImportRow) -> str | None:
+    if row.external_ref is not None and row.external_ref.startswith(MIRROR_REF_PREFIX):
+        return "external_ref is reserved for the BloFin demo mirror."
+    if RECONCILED_TAG in row.tags:
+        return "The mirror reconciliation marker is reserved."
+    return None
 
 
 def _effective_ref(row: JournalImportRow) -> str:

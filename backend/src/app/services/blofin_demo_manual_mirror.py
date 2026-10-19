@@ -70,6 +70,7 @@ from app.schemas.common import (
 )
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
 from app.security.tenant import TenantContext
+from app.services.risk.mirror_economics import RECONCILED_TAG
 
 logger = structlog.get_logger("services.blofin_demo_manual_mirror")
 
@@ -757,7 +758,7 @@ def _window(now: datetime) -> tuple[datetime, datetime, str, str]:
     return begin, end, str(int(begin.timestamp() * 1000)), str(int(end.timestamp() * 1000))
 
 
-def _tags(draft: MirrorDraft, existing: list[str]) -> list[str]:
+def _tags(draft: MirrorDraft, existing: list[str], *, reconciled: bool) -> list[str]:
     kept = [
         tag
         for tag in existing
@@ -770,6 +771,8 @@ def _tags(draft: MirrorDraft, existing: list[str]) -> list[str]:
     mirror.append(_VERIFIED if draft.verified else _UNVERIFIED)
     if draft.open_tracker:
         mirror = [tag for tag in mirror if tag != _UNVERIFIED]
+    if reconciled:
+        mirror.append(RECONCILED_TAG)
     return kept + mirror
 
 
@@ -836,7 +839,8 @@ def _apply_venue(row: JournalTrade, draft: MirrorDraft, *, fresh: bool) -> None:
         row.planned_targets = [
             {"price": format(draft.target, "f"), "size_fraction": 1.0, "label": "tp"}
         ]
-    row.tags = _tags(draft, list(row.tags or []))
+    reconciled = row.source in {JournalTradeSource.MANUAL, JournalTradeSource.MANUAL_DEMO_TEST}
+    row.tags = _tags(draft, list(row.tags or []), reconciled=reconciled)
 
 
 def _history_ids(row: JournalTrade) -> set[str]:

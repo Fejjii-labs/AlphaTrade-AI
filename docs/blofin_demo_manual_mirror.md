@@ -159,13 +159,19 @@ withheld. The stuck open example
 matches. This repository change does not call BloFin, so it does not prove
 that the live row matches a venue close.
 
-That close writes the venue net onto the journal row. The net does not enter
-open risk, daily realized loss, the daily lock, the paper loss cooldown, or
-promotion. Promotion reads paper-validation trades, and the mirror does not
-write those. A lifecycle-backed row keeps the entry time, size, and entry
-price the daily book already used, and a reconciled `manual_demo_test` row
-keeps that same open notional after it is closed. An unreconciled manual
-demo fill still counts toward the day's trade count and open exposure.
+That close writes the venue net onto the journal row and adds the server tag
+`blofin-reconciled`. Risk, the daily lock, open exposure, and the paper loss
+cooldown treat a row as mirror economics only when its source is
+`blofin_demo_manual` or it carries that tag. An `external_ref` prefix alone
+does not. Generic create, update, venue correction, and import reject a
+client `external_ref` that starts with `blofin-demo-`, and they reject a
+client change to `blofin-reconciled`. `external_ref` is a venue fact, so a
+lifecycle row cannot change it through the generic update. Promotion reads
+paper-validation trades, and the mirror does not write those. A
+lifecycle-backed row keeps the entry time, size, and entry price the daily
+book already used, and a reconciled `manual_demo_test` row keeps that same
+open notional after it is closed. An unreconciled manual demo fill still
+counts toward the day's trade count and open exposure.
 
 ## Tags after the mirror
 
