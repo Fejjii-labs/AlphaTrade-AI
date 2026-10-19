@@ -79,6 +79,7 @@ def exit_world(category="normal", *, partial=False):
         "createTime": ts,
     }
     responses = {
+        "query-apikey": {"readOnly": 0},
         "positions": [],
         "orders-pending": [],
         "orders-tpsl-pending": [],
@@ -115,7 +116,7 @@ def test_verified_actual_close_and_partial_entry_keep_real_economics(category, p
     assert closed.fills[0].fee == Decimal("0.03")
     assert closed.facts()["funding"] is None and closed.facts()["net_pnl"] is None
     assert closed.protection_ids == (() if category == "normal" else ("protect-1",))
-    assert len(calls) <= 9
+    assert len(calls) <= 11  # UID/permission checks bracket the history reads.
 
 
 @pytest.mark.parametrize(
@@ -124,7 +125,14 @@ def test_verified_actual_close_and_partial_entry_keep_real_economics(category, p
 def test_absence_or_partial_close_never_infers_closed(reason):
     plan, entry, provider, responses, _ = exit_world()
     if reason == "open":
-        responses["positions"] = [{"positions": "1", "instId": "ETH-USDT"}]
+        responses["positions"] = [
+            {
+                "positions": str(-plan.quantity.value),
+                "instId": plan.execution_instrument,
+                "positionSide": "net",
+                "marginMode": "cross",
+            }
+        ]
     elif reason == "pending":
         responses["orders-pending"] = [{"orderId": "other-market-pending"}]
     elif reason == "live_entry":
@@ -229,3 +237,56 @@ def test_actual_exit_retains_fee_currency_without_inferred_monetary_basis(curren
     assert closed.facts()["exit_fills"][0]["fee_currency"] == currency
     assert closed.facts()["fee_convention"] is None
     assert closed.facts()["net_pnl"] is closed.facts()["funding"] is None
+
+
+@pytest.mark.parametrize("problem", ["foreign", "oversized", "wrong_side", "duplicate", "hedge"])
+def test_open_position_must_be_explained_by_owned_net_fills(problem):
+    from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
+
+    plan, entry, *_ = exit_world()
+    row = {
+        "instId": plan.execution_instrument,
+        "positionSide": "net",
+        "marginMode": "cross",
+        "positions": str(-plan.quantity.value),
+    }
+    rows = [row]
+    if problem == "foreign":
+        row["instId"] = "ETH-USDT"
+    elif problem == "oversized":
+        row["positions"] = str(-plan.quantity.value * 2)
+    elif problem == "wrong_side":
+        row["positions"] = str(plan.quantity.value)
+    elif problem == "duplicate":
+        rows = [row, dict(row)]
+    elif problem == "hedge":
+        row["positionSide"] = "short"
+
+    def handle(request):
+        assert request.method == "GET"
+        if request.url.path.endswith("query-apikey"):
+            return httpx.Response(200, json={"code": "0", "data": {"readOnly": 0}})
+        assert request.url.path.endswith("positions")
+        return httpx.Response(200, json={"code": "0", "data": rows})
+
+    with pytest.raises(DemoPositionLineageError):
+        provider_for(handle).reconcile_exit(plan=plan, entry=entry)
+
+
+def test_execution_connection_requires_the_experiment_owned_uid_before_entry_io():
+    from app.providers.exchange.demo_preflight import DemoPreflightError
+
+    requests = []
+
+    def handler(request):
+        requests.append((request.method, request.url.path))
+        assert request.method == "GET" and request.url.path.endswith("query-apikey")
+        return httpx.Response(
+            200, json={"code": "0", "data": {"readOnly": 0, "uid": "foreign-uid"}}
+        )
+
+    provider = provider_for(handler)
+    provider.require_account_identity("owned-uid")
+    with pytest.raises(DemoPreflightError):
+        provider.verify_permissions()
+    assert requests == [("GET", "/api/v1/user/query-apikey")]

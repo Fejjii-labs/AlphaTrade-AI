@@ -37,9 +37,15 @@ from app.schemas.common import (
 from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCommandOutcome
 from app.schemas.trade_plan import (
     AuthorizationChannel,
+    AuthorizationState,
     TradePlanRevisionCreate,
 )
-from app.services.approval_service import ApprovalService
+from app.services.approval_service import (
+    CHANNEL_MISMATCH_REASON,
+    ApprovalService,
+    revoke_leftover_autonomous_authorizations,
+    stored_issuance_matches,
+)
 from app.services.audit_service import AuditService
 from app.services.canonical_trade_plan import CanonicalTradePlanService
 from app.services.execution_service import ExecutionService
@@ -96,6 +102,12 @@ class AutomatedPaperLoopProof:
     journal_status: str | None = None
 
 
+def _global_kill_switch_active(settings: object) -> bool:
+    """True only for an explicit boolean global kill switch."""
+
+    return getattr(settings, "global_kill_switch_active", None) is True
+
+
 def paper_loop_posture_refusal(settings: Settings) -> str | None:
     """Return a refusal code when this process may not place an internal paper fill."""
 
@@ -135,6 +147,7 @@ class AutomatedPaperLoop:
     ) -> AutomatedPaperLoopProof:
         """Open one internal paper journal trade, or write nothing when a gate fails."""
 
+        self._observed_kill_switch = kill_switch_active
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -172,11 +185,13 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
-        if kill_switch_active:
-            return _proof(candidate, "blocked", "kill_switch_active")
         if assessment.state is not SetupAssessmentState.CONFIRMED_SETUP:
             return _proof(candidate, "skipped", "setup_not_confirmed")
         lineage = _lineage_refusal(
@@ -324,6 +339,23 @@ class AutomatedPaperLoop:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
             eligibility_state = envelope.lineage.eligibility_state.value
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason="autonomous_precheck_blocked",
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        from app.services.autonomous_trading import (
+            AUTONOMOUS_ACTOR_TYPE,
+            AutonomousMode,
+            autonomous_decision_metadata,
+        )
+
         approval = ApprovalService(
             session,
             AuditService(session),
@@ -341,10 +373,44 @@ class AutomatedPaperLoop:
             ApprovalDecisionRequest(action=_approve_action(), modified_fields=None),
             principal_organization_id=target.organization_id,
             principal_user_id=target.user_id,
-            channel=AuthorizationChannel.API,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+            audit_metadata=autonomous_decision_metadata(
+                mode=AutonomousMode.INTERNAL_PAPER,
+                settings=self._settings,
+                limits=None,
+                limits_note=("account ledger limits are enforced at claim, not at this approval"),
+            ),
         )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason="post_approval_recheck",
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        if not stored_issuance_matches(
+            decided.authorization,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+        ):
+            if getattr(decided.authorization, "state", None) is AuthorizationState.AVAILABLE:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason=CHANNEL_MISMATCH_REASON,
+                )
+            return _proof(
+                candidate,
+                "blocked",
+                CHANNEL_MISMATCH_REASON,
+                revision_id=revision_id,
+            )
         execution = ExecutionService(
             session,
             self._settings,
@@ -358,6 +424,7 @@ class AutomatedPaperLoop:
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=True,
             ),
             clock=self._clock.now,
         )
@@ -383,6 +450,12 @@ class AutomatedPaperLoop:
                     journal_status=_journal_status_value(already_open),
                 )
         if result.outcome is not ExecutionCommandOutcome.ALLOW or result.command_id is None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason="claim_blocked",
+            )
             self._audit(
                 session,
                 target=target,
@@ -454,8 +527,35 @@ class AutomatedPaperLoop:
             else str(trade.status),
         )
 
+    def _autonomous_approval_refusal(self, session: Session, organization_id: UUID) -> str | None:
+        """Re-check mode and kill switch immediately before auto-approval."""
+
+        from app.services.autonomous_trading import (
+            AutonomousMode,
+            continuation_refusal,
+            kill_switch_refusal,
+        )
+
+        refusal = continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
+        if refusal is not None:
+            return refusal
+        observed = getattr(self, "_observed_kill_switch", None)
+        if observed is not None and not isinstance(observed, bool):
+            return "kill_switch_unverified"
+        return kill_switch_refusal(
+            self._settings,
+            session,
+            organization_id,
+            observed=observed if isinstance(observed, bool) else None,
+        )
+
     def _posture_refusal(self) -> str | None:
-        return paper_loop_posture_refusal(self._settings)
+        refusal = paper_loop_posture_refusal(self._settings)
+        if refusal is not None:
+            return refusal
+        from app.services.autonomous_trading import AutonomousMode, continuation_refusal
+
+        return continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
 
     def _policy_version(self) -> str:
         return _POLICY_VERSION
@@ -914,14 +1014,30 @@ def _execute_request(
     revision_id: UUID,
     authorization_id: UUID,
     candidate_id: UUID,
+    autonomous: bool = False,
 ) -> ExecutePaperPlanRequest:
+    """Build one paper execution request.
+
+    Human and API approvals keep ``paper-exec:{candidate_id}`` so an existing
+    human binding still replays. An autonomous attempt appends the authorization
+    id. The canonical payload hash includes that id, so a committed blocked
+    command for a revoked or expired authorization would conflict with the
+    reissued authorization if both reused the candidate key. The plan-entry
+    claim still admits one ALLOW per revision across keys, authorizations, and
+    workers. A consumed authorization is reused, so an allowed binding stays
+    single-use.
+    """
+
+    key = f"paper-exec:{candidate_id}"
+    if autonomous:
+        key = f"paper-exec:{candidate_id}:{authorization_id}"
     return ExecutePaperPlanRequest(
         organization_id=target.organization_id,
         user_id=target.user_id,
         account_id=account_id,
         authorization_id=authorization_id,
         revision_id=revision_id,
-        idempotency_key=f"paper-exec:{candidate_id}",
+        idempotency_key=key,
     )
 
 

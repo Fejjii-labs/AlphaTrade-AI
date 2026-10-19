@@ -29,6 +29,7 @@ from app.learning_attribution.contracts import (
     TraderBehaviorFacts,
 )
 from app.schemas.common import JournalLifecycleEventType, JournalTradeStatus, TradeResult
+from app.schemas.trade_plan import AuthorizationChannel
 from app.signal_fusion.assessment import SetupAssessment
 from app.signal_fusion.candidate import Candidate
 from app.signal_fusion.enums import SetupAssessmentState
@@ -79,7 +80,26 @@ def planned_setup_quality_from_identity(
     )
 
 
-def decision_actor_for(event_type: JournalLifecycleEventType) -> DecisionActor:
+def approval_channel_from_payload(payload: dict[str, object] | None) -> str | None:
+    """Read the authorization channel carried on a journal payload.
+
+    Missing or non-string values stay unset. Legacy events have no channel and
+    remain human approvals.
+    """
+
+    if not payload:
+        return None
+    value = payload.get("approval_channel")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+def decision_actor_for(
+    event_type: JournalLifecycleEventType,
+    *,
+    approval_channel: str | None = None,
+) -> DecisionActor:
     if event_type is JournalLifecycleEventType.CANDIDATE_CONFIRMED:
         return DecisionActor.SYSTEM_SETUP
     if event_type is JournalLifecycleEventType.REJECT:
@@ -87,11 +107,40 @@ def decision_actor_for(event_type: JournalLifecycleEventType) -> DecisionActor:
     if event_type is JournalLifecycleEventType.SKIP:
         return DecisionActor.HUMAN_DECISION
     if event_type is JournalLifecycleEventType.APPROVED_PLAN:
+        if approval_channel == AuthorizationChannel.AUTONOMOUS.value:
+            return DecisionActor.AUTONOMOUS_APPROVAL
         return DecisionActor.HUMAN_APPROVAL
     return DecisionActor.PAPER_SYSTEM_EXECUTION
 
 
-def trader_behavior_for(event_type: JournalLifecycleEventType) -> TraderBehavior:
+def human_plan_approved(
+    event_type: JournalLifecycleEventType,
+    trade: JournalTrade | None,
+    payload: dict[str, object] | None = None,
+) -> bool:
+    """Human approval flag. An AUTONOMOUS channel is never a human approval.
+
+    FILL and CLOSE still carry an execution lifecycle id. That shortcut must
+    not turn an autonomous trade into a human approval when facts are folded.
+    """
+
+    if approval_channel_from_payload(payload) == AuthorizationChannel.AUTONOMOUS.value:
+        return False
+    return event_type is JournalLifecycleEventType.APPROVED_PLAN or (
+        trade is not None and trade.execution_lifecycle_id is not None
+    )
+
+
+def trader_behavior_for(
+    event_type: JournalLifecycleEventType,
+    *,
+    approval_channel: str | None = None,
+) -> TraderBehavior:
+    if (
+        event_type is JournalLifecycleEventType.APPROVED_PLAN
+        and approval_channel == AuthorizationChannel.AUTONOMOUS.value
+    ):
+        return TraderBehavior.AUTONOMOUS_APPROVAL
     mapping = {
         JournalLifecycleEventType.CANDIDATE_CONFIRMED: TraderBehavior.AWAITING_DECISION,
         JournalLifecycleEventType.REJECT: TraderBehavior.REJECTED,
@@ -150,10 +199,15 @@ def behavior_facts(
     event_type: JournalLifecycleEventType,
     candidate: Candidate,
     trade: JournalTrade | None,
+    payload: dict[str, object] | None = None,
 ) -> TraderBehaviorFacts:
+    channel = approval_channel_from_payload(payload)
     return TraderBehaviorFacts(
-        axis=trader_behavior_for(event_type),
-        actor=decision_actor_for(event_type),
+        axis=trader_behavior_for(event_type, approval_channel=channel),
+        actor=decision_actor_for(
+            event_type,
+            approval_channel=channel,
+        ),
         event_type=event_type,
         candidate_state=candidate.state,
         executed_trade_outcome=executed_trade_outcome(event_type, trade),
@@ -252,6 +306,7 @@ def strategy_pattern_facts(
     trade: JournalTrade | None,
     outcome: TradeOutcomeFacts,
     learning_venue_mode: LearningVenueMode = LearningVenueMode.PAPER_INTERNAL,
+    payload: dict[str, object] | None = None,
 ) -> StrategyPatternStatFacts:
     filled = trade is not None and trade.status in {
         JournalTradeStatus.OPEN,
@@ -259,6 +314,7 @@ def strategy_pattern_facts(
     }
     closed = trade is not None and trade.status is JournalTradeStatus.CLOSED
     result = outcome.result if outcome.eligible else None
+    autonomous = approval_channel_from_payload(payload) == AuthorizationChannel.AUTONOMOUS.value
     return StrategyPatternStatFacts(
         strategy_version_id=candidate.strategy_version_id,
         setup_definition_id=candidate.setup_definition_id,
@@ -268,8 +324,8 @@ def strategy_pattern_facts(
         candidate_confirmed=True,
         rejected=event_type is JournalLifecycleEventType.REJECT,
         skipped=event_type is JournalLifecycleEventType.SKIP,
-        plan_approved=event_type is JournalLifecycleEventType.APPROVED_PLAN
-        or (trade is not None and trade.execution_lifecycle_id is not None),
+        plan_approved=human_plan_approved(event_type, trade, payload),
+        autonomous_approval=autonomous,
         filled=filled and outcome.eligible,
         closed=closed and outcome.eligible,
         executed_outcome=outcome.eligible,

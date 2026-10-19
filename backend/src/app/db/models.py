@@ -3,8 +3,12 @@
 PostgreSQL is the production target; SQLite is used only for tests. Types are
 chosen to be portable across both: ``Uuid`` for ids, ``Numeric(20, 8)`` for
 monetary/size values, ``JSON`` for small structured lists, and non-native
-``Enum`` (VARCHAR + CHECK) reusing the exact enums defined in
-:mod:`app.schemas.common` to prevent string drift between API and database.
+``Enum`` columns stored as VARCHAR. Those enums are checked in Python.
+``approval_authorizations.channel`` is the exception: an explicit CHECK allows
+WEB, API, TELEGRAM, and AUTONOMOUS, the same predicate Alembic revision
+``a14autonomouschannel001`` installs on a migrated database. One approval may
+keep revoked or expired authorizations. ``a15reissueauth001`` allows that
+history and keeps a single AVAILABLE or CONSUMED row per approval.
 
 Tenant-scoped resources carry ``organization_id``; vectors live in Qdrant while
 document/chunk metadata lives here.
@@ -231,8 +235,19 @@ _ENUM_LEN = 40
 
 
 def _enum(enum_cls: type) -> Enum:
-    """Portable, non-native enum column (VARCHAR + CHECK)."""
-    return Enum(enum_cls, native_enum=False, length=_ENUM_LEN, validate_strings=True)
+    """Portable non-native enum column (VARCHAR).
+
+    ``create_constraint`` is false, so the column itself adds no CHECK.
+    ``validate_strings`` checks the value in Python only. The authorization
+    channel is the exception and uses an explicit table CHECK instead.
+    """
+    return Enum(
+        enum_cls,
+        native_enum=False,
+        create_constraint=False,
+        length=_ENUM_LEN,
+        validate_strings=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1853,7 +1868,11 @@ class ApprovalRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """One exact, account-bound authorization issued by an APPROVE decision."""
+    """Account-bound authorization issued by an APPROVE decision.
+
+    REVOKED and EXPIRED rows remain as history. At most one AVAILABLE or
+    CONSUMED row exists for an approval.
+    """
 
     __tablename__ = "approval_authorizations"
     __table_args__ = (
@@ -1888,6 +1907,10 @@ class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "length(authorization_content_hash) = 64",
             name="ck_authorization_content_hash_length",
         ),
+        CheckConstraint(
+            "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')",
+            name="ck_authorization_channel",
+        ),
         Index(
             "uq_available_approval_authorization",
             "organization_id",
@@ -1900,10 +1923,17 @@ class ApprovalAuthorization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             postgresql_where=text("state = 'AVAILABLE'"),
             sqlite_where=text("state = 'AVAILABLE'"),
         ),
+        Index(
+            "uq_reusable_approval_authorization",
+            "approval_request_id",
+            unique=True,
+            postgresql_where=text("state IN ('AVAILABLE', 'CONSUMED')"),
+            sqlite_where=text("state IN ('AVAILABLE', 'CONSUMED')"),
+        ),
     )
 
     approval_request_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("approvals.id"), unique=True, nullable=False
+        ForeignKey("approvals.id"), nullable=False
     )
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id"), nullable=False

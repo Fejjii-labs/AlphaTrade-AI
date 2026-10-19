@@ -40,6 +40,7 @@ class DecisionActor(StrEnum):
     SYSTEM_SETUP = "system_setup"
     HUMAN_DECISION = "human_decision"
     HUMAN_APPROVAL = "human_approval"
+    AUTONOMOUS_APPROVAL = "autonomous_approval"
     PAPER_SYSTEM_EXECUTION = "paper_system_execution"
 
 
@@ -71,6 +72,7 @@ class TraderBehavior(StrEnum):
     REJECTED = "rejected"
     SKIPPED = "skipped"
     APPROVED_PLAN = "approved_plan"
+    AUTONOMOUS_APPROVAL = "autonomous_approval"
     EXECUTED = "executed"
     RECONCILED = "reconciled"
 
@@ -218,6 +220,7 @@ class StrategyPatternStatFacts(CanonicalModel):
     rejected: bool
     skipped: bool
     plan_approved: bool
+    autonomous_approval: bool = False
     filled: bool
     closed: bool
     executed_outcome: bool

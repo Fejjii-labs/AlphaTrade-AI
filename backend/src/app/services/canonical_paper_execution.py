@@ -4,9 +4,12 @@ EXECUTE_PAPER_PLAN for ``plan_authority=canonical`` must bind the exact approved
 immutable TradePlanRevision and re-verify Candidate, ActionEligibility, plan,
 approval, and account lineage immediately before the claim transaction.
 
-RiskEngine BLOCK and the kill switch remain final inside PaperPlanClaimService
-via ``evaluate_claim_predicate``. Missing Candidate, eligibility, or required
-lineage after ALLOW fails closed rather than skipping learning evidence.
+The claim predicate inside PaperPlanClaimService is final for the kill switch,
+daily lock, total exposure, daily loss, trade slots, and symbol exposure.
+``RiskEngine.evaluate()`` is not that gate. A kill switch that becomes active
+after approval and before claim still blocks the order. Missing Candidate,
+eligibility, or required lineage after ALLOW fails closed rather than skipping
+learning evidence.
 This module never calls an exchange.
 """
 
@@ -24,6 +27,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, TradingPolicyError, ValidationAppError
 from app.core.paper_safety import assert_paper_execution_allowed
 from app.db.canonical_trade_plans import PLAN_AUTHORITY_CANONICAL
+from app.db.models import ApprovalAuthorization as ApprovalAuthorizationRow
 from app.db.models import ExecutionCommand, ExecutionFillFact, JournalLifecycleEvent
 from app.repositories.journal_trades import JournalTradeRepository
 from app.runtime.canonical import ProductionCanonicalRuntime
@@ -170,6 +174,12 @@ class CanonicalPaperExecutionService:
                 if demo_protection is not None:
                     payload["venue_fill_fee_currency"] = venue_fill_fee_currency
                     payload["fee_convention"] = None
+            command = self._session.get(ExecutionCommand, command_id)
+            _attach_approval_channel(
+                self._session,
+                payload,
+                None if command is None else command.authorization_id,
+            )
             # Phase 1 paper claims do not create legacy Order rows. Command
             # identity is execution_lifecycle_id; linked_order_id stays unset.
             payload["lineage"] = _lineage_payload(envelope, command_id, self._runtime).model_dump(
@@ -306,6 +316,12 @@ class CanonicalPaperExecutionService:
                     mode="json", exclude_none=True
                 ),
             }
+            command = self._session.get(ExecutionCommand, request.command_id)
+            _attach_approval_channel(
+                self._session,
+                payload,
+                None if command is None else command.authorization_id,
+            )
             event = JournalLifecycleEventInput(
                 event_type=JournalLifecycleEventType.CLOSE,
                 execution_lifecycle_id=request.command_id,
@@ -501,6 +517,7 @@ class CanonicalPaperExecutionService:
         payload["lineage"] = _lineage_payload(
             envelope, result.command_id, self._runtime
         ).model_dump(mode="json", exclude_none=True)
+        _attach_approval_channel(self._session, payload, request.authorization_id)
         if result.replayed:
             # Preserve the original event preimage, including legacy events
             # without targets. Projection repair must never rewrite history.
@@ -552,6 +569,27 @@ class CanonicalPaperExecutionService:
 
 def is_canonical_plan_authority(plan_authority: str | None) -> bool:
     return plan_authority == PLAN_AUTHORITY_CANONICAL
+
+
+def _attach_approval_channel(
+    session: Session,
+    payload: dict[str, object],
+    authorization_id: UUID | None,
+) -> None:
+    """Copy the authorization channel onto a new journal payload.
+
+    Replay replaces this payload with the recorded event, so a legacy event
+    that has no channel stays a human approval. A missing authorization is
+    left unset for the same reason.
+    """
+
+    if authorization_id is None or "approval_channel" in payload:
+        return
+    row = session.get(ApprovalAuthorizationRow, authorization_id)
+    if row is None:
+        return
+    channel = row.channel
+    payload["approval_channel"] = channel.value if hasattr(channel, "value") else str(channel)
 
 
 def _instrument_payload(plan: TradePlanRevision) -> dict[str, object]:

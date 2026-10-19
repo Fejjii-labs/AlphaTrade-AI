@@ -255,6 +255,10 @@ class PaperPlanClaimService:
             user_id=request.user_id,
             exposure_unit=intent.exposure_unit,
         )
+        if blocked_reason is None and plan.execution_venue == "BLOFIN_DEMO":
+            from app.experiments.execution_risk import experiment_reservation_refusal
+
+            blocked_reason = experiment_reservation_refusal(self._session, plan, intent, now)
         if blocked_reason is None:
             if plan.schema_version == "ManualDemoTradePlanV1":
                 # The ledger keeps reservations/fill facts for every origin. Its
@@ -815,7 +819,7 @@ def conservative_reservation(plan: TradePlanRevision) -> ReservationIntent:
         price = plan.limit_price.value
         unit = plan.limit_price.unit
     else:
-        price = plan.basis_policy.execution_price.value
+        price = max(plan.basis_policy.execution_price.value, plan.entry_zone.upper)
         unit = plan.basis_policy.execution_price.unit
     try:
         quote_exposure = linear_quote_exposure(

@@ -127,7 +127,14 @@ class BloFinExperimentSourceResolver:
         lock_id = int.from_bytes(hashlib.sha256(scope.encode()).digest()[:8], "big") >> 1
         self.session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id})
         outcome = self.read(version, variant_key, source_record_id)
-        if outcome.status != "available" or outcome.proof is None:
+        from app.experiments.native_producer import BloFinNativeOutcomeProducer
+
+        outcome = BloFinNativeOutcomeProducer(
+            self.session, self.settings, self.tenant, clock=self.clock
+        ).qualify_existing_origin(version, variant_key, source_record_id, outcome)
+        if (
+            outcome.status != "available" and not outcome.closure_verified
+        ) or outcome.proof is None:
             refuse(outcome.reason or "native_outcome_unavailable")
         return outcome.proof
 
@@ -660,15 +667,19 @@ class BloFinExperimentSourceResolver:
             freshness="fresh",
         )
         if any(f.realized_pnl is None for f in closing):
-            refuse("native_profit_missing")
+            return NativeOutcome(**base, status="unavailable", reason="native_profit_missing")
         if any(f.fee is None or f.fee_currency != currency for f in [*entries, *closing]):
-            refuse("native_fee_or_currency_missing")
+            return NativeOutcome(
+                **base, status="unavailable", reason="native_fee_or_currency_missing"
+            )
         if (
             not lineage.pnl_excludes_fees
             or not lineage.fee_convention
             or not lineage.monetary_methodology_version
         ):
-            refuse("native_monetary_semantics_unverified")
+            return NativeOutcome(
+                **base, status="unavailable", reason="native_monetary_semantics_unverified"
+            )
         gross = sum((exact(f.realized_pnl) for f in closing), Decimal(0))
         native_fees = sum((exact(f.fee) for f in [*entries, *closing]), Decimal(0))
         fees = native_fees if lineage.fee_convention == "positive_cost" else -native_fees

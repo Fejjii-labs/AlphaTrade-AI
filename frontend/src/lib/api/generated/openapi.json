@@ -4117,7 +4117,8 @@
         "enum": [
           "WEB",
           "API",
-          "TELEGRAM"
+          "TELEGRAM",
+          "AUTONOMOUS"
         ],
         "title": "AuthorizationChannel",
         "type": "string"
@@ -9890,6 +9891,7 @@
           "system_setup",
           "human_decision",
           "human_approval",
+          "autonomous_approval",
           "paper_system_execution"
         ],
         "title": "DecisionActor",
@@ -14169,6 +14171,59 @@
             },
             "title": "Outcomes",
             "type": "array"
+          },
+          "price_pnl_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Currency"
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "const": "verified-linear-fill-prices/v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
+          },
+          "price_pnl_sample_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Price Pnl Sample Count",
+            "type": "integer"
+          },
+          "price_pnl_win_rate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Win Rate"
           },
           "realized_pnl_after_fees_excluding_funding": {
             "anyOf": [
@@ -27647,6 +27702,11 @@
             "title": "Account History Complete",
             "type": "boolean"
           },
+          "closure_verified": {
+            "default": false,
+            "title": "Closure Verified",
+            "type": "boolean"
+          },
           "contract_version": {
             "const": "blofin-experiment-outcome/v1",
             "default": "blofin-experiment-outcome/v1",
@@ -27813,6 +27873,30 @@
             "format": "uuid",
             "title": "Organization Id",
             "type": "string"
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "const": "verified-linear-fill-prices/v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
           },
           "proof": {
             "anyOf": [
@@ -46355,6 +46439,11 @@
         "additionalProperties": false,
         "description": "Increment-style facts for later strategy/pattern performance rollups.",
         "properties": {
+          "autonomous_approval": {
+            "default": false,
+            "title": "Autonomous Approval",
+            "type": "boolean"
+          },
           "breakeven": {
             "title": "Breakeven",
             "type": "boolean"
@@ -50035,6 +50124,7 @@
           "rejected",
           "skipped",
           "approved_plan",
+          "autonomous_approval",
           "executed",
           "reconciled"
         ],

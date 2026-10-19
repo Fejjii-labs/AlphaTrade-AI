@@ -2,9 +2,12 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
-## AT-ADR-107 — Non-pull_request runs cannot cancel or replace each other
+## AT-ADR-121 — Non-pull_request runs cannot cancel or replace each other
 
 - Date: 2026-10-19
+- Id: Renumbered from AT-ADR-107 during the 2026-10-19 integration batch.
+  AT-ADR-107 is the grade-based risk policy (PR #278, policy `at-adr-107/v1`).
+  The decision text is unchanged.
 - Decision: Every push and every `workflow_dispatch` run, including
   `full_backend`, has its own concurrency group: `github.workflow` plus
   `github.run_id`. `cancel-in-progress` stays true only for `pull_request`.
@@ -21,7 +24,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   local yet, fails open and runs the work. The docs-only skip remains
   pull_request-only. It does not apply to push, `workflow_dispatch`, or a
   non-base edit.
-- Limit: Supersedes the concurrency grouping in AT-ADR-106. Draft `opened` and
+- Limit: Supersedes the concurrency grouping in AT-ADR-122. Draft `opened` and
   `synchronize` still skip heavy work unless the exact label `run-ci` is already
   present. A label whose name only contains that text does not count. The scope
   self-test ignores the calling `CI_SCOPE_*`, `GITHUB_*`, and `GIT_*` environment.
@@ -31,11 +34,14 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.
 - Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`.
 
-## AT-ADR-106 — Ordinary CI cancels stale runs; full backend is manual per batch
+## AT-ADR-122 — Ordinary CI cancels stale runs; full backend is manual per batch
 
 - Date: 2026-10-19
+- Id: Renumbered from AT-ADR-106 during the 2026-10-19 integration batch.
+  AT-ADR-106 is the autonomous-mode decision (PR #258, policy `at-adr-106/v1`).
+  The decision text is unchanged.
 - Decision: Only pull_request CI cancels the previous run of that pull request.
-  Concurrency grouping is superseded by AT-ADR-107: a push or
+  Concurrency grouping is superseded by AT-ADR-121: a push or
   `workflow_dispatch` uses its own `github.run_id` group, so it is not queued,
   cancelled, or replaced while pending. The 02:00 UTC
   schedule is removed. The complete
@@ -44,7 +50,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   A batch stacks onto an integration branch such as `integration/<date>`, gets
   one full dispatch, and merges in order only after that run. Draft `opened`
   and `synchronize` events do not run backend, evaluation, Docker build, or
-  Playwright smoke unless they already carry `run-ci`. AT-ADR-107 runs that
+  Playwright smoke unless they already carry `run-ci`. AT-ADR-121 runs that
   heavy work for `reopened`, `ready_for_review`, and a base retarget even when
   the pull request is still a draft. The `labeled` activity is
   not a workflow trigger. `deployment-safety` still runs on drafts and runs
@@ -65,6 +71,113 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.
 - Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`;
   `.ai/RELEASE.md`.
+
+## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
+
+- Date: 2026-10-17
+- Decision: Owner Sofien decided (2026-10-17 22:49 CEST) that there are two
+  autonomous trading modes, (1) autonomous on internal paper and (2) autonomous
+  on the BloFin DEMO account, and BloFin demo trades may be auto-approved
+  without per-trade human approval, but only within the configured risk limits,
+  with the kill switch always honoured. Real-money trading stays permanently
+  blocked in code. Both modes ship behind feature flags that default OFF.
+- Flags: `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled`. Both default false. Both true, a flag that
+  disagrees with `execution_mode` / `exchange_mode`, or unreadable settings
+  fail closed. No flag means that mode is disarmed.
+- Demo auto-approval: allowed only when the demo flag resolves cleanly, the
+  kill switch is verified inactive, and the order fits the configured account
+  limits that already exist (max position / symbol notional, total exposure,
+  daily loss, and the stored trade-slot cap). Unreadable limits fail closed.
+  The existing claim predicate remains the execution authority.
+- Safety: `execution_mode=trade`, `exchange_mode=trade_live`, and
+  `enable_real_trading=true` stay permanently rejected. This decision does not
+  enable either flag, change deploy config, or authorize a merge. It does not
+  reopen live trading. AT-ADR-020's rejection of an autonomous live path
+  remains in force.
+- Risk gate, stated honestly (2026-10-17 review): `RiskEngine.evaluate()` does
+  not gate the demo order. Eligibility runs only some of its rules (daily loss,
+  weekly loss, cooldown, portfolio conflict, and open exposure against the 5%
+  equity cap) in `backend/src/app/signal_fusion/action_eligibility.py`. Demo
+  sizing may use up to 10% of equity as notional and 1% as loss
+  (`governed_blofin_demo.py`), which is above that 5% per-order cap. The claim
+  predicate remains the execution authority for the kill switch, daily lock,
+  total exposure, daily loss, trade slots, and symbol notional. The numeric
+  fallbacks used when no ledger row exists are unchanged. Demo auto-approval
+  refuses with `risk_limits_unverified` when that fallback has no
+  `daily_loss_limit`, and when an existing ledger row has `max_daily_loss` or
+  `max_symbol_notional` greater than or equal to `max_notional` (the 100%
+  fallback a first claim would persist). A later grade-based risk-per-trade
+  policy may loosen that guard.
+- Approval identity: an autonomous auto-approval is actor type `SYSTEM` on
+  channel `AUTONOMOUS`, not the plan user on the API channel. `actor_id` stays
+  the tenant user because that column is a user foreign key. The approval
+  audit row records the mode, both flag values, policy version
+  `at-adr-106/v1`, and the limit snapshot used. Demo records the account ledger
+  snapshot that passed. Paper records that the account ledger is enforced at
+  claim, not at this approval. Journal events carry `approval_channel`.
+  Learning attribution maps `AUTONOMOUS` to `autonomous_approval` and does not
+  set `plan_approved`, so those trades are not human approvals and do not
+  enter human-approved win/loss counts. The verified demo close copies
+  `approval_channel` from the authorization.   Once a record is autonomous,
+  that flag is sticky: a later fill or close with no channel cannot flip
+  `plan_approved` back to true. `autonomous_approval: false` is omitted from
+  the canonical facts hash so records stored before the field still load.
+  A true value stays in the hash. An autonomous approval's trader-behavior
+  axis is `autonomous_approval`, not `approved_plan`. A missing channel on a
+  legacy event that was never autonomous stays a human approval. If the
+  kill switch (or the same re-check) blocks after the authorization is
+  issued, that authorization is revoked and an `approval_decision` audit
+  row records `reason=post_approval_recheck`. A later pre-check that finds
+  an AVAILABLE AUTONOMOUS authorization for that revision revokes it with
+  `reason=autonomous_precheck_blocked`. A claim that blocks after issuance
+  revokes that authorization with `reason=claim_blocked`. Both write the
+  same approval-decision audit. A revoke that changes nothing writes no
+  second audit row. A contradictory autonomous gate refusal also revokes
+  leftover AVAILABLE AUTONOMOUS authorizations before it returns.
+  A REVOKED or EXPIRED authorization is not reused. A later cycle whose
+  pre-check passes issues a new authorization on the same approval, with a
+  new binding and a new approval-decision audit that names the new
+  authorization id. A CONSUMED row is reused, so a revision still has one
+  ALLOW. An AVAILABLE row is reused only when its channel and actor match
+  the issuance being requested. A leftover API, WEB, or TELEGRAM row is
+  revoked with an approval-decision audit before an autonomous authorization
+  is inserted, and a human issuance does the same to a leftover autonomous
+  row. Two workers still cannot hold two active authorizations for one
+  approval. The claim remains
+  one entry execution per plan revision. An autonomous execution idempotency
+  key is ``paper-exec:{candidate_id}:{authorization_id}``. The human and API
+  path keeps ``paper-exec:{candidate_id}``. A committed blocked command for a
+  revoked authorization therefore does not conflict with the reissued
+  authorization, and a second ALLOW for that revision is still refused. The
+  kill switch, unverified risk
+  limits, and production refusal are unchanged. Downgrade of a15 refuses on
+  every dialect when one approval has more than one authorization row.
+- Existing governed demo flow: with both autonomous flags off, the governed
+  BloFin demo worker keeps its pre-existing API-channel approval. That path
+  is not an AUTONOMOUS approval and is not subject to the unverified-ledger
+  refusal. The refusal applies only when the demo flag resolves to the
+  autonomous BloFin mode. A contradictory autonomous configuration still
+  fails closed and does not fall through to the API approval. The
+  `approval_authorizations.channel` CHECK includes `AUTONOMOUS` so an
+  Alembic-migrated database can store that channel. Fresh metadata
+  (`create_all`) installs the same predicate as an explicit table CHECK.
+  Other portable enums stay VARCHAR without a database CHECK. Downgrade
+  restores the WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row
+  exists. That row check runs on every dialect. Replacing the CHECK uses
+  the PostgreSQL catalog because PostgreSQL is the migrated production
+  database. Experiment price PnL aggregates are written only when the
+  verified closures share one confirmed currency. Mixed or missing
+  currencies leave those fields unknown.
+- Environment: `environment=production` refuses both modes at startup in
+  `deployment_safety.py` and again when the mode is resolved. Staging may
+  still arm a flag. BloFin demo execution stays staging-only through the
+  existing governed demo posture.
+- Kill switch: it stops new entries only. It does not close open demo
+  positions. An operator closes those on the BloFin demo account by hand and
+  confirms the account is flat. See
+  `docs/autonomous_blofin_demo_execution.md`.
+- Reference: PR #258; `backend/src/app/services/autonomous_trading.py`.
 
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422
 

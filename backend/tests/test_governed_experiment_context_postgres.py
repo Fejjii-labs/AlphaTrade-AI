@@ -17,7 +17,15 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError
-from app.db.models import AuditLog, ExecutionCommand, KillSwitchState, Membership, VenueSubmitEffect
+from app.db.models import (
+    AccountRiskAccountingState,
+    AuditLog,
+    ExecutionCommand,
+    KillSwitchState,
+    Membership,
+    UserRiskSettings,
+    VenueSubmitEffect,
+)
 from app.experiments.governed_context import (
     GovernedExperimentContext,
     require_registered_experiment_dispatch,
@@ -128,6 +136,20 @@ def world(producer_engine, monkeypatch, request):
         world.session.commit()
         world.metadata[0]["contractValue"] = "0.001"
         world.assembled = assembled
+        world.session.add(
+            UserRiskSettings(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                daily_loss_limit=Decimal("9000"),
+            )
+        )
+        ledger = world.session.scalar(select(AccountRiskAccountingState))
+        if ledger is not None:
+            if ledger.max_daily_loss >= ledger.max_notional:
+                ledger.max_daily_loss = Decimal("9000")
+            if ledger.max_symbol_notional >= ledger.max_notional:
+                ledger.max_symbol_notional = ledger.max_notional / Decimal("2")
+        world.session.commit()
         yield world
     finally:
         if hasattr(world, "session"):
@@ -144,6 +166,7 @@ def make_loop(world, monkeypatch, *, before_fence=None):
     settings = world.w.settings.model_copy(
         update={
             "governed_blofin_demo_enabled": True,
+            "autonomous_blofin_demo_enabled": True,
             "watcher_paper_staging_activation": True,
             "watcher_orchestration_enabled": True,
         }
@@ -205,6 +228,23 @@ def make_loop(world, monkeypatch, *, before_fence=None):
 
         monkeypatch.setattr(provider, "submit", delayed_submit)
     return loop, captures, venue
+
+
+def use_verified_persisted_symbol_cap(session) -> None:
+    """Give a replay a symbol cap below total notional.
+
+    The first claim persists ``max_symbol_notional == max_notional``. A later
+    auto-approval refuses that row. Replay tests cover command identity, so
+    they record a verified cap before the second entry.
+    """
+
+    row = session.scalar(select(AccountRiskAccountingState))
+    if row is None or row.max_symbol_notional < row.max_notional:
+        return
+    row.max_symbol_notional = row.max_notional / Decimal("2")
+    if row.max_daily_loss >= row.max_notional:
+        row.max_daily_loss = row.max_notional / Decimal("10")
+    session.flush()
 
 
 def execute(world, loop, session=None):
@@ -296,6 +336,7 @@ def test_fresh_coordinator_replays_original_command_without_new_position_or_send
     fresh, second_captures, _ = make_loop(world, monkeypatch)
     world.session.rollback()
     with world.factory() as session:
+        use_verified_persisted_symbol_cap(session)
         replay = execute(world, fresh, session)
     assert replay.execution_command_id == original.execution_command_id
     assert captures and second_captures == []

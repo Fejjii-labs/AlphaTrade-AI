@@ -318,6 +318,7 @@ def build_world(*, failure: str | None = None) -> ClosedLoopWorld:
     settings = _settings(
         database_url=POSTGRES_URL,
         exchange_mode="paper_internal",
+        autonomous_internal_paper_enabled=True,
         global_kill_switch_active=False,
         watcher_orchestration_enabled=False,
         watcher_paper_organization_id=str(ORG),

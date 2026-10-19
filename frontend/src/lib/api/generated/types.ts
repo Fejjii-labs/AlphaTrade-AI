@@ -1027,7 +1027,7 @@ export interface components {
          * AuthorizationChannel
          * @enum {string}
          */
-        AuthorizationChannel: "WEB" | "API" | "TELEGRAM";
+        AuthorizationChannel: "WEB" | "API" | "TELEGRAM" | "AUTONOMOUS";
         /**
          * BacktestStatus
          * @description Placeholder backtest lifecycle.
@@ -1832,6 +1832,19 @@ export interface components {
              * @default []
              */
             outcomes?: components["schemas"]["NativeOutcome"][];
+            /** Price Pnl Currency */
+            price_pnl_currency?: string | null;
+            /** Price Pnl Excluding Fees And Funding */
+            price_pnl_excluding_fees_and_funding?: string | null;
+            /** Price Pnl Methodology */
+            price_pnl_methodology?: "verified-linear-fill-prices/v1" | null;
+            /**
+             * Price Pnl Sample Count
+             * @default 0
+             */
+            price_pnl_sample_count?: number;
+            /** Price Pnl Win Rate */
+            price_pnl_win_rate?: string | null;
             /** Realized Pnl After Fees Excluding Funding */
             realized_pnl_after_fees_excluding_funding?: string | null;
             /** Reason */
@@ -1873,7 +1886,7 @@ export interface components {
             version_id: string;
             /** Win Rate */
             win_rate?: string | null;
-        } & (unknown & unknown & unknown);
+        } & (unknown & unknown & unknown & unknown);
         /** ExperimentPromotion */
         ExperimentPromotion: {
             /** Expected Revision */
@@ -2827,6 +2840,11 @@ export interface components {
              */
             account_history_complete?: false;
             /**
+             * Closure Verified
+             * @default false
+             */
+            closure_verified?: boolean;
+            /**
              * Contract Version
              * @default blofin-experiment-outcome/v1
              * @constant
@@ -2908,6 +2926,10 @@ export interface components {
              * Format: uuid
              */
             organization_id: string;
+            /** Price Pnl Excluding Fees And Funding */
+            price_pnl_excluding_fees_and_funding?: string | null;
+            /** Price Pnl Methodology */
+            price_pnl_methodology?: "verified-linear-fill-prices/v1" | null;
             proof?: components["schemas"]["NativeExperimentSourceProof"] | null;
             /**
              * Provider
@@ -2966,7 +2988,7 @@ export interface components {
              * Format: uuid
              */
             version_id: string;
-        } & (unknown & unknown);
+        } & (unknown & unknown & unknown);
         /**
          * NestedMaturityStage
          * @enum {string}

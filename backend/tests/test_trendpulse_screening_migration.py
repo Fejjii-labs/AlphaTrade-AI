@@ -22,10 +22,14 @@ from tests.test_trendpulse_screening import request, service
 def test_one_additive_revision_follows_reserved_a11():
     cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_heads() == ["a13voicemonitor001"]
+    assert scripts.get_heads() == ["a15reissueauth001"]
+    assert scripts.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
+    assert scripts.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"
     assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert len(scripts.get_bases()) == 1
     assert [r.revision for r in scripts.iterate_revisions("heads", "a11experiments001")] == [
+        "a15reissueauth001",
+        "a14autonomouschannel001",
         "a13voicemonitor001",
         "a12trendpulsescreen001",
     ]

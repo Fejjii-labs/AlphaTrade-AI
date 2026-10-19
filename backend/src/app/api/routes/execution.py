@@ -19,6 +19,7 @@ from app.core.dependencies import (
     UsageServiceDep,
 )
 from app.core.errors import ValidationAppError
+from app.db.models import ApprovalAuthorization as ApprovalAuthorizationRow
 from app.schemas.execution import PaginatedPaperOrders, PaperOrder, PaperOrderRequest
 from app.schemas.execution_account import (
     PaperAccountRegistration,
@@ -160,6 +161,15 @@ async def execute_paper_plan(
     usage_service: UsageServiceDep,
     session: SessionDep,
 ) -> ExecutePaperPlanResult:
+    from app.services.approval_service import assert_human_may_execute
+
+    stored = session.get(ApprovalAuthorizationRow, body.authorization_id)
+    if (
+        stored is not None
+        and stored.organization_id == tenant.organization_id
+        and stored.user_id == tenant.user_id
+    ):
+        assert_human_may_execute(stored)
     result = execution_service.execute_paper_plan(
         ExecutePaperPlanRequest(
             organization_id=tenant.organization_id,
