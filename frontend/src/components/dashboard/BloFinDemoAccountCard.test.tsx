@@ -440,6 +440,39 @@ it("shows activity win rate and withholds it when activity sync is disabled", as
   expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
 });
 
+it("hides a numeric win rate until activity sync is ready", async () => {
+  latest.mockResolvedValue(account({
+    can_refresh: false,
+    performance: {
+      status: "unavailable",
+      currency: "USDT",
+      gross_pnl: null,
+      fees: null,
+      funding: null,
+      net_pnl: null,
+      verified_closed_trades: 0,
+      unresolved_trades: 0,
+      manual_test_trades: 0,
+      strategy_closed_trades: null,
+      coverage: "Fee basis is unverified.",
+      activity_sync_status: "partial",
+      win_rate: "0.5000",
+      trade_count: 2,
+      wins: 1,
+      losses: 1,
+      realized_pnl: "2.87",
+      window_start: "2026-10-01T00:00:00Z",
+      window_end: "2026-10-18T00:00:00Z",
+      activity_coverage: "Withheld until a flat start is proven.",
+    },
+  }));
+  render(<BloFinDemoAccountCard />);
+  const winRate = await screen.findByTestId("dashboard-win-rate");
+  expect(winRate).toHaveTextContent("—");
+  expect(winRate).not.toHaveTextContent("50.0%");
+  expect(winRate).toHaveTextContent("Withheld until fee basis and a flat start are verified");
+});
+
 it("shows mirrored win rate while activity sync stays disabled", async () => {
   latest.mockResolvedValue(account({
     can_refresh: false,

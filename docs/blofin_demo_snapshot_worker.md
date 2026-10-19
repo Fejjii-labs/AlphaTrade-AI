@@ -43,17 +43,20 @@ existing demo path; that path is not the unattended worker.
 | `EXCHANGE_MODE` | `paper_internal` for the read-only path. |
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
-A successful or degraded snapshot younger than the interval is reused, so the
-worker does not call BloFin again for that snapshot while it is fresh. An
-owner refresh from the dashboard still calls BloFin. When
+A successful snapshot younger than the interval is reused and the cycle stays
+ok. A degraded snapshot in that window is also reused, and the cycle reports
+degraded, so the worker does not call BloFin again while it is fresh. An owner
+refresh from the dashboard still calls BloFin. When
 `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` is on, the same cycle still mirrors hand
-trades while the snapshot is fresh, and also when the snapshot sync returns
-a health status outside ok or degraded. The mirror does not run unless this
-cycle is attached: the snapshot flag is on, the worker is armed, and the
-read-only credentials above are present. Trading keys skip with
-`readonly_credentials_required` and do not open the mirror. That unhealthy
-snapshot still backs off. A mirror read failure does not back off the snapshot. A failed snapshot sync backs off, doubling from the interval
-up to 900 seconds. The provider's existing request
+trades while the snapshot is fresh, including a fresh degraded snapshot, and
+also when the snapshot sync returns a health status outside ok or degraded.
+The mirror does not run unless this cycle is attached: the snapshot flag is
+on, the worker is armed, and the read-only credentials above are present.
+Trading keys skip with `readonly_credentials_required` and do not open the
+mirror. A degraded snapshot does not back off. A health status outside ok or
+degraded still backs off. A mirror read failure does not back off the snapshot.
+A failed snapshot sync backs off, doubling from the interval up to 900 seconds.
+The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
 `ok`, `skipped`, `backing_off`, `degraded`, or `stopped`.
 
@@ -89,6 +92,7 @@ remain a separate partial coverage and are not the account win rate.
 ## Trade method
 
 Method id: `closed-round-trip-fillpnl-fee-recorded/v1`.
+Decisions: AT-ADR-113, AT-ADR-114, and AT-ADR-115.
 
 - A trade is one position going from flat back to flat. The position key is
   `(instrument, position_side)` where `position_side` is `long`, `short`, or `net`.

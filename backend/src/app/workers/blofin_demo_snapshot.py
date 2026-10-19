@@ -4,10 +4,12 @@ Calls the existing ``BloFinSyncService.sync`` on a 30-60 second cadence.
 Demo gates and native identity checks stay inside that service. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
-browser refresh and this cycle do not both hit the venue. The hand-trade
-mirror still runs on that fresh path, and also after a snapshot whose health
-is outside ok or degraded, before that unhealthy snapshot backs off. A mirror
-read failure rolls back only its own write and does not back off the snapshot.
+browser refresh and this cycle do not both hit the venue. A degraded snapshot
+in that window is reported as degraded and is not fetched again. The hand-trade
+mirror still runs on that fresh path, including a fresh degraded snapshot, and
+also after a snapshot whose health is outside ok or degraded, before that
+unhealthy snapshot backs off. A mirror read failure rolls back only its own
+write and does not back off the snapshot.
 """
 
 from __future__ import annotations
@@ -90,6 +92,8 @@ class BloFinDemoSnapshotCycle:
             return CycleOutcome("degraded", error="snapshot_unavailable")
         self._failures = 0
         self._next_attempt = None
+        if outcome == "degraded":
+            return CycleOutcome("degraded", error="snapshot_degraded")
         return CycleOutcome("ok")
 
     def request_stop(self) -> None:
@@ -111,22 +115,28 @@ class BloFinDemoSnapshotCycle:
         try:
             service = BloFinSyncService(session, self.settings)
             fresh = _fresh_snapshot(service, organization_id, self._clock(), self.settings)
-            unhealthy = False
-            if not fresh:
-                result = service.sync(
-                    organization_id=organization_id,
-                    user_id=user_id,
-                    request_id=f"blofin-snapshot-worker-{organization_id}",
-                    include_instrument_metadata=True,
-                    actor_type=ActorType.SYSTEM,
-                    sync_origin="worker",
-                )
-                session.commit()
-                unhealthy = result.snapshot.health_status not in _FRESH
+            if fresh is BloFinSyncHealthStatus.DEGRADED:
+                self._mirror_without_backing_off(session, organization_id, user_id)
+                return "degraded"
+            if fresh is BloFinSyncHealthStatus.OK:
+                self._mirror_without_backing_off(session, organization_id, user_id)
+                return "fresh"
+            result = service.sync(
+                organization_id=organization_id,
+                user_id=user_id,
+                request_id=f"blofin-snapshot-worker-{organization_id}",
+                include_instrument_metadata=True,
+                actor_type=ActorType.SYSTEM,
+                sync_origin="worker",
+            )
+            session.commit()
             self._mirror_without_backing_off(session, organization_id, user_id)
-            if unhealthy:
-                return "unavailable"
-            return "fresh" if fresh else "ok"
+            health = result.snapshot.health_status
+            if health is BloFinSyncHealthStatus.OK:
+                return "ok"
+            if health is BloFinSyncHealthStatus.DEGRADED:
+                return "degraded"
+            return "unavailable"
         except Exception:
             session.rollback()
             raise
@@ -223,21 +233,23 @@ def _fresh_snapshot(
     organization_id: uuid.UUID,
     now: datetime,
     settings: Settings,
-) -> bool:
+) -> BloFinSyncHealthStatus | None:
     from app.core.errors import NotFoundError
 
     try:
         snapshot = service.latest(organization_id=organization_id)
     except NotFoundError:
-        return False
+        return None
     health = snapshot.health_status
     if health not in _FRESH:
-        return False
+        return None
     synced_at = snapshot.synced_at
     if synced_at.tzinfo is None:
         synced_at = synced_at.replace(tzinfo=UTC)
     age = (now - synced_at).total_seconds()
-    return 0 <= age < settings.blofin_demo_snapshot_sync_seconds
+    if 0 <= age < settings.blofin_demo_snapshot_sync_seconds:
+        return health
+    return None
 
 
 def _now() -> datetime:

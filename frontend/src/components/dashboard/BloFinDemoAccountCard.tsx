@@ -52,6 +52,9 @@ export function BloFinDemoAccountCard({
       ? null
       : formatPercent(Number(performance.win_rate));
   const hideHeadline = !mirrorReady && (activityDisabled || mirrorStatus === "withheld");
+  const showWinRate =
+    winRate != null &&
+    (mirrorReady || (activityStatus === "ready" && mirrorStatus !== "withheld"));
 
   return (
     <Card data-testid="dashboard-demo-account">
@@ -130,7 +133,7 @@ export function BloFinDemoAccountCard({
           />
           <TradingMetric
             label="Win rate"
-            value={hideHeadline || winRate == null ? "—" : winRate}
+            value={showWinRate ? winRate : "—"}
             note={
               mirrorReady
                 ? "Closed mirrored BloFin demo trades"
