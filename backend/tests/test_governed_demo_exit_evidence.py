@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.providers.exchange.governed_blofin import DemoFill, DemoOrderEvidence
+from app.schemas.trade_plan import MarginMode
 from tests.support.phase5_market import EVALUATED_AT
 from tests.test_governed_blofin_quote_freshness import _plan
 from tests.test_governed_demo_readiness import provider_for
@@ -104,6 +105,19 @@ def exit_world(category="normal", *, partial=False):
     provider = provider_for(handler)
     provider._clock = lambda: EVALUATED_AT + timedelta(seconds=2)
     return plan, entry, provider, responses, calls
+
+
+def test_undocumented_fill_funding_fields_stay_unverified():
+    """BloFin fills-history does not document funding or its sign."""
+
+    plan, entry, provider, responses, _calls = exit_world()
+    responses["fills-history"][0]["funding"] = "-0.4"
+    responses["fills-history"][0]["fundingFee"] = "0.4"
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None
+    assert closed.funding is None
+    assert closed.fills[0].funding is None
+    assert closed.facts()["funding"] is None
 
 
 @pytest.mark.parametrize("category,partial", [("normal", False), ("tp", False), ("sl", True)])
@@ -217,6 +231,27 @@ def test_unexplained_or_incomplete_exit_evidence_is_refused(reason):
     else:
         responses["orders-tpsl-history"] *= 2
     with pytest.raises((ValueError, ArithmeticError)):
+        provider.reconcile_exit(plan=plan, entry=entry)
+
+
+def test_isolated_profile_exit_reads_back_the_posted_margin_mode():
+    plan, entry, provider, responses, calls = exit_world()
+    plan = plan.model_copy(
+        update={
+            "margin_mode": MarginMode.ISOLATED,
+            "risk_and_exits": plan.risk_and_exits.model_copy(
+                update={"margin_assumption_id": "verified-demo-read-leverage"}
+            ),
+        }
+    )
+    for row in responses["orders-history"]:
+        row["marginMode"] = "isolated"
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None
+    assert all(call.method == "GET" for call in calls)
+    for row in responses["orders-history"]:
+        row["marginMode"] = "cross"
+    with pytest.raises(ValueError, match="identity mismatch"):
         provider.reconcile_exit(plan=plan, entry=entry)
 
 

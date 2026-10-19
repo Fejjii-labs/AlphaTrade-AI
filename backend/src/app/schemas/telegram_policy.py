@@ -34,6 +34,7 @@ class NotificationEventType(StrEnum):
     SFP_INVALIDATED = "SFP_INVALIDATED"
     SFP_EXPIRED = "SFP_EXPIRED"
     SFP_BLOCKED_BY_RISK = "SFP_BLOCKED_BY_RISK"
+    SFP_LEVEL_APPROACH = "SFP_LEVEL_APPROACH"
 
 
 class AlertPhase(StrEnum):

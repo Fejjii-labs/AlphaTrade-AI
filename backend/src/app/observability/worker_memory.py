@@ -96,7 +96,18 @@ class CycleMemorySampler:
 
     def _sample(self) -> None:
         while not self._stop.wait(0.25):
-            self.sampled_peak = max(self.sampled_peak, self._read().rss_bytes)
+            try:
+                reading = self._read()
+            except Exception as exc:
+                # Stay on this thread. An uncaught sample error must not surface
+                # as a thread crash, and the component loop joins us from stop().
+                logger.warning(
+                    "paper_worker_memory_diagnostics_failed",
+                    component="sampler",
+                    error=f"{type(exc).__name__}: {exc}"[:120],
+                )
+                return
+            self.sampled_peak = max(self.sampled_peak, reading.rss_bytes)
 
     def stop(self) -> None:
         self._stop.set()

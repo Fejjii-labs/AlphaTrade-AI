@@ -157,6 +157,7 @@ class AuthService:
             organization_id=membership.organization_id,
             email=user.email,
             settings=self._settings,
+            actor="user",
         )
         return TokenPair(
             access_token=access_token,
@@ -272,6 +273,7 @@ class AuthService:
             organization_id=organization_id,
             email=user.email,
             settings=self._settings,
+            actor="user",
         )
         refresh_token = secrets.token_urlsafe(48)
         self._refresh_tokens.add(

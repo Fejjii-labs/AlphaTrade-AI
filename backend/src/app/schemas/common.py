@@ -217,6 +217,7 @@ class RiskRuleId(StrEnum):
     STRONG_GREEN_DAY = "strong_green_day"
     COOLDOWN_AFTER_LOSS = "cooldown_after_loss"
     KILL_SWITCH = "kill_switch"
+    RISK_PERCENT = "risk_percent"
 
 
 class StrategyId(StrEnum):
@@ -399,6 +400,10 @@ class AuditEventType(StrEnum):
     POSITION_UPDATE = "position_update"
     JOURNAL_ENTRY = "journal_entry"
     KILL_SWITCH = "kill_switch"
+    RISK_POLICY_PROPOSED = "risk_policy_proposed"
+    RISK_POLICY_APPLIED = "risk_policy_applied"
+    RISK_POLICY_APPLY_REFUSED = "risk_policy_apply_refused"
+    RISK_POLICY_CONSECUTIVE_RESET = "risk_policy_consecutive_reset"
 
 
 # Backward-compatible alias used by earlier slices
@@ -712,6 +717,7 @@ class PaperAlertType(StrEnum):
     DAILY_LOSS_LOCK_WARNING = "daily_loss_lock_warning"
     RESEARCH_VALIDATION_PROMOTION = "research_validation_promotion"
     TRADINGVIEW_SIGNAL = "tradingview_signal"
+    DEMO_LIQUIDATION_THROUGH_STOP = "demo_liquidation_through_stop"
 
 
 class PromotionSource(StrEnum):

@@ -228,6 +228,8 @@ class Settings(BaseSettings):
     # the deploy blueprint by the change that introduced them.
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = False
+    # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
+    risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)
