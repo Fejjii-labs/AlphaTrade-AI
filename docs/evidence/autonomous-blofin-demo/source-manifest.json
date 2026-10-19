@@ -1,7 +1,7 @@
 {
   "reviewed_candidate": "de5c010c7c85dfe5cde1ec8fabf60b6262500fe0",
-  "implementation_commit": "cbc753b45f2cf174e2c41bcc5ca71d554d04a9b2",
-  "implementation_tree": "d28eb1ac802f56f09f930afd1ff4c46ad0ae9588",
+  "implementation_commit": "59f14dfe8bd4edd179e7794fdd055c7495fec99a",
+  "implementation_tree": "f21b7fca9a8f5e1cbb84dba5926623b37c58ea66",
   "files": [
     {
       "path": "backend/src/app/experiments/blofin_source.py",
@@ -82,6 +82,18 @@
     {
       "path": "backend/tests/test_governed_demo_lifecycle.py",
       "sha256": "b676ebc7d0cf0b355a1ccd6853c70e846a05b9905b7488394fb612dff02dbbf3"
+    },
+    {
+      "path": "backend/tests/test_manual_blofin_demo.py",
+      "sha256": "4a5e8ca74ee4ea22124000a011f814a587a5ce37f7bc1dd2267eec6a40946d96"
+    },
+    {
+      "path": "backend/tests/test_phase1_slices_7_9_execution_protocol.py",
+      "sha256": "75fee038530fbccb8e2354607004c33417a0e6b4a577f064cb6715224e2f1f16"
+    },
+    {
+      "path": "docs/contracts/experiments_v1.openapi.json",
+      "sha256": "f9aff660f5a0a16d96c8c66fbf9b264cfd664aada457b55951b0bdedaf7d1613"
     },
     {
       "path": "frontend/scripts/generate-api.mjs",

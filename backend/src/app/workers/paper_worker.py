@@ -389,7 +389,14 @@ class PaperWorkerSupervisor:
         self._mark_stopped(component)
 
     def _step(self, component: _Component) -> None:
-        sampler = CycleMemorySampler() if self._memory_diagnostics is not None else None
+        # Sampler startup reads process memory before the cycle. A failure there
+        # is diagnostics, same as finish/sample/cleanup, and must not kill the loop.
+        sampler: CycleMemorySampler | None = None
+        if self._memory_diagnostics is not None:
+            try:
+                sampler = CycleMemorySampler()
+            except Exception as exc:
+                self._warn_memory_diagnostics(component, exc)
         try:
             if self._stop.is_set():
                 self._mark_stopped(component)
@@ -419,11 +426,14 @@ class PaperWorkerSupervisor:
             if sampler is not None and self._memory_diagnostics is not None:
                 self._memory_diagnostics.finish(component.name, sampler, after)
         except Exception as exc:
-            logger.warning(
-                "paper_worker_memory_diagnostics_failed",
-                component=component.name,
-                error=_safe_error(exc),
-            )
+            self._warn_memory_diagnostics(component, exc)
+
+    def _warn_memory_diagnostics(self, component: _Component, exc: BaseException) -> None:
+        logger.warning(
+            "paper_worker_memory_diagnostics_failed",
+            component=component.name,
+            error=_safe_error(exc),
+        )
 
     def _revert(self, component: _Component) -> None:
         guard = component.guard
