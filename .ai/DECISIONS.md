@@ -2,7 +2,7 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
-## AT-ADR-116 — Backfilled paper exits stay out of the breakers
+## AT-ADR-118 — Backfilled paper exits stay out of the breakers
 
 - Date: 2026-10-19
 - Decision: An exit-monitor close whose bar ended before the evaluation UTC
@@ -17,10 +17,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   unchanged. A live close does not insert a calibration row on this path,
   because the walk-forward fold is not known here. Both monitor flags stay
   false. This record does not arm them. Real-money trading stays rejected.
-- Reference: AT-ADR-109; AT-ADR-110; AT-ADR-114;
+- Reference: AT-ADR-109; AT-ADR-110; AT-ADR-116;
   `docs/paper_exit_monitor.md`.
 
-## AT-ADR-115 — Paper exit candles follow the trade's live evidence
+## AT-ADR-117 — Paper exit candles follow the trade's live evidence
 
 - Date: 2026-10-18
 - Decision: The internal-paper exit monitor reads closed candles from the
@@ -37,16 +37,17 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   `entry_time` is that bar's `interval_end`. The fill bar is not eligible.
   The next bar, whose `interval_start` equals `entry_time`, is the first
   bar that can exit. A touch inside the fill bar does not close the trade.
-- Flags and scope are unchanged from AT-ADR-114. Both monitor flags default
+- Flags and scope are unchanged from AT-ADR-116. Both monitor flags default
   false. This decision does not arm them, change deploy config, or
   authorize a merge. Real-money trading stays rejected.
 - Id: drafted as AT-ADR-108 on the paper exit-monitor branch. The grade-risk
-  branch had already published AT-ADR-107 and AT-ADR-108, so this record is
-  AT-ADR-115. The candle rule is unchanged.
+  branch had already published AT-ADR-107 and AT-ADR-108, so the merge
+  recorded this as AT-ADR-115. The batch already uses every id through
+  AT-ADR-115, so this record is AT-ADR-117. The candle rule is unchanged.
 - Reference: `docs/paper_exit_monitor.md`;
   `backend/src/app/services/paper_exit_candles.py`.
 
-## AT-ADR-114 — Internal paper trades exit at the stop or target
+## AT-ADR-116 — Internal paper trades exit at the stop or target
 
 - Date: 2026-10-18
 - Decision: Open canonical internal paper trades are closed by a paper-worker
@@ -75,9 +76,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   `paper_exit_monitor_would_close` and does not write. This decision does not
   arm either flag, change deploy config, or authorize a merge. Real-money
   trading stays rejected.
-- Id: drafted as AT-ADR-107 on the paper exit-monitor branch and renumbered
-  to AT-ADR-114 on the merge with the grade-risk branch, which already used
-  AT-ADR-107. The exit rule is unchanged.
+- Id: drafted as AT-ADR-107 on the paper exit-monitor branch. The grade-risk
+  branch had already used AT-ADR-107, so the merge recorded this as
+  AT-ADR-114. The batch already uses every id through AT-ADR-115, so this
+  record is AT-ADR-116. The exit rule is unchanged.
 - Reference: `docs/paper_exit_monitor.md`;
   `backend/src/app/services/paper_exit_monitor.py`.
 
