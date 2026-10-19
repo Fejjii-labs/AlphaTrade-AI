@@ -301,6 +301,7 @@ def test_disarmed_demo_keeps_the_governed_api_approval(
                 replayed=False,
             )
 
+    _skip_stored_plan_recheck(monkeypatch)
     monkeypatch.setattr(
         GovernedBloFinDemoLoop,
         "_plan_service",
@@ -555,6 +556,19 @@ def _forbid_approval(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("this failure must not create an approval")
 
 
+def _skip_stored_plan_recheck(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These fakes cover approval, not a stored-plan limit recheck."""
+
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._stored_plan_execution_refusal",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.governed_blofin_demo._stored_plan_execution_refusal",
+        lambda *_args, **_kwargs: None,
+    )
+
+
 def _armed_demo_view() -> SimpleNamespace:
     return _view(
         autonomous_blofin_demo_enabled=True,
@@ -569,7 +583,7 @@ def test_limit_snapshot_error_blocks_the_demo_order(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("app.services.execution_claim.conservative_reservation", _raise)
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
-    proof = _run_disarmed_style_demo(_armed_demo_view())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view())
     assert proof.stage == "blocked"
     assert proof.reason_code == "risk_limits_unverified"
 
@@ -595,7 +609,7 @@ def test_experiment_budget_error_blocks_the_demo_order(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("app.experiments.execution_risk.experiment_reservation_refusal", _raise)
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
-    proof = _run_disarmed_style_demo(_armed_demo_view())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view())
     assert proof.stage == "blocked"
     assert proof.reason_code == "risk_limits_unverified"
 
@@ -634,6 +648,7 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
             captured["revoke_user_id"] = kwargs.get("user_id")
             captured["revoke_reason"] = kwargs.get("reason")
 
+    _skip_stored_plan_recheck(monkeypatch)
     monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
     monkeypatch.setattr(
         "app.services.automated_paper_loop.ExecutionService",
@@ -642,7 +657,9 @@ def test_kill_switch_after_auto_approval_blocks_before_claim(
         ),
     )
     loop = AutomatedPaperLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         kill,  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -706,7 +723,7 @@ def test_demo_auto_approval_records_system_actor_and_limit_snapshot(
         _refusal,
     )
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _Approval)
-    proof = _run_disarmed_style_demo(_armed_demo_view())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view())
     assert proof.stage == "blocked"
     assert proof.reason_code == "kill_switch_active"
     assert getattr(captured["channel"], "value", None) == "AUTONOMOUS"
@@ -766,7 +783,7 @@ def test_claim_block_revokes_the_autonomous_demo_authorization(
     )
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _Approval)
     monkeypatch.setattr("app.services.governed_blofin_demo.ExecutionService", _Execution)
-    proof = _run_disarmed_style_demo(_armed_demo_view())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view())
     assert proof.stage == "blocked"
     assert proof.reason_code == "daily_loss_limit"
     assert getattr(captured["channel"], "value", None) == "AUTONOMOUS"
@@ -808,7 +825,7 @@ def test_precheck_block_revokes_a_leftover_autonomous_demo_authorization(
         lambda *_args, **_kwargs: ("risk_limits_unverified", None),
     )
     monkeypatch.setattr("app.services.approval_service.ApprovalService", _Approval)
-    proof = _run_disarmed_style_demo(_armed_demo_view(), session=_Session())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view(), session=_Session())
     assert proof.stage == "blocked"
     assert proof.reason_code == "risk_limits_unverified"
     assert captured["constructed"] is True
@@ -856,11 +873,14 @@ def test_claim_block_revokes_the_autonomous_paper_authorization(
                 replayed=False,
             )
 
+    _skip_stored_plan_recheck(monkeypatch)
     monkeypatch.setattr("app.services.automated_paper_loop.ApprovalService", _Approval)
     monkeypatch.setattr("app.services.automated_paper_loop.ExecutionService", _Execution)
     monkeypatch.setattr(AutomatedPaperLoop, "_audit", lambda *_args, **_kwargs: None)
     loop = AutomatedPaperLoop(None, settings, SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         _Idle(),  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -898,9 +918,12 @@ def test_precheck_block_revokes_a_leftover_autonomous_paper_authorization(
         def create_for_plan_revision(self, **_kwargs: object) -> None:
             raise AssertionError("a blocked pre-check must not create an approval")
 
+    _skip_stored_plan_recheck(monkeypatch)
     monkeypatch.setattr("app.services.approval_service.ApprovalService", _Approval)
     loop = AutomatedPaperLoop(None, Settings(_env_file=None), SimpleNamespace(now=lambda: None))  # type: ignore[arg-type]
-    loop._plan_service = lambda: SimpleNamespace(get_scoped=lambda *_a, **_k: SimpleNamespace())  # type: ignore[method-assign]
+    loop._plan_service = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        get_scoped=lambda *_a, **_k: SimpleNamespace(plan=SimpleNamespace())
+    )
     proof = loop._execute_existing(
         _Session(),  # type: ignore[arg-type]
         target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
@@ -933,7 +956,7 @@ def test_unset_daily_loss_limit_refuses_demo_auto_approval(
     monkeypatch.setattr("app.services.risk.settings_service.RiskSettingsService", _RiskSettings)
     _patch_reservation(monkeypatch)
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
-    proof = _run_disarmed_style_demo(_armed_demo_view())
+    proof = _run_disarmed_style_demo(monkeypatch, _armed_demo_view())
     assert proof.stage == "blocked"
     assert proof.reason_code == "risk_limits_unverified"
 
@@ -944,6 +967,7 @@ def test_ledger_daily_loss_at_notional_refuses_demo_auto_approval(
     _patch_reservation(monkeypatch)
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
     proof = _run_disarmed_style_demo(
+        monkeypatch,
         _armed_demo_view(),
         session=_ledger_session(_ledger_row(max_daily_loss=Decimal("1000"))),
     )
@@ -957,6 +981,7 @@ def test_ledger_symbol_cap_at_notional_refuses_demo_auto_approval(
     _patch_reservation(monkeypatch)
     monkeypatch.setattr("app.services.governed_blofin_demo.ApprovalService", _forbid_approval)
     proof = _run_disarmed_style_demo(
+        monkeypatch,
         _armed_demo_view(),
         session=_ledger_session(_ledger_row(max_symbol_notional=Decimal("1000"))),
     )
@@ -1049,7 +1074,12 @@ def _ledger_session(row: SimpleNamespace, *, always: bool = False) -> object:
     return _Session()
 
 
-def _run_disarmed_style_demo(settings: object, session: object | None = None):  # type: ignore[no-untyped-def]
+def _run_disarmed_style_demo(  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+    settings: object,
+    session: object | None = None,
+):
+    _skip_stored_plan_recheck(monkeypatch)
     revision_id = uuid4()
     candidate = SimpleNamespace(candidate_id=uuid4())
     target = SimpleNamespace(organization_id=uuid4(), user_id=uuid4())

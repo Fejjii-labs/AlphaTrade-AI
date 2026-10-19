@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+import structlog
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -20,9 +21,19 @@ from app.schemas.common import MembershipRole
 from app.schemas.manual_demo import ManualDemoPreviewRequest
 from app.schemas.trade_plan import EntrySide
 from app.security.tenant import TenantContext
+from app.services import manual_demo_service
 from app.services.manual_demo_service import ManualDemoService
 from tests.support.phase5_market import EVALUATED_AT
 from tests.test_governed_blofin_demo import Venue
+
+
+@pytest.fixture(autouse=True)
+def fresh_preflight_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Production caches bound loggers; a preceding test can initialize one
+    # before capture_logs, so this file would see the event on stdout only.
+    monkeypatch.setattr(
+        manual_demo_service, "logger", structlog.get_logger(manual_demo_service.__name__)
+    )
 
 STAGES = (
     ("permissions", "/api/v1/user/query-apikey"),

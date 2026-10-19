@@ -926,7 +926,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         account_id: UUID,
         eligibility_id: UUID | None = None,
         eligibility_state: str | None = None,
+        entry_occurred_at: datetime | None = None,
     ) -> AutomatedPaperLoopProof:
+        # The parent passes the signal-bar end for internal-paper journal time.
+        # Demo venue fills keep the venue event time and do not read this value.
+        del entry_occurred_at
         plans = self._plan_service()
         envelope = plans.get_scoped(
             revision_id, organization_id=target.organization_id, user_id=target.user_id
