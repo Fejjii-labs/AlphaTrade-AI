@@ -120,6 +120,18 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   reset route needs its own strict decoder that accepts only a human
   actor. Shortening the cooldown is a loosening. The next demo entry stays
   refused while that pause is active. Drawdown reset stays human-only.
+  The daily pause is stored on `daily_paused_until` as the next UTC
+  midnight when the daily loss first trips. A later scan on that same UTC
+  day keeps the stored timestamp after realized and unrealized PnL are
+  back inside the limit, and `breaker_active` stays true. That timestamp
+  is cleared only once it is no longer in the future. There is no early
+  reset for the daily pause. A scan cannot clear a drawdown latch.
+  `reset_drawdown_latch` remains the human path, and it still refuses
+  while the live drawdown is outside the threshold. `KillSwitchService.deactivate`
+  is the only path that turns the organization kill switch off. A
+  loosening `effective_at` is stored once and a later scan does not move
+  it earlier. SFP approach cooldowns and alert cooldowns are not risk
+  pauses, and a breaker scan does not clear them.
 - Claim ceilings for a profile plan are a per-claim view. They are not
   written onto the shared organization-and-account ledger row, so a later
   manual claim keeps the stored cash ceilings.

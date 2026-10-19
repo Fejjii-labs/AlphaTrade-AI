@@ -68,7 +68,17 @@ def _as_utc(moment: datetime) -> datetime:
 def _pause_active(paused_until: datetime | None, now: datetime) -> bool:
     if paused_until is None:
         return False
-    return _as_utc(paused_until) > now
+    return _as_utc(paused_until) > _as_utc(now)
+
+
+def _kept_pause(
+    stored: datetime | None, proposed: datetime | None, now: datetime
+) -> datetime | None:
+    """Keep a pause that is still in the future. Do not clear or shorten it."""
+
+    if stored is not None and _pause_active(stored, now):
+        return _as_utc(stored)
+    return proposed
 
 
 class RiskPolicyService:
@@ -329,6 +339,10 @@ class RiskPolicyService:
             return
         if self._open_started_at(organization_id, account_id, kind) is not None:
             return
+        # The daily window is closed at its expiry when it opens. A later
+        # scan that keeps the same expiry must not open a second window.
+        if self._has_close_at(organization_id, account_id, kind, paused_until):
+            return
         self._append_interval(organization_id, account_id, kind, "open", now)
         self._append_interval(organization_id, account_id, kind, "close", paused_until)
 
@@ -377,6 +391,24 @@ class RiskPolicyService:
                 continue
             opened_at = None
         return opened_at
+
+    def _has_close_at(
+        self,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        kind: str,
+        paused_until: datetime,
+    ) -> bool:
+        target = _as_utc(paused_until)
+        rows = self._session.scalars(
+            select(RiskPolicyBreakerInterval).where(
+                RiskPolicyBreakerInterval.organization_id == organization_id,
+                RiskPolicyBreakerInterval.account_id == account_id,
+                RiskPolicyBreakerInterval.kind == kind,
+                RiskPolicyBreakerInterval.phase == "close",
+            )
+        ).all()
+        return any(_as_utc(row.occurred_at) == target for row in rows)
 
     def _append_interval(
         self,
@@ -635,6 +667,20 @@ class RiskPolicyService:
         now: datetime,
     ) -> RiskPolicyBreakerState:
         row = self._breaker_row(organization_id, account_id, equity_peak, now)
+        # A scan cannot clear these. Drawdown ends only in ``reset_drawdown_latch``.
+        # Each pause ends at its stored expiry. The consecutive pause can also
+        # end in ``reset_consecutive_losses``, which does not call this method.
+        if row.drawdown_latched:
+            drawdown_latched = True
+        pause_held = row.consecutive_paused_until is not None and _pause_active(
+            row.consecutive_paused_until, now
+        )
+        if pause_held and consecutive_losses < int(row.consecutive_losses):
+            consecutive_losses = int(row.consecutive_losses)
+        daily_paused_until = _kept_pause(row.daily_paused_until, daily_paused_until, now)
+        consecutive_paused_until = _kept_pause(
+            row.consecutive_paused_until, consecutive_paused_until, now
+        )
         row.equity_peak = equity_peak
         row.consecutive_losses = consecutive_losses
         row.realized_pnl = realized_pnl

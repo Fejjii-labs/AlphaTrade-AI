@@ -2,7 +2,8 @@
 
 Drawdown from the equity peak trips the kill switch and stays tripped until
 a human reset, and only once equity is back inside the threshold. Daily loss
-pauses new trades until the next UTC day. Consecutive losses pause until the
+pauses new trades until the next UTC day. A later scan does not clear that
+stored pause before the boundary. Consecutive losses pause until the
 profile cooldown; that expiry is stored by the trip writer and is not
 recomputed here.
 """

@@ -622,3 +622,252 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
         assert increased == 5
         assert written["consecutive_losses"] == 5
         assert written["consecutive_paused_until"] == pause
+
+
+def test_recovered_pnl_same_utc_day_keeps_the_daily_pause() -> None:
+    from app.services.risk_policy.breaker_trip import _as_utc
+    from app.services.risk_policy.clock import next_utc_day
+
+    recorder = _Recorder()
+    tripped = trip_breakers(
+        recorder,
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        config=_config(),
+        snapshot=_snapshot(
+            realized_pnl_today=Decimal("-700"),
+            unrealized_pnl_today=Decimal("-50"),
+        ),
+        now=NOW,
+    )
+    expiry = recorder.calls[0]["daily_paused_until"]
+    assert tripped.daily_loss_active
+    assert expiry == next_utc_day(NOW)
+    later = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    held = trip_breakers(
+        recorder,
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        config=_config(),
+        snapshot=_snapshot(
+            realized_pnl_today=Decimal("-10"),
+            unrealized_pnl_today=Decimal("-5"),
+            now=later,
+        ),
+        now=later,
+        existing_daily_paused_until=expiry,  # type: ignore[arg-type]
+    )
+    assert held.daily_loss_active is False
+    assert held.refuse_new_trades is True
+    assert recorder.calls[1]["daily_paused_until"] == expiry
+    assert _as_utc(expiry) > later  # type: ignore[arg-type]
+    expired = trip_breakers(
+        recorder,
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        config=_config(),
+        snapshot=_snapshot(
+            realized_pnl_today=Decimal("-10"),
+            unrealized_pnl_today=Decimal("-5"),
+            now=expiry,  # type: ignore[arg-type]
+        ),
+        now=expiry,  # type: ignore[arg-type]
+        existing_daily_paused_until=expiry,  # type: ignore[arg-type]
+    )
+    assert expired.refuse_new_trades is False
+    assert recorder.calls[2]["daily_paused_until"] is None
+
+
+def test_same_day_scan_keeps_daily_pause_and_breaker_active(monkeypatch) -> None:
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    from app.db.models import Organization
+    from app.db.risk_policy import RiskPolicyBreakerInterval
+    from app.services.audit_service import AuditService
+    from app.services.risk_policy.breaker_trip import _as_utc, persist_profile_breakers
+    from app.services.risk_policy.clock import next_utc_day
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.profile import PolicyKind, placeholder_profile
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    session.add(Organization(id=ORG, name="Daily pause org"))
+    session.commit()
+    figures = {
+        "equity": Decimal("10000"),
+        "realized": Decimal("-150"),
+        "unrealized": Decimal("-50"),
+    }
+
+    class _Daily:
+        @property
+        def account_equity(self) -> Decimal:
+            return figures["equity"]
+
+        @property
+        def realized_pnl(self) -> Decimal:
+            return figures["realized"]
+
+        @property
+        def unrealized_pnl(self) -> Decimal:
+            return figures["unrealized"]
+
+    class _Accounting:
+        def __init__(self, _session: object, _settings: object, clock: object) -> None:
+            return None
+
+        def sync_from_portfolio(self, **_kwargs: object) -> _Daily:
+            return _Daily()
+
+    monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    profile = placeholder_profile(PolicyKind.INTERNAL_PAPER)
+    user_id = uuid4()
+    tripped = persist_profile_breakers(
+        session,
+        organization_id=ORG,
+        user_id=user_id,
+        account_id=ACCOUNT,
+        profile=profile,
+        now=NOW,
+    )
+    service = RiskPolicyService(session, AuditService(session))
+    stored = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert tripped is True
+    assert stored is not None
+    assert _as_utc(stored.daily_paused_until) == next_utc_day(NOW)  # type: ignore[arg-type]
+    assert stored.drawdown_latched is False
+    assert stored.consecutive_paused_until is None
+    assert service.breaker_active(organization_id=ORG, now=NOW) is True
+    figures["realized"] = Decimal("-10")
+    figures["unrealized"] = Decimal("-5")
+    later = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    recovered = persist_profile_breakers(
+        session,
+        organization_id=ORG,
+        user_id=user_id,
+        account_id=ACCOUNT,
+        profile=profile,
+        now=later,
+    )
+    session.expire_all()
+    held = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert recovered is True
+    assert held is not None
+    assert held.daily_paused_until is not None
+    assert _as_utc(held.daily_paused_until) == next_utc_day(NOW)
+    assert held.drawdown_latched is False
+    assert held.consecutive_paused_until is None
+    assert service.breaker_active(organization_id=ORG, now=later) is True
+    daily_closes = session.scalars(
+        select(RiskPolicyBreakerInterval).where(
+            RiskPolicyBreakerInterval.organization_id == ORG,
+            RiskPolicyBreakerInterval.account_id == ACCOUNT,
+            RiskPolicyBreakerInterval.kind == "daily",
+            RiskPolicyBreakerInterval.phase == "close",
+        )
+    ).all()
+    assert len(daily_closes) == 1
+    expiry = next_utc_day(NOW)
+    cleared = persist_profile_breakers(
+        session,
+        organization_id=ORG,
+        user_id=user_id,
+        account_id=ACCOUNT,
+        profile=profile,
+        now=expiry,
+    )
+    session.expire_all()
+    ended = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert cleared is False
+    assert ended is not None
+    assert ended.daily_paused_until is None
+    assert service.breaker_active(organization_id=ORG, now=expiry) is False
+
+
+def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    from app.db.models import Organization
+    from app.services.audit_service import AuditService
+    from app.services.risk_policy.governance import PolicyActor, PolicyChannel
+    from app.services.risk_policy.persistence import RiskPolicyService
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    session.add(Organization(id=ORG, name="Latch org"))
+    session.commit()
+    service = RiskPolicyService(session, AuditService(session))
+    pause = NOW + timedelta(hours=10)
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("-20"),
+        unrealized_pnl=Decimal("-5"),
+        daily_paused_until=pause,
+        consecutive_paused_until=pause,
+        drawdown_latched=True,
+        now=NOW,
+    )
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
+        now=NOW,
+    )
+    session.expire_all()
+    held = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert held is not None
+    assert held.daily_paused_until is not None
+    assert held.consecutive_paused_until is not None
+    assert held.consecutive_losses == 4
+    assert held.drawdown_latched is True
+    assert service.breaker_active(organization_id=ORG, now=NOW) is True
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
+        now=pause,
+    )
+    session.expire_all()
+    expired = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert expired is not None
+    assert expired.daily_paused_until is None
+    assert expired.consecutive_paused_until is None
+    assert expired.consecutive_losses == 0
+    assert expired.drawdown_latched is True
+    service.reset_drawdown_latch(
+        organization_id=ORG,
+        account_id=ACCOUNT,
+        actor=PolicyActor("sofien", PolicyChannel.HUMAN, True),
+        owner_user_id="sofien",
+        equity=Decimal("9500"),
+        drawdown_breaker_percent=Decimal("10"),
+        now=pause,
+    )
+    session.expire_all()
+    reset = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert reset is not None
+    assert reset.drawdown_latched is False
+    assert service.breaker_active(organization_id=ORG, now=pause) is False

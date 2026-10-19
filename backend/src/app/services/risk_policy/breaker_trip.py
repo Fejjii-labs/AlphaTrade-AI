@@ -7,6 +7,7 @@ reset a drawdown latch and it does not place an order.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -112,6 +113,10 @@ def profile_close_consecutive(
     return 0
 
 
+def _pause_still_in_force(paused_until: datetime | None, now: datetime) -> bool:
+    return paused_until is not None and _as_utc(paused_until) > _as_utc(now)
+
+
 def trip_breakers(
     recorder: BreakerRecorder,
     *,
@@ -121,18 +126,22 @@ def trip_breakers(
     snapshot: BreakerSnapshot,
     now: datetime,
     existing_consecutive_paused_until: datetime | None = None,
+    existing_daily_paused_until: datetime | None = None,
     cooldown_hours: int = 24,
 ) -> BreakerVerdict:
     """Evaluate one snapshot and persist it. A latched drawdown stays latched.
 
-    The consecutive pause is written once. A scan while it is still in the
-    future does not move it. After it expires the caller passes a cleared
-    streak; this function does not invent a new pause for a count of zero.
+    The consecutive pause and the daily pause are each written once. A scan
+    while either timestamp is still in the future does not move it and does
+    not clear it. The daily pause ends at its stored expiry. The consecutive
+    pause ends at its stored expiry or at ``reset_consecutive_losses``. After
+    the consecutive pause expires the caller passes a cleared streak; this
+    function does not invent a new pause for a count of zero.
     """
 
     verdict = evaluate_breakers(config, snapshot)
     existing_pause = existing_consecutive_paused_until
-    pause_still_in_force = existing_pause is not None and _as_utc(existing_pause) > _as_utc(now)
+    pause_still_in_force = _pause_still_in_force(existing_pause, now)
     if verdict.consecutive_loss_active:
         consecutive_until = consecutive_pause_expiry(
             now,
@@ -146,6 +155,19 @@ def trip_breakers(
         consecutive_until = _as_utc(existing_pause)
     else:
         consecutive_until = None
+    daily_existing = existing_daily_paused_until
+    if _pause_still_in_force(daily_existing, now):
+        # Recovered PnL on the same UTC day does not end the daily pause.
+        # There is no early reset. The stored timestamp is the expiry.
+        assert daily_existing is not None
+        daily_until = _as_utc(daily_existing)
+    elif verdict.daily_loss_active:
+        daily_until = next_utc_day(_as_utc(now))
+    else:
+        daily_until = None
+    pause_held = daily_until is not None or consecutive_until is not None
+    if pause_held and not verdict.refuse_new_trades:
+        verdict = replace(verdict, refuse_new_trades=True)
     recorder.record_breaker(
         organization_id=organization_id,
         account_id=account_id,
@@ -153,7 +175,7 @@ def trip_breakers(
         consecutive_losses=snapshot.consecutive_losses,
         realized_pnl=snapshot.realized_pnl_today,
         unrealized_pnl=snapshot.unrealized_pnl_today,
-        daily_paused_until=verdict.paused_until if verdict.daily_loss_active else None,
+        daily_paused_until=daily_until,
         consecutive_paused_until=consecutive_until,
         drawdown_latched=verdict.drawdown_active,
         now=now,
@@ -193,15 +215,13 @@ def persist_profile_breakers(
         peak = row.equity_peak
     stored = 0 if row is None else int(row.consecutive_losses)
     existing_pause = None if row is None else getattr(row, "consecutive_paused_until", None)
+    existing_daily = None if row is None else getattr(row, "daily_paused_until", None)
     if consecutive_losses is None:
         consecutive = streak_after_expiry(stored, existing_pause, now)
     else:
         consecutive = consecutive_losses
-    kept_pause = (
-        existing_pause
-        if existing_pause is not None and _as_utc(existing_pause) > _as_utc(now)
-        else None
-    )
+    kept_pause = existing_pause if _pause_still_in_force(existing_pause, now) else None
+    kept_daily = existing_daily if _pause_still_in_force(existing_daily, now) else None
     # A paper or demo close may pass a reset count. While the pause is in
     # the future that count cannot fall. A loss, which is larger, still counts.
     if kept_pause is not None and consecutive < stored:
@@ -233,6 +253,7 @@ def persist_profile_breakers(
         ),
         now=now,
         existing_consecutive_paused_until=kept_pause,
+        existing_daily_paused_until=kept_daily,
         cooldown_hours=profile.consecutive_loss_cooldown_hours,
     )
     return verdict.refuse_new_trades
