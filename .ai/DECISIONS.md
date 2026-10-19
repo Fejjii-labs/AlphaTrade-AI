@@ -3408,10 +3408,13 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   row whose external ref starts with `blofin-demo-` can still be tagged.
   Mirrored venue P&L, including that in-place close, does not feed open
   risk, daily realized loss, the daily lock, the paper loss cooldown, or
-  promotion. The exclusion is the `blofin_demo_manual` source or the
-  server tag `blofin-reconciled` the mirror writes on an in-place close.
-  An `external_ref` prefix alone does not exclude a row. Clients cannot
-  set a `blofin-demo-` external ref or that tag. Candidate selection,
+  promotion. The daily lock does not read tags. The exclusion is source
+  `blofin_demo_manual` or the exact server prefix `blofin-demo-history:`
+  on `external_ref`. A stuck governed `manual_demo_test` row closed by the
+  mirror receives that prefix, so its venue net does not count toward the
+  daily lock. Clients cannot set a case or whitespace variant of
+  `blofin-demo-`, or a tag that contains a double quote or starts with
+  `blofin-`. Candidate selection,
   in-place reconciliation, open-tracker cancellation, the cycle marker,
   and the headline read are limited to the pinned user, not the whole
   organization. A lifecycle-backed row

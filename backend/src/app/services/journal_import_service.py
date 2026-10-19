@@ -55,7 +55,7 @@ from app.schemas.journal_import import (
     PaginatedJournalImportBatches,
 )
 from app.services.audit_service import AuditService
-from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
+from app.services.risk.mirror_economics import client_mirror_ref, client_reserved_tag
 
 _REQUEST_TAG = "journal-import-api"
 _FINGERPRINT_PREFIX = "fp-sha256:"
@@ -320,10 +320,10 @@ def _parse_rows(
 
 
 def _reserved_mirror_identity(row: JournalImportRow) -> str | None:
-    if row.external_ref is not None and row.external_ref.startswith(MIRROR_REF_PREFIX):
+    if client_mirror_ref(row.external_ref):
         return "external_ref is reserved for the BloFin demo mirror."
-    if RECONCILED_TAG in row.tags:
-        return "The mirror reconciliation marker is reserved."
+    if any(client_reserved_tag(tag) for tag in row.tags):
+        return "A quoted tag or a blofin- tag is reserved for the server."
     return None
 
 

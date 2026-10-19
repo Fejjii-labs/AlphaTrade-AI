@@ -31,6 +31,7 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
+from app.schemas.journal_import import JournalImportMode, JournalImportRequest
 from app.schemas.journal_statistics import JournalStatsFilters, JournalStatsGroupBy
 from app.schemas.journal_trades import (
     JournalTradeAnnotation,
@@ -49,6 +50,7 @@ from app.services.blofin_demo_manual_mirror import (
     strategy_group_key,
     without_annotation_grade,
 )
+from app.services.journal_import_service import JournalImportService
 from app.services.journal_statistics_service import JournalStatisticsService
 from app.services.journal_trade_service import JournalTradeService
 from app.services.risk.daily_risk_accounting import (
@@ -503,10 +505,17 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
     with pytest.raises(ValidationAppError) as forged_tag:
         service.update(
             loss.id,
-            JournalTradeUpdate(tags=[RECONCILED_TAG]),
+            JournalTradeUpdate(tags=['x"blofin-reconciled']),
             organization_id=ORG,
         )
     assert forged_tag.value.status_code == 422
+    with pytest.raises(ValidationAppError) as cased_ref:
+        service.update(
+            loss.id,
+            JournalTradeUpdate(external_ref=" BLOFIN-DEMO-history:forged"),
+            organization_id=ORG,
+        )
+    assert cased_ref.value.status_code == 422
     with pytest.raises(ValidationAppError) as created:
         service.create(
             JournalTradeCreate(
@@ -514,7 +523,8 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
                 symbol="ETHUSDT",
                 timeframe=Timeframe.H1,
                 direction=TradeDirection.LONG,
-                external_ref="blofin-demo-history:created",
+                external_ref=" Blofin-Demo-history:created",
+                tags=[" Blofin-note"],
                 net_pnl=Decimal("-9"),
                 result=TradeResult.LOSS,
             ),
@@ -522,12 +532,43 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
             user_id=USER,
         )
     assert created.value.status_code == 422
+    with pytest.raises(ValidationAppError) as corrected:
+        service.correct_venue_facts(
+            loss.id,
+            organization_id=ORG,
+            actor_user_id=USER,
+            reason="client forge",
+            fields={"tags": ['x"blofin-reconciled'], "external_ref": " blofin-demo-history:x"},
+        )
+    assert corrected.value.status_code == 422
+    imported = JournalImportService(session, AuditService(session)).import_trades(
+        JournalImportRequest(
+            mode=JournalImportMode.COMMIT,
+            rows=[
+                {
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1h",
+                    "direction": "long",
+                    "status": "closed",
+                    "result": "loss",
+                    "net_pnl": "-9",
+                    "external_ref": " Blofin-Demo-history:imported",
+                    "tags": ['x"blofin-reconciled'],
+                }
+            ],
+        ),
+        organization_id=ORG,
+        user_id=USER,
+    )
+    assert imported.committed is False
+    assert imported.invalid_count == 1
 
-    loss.external_ref = "blofin-demo-history:forged"
+    loss.tags = ['x"blofin-reconciled']
+    loss.external_ref = " BLOFIN-DEMO-history:forged"
     session.commit()
-    prefixed = _daily(session)
-    assert prefixed.daily_locked is True
-    assert prefixed.realized_pnl == before.realized_pnl
+    crafted = _daily(session)
+    assert crafted.daily_locked is True
+    assert crafted.realized_pnl == before.realized_pnl
     assert (
         paper_loss_cooldown_active(
             session, organization_id=ORG, user_id=USER, seconds=3600, now=NOW
@@ -548,6 +589,7 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
             source=JournalTradeSource.MANUAL_DEMO_TEST,
             symbol="BCHUSDT",
             net="-5",
+            external_ref="blofin-demo-history:stuck-demo-test",
             tags=[RECONCILED_TAG],
         )
     )
@@ -567,7 +609,7 @@ def test_generic_update_cannot_clear_a_paper_loss(session: Session) -> None:
             source=JournalTradeSource.MANUAL_DEMO_TEST,
             symbol="LTCUSDT",
             net="-3",
-            external_ref="blofin-demo-history:prefix-only",
+            tags=['x"blofin-reconciled'],
         )
     )
     session.commit()
@@ -1016,7 +1058,7 @@ def test_extra_history_tag_cannot_freeze_the_next_recompute(session: Session) ->
     extra = [*(mirrored.tags or []), "blofin-history:not-in-the-fetch"]
     with pytest.raises(ValidationAppError) as edited:
         service.update(mirrored.id, JournalTradeUpdate(tags=extra), organization_id=ORG)
-    assert edited.value.details["reason"] == "mirror_venue_immutable"
+    assert edited.value.details["reason"] == "mirror_tag_immutable"
     session.refresh(mirrored)
     assert "blofin-history:not-in-the-fetch" not in (mirrored.tags or [])
     mirrored.net_pnl = Decimal("9")

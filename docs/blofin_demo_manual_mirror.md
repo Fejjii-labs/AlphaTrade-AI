@@ -160,26 +160,33 @@ withheld. The stuck open example
 matches. This repository change does not call BloFin, so it does not prove
 that the live row matches a venue close.
 
-That close writes the venue net onto the journal row and adds the server tag
+That close writes the venue net onto the journal row, sets
+`external_ref` to `blofin-demo-history:{historyId}`, and adds the server tag
 `blofin-reconciled`. Risk, the daily lock, open exposure, and the paper loss
 cooldown treat a row as mirror economics only when its source is
-`blofin_demo_manual` or it carries that tag. An `external_ref` prefix alone
-does not. Generic create, update, venue correction, and import reject a
-client `external_ref` that starts with `blofin-demo-`, and they reject a
-client change to `blofin-reconciled`. `external_ref` is a venue fact, so a
-lifecycle row cannot change it through the generic update. Promotion reads
-paper-validation trades, and the mirror does not write those. A
-lifecycle-backed row keeps the entry time, size, and entry price the daily
-book already used, and a reconciled `manual_demo_test` row keeps that same
-open notional after it is closed. An unreconciled manual demo fill still
-counts toward the day's trade count and open exposure.
+`blofin_demo_manual` or its `external_ref` has the exact server prefix
+`blofin-demo-history:`. Tags are not read. A case or whitespace variant of
+the prefix does not qualify. A stuck governed demo-test row, including
+`912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches, keeps
+source `manual_demo_test` and receives that history ref, so the close does
+not count toward the daily lock. Generic create, update, venue correction,
+and import reject a client `external_ref` that is a case or whitespace
+variant of `blofin-demo-`, and they reject a client tag that contains a
+double quote or starts with `blofin-` after trimming. `external_ref` is a
+venue fact, so a lifecycle row cannot change it through the generic update.
+Promotion reads paper-validation trades, and the mirror does not write
+those. A lifecycle-backed row keeps the entry time, size, and entry price
+the daily book already used, and a reconciled `manual_demo_test` row keeps
+that same open notional after it is closed. An unreconciled manual demo fill
+still counts toward the day's trade count and open exposure.
 
 ## Tags after the mirror
 
-`POST /journal/trades` rejects source `blofin_demo_manual`. The generic
-trade update rejects venue prices, size, fees, funding, result, net, the
-external ref, `pnl-verified` / `pnl-unverified` tags, and any change to a
-`blofin-` tag, including an added `blofin-history:` id, on a mirrored row.
+`POST /journal/trades` rejects source `blofin_demo_manual`. Create, update,
+venue correction, and import reject a tag that contains `"` or starts with
+`blofin-` on every row. The generic trade update also rejects venue prices,
+size, fees, funding, result, net, the external ref, and `pnl-verified` /
+`pnl-unverified` tags on a mirrored row.
 `PATCH /journal/trades/{id}/annotation` accepts `strategy_label`,
 `user_strategy_id`, `grade`, and `notes`. It does not accept prices, size,
 fees, or P&L. An empty string clears strategy, grade, or notes. Grade is

@@ -19,7 +19,7 @@ Classification rules (deterministic, documented):
   authority: manual, imported, human-approved proposal-flow paper
   executions, manual demo tests, and BloFin demo hand trades are ``human``;
   paper-validation, backtest, and system-generated trades are ``system``.
-  A source with no mapping is left out of the aggregate.
+  A source with no mapping is left out of the aggregate and a warning is logged.
 - AT-036 extends cohort comparison with scorecards, decision-quality metrics,
   dimension buckets, setup/regime breakdowns, and frontend navigation links.
 """
@@ -34,6 +34,7 @@ from decimal import Decimal
 from typing import Final
 from urllib.parse import urlencode
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -65,6 +66,8 @@ from app.schemas.journal_statistics import (
     SampleConfidence,
     TradeRuleCompliance,
 )
+
+logger = structlog.get_logger("services.journal_statistics")
 
 _UNASSIGNED_KEY: Final = "unassigned"
 _UNASSIGNED_LABEL: Final = "Unassigned"
@@ -188,6 +191,10 @@ class JournalStatisticsService:
         for row in rows:
             actor = _EXECUTION_ACTOR_BY_SOURCE.get(row.source)
             if actor is None:
+                logger.warning(
+                    "journal_statistics_unmapped_source",
+                    source=row.source.value,
+                )
                 continue
             annotated.append(
                 (

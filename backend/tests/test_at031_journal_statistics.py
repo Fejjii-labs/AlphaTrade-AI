@@ -727,6 +727,12 @@ def test_unknown_source_is_excluded_from_compute(
     mapped = dict(stats_module._EXECUTION_ACTOR_BY_SOURCE)
     del mapped[JournalTradeSource.MANUAL]
     monkeypatch.setattr(stats_module, "_EXECUTION_ACTOR_BY_SOURCE", mapped)
+    warnings: list[tuple[object, ...]] = []
+
+    def _warning(event: str, **kwargs: object) -> None:
+        warnings.append((event, kwargs.get("source")))
+
+    monkeypatch.setattr(stats_module.logger, "warning", _warning)
 
     test_client, factory = client
     headers = _auth(test_client, "stats-a@test.example")
@@ -739,6 +745,10 @@ def test_unknown_source_is_excluded_from_compute(
     grouped = _stats(test_client, headers, group_by="execution_actor")
     counts = {b["key"]: b["metrics"]["trade_count"] for b in grouped["buckets"]}
     assert counts == {"system": 1}
+    assert warnings == [
+        ("journal_statistics_unmapped_source", "manual"),
+        ("journal_statistics_unmapped_source", "manual"),
+    ]
 
 
 # --------------------------------------------------------------------------- #

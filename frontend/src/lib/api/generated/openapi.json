@@ -9628,6 +9628,13 @@
             ],
             "title": "Refresh Error"
           },
+          "refresh_interval_seconds": {
+            "default": 45,
+            "maximum": 60.0,
+            "minimum": 30.0,
+            "title": "Refresh Interval Seconds",
+            "type": "integer"
+          },
           "snapshot_id": {
             "anyOf": [
               {
@@ -10047,6 +10054,34 @@
       "DemoAccountPerformance": {
         "additionalProperties": false,
         "properties": {
+          "activity_coverage": {
+            "default": "",
+            "title": "Activity Coverage",
+            "type": "string"
+          },
+          "activity_sync_status": {
+            "default": "disabled",
+            "enum": [
+              "disabled",
+              "unavailable",
+              "partial",
+              "ready"
+            ],
+            "title": "Activity Sync Status",
+            "type": "string"
+          },
+          "average_r": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average R"
+          },
           "coverage": {
             "default": "Verified performance is unavailable for this account.",
             "title": "Coverage",
@@ -10094,6 +10129,32 @@
             ],
             "title": "Gross Pnl"
           },
+          "losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Losses"
+          },
+          "manual_mirror_reason": {
+            "default": "",
+            "title": "Manual Mirror Reason",
+            "type": "string"
+          },
+          "manual_mirror_status": {
+            "default": "disabled",
+            "enum": [
+              "disabled",
+              "withheld",
+              "ready"
+            ],
+            "title": "Manual Mirror Status",
+            "type": "string"
+          },
           "manual_test_trades": {
             "default": 0,
             "title": "Manual Test Trades",
@@ -10110,6 +10171,23 @@
               }
             ],
             "title": "Net Pnl"
+          },
+          "pnl_method": {
+            "default": "",
+            "title": "Pnl Method",
+            "type": "string"
+          },
+          "realized_pnl": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl"
           },
           "status": {
             "default": "unavailable",
@@ -10131,6 +10209,28 @@
             ],
             "title": "Strategy Closed Trades"
           },
+          "trade_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Count"
+          },
+          "unresolved_round_trips": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unresolved Round Trips"
+          },
           "unresolved_trades": {
             "default": 0,
             "title": "Unresolved Trades",
@@ -10140,6 +10240,53 @@
             "default": 0,
             "title": "Verified Closed Trades",
             "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          },
+          "wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wins"
           }
         },
         "title": "DemoAccountPerformance",
@@ -12807,7 +12954,7 @@
         "type": "object"
       },
       "ExecutionActor": {
-        "description": "Derived human-vs-system execution dimension.\n\nClassified by decision authority over the recorded trade:\n``human`` — manual entries, imported human history, and human-approved\nproposal-flow paper executions; ``system`` — automated paper-validation,\nbacktest, and system-generated trades.",
+        "description": "Derived human-vs-system execution dimension.\n\nClassified by decision authority over the recorded trade:\n``human`` — manual entries, imported human history, human-approved\nproposal-flow paper executions, manual demo tests, and BloFin demo hand\ntrades; ``system`` — automated paper-validation, backtest, and\nsystem-generated trades. An unmapped source is omitted.",
         "enum": [
           "human",
           "system"
@@ -19791,6 +19938,62 @@
         "title": "JournalStatsWarningCode",
         "type": "string"
       },
+      "JournalTradeAnnotation": {
+        "additionalProperties": false,
+        "description": "Strategy, grade, and notes on a mirrored BloFin demo journal trade.\n\nOmitted fields stay as they are. An empty string clears strategy, grade,\nor notes. Venue prices, size, fees, and P&L are not accepted here.",
+        "properties": {
+          "grade": {
+            "anyOf": [
+              {
+                "maxLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "strategy_label": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Label"
+          },
+          "user_strategy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Strategy Id"
+          }
+        },
+        "title": "JournalTradeAnnotation",
+        "type": "object"
+      },
       "JournalTradeAttachmentList": {
         "additionalProperties": false,
         "properties": {
@@ -21202,6 +21405,17 @@
               }
             ],
             "title": "Funding"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
           },
           "gross_pnl": {
             "anyOf": [
@@ -66020,6 +66234,64 @@
           }
         ],
         "summary": "Update canonical journal trade",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/journal/trades/{journal_trade_id}/annotation": {
+      "patch": {
+        "operationId": "annotate_journal_trade_journal_trades__journal_trade_id__annotation_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "journal_trade_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Journal Trade Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalTradeAnnotation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalTradeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Tag a mirrored BloFin demo trade with strategy, grade, and notes",
         "tags": [
           "journal"
         ]

@@ -75,35 +75,27 @@ from app.services.blofin_demo_manual_mirror import (
     grade_tag,
 )
 from app.services.canonical_serialization import canonical_sha256
-from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG
+from app.services.risk.mirror_economics import client_mirror_ref, client_reserved_tag
 
 _REQUEST_TAG = "journal-trades-api"
 _GRADE = re.compile(r"^(?:[A-D][+-]?|F)$")
 
 
 def _reject_client_mirror_ref(value: object) -> None:
-    if isinstance(value, str) and value.startswith(MIRROR_REF_PREFIX):
+    if client_mirror_ref(value):
         raise ValidationAppError(
             "A blofin-demo- external ref is written only by the read-only mirror.",
             details={"reason": "mirror_ref_immutable"},
         )
 
 
-def _tag_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [tag for tag in value if isinstance(tag, str)]
-
-
-def _reject_reconcile_tag_change(before: object, after: object) -> None:
-    had = RECONCILED_TAG in _tag_list(before)
-    has = RECONCILED_TAG in _tag_list(after)
-    if had == has:
-        return
-    raise ValidationAppError(
-        "The mirror reconciliation marker is written only by the read-only mirror.",
-        details={"reason": "mirror_reconciled_immutable"},
-    )
+def _reject_client_tags(value: object) -> None:
+    tags = value if isinstance(value, list) else []
+    if any(client_reserved_tag(tag) for tag in tags):
+        raise ValidationAppError(
+            "Tags with a quote or a blofin- prefix are written only by the server.",
+            details={"reason": "mirror_tag_immutable"},
+        )
 
 
 def _clean_grade(value: object) -> str | None:
@@ -212,7 +204,7 @@ class JournalTradeService:
                 details={"reason": "mirror_source_immutable"},
             )
         _reject_client_mirror_ref(data.external_ref)
-        _reject_reconcile_tag_change([], data.tags)
+        _reject_client_tags(data.tags)
         if data.external_ref == "blofin-demo-mirror-cycle" or cycle_tags_rewritten([], data.tags):
             raise ValidationAppError(
                 "The hand-trade mirror cycle marker cannot be created here.",
@@ -492,7 +484,7 @@ class JournalTradeService:
         if "external_ref" in updates:
             _reject_client_mirror_ref(updates.get("external_ref"))
         if "tags" in updates:
-            _reject_reconcile_tag_change(row.tags, updates.get("tags"))
+            _reject_client_tags(updates.get("tags"))
         if cycle_marker_locked(row) or updates.get("external_ref") == "blofin-demo-mirror-cycle":
             raise ValidationAppError(
                 "The hand-trade mirror cycle marker cannot be edited here.",
@@ -587,6 +579,10 @@ class JournalTradeService:
                 "Venue corrections require an explicit reason.",
                 details={"reason": "missing_correction_reason"},
             )
+        if "tags" in fields:
+            _reject_client_tags(fields.get("tags"))
+        if "external_ref" in fields:
+            _reject_client_mirror_ref(fields.get("external_ref"))
         unknown = sorted(key for key in fields if key not in VENUE_FACT_FIELDS)
         if unknown:
             raise ValidationAppError(

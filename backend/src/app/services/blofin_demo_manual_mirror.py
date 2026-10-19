@@ -70,7 +70,7 @@ from app.schemas.common import (
 )
 from app.schemas.dashboard_demo_account import DashboardDemoAccount
 from app.security.tenant import TenantContext
-from app.services.risk.mirror_economics import RECONCILED_TAG
+from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, RECONCILED_TAG, exact_prefix
 
 logger = structlog.get_logger("services.blofin_demo_manual_mirror")
 
@@ -948,7 +948,7 @@ class BloFinDemoManualMirror:
                     JournalTrade.organization_id == organization_id,
                     JournalTrade.user_id == user_id,
                     or_(
-                        JournalTrade.external_ref.like("blofin-demo-%"),
+                        exact_prefix(JournalTrade.external_ref, MIRROR_REF_PREFIX),
                         JournalTrade.source.in_(_MIRROR_SOURCES),
                     ),
                 )
