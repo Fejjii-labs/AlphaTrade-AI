@@ -100,7 +100,11 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   Later scans do not push that expiry forward. When the expiry passes, the
   streak clears. A manual reset requires the same human proof as a
   loosening apply, writes an audit row, and does not clear a drawdown
-  latch. Shortening the cooldown is a loosening. The next demo entry stays
+  latch. A Telegram proof without `iat` is rejected on that reset, the
+  same as on apply. `decode_apply_proof` stays bound to a proposal UUID
+  and is not widened for `consecutive-reset:<account_id>`. A future
+  reset route needs its own strict decoder that accepts only a human
+  actor. Shortening the cooldown is a loosening. The next demo entry stays
   refused while that pause is active. Drawdown reset stays human-only.
 - Claim ceilings for a profile plan are a per-claim view. They are not
   written onto the shared organization-and-account ledger row, so a later

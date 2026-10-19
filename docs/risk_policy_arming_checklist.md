@@ -94,6 +94,7 @@ These follow-ups are required. They do not replace (a)–(d).
 | Trigger | Work |
 | --- | --- |
 | Before a downgrade of `a17riskpolicy002` is relied on | Refuse that downgrade while cancellation, promotion-report, or breaker-reset rows exist. `a16` and `a18` already refuse when their guarded rows exist. |
+| Before a consecutive-loss reset route | Use a strict decoder of its own that accepts only a human actor. Do not widen `decode_apply_proof` to accept `consecutive-reset:<account_id>`. A Telegram proof without `iat` stays rejected. |
 | Before a client uses `/risk/policy/*` | Add route tests for those routes. |
 | The next edit of `backend/src/app/core/config.py` | Correct the stale comment at lines 205–209. This checklist does not edit that file. |
 

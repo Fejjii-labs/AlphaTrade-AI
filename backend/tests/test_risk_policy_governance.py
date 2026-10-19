@@ -1829,3 +1829,69 @@ def test_consecutive_cooldown_round_trips_and_a_shorter_pause_is_a_loosening() -
     )
     assert audit is not None
     assert service.breaker_active(organization_id=ORG, now=NOW) is True
+
+
+def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:
+    """Freshness from apply covers this reset. The UUID decoder stays closed."""
+
+    import inspect
+
+    from app.schemas.common import AuditResult
+    from app.services.risk_policy.governance import consecutive_reset_binding
+    from app.services.risk_policy.proof import decode_apply_proof
+
+    source = inspect.getsource(decode_apply_proof)
+    assert "proposal_id: UUID" in source
+    assert "consecutive-reset" not in source
+    session = _session()
+    service = _service(session)
+    account = uuid.uuid4()
+    paused_until = NOW + timedelta(hours=10)
+    service.record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=4,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=paused_until,
+        drawdown_latched=True,
+        now=NOW,
+    )
+    proposal_id, content_hash = consecutive_reset_binding(account)
+    proof = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        issued_at=None,
+        telegram_chat_id="pinned-owner-chat",
+        telegram_confirmation_id="confirm-1",
+    )
+    with pytest.raises(RiskPolicyRejected) as rejected:
+        service.reset_consecutive_losses(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=proof,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert rejected.value.code == "apply_proof_not_fresh"
+    state = service.load_breaker(organization_id=ORG, account_id=account)
+    assert state is not None
+    assert state.consecutive_losses == 4
+    assert state.consecutive_paused_until == paused_until
+    assert state.drawdown_latched is True
+    assert (
+        session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == AuditEventType.RISK_POLICY_CONSECUTIVE_RESET,
+                AuditLog.result == AuditResult.SUCCESS,
+            )
+        )
+        is None
+    )
