@@ -1051,8 +1051,10 @@ def test_linear_contract_multiplier_fill_exposure(session: Session) -> None:
     assert accounting is not None
     assert reservation.contract_multiplier == Decimal("10")
     reserved_before = reservation.remaining_reserved_notional
+    # Market reservations use the upper authorized executable price (entry zone
+    # 100.50), then the plan's existing fee and slippage allowances.
     expected_reserved = (
-        Decimal("2") * Decimal("100.10") * Decimal("10") + Decimal("1") + Decimal("0.75")
+        Decimal("2") * Decimal("100.50") * Decimal("10") + Decimal("1") + Decimal("0.75")
     )
     assert reserved_before == expected_reserved
     assert reserved_before == accounting.reserved_notional
@@ -1116,11 +1118,12 @@ def test_linear_base_quantity_ignores_contract_multiplier(session: Session) -> N
     assert accounting is not None
     assert reservation.quantity_unit == "BASE"
     assert reservation.contract_multiplier == Decimal("10")
-    quote_exposure = Decimal("2") * Decimal("100.10")
+    # Same upper executable price. BASE quantity is not scaled by the contract multiplier.
+    quote_exposure = Decimal("2") * Decimal("100.50")
     expected_reserved = quote_exposure + Decimal("1") + Decimal("0.75")
-    assert quote_exposure == Decimal("200.20")
-    assert expected_reserved == Decimal("201.95")
-    assert expected_reserved != Decimal("2") * Decimal("100.10") * Decimal("10") + Decimal(
+    assert quote_exposure == Decimal("201.00")
+    assert expected_reserved == Decimal("202.75")
+    assert expected_reserved != Decimal("2") * Decimal("100.50") * Decimal("10") + Decimal(
         "1"
     ) + Decimal("0.75")
     assert reservation.remaining_reserved_notional == expected_reserved
