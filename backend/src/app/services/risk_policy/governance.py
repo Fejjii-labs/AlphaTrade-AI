@@ -30,6 +30,7 @@ from app.services.risk_policy.profile import (
 
 PROPOSAL_TTL = timedelta(hours=72)
 FRESH_PROOF = timedelta(minutes=15)
+TELEGRAM_PROOF_MAX_AGE = timedelta(minutes=5)
 
 
 class PolicyChannel(StrEnum):
@@ -61,6 +62,7 @@ class HumanApplyProof:
     proposal_id: str
     content_hash: str
     expires_at: datetime
+    issued_at: datetime | None = None
     session_id: str | None = None
     authenticated_at: datetime | None = None
     step_up_at: datetime | None = None
@@ -155,6 +157,7 @@ def assert_can_apply(
             raise RiskPolicyRejected("apply_proof_chat_mismatch")
         if not proof.telegram_confirmation_id:
             raise RiskPolicyRejected("apply_proof_chat_mismatch")
+        _require_fresh_telegram(proof, now)
         return
     raise RiskPolicyRejected("apply_proof_missing")
 
@@ -218,4 +221,19 @@ def _require_fresh_step_up(proof: HumanApplyProof, now: datetime) -> None:
     if proof.step_up_at < proof.authenticated_at:
         raise RiskPolicyRejected("apply_proof_not_fresh")
     if now - proof.authenticated_at > FRESH_PROOF or now - proof.step_up_at > FRESH_PROOF:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+
+
+def _require_fresh_telegram(proof: HumanApplyProof, now: datetime) -> None:
+    """Cap a Telegram proof from its issued time, whatever ``exp`` says.
+
+    A proof issued in the future, or older than five minutes, is rejected.
+    """
+
+    issued = proof.issued_at
+    if issued is None:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+    if now.tzinfo is None or issued.tzinfo is None:
+        raise RiskPolicyRejected("timestamp_must_be_aware")
+    if issued > now or now - issued > TELEGRAM_PROOF_MAX_AGE:
         raise RiskPolicyRejected("apply_proof_not_fresh")

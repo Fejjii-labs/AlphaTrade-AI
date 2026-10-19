@@ -26,12 +26,14 @@ including a paper or demo profile apply.
 | Separate signing key | The proof signing key is not `jwt_secret`. |
 | Bound proposal | `proposal_id` is required and matches the proposal being applied. |
 
-Current state on `bc9041f0`: the proof only fails closed. A missing or
-invalid proof is rejected. There is no issuer, no stored nonce, and no
-separate signing key. `decode_apply_proof` verifies with `jwt_secret`. A
-token that omits `proposal_id` is filled with the request's proposal id.
-`actor=user` is a label on the access token. It is not a TOTP, WebAuthn, or
-Telegram check.
+Current state: the proof still only fails closed. A missing or invalid
+proof is rejected. There is no issuer, no stored nonce, and no separate
+signing key. `decode_apply_proof` verifies with `jwt_secret`. A missing
+`proposal_id`, and a `proposal_id` that does not match the proposal, are
+rejected. The request id is not copied in. A `telegram_owner` proof older
+than 5 minutes from `iat`, or issued in the future, is rejected even when
+`exp` is still later. `actor=user` is a label on the access token. It is
+not a TOTP, WebAuthn, or Telegram check.
 
 ## (b) Before exposing drawdown reset
 

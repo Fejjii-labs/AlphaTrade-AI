@@ -8,12 +8,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import jwt
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.types import Indicators, MarketStructure
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import AuditLog, Organization
 from app.db.risk_policy import (
@@ -61,6 +63,7 @@ from app.services.risk_policy.profile import (
     placeholder_profile,
     profile_with,
 )
+from app.services.risk_policy.proof import decode_apply_proof
 
 NOW = datetime(2026, 10, 18, 15, 0, tzinfo=UTC)
 ORG = uuid.UUID("00000000-0000-4000-8000-000000000107")
@@ -632,6 +635,7 @@ def test_apply_requires_owner_proof_and_refuses_service_and_agent_tokens() -> No
         proposal_id=str(proposal.id),
         content_hash=proposal.content_hash,
         expires_at=NOW + timedelta(minutes=10),
+        issued_at=NOW - timedelta(seconds=30),
         telegram_chat_id="pinned-owner-chat",
         telegram_confirmation_id="confirm-1",
     )
@@ -646,6 +650,169 @@ def test_apply_requires_owner_proof_and_refuses_service_and_agent_tokens() -> No
     )
     assert applied.actor_channel == "human"
     assert applied.change_class == "initial"
+
+
+def test_apply_proof_rejects_a_missing_or_unequal_proposal_and_a_stale_telegram() -> None:
+    settings = Settings(
+        environment="local",
+        log_json=False,
+        execution_mode="paper",
+        enable_real_trading=False,
+        database_url="sqlite+pysqlite:///:memory:",
+        jwt_secret="test-secret-key-for-auth-slice-32b-min",
+        access_token_expire_minutes=15,
+        refresh_token_expire_days=7,
+        access_token_denylist_use_redis=False,
+    )
+    session = _session()
+    service = _service(session)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Proof must name this proposal.",
+        now=NOW,
+    )
+    other = uuid.uuid4()
+
+    def token(claims: dict[str, object]) -> str:
+        payload = {
+            key: int(value.timestamp()) if isinstance(value, datetime) else value
+            for key, value in claims.items()
+        }
+        encoded = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        assert isinstance(encoded, str)
+        return encoded
+
+    def step_up(**overrides: object) -> dict[str, object]:
+        claims: dict[str, object] = {
+            "type": "risk_policy_step_up",
+            "sub": "sofien",
+            "proposal_id": str(proposal.id),
+            "content_hash": proposal.content_hash,
+            "exp": NOW + timedelta(minutes=5),
+            "session_id": "interactive-session",
+            "auth_time": NOW - timedelta(minutes=1),
+            "step_up_at": NOW - timedelta(seconds=20),
+        }
+        claims.update(overrides)
+        return claims
+
+    def telegram(**overrides: object) -> dict[str, object]:
+        claims: dict[str, object] = {
+            "type": "risk_policy_telegram",
+            "sub": "sofien",
+            "proposal_id": str(proposal.id),
+            "content_hash": proposal.content_hash,
+            "exp": NOW + timedelta(days=1),
+            "iat": NOW - timedelta(minutes=1),
+            "chat_id": "pinned-owner-chat",
+            "confirmation_id": "confirm-1",
+        }
+        claims.update(overrides)
+        return claims
+
+    matched = decode_apply_proof(token(step_up()), settings, proposal_id=proposal.id, now=NOW)
+    assert matched.proposal_id == str(proposal.id)
+    fresh = decode_apply_proof(token(telegram()), settings, proposal_id=proposal.id, now=NOW)
+    assert fresh.issued_at == NOW - timedelta(minutes=1)
+    applied = service.apply(
+        organization_id=ORG,
+        proposal_id=proposal.id,
+        actor=_human(),
+        proof=fresh,
+        owner_user_id="sofien",
+        pinned_telegram_chat_id="pinned-owner-chat",
+        now=NOW,
+    )
+    assert applied.change_class == "initial"
+
+    for claims in (step_up(), telegram()):
+        omitted = dict(claims)
+        del omitted["proposal_id"]
+        with pytest.raises(RiskPolicyRejected) as missing:
+            decode_apply_proof(token(omitted), settings, proposal_id=proposal.id, now=NOW)
+        assert missing.value.code == "apply_proof_missing"
+        with pytest.raises(RiskPolicyRejected) as unequal:
+            decode_apply_proof(
+                token({**claims, "proposal_id": str(other)}),
+                settings,
+                proposal_id=proposal.id,
+                now=NOW,
+            )
+        assert unequal.value.code == "apply_proof_proposal_mismatch"
+
+    with pytest.raises(RiskPolicyRejected) as stale:
+        decode_apply_proof(
+            token(telegram(iat=NOW - timedelta(minutes=6))),
+            settings,
+            proposal_id=proposal.id,
+            now=NOW,
+        )
+    assert stale.value.code == "apply_proof_not_fresh"
+    with pytest.raises(RiskPolicyRejected) as future:
+        decode_apply_proof(
+            token(telegram(iat=NOW + timedelta(seconds=1))),
+            settings,
+            proposal_id=proposal.id,
+            now=NOW,
+        )
+    assert future.value.code == "apply_proof_not_fresh"
+    without_issued = dict(telegram())
+    del without_issued["iat"]
+    with pytest.raises(RiskPolicyRejected) as no_iat:
+        decode_apply_proof(token(without_issued), settings, proposal_id=proposal.id, now=NOW)
+    assert no_iat.value.code == "apply_proof_not_fresh"
+
+    later = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5")),
+        reason="A second proposal for the apply-path freshness check.",
+        now=NOW,
+    )
+    old = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=str(later.id),
+        content_hash=later.content_hash,
+        expires_at=NOW + timedelta(days=1),
+        issued_at=NOW - timedelta(minutes=6),
+        telegram_chat_id="pinned-owner-chat",
+        telegram_confirmation_id="confirm-2",
+    )
+    with pytest.raises(RiskPolicyRejected) as aged:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=later.id,
+            actor=_human(),
+            proof=old,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert aged.value.code == "apply_proof_not_fresh"
+    ahead = HumanApplyProof(
+        method="telegram_owner",
+        subject_user_id="sofien",
+        proposal_id=str(later.id),
+        content_hash=later.content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        issued_at=NOW + timedelta(seconds=1),
+        telegram_chat_id="pinned-owner-chat",
+        telegram_confirmation_id="confirm-3",
+    )
+    with pytest.raises(RiskPolicyRejected) as dated:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=later.id,
+            actor=_human(),
+            proof=ahead,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert dated.value.code == "apply_proof_not_fresh"
 
 
 def test_loosening_waits_for_midnight_and_twenty_four_hours_and_proposals_expire() -> None:

@@ -10,7 +10,7 @@ import jwt
 
 from app.core.config import Settings
 from app.services.risk_policy.errors import RiskPolicyRejected
-from app.services.risk_policy.governance import HumanApplyProof
+from app.services.risk_policy.governance import TELEGRAM_PROOF_MAX_AGE, HumanApplyProof
 
 
 def decode_apply_proof(
@@ -20,19 +20,25 @@ def decode_apply_proof(
     proposal_id: UUID,
     now: datetime,
 ) -> HumanApplyProof:
-    """Turn a step-up or Telegram proof token into a proof bound to this proposal."""
+    """Turn a step-up or Telegram proof token into a proof bound to this proposal.
+
+    Expiry and Telegram age use ``now``. The library clock is not the authority.
+    """
 
     try:
         payload: dict[str, Any] = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False, "verify_iat": False},
         )
     except jwt.PyJWTError as exc:
         raise RiskPolicyRejected("apply_proof_missing") from exc
+    if now.tzinfo is None:
+        raise RiskPolicyRejected("timestamp_must_be_aware")
     kind = payload.get("type")
     subject = str(payload.get("sub") or "")
-    bound = str(payload.get("proposal_id") or "")
+    bound = _required_proposal_id(payload.get("proposal_id"), proposal_id)
     content_hash = str(payload.get("content_hash") or "")
     expires = _time(payload.get("exp"), "apply_proof_expired")
     if expires <= now:
@@ -41,7 +47,7 @@ def decode_apply_proof(
         return HumanApplyProof(
             method="interactive_step_up",
             subject_user_id=subject,
-            proposal_id=bound or str(proposal_id),
+            proposal_id=bound,
             content_hash=content_hash,
             expires_at=expires,
             session_id=_text(payload.get("session_id")),
@@ -52,13 +58,38 @@ def decode_apply_proof(
         return HumanApplyProof(
             method="telegram_owner",
             subject_user_id=subject,
-            proposal_id=bound or str(proposal_id),
+            proposal_id=bound,
             content_hash=content_hash,
             expires_at=expires,
+            issued_at=_fresh_issued_at(payload.get("iat"), now),
             telegram_chat_id=_text(payload.get("chat_id")),
             telegram_confirmation_id=_text(payload.get("confirmation_id")),
         )
     raise RiskPolicyRejected("apply_proof_missing")
+
+
+def _required_proposal_id(raw: object, proposal_id: UUID) -> str:
+    """Use only the claim. A missing claim is not filled from the request."""
+
+    if raw is None:
+        raise RiskPolicyRejected("apply_proof_missing")
+    bound = str(raw).strip()
+    if not bound:
+        raise RiskPolicyRejected("apply_proof_missing")
+    if bound != str(proposal_id):
+        raise RiskPolicyRejected("apply_proof_proposal_mismatch")
+    return bound
+
+
+def _fresh_issued_at(raw: object, now: datetime) -> datetime:
+    """Telegram freshness is five minutes from ``iat``, not the token ``exp``."""
+
+    if raw is None:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+    issued = _time(raw, "apply_proof_not_fresh")
+    if issued > now or now - issued > TELEGRAM_PROOF_MAX_AGE:
+        raise RiskPolicyRejected("apply_proof_not_fresh")
+    return issued
 
 
 def _text(value: object) -> str | None:

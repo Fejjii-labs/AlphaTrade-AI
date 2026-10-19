@@ -31,6 +31,12 @@ a paper or demo profile apply:
   A token that omits `proposal_id` is filled with the request's proposal
   id. `actor=user` is a label on the access token. It is not a TOTP,
   WebAuthn, or Telegram check.
+- Follow-up to Grok review 5568860205: `decode_apply_proof` now rejects a
+  missing `proposal_id` and a `proposal_id` that does not match the
+  proposal. It does not copy the request id. A `telegram_owner` proof is
+  fresh only when its `iat` is not in the future and is no older than 5
+  minutes, even when `exp` is later. There is still no issuer, stored
+  nonce, or separate signing key. `actor=user` is still a label.
 
 ### (b) Trigger: before exposing drawdown reset
 
