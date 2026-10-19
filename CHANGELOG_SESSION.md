@@ -1,16 +1,15 @@
 # Session changelog
 
-Generated At UTC: 2026-10-19T10:42:00Z
+Generated At UTC: 2026-10-19T11:11:00Z
 Timezone: Etc/UTC
-Source File SHA256: 17bde1625df2f6a84003ce67a17786d3ab9657ef61df82e9a3eac31bfac7fb5c
+Source File SHA256: 34005f4494011840d84cc0a78fef977c46946c9124ddb898e376bb85abf10c35
 
 ## 2026-10-19
 
-- Commit `b1d31b7198b77b4ceee33aae58493b6c1cca71c4` on `cursor/blofin-demo-manual-journal-c6b5` limits `journal_mirror_economics()` to source `blofin_demo_manual` or the server tag `blofin-reconciled`. A `blofin-demo-` external ref alone does not exclude a row.
-- Generic journal create and update reject a client `blofin-demo-` external ref and a client change to `blofin-reconciled` with HTTP 422. `external_ref` is a venue fact. Import and venue correction reject the reserved identity as well.
-- `test_generic_update_cannot_clear_a_paper_loss` keeps a `paper_execution` loss in the daily lock, realized P&L, and the cooldown. Tagged mirror rows stay out. A prefix-only `manual_demo_test` loss still counts.
-- Statistics still classify by source. Promotion still sums `PaperTrade.net_pnl`. Daily realized P&L, exposure, and the cooldown use the same server-marker predicate.
-- Local checks before the one push: ruff format, ruff check, and mypy on the changed modules passed. Pytest of the mirror, snapshot-worker, journal-statistics, and journal-import files plus the unreconciled manual-demo daily-risk test and the append-only venue-correction test exited 0.
-- CI run 39236932539 on `b1d31b71` succeeded.
-- Grok review 5570350418: VERDICT CHANGES_REQUIRED. REVIEWED_HEAD_SHA `b1d31b7198b77b4ceee33aae58493b6c1cca71c4`. The mirror candidate query is organization-wide and can stamp `blofin-reconciled` on another member's matching open row.
+- Commit `1973f68fbefc7998a12ce936430103a5fa20f2df` on `cursor/blofin-demo-manual-journal-c6b5` scopes mirror candidate selection, in-place reconciliation, and open-tracker cancellation to the pinned user.
+- The cycle marker and the headline read are per user. The worker's snapshot freshness check passes that user into `latest`. Daily lock and cooldown reads were already per user.
+- `test_other_members_open_match_stays_out_of_the_mirror` keeps the other member's exact open match open and untagged, leaves that member's open tracker open, and keeps that member's lifecycle loss in the daily lock.
+- Local checks before the one push: ruff format, ruff check, and mypy on the changed modules passed. The focused pytest suite exited 0 with one skip.
+- CI run 39240544992 on `1973f68f` succeeded.
+- Grok review 5570616284: VERDICT PASS. REVIEWED_HEAD_SHA `1973f68fbefc7998a12ce936430103a5fa20f2df`. No required corrections. One low OpenAPI finding was not applied.
 - PR 282 remains a draft. Flags stay off. The pull request was not merged. No workflow_dispatch.
