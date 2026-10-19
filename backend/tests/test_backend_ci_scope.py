@@ -1,6 +1,7 @@
 """Development scope cannot replace the explicit complete release acceptance gate."""
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -138,10 +139,13 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "ok reopened-draft-code",
         "ok ready-draft-flag",
         "ok fork-missing-head",
+        "ok draft-lookalike-label",
         "rename-into-docs",
         "labeled-other-does-not-skip",
     ):
         assert case in self_test.stdout
+    assert "env -i" in scope_script
+    assert "*,run-ci,*" not in scope_script
     assert "edited-not-base" in scope_script
     assert "pull/${CI_SCOPE_PR_NUMBER}/head" in scope_script
     concurrency = workflow["concurrency"]
@@ -189,3 +193,45 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     for job in jobs.values():
         assert "if" not in job and "continue-on-error" not in job
         assert all("continue-on-error" not in step for step in job["steps"])
+
+
+def test_ci_scope_self_test_ignores_polluted_environment(tmp_path: Path) -> None:
+    script = ROOT / ".github/workflows/ci-scope.sh"
+    output = tmp_path / "github_output"
+    summary = tmp_path / "github_summary"
+    output.write_text("")
+    summary.write_text("")
+    env = os.environ.copy()
+    env.update(
+        {
+            "CI_SCOPE_EVENT_NAME": "pull_request",
+            "CI_SCOPE_PR_ACTION": "labeled",
+            "CI_SCOPE_PR_DRAFT": "true",
+            "CI_SCOPE_PR_LABEL": "run-ci",
+            "CI_SCOPE_PR_LABELS": "run-ci",
+            "CI_SCOPE_BASE_SHA": "0" * 40,
+            "CI_SCOPE_HEAD_SHA": "a" * 40,
+            "CI_SCOPE_PR_NUMBER": "9",
+            "CI_SCOPE_BASE_CHANGED": "true",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "GITHUB_ENV": str(tmp_path / "github_env"),
+            "GITHUB_PATH": str(tmp_path / "github_path"),
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GIT_DIR": str(tmp_path / "not-a-git-dir"),
+            "GIT_WORK_TREE": str(tmp_path),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(script), "--self-test"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "ok draft-code" in result.stdout
+    assert "ok draft-lookalike-label" in result.stdout
+    assert "ci-scope self-test passed" in result.stdout
+    assert output.read_text() == ""
+    assert summary.read_text() == ""

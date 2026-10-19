@@ -22,7 +22,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   pull_request-only. It does not apply to push, `workflow_dispatch`, or a
   non-base edit.
 - Limit: Supersedes the concurrency grouping in AT-ADR-106. Draft `opened` and
-  `synchronize` still skip heavy work unless `run-ci` is already present. No
+  `synchronize` still skip heavy work unless the exact label `run-ci` is already
+  present. A label whose name only contains that text does not count. The scope
+  self-test ignores the calling `CI_SCOPE_*`, `GITHUB_*`, and `GIT_*` environment.
+  No
   schedule, no job-level `if`, and `full_backend` stays manual. A green check
   after a draft or docs skip is still not release acceptance (AT-ADR-084).
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.

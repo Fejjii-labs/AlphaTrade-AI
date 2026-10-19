@@ -41,11 +41,13 @@ when the pull request already has the `run-ci` label on an `opened` or
 `synchronize`. The workflow subscribes to `edited` so a base change is
 reclassified. An edit that does not change the base does not cancel the pull
 request run, and it does not skip. The workflow does not subscribe to
-`labeled`, so adding an unrelated label does not start CI or cancel a run. A
-missing head commit, including a fork pull request, fails open and runs the
-work.
-`deployment-safety` still runs on drafts, and it runs `ci-scope.sh --self-test`.
-`frontend` still runs for draft changes that are not docs-only. A rename is
+`labeled`, so adding any label, including `run-ci`, does not start CI or cancel
+a run. `run-ci` counts only as a whole label already present on `opened` or
+`synchronize`. A missing head commit, including a fork pull request, fails
+open and runs the work. `deployment-safety` still runs on drafts, and it runs
+`ci-scope.sh --self-test` in a clean environment that ignores the job's
+`CI_SCOPE_*` and `GITHUB_*` values. `frontend` still runs for draft changes
+that are not docs-only. A rename is
 classified with `git diff --name-only --no-renames`, so a move into `docs/` or
 `.ai/` does not count as docs-only.
 

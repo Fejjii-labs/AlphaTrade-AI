@@ -32,9 +32,14 @@ on_err() {
 }
 
 has_run_ci_label() {
-  case ",${CI_SCOPE_PR_LABELS:-}," in
-    *,run-ci,*) return 0 ;;
-  esac
+  local token
+  local IFS=','
+  # Exact comma-delimited tokens. A name such as do-not-run-ci is not run-ci.
+  for token in ${CI_SCOPE_PR_LABELS:-}; do
+    if [[ "$token" == "run-ci" ]]; then
+      return 0
+    fi
+  done
   [[ "${CI_SCOPE_PR_ACTION:-}" == "labeled" && "${CI_SCOPE_PR_LABEL:-}" == "run-ci" ]]
 }
 
@@ -162,7 +167,15 @@ decide() {
 }
 
 self_test() {
-  local tmp root fail=0 script_dir
+  local tmp root fail=0 script_dir name
+  # The workflow exports CI_SCOPE_* and GITHUB_* into every job. Git also
+  # honors GIT_DIR. Drop them before building the fixture repo, and give each
+  # case a fresh env -i so a polluted caller cannot change the result.
+  for name in $(compgen -v); do
+    case "$name" in
+      CI_SCOPE_* | GITHUB_* | GIT_* | CDPATH) unset "$name" ;;
+    esac
+  done
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   root="$(cd "$script_dir/../.." && pwd)"
   tmp="$(mktemp -d)"
@@ -188,8 +201,14 @@ self_test() {
     local name="$1" expect_app="$2" expect_heavy="$3"
     shift 3
     local out
+    # env -i keeps only the variables named here. PATH, HOME, and TMPDIR are
+    # required to run git; every CI_SCOPE_* and GITHUB_* input stays unset
+    # unless this case sets it.
     out="$(
-      env \
+      env -i \
+        PATH="$PATH" \
+        HOME="${HOME:-/tmp}" \
+        TMPDIR="${TMPDIR:-/tmp}" \
         CI_SCOPE_BASE_SHA="$base" \
         CI_SCOPE_HEAD_SHA="$head" \
         "$@" \
@@ -251,6 +270,12 @@ self_test() {
   run_case draft-run-ci true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true \
     CI_SCOPE_PR_LABELS=run-ci
+  run_case draft-run-ci-among-labels true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_PR_LABELS=docs,run-ci,other
+  run_case draft-lookalike-label true false \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_PR_LABELS=do-not-run-ci
   run_case labeled-run-ci-does-not-skip true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=labeled CI_SCOPE_PR_DRAFT=true \
     CI_SCOPE_PR_LABEL=run-ci CI_SCOPE_PR_LABELS=run-ci
