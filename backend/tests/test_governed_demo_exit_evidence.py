@@ -107,6 +107,18 @@ def exit_world(category="normal", *, partial=False):
     return plan, entry, provider, responses, calls
 
 
+def test_verified_funding_cash_is_kept_only_when_every_closing_fill_has_it():
+    plan, entry, provider, responses, _calls = exit_world()
+    responses["fills-history"][0]["funding"] = "-0.4"
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None
+    assert closed.funding == Decimal("-0.4")
+    assert closed.facts()["funding"] == "-0.4"
+    plan, entry, provider, _responses, _calls = exit_world()
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None and closed.funding is None
+
+
 @pytest.mark.parametrize("category,partial", [("normal", False), ("tp", False), ("sl", True)])
 def test_verified_actual_close_and_partial_entry_keep_real_economics(category, partial):
     plan, entry, provider, _, calls = exit_world(category, partial=partial)

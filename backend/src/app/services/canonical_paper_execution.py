@@ -623,7 +623,10 @@ def _journal_paper_liquidation(
             direction=direction,
         )
     except RiskPolicyRejected:
-        liquidation = plan.risk_and_exits.stop.value
+        payload["post_fill_action"] = "hold"
+        payload["post_fill_reason"] = "unreadable_liquidation"
+        payload["exchange_write_attempted"] = False
+        return
     outcome = post_fill_recheck(
         fill_price=fill_price,
         stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),

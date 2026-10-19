@@ -796,7 +796,12 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     from app.db.base import Base
     from app.db.models import Organization
     from app.services.audit_service import AuditService
-    from app.services.risk_policy.governance import PolicyActor, PolicyChannel
+    from app.services.risk_policy.governance import (
+        HumanApplyProof,
+        PolicyActor,
+        PolicyChannel,
+        drawdown_reset_binding,
+    )
     from app.services.risk_policy.persistence import RiskPolicyService
 
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -857,12 +862,23 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     assert expired.consecutive_paused_until is None
     assert expired.consecutive_losses == 0
     assert expired.drawdown_latched is True
+    proposal_id, content_hash = drawdown_reset_binding(ACCOUNT)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=ACCOUNT,
         actor=PolicyActor("sofien", PolicyChannel.HUMAN, True),
+        proof=HumanApplyProof(
+            method="interactive_step_up",
+            subject_user_id="sofien",
+            proposal_id=proposal_id,
+            content_hash=content_hash,
+            expires_at=pause + timedelta(minutes=10),
+            session_id="interactive-session",
+            authenticated_at=pause - timedelta(minutes=1),
+            step_up_at=pause - timedelta(seconds=20),
+        ),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
+        user_id=uuid4(),
         drawdown_breaker_percent=Decimal("10"),
         now=pause,
     )

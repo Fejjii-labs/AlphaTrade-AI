@@ -63,6 +63,10 @@ PAPER_CONSERVATIVE_MAINTENANCE_TIERS: tuple[MaintenanceTier, ...] = (
         maintenance_rate=PAPER_CONSERVATIVE_MAINTENANCE_RATE,
     ),
 )
+# Numeric(20, 8) money can differ by a unit in the last place when the same
+# open rows are summed twice. A larger gap is a different book.
+OPEN_NOTIONAL_MATCH_TOLERANCE = Decimal("0.00000001")
+STORED_PLAN_EXCEEDS_LIMITS = "stored_plan_exceeds_current_limits"
 
 
 @dataclass(frozen=True)
@@ -197,9 +201,10 @@ def open_risk_from_stops(
             expected_hold_hours=expected_hold_hours,
         )
         explained += size * entry
-    if open_notional != explained:
+    if abs(open_notional - explained) > OPEN_NOTIONAL_MATCH_TOLERANCE:
         return _open_risk_uncomputed(
-            "snapshot open notional does not match the notional explained by stops"
+            "open notional differs from the notional explained by stops "
+            f"by more than {OPEN_NOTIONAL_MATCH_TOLERANCE}"
         )
     return (risk_cash / equity * Decimal("100"), len(positions))
 
@@ -230,6 +235,84 @@ def canonical_open_stop_positions(
             )
         priced.append((size, entry, stop))
     return priced
+
+
+def stored_plan_limit_refusal(
+    *,
+    quantity: Decimal,
+    entry: Decimal,
+    stop: Decimal,
+    contract_multiplier: Decimal,
+    equity: Decimal,
+    book: ProfileOpenBook,
+    profile: RiskPolicyProfile,
+    execution_channel: str,
+    include_book_buffer: bool,
+    funding_rate: Decimal | None = None,
+    live_verified: bool = False,
+) -> str | None:
+    """Refuse a stored plan whose stop risk no longer fits the current book.
+
+    The stored quantity is not rewritten. Cash uses the same unit costs as
+    ``size_for_profile``. Equality with the remaining room is allowed.
+    """
+
+    if (
+        not isinstance(quantity, Decimal)
+        or not isinstance(entry, Decimal)
+        or not isinstance(stop, Decimal)
+        or not isinstance(contract_multiplier, Decimal)
+        or not isinstance(equity, Decimal)
+        or not quantity.is_finite()
+        or not entry.is_finite()
+        or not stop.is_finite()
+        or not contract_multiplier.is_finite()
+        or not equity.is_finite()
+        or quantity <= 0
+        or entry <= 0
+        or stop <= 0
+        or contract_multiplier <= 0
+        or equity <= 0
+    ):
+        return "stored_plan_limits_uncomputed"
+    size = quantity * contract_multiplier
+    cash = stop_out_cash(
+        size,
+        entry,
+        stop,
+        include_book_buffer=include_book_buffer,
+        funding_rate=funding_rate,
+        live_verified=live_verified,
+    )
+    added = cash / equity * Decimal("100")
+    notional = size * entry
+    if book.open_positions + 1 > profile.max_open_positions:
+        return STORED_PLAN_EXCEEDS_LIMITS
+    if (
+        book.remaining_daily_budget_percent <= 0
+        or book.open_risk_percent + added
+        > book.remaining_daily_budget_percent + OPEN_NOTIONAL_MATCH_TOLERANCE
+    ):
+        return STORED_PLAN_EXCEEDS_LIMITS
+    if (
+        book.open_risk_percent + added
+        > profile.max_aggregate_open_risk_percent + OPEN_NOTIONAL_MATCH_TOLERANCE
+    ):
+        return STORED_PLAN_EXCEEDS_LIMITS
+    per_trade = equity * profile.max_notional_per_trade_percent / Decimal("100")
+    aggregate = equity * profile.max_aggregate_notional_percent / Decimal("100")
+    if notional > per_trade + OPEN_NOTIONAL_MATCH_TOLERANCE:
+        return STORED_PLAN_EXCEEDS_LIMITS
+    if book.open_notional + notional > aggregate + OPEN_NOTIONAL_MATCH_TOLERANCE:
+        return STORED_PLAN_EXCEEDS_LIMITS
+    profile_cap = max(profile.risk_percent_by_grade.values(), default=Decimal("0"))
+    if _sized_risk_blocked_for_channel(
+        channel=execution_channel,
+        risk_percent=added,
+        profile_cap=profile_cap,
+    ):
+        return "risk_percent_exceeds_channel_ceiling"
+    return None
 
 
 def _open_risk_uncomputed(reason: str) -> str:

@@ -52,6 +52,7 @@ from app.services.risk_policy.governance import (
     PolicyChannel,
     assert_can_apply,
     channel_from_access_payload,
+    drawdown_reset_binding,
 )
 from app.services.risk_policy.grader import GRADER_VERSION, GradeBook, apply_ai_grade, grade_setup
 from app.services.risk_policy.ledger import caps_for_ledger
@@ -67,6 +68,7 @@ from app.services.risk_policy.proof import decode_apply_proof
 
 NOW = datetime(2026, 10, 18, 15, 0, tzinfo=UTC)
 ORG = uuid.UUID("00000000-0000-4000-8000-000000000107")
+USER = uuid.UUID("00000000-0000-4000-8000-000000000108")
 
 
 def _human() -> PolicyActor:
@@ -80,6 +82,20 @@ def _agent() -> PolicyActor:
 def _proof(proposal: RiskPolicyProposal, now: datetime = NOW) -> HumanApplyProof:
     proposal_id = str(proposal.id)
     content_hash = str(proposal.content_hash)
+    return HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=proposal_id,
+        content_hash=content_hash,
+        expires_at=now + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=now - timedelta(minutes=1),
+        step_up_at=now - timedelta(seconds=20),
+    )
+
+
+def _drawdown_proof(account_id: uuid.UUID, now: datetime = NOW) -> HumanApplyProof:
+    proposal_id, content_hash = drawdown_reset_binding(account_id)
     return HumanApplyProof(
         method="interactive_step_up",
         subject_user_id="sofien",
@@ -357,8 +373,9 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
+        user_id=USER,
         drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
@@ -1353,18 +1370,56 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
             organization_id=ORG,
             account_id=account,
             actor=_agent(),
+            proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            equity=Decimal("9500"),
+            user_id=USER,
             drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
     assert agent.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as bot:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=PolicyActor("bot-1", PolicyChannel.BOT, True),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            user_id=USER,
+            drawdown_breaker_percent=Decimal("10"),
+            now=NOW,
+        )
+    assert bot.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as undeclared:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=PolicyActor("sofien", PolicyChannel.UNDECLARED, True),
+            proof=_drawdown_proof(account),
+            owner_user_id="sofien",
+            user_id=USER,
+            drawdown_breaker_percent=Decimal("10"),
+            now=NOW,
+        )
+    assert undeclared.value.code == "drawdown_reset_requires_human"
+    with pytest.raises(RiskPolicyRejected) as missing:
+        service.reset_drawdown_latch(
+            organization_id=ORG,
+            account_id=account,
+            actor=_human(),
+            proof=None,
+            owner_user_id="sofien",
+            user_id=USER,
+            drawdown_breaker_percent=Decimal("10"),
+            now=NOW,
+        )
+    assert missing.value.code == "apply_proof_missing"
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
+        user_id=USER,
         drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
@@ -1547,7 +1602,7 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
     service.record_breaker(
         organization_id=ORG,
         account_id=account,
-        equity_peak=Decimal("10000"),
+        equity_peak=Decimal("20000"),
         consecutive_losses=0,
         realized_pnl=Decimal("0"),
         unrealized_pnl=Decimal("0"),
@@ -1561,8 +1616,9 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
             organization_id=ORG,
             account_id=account,
             actor=_human(),
+            proof=_drawdown_proof(account),
             owner_user_id="sofien",
-            equity=Decimal("9000"),
+            user_id=USER,
             drawdown_breaker_percent=Decimal("10"),
             now=NOW,
         )
@@ -1571,12 +1627,15 @@ def test_persisted_drawdown_reset_refuses_while_equity_is_beyond_the_threshold()
     assert state is not None
     assert state.drawdown_latched is True
     assert session.scalar(select(RiskPolicyBreakerReset.id)) is None
+    state.equity_peak = Decimal("10000")
+    session.flush()
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
+        user_id=USER,
         drawdown_breaker_percent=Decimal("10"),
         now=NOW,
     )
@@ -1597,14 +1656,16 @@ def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None
     service.latch_drawdown(
         organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=effective
     )
+    reset_at = datetime(2026, 10, 19, 16, tzinfo=UTC)
     service.reset_drawdown_latch(
         organization_id=ORG,
         account_id=account,
         actor=_human(),
+        proof=_drawdown_proof(account, reset_at),
         owner_user_id="sofien",
-        equity=Decimal("9500"),
+        user_id=USER,
         drawdown_breaker_percent=Decimal("10"),
-        now=datetime(2026, 10, 19, 16, tzinfo=UTC),
+        now=reset_at,
     )
     read_at = datetime(2026, 10, 19, 17, tzinfo=UTC)
     assert service.breaker_active(organization_id=ORG, now=read_at) is False

@@ -41,6 +41,7 @@ from app.services.risk_policy.governance import (
     assert_can_propose,
     consecutive_reset_binding,
     decide_apply,
+    drawdown_reset_binding,
     proposal_is_expired,
 )
 from app.services.risk_policy.grader import GRADER_VERSION, GradeDecision
@@ -704,17 +705,48 @@ class RiskPolicyService:
         organization_id: uuid.UUID,
         account_id: uuid.UUID,
         actor: PolicyActor,
+        proof: HumanApplyProof | None,
         owner_user_id: str,
-        equity: Decimal,
+        user_id: uuid.UUID,
         drawdown_breaker_percent: Decimal,
+        pinned_telegram_chat_id: str = "",
         now: datetime,
     ) -> None:
-        """Clear the drawdown latch only after equity is back inside the threshold."""
+        """Clear the drawdown latch after a human step-up and server equity.
 
-        if actor.channel in {PolicyChannel.AGENT, PolicyChannel.BOT, PolicyChannel.SERVICE}:
+        Equity is the portfolio accounting figure. A caller cannot supply it.
+        Undeclared, agent, bot, and service actors are refused before the proof
+        is checked. The proof is the same fresh step-up or pinned Telegram
+        confirmation required to apply a profile.
+        """
+
+        if actor.channel is not PolicyChannel.HUMAN:
+            self._audit_drawdown_reset_refusal(
+                organization_id=organization_id,
+                account_id=account_id,
+                actor=actor,
+                reason="drawdown_reset_requires_human",
+            )
             raise RiskPolicyRejected("drawdown_reset_requires_human")
-        if not owner_user_id or actor.actor_id != owner_user_id:
-            raise RiskPolicyRejected("apply_owner_mismatch")
+        proposal_id, content_hash = drawdown_reset_binding(account_id)
+        try:
+            assert_can_apply(
+                actor,
+                proof,
+                owner_user_id=owner_user_id,
+                pinned_telegram_chat_id=pinned_telegram_chat_id,
+                proposal_id=proposal_id,
+                content_hash=content_hash,
+                now=now,
+            )
+        except RiskPolicyRejected as exc:
+            self._audit_drawdown_reset_refusal(
+                organization_id=organization_id,
+                account_id=account_id,
+                actor=actor,
+                reason=exc.code,
+            )
+            raise
         row = self._session.scalar(
             select(RiskPolicyBreakerState).where(
                 RiskPolicyBreakerState.organization_id == organization_id,
@@ -723,6 +755,9 @@ class RiskPolicyService:
         )
         if row is None or not row.drawdown_latched:
             raise RiskPolicyRejected("drawdown_not_latched")
+        equity = self._server_account_equity(
+            organization_id=organization_id, user_id=user_id, now=now
+        )
         verdict = evaluate_breakers(
             BreakerConfig(
                 daily_loss_limit_percent=Decimal("100"),
@@ -745,6 +780,12 @@ class RiskPolicyService:
             ),
         )
         if verdict.drawdown_active:
+            self._audit_drawdown_reset_refusal(
+                organization_id=organization_id,
+                account_id=account_id,
+                actor=actor,
+                reason="drawdown_still_active",
+            )
             raise RiskPolicyRejected("drawdown_still_active")
         self._close_breaker(organization_id, account_id, "drawdown", now)
         self._session.add(
@@ -759,6 +800,45 @@ class RiskPolicyService:
         row.drawdown_latched = False
         row.updated_at = now
         self._session.flush()
+
+    def _server_account_equity(
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID, now: datetime
+    ) -> Decimal:
+        """Equity from portfolio accounting. Missing or non-finite equity refuses."""
+
+        from app.services.risk.daily_risk_accounting import DailyRiskAccounting
+        from app.services.risk.settings_service import RiskSettingsService
+
+        snapshot = DailyRiskAccounting(
+            self._session,
+            RiskSettingsService(self._session, self._audit),
+            clock=lambda: now,
+        ).sync_from_portfolio(organization_id=organization_id, user_id=user_id)
+        equity = snapshot.account_equity
+        if not isinstance(equity, Decimal) or not equity.is_finite() or equity <= 0:
+            raise RiskPolicyRejected("drawdown_equity_uncomputed")
+        return equity
+
+    def _audit_drawdown_reset_refusal(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        account_id: uuid.UUID,
+        actor: PolicyActor,
+        reason: str,
+    ) -> None:
+        self._audit_event(
+            AuditEventType.RISK_POLICY_APPLY_REFUSED,
+            organization_id=organization_id,
+            actor=actor,
+            resource_id=str(account_id),
+            result=AuditResult.BLOCKED,
+            metadata={
+                "action": "drawdown_reset",
+                "reason": reason,
+                "account_id": str(account_id),
+            },
+        )
 
     def reset_consecutive_losses(
         self,

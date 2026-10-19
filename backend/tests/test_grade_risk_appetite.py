@@ -714,10 +714,19 @@ def test_canonical_open_lifecycle_is_priced_at_its_stop(monkeypatch) -> None:
         open_notional=Decimal("100"),
     )
     assert excess == "open_risk_uncomputed"
-    assert any(
-        "snapshot open notional does not match the notional explained by stops" in item
-        for item in warnings
+    assert any("differs from the notional explained by stops" in item for item in warnings)
+    within = open_risk_from_stops(
+        equity=Decimal("10000"),
+        positions=[(Decimal("1"), Decimal("100"), Decimal("90"))],
+        open_notional=Decimal("100.000000001"),
     )
+    assert isinstance(within, tuple)
+    beyond = open_risk_from_stops(
+        equity=Decimal("10000"),
+        positions=[(Decimal("1"), Decimal("100"), Decimal("90"))],
+        open_notional=Decimal("100.00000002"),
+    )
+    assert beyond == "open_risk_uncomputed"
     short = open_risk_from_stops(
         equity=Decimal("10000"),
         positions=[(Decimal("1"), Decimal("100"), Decimal("90"))],
@@ -748,10 +757,28 @@ def test_canonical_open_lifecycle_is_priced_at_its_stop(monkeypatch) -> None:
     )
     session.commit()
 
+    session.add(
+        JournalTrade(
+            organization_id=org,
+            user_id=user,
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="15m",
+            direction=TradeDirection.LONG,
+            size=Decimal("5"),
+            entry_price=Decimal("100"),
+            planned_stop_price=Decimal("90"),
+            execution_lifecycle_id=uuid4(),
+        )
+    )
+    session.commit()
+
     class _Snapshot:
         realized_pnl = Decimal("0")
         account_equity = Decimal("10000")
-        open_exposure_notional = Decimal("100")
+        # A closed reconciled row must not be part of this comparison.
+        open_exposure_notional = Decimal("600")
 
     class _Accounting:
         def __init__(self, _session: object, _settings: object, clock: object) -> None:
@@ -781,6 +808,7 @@ def test_canonical_open_lifecycle_is_priced_at_its_stop(monkeypatch) -> None:
     cash = stop_out_cash(Decimal("1"), Decimal("100"), Decimal("90"), include_book_buffer=False)
     assert book.open_risk_percent == cash / Decimal("10000") * Decimal("100")
     assert book.open_positions == 1
+    assert book.open_notional == Decimal("100")
     engine.dispose()
 
 

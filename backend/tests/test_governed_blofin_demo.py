@@ -532,9 +532,15 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
         def create(self, **kwargs: object) -> None:
             alerts.append((str(kwargs["alert_type"]), str(kwargs["severity"])))
 
+    warnings: list[str] = []
+
+    def _warn(message: str, *args: object) -> None:
+        warnings.append(message % args if args else message)
+
     monkeypatch.setattr("app.services.governed_blofin_demo.KillSwitchService", _Switch)
     monkeypatch.setattr("app.services.governed_blofin_demo.PaperAlertService", _Alerts)
     monkeypatch.setattr("app.services.governed_blofin_demo.AuditService", lambda _session: None)
+    monkeypatch.setattr("app.services.governed_blofin_demo.logger.warning", _warn)
     disposition, arm = profile_liquidation_hold(
         liquidation_reason="demo_post_fill_liquidation_unreadable",
         protected=False,
@@ -576,6 +582,18 @@ def test_unreadable_liquidation_is_not_labeled_inside_the_stop(monkeypatch) -> N
     assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
     assert armed == ["BloFin demo protection missing; operator action required"]
     assert alerts == []
+    assert warnings and "unreadable" in warnings[-1]
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_unreadable",
+        protected=True,
+    )
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_UNREADABLE"
+    assert armed == ["BloFin demo protection missing; operator action required"]
+    assert alerts == []
+    assert "protected=True" in warnings[-1]
     loop._hold_profile_liquidation(
         object(),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]

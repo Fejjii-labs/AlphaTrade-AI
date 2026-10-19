@@ -7,6 +7,7 @@ principal pins never grant real execution. SFP keeps its existing refusal.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
@@ -74,6 +75,7 @@ from app.services.automated_paper_loop import (
     _fill_id,
     _plan_terms,
     _proof,
+    _stored_plan_execution_refusal,
 )
 from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
@@ -99,6 +101,7 @@ from app.signal_fusion.ports import Clock
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.workers.watcher_paper_targets import PaperScanTarget
 
+logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 
@@ -908,6 +911,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id
             )
+        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason=blocked,
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         context = self._experiment_context
         producer: BloFinNativeOutcomeProducer | None = None
         if context is not None:
@@ -1052,6 +1066,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 CHANNEL_MISMATCH_REASON,
                 revision_id=revision_id,
             )
+        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(
@@ -1183,6 +1206,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             liquidation_reason=liquidation_reason,
             protected=protected,
         )
+        if liquidation_reason == "demo_post_fill_liquidation_unreadable":
+            logger.warning(
+                "BloFin demo liquidation price is unreadable after fill; "
+                "command_id=%s protected=%s disposition=%s",
+                command.id,
+                protected,
+                disposition,
+            )
         if arm_kill_switch:
             through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
             reason = (

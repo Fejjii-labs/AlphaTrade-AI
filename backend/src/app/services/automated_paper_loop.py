@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -400,6 +400,17 @@ class AutomatedPaperLoop:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
             eligibility_state = envelope.lineage.eligibility_state.value
+        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason=blocked,
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         blocked = self._autonomous_approval_refusal(session, target.organization_id)
         if blocked is not None:
             revoke_leftover_autonomous_authorizations(
@@ -472,6 +483,15 @@ class AutomatedPaperLoop:
                 CHANNEL_MISMATCH_REASON,
                 revision_id=revision_id,
             )
+        blocked = _stored_plan_execution_refusal(self, session, target, envelope.plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         execution = ExecutionService(
             session,
             self._settings,
@@ -892,13 +912,22 @@ def _profile_open_book(
     )
     if isinstance(canonical, str):
         return canonical
+    # Same open rows on both sides of the notional check. Closed lifecycles
+    # and closed positions are excluded. Snapshot exposure is not used here:
+    # a later canonical exposure rule may count closed reconciled demo rows,
+    # and that figure must not fail every open-risk plan.
+    priced = [
+        *[(row.size, row.entry_price, row.stop_loss) for row in rows],
+        *canonical,
+    ]
+    open_notional = Decimal("0")
+    for size, entry, _stop in priced:
+        if isinstance(size, Decimal) and isinstance(entry, Decimal):
+            open_notional += size * entry
     measured = open_risk_from_stops(
         equity=snapshot.account_equity,
-        positions=[
-            *[(row.size, row.entry_price, row.stop_loss) for row in rows],
-            *canonical,
-        ],
-        open_notional=snapshot.open_exposure_notional,
+        positions=priced,
+        open_notional=open_notional,
         include_book_buffer=include_book_buffer,
         funding_rate=funding_rate,
         live_verified=live_verified,
@@ -908,9 +937,80 @@ def _profile_open_book(
     open_risk, count = measured
     return ProfileOpenBook(
         open_risk_percent=open_risk,
-        open_notional=snapshot.open_exposure_notional,
+        open_notional=open_notional,
         open_positions=count,
         remaining_daily_budget_percent=remaining,
+    )
+
+
+def _stored_plan_terms(plan: object) -> tuple[Decimal, Decimal, Decimal, Decimal] | None:
+    quantity = getattr(getattr(plan, "quantity", None), "value", None)
+    basis = getattr(plan, "basis_policy", None)
+    entry = getattr(getattr(basis, "execution_price", None), "value", None)
+    exits = getattr(plan, "risk_and_exits", None)
+    stop = getattr(getattr(exits, "stop", None), "value", None)
+    rules = getattr(plan, "instrument_rules", None)
+    multiplier = getattr(rules, "contract_multiplier", None)
+    terms = (quantity, entry, stop, multiplier)
+    if not all(isinstance(value, Decimal) and value.is_finite() and value > 0 for value in terms):
+        return None
+    return (
+        cast(Decimal, quantity),
+        cast(Decimal, entry),
+        cast(Decimal, stop),
+        cast(Decimal, multiplier),
+    )
+
+
+def _stored_plan_execution_refusal(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    target: PaperScanTarget,
+    plan: object,
+) -> str | None:
+    """Re-check breakers and current limits before a stored plan is approved.
+
+    A pause or drawdown latch written after the plan was sized still refuses.
+    Deactivating the kill switch does not clear that latch. When a profile is
+    active, the stored quantity is priced again against the current open book.
+    """
+
+    now = loop._clock.now()
+    if _breaker_refusing(session, target.organization_id, now):
+        return "breaker_active"
+    active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
+    if active is None:
+        return None
+    from app.services.risk_policy.plan_sizing import stored_plan_limit_refusal
+
+    funding_rate = loop._verified_funding_rate()
+    book = _profile_open_book(
+        session,
+        target,
+        now=now,
+        daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
+        include_book_buffer=loop._risk_policy_kind() == "demo",
+        funding_rate=funding_rate,
+        live_verified=funding_rate is not None,
+    )
+    if isinstance(book, str):
+        return book
+    terms = _stored_plan_terms(plan)
+    if terms is None:
+        return "stored_plan_limits_uncomputed"
+    quantity, entry, stop, multiplier = terms
+    return stored_plan_limit_refusal(
+        quantity=quantity,
+        entry=entry,
+        stop=stop,
+        contract_multiplier=multiplier,
+        equity=_equity(session, target, now=now),
+        book=book,
+        profile=active.profile,
+        execution_channel=loop._risk_policy_kind(),
+        include_book_buffer=loop._risk_policy_kind() == "demo",
+        funding_rate=funding_rate,
+        live_verified=funding_rate is not None,
     )
 
 

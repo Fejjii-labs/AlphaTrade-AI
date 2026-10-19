@@ -103,6 +103,18 @@ def signed_verified_demo_pnl(
     return net - funding
 
 
+def verified_demo_funding_cash(evidence: VerifiedDemoExit) -> Decimal | None:
+    """Funding cash the exit proof already verified, or None when it did not.
+
+    A missing figure is not the sizing floor and is not zero.
+    """
+
+    value = evidence.funding
+    if isinstance(value, Decimal) and value.is_finite():
+        return value
+    return None
+
+
 def resolve_verified_demo_exit(
     session: Session,
     *,
@@ -309,7 +321,7 @@ def resolve_verified_demo_exit(
             (f.fee for f in evidence.fills if f.fee is not None), Decimal("0")
         )
     source_id = f"verified-demo-exit:{command.id}"
-    close_payload = {
+    close_payload: dict[str, object] = {
         "exit_time": close_time.isoformat(),
         "exit_price": str(exit_price),
         "exit_reason": "verified_blofin_demo_"
@@ -451,6 +463,7 @@ def resolve_verified_demo_exit(
                 contract_multiplier=plan.instrument_rules.contract_multiplier,
                 reported_pnl=reported_pnl,
                 fees=fees,
+                funding=verified_demo_funding_cash(evidence),
                 notional=(
                     entry_price
                     * evidence.entry_quantity

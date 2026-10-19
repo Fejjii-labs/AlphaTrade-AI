@@ -2,6 +2,28 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-112 — Stored plans, open risk, and drawdown reset stay fail-closed
+
+- Date: 2026-10-19
+- Decision: A stored paper or demo plan is refused before approval and again
+  before execution when `breaker_active` is true, including a daily or
+  consecutive pause written after sizing and a drawdown latch that remains
+  after `KillSwitchService.deactivate`. When a profile is active, the stored
+  quantity is priced again against the current open book and is not rewritten.
+  Open-risk notional uses only open positions and open lifecycles. Closed
+  rows are excluded from both sides of that comparison, which allows a
+  difference of at most `0.00000001`. `reset_drawdown_latch` accepts only an
+  authenticated human, requires the same step-up proof as a profile apply,
+  and reads equity from server portfolio accounting. A verified demo close
+  passes funding cash into the streak only when every closing fill carried a
+  finite figure; otherwise the streak stays negative. An unreadable paper
+  liquidation price is recorded as `unreadable_liquidation`. An unreadable
+  demo liquidation price logs a warning and is not labeled through the stop.
+- What stays: real-money trading stays blocked. Both autonomous flags stay
+  false. The risk engine `BLOCK` remains final. No live order, withdrawal,
+  transfer, or leverage change is added.
+- Reference: Griller re-check of `e2f488f3`; AT-ADR-110; AT-ADR-111.
+
 ## AT-ADR-111 — Paper and demo may collect grades above 1% without a promotion report
 
 - Date: 2026-10-18

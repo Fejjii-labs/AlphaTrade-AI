@@ -178,6 +178,18 @@ def consecutive_reset_binding(account_id: UUID) -> tuple[str, str]:
     return proposal_id, content_hash
 
 
+def drawdown_reset_binding(account_id: UUID) -> tuple[str, str]:
+    """Proof subject for a drawdown-latch reset. Same strength as an apply.
+
+    ``assert_can_apply`` checks this id and hash. The reset itself also
+    refuses every channel except an authenticated human, including undeclared.
+    """
+
+    proposal_id = f"drawdown-reset:{account_id}"
+    content_hash = hashlib.sha256(proposal_id.encode()).hexdigest()
+    return proposal_id, content_hash
+
+
 def proposal_is_expired(created_at: datetime, now: datetime) -> bool:
     if created_at.tzinfo is None or now.tzinfo is None:
         raise RiskPolicyRejected("timestamp_must_be_aware")

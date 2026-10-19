@@ -4,10 +4,10 @@ No order mutations. Flat balances, acknowledgments and trigger acknowledgments
 are insufficient. Unexplained activity or incomplete pages remain operator holds.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.providers.exchange.blofin_client import BloFinClient
@@ -36,6 +36,7 @@ class DemoExitFill:
     reported_pnl: Decimal | None
     category: str
     fee_currency: str | None = None
+    funding: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class VerifiedDemoExit:
     # Raw provider pointers are retained without assuming an undocumented edge.
     exit_order_protection_ids: tuple[tuple[str, str], ...] = ()
     native_account_uid: str | None = None
+    funding: Decimal | None = None
 
     def facts(self) -> dict[str, Any]:
         """Stable economic evidence; receipt clock is persisted separately."""
@@ -88,9 +90,46 @@ class VerifiedDemoExit:
             "monetary_methodology_version": None,
             "positions": "flat_account_wide",
             "pending_orders": "none_account_wide",
-            "funding": None,
+            "funding": (
+                format(self.funding, "f")
+                if isinstance(self.funding, Decimal) and self.funding.is_finite()
+                else None
+            ),
             "net_pnl": None,
         }
+
+
+def _optional_funding_cash(fill: dict[str, Any]) -> Decimal | None:
+    """Finite funding cash on one fill, or None when the venue did not send it."""
+
+    raw = fill.get("funding")
+    if raw in (None, ""):
+        raw = fill.get("fundingFee")
+    if raw in (None, ""):
+        return None
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        return None
+    if not value.is_finite():
+        return None
+    return value
+
+
+def _verified_fill_funding(fills: Sequence[DemoExitFill]) -> Decimal | None:
+    """Sum funding only when every closing fill carries a finite cash figure.
+
+    A missing fill is not zero. The streak then stays unverified.
+    """
+
+    if not fills:
+        return None
+    total = Decimal("0")
+    for fill in fills:
+        if fill.funding is None or not fill.funding.is_finite():
+            return None
+        total += fill.funding
+    return total
 
 
 def reconcile_demo_exit(
@@ -244,6 +283,7 @@ def reconcile_demo_exit(
                     gross,
                     category,
                     fee_currency or None,
+                    _optional_funding_cash(fill),
                 )
             )
         if sum((f.quantity for f in order_fills), Decimal("0")) != filled:
@@ -321,4 +361,5 @@ def reconcile_demo_exit(
         entry.native_tpsl_id,
         tuple(sorted(exit_order_protection_ids)),
         entry.native_account_uid,
+        _verified_fill_funding(fills),
     )
