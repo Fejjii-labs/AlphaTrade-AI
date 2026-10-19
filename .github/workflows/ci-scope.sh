@@ -38,6 +38,23 @@ has_run_ci_label() {
   [[ "${CI_SCOPE_PR_ACTION:-}" == "labeled" && "${CI_SCOPE_PR_LABEL:-}" == "run-ci" ]]
 }
 
+# True when the object exists locally. A fork head may be absent until
+# refs/pull/<n>/head is fetched from the base repository. Failure stays open.
+commit_available() {
+  local sha="$1"
+  if git cat-file -e "${sha}^{commit}" >/dev/null 2>&1; then
+    return 0
+  fi
+  git fetch --no-tags origin "$sha" >/dev/null 2>&1 || true
+  if git cat-file -e "${sha}^{commit}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "${CI_SCOPE_PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+    git fetch --no-tags origin "pull/${CI_SCOPE_PR_NUMBER}/head" >/dev/null 2>&1 || true
+  fi
+  git cat-file -e "${sha}^{commit}" >/dev/null 2>&1
+}
+
 # Return 0 when every changed path is docs, .ai, or root-level markdown.
 docs_only_diff() {
   local base="$1"
@@ -45,16 +62,13 @@ docs_only_diff() {
   local files=""
   local path=""
 
-  if [[ -z "$base" || -z "$head" || "$base" =~ ^0+$ ]]; then
+  if [[ -z "$base" || -z "$head" || "$base" =~ ^0+$ || "$head" =~ ^0+$ ]]; then
     return 1
   fi
-  if ! git cat-file -e "${base}^{commit}" >/dev/null 2>&1; then
-    git fetch --no-tags origin "$base" >/dev/null 2>&1 || true
-  fi
-  if ! git cat-file -e "${base}^{commit}" >/dev/null 2>&1; then
+  if ! commit_available "$base"; then
     return 1
   fi
-  if ! git cat-file -e "${head}^{commit}" >/dev/null 2>&1; then
+  if ! commit_available "$head"; then
     return 1
   fi
   # --no-renames keeps the old path, so a rename into docs/ or .ai/ is not docs-only.
@@ -93,6 +107,17 @@ decide() {
   if [[ "$event" == "pull_request" ]]; then
     case "$action" in
       opened | synchronize | reopened | ready_for_review) ;;
+      edited)
+        # A title or body edit shares the head SHA with the run it must not
+        # replace. Skipping here would publish a green result for that SHA.
+        # A base retarget falls through and is classified against the new base.
+        if [[ "${CI_SCOPE_BASE_CHANGED:-}" != "true" ]]; then
+          app=true
+          heavy=true
+          reason=edited-not-base
+          return 0
+        fi
+        ;;
       *)
         # The workflow does not subscribe to labeled. An unexpected activity
         # must not skip work: a green skip would replace a real result.
@@ -116,7 +141,12 @@ decide() {
     return 0
   fi
 
-  if [[ "$event" == "pull_request" && "$draft" == "true" && "$action" != "ready_for_review" ]]; then
+  # ready_for_review, reopened, and a base retarget must run heavy work even
+  # when the draft flag is still set. Otherwise they cancel the previous run
+  # and publish a green skip for code that was not tested.
+  if [[ "$event" == "pull_request" && "$draft" == "true" \
+    && "$action" != "ready_for_review" && "$action" != "reopened" \
+    && "$action" != "edited" ]]; then
     if has_run_ci_label; then
       heavy=true
       reason=draft-run-ci-label
@@ -158,7 +188,13 @@ self_test() {
     local name="$1" expect_app="$2" expect_heavy="$3"
     shift 3
     local out
-    out="$(env "$@" CI_SCOPE_BASE_SHA="$base" CI_SCOPE_HEAD_SHA="$head" bash "$root/.github/workflows/ci-scope.sh")"
+    out="$(
+      env \
+        CI_SCOPE_BASE_SHA="$base" \
+        CI_SCOPE_HEAD_SHA="$head" \
+        "$@" \
+        bash "$root/.github/workflows/ci-scope.sh"
+    )"
     if [[ "$out" != *"app=${expect_app} heavy=${expect_heavy}"* ]]; then
       printf 'FAIL %s\n%s\n' "$name" "$out" >&2
       fail=1
@@ -172,7 +208,18 @@ self_test() {
   run_case docs-push true true \
     CI_SCOPE_EVENT_NAME=push CI_SCOPE_PR_ACTION= CI_SCOPE_PR_DRAFT=
   run_case dispatch-keeps-full true true \
-    CI_SCOPE_EVENT_NAME=workflow_dispatch CI_SCOPE_PR_ACTION= CI_SCOPE_PR_DRAFT=
+    CI_SCOPE_EVENT_NAME=workflow_dispatch CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true
+  run_case edited-title-docs-does-not-skip true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=edited CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_BASE_CHANGED=false
+  run_case retarget-docs false false \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=edited CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_BASE_CHANGED=true
+  run_case reopened-docs false false \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=reopened CI_SCOPE_PR_DRAFT=true
+  run_case zero-base-does-not-skip true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false \
+    CI_SCOPE_BASE_SHA=0000000000000000000000000000000000000000
 
   printf 'code\n' >>backend/app.py
   git add backend/app.py
@@ -183,6 +230,22 @@ self_test() {
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=true
   run_case ready-code true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=ready_for_review CI_SCOPE_PR_DRAFT=false
+  run_case ready-draft-flag true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=ready_for_review CI_SCOPE_PR_DRAFT=true
+  run_case reopened-code true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=reopened CI_SCOPE_PR_DRAFT=false
+  run_case reopened-draft-code true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=reopened CI_SCOPE_PR_DRAFT=true
+  run_case retarget-draft-code true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=edited CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_BASE_CHANGED=true
+  run_case edited-title-code true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=edited CI_SCOPE_PR_DRAFT=true \
+    CI_SCOPE_BASE_CHANGED=false
+  run_case fork-missing-head true true \
+    CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false \
+    CI_SCOPE_PR_NUMBER=9 \
+    CI_SCOPE_HEAD_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   run_case nondraft-sync true true \
     CI_SCOPE_EVENT_NAME=pull_request CI_SCOPE_PR_ACTION=synchronize CI_SCOPE_PR_DRAFT=false
   run_case draft-run-ci true true \

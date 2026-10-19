@@ -23,17 +23,27 @@ Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
 `backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
 `e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
 `frontend`. The workflow file has no `permissions` block and no `schedule`.
-A concurrency group cancels an older pull_request run on the same ref.
-`cancel-in-progress` is true only for `pull_request`, so a push cannot cancel
-another run. `workflow_dispatch` uses a unique group, so a manual full run is
-not queued or cancelled. The only `workflow_dispatch` input is `full_backend`,
+Pull requests share one concurrency group per pull request number, and
+`cancel-in-progress` is true only for `pull_request`, so a newer event cancels
+the older run of that pull request. Push and `workflow_dispatch` each use
+`github.run_id`, so a push or a manual `full_backend` run cannot cancel another
+run or replace one that is still pending. A pull request title or body edit
+uses that same unique group and still runs the heavy jobs. Retargeting the
+base, including to `main`, joins the pull request group and classifies the new
+diff. The only `workflow_dispatch` input is `full_backend`,
 and its default is `true`. There is no `combined_validation` input.
 
 Heavy steps in `backend`, `evaluation`, `docker-build`, and `e2e-smoke` do not
-run on a draft pull request. They run for a non-draft `opened`, `synchronize`,
-or `reopened` event, for `ready_for_review`, and when the pull request already
-has the `run-ci` label on one of those events. The workflow does not subscribe
-to `labeled`, so adding an unrelated label does not start CI or cancel a run.
+run on a draft `opened` or `synchronize`. They run for a non-draft `opened` or
+`synchronize`, for every `reopened` and `ready_for_review` of a code change
+even if the draft flag is still set, for a base retarget even while draft, and
+when the pull request already has the `run-ci` label on an `opened` or
+`synchronize`. The workflow subscribes to `edited` so a base change is
+reclassified. An edit that does not change the base does not cancel the pull
+request run, and it does not skip. The workflow does not subscribe to
+`labeled`, so adding an unrelated label does not start CI or cancel a run. A
+missing head commit, including a fork pull request, fails open and runs the
+work.
 `deployment-safety` still runs on drafts, and it runs `ci-scope.sh --self-test`.
 `frontend` still runs for draft changes that are not docs-only. A rename is
 classified with `git diff --name-only --no-renames`, so a move into `docs/` or

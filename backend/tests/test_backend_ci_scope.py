@@ -117,6 +117,7 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "synchronize",
         "reopened",
         "ready_for_review",
+        "edited",
     ]
     scope_script = (ROOT / ".github/workflows/ci-scope.sh").read_text()
     assert "git diff --name-only --no-renames" in scope_script
@@ -130,15 +131,28 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         text=True,
     )
     assert self_test.returncode == 0, self_test.stderr + self_test.stdout
-    assert "rename-into-docs" in self_test.stdout
-    assert "labeled-other-does-not-skip" in self_test.stdout
-    assert "ok docs-push" in self_test.stdout
+    for case in (
+        "ok docs-push",
+        "ok edited-title-docs-does-not-skip",
+        "ok retarget-draft-code",
+        "ok reopened-draft-code",
+        "ok ready-draft-flag",
+        "ok fork-missing-head",
+        "rename-into-docs",
+        "labeled-other-does-not-skip",
+    ):
+        assert case in self_test.stdout
+    assert "edited-not-base" in scope_script
+    assert "pull/${CI_SCOPE_PR_NUMBER}/head" in scope_script
     concurrency = workflow["concurrency"]
     assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
     assert "github.event_name == 'push'" not in concurrency["cancel-in-progress"]
     group = concurrency["group"]
-    assert "format('{0}-{1}-dispatch-{2}', github.workflow, github.ref, github.run_id)" in group
-    assert "format('{0}-{1}', github.workflow, github.ref)" in group
+    assert "format('pr-{0}', github.event.pull_request.number)" in group
+    assert "github.run_id" in group
+    assert "github.event.action != 'edited'" in group
+    assert "github.event.changes.base.ref.from" in group
+    assert "format('{0}-{1}', github.workflow, github.ref)" not in group
     full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   workflow_dispatch:
     inputs:
       full_backend:
@@ -13,11 +13,14 @@ on:
         required: true
         default: true
 
-# Only a newer pull_request run cancels the older one on that ref.
-# A push never cancels another run. workflow_dispatch uses a unique group so a
-# manual full_backend run is neither queued behind nor cancelled. No schedule.
+# Pull requests share one group per PR number, so a newer commit cancels the
+# older run of that PR. A title or body edit is not a base change: it gets
+# github.run_id and cannot cancel or replace the PR run. Push and
+# workflow_dispatch, including full_backend, always use github.run_id, so no
+# push or manual run can cancel another or replace one that is still pending.
+# No schedule. Do not set a queue max together with cancel-in-progress.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}-dispatch-{2}', github.workflow, github.ref, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base.ref.from) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -28,6 +31,8 @@ env:
   CI_SCOPE_PR_LABELS: ${{ github.event_name == 'pull_request' && join(github.event.pull_request.labels.*.name, ',') || '' }}
   CI_SCOPE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   CI_SCOPE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  CI_SCOPE_PR_NUMBER: ${{ github.event.pull_request.number }}
+  CI_SCOPE_BASE_CHANGED: ${{ github.event.changes.base.ref.from && 'true' || 'false' }}
 
 jobs:
   backend:
