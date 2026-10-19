@@ -37,6 +37,19 @@ a paper or demo profile apply:
   fresh only when its `iat` is not in the future and is no older than 5
   minutes, even when `exp` is later. There is still no issuer, stored
   nonce, or separate signing key. `actor=user` is still a label.
+- Follow-up to Grok review 5569113368: a step-up proof is rejected when
+  `auth_time` or `step_up_at` is later than now. `decode_apply_proof` and
+  `_require_fresh_step_up` both enforce that. The 15-minute maximum age
+  remains. There is no clock-skew allowance on this path. A non-numeric
+  or non-finite time claim is rejected instead of being parsed. `exp` does
+  not extend either freshness window. Blank or non-string `sub`,
+  `content_hash`, and `proposal_id` claims are rejected. An access token
+  cannot be used as an apply proof, and an apply proof cannot be used as
+  an access token. A human access token must include `exp`, `iat`, `sub`,
+  and `org_id`, and the risk-policy route checks those against the tenant.
+  Replaying a proof against another proposal is rejected. Applying the
+  same proposal twice is `version_conflict`. There is still no issuer,
+  stored nonce, or separate signing key. `actor=user` is still a label.
 
 ### (b) Trigger: before exposing drawdown reset
 

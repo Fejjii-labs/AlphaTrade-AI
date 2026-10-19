@@ -32,8 +32,16 @@ signing key. `decode_apply_proof` verifies with `jwt_secret`. A missing
 `proposal_id`, and a `proposal_id` that does not match the proposal, are
 rejected. The request id is not copied in. A `telegram_owner` proof older
 than 5 minutes from `iat`, or issued in the future, is rejected even when
-`exp` is still later. `actor=user` is a label on the access token. It is
-not a TOTP, WebAuthn, or Telegram check.
+`exp` is still later. A step-up proof whose `auth_time` or `step_up_at` is
+later than now is rejected in the decoder and in `_require_fresh_step_up`.
+The 15-minute maximum age remains. There is no clock-skew allowance. A
+non-numeric time claim is rejected. `exp` does not extend either freshness
+window. Blank or non-string subject, content hash, and proposal id claims
+are rejected. An access token is not an apply proof, and an apply proof is
+not an access token. A human access token must carry `exp`, `iat`, `sub`,
+and `org_id`. The same proof cannot be applied to a different proposal, and
+applying one proposal twice is `version_conflict`. `actor=user` is a label
+on the access token. It is not a TOTP, WebAuthn, or Telegram check.
 
 ## (b) Before exposing drawdown reset
 

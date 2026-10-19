@@ -763,6 +763,33 @@ def test_apply_proof_rejects_a_missing_or_unequal_proposal_and_a_stale_telegram(
     with pytest.raises(RiskPolicyRejected) as no_iat:
         decode_apply_proof(token(without_issued), settings, proposal_id=proposal.id, now=NOW)
     assert no_iat.value.code == "apply_proof_not_fresh"
+    for overrides in (
+        {"auth_time": NOW + timedelta(days=1), "step_up_at": NOW + timedelta(days=1)},
+        {"auth_time": NOW + timedelta(seconds=1)},
+        {"step_up_at": NOW + timedelta(seconds=1)},
+        {"auth_time": NOW - timedelta(minutes=16), "step_up_at": NOW - timedelta(minutes=16)},
+    ):
+        with pytest.raises(RiskPolicyRejected) as shifted:
+            decode_apply_proof(
+                token(step_up(exp=NOW + timedelta(days=2), **overrides)),
+                settings,
+                proposal_id=proposal.id,
+                now=NOW,
+            )
+        assert shifted.value.code == "apply_proof_not_fresh"
+    still_fresh = decode_apply_proof(
+        token(
+            step_up(
+                exp=NOW + timedelta(days=1),
+                auth_time=NOW - timedelta(minutes=15),
+                step_up_at=NOW - timedelta(minutes=15),
+            )
+        ),
+        settings,
+        proposal_id=proposal.id,
+        now=NOW,
+    )
+    assert still_fresh.authenticated_at == NOW - timedelta(minutes=15)
 
     later = service.propose(
         organization_id=ORG,
@@ -813,6 +840,356 @@ def test_apply_proof_rejects_a_missing_or_unequal_proposal_and_a_stale_telegram(
             now=NOW,
         )
     assert dated.value.code == "apply_proof_not_fresh"
+    ahead_step = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=str(later.id),
+        content_hash=later.content_hash,
+        expires_at=NOW + timedelta(days=1),
+        session_id="interactive-session",
+        authenticated_at=NOW + timedelta(days=1),
+        step_up_at=NOW + timedelta(days=1, seconds=1),
+    )
+    with pytest.raises(RiskPolicyRejected) as future_step:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=later.id,
+            actor=_human(),
+            proof=ahead_step,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert future_step.value.code == "apply_proof_not_fresh"
+    future_auth_only = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=str(later.id),
+        content_hash=later.content_hash,
+        expires_at=NOW + timedelta(days=1),
+        session_id="interactive-session",
+        authenticated_at=NOW + timedelta(seconds=1),
+        step_up_at=NOW - timedelta(seconds=20),
+    )
+    with pytest.raises(RiskPolicyRejected) as future_auth:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=later.id,
+            actor=_human(),
+            proof=future_auth_only,
+            owner_user_id="sofien",
+            pinned_telegram_chat_id="pinned-owner-chat",
+            now=NOW,
+        )
+    assert future_auth.value.code == "apply_proof_not_fresh"
+
+
+def test_apply_proof_rejects_bad_claims_type_confusion_and_replay() -> None:
+    settings = Settings(
+        environment="local",
+        log_json=False,
+        execution_mode="paper",
+        enable_real_trading=False,
+        database_url="sqlite+pysqlite:///:memory:",
+        jwt_secret="test-secret-key-for-auth-slice-32b-min",
+        access_token_expire_minutes=15,
+        refresh_token_expire_days=7,
+        access_token_denylist_use_redis=False,
+    )
+    session = _session()
+    service = _service(session)
+    proposal = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=placeholder_profile(PolicyKind.DEMO),
+        reason="Proof claims must be bound and single-use per proposal.",
+        now=NOW,
+    )
+    other = service.propose(
+        organization_id=ORG,
+        actor=_human(),
+        profile=profile_with(PolicyKind.DEMO, daily_loss_limit_percent=Decimal("0.5")),
+        reason="A second proposal cannot reuse the first proof.",
+        now=NOW,
+    )
+
+    def token(claims: dict[str, object]) -> str:
+        payload = {
+            key: int(value.timestamp()) if isinstance(value, datetime) else value
+            for key, value in claims.items()
+        }
+        encoded = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        assert isinstance(encoded, str)
+        return encoded
+
+    step = {
+        "type": "risk_policy_step_up",
+        "sub": "sofien",
+        "proposal_id": str(proposal.id),
+        "content_hash": proposal.content_hash,
+        "exp": NOW + timedelta(minutes=5),
+        "session_id": "interactive-session",
+        "auth_time": NOW - timedelta(minutes=1),
+        "step_up_at": NOW - timedelta(seconds=20),
+    }
+    proof = decode_apply_proof(token(step), settings, proposal_id=proposal.id, now=NOW)
+    applied = service.apply(
+        organization_id=ORG,
+        proposal_id=proposal.id,
+        actor=_human(),
+        proof=proof,
+        owner_user_id="sofien",
+        now=NOW,
+    )
+    assert applied.change_class == "initial"
+    with pytest.raises(RiskPolicyRejected) as unchanged:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=_human(),
+            proof=proof,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert unchanged.value.code == "no_change"
+    with pytest.raises(RiskPolicyRejected) as reused:
+        decode_apply_proof(token(step), settings, proposal_id=other.id, now=NOW)
+    assert reused.value.code == "apply_proof_proposal_mismatch"
+    with pytest.raises(RiskPolicyRejected) as other_org:
+        service.apply(
+            organization_id=uuid.uuid4(),
+            proposal_id=other.id,
+            actor=_human(),
+            proof=decode_apply_proof(
+                token({**step, "proposal_id": str(other.id), "content_hash": other.content_hash}),
+                settings,
+                proposal_id=other.id,
+                now=NOW,
+            ),
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert other_org.value.code == "proposal_not_found"
+
+    blank_proposal = dict(step)
+    blank_proposal["proposal_id"] = "  "
+    with pytest.raises(RiskPolicyRejected) as blank:
+        decode_apply_proof(token(blank_proposal), settings, proposal_id=proposal.id, now=NOW)
+    assert blank.value.code == "apply_proof_missing"
+    with pytest.raises(RiskPolicyRejected) as numeric_proposal:
+        decode_apply_proof(
+            token({**step, "proposal_id": 12345}),
+            settings,
+            proposal_id=proposal.id,
+            now=NOW,
+        )
+    assert numeric_proposal.value.code == "apply_proof_missing"
+    for claim in ("sub", "content_hash"):
+        omitted = dict(step)
+        del omitted[claim]
+        with pytest.raises(RiskPolicyRejected) as missing_binding:
+            decode_apply_proof(token(omitted), settings, proposal_id=proposal.id, now=NOW)
+        assert missing_binding.value.code == "apply_proof_missing"
+    wrong_subject = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="someone-else",
+        proposal_id=str(other.id),
+        content_hash=other.content_hash,
+        expires_at=NOW + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=NOW - timedelta(minutes=1),
+        step_up_at=NOW - timedelta(seconds=20),
+    )
+    with pytest.raises(RiskPolicyRejected) as subject:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=other.id,
+            actor=_human(),
+            proof=wrong_subject,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert subject.value.code == "apply_owner_mismatch"
+    wrong_hash = HumanApplyProof(
+        method="interactive_step_up",
+        subject_user_id="sofien",
+        proposal_id=str(other.id),
+        content_hash="0" * 64,
+        expires_at=NOW + timedelta(minutes=10),
+        session_id="interactive-session",
+        authenticated_at=NOW - timedelta(minutes=1),
+        step_up_at=NOW - timedelta(seconds=20),
+    )
+    with pytest.raises(RiskPolicyRejected) as hashed:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=other.id,
+            actor=_human(),
+            proof=wrong_hash,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert hashed.value.code == "apply_proof_proposal_mismatch"
+
+    for bad_time in (float("nan"), float("inf"), "1700000000", True, 10**30):
+        with pytest.raises(RiskPolicyRejected) as non_numeric:
+            decode_apply_proof(
+                token({**step, "proposal_id": str(other.id), "auth_time": bad_time}),
+                settings,
+                proposal_id=other.id,
+                now=NOW,
+            )
+        assert non_numeric.value.code == "apply_proof_not_fresh"
+    with pytest.raises(RiskPolicyRejected) as bad_exp:
+        decode_apply_proof(
+            token({**step, "proposal_id": str(other.id), "exp": float("nan")}),
+            settings,
+            proposal_id=other.id,
+            now=NOW,
+        )
+    assert bad_exp.value.code == "apply_proof_expired"
+    with pytest.raises(RiskPolicyRejected) as access_as_proof:
+        decode_apply_proof(
+            token({**step, "type": "access", "actor": "user"}),
+            settings,
+            proposal_id=proposal.id,
+            now=NOW,
+        )
+    assert access_as_proof.value.code == "apply_proof_missing"
+    with pytest.raises(RiskPolicyRejected) as list_type:
+        decode_apply_proof(
+            token({**step, "type": ["risk_policy_step_up"]}),
+            settings,
+            proposal_id=proposal.id,
+            now=NOW,
+        )
+    assert list_type.value.code == "apply_proof_missing"
+    from app.core.errors import AuthError
+    from app.security.tokens import decode_access_token
+
+    with pytest.raises(AuthError):
+        decode_access_token(token(step), settings)
+    telegram_as_step = dict(step)
+    telegram_as_step["type"] = "risk_policy_telegram"
+    with pytest.raises(RiskPolicyRejected) as swapped:
+        decode_apply_proof(token(telegram_as_step), settings, proposal_id=proposal.id, now=NOW)
+    assert swapped.value.code == "apply_proof_not_fresh"
+    missing_session = dict(step)
+    del missing_session["session_id"]
+    with pytest.raises(RiskPolicyRejected) as no_session:
+        decode_apply_proof(
+            token({**missing_session, "proposal_id": str(other.id)}),
+            settings,
+            proposal_id=other.id,
+            now=NOW,
+        )
+    assert no_session.value.code == "apply_proof_not_fresh"
+    tightened = decode_apply_proof(
+        token({**step, "proposal_id": str(other.id), "content_hash": other.content_hash}),
+        settings,
+        proposal_id=other.id,
+        now=NOW,
+    )
+    second = service.apply(
+        organization_id=ORG,
+        proposal_id=other.id,
+        actor=_human(),
+        proof=tightened,
+        owner_user_id="sofien",
+        now=NOW,
+    )
+    assert second.change_class == "tightening"
+    with pytest.raises(RiskPolicyRejected) as replayed:
+        service.apply(
+            organization_id=ORG,
+            proposal_id=proposal.id,
+            actor=_human(),
+            proof=proof,
+            owner_user_id="sofien",
+            now=NOW,
+        )
+    assert replayed.value.code == "version_conflict"
+
+
+def test_risk_policy_actor_binds_the_access_token_subject_and_org() -> None:
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from app.api.routes.risk_policy import _actor
+    from app.core.errors import AuthError, ForbiddenError
+    from app.schemas.common import MembershipRole
+    from app.security.tenant import TenantContext
+    from app.security.tokens import create_access_token
+
+    settings = Settings(
+        environment="local",
+        log_json=False,
+        execution_mode="paper",
+        enable_real_trading=False,
+        database_url="sqlite+pysqlite:///:memory:",
+        jwt_secret="test-secret-key-for-auth-slice-32b-min",
+        access_token_expire_minutes=15,
+        refresh_token_expire_days=7,
+        access_token_denylist_use_redis=False,
+    )
+    user_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
+    access, _expires = create_access_token(
+        user_id=user_id,
+        organization_id=organization_id,
+        email="owner@example.com",
+        settings=settings,
+        actor="user",
+    )
+    tenant = TenantContext(
+        user_id=user_id,
+        organization_id=organization_id,
+        email="owner@example.com",
+        membership_role=MembershipRole.OWNER,
+    )
+    actor = _actor(
+        tenant,
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials=access),
+        settings,
+    )
+    assert actor.actor_id == str(user_id)
+    assert actor.channel is PolicyChannel.HUMAN
+    with pytest.raises(ForbiddenError):
+        _actor(
+            TenantContext(
+                user_id=uuid.uuid4(),
+                organization_id=organization_id,
+                email="owner@example.com",
+                membership_role=MembershipRole.OWNER,
+            ),
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=access),
+            settings,
+        )
+    with pytest.raises(ForbiddenError):
+        _actor(
+            TenantContext(
+                user_id=user_id,
+                organization_id=uuid.uuid4(),
+                email="owner@example.com",
+                membership_role=MembershipRole.OWNER,
+            ),
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=access),
+            settings,
+        )
+    wall = datetime.now(UTC)
+    proof = jwt.encode(
+        {
+            "type": "risk_policy_step_up",
+            "sub": str(user_id),
+            "org_id": str(organization_id),
+            "exp": int((wall + timedelta(minutes=5)).timestamp()),
+            "iat": int(wall.timestamp()),
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+    assert isinstance(proof, str)
+    with pytest.raises(AuthError):
+        _actor(tenant, HTTPAuthorizationCredentials(scheme="Bearer", credentials=proof), settings)
 
 
 def test_loosening_waits_for_midnight_and_twenty_four_hours_and_proposals_expire() -> None:
