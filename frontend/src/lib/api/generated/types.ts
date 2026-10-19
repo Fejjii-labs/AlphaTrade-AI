@@ -3694,7 +3694,7 @@ export interface components {
          * @description Stable identifiers for risk rules (reconciled with PRD/Architecture).
          * @enum {string}
          */
-        RiskRuleId: "max_leverage" | "max_position_size" | "max_daily_loss" | "max_weekly_loss" | "no_stop_loss" | "invalid_stop_loss" | "unsupported_coin" | "countertrend_reduced_size" | "volatile_altcoin_reduced_size" | "extreme_funding" | "low_volume" | "weekend_condition" | "sleep_test" | "overtrading" | "strong_green_day" | "cooldown_after_loss" | "kill_switch";
+        RiskRuleId: "max_leverage" | "max_position_size" | "max_daily_loss" | "max_weekly_loss" | "no_stop_loss" | "invalid_stop_loss" | "unsupported_coin" | "countertrend_reduced_size" | "volatile_altcoin_reduced_size" | "extreme_funding" | "low_volume" | "weekend_condition" | "sleep_test" | "overtrading" | "strong_green_day" | "cooldown_after_loss" | "kill_switch" | "risk_percent";
         /**
          * RiskSeverity
          * @enum {string}
