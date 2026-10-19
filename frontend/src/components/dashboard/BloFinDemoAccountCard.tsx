@@ -40,12 +40,21 @@ export function BloFinDemoAccountCard({
   const verifiedPerformance = performance?.status === "partial";
   const activityStatus = performance?.activity_sync_status ?? "disabled";
   const activityDisabled = activityStatus === "disabled";
+  const mirrorStatus = performance?.manual_mirror_status ?? "disabled";
+  const mirrorReady = mirrorStatus === "ready";
+  const activityCoverage = performance?.activity_coverage ?? "";
+  const activityCoverageWithheld =
+    /win rate and realized p&l are withheld/i.test(activityCoverage);
   const intervalSeconds =
     account?.refresh_interval_seconds ?? DEMO_REFRESH_INTERVAL_MS / 1000;
   const winRate =
     performance?.win_rate == null
       ? null
       : formatPercent(Number(performance.win_rate));
+  const hideHeadline = !mirrorReady && (activityDisabled || mirrorStatus === "withheld");
+  const showWinRate =
+    winRate != null &&
+    (mirrorReady || (activityStatus === "ready" && mirrorStatus !== "withheld"));
 
   return (
     <Card data-testid="dashboard-demo-account">
@@ -124,29 +133,33 @@ export function BloFinDemoAccountCard({
           />
           <TradingMetric
             label="Win rate"
-            value={activityStatus === "ready" && winRate != null ? winRate : "—"}
+            value={showWinRate ? winRate : "—"}
             note={
-              activityDisabled
-                ? "Activity sync disabled"
-                : activityStatus === "ready"
-                  ? "Closed round-trips from stored fills"
-                  : "Withheld until fee basis and a flat start are verified"
+              mirrorReady
+                ? "Closed mirrored BloFin demo trades"
+                : mirrorStatus === "withheld"
+                  ? "Withheld until positions-history price, fee, and funding match"
+                  : activityDisabled
+                    ? "Activity sync disabled"
+                    : activityStatus === "ready"
+                      ? "Closed round-trips from stored fills"
+                      : "Withheld until fee basis and a flat start are verified"
             }
             testId="dashboard-win-rate"
           />
           <TradingMetric
             label="Realized PnL"
-            value={`${formatMoney(
-              activityDisabled || performance?.realized_pnl == null
-                ? null
-                : performance.realized_pnl,
-            )} USDT`}
+            value={`${formatMoney(hideHeadline ? null : performance?.realized_pnl)} USDT`}
             note={
-              activityDisabled
-                ? "Withheld until activity sync is enabled"
-                : performance?.realized_pnl == null
-                  ? "Withheld. fillPnl fee basis and fee sign are not verified"
-                  : "Stored fillPnl. Fees are not added"
+              mirrorReady
+                ? "Positions-history price P&L minus fee and funding. fillPnl is not used"
+                : mirrorStatus === "withheld"
+                  ? "Withheld. A mirrored trade does not match the price formula"
+                  : activityDisabled
+                    ? "Withheld until activity sync is enabled"
+                    : performance?.realized_pnl == null
+                      ? "Withheld. fillPnl fee basis and fee sign are not verified"
+                      : "Stored fillPnl. Fees are not added"
             }
             testId="dashboard-pnl"
           />
@@ -243,18 +256,32 @@ export function BloFinDemoAccountCard({
                 {status === "stale" ? " · stale" : ""}
               </p>
             ) : null}
-            {activityDisabled ? (
+            {mirrorReady ? (
+              <p role="status" data-testid="manual-mirror-ready" className="text-sm text-text-secondary">
+                {performance?.manual_mirror_reason}
+                {performance?.trade_count != null
+                  ? ` ${formatCount(performance.trade_count)} closed trades.`
+                  : ""}
+                {performance?.average_r != null ? ` Average R ${performance.average_r}.` : " Average R —."}
+              </p>
+            ) : null}
+            {mirrorStatus === "withheld" ? (
+              <p role="status" data-testid="manual-mirror-withheld" className="text-sm text-warning">
+                {performance?.manual_mirror_reason}
+              </p>
+            ) : null}
+            {activityDisabled && !mirrorReady ? (
               <p role="status" data-testid="activity-sync-disabled" className="text-sm text-warning">
                 Activity sync disabled. Win rate and realized P&L are withheld
                 until the activity worker is enabled.
               </p>
-            ) : performance?.activity_coverage ? (
+            ) : activityCoverage && !(mirrorReady && (activityDisabled || activityCoverageWithheld)) ? (
               <p className="text-xs text-text-secondary" data-testid="activity-coverage">
-                {performance.activity_coverage}
-                {performance.trade_count != null
+                {activityCoverage}
+                {!mirrorReady && performance?.trade_count != null
                   ? ` ${formatCount(performance.trade_count)} closed trades · ${formatCount(performance.wins)} wins · ${formatCount(performance.losses)} losses.`
                   : ""}
-                {performance.window_start
+                {!mirrorReady && performance?.window_start
                   ? ` Window ${formatDateTime(performance.window_start)} – ${formatDateTime(performance.window_end)}.`
                   : ""}
               </p>

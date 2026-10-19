@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import structlog
@@ -144,8 +144,18 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
+
+    def forbidden_mirror(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("mirror ran on trading keys")
+
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        forbidden_mirror,
+    )
     with structlog.testing.capture_logs() as logs:
-        outcome = BloFinDemoSnapshotCycle(_trading_key_settings())()
+        outcome = BloFinDemoSnapshotCycle(
+            _trading_key_settings(blofin_demo_manual_mirror_enabled=True)
+        )()
     assert outcome.status == "skipped"
     assert outcome.error == "readonly_credentials_required"
     rendered = repr(logs)
@@ -273,8 +283,9 @@ def test_fresh_snapshot_does_not_call_blofin(monkeypatch: pytest.MonkeyPatch) ->
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
-            assert organization_id
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id == UUID(settings.governed_blofin_demo_organization_id)
+            assert user_id == UUID(settings.governed_blofin_demo_user_id)
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.OK,
                 synced_at=now - timedelta(seconds=10),
@@ -312,8 +323,8 @@ def test_fresh_degraded_snapshot_skips_blofin_and_reports_unhealthy(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> SimpleNamespace:
-            assert organization_id
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
             return SimpleNamespace(
                 health_status=BloFinSyncHealthStatus.DEGRADED,
                 synced_at=now - timedelta(seconds=10),
@@ -355,7 +366,8 @@ def test_synced_degraded_snapshot_is_unhealthy_without_backoff(
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **kwargs: object) -> SimpleNamespace:
@@ -394,7 +406,8 @@ def test_stale_connection_syncs_and_commits(monkeypatch: pytest.MonkeyPatch) -> 
         def __init__(self, _session: object, _settings: object) -> None:
             pass
 
-        def latest(self, *, organization_id: object) -> None:
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
             raise NotFoundError("none")
 
         def sync(self, **kwargs: object) -> SimpleNamespace:
@@ -410,3 +423,252 @@ def test_stale_connection_syncs_and_commits(monkeypatch: pytest.MonkeyPatch) -> 
     assert synced[0]["actor_type"] is ActorType.SYSTEM
     assert synced[0]["sync_origin"] == "worker"
     assert synced[0]["include_instrument_metadata"] is True
+
+
+def test_flag_off_does_not_construct_the_readonly_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("flag off opened the read-only client")
+
+    monkeypatch.setattr("app.core.blofin_readonly_access.get_readonly_client", forbidden)
+    settings = _open_settings()
+    assert settings.blofin_demo_manual_mirror_enabled is False
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    session = SimpleNamespace(committed=False, closed=False, rollback=lambda: None)
+    session.commit = lambda: setattr(session, "committed", True)
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    assert cycle().status == "ok"
+    assert session.committed is True
+
+
+def test_flag_on_runs_the_mirror_after_the_snapshot_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    commits: list[str] = []
+    applied: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None)
+
+    def commit() -> None:
+        commits.append("commit")
+
+    session.commit = commit
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(self, client: object, *, now: datetime) -> None:
+            assert client == "readonly-client"
+            assert now.tzinfo is UTC
+
+        def apply(self, _session: object, **kwargs: object) -> None:
+            bound = kwargs["settings"]
+            assert getattr(bound, "blofin_demo_manual_mirror_enabled", None) is True
+            applied.append("apply")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        Mirror,
+    )
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    assert cycle().status == "ok"
+    assert commits == ["commit", "commit"]
+    assert applied == ["apply"]
+
+
+def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    synced: list[str] = []
+    applied: list[str] = []
+    commits: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None)
+    session.commit = lambda: commits.append("commit")
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
+            return SimpleNamespace(
+                health_status=BloFinSyncHealthStatus.OK,
+                synced_at=now - timedelta(seconds=10),
+            )
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            synced.append("sync")
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(self, client: object, *, now: datetime) -> None:
+            assert client == "readonly-client"
+            assert now.tzinfo is UTC
+
+        def apply(self, _session: object, **_kwargs: object) -> None:
+            applied.append("apply")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        Mirror,
+    )
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    assert cycle().status == "ok"
+    assert synced == []
+    assert applied == ["apply"]
+    assert commits == ["commit"]
+    assert cycle._next_attempt is None
+
+
+def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    applied: list[str] = []
+    commits: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None)
+    session.commit = lambda: commits.append("commit")
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(health_status=BloFinSyncHealthStatus.UNAVAILABLE)
+            )
+
+    class Mirror:
+        def __init__(self, client: object, *, now: datetime) -> None:
+            assert client == "readonly-client"
+            assert now.tzinfo is UTC
+
+        def apply(self, _session: object, **_kwargs: object) -> None:
+            applied.append("apply")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        Mirror,
+    )
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    outcome = cycle()
+    assert outcome.status == "degraded"
+    assert outcome.error == "snapshot_unavailable"
+    assert applied == ["apply"]
+    assert commits == ["commit", "commit"]
+    assert cycle._next_attempt is not None
+
+
+def test_mirror_read_failure_does_not_back_off_the_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    session = SimpleNamespace(closed=False)
+    session.commit = lambda: commits.append("commit")
+    session.rollback = lambda: rollbacks.append("rollback")
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
+            return SimpleNamespace(
+                health_status=BloFinSyncHealthStatus.OK,
+                synced_at=now - timedelta(seconds=10),
+            )
+
+        def sync(self, **_kwargs: object) -> None:
+            raise AssertionError("a fresh snapshot must not be refetched")
+
+    class Mirror:
+        def __init__(self, _client: object, *, now: datetime) -> None:
+            assert now.tzinfo is UTC
+
+        def apply(self, _session: object, **_kwargs: object) -> None:
+            raise RuntimeError("mirror read")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    recorded: list[str] = []
+
+    def remember(*_args: object, **kwargs: object) -> None:
+        recorded.append(str(kwargs.get("outcome")))
+
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
+        Mirror,
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.record_mirror_cycle",
+        remember,
+    )
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    outcome = cycle()
+    assert outcome.status == "ok"
+    assert outcome.error == ""
+    assert commits == ["commit"]
+    assert rollbacks == ["rollback"]
+    assert recorded == ["failed"]
+    assert cycle._failures == 0
+    assert cycle._next_attempt is None
+    assert cycle().status == "ok"

@@ -2535,7 +2535,7 @@ export interface components {
          * @description Origin of a canonical journal trade (AT-030).
          * @enum {string}
          */
-        JournalTradeSource: "manual" | "paper_execution" | "manual_demo_test" | "paper_validation" | "backtest" | "imported" | "system";
+        JournalTradeSource: "manual" | "paper_execution" | "manual_demo_test" | "blofin_demo_manual" | "paper_validation" | "backtest" | "imported" | "system";
         /** KnowledgeHit */
         KnowledgeHit: {
             /**

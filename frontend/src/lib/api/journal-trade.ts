@@ -15,6 +15,11 @@ export type JournalTradeDetail = {
     funding: string | null;
     exit_time: string | null;
     execution_lifecycle_id: string | null;
+    notes?: string | null;
+    grade?: string | null;
+    leverage?: string | null;
+    external_ref?: string | null;
+    planned_stop_price?: string | null;
   };
   manual_demo?: ManualDemoAttempt | null;
   evidence: Array<{ id: string; kind: string; caption: string | null; ref: string | null }>;
@@ -29,5 +34,12 @@ export const journalTradeApi = {
       method: "POST",
       body: JSON.stringify({ category: "behavioral", observation, emotion_tags: [] }),
     },
+  ),
+  annotate: (
+    id: string,
+    body: { strategy_label?: string; grade?: string; notes?: string },
+  ) => apiFetch<JournalTradeDetail["trade"]>(
+    `/journal/trades/${encodeURIComponent(id)}/annotation`,
+    { auth: true, method: "PATCH", body: JSON.stringify(body) },
   ),
 };

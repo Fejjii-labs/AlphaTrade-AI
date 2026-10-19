@@ -270,6 +270,9 @@ class Settings(BaseSettings):
     blofin_demo_snapshot_sync_enabled: bool = False
     # Worker read-only snapshot cadence. The browser polls the same interval.
     blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
+    # Read-only journal mirror for hand trades on the BloFin demo account.
+    # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
+    blofin_demo_manual_mirror_enabled: bool = False
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
 

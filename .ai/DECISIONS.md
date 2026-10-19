@@ -3981,3 +3981,71 @@ See docs/trendpulse_screening_contract.md and verification handoff.
   `BLOFIN_READONLY_API_*` credentials. It does not fall back to demo trading
   keys. A refusal logs only those two booleans. This does not enable the flag
   or real-money trading.
+
+## AT-ADR-112 — Mirror BloFin demo hand trades from positions history, not fillPnl
+
+- Date: 2026-10-18
+- Number: AT-ADR-112. PR 279 already uses AT-ADR-111 for Sofien's paper and
+  demo promotion exception, and AT-ADR-110 for the 5% per-trade ceiling.
+  PR 280's snapshot decisions are AT-ADR-113, AT-ADR-114, and AT-ADR-115.
+  PRs 278, 280, and 281 do not use 112.
+- Decision: Sofien's hand trades on the BloFin demo account are mirrored into
+  the canonical journal from read-only `GET /api/v1/account/positions-history`,
+  funding-fee history, fills (order ids only), and orders history. The flag
+  `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and is not set by this
+  change. New rows use source `blofin_demo_manual`. Grade is a `grade:` tag.
+  No Alembic revision.
+- Semantics, read from https://docs.blofin.com/index.html on 2026-10-18:
+  the published ETH positions-history row shows `realizedPnl` equal to
+  `(close - open) * contracts` and not net of `fee`. `fundingFee` is positive
+  when received and negative when paid. Positions history has no funding
+  field. `fillPnl` is still not documented as gross or net of fees or
+  funding, so AT-ADR-114 stands for the activity path. This mirror ignores
+  `fillPnl`.
+- A closed row is verified only when direction-aware price P&L times
+  `contractValue` equals `realizedPnl` at 1e-8, settlement is USDT, the fee
+  is present, and funding for that slice sits inside the seven-day window
+  and is not shared. Net is price P&L minus fee minus funding paid
+  (`-fundingFee`). A negative fee is stored as a rebate. That sign is
+  inferred from the order-history "Fee and rebate" label and the existing
+  reconciliation note, not from a positions-history sentence. The published
+  BCH `sell` example does not match the short formula, so it stays
+  unverified.
+- The dashboard publishes win rate, realized P&L, average R, and count from
+  closed `blofin_demo_manual` rows only when every one of those rows is
+  verified. Otherwise those headlines stay empty and the card says why.
+  Method id: `positions-history-price-pnl-fee-funding/v1`.
+- Idempotency key is `blofin-demo-history:{historyId}` for a closed slice and
+  `blofin-demo-open:{positionId}:{createTime}` for a remainder. An open
+  AlphaTrade manual demo row with the same symbol, direction, entry, and
+  size is closed in place and keeps its source, including
+  `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
+  Ambiguous matches are skipped. A reconciled `manual` or `manual_demo_test`
+  row whose external ref starts with `blofin-demo-` can still be tagged.
+  Mirrored venue P&L, including that in-place close, does not feed open
+  risk, daily realized loss, the daily lock, the paper loss cooldown, or
+  promotion. The daily lock does not read tags. The exclusion is source
+  `blofin_demo_manual` or the exact server prefix `blofin-demo-history:`
+  on `external_ref`. A stuck governed `manual_demo_test` row closed by the
+  mirror receives that prefix, so its venue net does not count toward the
+  daily lock. Clients cannot set a case or whitespace variant of
+  `blofin-demo-`, or a tag that contains a double quote or starts with
+  `blofin-`. Candidate selection,
+  in-place reconciliation, open-tracker cancellation, the cycle marker,
+  and the headline read are limited to the pinned user, not the whole
+  organization. A lifecycle-backed row keeps its entry time, so the day's
+  trade count still includes the close. A closed row contributes zero open
+  exposure. Promotion continues to read paper-validation trades only.
+- The mirror runs on the snapshot cadence only when
+  `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the paper worker is armed, and
+  `BLOFIN_READONLY_SYNC_ENABLED` with the three `BLOFIN_READONLY_API_*`
+  credentials are set. Demo trading keys are not a fallback. It still runs
+  when the saved snapshot is inside the refresh interval. A mirror read
+  failure does not back off the snapshot cycle. The latest read is stored on a cancelled journal
+  marker. A failed read or a page cap withholds the headline. Fills, funding,
+  and orders keep paging after positions history has succeeded. A capped
+  auxiliary read still stores that history and does not publish a net.
+- Headline rows are recomputed from stored entry, exit, size, fee, and
+  funding. The journal create route cannot mint `blofin_demo_manual`, and
+  the generic update cannot change that source's venue facts or P&L tags.
+- Reference: `docs/blofin_demo_manual_mirror.md`.

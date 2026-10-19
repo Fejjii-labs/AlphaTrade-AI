@@ -65,6 +65,52 @@ class JournalTradeStatsRow:
     planned_entry_price: Decimal | None
     entry_price: Decimal | None
     exit_reason: str | None
+    strategy_label: str | None
+
+
+_ANNOTATION_EXCLUDED_FROM_STATS = frozenset({"tags", "notes", "grade"})
+
+
+def _stats_columns() -> tuple[object, ...]:
+    """Closed-trade columns for statistics. Annotation grade stays out."""
+    return (
+        JournalTrade.id,
+        JournalTrade.source,
+        JournalTrade.entry_method,
+        JournalTrade.symbol,
+        JournalTrade.timeframe,
+        JournalTrade.market_regime,
+        JournalTrade.setup_id,
+        JournalTrade.user_strategy_id,
+        JournalTrade.strategy_version_id,
+        JournalTrade.result,
+        JournalTrade.net_pnl,
+        JournalTrade.gross_pnl,
+        JournalTrade.fees,
+        JournalTrade.funding,
+        JournalTrade.slippage,
+        JournalTrade.planned_risk_amount,
+        JournalTrade.mfe_amount,
+        JournalTrade.mae_amount,
+        JournalTrade.available_profit,
+        JournalTrade.realized_vs_available_pct,
+        JournalTrade.direction,
+        JournalTrade.planned_entry_price,
+        JournalTrade.entry_price,
+        JournalTrade.exit_reason,
+        JournalTrade.strategy_label,
+    )
+
+
+def assert_stats_projection_excludes_annotation_grade() -> None:
+    """Fail closed if a hand grade, note, or tag list enters statistics."""
+    names = {column.key for column in _stats_columns()}  # type: ignore[attr-defined]
+    names.update(JournalTradeStatsRow.__dataclass_fields__)
+    leaked = names & _ANNOTATION_EXCLUDED_FROM_STATS
+    if leaked:
+        raise RuntimeError(
+            "annotation grade is not a journal statistics input: " + ", ".join(sorted(leaked))
+        )
 
 
 class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
@@ -312,7 +358,9 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
 
         Returns ``(rows, truncated)``. Ordering is stable (effective time,
         then id) so a truncated result always covers the same oldest window.
+        Hand-assigned ``grade:`` tags, notes, and the tag list are not selected.
         """
+        assert_stats_projection_excludes_annotation_grade()
         filters = self._stats_filters(
             organization_id=organization_id,
             user_id=user_id,
@@ -332,32 +380,7 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
             JournalTrade.exit_time, JournalTrade.entry_time, JournalTrade.created_at
         )
         stmt = (
-            select(
-                JournalTrade.id,
-                JournalTrade.source,
-                JournalTrade.entry_method,
-                JournalTrade.symbol,
-                JournalTrade.timeframe,
-                JournalTrade.market_regime,
-                JournalTrade.setup_id,
-                JournalTrade.user_strategy_id,
-                JournalTrade.strategy_version_id,
-                JournalTrade.result,
-                JournalTrade.net_pnl,
-                JournalTrade.gross_pnl,
-                JournalTrade.fees,
-                JournalTrade.funding,
-                JournalTrade.slippage,
-                JournalTrade.planned_risk_amount,
-                JournalTrade.mfe_amount,
-                JournalTrade.mae_amount,
-                JournalTrade.available_profit,
-                JournalTrade.realized_vs_available_pct,
-                JournalTrade.direction,
-                JournalTrade.planned_entry_price,
-                JournalTrade.entry_price,
-                JournalTrade.exit_reason,
-            )
+            select(*_stats_columns())
             .where(*filters)
             .order_by(effective_time.asc(), JournalTrade.id.asc())
             .limit(max_rows + 1)

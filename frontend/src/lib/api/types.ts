@@ -4254,7 +4254,8 @@ export type JournalTradeSource =
   | "paper_validation"
   | "backtest"
   | "imported"
-  | "system";
+  | "system"
+  | "blofin_demo_manual";
 
 export type MarketRegime =
   | "trending_up"

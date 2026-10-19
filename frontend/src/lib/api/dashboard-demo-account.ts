@@ -26,6 +26,9 @@ export interface DashboardDemoAccount {
     window_end?: string | null;
     unresolved_round_trips?: number | null;
     activity_coverage?: string;
+    manual_mirror_status?: "disabled" | "withheld" | "ready";
+    manual_mirror_reason?: string;
+    average_r?: string | null;
   };
   read_only: true;
   status:

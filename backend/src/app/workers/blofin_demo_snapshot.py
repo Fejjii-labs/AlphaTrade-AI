@@ -5,7 +5,11 @@ Demo gates and native identity checks stay inside that service. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
 browser refresh and this cycle do not both hit the venue. A degraded snapshot
-in that window is reported as degraded and is not fetched again.
+in that window is reported as degraded and is not fetched again. The hand-trade
+mirror still runs on that fresh path, including a fresh degraded snapshot, and
+also after a snapshot whose health is outside ok or degraded, before that
+unhealthy snapshot backs off. A mirror read failure rolls back only its own
+write and does not back off the snapshot.
 """
 
 from __future__ import annotations
@@ -110,10 +114,12 @@ class BloFinDemoSnapshotCycle:
         session = get_session_factory()()
         try:
             service = BloFinSyncService(session, self.settings)
-            fresh = _fresh_snapshot(service, organization_id, self._clock(), self.settings)
+            fresh = _fresh_snapshot(service, organization_id, user_id, self._clock(), self.settings)
             if fresh is BloFinSyncHealthStatus.DEGRADED:
+                self._mirror_without_backing_off(session, organization_id, user_id)
                 return "degraded"
             if fresh is BloFinSyncHealthStatus.OK:
+                self._mirror_without_backing_off(session, organization_id, user_id)
                 return "fresh"
             result = service.sync(
                 organization_id=organization_id,
@@ -124,18 +130,80 @@ class BloFinDemoSnapshotCycle:
                 sync_origin="worker",
             )
             session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        else:
+            self._mirror_without_backing_off(session, organization_id, user_id)
             health = result.snapshot.health_status
             if health is BloFinSyncHealthStatus.OK:
                 return "ok"
             if health is BloFinSyncHealthStatus.DEGRADED:
                 return "degraded"
             return "unavailable"
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
+
+    def _mirror_without_backing_off(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Run the journal mirror. A read failure must not delay the snapshot."""
+        if not self.settings.blofin_demo_manual_mirror_enabled:
+            return
+        try:
+            self._run_mirror(session, organization_id, user_id)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning(
+                "blofin_demo_manual_mirror_failed",
+                error_type=type(exc).__name__,
+            )
+            self._record_failed_cycle(session, organization_id, user_id)
+
+    def _run_mirror(
+        self,
+        session: object,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Journal mirror. The flag stays off unless an operator sets it."""
+        from app.core.blofin_readonly_access import get_readonly_client
+        from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
+
+        client = get_readonly_client(self.settings, activity_history=True)
+        BloFinDemoManualMirror(client, now=self._clock()).apply(
+            session,  # type: ignore[arg-type]
+            organization_id=organization_id,
+            user_id=user_id,
+            settings=self.settings,
+        )
+
+    def _record_failed_cycle(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Persist a withheld cycle after the mirror transaction has rolled back."""
+        from app.services.blofin_demo_manual_mirror import record_mirror_cycle
+
+        try:
+            record_mirror_cycle(
+                session,  # type: ignore[arg-type]
+                organization_id=organization_id,
+                user_id=user_id,
+                outcome="failed",
+            )
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning(
+                "blofin_demo_manual_mirror_status_unrecorded",
+                error_type=type(exc).__name__,
+            )
 
 
 def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:
@@ -150,20 +218,29 @@ def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:
         return None
 
 
+class _UnitOfWork(Protocol):
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+
 class _SnapshotReader(Protocol):
-    def latest(self, *, organization_id: uuid.UUID) -> BloFinSyncSnapshotItem: ...
+    def latest(
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID
+    ) -> BloFinSyncSnapshotItem: ...
 
 
 def _fresh_snapshot(
     service: _SnapshotReader,
     organization_id: uuid.UUID,
+    user_id: uuid.UUID,
     now: datetime,
     settings: Settings,
 ) -> BloFinSyncHealthStatus | None:
     from app.core.errors import NotFoundError
 
     try:
-        snapshot = service.latest(organization_id=organization_id)
+        snapshot = service.latest(organization_id=organization_id, user_id=user_id)
     except NotFoundError:
         return None
     health = snapshot.health_status
