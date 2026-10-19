@@ -141,7 +141,7 @@ it("renders annotation notes as plain text", async () => {
   const view = render(<JournalTradeScreen tradeId="exact-trade" />);
   const field = await screen.findByLabelText("Notes");
   expect(field.tagName).toBe("TEXTAREA");
-  expect(field).toHaveValue(notes);
+  await waitFor(() => expect(field).toHaveValue(notes));
   expect(view.container.querySelector("img")).toBeNull();
   expect(view.container.querySelector("script")).toBeNull();
   expect(view.container.innerHTML).not.toContain("<img");

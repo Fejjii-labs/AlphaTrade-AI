@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,12 +26,15 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const [tagging, setTagging] = useState(false);
   const pending = useRef(false);
   const tagPending = useRef(false);
-  useEffect(() => {
-    if (!data) return;
-    setStrategy(data.trade.strategy_label ?? "");
-    setGrade(data.trade.grade ?? "");
-    setNotes(data.trade.notes ?? "");
-  }, [data]);
+  const [synced, setSynced] = useState<typeof data>(null);
+  if (data !== synced) {
+    setSynced(data);
+    if (data) {
+      setStrategy(data.trade.strategy_label ?? "");
+      setGrade(data.trade.grade ?? "");
+      setNotes(data.trade.notes ?? "");
+    }
+  }
   if (loading && !data) return <LoadingState label="Loading this Journal trade…" />;
   if (error || !data) return <ErrorState message={error ?? "This Journal trade is unavailable in your account."} onRetry={() => void reload()} />;
   // A mismatched response must never display another trade under the linked identity.
