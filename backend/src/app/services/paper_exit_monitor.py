@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 from uuid import UUID
@@ -36,6 +36,12 @@ INTERNAL_PAPER_VENUE = "PAPER_INTERNAL"
 INTERNAL_PAPER_POLICY = "paper-internal-entry/v1"
 EXIT_CHANNEL = "PAPER_EXIT_MONITOR"
 EXIT_ACTOR = "paper_exit_monitor"
+# A crossing on an earlier UTC day is a reconstruction. It is journaled and
+# kept out of the consecutive-loss breaker, the daily lock, and ADR-109 samples.
+EXIT_ORIGIN_BACKFILL = "backfill"
+EXIT_ORIGIN_LIVE = "live"
+CALIBRATION_EXCLUDED = "excluded"
+CALIBRATION_ELIGIBLE = "eligible"
 EXIT_REASON_STOP: Literal["stop_hit"] = "stop_hit"
 EXIT_REASON_TARGET: Literal["target_hit"] = "target_hit"
 SAME_BAR_ASSUMPTION = "stop_first"
@@ -137,6 +143,48 @@ def exit_idempotency_key(command_id: UUID) -> str:
     """One stable close identity per execution command."""
 
     return f"paper-exit-monitor:{command_id}"
+
+
+def exit_monitor_backfill(request: ClosePaperPlanRequest) -> bool:
+    """True when the monitor labelled this close as a historical reconstruction."""
+
+    evidence = request.exit_evidence
+    if not evidence:
+        return False
+    return evidence.get("exit_origin") == EXIT_ORIGIN_BACKFILL
+
+
+def counts_for_adr109_calibration(request: ClosePaperPlanRequest) -> bool:
+    """ADR-109 samples include a live monitor close and exclude a backfill.
+
+    A human close has no monitor evidence, so it is not a monitor sample.
+    This predicate does not write a row. The close path does not invent a
+    walk-forward fold, so no calibration sample is inserted here.
+    """
+
+    if exit_monitor_backfill(request):
+        return False
+    evidence = request.exit_evidence
+    if evidence is None:
+        return False
+    return evidence.get("calibration_sample") == CALIBRATION_ELIGIBLE
+
+
+def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:
+    """Label a crossing that happened before the evaluation UTC day as a backfill.
+
+    The open October 6 trades close on the first armed run at those historical
+    bars. A naive timestamp fails closed to ``backfill`` so it cannot move the
+    breaker. A crossing on the evaluation UTC day is live.
+    """
+
+    if occurred_at.tzinfo is None or evaluated_at.tzinfo is None:
+        return EXIT_ORIGIN_BACKFILL
+    occurred = occurred_at.astimezone(UTC)
+    evaluated = evaluated_at.astimezone(UTC)
+    if occurred.date() < evaluated.date():
+        return EXIT_ORIGIN_BACKFILL
+    return EXIT_ORIGIN_LIVE
 
 
 def is_internal_paper_plan(
@@ -375,18 +423,24 @@ def decide_exit(
         stop_exit = touch in {"stop", "both"}
         reason: ExitReason = EXIT_REASON_STOP if stop_exit else EXIT_REASON_TARGET
         price = trade.stop if stop_exit else trade.target
+        origin = classify_exit_origin(bar.interval_end, evaluated_at)
+        evidence = _evidence(
+            trade,
+            bar,
+            source_name=source_name,
+            level="stop" if stop_exit else "target",
+            assumption=SAME_BAR_ASSUMPTION if touch == "both" else SAME_BAR_NONE,
+        )
+        evidence["exit_origin"] = origin
+        evidence["calibration_sample"] = (
+            CALIBRATION_EXCLUDED if origin == EXIT_ORIGIN_BACKFILL else CALIBRATION_ELIGIBLE
+        )
         return ExitDecision(
             trade=trade,
             reason=reason,
             exit_price=price,
             occurred_at=bar.interval_end,
-            evidence=_evidence(
-                trade,
-                bar,
-                source_name=source_name,
-                level="stop" if stop_exit else "target",
-                assumption=SAME_BAR_ASSUMPTION if touch == "both" else SAME_BAR_NONE,
-            ),
+            evidence=evidence,
             idempotency_key=exit_idempotency_key(trade.command_id),
         )
     return None
@@ -638,6 +692,7 @@ def _decision_log(decision: ExitDecision) -> dict[str, object]:
         "exit_price": format(decision.exit_price, "f"),
         "bar_interval_end": decision.occurred_at.isoformat(),
         "same_bar_assumption": decision.evidence["same_bar_assumption"],
+        "exit_origin": decision.evidence.get("exit_origin", ""),
         "exit_channel": EXIT_CHANNEL,
         "exit_actor": EXIT_ACTOR,
     }

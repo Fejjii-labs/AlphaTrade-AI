@@ -100,5 +100,16 @@ the crossing bar's end. The CLOSE lifecycle payload also stores:
 - `exit_actor`: `paper_exit_monitor`
 - `exit_evidence`: bar times, OHLC, source event id, content hash, level, and
   the same-bar assumption
+- `exit_origin`: `live` when the crossing bar ended on the evaluation UTC day,
+  `backfill` when it ended on an earlier UTC day. The October 6 open trades
+  are backfills. A naive timestamp is also labelled `backfill`.
+- `calibration_sample`: `eligible` on a live close and `excluded` on a backfill
 
-A human close leaves those three fields unset.
+A live close of a `paper-profile-isolated` plan uses the same profile-close
+note as any other profile close. That note advances the consecutive-loss
+streak and syncs the daily lock. A backfill is journaled and does not call
+that note, so it does not move the streak or the daily lock, and it is not
+an ADR-109 calibration sample. This path does not insert a calibration row
+for a live close either: the walk-forward fold is not known here.
+
+A human close leaves those fields unset.

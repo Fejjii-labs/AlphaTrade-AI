@@ -2,6 +2,24 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-116 — Backfilled paper exits stay out of the breakers
+
+- Date: 2026-10-19
+- Decision: An exit-monitor close whose bar ended before the evaluation UTC
+  day is a backfill. The open October 6 short stop and long target are that
+  case. The journal still records the close, with `exit_origin=backfill` and
+  `calibration_sample=excluded`. That close does not advance the
+  consecutive-loss breaker, does not sync the daily lock, and is not an
+  AT-ADR-109 calibration sample. A crossing on the evaluation UTC day is
+  `exit_origin=live`. A live close of a `paper-profile-isolated` plan uses
+  the same profile-close note as any other profile close, so the result
+  counts toward the consecutive streak and the daily lock. A human close is
+  unchanged. A live close does not insert a calibration row on this path,
+  because the walk-forward fold is not known here. Both monitor flags stay
+  false. This record does not arm them. Real-money trading stays rejected.
+- Reference: AT-ADR-109; AT-ADR-110; AT-ADR-114;
+  `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-115 — Paper exit candles follow the trade's live evidence
 
 - Date: 2026-10-18

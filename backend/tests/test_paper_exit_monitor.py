@@ -19,7 +19,10 @@ from app.market_contracts.errors import FormingCandleError
 from app.market_contracts.ohlcv import require_closed_series
 from app.schemas.common import Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanHttpRequest, ClosePaperPlanRequest
-from app.services.canonical_paper_execution import paper_exit_audit_fields
+from app.services.canonical_paper_execution import (
+    paper_exit_audit_fields,
+    profile_close_should_note,
+)
 from app.services.paper_exit_candles import (
     PaperExitCandleLoader,
     build_candle_source,
@@ -34,7 +37,10 @@ from app.services.paper_exit_monitor import (
     FetchedBars,
     OpenInternalPaperTrade,
     PaperExitCloser,
+    classify_exit_origin,
+    counts_for_adr109_calibration,
     exit_idempotency_key,
+    exit_monitor_backfill,
     is_internal_paper_plan,
     open_internal_paper_statement,
     parse_open_trade,
@@ -150,6 +156,7 @@ def _run(
     dry_run: bool = False,
     covers: bool = True,
     closer: PaperExitCloser | None = None,
+    evaluated_at: datetime = NOW,
 ) -> tuple[object, RecordingCloser]:
     recorder = closer if closer is not None else RecordingCloser()
     report = run_paper_exit_monitor(
@@ -158,7 +165,7 @@ def _run(
         trades=(trade,),
         candles=lambda _trade: _fetched(bars, covers=covers),
         closer=recorder,
-        evaluated_at=NOW,
+        evaluated_at=evaluated_at,
     )
     return report, recorder
 
@@ -306,6 +313,85 @@ def test_historical_crossing_closes_at_the_first_bar_not_a_later_one() -> None:
     assert request.occurred_at == crossing + timedelta(minutes=15)
     assert request.exit_evidence is not None
     assert request.exit_evidence["bar_interval_start"] == crossing.isoformat()
+    assert request.exit_evidence["exit_origin"] == "backfill"
+    assert request.exit_evidence["calibration_sample"] == "excluded"
+    assert exit_monitor_backfill(request) is True
+    assert counts_for_adr109_calibration(request) is False
+    assert (
+        profile_close_should_note(
+            request,
+            replayed=False,
+            margin_assumption_id="paper-profile-isolated",
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+
+
+def test_same_day_crossing_feeds_the_breaker_and_stays_eligible() -> None:
+    """A stop touched on the evaluation UTC day is a live profile outcome."""
+
+    start = datetime(2026, 10, 18, 11, 0, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    _report, closer = _run(
+        _trade(),
+        (_bar(start, low="94", high="101"),),
+        evaluated_at=evaluated,
+    )
+    request = closer.requests[0]
+    assert request.exit_evidence is not None
+    assert request.exit_evidence["exit_origin"] == "live"
+    assert request.exit_evidence["calibration_sample"] == "eligible"
+    assert exit_monitor_backfill(request) is False
+    assert counts_for_adr109_calibration(request) is True
+    assert profile_close_should_note(
+        request,
+        replayed=False,
+        margin_assumption_id="paper-profile-isolated",
+        net_pnl=Decimal("-5"),
+    )
+    assert (
+        profile_close_should_note(
+            request,
+            replayed=False,
+            margin_assumption_id="paper-internal-cash",
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+    assert (
+        profile_close_should_note(
+            request,
+            replayed=True,
+            margin_assumption_id="paper-profile-isolated",
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+    human = ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="manual",
+        occurred_at=evaluated,
+        idempotency_key="human-close",
+    )
+    assert counts_for_adr109_calibration(human) is False
+    assert profile_close_should_note(
+        human,
+        replayed=False,
+        margin_assumption_id="paper-profile-isolated",
+        net_pnl=Decimal("-5"),
+    )
+
+
+def test_naive_exit_time_is_labelled_backfill() -> None:
+    naive = datetime(2026, 10, 18, 12, 0)
+    assert classify_exit_origin(naive, NOW) == "backfill"
+    assert classify_exit_origin(NOW, naive) == "backfill"
 
 
 def test_trade_opened_at_bar_close_exits_on_the_next_bar() -> None:
@@ -671,6 +757,15 @@ def test_october_6_live_crossings_are_read_from_binance_not_replay() -> None:
     assert short_close.exit_evidence is not None
     assert short_close.exit_evidence["market_source"] == "binance-usdm-perpetual"
     assert short_close.exit_evidence["bar_interval_start"] == crossing.isoformat()
+    assert short_close.exit_evidence["exit_origin"] == "backfill"
+    assert long_close.exit_evidence is not None
+    assert long_close.exit_evidence["exit_origin"] == "backfill"
+    assert long_close.exit_evidence["calibration_sample"] == "excluded"
+    assert counts_for_adr109_calibration(short_close) is False
+    assert counts_for_adr109_calibration(long_close) is False
+    journal = paper_exit_audit_fields(short_close)
+    assert journal["exit_origin"] == "backfill"
+    assert journal["calibration_sample"] == "excluded"
 
 
 def test_disabled_cycle_does_not_open_a_session(monkeypatch: pytest.MonkeyPatch) -> None:

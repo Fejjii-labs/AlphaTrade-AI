@@ -374,11 +374,17 @@ class CanonicalPaperExecutionService:
                     details={"reason": "missing_journal_trade"},
                 )
             self._session.refresh(trade)
-            if (
-                not projection.replayed
-                and envelope.plan.risk_and_exits.margin_assumption_id == "paper-profile-isolated"
-                and trade.net_pnl is not None
+            # A live profile close feeds the consecutive streak and the daily
+            # lock. A labelled backfill does not. No calibration sample is
+            # written: a backfill is ineligible, and a live close has no
+            # walk-forward fold on this path.
+            if profile_close_should_note(
+                request,
+                replayed=projection.replayed,
+                margin_assumption_id=envelope.plan.risk_and_exits.margin_assumption_id,
+                net_pnl=trade.net_pnl,
             ):
+                assert trade.net_pnl is not None
                 _note_profile_close(
                     self._session,
                     organization_id=request.organization_id,
@@ -616,7 +622,36 @@ def paper_exit_audit_fields(request: ClosePaperPlanRequest) -> dict[str, object]
         fields["exit_actor"] = request.exit_actor
     if request.exit_evidence is not None:
         fields["exit_evidence"] = dict(request.exit_evidence)
+        origin = request.exit_evidence.get("exit_origin")
+        if origin is not None:
+            fields["exit_origin"] = origin
+        sample = request.exit_evidence.get("calibration_sample")
+        if sample is not None:
+            fields["calibration_sample"] = sample
     return fields
+
+
+def profile_close_should_note(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    margin_assumption_id: str,
+    net_pnl: Decimal | None,
+) -> bool:
+    """Profile closes update the breaker. A labelled backfill does not.
+
+    ``_note_profile_close`` is what advances the consecutive-loss streak and
+    syncs the daily lock. Skipping it leaves both untouched. A human close
+    has no monitor label and still notes. A cash-margin plan does not.
+    """
+
+    if replayed or net_pnl is None:
+        return False
+    if margin_assumption_id != "paper-profile-isolated":
+        return False
+    from app.services.paper_exit_monitor import exit_monitor_backfill
+
+    return not exit_monitor_backfill(request)
 
 
 def _journal_paper_liquidation(
