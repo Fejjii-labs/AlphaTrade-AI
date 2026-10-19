@@ -110,11 +110,8 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
         "docker-build",
         "e2e-smoke",
     }
-    assert trigger["schedule"] == [{"cron": "0 2 * * *"}]
-    full_gate = (
-        "github.event_name == 'schedule' || "
-        "(github.event_name == 'workflow_dispatch' && inputs.full_backend)"
-    )
+    assert "schedule" not in trigger
+    full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
@@ -135,8 +132,7 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
     assert steps["Focused backend development tests"]["if"] == (
-        "github.event_name != 'schedule' && "
-        "(github.event_name != 'workflow_dispatch' || !inputs.full_backend)"
+        "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
     )
     assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
     upload = steps["Upload full backend pytest artifacts"]

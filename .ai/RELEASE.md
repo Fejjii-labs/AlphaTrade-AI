@@ -22,9 +22,26 @@ npm run lint && npm run typecheck && npm run test && npm run build
 Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
 `backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
 `e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
-`frontend`. The workflow file has no concurrency group and no `permissions`
-block. The only `workflow_dispatch` input is `full_backend`, and its default is
-`true`. There is no `combined_validation` input.
+`frontend`. The workflow file has no `permissions` block and no `schedule`.
+A concurrency group cancels an older push or pull_request run on the same ref.
+`workflow_dispatch` uses a unique group, so a manual full run is not queued or
+cancelled. The only `workflow_dispatch` input is `full_backend`, and its default
+is `true`. There is no `combined_validation` input.
+
+Heavy steps in `backend`, `evaluation`, `docker-build`, and `e2e-smoke` do not
+run on a draft pull request. They run for a non-draft `opened`, `synchronize`,
+or `reopened` event, for `ready_for_review`, and when the pull request has the
+`run-ci` label (including `labeled` with that name). `deployment-safety` still
+runs on drafts. `frontend` still runs for draft changes that are not docs-only.
+A pull_request `labeled` event for any other label skips app and heavy work.
+
+`docs/**`, `.ai/**`, and root-level markdown-only changes skip backend,
+frontend, Docker, evaluation, and browser work. Those jobs still finish
+successfully, so a required check is not left pending or skipped.
+`workflow_dispatch` ignores that path filter and the draft filter. The
+`full_backend` input still selects only the complete backend pytest step, and
+only a manual dispatch can select it. Pull requests and pushes never run that
+step. There is no cron.
 
 The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
 150-minute job timeout. On an ordinary push or pull request, and on a manual
@@ -44,12 +61,24 @@ tests for other cross-module changes in the PR. The CI database URL is bound to
 disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
 
 The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
-`npm run test`, and `npm run build` on ordinary events. It does not run
-`scripts/run_frontend_focused.py`. The evaluation, Docker build, and Playwright
-smoke jobs also run on ordinary events; they are not skipped behind a second
-manual flag. No branch-protection settings are changed by this policy.
+`npm run test`, and `npm run build` when the change is not docs-only or
+`.ai`-only. It does not run `scripts/run_frontend_focused.py`. The evaluation,
+Docker build, and Playwright smoke jobs run for the same non-draft code events
+as the heavy backend steps. They are not gated by a second manual flag.
+No branch-protection settings are changed by this policy. A green required
+check on a draft or a docs-only change means that heavy work was skipped, not
+that the suite passed. Complete acceptance is one manual `full_backend=true`
+dispatch on the integration batch SHA, not a nightly run.
 
 ## Final consolidated release acceptance
+
+Pull requests get the quick focused checks only. The complete backend suite does
+not run on pull request pushes, on pushes to `main`, or on a schedule.
+
+When a batch of pull requests is ready, stack them on an integration branch
+named like `integration/<date>`. Dispatch `full_backend` **once** on that
+branch. Merge the batch to `main` in order only after that single run passes.
+Do not dispatch the full suite after each fix or feature.
 
 After supervising review, consolidated staging deployment and fresh SFP diagnostics/
 evaluations, dispatch **one** complete CI run on the exact reviewed release ref:
@@ -59,9 +88,10 @@ gh workflow run ci.yml --ref <reviewed-release-ref> -f full_backend=true
 ```
 
 The Actions UI exposes the same `full_backend` boolean, defaulting to true for
-manual dispatch. Ordinary push/PR events always use focused mode. A manual false
-value requests development checks only. Do not dispatch a full run during routine
-implementation or call a focused green check the complete release gate.
+manual dispatch. Ordinary push and pull_request events always use focused mode.
+A manual false value requests development checks only. Do not dispatch a full
+run during routine implementation or call a focused green check the complete
+release gate.
 
 The full step runs one pytest process:
 
@@ -74,7 +104,7 @@ The shell is `bash -eo pipefail`. The step timeout is 140 minutes, inside the
 `full-backend-pytest` artifact. The same run still executes Ruff, the frontend
 lint/type/unit/build steps, deployment-safety, the Docker build, the
 deterministic Agent/RAG/guardrail evaluation, and the Playwright browser smoke
-job. The schedule is 02:00 UTC and runs from the default branch only. Record
+job. Nothing in this workflow runs the full suite on a schedule. Record
 the run URL, exact `head_sha`, full backend counts/skips and successful results for all
 six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
 acceptance. Investigate skips and do not attribute counts from another commit.

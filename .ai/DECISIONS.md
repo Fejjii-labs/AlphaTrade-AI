@@ -2,6 +2,33 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-106 — Ordinary CI cancels stale runs; full backend is manual per batch
+
+- Date: 2026-10-19
+- Decision: Push and pull_request CI cancel the previous run on the same ref.
+  `workflow_dispatch` stays in its own group, so a manual `full_backend` run is
+  not queued or cancelled. The 02:00 UTC schedule is removed. The complete
+  backend suite runs only when someone dispatches `ci.yml` with
+  `full_backend=true`. Pull requests and pushes run the focused selection only.
+  A batch stacks onto an integration branch such as `integration/<date>`, gets
+  one full dispatch, and merges in order only after that run. Draft pull
+  requests do not run backend, evaluation, Docker build, or Playwright smoke
+  unless they are marked ready or labeled `run-ci`. `deployment-safety` still
+  runs on drafts. Frontend still runs on draft code changes. A change limited
+  to `docs/**`, `.ai/**`, or root markdown skips backend, frontend, and Docker,
+  and also evaluation and browser work that depend on them. The six job names
+  stay, with no job-level `if`, and a skipped heavy path exits success so a
+  required check is not left pending.
+- Limit: The `full_backend` input and the complete pytest command are unchanged.
+  A green check after a draft or docs skip is not release acceptance
+  (AT-ADR-084). This supersedes the nightly schedule in AT-ADR-103. No branch
+  protection, secrets, or trading mode changes. The Postgres service on the
+  backend job still starts when heavy steps are skipped, because a job-level
+  `if` would drop the required check name.
+- Safety: Real trading stays disabled. No workflow is dispatched by this change.
+- Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`;
+  `.ai/RELEASE.md`.
+
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422
 
 - Date: 2026-10-16
