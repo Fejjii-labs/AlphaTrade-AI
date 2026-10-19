@@ -175,12 +175,26 @@ def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) ->
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
     service = BloFinSyncService(MagicMock(), _trading_key_settings())
-    with structlog.testing.capture_logs() as logs, pytest.raises(ValueError, match="read-only"):
-        service.sync(
-            organization_id=uuid4(),
-            user_id=uuid4(),
-            sync_origin="worker",
-        )
+    # The full suite calls configure_logging, which caches this module logger
+    # on first use. capture_logs then never sees that cached printer.
+    configuration = structlog.get_config()
+    try:
+        structlog.configure(cache_logger_on_first_use=False)
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(ValueError, match="read-only"),
+        ):
+            monkeypatch.setattr(
+                "app.services.blofin_sync_service.logger",
+                structlog.get_logger("app.services.blofin_sync_service"),
+            )
+            service.sync(
+                organization_id=uuid4(),
+                user_id=uuid4(),
+                sync_origin="worker",
+            )
+    finally:
+        structlog.configure(**configuration)
     rendered = repr(logs)
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
