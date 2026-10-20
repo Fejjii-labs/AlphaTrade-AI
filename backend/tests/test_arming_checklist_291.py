@@ -135,7 +135,7 @@ class _Session:
 def test_flags_stay_off_and_real_trading_stays_blocked() -> None:
     settings = Settings(_env_file=None)
     assert settings.paper_exit_monitor_enabled is False
-    assert settings.paper_exit_monitor_dry_run is False
+    assert settings.paper_exit_monitor_dry_run is True
     assert settings.autonomous_internal_paper_enabled is False
     assert settings.autonomous_blofin_demo_enabled is False
     assert settings.real_trading_enabled is False

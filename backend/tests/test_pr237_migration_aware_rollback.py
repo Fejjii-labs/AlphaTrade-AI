@@ -29,6 +29,7 @@ from app.db.voice_realtime import VoiceSessionReservation
 from app.db.watcher_assignments import WatcherAssignmentReceiptRow, WatcherStrategyAssignmentRow
 from app.schemas.usage import OrganizationQuotaUpdate
 from app.services.quota_service import QuotaService
+from tests.support.alembic_heads import single_alembic_head
 
 BASELINE = "b165b92276346f0e0fe3ccdbd2bec3443dc75d40"
 ROLLBACK_BASE = "bda597c2fffbf1a49beadc64d757100808094ca2"
@@ -44,6 +45,8 @@ MIGRATIONS = (
     "src/app/db/migrations/versions/a17riskpolicy002_risk_policy_review_guards.py",
     "src/app/db/migrations/versions/a18riskpolicy003_breaker_intervals.py",
     "src/app/db/migrations/versions/a19riskpolicy004_paper_demo_risk_ceiling.py",
+    "src/app/db/migrations/versions/a20autonomoussettings001_autonomous_trading_settings.py",
+    "src/app/db/migrations/versions/a21killswitchkey001_widen_runtime_component.py",
 )
 QUOTA_COMPATIBILITY = (
     "src/app/db/voice_realtime.py",
@@ -420,6 +423,19 @@ print(json.dumps({
 """
 
 
+def test_rollback_overlay_can_locate_the_single_alembic_head() -> None:
+    """The reviewed tree must receive the current head file or upgrade cannot see it."""
+
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "src/app/db/migrations"))
+    script = ScriptDirectory.from_config(config)
+    head = single_alembic_head(script)
+    assert head == script.get_current_head()
+    overlay = {Path(item).name for item in MIGRATIONS}
+    assert any(name.startswith(head) for name in overlay)
+
+
 def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_path, monkeypatch):
     raw = os.environ.get("PR237_ROLLBACK_POSTGRES_URL") or os.environ.get("PHASE1_POSTGRES_URL")
     if not raw:
@@ -438,8 +454,7 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
     engine = create_engine(scoped)
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "src/app/db/migrations"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "a19riskpolicy004"
+    head = single_alembic_head(ScriptDirectory.from_config(config))
     try:
         command.upgrade(config, "head")
         _seed(engine)

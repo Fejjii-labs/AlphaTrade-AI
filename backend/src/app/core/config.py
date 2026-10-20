@@ -225,11 +225,13 @@ class Settings(BaseSettings):
     autonomous_internal_paper_enabled: bool = False
     autonomous_blofin_demo_enabled: bool = False
     # Automatic stop/target exits for canonical internal paper only.
-    # Default off. Production refuses the enabled flag. Dry-run evaluates and
-    # logs without calling the paper close service. Neither flag is set in
-    # the deploy blueprint by the change that introduced them.
+    # The enabled flag defaults off. Production refuses it. Dry-run evaluates
+    # and logs without calling the paper close service. It defaults true so
+    # removing PAPER_EXIT_MONITOR_DRY_RUN cannot close a trade. Live internal
+    # paper closes require an explicit false. Neither flag is set in the
+    # deploy blueprint.
     paper_exit_monitor_enabled: bool = False
-    paper_exit_monitor_dry_run: bool = False
+    paper_exit_monitor_dry_run: bool = True
     # Repeated degraded or refused exit-monitor cycles raise a structured
     # alert after this many seconds. Default 15 minutes, capped at 1 hour,
     # so the wait stays well under the 24-hour backfill horizon. At least

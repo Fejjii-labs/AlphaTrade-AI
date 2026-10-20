@@ -670,9 +670,12 @@ def kill_switch_retry_should_schedule(
 
     ``None`` means the runtime rows could not be read. The thread is still
     scheduled so a failed read is not treated as an empty queue. No thread
-    is scheduled when no unsent page is visible, or when every visible page
-    is still inside the 60 second limit. This does not claim that limit and
-    does not send.
+    is scheduled when no unsent page is visible, when every visible page is
+    still inside the 60 second limit, or when the only unsent rows are older
+    than the current activation. A 31-hex or legacy row is older when the
+    full-hex row for that organization is active at a higher version, or
+    when that full-hex row is no longer an active activation. This does not
+    claim the limit and does not send.
     """
 
     if rows is None:
@@ -680,7 +683,7 @@ def kill_switch_retry_should_schedule(
     moment = now or datetime.now(UTC)
     for row in rows.values():
         identity = _visible_unsent_alert(row)
-        if identity is None:
+        if identity is None or _unsent_row_is_stale(row, rows):
             continue
         organization_id, version = identity
         if not _retry_claimed_recently(organization_id, version, moment):
@@ -739,6 +742,8 @@ def _upsert_kill_switch_posture(
 ) -> None:
     """Insert or update one organization's slot. A concurrent first insert commits."""
 
+    component = paper_kill_switch_component(organization_id)
+    first_full_hex_write = session.get(ControlledRuntimeStatusRow, component) is None
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -786,6 +791,8 @@ def _upsert_kill_switch_posture(
         assignments["last_delivery_at"] = None
     session.execute(statement.on_conflict_do_update(index_elements=["component"], set_=assignments))
     session.flush()
+    if first_full_hex_write:
+        _retire_previous_kill_switch_slots(session, organization_id, now=at)
 
 
 def _kill_switch_posture_row(
@@ -920,6 +927,109 @@ def _visible_unsent_alert(row: object) -> tuple[str, int] | None:
     except ValueError:
         return None
     return organization_id, version
+
+
+@dataclass(frozen=True, slots=True)
+class _PreferredSlot:
+    component: str
+    version: int
+    active: bool
+
+
+def _preferred_kill_switch_slot(
+    rows: Mapping[str, object],
+    organization_id: str,
+) -> _PreferredSlot | None:
+    """Full-hex slot, then the 31-hex slot, then the legacy row for this org."""
+
+    try:
+        parsed = uuid.UUID(organization_id)
+    except ValueError:
+        return None
+    order = (
+        paper_kill_switch_component(parsed),
+        paper_kill_switch_truncated_component(parsed),
+        PAPER_KILL_SWITCH_COMPONENT,
+    )
+    found: dict[str, object] = {}
+    for key, row in rows.items():
+        component = str(getattr(row, "component", "") or "")
+        if not component and isinstance(key, str):
+            component = key
+        if component not in order:
+            continue
+        if str(getattr(row, "worker_id", "") or "") != organization_id:
+            continue
+        if str(getattr(row, "market_source", "")) != "kill_switch":
+            continue
+        found[component] = row
+    for component in order:
+        row = found.get(component)
+        if row is None:
+            continue
+        try:
+            version = int(getattr(row, "lease_epoch", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        return _PreferredSlot(
+            component=component,
+            version=version,
+            active=str(getattr(row, "activation_state", "")) == "active",
+        )
+    return None
+
+
+def _unsent_row_is_stale(row: object, rows: Mapping[str, object]) -> bool:
+    """True when this unsent row is not the current activation.
+
+    The current activation is the preferred slot. A lower-priority row is
+    stale when that slot is active at a newer version, or when that slot
+    exists and is no longer active. The preferred row itself is not stale.
+    A same-version unsent row is still retried.
+    """
+
+    identity = _visible_unsent_alert(row)
+    if identity is None:
+        return False
+    organization_id, version = identity
+    preferred = _preferred_kill_switch_slot(rows, organization_id)
+    if preferred is None:
+        return False
+    component = str(getattr(row, "component", "") or "")
+    if component == preferred.component:
+        return False
+    if not preferred.active:
+        return True
+    return version < preferred.version
+
+
+def _retire_previous_kill_switch_slots(
+    session: Session,
+    organization_id: uuid.UUID,
+    *,
+    now: datetime,
+) -> None:
+    """Mark this org's 31-hex and legacy rows sent on the first full-hex write.
+
+    Those rows are not the new slot. Leaving them unsent makes every
+    ``GET /health/paper-worker`` poll schedule a retry that will not send.
+    """
+
+    org = str(organization_id)
+    components = (
+        paper_kill_switch_truncated_component(organization_id),
+        PAPER_KILL_SWITCH_COMPONENT,
+    )
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.component.in_(components)
+        )
+    ).all()
+    for row in rows:
+        if str(row.worker_id) != org or str(row.last_error_code) != _ALERT_UNSENT:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
 
 
 def _kill_switch_slot_components(organization_id: str) -> list[str]:

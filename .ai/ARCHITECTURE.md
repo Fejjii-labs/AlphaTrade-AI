@@ -83,7 +83,9 @@ The LLM layer only **explains**; it cannot change risk decisions or approval sta
   public adapter that matches their evidence identity; replay stays on the
   fixture. Both-in-bar
   uses the stop. Writes go through `ExecutionService.close_canonical_paper_plan`.
-  `PAPER_EXIT_MONITOR_ENABLED` and `PAPER_EXIT_MONITOR_DRY_RUN` default false.
+  `PAPER_EXIT_MONITOR_ENABLED` defaults false. `PAPER_EXIT_MONITOR_DRY_RUN` defaults
+  true, so an unset variable does not close a trade. Live closes require an
+  explicit false.
   Production refuses the enabled flag. BloFin demo trades are not in scope.
   See `docs/paper_exit_monitor.md`.
 - Paper Watcher runtime (`app.workers.watcher_paper`): continuous paper-only

@@ -1564,3 +1564,169 @@ def test_precheck_uses_the_same_sixty_second_window() -> None:
     }
     assert kill_switch_retry_should_schedule(ignored, now=started) is False
     reset_kill_switch_retry_window()
+
+
+def _pending_slot(
+    component: str,
+    *,
+    epoch: int,
+    error: str = "unsent",
+    state: str = "active",
+    organization_id: uuid.UUID = _ORG,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        component=component,
+        market_source="kill_switch",
+        activation_state=state,
+        last_error_code=error,
+        lease_epoch=epoch,
+        worker_id=str(organization_id),
+        last_scan_reason="manual",
+    )
+
+
+def test_precheck_ignores_rows_older_than_the_current_activation() -> None:
+    reset_kill_switch_retry_window()
+    started = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    full = paper_kill_switch_component(_ORG)
+    truncated = paper_kill_switch_truncated_component(_ORG)
+    rows = {
+        full: _pending_slot(full, epoch=4, error="sent"),
+        truncated: _pending_slot(truncated, epoch=2),
+        PAPER_KILL_SWITCH_COMPONENT: _pending_slot(PAPER_KILL_SWITCH_COMPONENT, epoch=1),
+    }
+    assert kill_switch_retry_should_schedule(rows, now=started) is False
+    same_version = {
+        full: _pending_slot(full, epoch=4, error="sent"),
+        truncated: _pending_slot(truncated, epoch=4),
+    }
+    assert kill_switch_retry_should_schedule(same_version, now=started) is True
+    cleared = {
+        full: _pending_slot(full, epoch=0, error="", state="clear"),
+        truncated: _pending_slot(truncated, epoch=3),
+    }
+    assert kill_switch_retry_should_schedule(cleared, now=started) is False
+    only_old_key = {truncated: _pending_slot(truncated, epoch=4)}
+    assert kill_switch_retry_should_schedule(only_old_key, now=started) is True
+    reset_kill_switch_retry_window()
+
+
+def test_first_full_hex_write_marks_older_slots_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_queued_safety_alerts",
+        lambda _session: None,
+    )
+    factory, settings = _kill_db
+    # Differs inside the first 31 hex digits so it does not share the old key.
+    other = uuid.UUID("00000000-0000-0000-0000-0000000001d3")
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    with factory() as session, session.begin():
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=1,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=PAPER_KILL_SWITCH_COMPONENT,
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=1,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(other),
+                worker_id=str(other),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=1,
+                market_source="kill_switch",
+            )
+        )
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="manual",
+        )
+        session.commit()
+    with factory() as session:
+        current = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
+        truncated = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(_ORG),
+        )
+        legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        untouched = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(other),
+        )
+        assert current is not None and current.last_error_code == "unsent"
+        assert truncated is not None and truncated.last_error_code == "sent"
+        assert legacy is not None and legacy.last_error_code == "sent"
+        assert untouched is not None and untouched.last_error_code == "unsent"
+
+
+def test_health_does_not_schedule_a_retry_for_stale_slots(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    _capture_telegram(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_queued_safety_alerts",
+        lambda _session: None,
+    )
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="manual",
+        )
+        session.commit()
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    with factory() as session, session.begin():
+        current = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
+        assert current is not None
+        current.last_error_code = "sent"
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=1,
+                market_source="kill_switch",
+            )
+        )
+    from app.api.routes.health import paper_worker_heartbeat
+
+    tasks = BackgroundTasks()
+    asyncio.run(paper_worker_heartbeat(settings, tasks))
+    assert tasks.tasks == []

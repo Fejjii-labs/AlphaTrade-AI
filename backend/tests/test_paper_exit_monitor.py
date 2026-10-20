@@ -1147,6 +1147,47 @@ def test_disabled_cycle_does_not_open_a_session(monkeypatch: pytest.MonkeyPatch)
     assert outcome.status == "disarmed"
 
 
+def _clock_session_factory() -> object:
+    class Factory:
+        def __call__(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                execute=lambda _statement: SimpleNamespace(all=list),
+                scalar=lambda _statement: datetime.now(UTC),
+                rollback=lambda: None,
+                close=lambda: None,
+            )
+
+    return Factory()
+
+
+def test_unset_dry_run_does_not_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAPER_EXIT_MONITOR_DRY_RUN", raising=False)
+    settings = Settings(_env_file=None, paper_exit_monitor_enabled=True)
+    assert settings.paper_exit_monitor_dry_run is True
+    report = run_configured_exit_monitor(
+        settings,
+        session_factory=_clock_session_factory(),  # type: ignore[arg-type]
+    )
+    assert report.status == "dry_run"
+    assert report.closed == 0
+
+
+def test_explicit_dry_run_false_is_the_live_close_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAPER_EXIT_MONITOR_DRY_RUN", raising=False)
+    settings = Settings(
+        _env_file=None,
+        paper_exit_monitor_enabled=True,
+        paper_exit_monitor_dry_run=False,
+    )
+    assert settings.paper_exit_monitor_dry_run is False
+    report = run_configured_exit_monitor(
+        settings,
+        session_factory=_clock_session_factory(),  # type: ignore[arg-type]
+    )
+    assert report.status == "idle"
+    assert report.closed == 0
+
+
 def test_enabled_dry_run_reads_without_building_a_closer() -> None:
     class Factory:
         def __call__(self) -> SimpleNamespace:
