@@ -141,6 +141,31 @@ def publish_boot_arming_posture(
     return posture
 
 
+def clear_disarmed_boot_rows() -> None:
+    """Delete leftover arming and exit-monitor rows on a disarmed reboot.
+
+    An old ``armed`` row pages on every cooldown once its heartbeat is
+    stale. An old ``refused`` row stays on ``GET /health``. This opens the
+    database only to delete those two rows. It does not attach the monitor,
+    write a new posture, or send Telegram. A database failure is logged and
+    does not raise, so a disarmed boot still returns disarmed.
+    """
+
+    from app.db.runtime_status import ControlledRuntimeStatusRow
+    from app.db.session import get_session_factory
+    from app.persistence.runtime_status import PAPER_EXIT_MONITOR_COMPONENT
+
+    try:
+        factory = get_session_factory()
+        with factory() as session, session.begin():
+            for component in (PAPER_ARMING_COMPONENT, PAPER_EXIT_MONITOR_COMPONENT):
+                row = session.get(ControlledRuntimeStatusRow, component)
+                if row is not None:
+                    session.delete(row)
+    except Exception:
+        logger.error("paper_arming_disarmed_clear_failed")
+
+
 def project_arming_refusal(row: object | None) -> ArmingRefusalObservation:
     """Read the boot row. Anything other than a refused token stays quiet."""
 

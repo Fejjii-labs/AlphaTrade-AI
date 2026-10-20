@@ -15,7 +15,9 @@ rollback, because the condition already happened. Global-setting and
 fail-closed pages from ``KillSwitchService.evaluate`` are not sent while a
 transaction is open. They are sent after that transaction ends, including
 after rollback, because the condition already happened. A committed
-activation whose Telegram send fails is logged at error. The HTTP send
+activation whose Telegram send fails is logged at error and left marked
+unsent. The next health check or worker boot retries that version once
+it can be sent, and does not send the same version again. The HTTP send
 timeout is at most 5 seconds.
 """
 
@@ -296,14 +298,16 @@ def deliver_queued_safety_alerts(session: Session) -> None:
         settings, alert = item
         if not isinstance(settings, Settings) or not isinstance(alert, ExitMonitorAlert):
             continue
+        sent = False
         try:
-            deliver_safety_alert(settings, alert, failure_log="error")
+            sent = deliver_safety_alert(settings, alert, failure_log="error")
         except Exception as exc:
             logger.error(
                 "safety_alert_telegram_failed",
                 code=alert.code,
                 error=redact_text(str(exc))[:200],
             )
+        _note_committed_kill_switch_delivery(session, alert, delivered=sent)
 
 
 def discard_queued_safety_alerts(session: Session) -> None:
@@ -377,6 +381,59 @@ def _bind_safety_alert_hooks(session: Session) -> None:
 
 def _cooldown(code: str) -> timedelta:
     return timedelta(seconds=_COOLDOWN_SECONDS.get(code, _DEFAULT_COOLDOWN_SECONDS))
+
+
+def kill_switch_page_recently_sent(key: str, now: datetime) -> bool:
+    """True when this process already sent this kill-switch version."""
+
+    return _recently_sent(key, now, _cooldown("kill_switch_activated"))
+
+
+def _kill_switch_dedup_parts(alert: ExitMonitorAlert) -> tuple[str, int] | None:
+    key = str(alert.fields.get("dedup_key") or "")
+    prefix = "kill_switch_activated:"
+    if not key.startswith(prefix):
+        return None
+    try:
+        _source, organization_id, version_text = key[len(prefix) :].split(":", 2)
+    except ValueError:
+        return None
+    if not organization_id or not version_text.isdigit():
+        return None
+    return organization_id, int(version_text)
+
+
+def _note_committed_kill_switch_delivery(
+    session: Session,
+    alert: ExitMonitorAlert,
+    *,
+    delivered: bool,
+) -> None:
+    """Mark a committed activation sent after Telegram accepts it.
+
+    A failed send stays ``unsent`` so the next check can retry that version.
+    A send this process already recorded is marked sent too, so a restart
+    after the cooldown does not page the same version again.
+    """
+
+    if alert.code != "kill_switch_activated":
+        return
+    moment = datetime.now(UTC)
+    key = str(alert.fields.get("dedup_key") or "")
+    if not delivered and not _recently_sent(key, moment, _cooldown(alert.code)):
+        return
+    parsed = _kill_switch_dedup_parts(alert)
+    if parsed is None:
+        return
+    organization_id, version = parsed
+    from app.services.risk.kill_switch import mark_kill_switch_alert_sent
+
+    mark_kill_switch_alert_sent(
+        session,
+        organization_id=organization_id,
+        version=version,
+        now=moment,
+    )
 
 
 def _recently_sent(key: str, now: datetime, cooldown: timedelta) -> bool:

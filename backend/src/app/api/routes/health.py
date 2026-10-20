@@ -289,8 +289,12 @@ async def paper_worker_heartbeat(settings: SettingsDep) -> PaperWorkerHeartbeatR
                 component=EXIT_MONITOR_ALERT_COMPONENT,
             ),
         )
-    from app.services.risk.kill_switch import read_paper_worker_kill_switch
+    from app.services.risk.kill_switch import (
+        read_paper_worker_kill_switch,
+        retry_unsent_kill_switch_alert,
+    )
 
+    retry_unsent_kill_switch_alert(settings)
     return PaperWorkerHeartbeatResponse(
         status=heartbeat_status(observation),
         observation=observation,

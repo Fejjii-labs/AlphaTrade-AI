@@ -2,6 +2,25 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-132 — A disarmed reboot clears stale arming rows
+
+- Date: 2026-10-20
+- Decision: A worker that boots disarmed deletes leftover `paper_arming`
+  and `paper_exit_monitor` rows. An old armed row must not page as stale,
+  and an old refused row must not stay on `GET /health`. The delete does
+  not attach the monitor and does not write a new posture. If the database
+  cannot be opened, the failure is logged and the process still returns
+  disarmed.
+- Kill switch: a committed activation records its page as unsent, keyed by
+  the row version, in the same transaction. A failed Telegram send or a
+  crash before the send leaves that marker. `GET /health/paper-worker` and
+  the next worker boot retry it. A version already sent is not sent again.
+  The HTTP send timeout stays at most 5 seconds.
+- Safety: Flags stay default false. Production refusal is unchanged.
+  Real-money trading stays rejected. No environment, Render, or workflow
+  change.
+- Reference: AT-ADR-131; Griller second pass on the exit-monitor follow-up.
+
 ## AT-ADR-131 — An attached exit monitor stays visible when the loop refuses
 
 - Date: 2026-10-20

@@ -226,8 +226,12 @@ stay default false. These checks do not arm anything.
 A refusal at boot is written to the `paper_arming` runtime-status row.
 `GET /health` and `GET /health/paper-worker` both show `arming_refusal`
 (`refused`, `reason`, `source`). One deduplicated Telegram alert uses the
-code `arming_refused`. A disarmed worker still does not open the database,
-so it does not write that row.
+code `arming_refused`. A disarmed reboot deletes leftover `paper_arming`
+and `paper_exit_monitor` rows, so an old armed heartbeat cannot page as
+stale and an old refusal cannot stay on `GET /health`. That delete is the
+only database write on the disarmed path. It does not attach the monitor
+and it does not write a new arming row. A database failure is logged and
+the process still returns disarmed.
 
 ## Heartbeat and Telegram
 
@@ -265,4 +269,7 @@ back.
 Kill-switch activations from the manual route, the global setting, the
 drawdown breaker, the other breaker and demo-protection paths, and a
 fail-closed read use that same redacted, deduplicated Telegram path. The
-free-text reason is not copied. No P&L amount is included.
+free-text reason is not copied. No P&L amount is included. A committed
+activation is marked unsent in the same transaction. If Telegram fails, or
+the process stops before the send, `GET /health/paper-worker` and the next
+worker boot retry that version. A version already sent is not sent again.

@@ -407,8 +407,9 @@ os.environ.update({
     'ACCESS_TOKEN_DENYLIST_USE_REDIS': 'true',
     'TRUSTED_PROXY_HOPS': '1',
 })
-# The real disarmed worker must not open operational dependencies. Fallback is
-# only its validated configuration token; no provider is constructed or called.
+# A refused database open must not stop the disarmed worker. It may try to
+# delete leftover arming rows, then continue. Fallback is only its validated
+# configuration token; no provider is constructed or called.
 import app.db.session
 def forbidden_dependency(*args, **kwargs):
     raise AssertionError('disarmed rollback worker opened the database')

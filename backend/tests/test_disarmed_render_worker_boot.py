@@ -229,7 +229,11 @@ def _run_child(script: str, payload: dict[str, str], *args: str) -> dict[str, ob
 
 
 def boot_literal_worker(service_name: str, role: WorkerBootRole) -> dict[str, object]:
-    """Construct Settings and idle once from the literal blueprint environment."""
+    """Construct Settings and idle once from the literal blueprint environment.
+
+    The child refuses the database. A disarmed reboot tries to delete leftover
+    arming rows and then continues, so this boot still returns disarmed.
+    """
 
     env = blueprint_env(service_name)
     for secret in _SECRET_KEYS:

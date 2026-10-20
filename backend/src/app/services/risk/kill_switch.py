@@ -19,7 +19,7 @@ import structlog
 from sqlalchemy import event, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, TradingPolicyError, ValidationAppError
@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     from app.services.safety_epoch import SafetyEpochService
 
 logger = structlog.get_logger(__name__)
+
+_ALERT_UNSENT = "unsent"
+_ALERT_SENT = "sent"
 
 
 class ExecutionKillSwitch(Protocol):
@@ -160,6 +163,7 @@ class KillSwitchService:
             source=source,
             active=True,
             at=now,
+            version=int(row.version),
         )
         return self._to_status(row)
 
@@ -227,6 +231,7 @@ class KillSwitchService:
             source="",
             active=False,
             at=now,
+            version=0,
         )
         return self._to_status(row)
 
@@ -506,13 +511,21 @@ class KillSwitchService:
         source: str,
         active: bool,
         at: datetime,
+        version: int,
     ) -> None:
-        """Remember a safe source token on this session. The reason is not stored."""
+        """Remember a safe source token on this session. The reason is not stored.
+
+        An activation marks its page ``unsent`` in the same transaction as
+        the kill-switch row. The version is the dedup key. A later send
+        marks that same version ``sent``.
+        """
 
         try:
             from app.services.safety_alerts import kill_switch_source
 
             token = kill_switch_source(source) if active else ""
+            alert_state = _ALERT_UNSENT if active else ""
+            epoch = version if active else 0
             row = self._session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
             if row is None:
                 self._session.add(
@@ -522,6 +535,9 @@ class KillSwitchService:
                         heartbeat_at=at,
                         activation_state="active" if active else "clear",
                         last_scan_reason=token,
+                        last_error_code=alert_state,
+                        lease_epoch=epoch,
+                        last_delivery_at=None,
                         market_source="kill_switch",
                     )
                 )
@@ -530,6 +546,10 @@ class KillSwitchService:
             row.heartbeat_at = at
             row.activation_state = "active" if active else "clear"
             row.last_scan_reason = token
+            row.last_error_code = alert_state
+            row.lease_epoch = epoch
+            if active:
+                row.last_delivery_at = None
             row.market_source = "kill_switch"
         except Exception:
             logger.error("kill_switch_source_unrecorded")
@@ -609,3 +629,120 @@ def _recorded_kill_switch_source(session: Session, organization_id: uuid.UUID) -
     if token and kill_switch_source(token) == token:
         return token
     return "organization"
+
+
+def mark_kill_switch_alert_sent(
+    session: Session,
+    *,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> None:
+    """Record that this activation version reached Telegram.
+
+    A newer version on the row is left alone. The write uses a new session
+    on the same engine so the caller's committed transaction stays closed.
+    """
+
+    try:
+        bind = session.get_bind()
+        factory = sessionmaker(bind=bind, expire_on_commit=False)
+        with factory() as fresh, fresh.begin():
+            row = fresh.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+            if row is None or str(row.worker_id) != organization_id:
+                return
+            if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
+                return
+            row.last_error_code = _ALERT_SENT
+            row.last_delivery_at = now
+    except Exception:
+        logger.error("kill_switch_alert_sent_unrecorded")
+
+
+def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None = None) -> bool:
+    """Send a committed kill-switch page that never reached Telegram.
+
+    The activation row stores the version as ``unsent``. A failed send or a
+    crash before the send leaves that marker. The next health check or
+    worker boot calls this. A version already sent is not sent again.
+    """
+
+    moment = now or datetime.now(UTC)
+    try:
+        pending = _load_unsent_kill_switch_alert()
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed")
+        return False
+    if pending is None:
+        return False
+    source, organization_id, version = pending
+    try:
+        from app.services.safety_alerts import (
+            build_kill_switch_alert,
+            deliver_safety_alert,
+            kill_switch_page_recently_sent,
+            telegram_safety_configured,
+        )
+
+        if not telegram_safety_configured(settings):
+            return False
+        key = f"kill_switch_activated:{source}:{organization_id}:{version}"
+        if kill_switch_page_recently_sent(key, moment):
+            _mark_kill_switch_alert_sent(organization_id, version, moment)
+            return False
+        alert = build_kill_switch_alert(
+            source=source,
+            organization_id=organization_id,
+            dedup_key=key,
+        )
+        sent = deliver_safety_alert(settings, alert, now=moment, failure_log="error")
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed", source=source)
+        return False
+    if sent:
+        _mark_kill_switch_alert_sent(organization_id, version, moment)
+    return sent
+
+
+def _load_unsent_kill_switch_alert() -> tuple[str, str, int] | None:
+    from app.db.session import get_session_factory
+
+    factory = get_session_factory()
+    with factory() as session:
+        row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        if row is None:
+            return None
+        if str(row.activation_state) != "active" or str(row.last_error_code) != _ALERT_UNSENT:
+            return None
+        version = int(row.lease_epoch or 0)
+        organization_id = str(row.worker_id or "").strip()
+        source = str(row.last_scan_reason or "").strip()
+        if version < 1 or not organization_id or not source:
+            return None
+        try:
+            organization = uuid.UUID(organization_id)
+        except ValueError:
+            return None
+        state = session.scalar(
+            select(KillSwitchState).where(KillSwitchState.organization_id == organization)
+        )
+        if state is None or not bool(state.active) or int(state.version) != version:
+            return None
+        return source, organization_id, version
+
+
+def _mark_kill_switch_alert_sent(organization_id: str, version: int, now: datetime) -> None:
+    from app.db.session import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        with factory() as session, session.begin():
+            row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+            if row is None or str(row.worker_id) != organization_id:
+                return
+            if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
+                return
+            row.last_error_code = _ALERT_SENT
+            row.last_delivery_at = now
+    except Exception:
+        logger.error("kill_switch_alert_sent_unrecorded")
