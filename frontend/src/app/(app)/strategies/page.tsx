@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RiskSettingsSummary } from "@/components/settings/RiskSettingsSummary";
 import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
@@ -61,14 +62,23 @@ function StrategiesWorkspace() {
   }, []);
   return (
     <div className="space-y-5" data-testid="trader-strategies">
-      <div className="flex flex-wrap justify-between gap-3">
-        <h1 className="text-2xl font-semibold">
-          {family?.name ?? "Strategies"}
-        </h1>
-        <Link href="/agent?discuss=strategy" className="text-accent">
-          Discuss a strategy
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow={family ? "Strategy family" : "Research"}
+        title={family?.name ?? "Strategies"}
+        description={
+          family
+            ? "Directional configurations and revisions. Approval and automation stay separate."
+            : "Nested Continuation and SFP families, detections, and captured drafts."
+        }
+        actions={
+          <Link
+            href="/agent?discuss=strategy"
+            className="inline-flex min-h-10 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-[length:var(--text-label)] font-medium text-accent"
+          >
+            Discuss a strategy
+          </Link>
+        }
+      />
       {family ? (
         <>
           <Link

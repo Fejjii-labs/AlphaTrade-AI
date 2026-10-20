@@ -6,6 +6,7 @@ import { KnowledgeDocumentCard } from "@/components/knowledge/KnowledgeDocumentC
 import { KnowledgeDetailPanel } from "@/components/knowledge/KnowledgeDetailPanel";
 import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { useAuth } from "@/contexts/AuthContext";
@@ -327,12 +328,19 @@ function JournalWorkspaceContent() {
   );
   return (
     <div className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
-      <div className="flex flex-wrap justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Journal &amp; Knowledge</h1>
-        <Link href="/agent" className="text-accent">
-          Add with Agent
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Review"
+        title="Journal & Knowledge"
+        description="Execution-backed activity, reflections, and preserved knowledge."
+        actions={
+          <Link
+            href="/agent"
+            className="inline-flex min-h-10 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-[length:var(--text-label)] font-medium text-accent"
+          >
+            Add with Agent
+          </Link>
+        }
+      />
       <nav
         aria-label="Journal and Knowledge"
         className="flex gap-3 border-b border-border-subtle"

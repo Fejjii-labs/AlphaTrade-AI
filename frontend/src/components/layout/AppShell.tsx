@@ -32,7 +32,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <main
               id="main"
               tabIndex={-1}
-              className="mx-auto w-full min-w-0 max-w-none flex-1 space-y-section overflow-x-hidden px-gutter py-6 focus:outline-none lg:px-gutter-lg"
+              className="mx-auto w-full min-w-0 max-w-content flex-1 space-y-section overflow-x-hidden px-gutter py-5 focus:outline-none lg:px-gutter-lg"
             >
               {children}
             </main>

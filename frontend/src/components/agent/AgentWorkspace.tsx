@@ -22,6 +22,7 @@ import { VoiceConversationControls } from "./VoiceConversationControls";
 import { RealtimeVoiceControls } from "./RealtimeVoiceControls";
 import { useConversationViewport } from "./useConversationViewport";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
@@ -654,7 +655,11 @@ export function AgentWorkspace() {
       className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm"
       data-testid="agent-workspace"
     >
-      <h1 className="sr-only">Agent</h1>
+      <PageHeader
+        eyebrow="Copilot"
+        title="Agent"
+        description="Conversation, capture, and voice. Execution can stay paused."
+      />
       {strategyContext || strategyError || (strategyId && !conversationId) ? <div className="flex flex-wrap gap-3 text-sm" data-testid="agent-strategy-context">
         {strategyContext ? <><span>Strategy: {strategyContext.name}</span>
           <Link href={`/strategy-lab/${encodeURIComponent(strategyContext.id)}`} className="underline">Back to strategy</Link></> :

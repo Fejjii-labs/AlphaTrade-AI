@@ -114,7 +114,9 @@ export function TraderDashboardView({
   return (
     <div className="space-y-5" data-testid="trader-dashboard">
       <PageHeader
+        eyebrow="Overview"
         title="Dashboard"
+        description="BloFin demo account, recent activity, and attention areas."
         actions={
           <>
             <Link

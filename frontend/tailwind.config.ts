@@ -114,8 +114,20 @@ export default {
         "gutter-lg": "var(--page-gutter-desktop)",
       },
       fontFamily: {
-        sans: ["var(--font-figtree)", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: [
+          '"Figtree Variable"',
+          "Figtree",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
+        mono: [
+          '"Figtree Variable"',
+          "Figtree",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
       },
       fontSize: {
         eyebrow: [

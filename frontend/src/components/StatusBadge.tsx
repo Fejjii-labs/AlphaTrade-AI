@@ -21,10 +21,12 @@ const toneMap: Record<string, BadgeProps["variant"]> = {
 export function StatusBadge({
   label,
   tone = "default",
+  className,
 }: {
   label: string;
   tone?: keyof typeof toneMap | "default";
+  className?: string;
 }) {
   const variant = tone === "default" ? "default" : (toneMap[tone] ?? "default");
-  return <Badge variant={variant}>{label}</Badge>;
+  return <Badge variant={variant} className={className}>{label}</Badge>;
 }
