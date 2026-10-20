@@ -244,6 +244,8 @@ def test_deployment_posture_reports_at018_hardening() -> None:
     assert posture["autonomous_blofin_demo_enabled"] is False
     assert posture["paper_exit_monitor_enabled"] is False
     assert posture["paper_exit_monitor_dry_run"] is False
+    assert posture["paper_exit_monitor_degraded_alert_after_seconds"] == 900
+    assert posture["paper_exit_monitor_max_clock_skew_seconds"] == 15
 
 
 def test_staging_rejects_market_watcher_enabled() -> None:

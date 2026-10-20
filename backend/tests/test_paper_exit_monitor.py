@@ -31,25 +31,37 @@ from app.services.paper_exit_candles import (
     identity_for_trade,
 )
 from app.services.paper_exit_monitor import (
+    DEGRADED_REPEAT_ALERT_AFTER,
     EXIT_ACTOR,
     EXIT_CHANNEL,
+    MAX_CLOCK_SKEW,
     ExitBar,
+    ExitMonitorAlert,
     FetchedBars,
+    MonitorReport,
     OpenInternalPaperTrade,
     PaperExitCloser,
+    backfill_loss_needs_protection,
+    build_clock_alert,
     candle_series_block,
     classify_exit_origin,
+    clock_refusal_reason,
     counts_for_adr109_calibration,
     downtime_is_historical_backfill,
     exit_idempotency_key,
     exit_monitor_backfill,
     fill_entry_time,
     is_internal_paper_plan,
+    observe_repeated_degradation,
     open_internal_paper_statement,
     parse_open_trade,
     run_paper_exit_monitor,
 )
-from app.workers.paper_exit_monitor import PaperExitMonitorCycle, run_configured_exit_monitor
+from app.workers.paper_exit_monitor import (
+    PaperExitMonitorCycle,
+    read_database_now,
+    run_configured_exit_monitor,
+)
 from app.workers.paper_worker import (
     CycleOutcome,
     PaperWorkerSupervisor,
@@ -201,7 +213,7 @@ def _continuous(
 
 def test_long_stop_hit_closes_at_the_stop_with_zero_internal_paper_costs() -> None:
     start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
-    report, closer = _run(_trade(), (_bar(start, low="94", high="101"),))
+    report, closer = _run(_trade(entry_time=start), (_bar(start, low="94", high="101"),))
     assert report.status == "closed" and report.closed == 1
     request = closer.requests[0]
     assert request.exit_reason == "stop_hit"
@@ -225,6 +237,7 @@ def test_short_target_hit_closes_at_the_target() -> None:
         entry=Decimal("100"),
         stop=Decimal("105"),
         target=Decimal("90"),
+        entry_time=start,
     )
     report, closer = _run(short, (_bar(start, low="89", high="99"),))
     assert report.closed == 1
@@ -248,7 +261,7 @@ def test_same_bar_stop_and_target_assume_the_stop(
     target: Decimal,
 ) -> None:
     start = datetime(2026, 10, 4, 0, 0, tzinfo=UTC)
-    trade = _trade(direction=direction, stop=stop, target=target)
+    trade = _trade(direction=direction, stop=stop, target=target, entry_time=start)
     report, closer = _run(trade, (_bar(start, low="80", high="120"),))
     assert report.closed == 1
     request = closer.requests[0]
@@ -261,7 +274,7 @@ def test_same_bar_stop_and_target_assume_the_stop(
 
 def test_no_hit_leaves_the_trade_open() -> None:
     start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
-    report, closer = _run(_trade(), (_bar(start, low="96", high="109"),))
+    report, closer = _run(_trade(entry_time=start), (_bar(start, low="96", high="109"),))
     assert report.status == "idle"
     assert report.closed == 0
     assert closer.requests == []
@@ -271,8 +284,8 @@ def test_idempotent_rerun_replays_the_same_close() -> None:
     start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
     bars = (_bar(start, low="94", high="101"),)
     closer = RecordingCloser()
-    first, _ = _run(_trade(), bars, closer=closer)
-    second, _ = _run(_trade(), bars, closer=closer)
+    first, _ = _run(_trade(entry_time=start), bars, closer=closer)
+    second, _ = _run(_trade(entry_time=start), bars, closer=closer)
     assert first.closed == 1 and first.replayed == 0
     assert second.closed == 0 and second.replayed == 1
     assert len(closer.requests) == 2
@@ -307,7 +320,7 @@ def test_dry_run_logs_the_close_without_writing() -> None:
 
     with capture_logs() as logs:
         report, _ = _run(
-            _trade(),
+            _trade(entry_time=start),
             (_bar(start, low="94", high="101"),),
             dry_run=True,
             closer=Boom(),
@@ -375,7 +388,7 @@ def test_same_day_crossing_feeds_the_breaker_and_stays_eligible() -> None:
     start = datetime(2026, 10, 18, 11, 0, tzinfo=UTC)
     evaluated = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
     _report, closer = _run(
-        _trade(),
+        _trade(entry_time=start),
         _continuous(start, evaluated, hits={start: ("94", "101")}),
         evaluated_at=evaluated,
     )
@@ -457,7 +470,7 @@ def test_gapped_candles_are_not_evaluated() -> None:
     evaluated = skipped + timedelta(minutes=15)
     with capture_logs() as logs:
         report, closer = _run(
-            _trade(),
+            _trade(entry_time=start),
             (
                 _bar(start, low="94", high="101"),
                 _bar(skipped, low="94", high="101"),
@@ -484,7 +497,7 @@ def test_stale_candles_are_not_evaluated() -> None:
     start = datetime(2026, 10, 18, 11, 0, tzinfo=UTC)
     bar = _bar(start, low="94", high="101")
     evaluated = bar.interval_end + timedelta(minutes=15)
-    report, closer = _run(_trade(), (bar,), evaluated_at=evaluated)
+    report, closer = _run(_trade(entry_time=start), (bar,), evaluated_at=evaluated)
     assert report.status == "degraded"
     assert report.refused == 1
     assert report.closed == 0
@@ -608,7 +621,7 @@ def test_live_close_across_midnight_feeds_the_breaker_for_the_close_day() -> Non
 
     bar_start = datetime(2026, 10, 17, 23, 30, tzinfo=UTC)
     evaluated = datetime(2026, 10, 18, 0, 10, tzinfo=UTC)
-    entry = datetime(2026, 10, 17, 22, 0, tzinfo=UTC)
+    entry = bar_start
     _report, closer = _run(
         _trade(entry_time=entry),
         _continuous(bar_start, evaluated, hits={bar_start: ("94", "101")}),
@@ -656,15 +669,27 @@ def test_bar_containing_the_entry_is_not_a_hit() -> None:
 
 def test_incomplete_history_does_not_close_a_visible_hit() -> None:
     start = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
-    report, closer = _run(_trade(), (_bar(start, low="90", high="101"),), covers=False)
+    with capture_logs() as logs:
+        report, closer = _run(_trade(), (_bar(start, low="90", high="101"),), covers=False)
     assert report.closed == 0
-    assert report.skipped == 1
+    assert report.refused == 1
+    assert report.status == "degraded"
+    assert report.error == "candles_unusable"
     assert closer.requests == []
+    recorded = next(
+        entry for entry in logs if entry["event"] == "paper_exit_monitor_candles_unusable"
+    )
+    assert recorded["reason"] == "leading_gap"
 
 
 def test_plan_allowances_are_the_close_costs() -> None:
-    trade = _trade(fees=Decimal("0.10"), funding=Decimal("0.20"), slippage=Decimal("0.30"))
     start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
+    trade = _trade(
+        fees=Decimal("0.10"),
+        funding=Decimal("0.20"),
+        slippage=Decimal("0.30"),
+        entry_time=start,
+    )
     _report, closer = _run(trade, (_bar(start, low="94", high="101"),))
     request = closer.requests[0]
     assert request.fees == Decimal("0.10")
@@ -758,7 +783,11 @@ def test_already_closed_is_skipped() -> None:
                 details={"reason": "already_closed"},
             )
 
-    report, _closer = _run(_trade(), (_bar(start, low="94", high="101"),), closer=Closed())
+    report, _closer = _run(
+        _trade(entry_time=start),
+        (_bar(start, low="94", high="101"),),
+        closer=Closed(),
+    )
     assert report.closed == 0
     assert report.skipped == 1
     assert report.errors == 0
@@ -1040,6 +1069,7 @@ def test_enabled_dry_run_reads_without_building_a_closer() -> None:
         def __call__(self) -> SimpleNamespace:
             return SimpleNamespace(
                 execute=lambda _statement: SimpleNamespace(all=list),
+                scalar=lambda _statement: datetime.now(UTC),
                 rollback=lambda: None,
                 close=lambda: None,
             )
@@ -1168,3 +1198,329 @@ def _supervisor() -> PaperWorkerSupervisor:
         telegram_cycle=lambda: CycleOutcome("disarmed"),
         poll_seconds=0.01,
     )
+
+
+def _backfill_request(*, net_label: str = "loss") -> ClosePaperPlanRequest:
+    return ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="stop_hit",
+        occurred_at=ENTRY,
+        idempotency_key=exit_idempotency_key(COMMAND),
+        exit_channel=EXIT_CHANNEL,
+        exit_actor=EXIT_ACTOR,
+        exit_evidence={
+            "exit_origin": "backfill",
+            "calibration_sample": "excluded",
+            "level": net_label,
+        },
+    )
+
+
+def test_losing_backfill_does_not_move_breakers_and_needs_protection() -> None:
+    """A reconstructed loss stays out of the streak and the daily lock."""
+
+    request = _backfill_request()
+    assert exit_monitor_backfill(request) is True
+    assert (
+        profile_close_should_note(
+            request,
+            replayed=False,
+            margin_assumption_id="paper-profile-isolated",
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+    assert backfill_loss_needs_protection(
+        request,
+        replayed=False,
+        net_pnl=Decimal("-5"),
+    )
+    assert (
+        backfill_loss_needs_protection(
+            request,
+            replayed=False,
+            net_pnl=Decimal("5"),
+        )
+        is False
+    )
+    assert (
+        backfill_loss_needs_protection(
+            request,
+            replayed=False,
+            net_pnl=Decimal("0"),
+        )
+        is False
+    )
+    assert (
+        backfill_loss_needs_protection(
+            request,
+            replayed=True,
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+    assert backfill_loss_needs_protection(
+        request,
+        replayed=False,
+        net_pnl=Decimal("NaN"),
+    )
+
+
+def test_live_loss_still_notes_the_breakers() -> None:
+    request = ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="stop_hit",
+        occurred_at=NOW,
+        idempotency_key=exit_idempotency_key(COMMAND),
+        exit_evidence={"exit_origin": "live", "calibration_sample": "eligible"},
+    )
+    assert (
+        backfill_loss_needs_protection(
+            request,
+            replayed=False,
+            net_pnl=Decimal("-5"),
+        )
+        is False
+    )
+    assert profile_close_should_note(
+        request,
+        replayed=False,
+        margin_assumption_id="paper-profile-isolated",
+        net_pnl=Decimal("-5"),
+    )
+
+
+def test_series_that_starts_after_entry_is_a_leading_gap() -> None:
+    entry = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+    start = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    later = start + timedelta(minutes=15)
+    evaluated = later + timedelta(minutes=15)
+    missing = (
+        _bar(start, low="94", high="101"),
+        _bar(later, low="94", high="101"),
+    )
+    assert (
+        candle_series_block(
+            missing,
+            timeframe=Timeframe.M15,
+            evaluated_at=evaluated,
+            entry_time=entry,
+        )
+        == "leading_gap"
+    )
+    reached = candle_series_block(
+        missing,
+        timeframe=Timeframe.M15,
+        evaluated_at=evaluated,
+        entry_time=start,
+    )
+    assert reached is None
+    with capture_logs() as logs:
+        report, closer = _run(
+            _trade(entry_time=entry),
+            missing,
+            evaluated_at=evaluated,
+            covers=True,
+        )
+    assert report.status == "degraded"
+    assert report.refused == 1
+    assert report.closed == 0
+    assert closer.requests == []
+    recorded = next(
+        entry for entry in logs if entry["event"] == "paper_exit_monitor_candles_unusable"
+    )
+    assert recorded["reason"] == "leading_gap"
+    assert recorded["series_start"] == start.isoformat()
+
+
+def test_repeated_degraded_cycles_alert_before_24_hours() -> None:
+    assert timedelta(minutes=15) == DEGRADED_REPEAT_ALERT_AFTER
+    assert int(DEGRADED_REPEAT_ALERT_AFTER.total_seconds()) == 900
+    started = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    first = observe_repeated_degradation(
+        None,
+        status="degraded",
+        observed_at=started,
+        threshold=DEGRADED_REPEAT_ALERT_AFTER,
+        error="candles_unusable",
+        refused=1,
+    )
+    assert first.alert is None
+    assert first.streak is not None
+    assert first.streak.cycles == 1
+    early = observe_repeated_degradation(
+        first.streak,
+        status="refused",
+        observed_at=started + timedelta(minutes=14),
+        threshold=DEGRADED_REPEAT_ALERT_AFTER,
+        error="clock_skew",
+    )
+    assert early.alert is None
+    assert early.streak is not None
+    assert early.streak.cycles == 2
+    due = observe_repeated_degradation(
+        early.streak,
+        status="degraded",
+        observed_at=started + DEGRADED_REPEAT_ALERT_AFTER,
+        threshold=DEGRADED_REPEAT_ALERT_AFTER,
+        error="candles_unusable",
+        refused=1,
+    )
+    assert due.alert is not None
+    assert due.alert.code == "degraded_repeat"
+    assert due.alert.severity == "warning"
+    assert due.alert.fields["threshold_seconds"] == "900"
+    assert due.alert.fields["cycles"] == "3"
+    assert due.alert.fields["refused"] == "1"
+    quiet = observe_repeated_degradation(
+        due.streak,
+        status="idle",
+        observed_at=started + timedelta(minutes=16),
+        threshold=DEGRADED_REPEAT_ALERT_AFTER,
+    )
+    assert quiet.streak is None
+    assert quiet.alert is None
+    one_cycle = observe_repeated_degradation(
+        None,
+        status="refused",
+        observed_at=started + timedelta(hours=23),
+        threshold=DEGRADED_REPEAT_ALERT_AFTER,
+        error="clock_skew",
+    )
+    assert one_cycle.alert is None
+
+
+def test_cycle_emits_a_structured_alert_when_refusals_repeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    moments = iter(
+        (
+            started,
+            started + timedelta(minutes=1),
+            started + DEGRADED_REPEAT_ALERT_AFTER,
+        )
+    )
+    alerts: list[ExitMonitorAlert] = []
+
+    def clock() -> datetime:
+        return next(moments)
+
+    def monitor(*_args: object, **_kwargs: object) -> MonitorReport:
+        return MonitorReport(status="degraded", error="candles_unusable", refused=1)
+
+    settings = Settings(
+        _env_file=None,
+        paper_exit_monitor_enabled=True,
+        paper_exit_monitor_degraded_alert_after_seconds=900,
+    )
+    cycle = PaperExitMonitorCycle(settings, clock=clock, alert_sink=alerts.append)
+    monkeypatch.setattr(
+        "app.workers.paper_exit_monitor.run_configured_exit_monitor",
+        monitor,
+    )
+    with capture_logs() as logs:
+        assert cycle().status == "degraded"
+        assert cycle().status == "degraded"
+        assert alerts == []
+        assert cycle().status == "degraded"
+    assert len(alerts) == 1
+    assert alerts[0].code == "degraded_repeat"
+    assert alerts[0].fields["threshold_seconds"] == "900"
+    assert any(entry["event"] == "paper_exit_monitor_alert" for entry in logs)
+    assert any(entry["event"] == "paper_exit_monitor_cycle_degraded" for entry in logs)
+
+
+def test_clock_skew_above_the_threshold_refuses_and_alerts() -> None:
+    wall = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    assert timedelta(seconds=15) == MAX_CLOCK_SKEW
+    assert clock_refusal_reason(wall, (wall + MAX_CLOCK_SKEW,), max_skew=MAX_CLOCK_SKEW) is None
+    assert (
+        clock_refusal_reason(
+            wall,
+            (wall + MAX_CLOCK_SKEW + timedelta(microseconds=1),),
+            max_skew=MAX_CLOCK_SKEW,
+        )
+        == "clock_skew"
+    )
+    assert clock_refusal_reason(wall, (), max_skew=MAX_CLOCK_SKEW) == "clock_untrusted"
+    assert (
+        clock_refusal_reason(wall, (datetime(2026, 10, 18, 12, 0),), max_skew=MAX_CLOCK_SKEW)
+        == "clock_untrusted"
+    )
+    database = wall
+    exchange = wall + timedelta(minutes=2)
+    assert clock_refusal_reason(wall, (database, exchange), max_skew=MAX_CLOCK_SKEW) == "clock_skew"
+    alert = build_clock_alert(
+        reason="clock_skew",
+        wall=wall,
+        trusted=(database, exchange),
+        max_skew=MAX_CLOCK_SKEW,
+        trusted_source="database+exchange",
+    )
+    assert alert.code == "clock_skew"
+    assert alert.severity == "critical"
+    assert alert.fields["refusal"] == "cycle_refused"
+    assert alert.fields["trusted_source"] == "database+exchange"
+
+
+def test_worker_refuses_the_cycle_when_the_database_clock_disagrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wall = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    database = wall - timedelta(minutes=5)
+    seen: list[ExitMonitorAlert] = []
+
+    class Session:
+        def execute(self, _statement: object) -> SimpleNamespace:
+            return SimpleNamespace(all=list)
+
+        def scalar(self, _statement: object) -> datetime:
+            return database
+
+        def rollback(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            raise AssertionError("clock refusal persisted through the test sink")
+
+        def close(self) -> None:
+            return None
+
+    settings = Settings(_env_file=None, paper_exit_monitor_enabled=True)
+
+    def candles(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("skewed clock loaded candles")
+
+    monkeypatch.setattr("app.workers.paper_exit_monitor.PaperExitCandleLoader", candles)
+    report = run_configured_exit_monitor(
+        settings,
+        session_factory=lambda: Session(),  # type: ignore[arg-type, return-value]
+        clock=lambda: wall,
+        alert_sink=seen.append,
+    )
+    assert report.status == "refused"
+    assert report.error == "clock_skew"
+    assert report.examined == 0
+    assert len(report.alerts) == 1
+    assert report.alerts[0].code == "clock_skew"
+    assert seen == list(report.alerts)
+    assert report.alerts[0].fields["threshold_seconds"] == "15"
+
+
+def test_naive_database_now_is_not_a_trusted_clock() -> None:
+    class Session:
+        def scalar(self, _statement: object) -> datetime:
+            return datetime(2026, 10, 18, 12, 0)
+
+    assert read_database_now(Session()) is None  # type: ignore[arg-type]

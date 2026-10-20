@@ -2,6 +2,51 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-127 — A losing backfill alerts and refuses; it does not move the live breakers
+
+- Date: 2026-10-20
+- Decision: A paper-exit close that `downtime_is_historical_backfill` labels
+  as a backfill (24 hours or more, or a naive timestamp) and that has a net
+  loss still protects the account. It does not advance the consecutive-loss
+  streak and it does not sync the daily lock. It raises a structured alert
+  and arms the organization kill switch, which refuses new entries until a
+  human deactivates it. The close stays journaled. A winning or zero backfill
+  does neither. A replay does not ask again. AT-ADR-118 and AT-ADR-124 still
+  keep the backfill out of ADR-109 calibration.
+- Why this and not the live breakers: `_note_profile_close` is called with
+  the crossing bar's end. That instant is already 24 hours or more behind
+  evaluation. The daily lock it would write is for a finished UTC day, so it
+  does not block today's entries. The consecutive pause it would write is
+  dated from that same past instant, and the next scan's `streak_after_expiry`
+  clears a pause that is already over. Moving the breakers with the bar time
+  does not protect the account. Noting the loss with the evaluation clock
+  instead would lock today and increment today's streak for a reconstruction,
+  including several October losses in one pass, and a later backfill win must
+  not reset that streak. The live book would no longer match the live
+  sequence. The kill switch is the existing refusal that blocks new entries
+  without rewriting either figure. The PnL amount is not stored on the alert.
+- Repeated cycles: degraded or refused exit-monitor cycles raise a structured
+  paper alert, not only a log line, after they have repeated for
+  `paper_exit_monitor_degraded_alert_after_seconds`. The default is 900
+  seconds (15 minutes). The field cannot be set above 3600 seconds, so the
+  wait stays well under the 24-hour backfill horizon. One cycle does not
+  alert. A healthy cycle clears the streak.
+- Candles: a series whose earliest closed bar starts after the trade entry
+  is a leading gap. The trade stays open. The pass counts `refused`, logs
+  `paper_exit_monitor_candles_unusable` with reason `leading_gap`, and the
+  report is `degraded`. The monitor does not invent the missing stretch.
+- Clock: before any candle read, the worker compares its wall clock with
+  database `now()`. An exchange server time, when the caller supplies one,
+  must agree as well. A gap larger than
+  `paper_exit_monitor_max_clock_skew_seconds` (default 15, maximum 120) or a
+  missing trusted time refuses the cycle and raises a structured alert.
+  Equality with the threshold is still accepted.
+- Safety: Both monitor flags stay default false. This record does not arm
+  them, change an environment, or change a blueprint. Real-money trading
+  stays rejected.
+- Reference: AT-ADR-118; AT-ADR-124; AT-ADR-125;
+  `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-124 — Paper exit monitor stays closed until a close is exactly once
 
 - Date: 2026-10-20

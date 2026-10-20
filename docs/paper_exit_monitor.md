@@ -95,17 +95,21 @@ range touches a level is the exit.
   at the stop or the target. Both levels in one bar, without that gap, still
   exit at the stop.
 - If the fetched history does not reach the entry, the trade is left open.
-  That incomplete history is a skip, not a stop or target evaluation.
+  That missing stretch at the start of the series is a refusal
+  (`leading_gap`), not a stop or target evaluation.
 
-Closed bars are not evaluated when the series is gapped or stale.
-`candle_series_block` is the check. A gap is a closed bar whose length is
+Closed bars are not evaluated when the series is gapped, stale, or missing
+its start. `candle_series_block` is the check. A leading gap means the
+earliest closed bar starts after the trade's entry, so the candles do not
+reach back to the fill. An internal gap is a closed bar whose length is
 not exactly one timeframe, or a later closed bar whose `interval_start` is
 not the previous bar's `interval_end`. Stale means there is no closed bar,
 or the newest closed bar ended at least one full timeframe before
 evaluation. The monitor does not invent the missing bars. The trade stays
 open. The pass counts `refused`, logs `paper_exit_monitor_candles_unusable`
-with reason `gap` or `stale`, and the report status is `degraded` with
-error `candles_unusable` when that is the only failure.
+with reason `leading_gap`, `gap`, or `stale`, and the report status is
+`degraded` with error `candles_unusable` when that is the only failure.
+A loader that reports `covers_entry` false is the same leading-gap refusal.
 
 On each run, a trade whose stop or target was already crossed in an earlier
 closed bar is closed at that historical bar. The close is idempotent:
@@ -144,14 +148,41 @@ it advances the consecutive-loss streak and syncs the daily lock for the day
 the bar closed. A close processed just after midnight still does that for
 the previous UTC day. A backfill is journaled and does not call that note,
 so it does not move the streak or the daily lock, and it is not an ADR-109
-calibration sample. This path does not insert a calibration row for a live
+calibration sample. A backfill with a net loss still protects the account:
+the close path raises the structured alert `paper_exit_backfill_loss` and
+arms the organization kill switch, which refuses new entries until a human
+deactivates it (AT-ADR-127). A winning or zero backfill does not. Noting the
+loss onto the live streak or the daily lock was the other option and is not
+used, because those figures are dated from the old bar and do not block
+today's entries. This path does not insert a calibration row for a live
 close either: the walk-forward fold is not known here.
 
 A human close leaves those fields unset.
 
 A cycle that raises, or that returns `degraded` (candle failure, close
-failure, or a refused gapped or stale series), logs the structured warning
-`paper_exit_monitor_cycle_degraded`. The warning carries `failed` when the
-cycle raised or the report counted errors. A refused series sets `refused`
-and does not set `failed`. The worker stays up. The flag is not turned on
-by that warning.
+failure, or a refused gapped, stale, or leading-gap series), logs the
+structured warning `paper_exit_monitor_cycle_degraded`. The warning carries
+`failed` when the cycle raised or the report counted errors. A refused
+series sets `refused` and does not set `failed`. The worker stays up. The
+flag is not turned on by that warning.
+
+Before candles are read, the worker compares its wall clock with database
+`now()`. An exchange server time supplied by the caller must agree as well.
+A missing trusted time, or a gap larger than
+`paper_exit_monitor_max_clock_skew_seconds` (default 15), refuses the cycle
+with status `refused` and raises the structured alert `paper_exit_clock_skew`.
+No close is attempted.
+
+Degraded or refused cycles that continue for
+`paper_exit_monitor_degraded_alert_after_seconds` (default 900, maximum
+3600) raise the structured alert `paper_exit_degraded_repeat`. One cycle
+does not. A healthy cycle clears the count. The alert is a paper-alert row
+and an audit row, not only the log line `paper_exit_monitor_alert`.
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| `paper_exit_monitor_degraded_alert_after_seconds` | `PAPER_EXIT_MONITOR_DEGRADED_ALERT_AFTER_SECONDS` | `900` |
+| `paper_exit_monitor_max_clock_skew_seconds` | `PAPER_EXIT_MONITOR_MAX_CLOCK_SKEW_SECONDS` | `15` |
+
+Neither value is set in `render.yaml` or in a deployed environment. The
+monitor flags stay default false.

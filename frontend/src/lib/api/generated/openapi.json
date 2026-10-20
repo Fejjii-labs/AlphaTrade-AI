@@ -32405,7 +32405,8 @@
           "paper_validation_runtime",
           "market_watcher",
           "market_watcher_bridge",
-          "manual_action"
+          "manual_action",
+          "paper_exit_monitor"
         ],
         "title": "PaperAlertSource",
         "type": "string"
@@ -32460,7 +32461,10 @@
           "daily_loss_lock_warning",
           "research_validation_promotion",
           "tradingview_signal",
-          "demo_liquidation_through_stop"
+          "demo_liquidation_through_stop",
+          "paper_exit_backfill_loss",
+          "paper_exit_degraded_repeat",
+          "paper_exit_clock_skew"
         ],
         "title": "PaperAlertType",
         "type": "string"

@@ -41,6 +41,10 @@ EXIT_ACTOR = "paper_exit_monitor"
 # It is journaled and kept out of the breaker, the daily lock, and ADR-109.
 # A close processed within this window is live, including across UTC midnight.
 HISTORICAL_BACKFILL_AFTER = timedelta(hours=24)
+# Repeated degraded or refused cycles. Well under the 24-hour backfill horizon.
+DEGRADED_REPEAT_ALERT_AFTER = timedelta(minutes=15)
+# Worker wall clock versus a trusted clock. Inside one 15-minute bar.
+MAX_CLOCK_SKEW = timedelta(seconds=15)
 # A fill recorded in this gap after a closed-bar boundary still belongs to
 # that boundary. The bar that opens there is the first post-entry bar.
 ENTRY_SETTLEMENT_GAP = timedelta(seconds=90)
@@ -126,6 +130,21 @@ class ExitDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class ExitMonitorAlert:
+    """A structured exit-monitor alert. A log line is not this object."""
+
+    code: str
+    severity: str
+    message: str
+    fields: dict[str, str]
+
+    def as_log(self) -> dict[str, str]:
+        payload = {"code": self.code, "severity": self.severity, "message": self.message}
+        payload.update(self.fields)
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class MonitorReport:
     """One pass. ``disarmed`` performs no reads and no writes."""
 
@@ -138,6 +157,8 @@ class MonitorReport:
     refused: int = 0
     errors: int = 0
     error: str = ""
+    alerts: tuple[ExitMonitorAlert, ...] = ()
+    organization_ids: tuple[UUID, ...] = ()
 
 
 class PaperExitCloser:
@@ -187,6 +208,7 @@ def downtime_is_historical_backfill(occurred_at: datetime, evaluated_at: datetim
     A naive timestamp is a backfill so it cannot move the breaker. The close
     is still journaled. A backfill does not advance the consecutive-loss
     streak, does not sync the daily lock, and is not an ADR-109 sample.
+    A backfill with a net loss alerts and refuses new entries instead.
     """
 
     if occurred_at.tzinfo is None or evaluated_at.tzinfo is None:
@@ -194,6 +216,26 @@ def downtime_is_historical_backfill(occurred_at: datetime, evaluated_at: datetim
     occurred = occurred_at.astimezone(UTC)
     evaluated = evaluated_at.astimezone(UTC)
     return evaluated - occurred >= HISTORICAL_BACKFILL_AFTER
+
+
+def backfill_loss_needs_protection(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+) -> bool:
+    """A journaled backfill with a net loss still has to protect the account.
+
+    The live loss streak and the daily lock stay unchanged. A replay does
+    not ask again. A win, a zero result, and a missing PnL do not. A
+    non-finite PnL fails closed and does need protection.
+    """
+
+    if replayed or not exit_monitor_backfill(request):
+        return False
+    if not isinstance(net_pnl, Decimal) or not net_pnl.is_finite():
+        return isinstance(net_pnl, Decimal)
+    return net_pnl < 0
 
 
 def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:
@@ -213,13 +255,16 @@ def candle_series_block(
     *,
     timeframe: Timeframe,
     evaluated_at: datetime,
+    entry_time: datetime | None = None,
 ) -> str | None:
-    """Refuse a stop or target read when the closed series is gapped or stale.
+    """Refuse a stop or target read when the closed series is unusable.
 
-    A gap is two closed bars that do not meet, or a bar that is not one
+    A leading gap means the earliest closed bar starts after the trade
+    entry, so a stretch at the start of the series is missing. An internal
+    gap is two closed bars that do not meet, or a bar that is not one
     timeframe long. Stale means the newest closed bar ended at least one full
     timeframe before evaluation, so a later stop or target may be missing.
-    Neither hole is filled. ``None`` means the series may be evaluated.
+    No hole is filled. ``None`` means the series may be evaluated.
     """
 
     step = interval_timedelta(timeframe)
@@ -233,6 +278,13 @@ def candle_series_block(
         and bar.interval_end <= evaluated_at
     ]
     ordered = sorted(closed, key=lambda bar: (bar.interval_start, bar.interval_end))
+    if entry_time is not None:
+        if entry_time.tzinfo is None:
+            return "leading_gap"
+        entry = entry_time.astimezone(UTC)
+        earliest = ordered[0].interval_start.astimezone(UTC) if ordered else None
+        if earliest is None or earliest > entry:
+            return "leading_gap"
     if not ordered:
         return "stale"
     previous: ExitBar | None = None
@@ -246,6 +298,150 @@ def candle_series_block(
     if evaluated_at - last.interval_end >= step:
         return "stale"
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class DegradationStreak:
+    """How long degraded or refused cycles have continued in this process."""
+
+    started_at: datetime
+    cycles: int
+    last_alert_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DegradationWatch:
+    """The streak after one cycle, and the alert when the repeat is long enough."""
+
+    streak: DegradationStreak | None
+    alert: ExitMonitorAlert | None
+
+
+_REPEATED_FAILURE = frozenset({"degraded", "refused"})
+
+
+def observe_repeated_degradation(
+    streak: DegradationStreak | None,
+    *,
+    status: str,
+    observed_at: datetime,
+    threshold: timedelta,
+    error: str = "",
+    refused: int = 0,
+) -> DegradationWatch:
+    """Alert when degraded or refused cycles repeat for the configured duration.
+
+    One cycle does not alert. A healthy cycle clears the streak. The
+    threshold is the caller's value; settings keep it at or under one hour.
+    A later alert waits for another full threshold so a long outage is
+    visible without a row on every poll.
+    """
+
+    failed = status in _REPEATED_FAILURE or refused > 0
+    if not failed or observed_at.tzinfo is None:
+        return DegradationWatch(streak=None, alert=None)
+    if threshold <= timedelta(0):
+        threshold = DEGRADED_REPEAT_ALERT_AFTER
+    moment = observed_at.astimezone(UTC)
+    if streak is None or streak.started_at.tzinfo is None:
+        started = moment
+        cycles = 1
+        last_alert: datetime | None = None
+    else:
+        started = streak.started_at.astimezone(UTC)
+        cycles = streak.cycles + 1
+        last_alert = streak.last_alert_at
+    elapsed = moment - started
+    alert: ExitMonitorAlert | None = None
+    due = cycles >= 2 and elapsed >= threshold
+    if due and (last_alert is None or moment - last_alert >= threshold):
+        alert = ExitMonitorAlert(
+            code="degraded_repeat",
+            severity="warning",
+            message=(
+                "Paper exit monitor cycles stayed degraded or refused "
+                "past the configured threshold."
+            ),
+            fields={
+                "status": status,
+                "error": error[:200],
+                "cycles": str(cycles),
+                "elapsed_seconds": str(int(elapsed.total_seconds())),
+                "threshold_seconds": str(int(threshold.total_seconds())),
+                "refused": str(refused),
+                "dedup_key": f"degraded_repeat:{started.isoformat()}",
+            },
+        )
+        last_alert = moment
+    return DegradationWatch(
+        streak=DegradationStreak(started_at=started, cycles=cycles, last_alert_at=last_alert),
+        alert=alert,
+    )
+
+
+def clock_refusal_reason(
+    wall: datetime,
+    trusted: Sequence[datetime],
+    *,
+    max_skew: timedelta,
+) -> str | None:
+    """Refuse when the wall clock is not within ``max_skew`` of every trusted time.
+
+    No trusted time, or a naive timestamp, is ``clock_untrusted``. A larger
+    gap, including trusted sources that disagree with each other, is
+    ``clock_skew``. Equality with the threshold is still accepted.
+    """
+
+    if wall.tzinfo is None or max_skew < timedelta(0):
+        return "clock_untrusted"
+    if not trusted:
+        return "clock_untrusted"
+    wall_utc = wall.astimezone(UTC)
+    normalized: list[datetime] = []
+    for moment in trusted:
+        if moment.tzinfo is None:
+            return "clock_untrusted"
+        normalized.append(moment.astimezone(UTC))
+    for moment in normalized:
+        if abs(wall_utc - moment) > max_skew:
+            return "clock_skew"
+    first = normalized[0]
+    for moment in normalized[1:]:
+        if abs(first - moment) > max_skew:
+            return "clock_skew"
+    return None
+
+
+def build_clock_alert(
+    *,
+    reason: str,
+    wall: datetime,
+    trusted: Sequence[datetime],
+    max_skew: timedelta,
+    trusted_source: str,
+) -> ExitMonitorAlert:
+    """The structured alert for one refused clock check."""
+
+    skew = 0.0
+    if trusted and wall.tzinfo is not None and trusted[0].tzinfo is not None:
+        skew = abs((wall.astimezone(UTC) - trusted[0].astimezone(UTC)).total_seconds())
+    code = "clock_skew" if reason == "clock_skew" else "clock_untrusted"
+    return ExitMonitorAlert(
+        code=code,
+        severity="critical",
+        message=(
+            "Paper exit monitor refused the cycle because the worker clock "
+            "does not agree with a trusted time."
+        ),
+        fields={
+            "reason": reason,
+            "threshold_seconds": str(int(max_skew.total_seconds())),
+            "skew_seconds": f"{skew:.3f}",
+            "trusted_source": trusted_source,
+            "refusal": "cycle_refused",
+            "dedup_key": f"clock:{reason}",
+        },
+    )
 
 
 def fill_entry_time(*, trigger_end: datetime, clock: datetime) -> datetime:
@@ -620,20 +816,14 @@ def run_paper_exit_monitor(
                 error=redact_text(str(exc))[:200],
             )
             continue
-        if not fetched.covers_entry:
-            skipped += 1
-            logger.info(
-                "paper_exit_monitor_history_incomplete",
-                journal_trade_id=str(trade.journal_trade_id),
-                symbol=trade.symbol,
-                timeframe=trade.timeframe.value,
+        block = "leading_gap" if not fetched.covers_entry else None
+        if block is None:
+            block = candle_series_block(
+                fetched.bars,
+                timeframe=trade.timeframe,
+                evaluated_at=evaluated_at,
+                entry_time=trade.entry_time,
             )
-            continue
-        block = candle_series_block(
-            fetched.bars,
-            timeframe=trade.timeframe,
-            evaluated_at=evaluated_at,
-        )
         if block is not None:
             refused += 1
             logger.warning(
@@ -642,6 +832,8 @@ def run_paper_exit_monitor(
                 symbol=trade.symbol,
                 timeframe=trade.timeframe.value,
                 reason=block,
+                entry_time=trade.entry_time.isoformat(),
+                series_start=_series_start(fetched.bars),
             )
             continue
         decision = decide_exit(
@@ -705,6 +897,7 @@ def run_paper_exit_monitor(
         refused=refused,
         errors=errors,
         error=error,
+        organization_ids=tuple(dict.fromkeys(trade.organization_id for trade in ordered)),
     )
 
 
@@ -839,6 +1032,13 @@ def _decision_log(decision: ExitDecision) -> dict[str, object]:
         "exit_channel": EXIT_CHANNEL,
         "exit_actor": EXIT_ACTOR,
     }
+
+
+def _series_start(bars: Sequence[ExitBar]) -> str:
+    if not bars:
+        return ""
+    earliest = min(bars, key=lambda bar: bar.interval_start)
+    return earliest.interval_start.isoformat()
 
 
 def _close_skip_reason(exc: Exception) -> str | None:

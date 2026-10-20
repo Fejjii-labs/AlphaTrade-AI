@@ -247,7 +247,19 @@ def fetch_closed_bars_since(
 
 
 def _covers(bars: tuple[ExitBar, ...], entry_time: datetime) -> bool:
-    return bool(bars) and bars[0].interval_start <= entry_time
+    """True when the earliest bar starts at or before the trade entry.
+
+    A series that begins later is a missing stretch at the start. The monitor
+    refuses that series. Bar order does not matter: the earliest start is
+    the check, not whichever bar the page returned first.
+    """
+
+    if entry_time.tzinfo is None or not bars:
+        return False
+    earliest = min(bar.interval_start for bar in bars)
+    if earliest.tzinfo is None:
+        return False
+    return earliest <= entry_time
 
 
 def _fetch_page(

@@ -423,6 +423,18 @@ class CanonicalPaperExecutionService:
                         account_id=str(request.account_id),
                         consecutive_losses=_consecutive,
                     )
+            elif _backfill_loss_needs_protection(
+                request,
+                replayed=projection.replayed,
+                net_pnl=trade.net_pnl,
+            ):
+                assert trade.net_pnl is not None
+                _protect_backfill_loss(
+                    self._session,
+                    request=request,
+                    net_pnl=trade.net_pnl,
+                    settings=self._settings,
+                )
             if (
                 trade.entry_price is None
                 or trade.exit_price is None
@@ -673,6 +685,8 @@ def profile_close_should_note(
     ``_note_profile_close`` is what advances the consecutive-loss streak and
     syncs the daily lock. Skipping it leaves both untouched. A human close
     has no monitor label and still notes. A cash-margin plan does not.
+    A losing backfill is not noted here. The close path refuses new entries
+    for that loss without writing the streak or the daily lock.
     """
 
     if replayed or net_pnl is None:
@@ -682,6 +696,34 @@ def profile_close_should_note(
     from app.services.paper_exit_monitor import exit_monitor_backfill
 
     return not exit_monitor_backfill(request)
+
+
+def _backfill_loss_needs_protection(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+) -> bool:
+    from app.services.paper_exit_monitor import backfill_loss_needs_protection
+
+    return backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl)
+
+
+def _protect_backfill_loss(
+    session: Session,
+    *,
+    request: ClosePaperPlanRequest,
+    net_pnl: Decimal,
+    settings: Settings,
+) -> None:
+    from app.services.paper_exit_protection import protect_account_from_backfill_loss
+
+    protect_account_from_backfill_loss(
+        session,
+        request=request,
+        net_pnl=net_pnl,
+        settings=settings,
+    )
 
 
 def _journal_paper_liquidation(
