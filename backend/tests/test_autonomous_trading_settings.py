@@ -326,9 +326,7 @@ def test_enforcement_guards() -> None:
 def test_risk_override_replaces_grade_cap() -> None:
     profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
     active = ActiveProfile(profile=profile, version_id=uuid4())
-    grade = GradeDecision(
-        Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None
-    )
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
     common = {
         "active": active,
         "grade": grade,

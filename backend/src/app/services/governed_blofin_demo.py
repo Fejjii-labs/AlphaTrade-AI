@@ -698,9 +698,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
             live_funding = self._verified_funding_rate()
             autonomous = getattr(self, "_autonomous_settings", None)
-            fixed_risk = (
-                autonomous.risk_per_trade_percent if autonomous is not None else None
-            )
+            fixed_risk = autonomous.risk_per_trade_percent if autonomous is not None else None
             sized = size_for_profile(
                 active=active_profile,
                 grade=grade,
