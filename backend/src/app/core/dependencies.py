@@ -22,6 +22,7 @@ from app.services.alert_delivery_service import AlertDeliveryService
 from app.services.analytics.facade import TradingAnalyticsFacade
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
+from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.backtest_journal_service import BacktestJournalService
 from app.services.backtest_service import BacktestService
 from app.services.blofin_sync_service import BloFinSyncService
@@ -73,7 +74,6 @@ from app.services.quota_service import QuotaService
 from app.services.rag_service import RagService, build_rag_service
 from app.services.research_validation_service import ResearchValidationService
 from app.services.risk.kill_switch import KillSwitchService
-from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.risk.settings_service import RiskSettingsService
 from app.services.risk_service import RiskService
 from app.services.setup_evidence_service import SetupEvidenceService
