@@ -2,6 +2,48 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-128 — A stale live paper-exit loss arms the kill switch
+
+- Date: 2026-10-20
+- Decision: A paper-exit close that is labelled live, has a net loss, and
+  whose bar end is strictly older than the paper loss cooldown or strictly
+  older than one candle of the trade timeframe, arms the organization kill
+  switch. It does not advance the consecutive-loss streak and it does not
+  sync the daily lock. The close stays journaled with `exit_origin=live`.
+  The journal `exit_time` stays the bar end. Calibration eligibility is
+  unchanged. A replay does not ask again. A win, a zero, and a missing PnL
+  do not arm the switch. A non-finite PnL on a stale close fails closed and
+  does. A missing database clock, or an unreadable timeframe, fails closed
+  and arms the switch for a live monitor loss.
+- Bounds: The pause window is `paper_signal_cooldown_after_loss_seconds`
+  (default 3600). A non-positive window does not by itself mark a close
+  stale. Equality with the pause window or with one candle stays on the
+  live note, so a loss on the bar that just closed still writes the streak
+  and the daily lock from that bar. The `>=24h` backfill path is unchanged:
+  `downtime_is_historical_backfill` and `backfill_loss_needs_protection`
+  still own that label, that alert, and that kill-switch reason.
+- Why the kill switch, not the current database time: AT-ADR-127 already
+  refused to fold a delayed loss into the live streak. Stamping the breakers
+  with database `now()` would make every loss from one outage look like it
+  happened now, including several closes in one pass. A stale win is still
+  noted at the bar time, and that win could reset or fail to reset a streak
+  that had just been moved to the current clock. The paper loss cooldown
+  keys off journal `exit_time`, which has to stay the bar end, so restamping
+  only the breaker clock would not revive a cooldown that has already
+  expired. The daily lock written from the bar's UTC date is yesterday when
+  the close crosses midnight. The kill switch blocks new entries until a
+  human deactivates it, without rewriting either figure.
+- Audit: Exit-monitor kill-switch arming, for this path and for the
+  backfill path, is recorded as the system. `activated_by` is null and the
+  audit actor is `system`. A human activation stays a user action.
+- Not in this record: The degraded-cycle counter still lives in the worker
+  process. Persisting it from audit rows needs a row on each degraded cycle
+  and a rule for clearing it across processes. That is a follow-up.
+- Safety: Both monitor flags stay default false. This record does not arm
+  them, change an environment, or change a blueprint. Real-money trading
+  stays rejected.
+- Reference: AT-ADR-127; AT-ADR-118; `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-127 — A losing backfill alerts and refuses; it does not move the live breakers
 
 - Date: 2026-10-20

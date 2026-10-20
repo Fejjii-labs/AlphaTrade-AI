@@ -14,7 +14,6 @@ from threading import Event
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
@@ -78,13 +77,9 @@ class ExecutionServicePaperExitCloser(PaperExitCloser):
 def read_database_now(session: Session) -> datetime | None:
     """Database ``now()``, or None when the session cannot return an aware time."""
 
-    try:
-        value = session.scalar(select(func.now()))
-    except Exception:
-        return None
-    if not isinstance(value, datetime) or value.tzinfo is None:
-        return None
-    return value.astimezone(UTC)
+    from app.services.paper_exit_monitor import database_now
+
+    return database_now(session)
 
 
 def run_configured_exit_monitor(

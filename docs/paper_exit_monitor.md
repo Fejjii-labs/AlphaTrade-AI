@@ -135,27 +135,42 @@ the crossing bar's end. The CLOSE lifecycle payload also stores:
 - `exit_origin`: `live` or `backfill`, from
   `downtime_is_historical_backfill`. Downtime is the gap from the crossing
   bar's end to this evaluation. Exactly 24 hours
-  (`HISTORICAL_BACKFILL_AFTER`) is a backfill. A shorter gap is live,
-  including a bar that ended on the previous UTC date and is processed
+  (`HISTORICAL_BACKFILL_AFTER`) is a backfill. A shorter gap is labelled
+  live, including a bar that ended on the previous UTC date and is processed
   after midnight. A naive timestamp is a backfill. The October 6
   reconstruction is the 24-hour case: the close is journaled, and it does
   not move the breakers.
 - `calibration_sample`: `eligible` on a live close and `excluded` on a backfill
 
-A live close of a `paper-profile-isolated` plan uses the same profile-close
-note as any other profile close. The note is called with the bar's end, so
-it advances the consecutive-loss streak and syncs the daily lock for the day
-the bar closed. A close processed just after midnight still does that for
-the previous UTC day. A backfill is journaled and does not call that note,
-so it does not move the streak or the daily lock, and it is not an ADR-109
-calibration sample. A backfill with a net loss still protects the account:
-the close path raises the structured alert `paper_exit_backfill_loss` and
-arms the organization kill switch, which refuses new entries until a human
-deactivates it (AT-ADR-127). A winning or zero backfill does not. Noting the
-loss onto the live streak or the daily lock was the other option and is not
-used, because those figures are dated from the old bar and do not block
-today's entries. This path does not insert a calibration row for a live
-close either: the walk-forward fold is not known here.
+A fresh live close of a `paper-profile-isolated` plan uses the same
+profile-close note as any other profile close. The note is called with the
+bar's end, so it advances the consecutive-loss streak and syncs the daily
+lock for the day the bar closed. Fresh means the bar is not older than the
+paper loss cooldown (`paper_signal_cooldown_after_loss_seconds`, default
+3600 seconds) and not older than one candle of the trade's timeframe.
+Equality with either bound still notes. A winning close still notes at the
+bar's end, including one processed after midnight.
+
+A losing close that is labelled live, and that is older than the cooldown
+or older than one candle, does not call that note. The bar clock would
+write a pause that has already expired, or a daily lock on the previous
+UTC day. The close stays journaled with `exit_origin=live`. The path raises
+`paper_exit_stale_loss` and arms the organization kill switch (AT-ADR-128).
+Writing the breakers at the current database time was the other option and
+is not used. A replay does not ask again. A zero result does not arm the
+switch.
+
+A backfill is journaled and does not call that note, so it does not move
+the streak or the daily lock, and it is not an ADR-109 calibration sample.
+A backfill with a net loss still protects the account: the close path raises
+the structured alert `paper_exit_backfill_loss` and arms the organization
+kill switch, which refuses new entries until a human deactivates it
+(AT-ADR-127). A winning or zero backfill does not. Noting the loss onto the
+live streak or the daily lock was the other option and is not used, because
+those figures are dated from the old bar and do not block today's entries.
+This path does not insert a calibration row for a live close either: the
+walk-forward fold is not known here. Both kill-switch armings are audited
+as the system. The trade owner is not stored as the person who armed it.
 
 A human close leaves those fields unset.
 

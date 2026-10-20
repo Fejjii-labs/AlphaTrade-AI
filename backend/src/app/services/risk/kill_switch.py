@@ -83,6 +83,7 @@ class KillSwitchService:
         organization_id: uuid.UUID,
         actor_user_id: uuid.UUID,
         payload: KillSwitchMutationRequest,
+        actor_type: ActorType = ActorType.USER,
     ) -> KillSwitchStatus:
         self._require_confirm(payload)
         row = self._get_or_create_row(organization_id=organization_id)
@@ -93,6 +94,9 @@ class KillSwitchService:
         now = datetime.now(UTC)
         reason = payload.reason.strip()
         current_version = int(row.version)
+        # A system arm, such as the exit monitor, must not be stored as the
+        # trade owner flipping the switch by hand.
+        stored_user_id = None if actor_type is ActorType.SYSTEM else actor_user_id
         result = cast(
             CursorResult[Any],
             self._session.execute(
@@ -105,7 +109,7 @@ class KillSwitchService:
                 .values(
                     active=True,
                     reason=reason,
-                    activated_by=actor_user_id,
+                    activated_by=stored_user_id,
                     activated_at=now,
                     deactivated_by=None,
                     deactivated_at=None,
@@ -134,9 +138,10 @@ class KillSwitchService:
         )
         self._audit_mutation(
             organization_id=organization_id,
-            actor_user_id=actor_user_id,
+            actor_user_id=stored_user_id,
             event_type=AuditEventType.KILL_SWITCH_ACTIVATED,
             row=row,
+            actor_type=actor_type,
         )
         return self._to_status(row)
 
@@ -348,9 +353,10 @@ class KillSwitchService:
         self,
         *,
         organization_id: uuid.UUID,
-        actor_user_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
         event_type: AuditEventType,
         row: KillSwitchState,
+        actor_type: ActorType = ActorType.USER,
     ) -> None:
         self._audit.record(
             AuditRecordCreate(
@@ -361,7 +367,7 @@ class KillSwitchService:
                 resource_id=str(row.id),
                 organization_id=organization_id,
                 user_id=actor_user_id,
-                actor_type=ActorType.USER,
+                actor_type=actor_type,
                 result=AuditResult.SUCCESS,
                 severity=AuditSeverity.CRITICAL if row.active else AuditSeverity.HIGH,
                 metadata={

@@ -28,6 +28,7 @@ ALERT_TYPE_LABELS: dict[str, str] = {
     "paper_exit_backfill_loss": "Paper exit backfill loss",
     "paper_exit_degraded_repeat": "Paper exit monitor degraded",
     "paper_exit_clock_skew": "Paper exit clock skew",
+    "paper_exit_stale_loss": "Paper exit stale loss",
 }
 
 
