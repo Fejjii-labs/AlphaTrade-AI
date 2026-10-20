@@ -35,11 +35,15 @@ from app.db.session import get_session
 from app.main import create_app
 from app.schemas.common import (
     AuditEventType,
+    JournalTradeSource,
+    JournalTradeStatus,
+    MarketRegime,
     MembershipRole,
     PaperTradeStatus,
     RiskSeverity,
     StrategyId,
     TradeDirection,
+    TradeResult,
 )
 from app.security.passwords import hash_password
 from app.security.rate_limit import reset_rate_limiter
@@ -668,6 +672,123 @@ def test_detail_includes_evidence_rule_checks_and_observations(
             assert len(session.scalars(select(model)).all()) == 1
             audit = session.scalars(select(AuditLog).where(AuditLog.action == expected_event)).all()
             assert len(audit) == 1
+
+
+def test_get_journal_trade_detail_includes_exit_reason_and_tags(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "journal-a@test.example")
+    with factory() as session:
+        trade = JournalTrade(
+            organization_id=ORG_A,
+            user_id=USER_A,
+            source=JournalTradeSource.MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="manual",
+            market_regime=MarketRegime.UNKNOWN,
+            direction=TradeDirection.LONG,
+            exit_reason="venue_close",
+            tags=["blofin-reconciled", "session:london"],
+            result=TradeResult.WIN,
+        )
+        session.add(trade)
+        session.commit()
+        trade_id = str(trade.id)
+
+    detail = test_client.get(f"/journal/trades/{trade_id}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    body = detail.json()["trade"]
+    assert body["exit_reason"] == "venue_close"
+    assert body["tags"] == ["blofin-reconciled", "session:london"]
+
+
+def test_reconciled_mirror_annotation_scopes_organization_and_owner(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers_owner = _auth(test_client, "journal-a@test.example")
+    headers_other_org = _auth(test_client, "journal-b@test.example")
+    other_trader_id = uuid.UUID("00000000-0000-0000-0000-000000009014")
+    with factory() as session:
+        session.add(
+            User(
+                id=other_trader_id,
+                email="journal-other-trader-a@test.example",
+                hashed_password=hash_password("SecurePass123!", Settings(**_BASE)),
+                email_verified=True,
+            )
+        )
+        session.flush()
+        session.add(
+            Membership(
+                user_id=other_trader_id,
+                organization_id=ORG_A,
+                role=MembershipRole.TRADER,
+            )
+        )
+        trade = JournalTrade(
+            organization_id=ORG_A,
+            user_id=USER_A,
+            source=JournalTradeSource.MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="manual",
+            market_regime=MarketRegime.UNKNOWN,
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:h-reconciled",
+            exit_reason="venue_close",
+            tags=["blofin-reconciled"],
+            result=TradeResult.WIN,
+        )
+        demo_test = JournalTrade(
+            organization_id=ORG_A,
+            user_id=USER_A,
+            source=JournalTradeSource.MANUAL_DEMO_TEST,
+            status=JournalTradeStatus.CLOSED,
+            symbol="ETHUSDT",
+            timeframe="manual",
+            market_regime=MarketRegime.UNKNOWN,
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:h-demo-test",
+            exit_reason="venue_close",
+            tags=["blofin-reconciled"],
+            result=TradeResult.LOSS,
+            execution_lifecycle_id=uuid.uuid4(),
+        )
+        session.add_all([trade, demo_test])
+        session.commit()
+        manual_id = str(trade.id)
+        demo_id = str(demo_test.id)
+
+    for trade_id in (manual_id, demo_id):
+        detail = test_client.get(f"/journal/trades/{trade_id}", headers=headers_owner)
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["manual_demo"] is None
+
+        tagged = test_client.patch(
+            f"/journal/trades/{trade_id}/annotation",
+            json={"strategy_label": "Breakout", "grade": "B+"},
+            headers=headers_owner,
+        )
+        assert tagged.status_code == 200, tagged.text
+        assert tagged.json()["strategy_label"] == "Breakout"
+        assert tagged.json()["grade"] == "B+"
+
+        denied_org = test_client.patch(
+            f"/journal/trades/{trade_id}/annotation",
+            json={"grade": "F"},
+            headers=headers_other_org,
+        )
+        assert denied_org.status_code == 404
+
+        denied_user = test_client.patch(
+            f"/journal/trades/{trade_id}/annotation",
+            json={"grade": "F"},
+            headers=_auth(test_client, "journal-other-trader-a@test.example"),
+        )
+        assert denied_user.status_code == 404
 
 
 def test_children_cross_org_fails_closed(

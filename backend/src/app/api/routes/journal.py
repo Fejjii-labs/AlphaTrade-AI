@@ -625,6 +625,9 @@ async def get_journal_trade(
 ) -> JournalTradeDetail:
     detail = service.get_detail(journal_trade_id, organization_id=tenant.organization_id)
     if detail.trade.source == JournalTradeSource.MANUAL_DEMO_TEST:
+        ref = detail.trade.external_ref or ""
+        if ref.startswith("blofin-demo-history:"):
+            return detail
         if detail.trade.user_id != tenant.user_id or detail.trade.execution_lifecycle_id is None:
             raise NotFoundError("Journal trade not found.")
         attempt = ManualDemoHistoryService(session).get(tenant, detail.trade.execution_lifecycle_id)
@@ -728,6 +731,9 @@ async def annotate_journal_trade(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> JournalTradeRead:
+    trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
+    if trade.user_id != tenant.user_id:
+        raise NotFoundError("Journal trade not found.")
     result = service.annotate(
         journal_trade_id,
         body,
