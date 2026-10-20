@@ -187,6 +187,17 @@ def test_stored_plan_without_a_sizing_grade_is_uncomputed(monkeypatch) -> None:
 
 def test_missing_clock_or_plan_refuses_without_raising(monkeypatch) -> None:
     session = _session()
+    revoked: list[str] = []
+
+    def _revoke(*_args: object, **kwargs: object) -> None:
+        reason = kwargs.get("reason")
+        assert isinstance(reason, str)
+        revoked.append(reason)
+
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop.revoke_leftover_autonomous_authorizations",
+        _revoke,
+    )
     for cls in (AutomatedPaperLoop, GovernedBloFinDemoLoop):
         missing_clock = _loop(cls, monkeypatch)
         missing_clock._clock = SimpleNamespace(now=lambda: None)
@@ -200,6 +211,7 @@ def test_missing_clock_or_plan_refuses_without_raising(monkeypatch) -> None:
         proof = _execute(missing_plan, session)
         assert proof.stage == "blocked"
         assert proof.reason_code == "stored_plan_limits_uncomputed"
+    assert revoked == ["stored_plan_limits_uncomputed", "stored_plan_limits_uncomputed"]
 
 
 def test_each_loop_resizes_a_stored_plan_against_the_current_book(monkeypatch) -> None:

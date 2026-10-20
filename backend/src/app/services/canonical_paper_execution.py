@@ -21,6 +21,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+import structlog
+
 if TYPE_CHECKING:
     from app.services.risk_policy.profile import PolicyKind
 
@@ -32,7 +34,7 @@ from app.core.errors import NotFoundError, TradingPolicyError, ValidationAppErro
 from app.core.paper_safety import assert_paper_execution_allowed
 from app.db.canonical_trade_plans import PLAN_AUTHORITY_CANONICAL
 from app.db.models import ApprovalAuthorization as ApprovalAuthorizationRow
-from app.db.models import ExecutionCommand, ExecutionFillFact, JournalLifecycleEvent
+from app.db.models import ExecutionCommand, ExecutionFillFact, JournalLifecycleEvent, JournalTrade
 from app.repositories.journal_trades import JournalTradeRepository
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalAuthorization
@@ -69,6 +71,8 @@ from app.services.journal_lifecycle_projector import JournalLifecycleProjector
 from app.services.paper_close_economics import paper_close_pnl
 from app.services.safety_epoch import SafetyEpochService
 from app.signal_fusion.enums import CandidateState
+
+logger = structlog.get_logger(__name__)
 
 _TERMINAL_CANDIDATE_REASONS: dict[CandidateState, str] = {
     CandidateState.REJECTED: "candidate_rejected",
@@ -290,6 +294,25 @@ class CanonicalPaperExecutionService:
                     "Filled paper journal trade is missing; refusing to invent an outcome.",
                     details={"reason": "missing_open_trade"},
                 )
+            # Two cycles can both observe OPEN before either commits. The row
+            # lock makes the second wait, then re-read. A matching close key
+            # replays. Any other key finds the trade already closed.
+            self._projector.lock_execution_lifecycle(request.organization_id, request.command_id)
+            refresh = (
+                select(JournalTrade)
+                .where(JournalTrade.id == trade.id)
+                .execution_options(populate_existing=True)
+            )
+            bind = self._session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                refresh = refresh.with_for_update()
+            locked = self._session.scalar(refresh)
+            if locked is None or locked.user_id != request.user_id:
+                raise ValidationAppError(
+                    "Filled paper journal trade is missing; refusing to invent an outcome.",
+                    details={"reason": "missing_open_trade"},
+                )
+            trade = locked
             self._assert_close_eligible(request, trade_status=trade.status)
             if trade.entry_price is None or trade.size is None:
                 raise ValidationAppError(
@@ -385,7 +408,7 @@ class CanonicalPaperExecutionService:
                 net_pnl=trade.net_pnl,
             ):
                 assert trade.net_pnl is not None
-                _note_profile_close(
+                _consecutive, refused_new_trades = _note_profile_close(
                     self._session,
                     organization_id=request.organization_id,
                     user_id=request.user_id,
@@ -393,6 +416,13 @@ class CanonicalPaperExecutionService:
                     net_pnl=trade.net_pnl,
                     now=request.occurred_at,
                 )
+                if refused_new_trades:
+                    logger.info(
+                        "profile_close_refuses_new_trades",
+                        organization_id=str(request.organization_id),
+                        account_id=str(request.account_id),
+                        consecutive_losses=_consecutive,
+                    )
             if (
                 trade.entry_price is None
                 or trade.exit_price is None
@@ -708,12 +738,13 @@ def _note_profile_close(
     net_pnl: Decimal,
     now: datetime,
     kind: PolicyKind | None = None,
-) -> int | None:
+) -> tuple[int | None, bool]:
     """Advance consecutive losses, then persist the breaker verdict. No reset.
 
-    ``kind`` selects the active profile and the breaker row is the account's
-    row. Paper uses the internal-paper profile. Demo uses the demo profile.
-    A drawdown latch is not cleared.
+    Returns the streak and whether new trades are refused. ``kind`` selects
+    the active profile and the breaker row is the account's row. Paper uses
+    the internal-paper profile. Demo uses the demo profile. A drawdown latch
+    is not cleared. A refusal is final for the next entry; this close stays.
     """
 
     from app.services.audit_service import AuditService
@@ -730,7 +761,7 @@ def _note_profile_close(
     selected = StoredPolicyKind.INTERNAL_PAPER if kind is None else kind
     active = _load_active_profile(session, organization_id, selected.value, now)
     if active is None:
-        return None
+        return None, False
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
     current = 0 if row is None else int(row.consecutive_losses)
@@ -738,7 +769,7 @@ def _note_profile_close(
     current = streak_after_expiry(current, paused_until, now)
     pause_in_force = paused_until is not None and _as_utc(paused_until) > _as_utc(now)
     consecutive = profile_close_consecutive(current, net_pnl, pause_in_force=pause_in_force)
-    persist_profile_breakers(
+    refused = persist_profile_breakers(
         session,
         organization_id=organization_id,
         user_id=user_id,
@@ -747,7 +778,7 @@ def _note_profile_close(
         now=now,
         consecutive_losses=consecutive,
     )
-    return consecutive
+    return consecutive, refused
 
 
 def _attach_approval_channel(

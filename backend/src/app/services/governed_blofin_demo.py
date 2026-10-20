@@ -72,8 +72,8 @@ from app.services.automated_paper_loop import (
     AutomatedPaperLoopProof,
     _eligibility_command,
     _execute_request,
-    _execution_moment,
     _fill_id,
+    _missing_stored_plan_proof,
     _plan_terms,
     _proof,
     _stored_plan_execution_refusal,
@@ -937,10 +937,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             revision_id, organization_id=target.organization_id, user_id=target.user_id
         )
         plan = getattr(envelope, "plan", None)
-        if plan is None or _execution_moment(self) is None:
-            return _proof(
-                candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id
-            )
+        missing = _missing_stored_plan_proof(
+            self,
+            session,
+            target,
+            candidate,
+            revision_id,
+            plan=plan,
+        )
+        if missing is not None:
+            return missing
         if plan.execution_venue != "BLOFIN_DEMO" or plan.execution_policy_version != DEMO_POLICY:
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id

@@ -43,6 +43,13 @@ The component is attached to the existing paper worker
 (`python -m app.workers.paper_worker`) and uses that worker's poll interval
 (`WATCHER_PAPER_POLL_INTERVAL_SECONDS`). It is not a second service.
 
+Attachment happens only after the disarmed-worker check, and only when the
+enabled flag is true. A disarmed staging worker does not construct the
+monitor when `PAPER_EXIT_MONITOR_ENABLED` is true. `run_configured_exit_monitor`
+and the cycle return `disarmed` before opening a session or loading candles
+in that case, and also when the flag is false. The flag stays default false.
+This record does not arm it.
+
 ## Decision
 
 For each open trade the monitor loads closed candles with
@@ -88,11 +95,26 @@ range touches a level is the exit.
   at the stop or the target. Both levels in one bar, without that gap, still
   exit at the stop.
 - If the fetched history does not reach the entry, the trade is left open.
+  That incomplete history is a skip, not a stop or target evaluation.
+
+Closed bars are not evaluated when the series is gapped or stale.
+`candle_series_block` is the check. A gap is a closed bar whose length is
+not exactly one timeframe, or a later closed bar whose `interval_start` is
+not the previous bar's `interval_end`. Stale means there is no closed bar,
+or the newest closed bar ended at least one full timeframe before
+evaluation. The monitor does not invent the missing bars. The trade stays
+open. The pass counts `refused`, logs `paper_exit_monitor_candles_unusable`
+with reason `gap` or `stale`, and the report status is `degraded` with
+error `candles_unusable` when that is the only failure.
 
 On each run, a trade whose stop or target was already crossed in an earlier
 closed bar is closed at that historical bar. The close is idempotent:
 `paper-exit-monitor:{command_id}` is the close key, and a second pass replays
-the same journal event.
+the same journal event. Two overlapping cycles, including two processes,
+take the lifecycle lock before the status check (`lock_execution_lifecycle`:
+the advisory key, then `SELECT … FOR UPDATE` on PostgreSQL). The waiter
+re-reads the row. The same key replays. A different key on a trade that is
+already closed raises `already_closed` and does not write a second close.
 
 ## Journal
 
@@ -106,10 +128,14 @@ the crossing bar's end. The CLOSE lifecycle payload also stores:
 - `exit_actor`: `paper_exit_monitor`
 - `exit_evidence`: bar times, OHLC, source event id, content hash, level, and
   the same-bar assumption
-- `exit_origin`: `live` when the crossing bar ended less than 24 hours before
-  evaluation, including a bar processed after UTC midnight. `backfill` when
-  the bar ended 24 hours or more earlier, which is the October 6
-  reconstruction, or when a timestamp is naive.
+- `exit_origin`: `live` or `backfill`, from
+  `downtime_is_historical_backfill`. Downtime is the gap from the crossing
+  bar's end to this evaluation. Exactly 24 hours
+  (`HISTORICAL_BACKFILL_AFTER`) is a backfill. A shorter gap is live,
+  including a bar that ended on the previous UTC date and is processed
+  after midnight. A naive timestamp is a backfill. The October 6
+  reconstruction is the 24-hour case: the close is journaled, and it does
+  not move the breakers.
 - `calibration_sample`: `eligible` on a live close and `excluded` on a backfill
 
 A live close of a `paper-profile-isolated` plan uses the same profile-close
@@ -122,3 +148,10 @@ calibration sample. This path does not insert a calibration row for a live
 close either: the walk-forward fold is not known here.
 
 A human close leaves those fields unset.
+
+A cycle that raises, or that returns `degraded` (candle failure, close
+failure, or a refused gapped or stale series), logs the structured warning
+`paper_exit_monitor_cycle_degraded`. The warning carries `failed` when the
+cycle raised or the report counted errors. A refused series sets `refused`
+and does not set `failed`. The worker stays up. The flag is not turned on
+by that warning.

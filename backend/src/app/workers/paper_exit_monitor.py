@@ -76,9 +76,15 @@ def run_configured_exit_monitor(
     closer: PaperExitCloser | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> MonitorReport:
-    """One monitor pass. The flag off returns before any database or market read."""
+    """One monitor pass. The flag off returns before any database or market read.
 
-    if not settings.paper_exit_monitor_enabled:
+    A disarmed paper worker returns here even when the flag is true. It does
+    not open PostgreSQL and it does not read public candles.
+    """
+
+    from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
+
+    if settings_are_disarmed_paper_worker(settings) or not settings.paper_exit_monitor_enabled:
         return MonitorReport(status="disarmed")
     if shutdown is not None and shutdown():
         return MonitorReport(status="stopped")
@@ -120,9 +126,13 @@ class PaperExitMonitorCycle:
         self._stop = Event()
 
     def __call__(self) -> CycleOutcome:
+        from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
+
         if self._stop.is_set():
             return CycleOutcome("stopped")
-        if not self._settings.paper_exit_monitor_enabled:
+        if settings_are_disarmed_paper_worker(self._settings) or (
+            not self._settings.paper_exit_monitor_enabled
+        ):
             return CycleOutcome("disarmed")
         try:
             report = run_configured_exit_monitor(
@@ -131,13 +141,23 @@ class PaperExitMonitorCycle:
             )
         except Exception as exc:
             logger.warning(
-                "paper_exit_monitor_cycle_failed",
+                "paper_exit_monitor_cycle_degraded",
                 error=redact_text(str(exc))[:200],
+                failed=True,
             )
             return CycleOutcome("degraded", error="paper_exit_monitor_failed")
         if report.status == "stopped":
             return CycleOutcome("stopped")
         if report.status == "degraded":
+            logger.warning(
+                "paper_exit_monitor_cycle_degraded",
+                error=report.error or "paper_exit_monitor_failed",
+                examined=report.examined,
+                errors=report.errors,
+                refused=report.refused,
+                skipped=report.skipped,
+                failed=report.errors > 0,
+            )
             return CycleOutcome("degraded", error=report.error or "paper_exit_monitor_failed")
         return CycleOutcome("running")
 

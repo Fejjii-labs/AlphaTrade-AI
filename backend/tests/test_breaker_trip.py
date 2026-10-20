@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from app.services.risk_policy.breaker_trip import trip_breakers
 from app.services.risk_policy.breakers import BreakerConfig, BreakerSnapshot
 
@@ -260,7 +262,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         )
     assert stored["kind"] == "demo"
     assert stored["written"] == [1, 2, 3]
-    paused = _note_profile_close(
+    paused, _refused = _note_profile_close(
         object(),  # type: ignore[arg-type]
         organization_id=org,
         user_id=user,
@@ -282,7 +284,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         funding=Decimal("0"),
     )
     assert misleading < 0
-    counted = _note_profile_close(
+    counted, _refused = _note_profile_close(
         object(),  # type: ignore[arg-type]
         organization_id=org,
         user_id=user,
@@ -303,7 +305,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         funding=Decimal("0"),
     )
     assert fee_only_loss < 0
-    priced = _note_profile_close(
+    priced, _refused = _note_profile_close(
         object(),  # type: ignore[arg-type]
         organization_id=org,
         user_id=user,
@@ -335,7 +337,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         notional=Decimal("1000000"),
     )
     assert unverified_funding < 0
-    held = _note_profile_close(
+    held, _refused = _note_profile_close(
         object(),  # type: ignore[arg-type]
         organization_id=org,
         user_id=user,
@@ -368,7 +370,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
         funding=Decimal("0"),
     )
     assert price_win > 0
-    reset = _note_profile_close(
+    reset, _refused = _note_profile_close(
         object(),  # type: ignore[arg-type]
         organization_id=org,
         user_id=user,
@@ -433,6 +435,80 @@ def test_next_demo_persist_keeps_the_stored_streak_and_refuses(monkeypatch) -> N
     assert written["consecutive_losses"] == 4
     assert written["consecutive_paused_until"] is not None
     assert written["drawdown_latched"] is False
+
+
+@pytest.mark.parametrize("equity", [Decimal("0"), Decimal("-1"), Decimal("NaN")])
+def test_ruined_equity_still_latches_drawdown_and_the_loss_streak(
+    monkeypatch: pytest.MonkeyPatch,
+    equity: Decimal,
+) -> None:
+    from app.services.risk_policy.breaker_trip import persist_profile_breakers
+    from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
+
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    written: dict[str, object] = {}
+    armed: list[bool] = []
+
+    class _Daily:
+        account_equity = equity
+        realized_pnl = Decimal("-10000")
+        unrealized_pnl = Decimal("0")
+
+    class _Accounting:
+        def __init__(self, _session: object, _settings: object, clock: object) -> None:
+            return None
+
+        def sync_from_portfolio(self, **_kwargs: object) -> _Daily:
+            return _Daily()
+
+    class _Row:
+        equity_peak = Decimal("10000")
+        consecutive_losses = 2
+        drawdown_latched = False
+        consecutive_paused_until = None
+        daily_paused_until = None
+
+    class _Service:
+        def __init__(self, _session: object, _audit: object) -> None:
+            return None
+
+        def load_breaker(self, **_kwargs: object) -> _Row:
+            return _Row()
+
+        def record_breaker(self, **kwargs: object) -> object:
+            written.update(kwargs)
+            return kwargs
+
+    class _Kill:
+        def __init__(self, _session: object, _audit: object, _settings: object) -> None:
+            return None
+
+        def activate(self, **_kwargs: object) -> object:
+            armed.append(True)
+            return None
+
+    monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    monkeypatch.setattr(
+        "app.services.risk.settings_service.RiskSettingsService", lambda _session, _audit: None
+    )
+    monkeypatch.setattr("app.services.audit_service.AuditService", lambda _session: None)
+    monkeypatch.setattr("app.services.risk_policy.persistence.RiskPolicyService", _Service)
+    monkeypatch.setattr("app.services.risk.kill_switch.KillSwitchService", _Kill)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: None)
+    refused = persist_profile_breakers(
+        object(),  # type: ignore[arg-type]
+        organization_id=ORG,
+        user_id=uuid4(),
+        account_id=ACCOUNT,
+        profile=profile,
+        now=NOW,
+        consecutive_losses=3,
+    )
+    assert refused is True
+    assert written["drawdown_latched"] is True
+    assert written["consecutive_losses"] == 3
+    assert written["equity_peak"] == Decimal("10000")
+    assert armed == [True]
 
 
 def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch) -> None:
@@ -598,7 +674,7 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
     for kind in (PolicyKind.DEMO, PolicyKind.INTERNAL_PAPER):
         state["losses"] = 4
         state["paused"] = pause
-        kept = _note_profile_close(
+        kept, _refused = _note_profile_close(
             object(),  # type: ignore[arg-type]
             organization_id=org,
             user_id=user,
@@ -610,7 +686,7 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
         assert kept == 4
         assert written["consecutive_losses"] == 4
         assert written["consecutive_paused_until"] == pause
-        increased = _note_profile_close(
+        increased, _refused = _note_profile_close(
             object(),  # type: ignore[arg-type]
             organization_id=org,
             user_id=user,

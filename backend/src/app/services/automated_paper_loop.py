@@ -325,14 +325,21 @@ class AutomatedPaperLoop:
             remaining_daily = book.remaining_daily_budget_percent
             from app.services.risk_policy.breaker_trip import persist_profile_breakers
 
-            persist_profile_breakers(
+            if persist_profile_breakers(
                 session,
                 organization_id=target.organization_id,
                 user_id=target.user_id,
                 account_id=account.id,
                 profile=active.profile,
                 now=now,
-            )
+            ):
+                return AutomatedPaperLoopProof(
+                    stage="skipped",
+                    reason_code="breaker_active",
+                    candidate_id=candidate.candidate_id,
+                    eligibility_id=eligibility.eligibility.eligibility_id,
+                    eligibility_state=state.value,
+                )
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -400,10 +407,16 @@ class AutomatedPaperLoop:
             user_id=target.user_id,
         )
         plan = getattr(envelope, "plan", None)
-        if plan is None or _execution_moment(self) is None:
-            return _proof(
-                candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id
-            )
+        missing = _missing_stored_plan_proof(
+            self,
+            session,
+            target,
+            candidate,
+            revision_id,
+            plan=plan,
+        )
+        if missing is not None:
+            return missing
         if eligibility_id is None:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
@@ -1077,6 +1090,37 @@ def _execution_moment(loop: AutomatedPaperLoop) -> datetime | None:
     if not isinstance(moment, datetime):
         return None
     return moment
+
+
+def _missing_stored_plan_proof(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    target: PaperScanTarget,
+    candidate: Candidate,
+    revision_id: UUID,
+    *,
+    plan: object,
+) -> AutomatedPaperLoopProof | None:
+    """Block a stored-plan execution whose clock or plan cannot be read.
+
+    When the clock is present and the plan is missing, leftover autonomous
+    authorizations for that revision are revoked before the refusal. A missing
+    clock is not a moment at which those rows can be revoked.
+    """
+
+    moment = _execution_moment(loop)
+    if plan is not None and moment is not None:
+        return None
+    if plan is None and moment is not None:
+        revoke_leftover_autonomous_authorizations(
+            session,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            revision_id=revision_id,
+            reason="stored_plan_limits_uncomputed",
+            clock=loop._clock.now,
+        )
+    return _proof(candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id)
 
 
 def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
