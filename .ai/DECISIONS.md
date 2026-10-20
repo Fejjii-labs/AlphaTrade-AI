@@ -2,6 +2,36 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-129 — Arming refuses a disabled loss cooldown, a slow cycle, and a silent alert
+
+- Date: 2026-10-20
+- Decision: The paper exit monitor and both autonomous loops refuse to arm
+  unless `paper_signal_cooldown_after_loss_seconds` is a finite number
+  greater than zero. The reason code is `consecutive_loss_cooldown_invalid`.
+  They also refuse when `watcher_paper_poll_interval_seconds` is longer than
+  the smallest configured strategy timeframe, or when that list cannot be
+  read. The reason code is `cycle_interval_exceeds_timeframe`. Equality with
+  the candle is still allowed. The exit-monitor call returns `refused`
+  before a database or candle read. A disarmed flag stays disarmed.
+- Heartbeat: the paper worker writes a `paper_worker` runtime-status
+  heartbeat on each watcher cycle. A disarmed worker does not open the
+  database and does not write it. `GET /health/paper-worker` reports
+  `fresh`, `stale`, or `missing`. Stale and missing raise one deduped
+  Telegram alert. `GET /health` reports the same row and does not send.
+- Alerts: backfill loss, stale live loss, kill-switch arming, repeated
+  degraded or refused cycles, clock skew, and the heartbeat alert go through
+  the existing Telegram delivery provider. The bot token and chat id stay
+  `telegram_bot_token` and `telegram_chat_id`. No new secret is added. The
+  message has no secret and no P&L amount. A dedup key inside its cooldown
+  does not send again. The send runs after the database commit.
+- Counter: the degraded-cycle streak is the `paper_exit_degradation` runtime
+  status row. A restart loads it. A healthy cycle deletes it.
+- Safety: Both monitor flags and both autonomous flags stay default false.
+  Production still refuses them. This record does not arm them, change an
+  environment, or change a blueprint. Real-money trading stays rejected.
+- Reference: AT-ADR-127; AT-ADR-128; issue #291;
+  `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-128 — A stale live paper-exit loss arms the kill switch
 
 - Date: 2026-10-20

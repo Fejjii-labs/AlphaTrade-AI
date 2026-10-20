@@ -105,10 +105,16 @@ def resolve_autonomous_mode(settings: object) -> AutonomousModeResolution:
     if paper_flag:
         if execution_mode != "paper" or exchange_mode != "paper_internal":
             return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_paper_unverified")
+        refusal = _arming_refusal(settings)
+        if refusal is not None:
+            return AutonomousModeResolution(AutonomousMode.OFF, refusal)
         return AutonomousModeResolution(AutonomousMode.INTERNAL_PAPER, None)
     if demo_flag:
         if execution_mode != "paper" or exchange_mode != "paper_exchange_demo":
             return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_demo_unverified")
+        refusal = _arming_refusal(settings)
+        if refusal is not None:
+            return AutonomousModeResolution(AutonomousMode.OFF, refusal)
         return AutonomousModeResolution(AutonomousMode.BLOFIN_DEMO, None)
     return AutonomousModeResolution(AutonomousMode.OFF, None)
 
@@ -144,6 +150,14 @@ def autonomous_decision_metadata(
         "limits_note": limits_note,
         "limits": _limit_payload(limits),
     }
+
+
+def _arming_refusal(settings: object) -> str | None:
+    """Cooldown and cycle-interval gates. Imported lazily to keep this module small."""
+
+    from app.services.arming_gates import paper_arming_refusal
+
+    return paper_arming_refusal(settings)
 
 
 def continuation_refusal(settings: object, *, expected: AutonomousMode) -> str | None:

@@ -191,8 +191,11 @@ No close is attempted.
 Degraded or refused cycles that continue for
 `paper_exit_monitor_degraded_alert_after_seconds` (default 900, maximum
 3600) raise the structured alert `paper_exit_degraded_repeat`. One cycle
-does not. A healthy cycle clears the count. The alert is a paper-alert row
-and an audit row, not only the log line `paper_exit_monitor_alert`.
+does not. A healthy cycle clears the count. The count is stored on the
+`controlled_runtime_status` row `paper_exit_degradation`, so a restart
+continues the same streak instead of starting from zero. The alert is a
+paper-alert row, an audit row, and a Telegram message, not only the log
+line `paper_exit_monitor_alert`.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
@@ -201,3 +204,36 @@ and an audit row, not only the log line `paper_exit_monitor_alert`.
 
 Neither value is set in `render.yaml` or in a deployed environment. The
 monitor flags stay default false.
+
+## Arming gates
+
+The monitor is not attached, and `run_configured_exit_monitor` returns
+`refused` before any database or candle read, unless both of these hold:
+
+- `paper_signal_cooldown_after_loss_seconds` is a finite number greater
+  than zero. Zero, a negative number, and a non-finite number refuse with
+  `consecutive_loss_cooldown_invalid`.
+- `watcher_paper_poll_interval_seconds` is not longer than the smallest
+  entry in `paper_signal_allowed_timeframes`. A longer interval, or a
+  timeframe list that cannot be read, refuses with
+  `cycle_interval_exceeds_timeframe`. An interval equal to that candle is
+  still allowed.
+
+The same two checks refuse `resolve_autonomous_mode` when either autonomous
+flag is set. Production still refuses those flags, and both monitor flags
+stay default false. These checks do not arm anything.
+
+## Heartbeat and Telegram
+
+Each watcher cycle of the paper worker writes a `paper_worker` heartbeat on
+`controlled_runtime_status`. A disarmed worker does not open the database,
+so it does not write that row. `GET /health` reports the row.
+`GET /health/paper-worker` is the external check: it reports `fresh`,
+`stale`, or `missing`, and a stale or missing heartbeat raises one deduped
+Telegram alert.
+
+Backfill-loss, stale-loss, kill-switch arming, repeated degraded or refused
+cycles, and clock-skew alerts use the same Telegram path. The message uses
+the existing `telegram_bot_token` and `telegram_chat_id`. It does not include
+a secret or a P&L amount. A repeated dedup key inside the alert cooldown
+does not send again. Telegram is attempted only after the database commit.

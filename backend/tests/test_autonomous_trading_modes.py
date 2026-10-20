@@ -51,6 +51,9 @@ def _view(**updates: object) -> SimpleNamespace:
         "autonomous_internal_paper_enabled": False,
         "autonomous_blofin_demo_enabled": False,
         "global_kill_switch_active": False,
+        "paper_signal_cooldown_after_loss_seconds": 3600,
+        "watcher_paper_poll_interval_seconds": 15.0,
+        "paper_signal_allowed_timeframes": ["15m", "1h"],
     }
     values.update(updates)
     return SimpleNamespace(**values)

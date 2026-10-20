@@ -65,6 +65,23 @@ class WorkerRuntimeObservation(BaseModel):
     available: bool = False
     watcher: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     telegram: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    paper_worker: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+
+
+class PaperWorkerHeartbeatResponse(BaseModel):
+    """External liveness of the paper worker.
+
+    ``status`` is ``fresh``, ``stale``, or ``missing``. ``alert_raised`` is
+    true only when this request sent a new Telegram alert. A repeated poll
+    inside the cooldown reports the same status and does not send again.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["fresh", "stale", "missing"]
+    observation: WorkerComponentObservation
+    alert_raised: bool = False
+    timestamp: datetime
 
 
 class HealthResponse(BaseModel):

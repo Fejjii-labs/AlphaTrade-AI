@@ -1122,7 +1122,7 @@ def test_supervisor_runs_the_monitor_when_the_flag_is_on(monkeypatch: pytest.Mon
     )
 
     class Stub:
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, **_kwargs: object) -> None:
             assert settings.paper_exit_monitor_enabled is True
 
         def __call__(self) -> CycleOutcome:

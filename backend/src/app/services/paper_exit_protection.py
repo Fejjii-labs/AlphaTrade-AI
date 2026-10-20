@@ -167,6 +167,7 @@ def _protect(
         alert,
         organization_id=request.organization_id,
         user_id=request.user_id,
+        settings=settings,
     )
     KillSwitchService(session, AuditService(session), settings).activate(
         organization_id=request.organization_id,
@@ -184,6 +185,7 @@ def record_exit_monitor_alert(
     *,
     organization_id: uuid.UUID | None,
     user_id: uuid.UUID | None,
+    settings: Settings | None = None,
 ) -> bool:
     """Persist one structured alert. Returns False when dedup suppresses it.
 
@@ -223,6 +225,10 @@ def record_exit_monitor_alert(
             metadata=alert.as_log(),
         )
     )
+    if settings is not None:
+        from app.services.safety_alerts import queue_safety_alert
+
+        queue_safety_alert(session, settings, alert)
     return True
 
 
