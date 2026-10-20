@@ -46,9 +46,10 @@ def autonomous_precheck_refusal(
     target: PaperScanTarget,
     snapshot: AuthoritativeDailySnapshot,
 ) -> str | None:
-    mismatch = autonomous_target_matches(settings, target)
-    if mismatch is not None:
-        return mismatch
+    if not settings.using_defaults:
+        mismatch = autonomous_target_matches(settings, target)
+        if mismatch is not None:
+            return mismatch
     if autonomous_daily_loss_exceeded(settings, snapshot):
         return "autonomous_daily_loss_limit"
     if autonomous_max_trades_reached(settings, snapshot):

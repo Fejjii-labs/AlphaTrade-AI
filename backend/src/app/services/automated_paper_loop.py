@@ -388,7 +388,9 @@ class AutomatedPaperLoop:
             breaker_refusing=_breaker_refusing(session, target.organization_id, now),
             risk_records=records,
             fixed_risk_percent=(
-                autonomous.risk_per_trade_percent if autonomous is not None else None
+                autonomous.risk_per_trade_percent
+                if autonomous is not None and not autonomous.using_defaults
+                else None
             ),
         )
         if isinstance(terms, str):
