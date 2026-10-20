@@ -223,6 +223,12 @@ def deployment_posture(settings: Settings) -> dict[str, object]:
         "autonomous_blofin_demo_enabled": settings.autonomous_blofin_demo_enabled,
         "paper_exit_monitor_enabled": settings.paper_exit_monitor_enabled,
         "paper_exit_monitor_dry_run": settings.paper_exit_monitor_dry_run,
+        "paper_exit_monitor_degraded_alert_after_seconds": (
+            settings.paper_exit_monitor_degraded_alert_after_seconds
+        ),
+        "paper_exit_monitor_max_clock_skew_seconds": (
+            settings.paper_exit_monitor_max_clock_skew_seconds
+        ),
         **dict(perpetual_evidence_health(settings)),
     }
 

@@ -228,6 +228,15 @@ class Settings(BaseSettings):
     # the deploy blueprint by the change that introduced them.
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = False
+    # Repeated degraded or refused exit-monitor cycles raise a structured
+    # alert after this many seconds. Default 15 minutes, capped at 1 hour,
+    # so the wait stays well under the 24-hour backfill horizon. At least
+    # two cycles are required. This does not arm the monitor.
+    paper_exit_monitor_degraded_alert_after_seconds: int = Field(default=900, ge=60, le=3600)
+    # Worker wall clock versus database now(), and versus exchange server
+    # time when that source is supplied. A larger gap refuses the cycle.
+    # Default 15 seconds. This does not arm the monitor.
+    paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
     # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
     risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits

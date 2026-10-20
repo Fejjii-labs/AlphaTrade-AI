@@ -25,6 +25,9 @@ ALERT_TYPE_LABELS: dict[str, str] = {
     "overtrading_warning": "Overtrading warning",
     "daily_loss_lock_warning": "Daily loss lock warning",
     "demo_liquidation_through_stop": "LIQUIDATION THROUGH STOP",
+    "paper_exit_backfill_loss": "Paper exit backfill loss",
+    "paper_exit_degraded_repeat": "Paper exit monitor degraded",
+    "paper_exit_clock_skew": "Paper exit clock skew",
 }
 
 
