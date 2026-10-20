@@ -52,6 +52,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow  # noqa: F401
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.blofin_activity import (  # noqa: F401
     BloFinActivityAccount,

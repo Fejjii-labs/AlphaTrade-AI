@@ -45,6 +45,7 @@ def decide_trade(
     promotion: PromotionReport | None = None,
     preserve_grade_risk: bool = False,
     reduce_leverage: bool = True,
+    replace_grade_cap: bool = False,
 ) -> TradeDecision:
     """Accept a new trade or return a refusal. Does not place an order.
 
@@ -56,7 +57,7 @@ def decide_trade(
 
     if breaker.refuse_new_trades:
         return TradeDecision(False, "breaker_active", None, None)
-    if not grade.tradable or grade.grade is None:
+    if grade.grade is None or (not grade.tradable and not replace_grade_cap):
         return TradeDecision(False, grade.refusal or "grade_not_tradable", None, None)
     explanation = ai_explanation
     if ai_suggested_grade is not None:
@@ -65,8 +66,13 @@ def decide_trade(
             return TradeDecision(False, "ai_changed_grade", None, None)
     if sizing.entry is None:
         return TradeDecision(False, "entry_missing", None, None)
+    base_risk = (
+        sizing.grade_risk_percent
+        if sizing.grade_risk_percent is not None
+        else profile.risk_percent(grade.grade)
+    )
     try:
-        adjusted = apply_adjusters(profile.risk_percent(grade.grade), adjusters)
+        adjusted = apply_adjusters(base_risk, adjusters)
     except RiskPolicyRejected as exc:
         return TradeDecision(False, exc.code, None, None)
     requested = sizing.leverage if sizing.leverage is not None else profile.default_leverage
@@ -84,6 +90,7 @@ def decide_trade(
                 attempt,
                 promotion=promotion,
                 preserve_grade_risk=preserve_grade_risk,
+                replace_grade_cap=replace_grade_cap,
             )
         except RiskPolicyRejected as exc:
             return TradeDecision(False, exc.code, None, None)

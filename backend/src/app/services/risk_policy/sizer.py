@@ -16,6 +16,7 @@ from app.services.risk_policy.calibration import PromotionReport, assert_promoti
 from app.services.risk_policy.ceilings import (
     HARD_MAX_DAILY_LOSS_PERCENT,
     HARD_MAX_LEVERAGE,
+    PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
     risk_ceiling_for,
 )
 from app.services.risk_policy.errors import RiskPolicyRejected
@@ -97,6 +98,7 @@ def size_trade(
     *,
     promotion: PromotionReport | None = None,
     preserve_grade_risk: bool = False,
+    replace_grade_cap: bool = False,
 ) -> SizingResult:
     """Size one new trade. Leverage does not increase quantity.
 
@@ -125,7 +127,7 @@ def size_trade(
         raise RiskPolicyRejected("open_positions_missing")
     if data.direction not in {"long", "short"}:
         raise RiskPolicyRejected("direction_missing")
-    if data.grade is None or data.grade is Grade.C:
+    if data.grade is None or (data.grade is Grade.C and not replace_grade_cap):
         raise RiskPolicyRejected("grade_not_tradable")
     if data.margin_mode is None:
         raise RiskPolicyRejected("margin_mode_missing")
@@ -167,6 +169,7 @@ def size_trade(
     if leverage < 1 or leverage > profile.max_leverage or leverage > HARD_MAX_LEVERAGE:
         raise RiskPolicyRejected("leverage_exceeds_ceiling")
     profile_risk = profile.risk_percent(data.grade)
+    profile_max = max(profile.risk_percent_by_grade.values())
     daily_cap = min(profile.daily_loss_limit_percent, HARD_MAX_DAILY_LOSS_PERCENT, remaining_daily)
     daily_room = daily_cap - open_risk
     aggregate_room = profile.max_aggregate_open_risk_percent - open_risk
@@ -174,7 +177,19 @@ def size_trade(
     if budget_room <= 0:
         raise RiskPolicyRejected("budget_exhausted")
     ceiling = risk_ceiling_for(profile.kind)
-    effective = min(grade_risk, profile_risk, ceiling, budget_room)
+    if replace_grade_cap:
+        hard_ceiling = min(PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT, ceiling)
+        if grade_risk > hard_ceiling:
+            raise RiskPolicyRejected("risk_override_exceeds_ceiling")
+        if grade_risk > profile_max:
+            raise RiskPolicyRejected("risk_override_exceeds_profile_max")
+        # The override replaces the graded cap. Profile max and the code
+        # ceiling were refused above; do not clamp the override down to the
+        # grade that was scored.
+        effective = min(grade_risk, hard_ceiling, budget_room)
+        profile_risk = profile_max
+    else:
+        effective = min(grade_risk, profile_risk, ceiling, budget_room)
     if effective <= 0:
         raise RiskPolicyRejected("budget_exhausted")
     adverse = stop_distance + gap

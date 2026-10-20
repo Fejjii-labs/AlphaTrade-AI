@@ -626,6 +626,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         remaining_daily_budget_percent: Decimal | None = None,
         breaker_refusing: bool = False,
         risk_records: list[object] | None = None,
+        fixed_risk_percent: Decimal | None = None,
     ) -> TradePlanRevisionCreate | str:
         snapshot = self._require_snapshot()
         equity = min(equity, snapshot.equity, snapshot.available)
@@ -721,6 +722,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     for floor, rate in snapshot.maintenance_tiers
                 ),
                 execution_channel="demo",
+                fixed_risk_percent=fixed_risk_percent,
             )
             if isinstance(sized, str):
                 return sized
@@ -745,7 +747,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             profile_funding_rate = sized.funding_rate
             profile_funding_periods = sized.funding_periods
             profile_grade = sized.grade
-            profile_grade_cap = active_profile.profile.risk_percent(sized.grade)
+            profile_grade_cap = (
+                fixed_risk_percent
+                if fixed_risk_percent is not None
+                else active_profile.profile.risk_percent(sized.grade)
+            )
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
