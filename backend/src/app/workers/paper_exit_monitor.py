@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.guardrails.redaction import redact_text
+from app.persistence.paper_exit_degradation import DegradationStreakStore
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
 from app.services.paper_exit_candles import PaperExitCandleLoader
@@ -66,9 +67,15 @@ class ExecutionServicePaperExitCloser(PaperExitCloser):
                 canonical_runtime=self._runtime,
             ).close_canonical_paper_plan(request)
             session.commit()
+            from app.services.safety_alerts import deliver_queued_safety_alerts
+
+            deliver_queued_safety_alerts(session)
             return result
         except Exception:
             session.rollback()
+            from app.services.safety_alerts import discard_queued_safety_alerts
+
+            discard_queued_safety_alerts(session)
             raise
         finally:
             session.close()
@@ -104,6 +111,12 @@ def run_configured_exit_monitor(
 
     if settings_are_disarmed_paper_worker(settings) or not settings.paper_exit_monitor_enabled:
         return MonitorReport(status="disarmed")
+    from app.services.arming_gates import paper_arming_refusal
+
+    refusal = paper_arming_refusal(settings)
+    if refusal is not None:
+        logger.warning("paper_exit_monitor_arming_refused", reason=refusal)
+        return MonitorReport(status="refused", error=refusal)
     if shutdown is not None and shutdown():
         return MonitorReport(status="stopped")
     factory = session_factory or _session_factory()
@@ -123,9 +136,12 @@ def run_configured_exit_monitor(
                 trusted_source=trusted_source,
             )
             try:
-                _emit_clock_alert(session, alert, trades, alert_sink)
+                _emit_clock_alert(session, alert, trades, alert_sink, settings)
             except Exception as exc:
                 session.rollback()
+                from app.services.safety_alerts import discard_queued_safety_alerts
+
+                discard_queued_safety_alerts(session)
                 logger.warning(
                     "paper_exit_monitor_alert_persist_failed",
                     error=redact_text(str(exc))[:200],
@@ -174,11 +190,14 @@ class PaperExitMonitorCycle:
         *,
         clock: Callable[[], datetime] | None = None,
         alert_sink: Callable[[ExitMonitorAlert], None] | None = None,
+        streak_store: DegradationStreakStore | None = None,
     ) -> None:
         self._settings = settings.model_copy(deep=True)
         self._stop = Event()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._alert_sink = alert_sink
+        self._streak_store = streak_store
+        self._streak_loaded = False
         self._streak: DegradationStreak | None = None
 
     def __call__(self) -> CycleOutcome:
@@ -250,6 +269,7 @@ class PaperExitMonitorCycle:
         refused: int,
         report: MonitorReport | None = None,
     ) -> None:
+        self._load_streak()
         seconds = int(self._settings.paper_exit_monitor_degraded_alert_after_seconds)
         threshold = timedelta(seconds=seconds)
         watch = observe_repeated_degradation(
@@ -261,10 +281,39 @@ class PaperExitMonitorCycle:
             refused=refused,
         )
         self._streak = watch.streak
+        self._save_streak(watch.streak)
         if watch.alert is None:
             return
         logger.warning("paper_exit_monitor_alert", **watch.alert.as_log())
         self._emit_repeat_alert(watch.alert, report)
+
+    def _load_streak(self) -> None:
+        if self._streak_loaded:
+            return
+        self._streak_loaded = True
+        if self._streak_store is None:
+            return
+        try:
+            loaded = self._streak_store.load()
+        except Exception as exc:
+            logger.warning(
+                "paper_exit_degradation_unloaded",
+                error=redact_text(str(exc))[:200],
+            )
+            return
+        if loaded is not None:
+            self._streak = loaded
+
+    def _save_streak(self, streak: DegradationStreak | None) -> None:
+        if self._streak_store is None:
+            return
+        try:
+            self._streak_store.save(streak, observed_at=self._clock())
+        except Exception as exc:
+            logger.warning(
+                "paper_exit_degradation_unpersisted",
+                error=redact_text(str(exc))[:200],
+            )
 
     def _emit_repeat_alert(
         self,
@@ -278,6 +327,10 @@ class PaperExitMonitorCycle:
         session = factory()
         try:
             from app.services.paper_exit_protection import record_exit_monitor_alert
+            from app.services.safety_alerts import (
+                deliver_queued_safety_alerts,
+                discard_queued_safety_alerts,
+            )
 
             orgs = () if report is None else report.organization_ids
             if orgs:
@@ -287,6 +340,7 @@ class PaperExitMonitorCycle:
                         alert,
                         organization_id=organization_id,
                         user_id=None,
+                        settings=self._settings,
                     )
             else:
                 record_exit_monitor_alert(
@@ -294,10 +348,13 @@ class PaperExitMonitorCycle:
                     alert,
                     organization_id=None,
                     user_id=None,
+                    settings=self._settings,
                 )
             session.commit()
+            deliver_queued_safety_alerts(session)
         except Exception as exc:
             session.rollback()
+            discard_queued_safety_alerts(session)
             logger.warning(
                 "paper_exit_monitor_alert_persist_failed",
                 error=redact_text(str(exc))[:200],
@@ -336,12 +393,14 @@ def _emit_clock_alert(
     alert: ExitMonitorAlert,
     trades: tuple[OpenInternalPaperTrade, ...],
     alert_sink: Callable[[ExitMonitorAlert], None] | None,
+    settings: Settings,
 ) -> None:
     if alert_sink is not None:
         alert_sink(alert)
         session.rollback()
         return
     from app.services.paper_exit_protection import record_exit_monitor_alert
+    from app.services.safety_alerts import deliver_queued_safety_alerts
 
     targets = _alert_targets(trades)
     if not targets:
@@ -350,6 +409,7 @@ def _emit_clock_alert(
             alert,
             organization_id=None,
             user_id=None,
+            settings=settings,
         )
     else:
         for organization_id, user_id in targets:
@@ -358,8 +418,10 @@ def _emit_clock_alert(
                 alert,
                 organization_id=organization_id,
                 user_id=user_id,
+                settings=settings,
             )
     session.commit()
+    deliver_queued_safety_alerts(session)
 
 
 def _alert_targets(

@@ -20,6 +20,7 @@ from app.persistence.runtime_health import project_worker_component
 from app.providers.base import ProviderHealth
 from app.schemas.health import (
     HealthResponse,
+    PaperWorkerHeartbeatResponse,
     ReadinessResponse,
     WorkerRuntimeObservation,
 )
@@ -46,9 +47,14 @@ def _read_worker_runtime(
     try:
         from app.db.session import get_session_factory
         from app.persistence.runtime_status import (
+            PAPER_WORKER_COMPONENT,
             TELEGRAM_COMPONENT,
             WATCHER_COMPONENT,
             load_runtime_rows,
+        )
+        from app.services.worker_heartbeat import (
+            paper_worker_stale_after_seconds,
+            project_paper_worker_heartbeat,
         )
 
         with get_session_factory()() as session:
@@ -58,7 +64,9 @@ def _read_worker_runtime(
             available=False,
             watcher=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
             telegram=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
+            paper_worker=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
         )
+    worker_limit = paper_worker_stale_after_seconds(settings)
     return WorkerRuntimeObservation(
         available=True,
         watcher=project_worker_component(
@@ -70,6 +78,11 @@ def _read_worker_runtime(
             rows.get(TELEGRAM_COMPONENT),
             now=observed_at,
             stale_after_seconds=limit,
+        ),
+        paper_worker=project_paper_worker_heartbeat(
+            rows.get(PAPER_WORKER_COMPONENT),
+            now=observed_at,
+            stale_after_seconds=worker_limit,
         ),
     )
 
@@ -136,6 +149,54 @@ async def telegram_paper_activation(settings: SettingsDep, request: Request) -> 
     if mounted and not status.webhook_mounted:
         return status.model_copy(update={"webhook_mounted": True})
     return status
+
+
+@router.get(
+    "/health/paper-worker",
+    response_model=PaperWorkerHeartbeatResponse,
+    summary="Paper worker heartbeat",
+)
+async def paper_worker_heartbeat(settings: SettingsDep) -> PaperWorkerHeartbeatResponse:
+    """Report the worker heartbeat and alert when it is stale or missing.
+
+    This route does not arm the worker, the exit monitor, or real trading.
+    A Telegram send uses the existing bot token and chat id. The response
+    does not include those values.
+    """
+
+    from app.services.worker_heartbeat import (
+        HeartbeatAlertLedger,
+        MemoryHeartbeatAlertLedger,
+        RuntimeStatusHeartbeatLedger,
+        heartbeat_status,
+        load_paper_worker_row,
+        paper_worker_stale_after_seconds,
+        project_paper_worker_heartbeat,
+        raise_heartbeat_alert,
+    )
+
+    observed_at = datetime.now(UTC)
+    limit = paper_worker_stale_after_seconds(settings)
+    row: object | None = None
+    ledger: HeartbeatAlertLedger
+    try:
+        from app.db.session import get_session_factory
+
+        factory = get_session_factory()
+        with factory() as session:
+            row = load_paper_worker_row(session)
+        ledger = RuntimeStatusHeartbeatLedger(factory)
+    except Exception:
+        row = None
+        ledger = MemoryHeartbeatAlertLedger()
+    observation = project_paper_worker_heartbeat(row, now=observed_at, stale_after_seconds=limit)
+    alert_raised = raise_heartbeat_alert(settings, observation, now=observed_at, ledger=ledger)
+    return PaperWorkerHeartbeatResponse(
+        status=heartbeat_status(observation),
+        observation=observation,
+        alert_raised=alert_raised,
+        timestamp=observed_at,
+    )
 
 
 @router.get("/health/ready", response_model=ReadinessResponse, summary="Readiness probe")

@@ -621,7 +621,7 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
     watcher_settings, telegram_settings = isolate_runtime_settings(settings)
     if settings_are_disarmed_paper_worker(settings):
         supervisor = PaperWorkerSupervisor(
-            watcher_cycle=_static_cycle("disarmed"),
+            watcher_cycle=_with_worker_heartbeat(settings, _static_cycle("disarmed")),
             telegram_cycle=_static_cycle("disarmed"),
             poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
             watcher_authority=authority_binding(watcher_settings),
@@ -659,14 +659,24 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
     # Attached only after the disarmed check. A disarmed worker does not open
     # PostgreSQL or public candles when PAPER_EXIT_MONITOR_ENABLED is true.
     if settings.paper_exit_monitor_enabled and not settings_are_disarmed_paper_worker(settings):
-        from app.workers.paper_exit_monitor import PaperExitMonitorCycle
+        from app.services.arming_gates import paper_arming_refusal
 
-        exit_monitor = PaperExitMonitorCycle(settings.model_copy(deep=True))
-        supervisor.attach_exit_monitor(
-            exit_monitor,
-            poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
-            request_stop=exit_monitor.request_stop,
-        )
+        refusal = paper_arming_refusal(settings)
+        if refusal is not None:
+            logger.warning("paper_exit_monitor_arming_refused", reason=refusal)
+        else:
+            from app.persistence.paper_exit_degradation import PostgresDegradationStreakStore
+            from app.workers.paper_exit_monitor import PaperExitMonitorCycle
+
+            exit_monitor = PaperExitMonitorCycle(
+                settings.model_copy(deep=True),
+                streak_store=PostgresDegradationStreakStore(),
+            )
+            supervisor.attach_exit_monitor(
+                exit_monitor,
+                poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
+                request_stop=exit_monitor.request_stop,
+            )
     return supervisor
 
 
@@ -811,7 +821,7 @@ def _build_armed_supervisor(
             close()
 
     return PaperWorkerSupervisor(
-        watcher_cycle=research_watcher_cycle,
+        watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
         telegram_cycle=telegram_cycle,
         poll_seconds=float(watcher_settings.watcher_paper_poll_interval_seconds),
         watcher_authority=authority_binding(watcher_settings),
@@ -823,6 +833,17 @@ def _build_armed_supervisor(
 
 class _NowClock(Protocol):
     def now(self) -> datetime: ...
+
+
+def _with_worker_heartbeat(
+    settings: Settings,
+    cycle: Callable[[], CycleOutcome],
+) -> Callable[[], CycleOutcome]:
+    """Publish the external heartbeat around one watcher cycle."""
+
+    from app.services.worker_heartbeat import watch_cycle_with_heartbeat
+
+    return watch_cycle_with_heartbeat(settings, cycle)
 
 
 def _static_cycle(status: str, *, error: str = "") -> Callable[[], CycleOutcome]:

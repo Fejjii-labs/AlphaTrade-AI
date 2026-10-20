@@ -1,0 +1,207 @@
+"""Send safety alerts through the existing Telegram delivery path.
+
+Kill-switch arming, backfill and stale-loss alerts, repeated degraded or
+refused cycles, clock skew, and a missing worker heartbeat all use
+``telegram_bot_token`` and ``telegram_chat_id``. No new secret is added.
+The message never includes a secret or a P&L amount. A repeated dedup key
+inside the cooldown does not send again.
+
+Delivery is queued on the caller's session and flushed after commit, so a
+rolled-back close does not notify and a Telegram call does not hold the
+transaction open.
+"""
+
+from __future__ import annotations
+
+import re
+import threading
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+
+import structlog
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.guardrails.redaction import redact_text
+from app.providers.alert_delivery.base import AlertDeliveryPayload
+from app.providers.alert_delivery.telegram import TelegramAlertDeliveryProvider
+from app.services.paper_exit_monitor import ExitMonitorAlert
+
+logger = structlog.get_logger(__name__)
+
+_QUEUE_KEY = "alphatrade_safety_alerts"
+_SAFE_FIELDS = frozenset(
+    {
+        "account_id",
+        "code",
+        "command_id",
+        "component",
+        "cycles",
+        "dedup_key",
+        "elapsed_seconds",
+        "error",
+        "exit_origin",
+        "health_state",
+        "heartbeat_age_seconds",
+        "net_loss",
+        "organization_id",
+        "reason",
+        "refusal",
+        "refused",
+        "severity",
+        "skew_seconds",
+        "status",
+        "threshold_seconds",
+        "trusted_source",
+    }
+)
+_COOLDOWN_SECONDS = {
+    "backfill_loss": 86400,
+    "stale_live_loss": 86400,
+    "degraded_repeat": 900,
+    "clock_skew": 900,
+    "clock_untrusted": 900,
+    "worker_heartbeat_missing": 900,
+    "worker_heartbeat_stale": 900,
+}
+_DEFAULT_COOLDOWN_SECONDS = 900
+_AMOUNT = re.compile(
+    r"(?i)\b(?:net[_\s-]?pnl|pnl|p&l|profit|loss amount)\b\s*[:=]?\s*-?\d+(?:\.\d+)?"
+)
+
+_LOCK = threading.Lock()
+_SENT: dict[str, datetime] = {}
+
+
+def reset_safety_alert_dedup() -> None:
+    """Forget in-process dedup state. Tests call this between cases."""
+
+    with _LOCK:
+        _SENT.clear()
+
+
+def safety_alert_message(
+    *,
+    code: str,
+    message: str,
+    fields: Mapping[str, str],
+) -> str:
+    """Text safe to hand to Telegram. Unknown fields and amounts are dropped."""
+
+    lines = [f"Code: {code}", redact_text(message)[:500]]
+    for key in sorted(fields):
+        if key not in _SAFE_FIELDS:
+            continue
+        value = fields[key]
+        if not isinstance(value, str):
+            continue
+        lines.append(f"{key}: {redact_text(value)[:160]}")
+    return _AMOUNT.sub("[redacted]", "\n".join(lines))
+
+
+def telegram_safety_configured(settings: Settings) -> bool:
+    """True when the existing bot token and chat id are both set."""
+
+    return bool(settings.telegram_bot_token.strip() and settings.telegram_chat_id.strip())
+
+
+def deliver_safety_alert(
+    settings: Settings,
+    alert: ExitMonitorAlert,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Send one alert. False when it is deduped, unconfigured, or refused.
+
+    The provider reuses ``telegram_bot_token`` and ``telegram_chat_id``.
+    The enable flags are bypassed so a safety alert is not dropped only
+    because the general Telegram product flag is off. A missing token or
+    chat id still skips the send.
+    """
+
+    moment = now or datetime.now(UTC)
+    key = alert.fields.get("dedup_key") or alert.code
+    if _recently_sent(key, moment, _cooldown(alert.code)):
+        return False
+    if not telegram_safety_configured(settings):
+        logger.warning("safety_alert_telegram_unconfigured", code=alert.code)
+        return False
+    text = safety_alert_message(code=alert.code, message=alert.message, fields=alert.fields)
+    payload = AlertDeliveryPayload(
+        alert_id=key[:120],
+        organization_id=alert.fields.get("organization_id") or "system",
+        alert_type=alert.code[:80],
+        severity=alert.severity,
+        message=text,
+        dedup_key=key[:200],
+    )
+    result = TelegramAlertDeliveryProvider(settings).deliver(payload, bypass_enable_check=True)
+    if not result.success:
+        logger.warning(
+            "safety_alert_telegram_failed",
+            code=alert.code,
+            skipped=result.skipped,
+        )
+        return False
+    _remember(key, moment)
+    return True
+
+
+def queue_safety_alert(session: Session, settings: Settings, alert: ExitMonitorAlert) -> None:
+    """Hold one alert until the caller commits. A rollback must not send it."""
+
+    pending = session.info.setdefault(_QUEUE_KEY, [])
+    if isinstance(pending, list):
+        pending.append((settings, alert))
+
+
+def deliver_queued_safety_alerts(session: Session) -> None:
+    """Send alerts queued on this session. Call this only after commit."""
+
+    pending = session.info.pop(_QUEUE_KEY, [])
+    if not isinstance(pending, list):
+        return
+    for item in pending:
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        settings, alert = item
+        if not isinstance(settings, Settings) or not isinstance(alert, ExitMonitorAlert):
+            continue
+        try:
+            deliver_safety_alert(settings, alert)
+        except Exception as exc:
+            logger.warning(
+                "safety_alert_telegram_failed",
+                code=alert.code,
+                error=redact_text(str(exc))[:200],
+            )
+
+
+def discard_queued_safety_alerts(session: Session) -> None:
+    """Drop queued alerts after a rollback."""
+
+    session.info.pop(_QUEUE_KEY, None)
+
+
+def _cooldown(code: str) -> timedelta:
+    return timedelta(seconds=_COOLDOWN_SECONDS.get(code, _DEFAULT_COOLDOWN_SECONDS))
+
+
+def _recently_sent(key: str, now: datetime, cooldown: timedelta) -> bool:
+    moment = _aware(now)
+    with _LOCK:
+        previous = _SENT.get(key)
+    if previous is None:
+        return False
+    return moment - previous < cooldown
+
+
+def _remember(key: str, now: datetime) -> None:
+    with _LOCK:
+        _SENT[key] = _aware(now)
+
+
+def _aware(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
