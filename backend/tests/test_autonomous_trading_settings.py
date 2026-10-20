@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -298,6 +299,15 @@ def test_enforcement_guards() -> None:
     assert (
         autonomous_precheck_refusal(
             resolved,
+            _target(symbol="ETHUSDT"),
+            _snapshot(),
+        )
+        is None
+    )
+    configured = replace(resolved, using_defaults=False)
+    assert (
+        autonomous_precheck_refusal(
+            configured,
             _target(symbol="ETHUSDT"),
             _snapshot(),
         )
