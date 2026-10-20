@@ -1,0 +1,5 @@
+
+> frontend@0.1.0 api:check
+> node scripts/generate-api.mjs --check
+
+API drift check passed; full schema SHA256 eb9f188b454a8eb944705a7eec0d174212e70b2ddc59faef05ef27ef881546a7

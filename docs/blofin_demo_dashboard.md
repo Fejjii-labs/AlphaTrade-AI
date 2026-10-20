@@ -38,16 +38,16 @@ This is a fixture example, not a live account claim.
 
 | Action | Behavior |
 | --- | --- |
-| Open / Dashboard Refresh | Authenticated organization-scoped `GET /dashboard/demo-account`. Saved evidence only; no venue request. |
-| Visible owner Dashboard | Native `POST /dashboard/demo-account/refresh` every 180 seconds, scheduled after completion. One native request at a time; saved reads cannot overtake it. |
-| Visible trader/viewer | Saved GET every 180 seconds. Native refresh retains owner-only authorization. |
+| Open / Dashboard Refresh | Authenticated organization-scoped `GET /dashboard/demo-account`. Saved evidence only; no venue request. An owner with demo gates open then posts one native refresh immediately. |
+| Visible owner Dashboard and /exchange | Native `POST /dashboard/demo-account/refresh` on open, then every `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` (default 45, allowed 30–60) while visible. One native request at a time; saved reads cannot overtake it. |
+| Visible trader/viewer | Saved GET on the same interval. Native refresh retains owner-only authorization. |
 | Hidden page | Stops scheduled polling. Visibility return performs at most one overdue request, respecting due time/backoff. Existing in-flight requests may complete. |
-| Failure | Retry delays are 360, 720, then capped at 900 seconds. HTTP/timeouts and unavailable responses retain successful evidence and its timestamp with stale/error status. Success clears the error and restores 180 seconds. |
+| Failure | Retry delay doubles from the configured interval and is capped at 900 seconds. HTTP/timeouts and unavailable responses retain successful evidence and its timestamp with stale/error status. Success clears the error and restores the configured interval. |
 | Timeout / navigation | A 30-second deadline and AbortSignal bound browser work. Superseded reads/unmount cancel requests; late results cannot overwrite state. A server read already started may finish after browser cancellation. |
 | Explicit native refresh | Owner-only; repeated clicks and automatic refresh are deduplicated in the card. Dashboard-wide Refresh remains a saved read. |
 | Failed saved attempt / reload | Failure remains persisted/audited. Dashboard retrieves this organization's last valid successful snapshot, marks it stale and exposes the failed attempt timestamp/generic error. Other sync consumers still read the actual latest attempt. |
 | First failure / no snapshot | Unavailable / not synced / inactive never claim an invented flat account. |
-| Limits | At most 20 automatic attempts/hour/tab; native endpoint enforces 30/organization/user/hour. Multiple tabs share that server limit and independently back off. Lists retain configured bounds; truncated positions have no full count. |
+| Limits | The native endpoint allows 240 refreshes per organization and user per hour so one or two open owner views can poll every 30 seconds. Multiple tabs share that limit and independently back off. The worker snapshot cycle skips when a fresh snapshot already exists. Lists retain configured bounds; truncated positions have no full count. |
 
 Both endpoints return `Cache-Control: private, no-store`. Server freshness
 (default 300 seconds) and browser expiry still apply. Errors/provenance payloads

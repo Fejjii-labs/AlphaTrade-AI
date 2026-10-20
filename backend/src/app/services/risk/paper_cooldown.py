@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import JournalTrade, Position
 from app.schemas.common import JournalTradeSource, JournalTradeStatus, PositionStatus
+from app.services.risk.mirror_economics import journal_mirror_economics
 
 
 def paper_loss_cooldown_active(
@@ -37,6 +38,7 @@ def paper_loss_cooldown_active(
             JournalTrade.execution_lifecycle_id.is_not(None),
             JournalTrade.exit_time >= since,
             JournalTrade.net_pnl < 0,
+            ~journal_mirror_economics(),
         )
         .limit(1)
     )

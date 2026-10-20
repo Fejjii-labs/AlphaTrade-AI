@@ -2,9 +2,12 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
-## AT-ADR-107 — Non-pull_request runs cannot cancel or replace each other
+## AT-ADR-121 — Non-pull_request runs cannot cancel or replace each other
 
 - Date: 2026-10-19
+- Id: Renumbered from AT-ADR-107 during the 2026-10-19 integration batch.
+  AT-ADR-107 is the grade-based risk policy (PR #278, policy `at-adr-107/v1`).
+  The decision text is unchanged.
 - Decision: Every push and every `workflow_dispatch` run, including
   `full_backend`, has its own concurrency group: `github.workflow` plus
   `github.run_id`. `cancel-in-progress` stays true only for `pull_request`.
@@ -21,7 +24,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   local yet, fails open and runs the work. The docs-only skip remains
   pull_request-only. It does not apply to push, `workflow_dispatch`, or a
   non-base edit.
-- Limit: Supersedes the concurrency grouping in AT-ADR-106. Draft `opened` and
+- Limit: Supersedes the concurrency grouping in AT-ADR-122. Draft `opened` and
   `synchronize` still skip heavy work unless the exact label `run-ci` is already
   present. A label whose name only contains that text does not count. The scope
   self-test ignores the calling `CI_SCOPE_*`, `GITHUB_*`, and `GIT_*` environment.
@@ -31,11 +34,14 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.
 - Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`.
 
-## AT-ADR-106 — Ordinary CI cancels stale runs; full backend is manual per batch
+## AT-ADR-122 — Ordinary CI cancels stale runs; full backend is manual per batch
 
 - Date: 2026-10-19
+- Id: Renumbered from AT-ADR-106 during the 2026-10-19 integration batch.
+  AT-ADR-106 is the autonomous-mode decision (PR #258, policy `at-adr-106/v1`).
+  The decision text is unchanged.
 - Decision: Only pull_request CI cancels the previous run of that pull request.
-  Concurrency grouping is superseded by AT-ADR-107: a push or
+  Concurrency grouping is superseded by AT-ADR-121: a push or
   `workflow_dispatch` uses its own `github.run_id` group, so it is not queued,
   cancelled, or replaced while pending. The 02:00 UTC
   schedule is removed. The complete
@@ -44,7 +50,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   A batch stacks onto an integration branch such as `integration/<date>`, gets
   one full dispatch, and merges in order only after that run. Draft `opened`
   and `synchronize` events do not run backend, evaluation, Docker build, or
-  Playwright smoke unless they already carry `run-ci`. AT-ADR-107 runs that
+  Playwright smoke unless they already carry `run-ci`. AT-ADR-121 runs that
   heavy work for `reopened`, `ready_for_review`, and a base retarget even when
   the pull request is still a draft. The `labeled` activity is
   not a workflow trigger. `deployment-safety` still runs on drafts and runs
@@ -65,6 +71,659 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Safety: Real trading stays disabled. No workflow is dispatched by this change.
 - Reference: `.github/workflows/ci.yml`; `.github/workflows/ci-scope.sh`;
   `.ai/RELEASE.md`.
+## AT-ADR-118 — Backfilled paper exits stay out of the breakers
+
+- Date: 2026-10-19
+- Decision: An exit-monitor close is a historical backfill only when the
+  crossing bar ended at least 24 hours before evaluation, or a timestamp is
+  naive. That is a close from before the monitor tracked the trade. The open
+  October 6 short stop and long target, reconstructed on a later day, are
+  that case. The journal still records the close, with `exit_origin=backfill`
+  and `calibration_sample=excluded`. That close does not advance the
+  consecutive-loss breaker, does not sync the daily lock, and is not an
+  AT-ADR-109 calibration sample. A crossing processed within 24 hours is
+  `exit_origin=live`, including when the bar ended on the previous UTC date
+  and the worker runs after midnight. A live close of a
+  `paper-profile-isolated` plan uses the same profile-close note as any
+  other profile close, with the bar's end as the note time, so the result
+  counts toward the consecutive streak and the daily lock for the day the
+  bar closed. A human close is unchanged. A live close does not insert a
+  calibration row on this path, because the walk-forward fold is not known
+  here. Both monitor flags stay false. This record does not arm them.
+  Real-money trading stays rejected.
+- Reference: AT-ADR-109; AT-ADR-110; AT-ADR-116;
+  `docs/paper_exit_monitor.md`.
+
+## AT-ADR-117 — Paper exit candles follow the trade's live evidence
+
+- Date: 2026-10-18
+- Decision: The internal-paper exit monitor reads closed candles from the
+  trade's stored evidence identity. Live Binance evidence uses the Binance
+  USD-M public adapter (the live watcher source for BTCUSDT 15m and the
+  other watched perpetuals). Live Bybit evidence uses the Bybit public
+  adapter. Replay and mock evidence stay on the replay fixture, which is
+  for tests and backtests. `perpetual_evidence_source=replay` remains the
+  process default and does not select candles for a live trade. Staging
+  trades with no stored identity use Binance USD-M. A process already
+  configured on a live source keeps that source, including failover, only
+  when the trade has no stored identity.
+- Entry bar: live internal-paper fills are taken at a closed-bar boundary.
+  The journal `entry_time` is that bar's `interval_end`, not the watcher
+  clock. A stored time within 90 seconds after the boundary is the same
+  boundary. The fill bar is not eligible. The next bar, whose
+  `interval_start` equals that boundary, is the first bar that can exit.
+  A touch inside the fill bar does not close the trade. A fill deeper
+  inside a bar still skips that bar. A bar that opens through the stop
+  exits at that open.
+- Flags and scope are unchanged from AT-ADR-116. Both monitor flags default
+  false. This decision does not arm them, change deploy config, or
+  authorize a merge. Real-money trading stays rejected.
+- Id: drafted as AT-ADR-108 on the paper exit-monitor branch. The grade-risk
+  branch had already published AT-ADR-107 and AT-ADR-108, so the merge
+  recorded this as AT-ADR-115. The batch already uses every id through
+  AT-ADR-115, so this record is AT-ADR-117. The candle rule is unchanged.
+- Reference: `docs/paper_exit_monitor.md`;
+  `backend/src/app/services/paper_exit_candles.py`.
+
+## AT-ADR-116 — Internal paper trades exit at the stop or target
+
+- Date: 2026-10-18
+- Decision: Open canonical internal paper trades are closed by a paper-worker
+  component when a closed candle from the strategy evidence source touches the
+  stop or the single full-size target. The fill price is that level, except
+  when the bar opens through the stop: that fill is the open. Costs are
+  the plan's fee, funding, and slippage allowances (zero on
+  `paper-internal-entry/v1`). If one bar touches both levels, the stop wins and
+  the journal evidence records `same_bar_assumption=stop_first`. The exit time
+  is the crossing bar's `interval_end`.
+- Writer: `ExecutionService.close_canonical_paper_plan`, the same method as
+  `POST /paper-plan/close`. The monitor does not update journal rows itself
+  and does not call an exchange. Idempotency key
+  `paper-exit-monitor:{command_id}`. A rerun replays that close.
+- Journal identity: `exit_reason` is `stop_hit` or `target_hit`. The CLOSE
+  lifecycle payload adds `exit_channel=PAPER_EXIT_MONITOR` and
+  `exit_actor=paper_exit_monitor` plus bar evidence. The HTTP close body
+  cannot set those fields, so a human close stays distinct.
+- Scope: `plan_authority=canonical`, `execution_venue=PAPER_INTERNAL`,
+  `execution_policy_version=paper-internal-entry/v1`, runner disabled, one
+  target at fraction 1. Manual BloFin demo trades and governed BloFin demo
+  plans are not read for exit. A history window that does not reach the entry
+  does not close the trade.
+- Flags: `paper_exit_monitor_enabled` (`PAPER_EXIT_MONITOR_ENABLED`) and
+  `paper_exit_monitor_dry_run` (`PAPER_EXIT_MONITOR_DRY_RUN`). Both default
+  false. Production refuses the enabled flag. Dry-run logs
+  `paper_exit_monitor_would_close` and does not write. This decision does not
+  arm either flag, change deploy config, or authorize a merge. Real-money
+  trading stays rejected.
+- Id: drafted as AT-ADR-107 on the paper exit-monitor branch. The grade-risk
+  branch had already used AT-ADR-107, so the merge recorded this as
+  AT-ADR-114. The batch already uses every id through AT-ADR-115, so this
+  record is AT-ADR-116. The exit rule is unchanged.
+- Reference: `docs/paper_exit_monitor.md`;
+  `backend/src/app/services/paper_exit_monitor.py`.
+
+## AT-ADR-120 — Stored-plan grade cap, server drawdown reset, unverified fill funding
+
+- Date: 2026-10-19
+- Id: Renumbered from AT-ADR-113. PR 280 owns AT-ADR-113. PR 281 uses
+  AT-ADR-116 through AT-ADR-118.
+- Decision: This amends AT-ADR-119. A stored plan is capped at the grade
+  written on it when it was sized (`profile_sizing_grade`). The cap is the
+  tighter of that stored percent and the same grade on the profile in force.
+  The widest grade on the profile is not used. A plan with no readable grade
+  is refused with `stored_plan_limits_uncomputed`. `reset_drawdown_latch`
+  reads equity for the user stored on `ExecutionAccount` and reads the
+  drawdown threshold as the tighter of the internal-paper and demo profiles
+  in force. The caller does not pass either value. The proof owner stays the
+  configured risk-policy owner, the same value `apply` uses.
+- Fill funding: official `GET /api/v1/trade/fills-history`
+  (https://docs.blofin.com/index.html) lists `fillPnl` and `fee` and does
+  not list a funding field or its sign. `GET /api/v1/account/funding-fees`
+  has `fundingFee` ("a positive value means received; a negative value means
+  paid") on a separate bill, not on the fill. Fill funding stays unverified,
+  so the demo close streak stays negative. A TODO marks the fill parser.
+- What stays: real-money trading stays blocked. Both autonomous flags stay
+  false. No live order is added.
+- Reference: Grok review 5575648400 on `cf67b559`.
+
+## AT-ADR-119 — Stored plans, open risk, and drawdown reset stay fail-closed
+
+- Date: 2026-10-19
+- Id: Renumbered from AT-ADR-112. PR 282 owns AT-ADR-112.
+- Decision: A stored paper or demo plan is refused before approval and again
+  before execution when `breaker_active` is true, including a daily or
+  consecutive pause written after sizing and a drawdown latch that remains
+  after `KillSwitchService.deactivate`. A missing execution clock time, or a
+  missing stored plan, refuses with `stored_plan_limits_uncomputed` and does
+  not raise. When a profile is active, the stored quantity is priced again
+  against the current open book and is not rewritten.
+  Open-risk notional uses only open positions and open lifecycles. Closed
+  rows are excluded from both sides of that comparison, which allows a
+  difference of at most `0.00000001`. `reset_drawdown_latch` accepts only an
+  authenticated human, requires the same step-up proof as a profile apply,
+  and reads equity from server portfolio accounting. A verified demo close
+  passes funding cash into the streak only when every closing fill carried a
+  finite figure; otherwise the streak stays negative. An unreadable paper
+  liquidation price is recorded as `unreadable_liquidation`. An unreadable
+  demo liquidation price logs a warning and is not labeled through the stop.
+- What stays: real-money trading stays blocked. Both autonomous flags stay
+  false. The risk engine `BLOCK` remains final. No live order, withdrawal,
+  transfer, or leverage change is added.
+- Reference: Griller re-check of `e2f488f3`; AT-ADR-110; AT-ADR-111.
+
+## AT-ADR-111 — Paper and demo may collect grades above 1% without a promotion report
+
+- Date: 2026-10-18
+- Decision: Sofien decided at 17:20 CEST on 2026-10-18 (15:20 UTC), in chat
+  with his AI Nerd agent, to allow grade risk up to 5% (A+) on internal
+  paper and BloFin demo now, and to skip the AT-ADR-109 (c) promotion gate
+  for those kinds only, so paper and demo can collect data. This amends
+  AT-ADR-109 (c). It does not replace (a), (b), (d), or (e).
+- Scope: the skip applies only when the stored profile kind is the
+  server-set `internal_paper` or `demo` kind (`PAPER_DEMO_KINDS`, the same
+  set as the 5% ceiling) and `paper_demo_data_collection` is true on that
+  stored profile. `conservative`, `standard`, and `aggressive` still require
+  a stored eligible promotion report before a tradable grade goes above 1%,
+  and they cannot set `paper_demo_data_collection`. A caller does not pass
+  an eligibility flag into sizing. `promote()` still refuses. The field is
+  not a live-trading or arming exemption.
+- What stays: the PR 278 human proof and the loosening cooldown still apply
+  before a profile version is applied. Breakers, the daily-loss limit, and
+  the open-risk limit still refuse a new trade. Real-money trading stays
+  blocked. Both autonomous flags stay false. The per-trade ceiling stays 5%
+  for paper and demo and 2% for every other kind.
+- Rationale: paper and demo need observed outcomes for grades above the 1%
+  placeholder before a server promotion report can exist. Collecting those
+  outcomes does not satisfy (c) for any other kind, for live trading, or
+  for arming either flag.
+- Reference: Sofien, 2026-10-18 17:20 CEST; AT-ADR-109 (c); AT-ADR-110.
+
+## AT-ADR-110 — Paper and demo per-trade ceiling of 5%
+
+- Date: 2026-10-18
+- Decision: Sofien instructed on 2026-10-18 that paper and demo risk at the
+  stop may be chosen by setup grade, normally 1–3% and up to 5% for an A+
+  high-confidence setup. A selectable profile `sofien_aggressive_paper`
+  (and `sofien_aggressive_demo`) uses A+ 5%, A 3%, B+ 2%, B 1%, C 0%,
+  default leverage 10x, and maximum leverage 20x. It is not applied
+  automatically. The conservative placeholder stays the default, and a
+  profile is active only when a version row exists.
+- Ceilings: `PolicyKind.INTERNAL_PAPER` and `PolicyKind.DEMO` may store up
+  to 5% per trade and 2000% of equity as notional. `conservative`,
+  `standard`, and `aggressive` stay at 2% per trade and 100% notional.
+  There is no live policy kind. Real-money trading stays blocked. Both
+  autonomous flags stay false and a profile that sets either flag is rejected.
+- Calibration: AT-ADR-111 amends AT-ADR-109 (c). An applied
+  `internal_paper` or `demo` profile with `paper_demo_data_collection` may
+  size a grade above 1%, up to the 5% ceiling, without a promotion report.
+  Turning the field on is a loosening and is audited. `promote()` still
+  refuses. Every other kind still requires the report. The field does not
+  satisfy (c) for live trading or for arming either flag. The human proof,
+  loosening cooldown, breakers, daily and open-risk limits, and the
+  real-money block stay in force. The profile sizer sets
+  `paper_or_demo_channel` from the execution channel. Internal paper and
+  BloFin demo use that 5% branch. Any other channel keeps
+  `risk_ceiling_for` and is refused above 2%.
+- Drawdown kill switch: the profile scan that newly sets the drawdown
+  latch calls `KillSwitchService.activate` for the organization, with an
+  audited reason. A later scan does not deactivate it and does not call
+  activate again while that latch remains, including after equity is back
+  inside the threshold and after a human deactivation. Only
+  `KillSwitchService.deactivate` turns it off. A new trip after
+  `reset_drawdown_latch` can arm it again. A repeat scan does not write
+  another activation audit row.
+- Open stop risk: canonical open paper and demo lifecycle rows are priced
+  at their planned stop together with Position rows. If a lifecycle row
+  or the snapshot notional cannot be priced, the plan is refused with
+  `open_risk_uncomputed` and the reason is logged.
+- Leverage sets margin only. Loss at the stop, the exit-leg taker fee,
+  funding, and on demo the 0.2% book buffer, must fit inside the grade
+  cash. Costs above the profile share of R refuse with `costs_exceed_r`.
+  Funding is the verified live rate when a demo
+  `GET /api/v1/market/funding-rate` returns a finite rate, and otherwise
+  a floor of 0.0001 per 8 hours. The sized rate is never below that floor
+  (`max(abs(live), 0.0001)`). Periods are the expected hold divided by 8,
+  and at least one. The wired path has no hold forecast, so the expected
+  hold is 8 hours (one window). A caller that supplies a longer hold
+  scales the periods. A failed or missing GET is not replaced with the
+  mock funding fallback. Paper has no venue funding read and uses the
+  floor. A 0.5% stop can refuse at this floor; the 20% cost-share ceiling
+  is unchanged. Those same costs are counted in open risk at existing
+  stops and in the `maximum_loss` reserved as daily loss. The shared
+  organization-and-account ledger row is not rewritten. The wired paper
+  and demo path refuses when liquidation is inside the buffer. It does
+  not silently lower leverage. A library helper can still compute a lower
+  whole-number leverage and never raises it; that helper is not applied
+  on the wired path. If 1x still fails, or margin would exceed equity, the
+  trade is refused and quantity is not shrunk to fit. Paper maintenance
+  uses a conservative 2% rate because there is no venue tier feed. Demo
+  reads public position tiers and refuses when they are missing. BloFin's
+  GET /api/v1/market/position-tiers
+  (https://docs.blofin.com/index.html) describes `minSize` as "Minimum
+  position size" and does not say contracts. Order `minSize` on GET
+  Instruments is in contracts. The public BTC-USDT isolated ladder
+  (0, 2500, 5000, … USDT, with `contractValue` 0.001) matches quote
+  notional. The tier floor is that number unchanged. Scaling it by
+  contract value and price would keep the lowest maintenance rate.
+  BloFin
+  demo does not send a leverage or margin-mode write. Account margin mode
+  is read from `GET /api/v1/account/margin-mode`. Leverage-info counts
+  only when its payload includes `marginMode` and that mode equals the
+  account read. A missing mode is not replaced with the requested mode.
+  A leverage mismatch blocks with `demo_account_leverage_mismatch`. A
+  demo account that is not isolated blocks with
+  `demo_margin_mode_not_isolated`. An active demo profile does not treat
+  the unprofiled 1% `size_below_minimum` result as the plan result; that
+  plan is sized with `size_for_profile`. After a profile demo fill, the
+  existing kill switch runs before a liquidation or unreadable-liquidation
+  result, including when the observed liquidation price is through the
+  stop and protection is reported attached. When that is the trigger, the
+  kill-switch reason says liquidation is through the stop, and a critical
+  alert is recorded on the existing notification path. Telegram stays off
+  unless it was already enabled. An unreadable read keeps the
+  protection-missing reason and is not labeled as a price through the
+  stop. That path does not close or reduce the position and does not
+  write leverage or margin mode. A verified demo profile close advances
+  that account's consecutive-loss count. The sign subtracts verified fees
+  and funding, so a trade that is flat or green on price and loses after
+  fees is a loss. Missing fees do not reset the streak. Missing or
+  non-finite demo funding cash does not reset it either. The 0.0001 per
+  8h figure stays a sizing cost estimate and is not verified funding for
+  the streak sign. Venue fill PnL stays ignored. The consecutive
+  pause is set once, to the later of the next UTC midnight and the profile
+  cooldown (`consecutive_loss_cooldown_hours`, default 24, range 1 to 168).
+  Later scans do not push that expiry forward. When the expiry passes, the
+  streak clears. While that pause is still in the future, a paper or demo
+  close cannot zero the streak or clear the pause. A loss on that close
+  may still increment the count. Ending the pause early stays on the
+  human consecutive-loss reset. A manual reset requires the same human proof as a
+  loosening apply, writes an audit row, and does not clear a drawdown
+  latch. A Telegram proof without `iat` is rejected on that reset, the
+  same as on apply. `decode_apply_proof` stays bound to a proposal UUID
+  and is not widened for `consecutive-reset:<account_id>`. A future
+  reset route needs its own strict decoder that accepts only a human
+  actor. Shortening the cooldown is a loosening. The next demo entry stays
+  refused while that pause is active. Drawdown reset stays human-only.
+  The daily pause is stored on `daily_paused_until` as the next UTC
+  midnight when the daily loss first trips. A later scan on that same UTC
+  day keeps the stored timestamp after realized and unrealized PnL are
+  back inside the limit, and `breaker_active` stays true. That timestamp
+  is cleared only once it is no longer in the future. There is no early
+  reset for the daily pause. A scan cannot clear a drawdown latch.
+  `reset_drawdown_latch` remains the human path, and it still refuses
+  while the live drawdown is outside the threshold. `KillSwitchService.deactivate`
+  is the only path that turns the organization kill switch off. A
+  loosening `effective_at` is stored once and a later scan does not move
+  it earlier. SFP approach cooldowns and alert cooldowns are not risk
+  pauses, and a breaker scan does not clear them.
+- Claim ceilings for a profile plan are a per-claim view. They are not
+  written onto the shared organization-and-account ledger row, so a later
+  manual claim keeps the stored cash ceilings.
+- Notional: when a profile is active, a cap that would shrink the grade
+  risk refuses with `notional_cap_shrinks_grade_risk`. The previous fixed
+  1% risk and 5% notional path remains only when no profile version row
+  is active.
+- Reference: Sofien, 2026-10-18; AT-ADR-111; `docs/risk_policy_arming_checklist.md` (c);
+  `docs/sfp_level_approach.md`.
+
+## AT-ADR-109 — Hard prerequisites before arming the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: Griller's verdict on PR #278 at
+  `bc9041f09fef55517056a0da8238797ec9119cb8` is MERGE WITH BOTH FLAGS OFF.
+  `autonomous_internal_paper_enabled` and `autonomous_blofin_demo_enabled`
+  stay false. Real-money trading stays blocked. This record does not enable
+  either flag, does not change deploy config, and does not merge the pull
+  request. The checklist is `docs/risk_policy_arming_checklist.md`.
+- The items below are HARD PREREQUISITES. Each one names the trigger that
+  makes it binding. Writing them down does not satisfy them.
+
+### (a) Trigger: before ANY proof issuer or apply use
+
+Before a server issues an apply proof, and before apply is used, including
+a paper or demo profile apply:
+
+- Proofs are issued by the server and are single-use. Single-use means a
+  stored nonce. The TTL is 5 minutes or less.
+- The server checks a real verification: a TOTP or WebAuthn step-up, or a
+  Telegram confirmation from the pinned chat id.
+- The proof uses a signing key that is separate from `jwt_secret`.
+- `proposal_id` is required and matches the proposal being applied.
+- Current state on `bc9041f0`: the proof only fails closed. A missing or
+  invalid proof is rejected. There is no issuer, no stored nonce, and no
+  separate signing key. `decode_apply_proof` verifies with `jwt_secret`.
+  A token that omits `proposal_id` is filled with the request's proposal
+  id. `actor=user` is a label on the access token. It is not a TOTP,
+  WebAuthn, or Telegram check.
+- Follow-up to Grok review 5568860205: `decode_apply_proof` now rejects a
+  missing `proposal_id` and a `proposal_id` that does not match the
+  proposal. It does not copy the request id. A `telegram_owner` proof is
+  fresh only when its `iat` is not in the future and is no older than 5
+  minutes, even when `exp` is later. There is still no issuer, stored
+  nonce, or separate signing key. `actor=user` is still a label.
+- Follow-up to Grok review 5569113368: a step-up proof is rejected when
+  `auth_time` or `step_up_at` is later than now. `decode_apply_proof` and
+  `_require_fresh_step_up` both enforce that. The 15-minute maximum age
+  remains. There is no clock-skew allowance on this path. A non-numeric
+  or non-finite time claim is rejected instead of being parsed. `exp` does
+  not extend either freshness window. Blank or non-string `sub`,
+  `content_hash`, and `proposal_id` claims are rejected. An access token
+  cannot be used as an apply proof, and an apply proof cannot be used as
+  an access token. A human access token must include `exp`, `iat`, `sub`,
+  and `org_id`, and the risk-policy route checks those against the tenant.
+  Replaying a proof against another proposal is rejected. Applying the
+  same proposal twice is `version_conflict`. There is still no issuer,
+  stored nonce, or separate signing key. `actor=user` is still a label.
+
+### (b) Trigger: before exposing drawdown reset
+
+Before a route or any other caller can reset a drawdown latch:
+
+- The reset requires the same proof as apply.
+- Legacy tokens with no `actor` claim are refused.
+
+### (c) Trigger: before ANY grade goes above 1%
+
+Amended 2026-10-18 by AT-ADR-111. The promotion report is not required for
+a stored `internal_paper` or `demo` profile whose
+`paper_demo_data_collection` field is true. Every other kind still requires
+the report. This amendment does not change (a), (b), (d), or (e), and it
+does not cover live trading or arming.
+
+Before a tradable grade risk is allowed above the 1% placeholder, on apply
+or on sizing:
+
+- The promotion report is computed by the server, per grade, from stored
+  samples.
+- The caller supplies no eligibility flags.
+- One report does not cover the whole organization.
+
+### (d) Trigger: before arming
+
+Before either autonomous flag is set true, in any environment:
+
+- Database triggers make breaker intervals, cancellations, promotion
+  reports, and breaker resets append-only.
+- A cancellation commits only its own work.
+- A breaker that opens and closes between apply and `effective_at` also
+  cancels that change.
+- On `bc9041f0`, profile versions have a Postgres immutability trigger.
+  Intervals, cancellations, promotion reports, and resets are refused by
+  ORM listeners. Those four tables do not have the database triggers this
+  prerequisite requires. `_cancel_version` commits the whole session. A
+  persisted window cancels a loosening when the window covers
+  `effective_at`. A window that has already closed before `effective_at`
+  does not.
+
+### (e) Follow-ups
+
+These follow-ups are required. They do not replace (a)–(d).
+
+- Trigger: before a downgrade of `a17riskpolicy002` is relied on. That
+  downgrade refuses while cancellation, promotion-report, or breaker-reset
+  rows exist. `a16` and `a18` already refuse when their guarded rows exist.
+- Trigger: before a client uses `/risk/policy/*`. Route tests cover those
+  routes.
+- Trigger: the next edit of `backend/src/app/core/config.py`. Correct the
+  stale comment at lines 205–209. This record does not edit that file.
+
+### Wiring pull request
+
+These stay in a later wiring pull request. This decision does not authorize
+that work:
+
+- an atomic budget reservation
+- server-side open-risk computation
+- the isolated-versus-cross margin mismatch on the demo path
+
+`ExchangeMarginWriter` stays unwired.
+
+- Reference: AT-ADR-107; AT-ADR-108; `docs/risk_policy_arming_checklist.md`;
+  Griller review of PR #278 at `bc9041f0`, 2026-10-18.
+
+## AT-ADR-108 — Griller follow-up on the grade-based risk policy
+
+- Date: 2026-10-18
+- Decision: The follow-up review of the grade-based risk policy (PR #278 at
+  `895ca71f`) is accepted as changes, not as a merge. Real-money trading
+  stays blocked. Both autonomous flags stay off. No BloFin write path is
+  added. Alembic `a17riskpolicy002` revises `a16riskpolicy001`.
+- `risk_percent` in the rule engine applies only when the caller sets
+  `autonomous_sizing`. Human paper execution still copies
+  `max_risk_per_trade_percent` (the settings API allows up to 10%) and
+  strategy replays still pass 2-5%. Those paths do not opt in, so they
+  behave as they did before the policy tables existed.
+- Apply is not "any owner role" and a missing `actor` claim is not a human.
+  Apply requires the configured `risk_policy_owner_user_id` plus a separate
+  proof: a fresh interactive session with step-up or re-auth (15 minutes),
+  or a confirmation from the pinned Telegram owner chat
+  (`telegram_chat_id`). Service, agent, and bot tokens are refused. The
+  apply body has no `confirm` field. The stored version channel remains
+  `human` because the proof is what makes the apply human.
+- Loosening becomes effective at `max(next UTC midnight, apply time + 24h)`.
+  A proposal older than 72 hours cannot be applied. If a breaker is active
+  when a scheduled loosening comes due, that version is cancelled and does
+  not activate after the breaker clears.
+- A tradable grade above the 1% placeholder is refused, on apply and on
+  sizing, unless a stored promotion report for `deterministic-grade/v1`
+  meets the existing calibration criteria. `promote()` still always refuses.
+- R includes the exit-leg fee at the stop price. Funding is expected
+  holding periods times the funding rate. Quantity is rounded down to the
+  instrument lot step, refused below the minimum quantity, and R is
+  recomputed after that rounding. A non-positive stop is refused. The
+  remaining daily budget used for sizing is
+  `min(profile daily, 6% ceiling, remaining daily)`.
+- Postgres refuses UPDATE and DELETE of `risk_policy_versions` with a
+  trigger. Downgrade of `a16riskpolicy001` refuses when trade records or
+  breaker-state rows exist. Breaker pause, loss count, realized P&L, and
+  unrealized P&L are persisted. A drawdown reset is an append-only row
+  carrying the actor. The daily breaker uses realized plus unrealized P&L.
+- Grok review of `38450d26` (2026-10-18) required one further correction.
+  A loosening is cancelled when its `effective_at` falls inside a persisted
+  breaker window, even if the first profile read happens after that window
+  has closed. The window is the append-only open and close history in
+  `risk_policy_breaker_intervals` (`a18riskpolicy003`), not the live latch.
+  A breaker that opens only after `effective_at` does not cancel that
+  version. `a18riskpolicy003` revises `a17riskpolicy002`. `a16` still
+  revises `a15reissueauth001`. Real-money trading stays blocked.
+- Grok review of `f06614c3` (2026-10-18) required four corrections, accepted
+  on the same branch. The first stored profile is classified against the
+  live placeholder: a looser result is a loosening, so the cooldown and the
+  human proof apply, and an unchanged placeholder stays an initial apply.
+  Breaker cancellation of a due loosening is committed, so closing the read
+  session cannot roll it back, and that version stays cancelled after the
+  breaker clears. A new proposal is required. Human access tokens are
+  stamped `actor=user` at issuance. Agent, bot, and service tokens keep
+  their own actor. An undeclared or missing actor is rejected before a
+  proposal insert. A persisted drawdown reset is refused while equity is
+  still outside the drawdown threshold.
+- Left for a later wiring pull request, not this change: an atomic budget
+  reservation, server-side open-risk computation, and the isolated-versus-cross
+  margin mismatch on the demo path. Connecting `ExchangeMarginWriter` still
+  needs its own pull request, a Griller review, and a further ADR.
+- Reference: AT-ADR-107; Griller review of PR #278, 2026-10-18.
+- Addendum 2026-10-18: Griller's verdict on `bc9041f0` is MERGE WITH BOTH
+  FLAGS OFF. The hard prerequisites and their triggers are AT-ADR-109 and
+  `docs/risk_policy_arming_checklist.md`. This addendum does not arm either
+  flag.
+
+## AT-ADR-107 — Grade-based risk policy is versioned, and ceilings fail closed
+
+- Date: 2026-10-18
+- Decision: Owner Sofien's grade-based risk policy is infrastructure only.
+  Every risk number is a profile field. The shipped values are conservative
+  placeholders: 1% risk on A+, A, B+, and B; C and an ungraded setup do not
+  trade; leverage defaults to 1x; `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled` stay false and a profile that sets either
+  to true is rejected. Real-money trading stays permanently blocked. This
+  decision does not enable either autonomous flag, change deploy config, or
+  authorize a merge.
+- Ceilings, in code, not in the profile: 2% per trade, 6% daily loss, 6%
+  aggregate open risk (sum of risk-at-stop), 20x leverage, and 25% of R as
+  the maximum cost share. A profile outside a ceiling is rejected at
+  validation and again when a version row is inserted. The loader does not
+  clamp. Separate profile kinds (conservative, standard, aggressive,
+  internal paper, demo) exist so paper and demo can diverge later. They
+  start from the same placeholder.
+- Governance: proposals may come from an authenticated human, agent, or bot
+  token. Only an authenticated human access token can apply, and the version
+  row's `actor_channel` check is `human`. Tightening takes effect immediately.
+  Loosening needs `confirm=true`, takes effect at the next UTC midnight, and
+  is refused while a daily-loss, drawdown, or consecutive-loss breaker is
+  active. The active version is the highest version number whose
+  `effective_at` is already due, so a later tightening is not overwritten by
+  an earlier scheduled loosening. Versions are immutable. A change applies
+  to new trades only; the trade row keeps the version it was sized with.
+- Grading: `deterministic-grade/v1` uses only the trend and momentum scores
+  from `app.analysis.confidence`. The first grade bound to a setup stays
+  bound. AI text may explain that grade and cannot raise it.
+- Sizing: effective risk is the minimum of the adjusted grade risk, the
+  profile allowance, the 2% ceiling, and the room left in both the daily
+  budget and the aggregate open-risk cap after open risk-at-stop. Quantity
+  comes from the adverse stop distance (stop plus any gap past the stop)
+  with fees, absolute funding, and slippage inside R. Costs above the
+  profile's share of R refuse the trade. Notional caps can only reduce
+  quantity. Leverage sets isolated margin and does not change quantity.
+  A missing adjuster input or a missing maintenance tier refuses the trade.
+- Breakers: daily loss and four consecutive losses pause new trades until
+  the next UTC day. A 10% drawdown from the equity peak trips the kill
+  switch and stays latched until an authenticated human resets it, and the
+  reset does not stick while the drawdown is still outside the threshold.
+- Liquidation: isolated margin only. The buffer is the larger of twice the
+  stop distance and the stop distance plus 1.5 ATR, using the maintenance
+  tier for the position notional. The post-fill check can say
+  `close_or_reduce`. It does not call an exchange.
+- Exchange writes: this decision does **not** add a BloFin endpoint that
+  sets leverage or margin mode. `ExchangeMarginWriter` in
+  `app.services.risk_policy.exchange_margin` is unwired and raises if
+  called. Connecting that write needs its own pull request, a Griller
+  review, and a further ADR that covers the allowlist, the demo host, the
+  pinned account, and a read-back that matches. Until then the check is
+  local.
+- Ledger: PR 258's unverified fallback stores `max_symbol_notional` equal
+  to `max_notional`, and demo auto-approval already refuses that row. A
+  bound profile produces a symbol cap from per-trade notional that is
+  strictly below aggregate notional, and a daily-loss amount that is also
+  strictly below aggregate notional. The risk engine's `risk_percent` rule
+  blocks a stated risk above the ceiling or the active profile cap, and
+  blocks a ledger whose symbol cap is not independent of total notional.
+  Callers that omit both the field and the ledger are unchanged.
+- Calibration: the promotion report needs at least 100 out-of-sample trades
+  per tradable grade on one frozen grader version, strictly ordered
+  expectancy, a lower 90% bound above zero for A+ and A, walk-forward folds
+  that keep A+ and A positive, and the same results after the slippage
+  haircut. A full sample that then fails is flagged for auto-demotion on
+  the report. `promote()` always refuses. Promotion is manual.
+- Reference: Griller review 2026-10-18; PR #258; AT-ADR-106. Alembic
+  `a16riskpolicy001` revises `a15reissueauth001` and downgrades by dropping
+  the new tables, refusing while a trade record exists.
+
+## AT-ADR-106 — Two autonomous modes; demo auto-approval stays inside risk limits
+
+- Date: 2026-10-17
+- Decision: Owner Sofien decided (2026-10-17 22:49 CEST) that there are two
+  autonomous trading modes, (1) autonomous on internal paper and (2) autonomous
+  on the BloFin DEMO account, and BloFin demo trades may be auto-approved
+  without per-trade human approval, but only within the configured risk limits,
+  with the kill switch always honoured. Real-money trading stays permanently
+  blocked in code. Both modes ship behind feature flags that default OFF.
+- Flags: `autonomous_internal_paper_enabled` and
+  `autonomous_blofin_demo_enabled`. Both default false. Both true, a flag that
+  disagrees with `execution_mode` / `exchange_mode`, or unreadable settings
+  fail closed. No flag means that mode is disarmed.
+- Demo auto-approval: allowed only when the demo flag resolves cleanly, the
+  kill switch is verified inactive, and the order fits the configured account
+  limits that already exist (max position / symbol notional, total exposure,
+  daily loss, and the stored trade-slot cap). Unreadable limits fail closed.
+  The existing claim predicate remains the execution authority.
+- Safety: `execution_mode=trade`, `exchange_mode=trade_live`, and
+  `enable_real_trading=true` stay permanently rejected. This decision does not
+  enable either flag, change deploy config, or authorize a merge. It does not
+  reopen live trading. AT-ADR-020's rejection of an autonomous live path
+  remains in force.
+- Risk gate, stated honestly (2026-10-17 review): `RiskEngine.evaluate()` does
+  not gate the demo order. Eligibility runs only some of its rules (daily loss,
+  weekly loss, cooldown, portfolio conflict, and open exposure against the 5%
+  equity cap) in `backend/src/app/signal_fusion/action_eligibility.py`. Demo
+  sizing may use up to 10% of equity as notional and 1% as loss
+  (`governed_blofin_demo.py`), which is above that 5% per-order cap. The claim
+  predicate remains the execution authority for the kill switch, daily lock,
+  total exposure, daily loss, trade slots, and symbol notional. The numeric
+  fallbacks used when no ledger row exists are unchanged. Demo auto-approval
+  refuses with `risk_limits_unverified` when that fallback has no
+  `daily_loss_limit`, and when an existing ledger row has `max_daily_loss` or
+  `max_symbol_notional` greater than or equal to `max_notional` (the 100%
+  fallback a first claim would persist). A later grade-based risk-per-trade
+  policy may loosen that guard.
+- Approval identity: an autonomous auto-approval is actor type `SYSTEM` on
+  channel `AUTONOMOUS`, not the plan user on the API channel. `actor_id` stays
+  the tenant user because that column is a user foreign key. The approval
+  audit row records the mode, both flag values, policy version
+  `at-adr-106/v1`, and the limit snapshot used. Demo records the account ledger
+  snapshot that passed. Paper records that the account ledger is enforced at
+  claim, not at this approval. Journal events carry `approval_channel`.
+  Learning attribution maps `AUTONOMOUS` to `autonomous_approval` and does not
+  set `plan_approved`, so those trades are not human approvals and do not
+  enter human-approved win/loss counts. The verified demo close copies
+  `approval_channel` from the authorization.   Once a record is autonomous,
+  that flag is sticky: a later fill or close with no channel cannot flip
+  `plan_approved` back to true. `autonomous_approval: false` is omitted from
+  the canonical facts hash so records stored before the field still load.
+  A true value stays in the hash. An autonomous approval's trader-behavior
+  axis is `autonomous_approval`, not `approved_plan`. A missing channel on a
+  legacy event that was never autonomous stays a human approval. If the
+  kill switch (or the same re-check) blocks after the authorization is
+  issued, that authorization is revoked and an `approval_decision` audit
+  row records `reason=post_approval_recheck`. A later pre-check that finds
+  an AVAILABLE AUTONOMOUS authorization for that revision revokes it with
+  `reason=autonomous_precheck_blocked`. A claim that blocks after issuance
+  revokes that authorization with `reason=claim_blocked`. Both write the
+  same approval-decision audit. A revoke that changes nothing writes no
+  second audit row. A contradictory autonomous gate refusal also revokes
+  leftover AVAILABLE AUTONOMOUS authorizations before it returns.
+  A REVOKED or EXPIRED authorization is not reused. A later cycle whose
+  pre-check passes issues a new authorization on the same approval, with a
+  new binding and a new approval-decision audit that names the new
+  authorization id. A CONSUMED row is reused, so a revision still has one
+  ALLOW. An AVAILABLE row is reused only when its channel and actor match
+  the issuance being requested. A leftover API, WEB, or TELEGRAM row is
+  revoked with an approval-decision audit before an autonomous authorization
+  is inserted, and a human issuance does the same to a leftover autonomous
+  row. Two workers still cannot hold two active authorizations for one
+  approval. The claim remains
+  one entry execution per plan revision. An autonomous execution idempotency
+  key is ``paper-exec:{candidate_id}:{authorization_id}``. The human and API
+  path keeps ``paper-exec:{candidate_id}``. A committed blocked command for a
+  revoked authorization therefore does not conflict with the reissued
+  authorization, and a second ALLOW for that revision is still refused. The
+  kill switch, unverified risk
+  limits, and production refusal are unchanged. Downgrade of a15 refuses on
+  every dialect when one approval has more than one authorization row.
+- Existing governed demo flow: with both autonomous flags off, the governed
+  BloFin demo worker keeps its pre-existing API-channel approval. That path
+  is not an AUTONOMOUS approval and is not subject to the unverified-ledger
+  refusal. The refusal applies only when the demo flag resolves to the
+  autonomous BloFin mode. A contradictory autonomous configuration still
+  fails closed and does not fall through to the API approval. The
+  `approval_authorizations.channel` CHECK includes `AUTONOMOUS` so an
+  Alembic-migrated database can store that channel. Fresh metadata
+  (`create_all`) installs the same predicate as an explicit table CHECK.
+  Other portable enums stay VARCHAR without a database CHECK. Downgrade
+  restores the WEB/API/TELEGRAM check and refuses while an AUTONOMOUS row
+  exists. That row check runs on every dialect. Replacing the CHECK uses
+  the PostgreSQL catalog because PostgreSQL is the migrated production
+  database. Experiment price PnL aggregates are written only when the
+  verified closures share one confirmed currency. Mixed or missing
+  currencies leave those fields unknown.
+- Environment: `environment=production` refuses both modes at startup in
+  `deployment_safety.py` and again when the mode is resolved. Staging may
+  still arm a flag. BloFin demo execution stays staging-only through the
+  existing governed demo posture.
+- Kill switch: it stops new entries only. It does not close open demo
+  positions. An operator closes those on the BloFin demo account by hand and
+  confirms the account is flat. See
+  `docs/autonomous_blofin_demo_execution.md`.
+- Reference: PR #258; `backend/src/app/services/autonomous_trading.py`.
 
 ## AT-ADR-105 — Analytics filters on a mutation turn return 422
 
@@ -3279,3 +3938,114 @@ Synthetic untuned four-regime replay yields192 no-setups/zero signals; genuine
 original-arrival market replay remains unverified. Disabled defaults, gross1R,
 structural stops, no runner, no quantity/sample/performance or operator changes.
 See docs/trendpulse_screening_contract.md and verification handoff.
+
+## AT-ADR-113 — Demo snapshot worker and activity round-trip P&L
+
+- Date: 2026-10-18
+- Decision: The paper worker may call the existing read-only `BloFinSyncService.sync`
+  every 30–60 seconds when demo gates and the governed owner pin are set. Closed
+  gates skip without a database or venue call. Errors back off. A snapshot newer
+  than the interval is not fetched again. Real-money trading stays blocked. No
+  new BloFin order or write endpoint is added.
+- Performance: Win rate and realized P&L for the whole demo account come from
+  fills stored by the activity worker. A trade is a closed round-trip per
+  position. Partial fills accumulate. A crossing fill is split in proportion.
+  Realized P&L is native `fillPnl` plus the original signed fee only when the
+  fee currency matches the stored settlement currency. Order `pnl` is not added.
+  When `BLOFIN_ACTIVITY_ENABLED` is false, those figures are withheld.
+- Method id: `closed-round-trip-fillpnl-signed-fee/v1`.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Enabling the activity worker
+  still requires Sofien's approval and is not done by this decision.
+
+## AT-ADR-114 — Demo win rate stays withheld until fee basis and a flat start exist
+
+- Date: 2026-10-18
+- Decision: Follow-up to AT-ADR-113 after review of the draft implementation.
+  Stored BloFin `fillPnl` is not established as gross or net of fees or funding,
+  and fee sign is not independently verified. The signed fee is recorded and is
+  not added to the decisive result. A complete activity cursor is not proof
+  that a position was flat before the first retained fill. Until both proofs
+  exist, the demo account API keeps `win_rate` and realized P&L empty and
+  `activity_sync_status` is not `ready`. The structural method id is
+  `closed-round-trip-fillpnl-fee-recorded/v1`. Activity sync remains off until
+  Sofien approves the worker env names.
+
+## AT-ADR-115 — Demo snapshot worker stays off unless explicitly enabled
+
+- Date: 2026-10-19
+- Decision: `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` defaults false. The paper
+  worker does not construct the snapshot cycle while the flag is off or while
+  the worker is disarmed, so a disarmed staging boot still opens no database
+  and no exchange client for this cycle. When the flag is on, the unattended
+  sync requires `BLOFIN_READONLY_SYNC_ENABLED` and the three
+  `BLOFIN_READONLY_API_*` credentials. It does not fall back to demo trading
+  keys. A refusal logs only those two booleans. This does not enable the flag
+  or real-money trading.
+
+## AT-ADR-112 — Mirror BloFin demo hand trades from positions history, not fillPnl
+
+- Date: 2026-10-18
+- Number: AT-ADR-112. PR 279 already uses AT-ADR-111 for Sofien's paper and
+  demo promotion exception, and AT-ADR-110 for the 5% per-trade ceiling.
+  PR 280's snapshot decisions are AT-ADR-113, AT-ADR-114, and AT-ADR-115.
+  PRs 278, 280, and 281 do not use 112.
+- Decision: Sofien's hand trades on the BloFin demo account are mirrored into
+  the canonical journal from read-only `GET /api/v1/account/positions-history`,
+  funding-fee history, fills (order ids only), and orders history. The flag
+  `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and is not set by this
+  change. New rows use source `blofin_demo_manual`. Grade is a `grade:` tag.
+  No Alembic revision.
+- Semantics, read from https://docs.blofin.com/index.html on 2026-10-18:
+  the published ETH positions-history row shows `realizedPnl` equal to
+  `(close - open) * contracts` and not net of `fee`. `fundingFee` is positive
+  when received and negative when paid. Positions history has no funding
+  field. `fillPnl` is still not documented as gross or net of fees or
+  funding, so AT-ADR-114 stands for the activity path. This mirror ignores
+  `fillPnl`.
+- A closed row is verified only when direction-aware price P&L times
+  `contractValue` equals `realizedPnl` at 1e-8, settlement is USDT, the fee
+  is present, and funding for that slice sits inside the seven-day window
+  and is not shared. Net is price P&L minus fee minus funding paid
+  (`-fundingFee`). A negative fee is stored as a rebate. That sign is
+  inferred from the order-history "Fee and rebate" label and the existing
+  reconciliation note, not from a positions-history sentence. The published
+  BCH `sell` example does not match the short formula, so it stays
+  unverified.
+- The dashboard publishes win rate, realized P&L, average R, and count from
+  closed `blofin_demo_manual` rows only when every one of those rows is
+  verified. Otherwise those headlines stay empty and the card says why.
+  Method id: `positions-history-price-pnl-fee-funding/v1`.
+- Idempotency key is `blofin-demo-history:{historyId}` for a closed slice and
+  `blofin-demo-open:{positionId}:{createTime}` for a remainder. An open
+  AlphaTrade manual demo row with the same symbol, direction, entry, and
+  size is closed in place and keeps its source, including
+  `912f2bfd-9061-4196-82bd-a17a0650c14e` when the venue slice matches.
+  Ambiguous matches are skipped. A reconciled `manual` or `manual_demo_test`
+  row whose external ref starts with `blofin-demo-` can still be tagged.
+  Mirrored venue P&L, including that in-place close, does not feed open
+  risk, daily realized loss, the daily lock, the paper loss cooldown, or
+  promotion. The daily lock does not read tags. The exclusion is source
+  `blofin_demo_manual` or the exact server prefix `blofin-demo-history:`
+  on `external_ref`. A stuck governed `manual_demo_test` row closed by the
+  mirror receives that prefix, so its venue net does not count toward the
+  daily lock. Clients cannot set a case or whitespace variant of
+  `blofin-demo-`, or a tag that contains a double quote or starts with
+  `blofin-`. Candidate selection,
+  in-place reconciliation, open-tracker cancellation, the cycle marker,
+  and the headline read are limited to the pinned user, not the whole
+  organization. A lifecycle-backed row keeps its entry time, so the day's
+  trade count still includes the close. A closed row contributes zero open
+  exposure. Promotion continues to read paper-validation trades only.
+- The mirror runs on the snapshot cadence only when
+  `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is on, the paper worker is armed, and
+  `BLOFIN_READONLY_SYNC_ENABLED` with the three `BLOFIN_READONLY_API_*`
+  credentials are set. Demo trading keys are not a fallback. It still runs
+  when the saved snapshot is inside the refresh interval. A mirror read
+  failure does not back off the snapshot cycle. The latest read is stored on a cancelled journal
+  marker. A failed read or a page cap withholds the headline. Fills, funding,
+  and orders keep paging after positions history has succeeded. A capped
+  auxiliary read still stores that history and does not publish a net.
+- Headline rows are recomputed from stored entry, exit, size, fee, and
+  funding. The journal create route cannot mint `blofin_demo_manual`, and
+  the generic update cannot change that source's venue facts or P&L tags.
+- Reference: `docs/blofin_demo_manual_mirror.md`.

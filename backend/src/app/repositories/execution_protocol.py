@@ -44,6 +44,7 @@ class ExecutionIdempotencyRepository(SQLAlchemyRepository[ExecutionIdempotencyBi
                 ExecutionIdempotencyBinding.opaque_key == opaque_key,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalar(stmt)
 
@@ -81,6 +82,15 @@ class ExecutionProjectionRepository(SQLAlchemyRepository[ExecutionProjection]):
 
     def get_by_receipt(self, receipt_id: uuid.UUID) -> ExecutionProjection | None:
         stmt = select(ExecutionProjection).where(ExecutionProjection.receipt_id == receipt_id)
+        return self._session.scalar(stmt)
+
+    def get_by_receipt_for_update(self, receipt_id: uuid.UUID) -> ExecutionProjection | None:
+        stmt = (
+            select(ExecutionProjection)
+            .where(ExecutionProjection.receipt_id == receipt_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         return self._session.scalar(stmt)
 
     def compare_and_set_version(
@@ -139,6 +149,7 @@ class AccountSafetyEpochRepository(SQLAlchemyRepository[AccountSafetyEpoch]):
                 AccountSafetyEpoch.account_id == account_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalar(stmt)
 
@@ -150,6 +161,7 @@ class AccountSafetyEpochRepository(SQLAlchemyRepository[AccountSafetyEpoch]):
             .where(AccountSafetyEpoch.organization_id == organization_id)
             .order_by(AccountSafetyEpoch.account_id.asc())
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return list(self._session.scalars(stmt).all())
 
@@ -170,6 +182,7 @@ class AccountRiskAccountingRepository(SQLAlchemyRepository[AccountRiskAccounting
                 AccountRiskAccountingState.account_id == account_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalar(stmt)
 
@@ -186,6 +199,7 @@ class RiskReservationRepository(SQLAlchemyRepository[RiskReservation]):
             select(RiskReservation)
             .where(RiskReservation.command_id == command_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalar(stmt)
 

@@ -3965,7 +3965,11 @@
           "proposal_created",
           "position_update",
           "journal_entry",
-          "kill_switch"
+          "kill_switch",
+          "risk_policy_proposed",
+          "risk_policy_applied",
+          "risk_policy_apply_refused",
+          "risk_policy_consecutive_reset"
         ],
         "title": "AuditEventType",
         "type": "string"
@@ -4117,7 +4121,8 @@
         "enum": [
           "WEB",
           "API",
-          "TELEGRAM"
+          "TELEGRAM",
+          "AUTONOMOUS"
         ],
         "title": "AuthorizationChannel",
         "type": "string"
@@ -9627,6 +9632,13 @@
             ],
             "title": "Refresh Error"
           },
+          "refresh_interval_seconds": {
+            "default": 45,
+            "maximum": 60.0,
+            "minimum": 30.0,
+            "title": "Refresh Interval Seconds",
+            "type": "integer"
+          },
           "snapshot_id": {
             "anyOf": [
               {
@@ -9890,6 +9902,7 @@
           "system_setup",
           "human_decision",
           "human_approval",
+          "autonomous_approval",
           "paper_system_execution"
         ],
         "title": "DecisionActor",
@@ -10045,6 +10058,34 @@
       "DemoAccountPerformance": {
         "additionalProperties": false,
         "properties": {
+          "activity_coverage": {
+            "default": "",
+            "title": "Activity Coverage",
+            "type": "string"
+          },
+          "activity_sync_status": {
+            "default": "disabled",
+            "enum": [
+              "disabled",
+              "unavailable",
+              "partial",
+              "ready"
+            ],
+            "title": "Activity Sync Status",
+            "type": "string"
+          },
+          "average_r": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average R"
+          },
           "coverage": {
             "default": "Verified performance is unavailable for this account.",
             "title": "Coverage",
@@ -10092,6 +10133,32 @@
             ],
             "title": "Gross Pnl"
           },
+          "losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Losses"
+          },
+          "manual_mirror_reason": {
+            "default": "",
+            "title": "Manual Mirror Reason",
+            "type": "string"
+          },
+          "manual_mirror_status": {
+            "default": "disabled",
+            "enum": [
+              "disabled",
+              "withheld",
+              "ready"
+            ],
+            "title": "Manual Mirror Status",
+            "type": "string"
+          },
           "manual_test_trades": {
             "default": 0,
             "title": "Manual Test Trades",
@@ -10108,6 +10175,23 @@
               }
             ],
             "title": "Net Pnl"
+          },
+          "pnl_method": {
+            "default": "",
+            "title": "Pnl Method",
+            "type": "string"
+          },
+          "realized_pnl": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl"
           },
           "status": {
             "default": "unavailable",
@@ -10129,6 +10213,28 @@
             ],
             "title": "Strategy Closed Trades"
           },
+          "trade_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Count"
+          },
+          "unresolved_round_trips": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unresolved Round Trips"
+          },
           "unresolved_trades": {
             "default": 0,
             "title": "Unresolved Trades",
@@ -10138,6 +10244,53 @@
             "default": 0,
             "title": "Verified Closed Trades",
             "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          },
+          "wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wins"
           }
         },
         "title": "DemoAccountPerformance",
@@ -12805,7 +12958,7 @@
         "type": "object"
       },
       "ExecutionActor": {
-        "description": "Derived human-vs-system execution dimension.\n\nClassified by decision authority over the recorded trade:\n``human`` — manual entries, imported human history, and human-approved\nproposal-flow paper executions; ``system`` — automated paper-validation,\nbacktest, and system-generated trades.",
+        "description": "Derived human-vs-system execution dimension.\n\nClassified by decision authority over the recorded trade:\n``human`` — manual entries, imported human history, human-approved\nproposal-flow paper executions, manual demo tests, and BloFin demo hand\ntrades; ``system`` — automated paper-validation, backtest, and\nsystem-generated trades. An unmapped source is omitted.",
         "enum": [
           "human",
           "system"
@@ -14169,6 +14322,59 @@
             },
             "title": "Outcomes",
             "type": "array"
+          },
+          "price_pnl_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Currency"
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "const": "verified-linear-fill-prices/v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
+          },
+          "price_pnl_sample_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Price Pnl Sample Count",
+            "type": "integer"
+          },
+          "price_pnl_win_rate": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Win Rate"
           },
           "realized_pnl_after_fees_excluding_funding": {
             "anyOf": [
@@ -19736,6 +19942,62 @@
         "title": "JournalStatsWarningCode",
         "type": "string"
       },
+      "JournalTradeAnnotation": {
+        "additionalProperties": false,
+        "description": "Strategy, grade, and notes on a mirrored BloFin demo journal trade.\n\nOmitted fields stay as they are. An empty string clears strategy, grade,\nor notes. Venue prices, size, fees, and P&L are not accepted here.",
+        "properties": {
+          "grade": {
+            "anyOf": [
+              {
+                "maxLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "strategy_label": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Label"
+          },
+          "user_strategy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Strategy Id"
+          }
+        },
+        "title": "JournalTradeAnnotation",
+        "type": "object"
+      },
       "JournalTradeAttachmentList": {
         "additionalProperties": false,
         "properties": {
@@ -21148,6 +21410,17 @@
             ],
             "title": "Funding"
           },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
+          },
           "gross_pnl": {
             "anyOf": [
               {
@@ -21727,6 +22000,7 @@
           "manual",
           "paper_execution",
           "manual_demo_test",
+          "blofin_demo_manual",
           "paper_validation",
           "backtest",
           "imported",
@@ -27647,6 +27921,11 @@
             "title": "Account History Complete",
             "type": "boolean"
           },
+          "closure_verified": {
+            "default": false,
+            "title": "Closure Verified",
+            "type": "boolean"
+          },
           "contract_version": {
             "const": "blofin-experiment-outcome/v1",
             "default": "blofin-experiment-outcome/v1",
@@ -27813,6 +28092,30 @@
             "format": "uuid",
             "title": "Organization Id",
             "type": "string"
+          },
+          "price_pnl_excluding_fees_and_funding": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Excluding Fees And Funding"
+          },
+          "price_pnl_methodology": {
+            "anyOf": [
+              {
+                "const": "verified-linear-fill-prices/v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Pnl Methodology"
           },
           "proof": {
             "anyOf": [
@@ -28408,7 +28711,8 @@
           "SFP_CONFIRMED",
           "SFP_INVALIDATED",
           "SFP_EXPIRED",
-          "SFP_BLOCKED_BY_RISK"
+          "SFP_BLOCKED_BY_RISK",
+          "SFP_LEVEL_APPROACH"
         ],
         "title": "NotificationEventType",
         "type": "string"
@@ -32155,7 +32459,8 @@
           "overtrading_warning",
           "daily_loss_lock_warning",
           "research_validation_promotion",
-          "tradingview_signal"
+          "tradingview_signal",
+          "demo_liquidation_through_stop"
         ],
         "title": "PaperAlertType",
         "type": "string"
@@ -42228,6 +42533,440 @@
         "title": "RiskCheckResult",
         "type": "object"
       },
+      "RiskPolicyApplyRequest": {
+        "additionalProperties": false,
+        "description": "Apply has no confirmation field.\n\nConfirmation is a separate proof (step-up or the pinned Telegram owner\nchat), not a boolean in this body.",
+        "properties": {},
+        "title": "RiskPolicyApplyRequest",
+        "type": "object"
+      },
+      "RiskPolicyProposalResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_channel": {
+            "title": "Actor Channel",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "actor_channel",
+          "content_hash",
+          "reason"
+        ],
+        "title": "RiskPolicyProposalResponse",
+        "type": "object"
+      },
+      "RiskPolicyProposeRequest": {
+        "additionalProperties": false,
+        "description": "A full profile. Omitted numbers are not filled in.",
+        "properties": {
+          "autonomous_blofin_demo_enabled": {
+            "default": false,
+            "title": "Autonomous Blofin Demo Enabled",
+            "type": "boolean"
+          },
+          "autonomous_internal_paper_enabled": {
+            "default": false,
+            "title": "Autonomous Internal Paper Enabled",
+            "type": "boolean"
+          },
+          "consecutive_loss_limit": {
+            "title": "Consecutive Loss Limit",
+            "type": "integer"
+          },
+          "daily_loss_limit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Daily Loss Limit Percent"
+          },
+          "drawdown_breaker_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Drawdown Breaker Percent"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "max_aggregate_notional_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Max Aggregate Notional Percent"
+          },
+          "max_aggregate_open_risk_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Max Aggregate Open Risk Percent"
+          },
+          "max_cost_share_of_r": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Max Cost Share Of R"
+          },
+          "max_leverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Max Leverage"
+          },
+          "max_notional_per_trade_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Max Notional Per Trade Percent"
+          },
+          "max_open_positions": {
+            "title": "Max Open Positions",
+            "type": "integer"
+          },
+          "min_stop_absolute_floor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Min Stop Absolute Floor"
+          },
+          "min_stop_atr_multiple": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Min Stop Atr Multiple"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          },
+          "risk_percent_a": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Percent A"
+          },
+          "risk_percent_a_plus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Percent A Plus"
+          },
+          "risk_percent_b": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Percent B"
+          },
+          "risk_percent_b_plus": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Percent B Plus"
+          },
+          "risk_percent_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Risk Percent C"
+          }
+        },
+        "required": [
+          "kind",
+          "reason",
+          "risk_percent_a_plus",
+          "risk_percent_a",
+          "risk_percent_b_plus",
+          "risk_percent_b",
+          "risk_percent_c",
+          "max_leverage",
+          "daily_loss_limit_percent",
+          "max_aggregate_open_risk_percent",
+          "max_open_positions",
+          "max_notional_per_trade_percent",
+          "max_aggregate_notional_percent",
+          "min_stop_atr_multiple",
+          "min_stop_absolute_floor",
+          "max_cost_share_of_r",
+          "drawdown_breaker_percent",
+          "consecutive_loss_limit"
+        ],
+        "title": "RiskPolicyProposeRequest",
+        "type": "object"
+      },
+      "RiskPolicyVersionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_channel": {
+            "title": "Actor Channel",
+            "type": "string"
+          },
+          "applies_to_new_trades_only": {
+            "default": true,
+            "title": "Applies To New Trades Only",
+            "type": "boolean"
+          },
+          "change_class": {
+            "title": "Change Class",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "effective_at": {
+            "format": "date-time",
+            "title": "Effective At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "version_number": {
+            "title": "Version Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "version_number",
+          "change_class",
+          "effective_at",
+          "actor_channel",
+          "content_hash"
+        ],
+        "title": "RiskPolicyVersionResponse",
+        "type": "object"
+      },
+      "RiskPolicyView": {
+        "additionalProperties": false,
+        "properties": {
+          "applies_to_new_trades_only": {
+            "default": true,
+            "title": "Applies To New Trades Only",
+            "type": "boolean"
+          },
+          "change_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Class"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "profile": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Profile",
+            "type": "object"
+          },
+          "real_trading_enabled": {
+            "default": false,
+            "title": "Real Trading Enabled",
+            "type": "boolean"
+          },
+          "scheduled_effective_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Effective At"
+          },
+          "scheduled_version_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Version Number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Id"
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Number"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "profile"
+        ],
+        "title": "RiskPolicyView",
+        "type": "object"
+      },
       "RiskProfile": {
         "enum": [
           "conservative",
@@ -42356,7 +43095,8 @@
           "overtrading",
           "strong_green_day",
           "cooldown_after_loss",
-          "kill_switch"
+          "kill_switch",
+          "risk_percent"
         ],
         "title": "RiskRuleId",
         "type": "string"
@@ -44253,6 +44993,33 @@
         "additionalProperties": false,
         "description": "Explicit research inputs. Ratios are relative to reference price, never win odds.",
         "properties": {
+          "approach_cooldown_seconds": {
+            "default": 900,
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Approach Cooldown Seconds",
+            "type": "integer"
+          },
+          "approach_proximity": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                    "type": "string"
+                  }
+                ],
+                "ge": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Proximity"
+          },
           "breakout_confirmation_closes": {
             "maximum": 500.0,
             "minimum": 1.0,
@@ -44404,8 +45171,11 @@
             "title": "Structural Invalidation Buffer"
           },
           "version": {
-            "const": "sfp-research/v1",
             "default": "sfp-research/v1",
+            "enum": [
+              "sfp-research/v1",
+              "sfp-research/v2"
+            ],
             "title": "Version",
             "type": "string"
           }
@@ -44433,6 +45203,26 @@
         "additionalProperties": false,
         "description": "Explicit research inputs. Ratios are relative to reference price, never win odds.",
         "properties": {
+          "approach_cooldown_seconds": {
+            "default": 900,
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Approach Cooldown Seconds",
+            "type": "integer"
+          },
+          "approach_proximity": {
+            "anyOf": [
+              {
+                "ge": 0,
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approach Proximity"
+          },
           "breakout_confirmation_closes": {
             "maximum": 500.0,
             "minimum": 1.0,
@@ -44538,8 +45328,11 @@
             "type": "string"
           },
           "version": {
-            "const": "sfp-research/v1",
             "default": "sfp-research/v1",
+            "enum": [
+              "sfp-research/v1",
+              "sfp-research/v2"
+            ],
             "title": "Version",
             "type": "string"
           }
@@ -46355,6 +47148,11 @@
         "additionalProperties": false,
         "description": "Increment-style facts for later strategy/pattern performance rollups.",
         "properties": {
+          "autonomous_approval": {
+            "default": false,
+            "title": "Autonomous Approval",
+            "type": "boolean"
+          },
           "breakeven": {
             "title": "Breakeven",
             "type": "boolean"
@@ -50035,6 +50833,7 @@
           "rejected",
           "skipped",
           "approved_plan",
+          "autonomous_approval",
           "executed",
           "reconciled"
         ],
@@ -65934,6 +66733,64 @@
         ]
       }
     },
+    "/journal/trades/{journal_trade_id}/annotation": {
+      "patch": {
+        "operationId": "annotate_journal_trade_journal_trades__journal_trade_id__annotation_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "journal_trade_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Journal Trade Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalTradeAnnotation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalTradeRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Tag a mirrored BloFin demo trade with strategy, grade, and notes",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
     "/journal/trades/{journal_trade_id}/attachments": {
       "get": {
         "operationId": "list_journal_trade_attachments_journal_trades__journal_trade_id__attachments_get",
@@ -73005,6 +73862,166 @@
         "summary": "Evaluate loss acceptance gate",
         "tags": [
           "risk"
+        ]
+      }
+    },
+    "/risk/policy/profiles/{kind}": {
+      "get": {
+        "operationId": "read_risk_policy_risk_policy_profiles__kind__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Risk Policy",
+        "tags": [
+          "risk",
+          "risk-policy"
+        ]
+      }
+    },
+    "/risk/policy/proposals": {
+      "post": {
+        "operationId": "propose_risk_policy_risk_policy_proposals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskPolicyProposeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPolicyProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Propose Risk Policy",
+        "tags": [
+          "risk",
+          "risk-policy"
+        ]
+      }
+    },
+    "/risk/policy/proposals/{proposal_id}/apply": {
+      "post": {
+        "operationId": "apply_risk_policy_risk_policy_proposals__proposal_id__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RiskPolicyApplyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPolicyVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Apply Risk Policy",
+        "tags": [
+          "risk",
+          "risk-policy"
         ]
       }
     },

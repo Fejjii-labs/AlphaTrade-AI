@@ -64,6 +64,7 @@ from app.schemas.journal_statistics import (
     TradeRuleCompliance,
 )
 from app.schemas.journal_trades import (
+    JournalTradeAnnotation,
     JournalTradeCreate,
     JournalTradeDetail,
     JournalTradeEvidenceCreate,
@@ -710,6 +711,27 @@ async def add_journal_trade_rule_check(
         body,
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,
+    )
+    session.commit()
+    return result
+
+
+@router.patch(
+    "/trades/{journal_trade_id}/annotation",
+    response_model=JournalTradeRead,
+    summary="Tag a mirrored BloFin demo trade with strategy, grade, and notes",
+)
+async def annotate_journal_trade(
+    journal_trade_id: uuid.UUID,
+    body: JournalTradeAnnotation,
+    tenant: TraderDep,
+    service: JournalTradeServiceDep,
+    session: SessionDep,
+) -> JournalTradeRead:
+    result = service.annotate(
+        journal_trade_id,
+        body,
+        organization_id=tenant.organization_id,
     )
     session.commit()
     return result

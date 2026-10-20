@@ -21,6 +21,7 @@ SEVERITIES = {
     NotificationEventType.SFP_INVALIDATED: NotificationSeverity.INFO,
     NotificationEventType.SFP_EXPIRED: NotificationSeverity.INFO,
     NotificationEventType.SFP_BLOCKED_BY_RISK: NotificationSeverity.WATCH,
+    NotificationEventType.SFP_LEVEL_APPROACH: NotificationSeverity.WATCH,
 }
 
 
@@ -44,6 +45,8 @@ class SfpAlertSummary(CanonicalModel):
     risk_state: str
     risk_reasons: tuple[str, ...] = ()
     paper_mode: Literal[True] = True
+    # Empty salt keeps the historical duplicate key. Approach alerts set a bucket.
+    duplicate_salt: str = ""
 
     def notification_event(self) -> TelegramNotificationEvent:
         if self.event_type not in SEVERITIES:
@@ -71,12 +74,28 @@ class SfpAlertSummary(CanonicalModel):
                     "version": self.strategy_version_id,
                     "setup": self.setup_id,
                     "event_type": self.event_type,
+                    **({"salt": self.duplicate_salt} if self.duplicate_salt else {}),
                 }
             ),
             occurred_at=self.occurred_at,
         )
 
     def text(self) -> str:
+        if self.event_type == NotificationEventType.SFP_LEVEL_APPROACH:
+            return "\n".join(
+                (
+                    "PAPER MODE — SFP LEVEL APPROACH",
+                    "Preparation only. Price is near a level and has not swept it.",
+                    "Execution is not authorized.",
+                    f"{self.symbol} | {self.venue} | {self.timeframe} | {self.direction}",
+                    f"Structural level: {self.level_type} {self.structural_level}",
+                    f"Live price: {self.sweep_extreme}",
+                    f"Strategy version: {self.strategy_version_id}",
+                    f"Level reference: {self.setup_id}",
+                    f"Evidence timestamp: {self.evidence_at.isoformat()}",
+                    f"Event timestamp: {self.occurred_at.isoformat()}",
+                )
+            )
         return "\n".join(
             (
                 f"PAPER MODE — {self.event_type.value.replace('_', ' ')}",

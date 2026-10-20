@@ -109,7 +109,7 @@ AGENT_1_ATTRIBUTION_INTEGRATION = DurableAttributionIntegrationRequirement(
             name="trader_behavior_axis",
             sql_type="VARCHAR(32) NOT NULL",
             nullable=False,
-            purpose="REJECT/SKIP/APPROVE/EXECUTED behavior. Never an executed outcome by itself.",
+            purpose="REJECT/SKIP/APPROVE/autonomous approval/EXECUTED. Never an outcome by itself.",
         ),
     ),
     event_columns=(

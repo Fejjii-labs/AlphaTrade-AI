@@ -42,6 +42,23 @@ class DemoAccountPerformance(StrictModel):
     manual_test_trades: int = 0
     strategy_closed_trades: int | None = None
     coverage: str = "Verified performance is unavailable for this account."
+    # Whole demo account, from activity-worker fills. Null while that worker is off.
+    activity_sync_status: Literal["disabled", "unavailable", "partial", "ready"] = "disabled"
+    pnl_method: str = ""
+    win_rate: Decimal | None = None
+    trade_count: int | None = None
+    wins: int | None = None
+    losses: int | None = None
+    realized_pnl: Decimal | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    unresolved_round_trips: int | None = None
+    activity_coverage: str = ""
+    # Hand-traded BloFin demo journal. Headline numbers stay empty until
+    # positions-history price P&L, fee, and funding are verified.
+    manual_mirror_status: Literal["disabled", "withheld", "ready"] = "disabled"
+    manual_mirror_reason: str = ""
+    average_r: Decimal | None = None
 
 
 class DashboardDemoAccount(StrictModel):
@@ -62,4 +79,5 @@ class DashboardDemoAccount(StrictModel):
     total_equity_usd: Decimal | None = None
     refresh_error: str | None = None
     last_attempt_at: datetime | None = None
+    refresh_interval_seconds: int = Field(default=45, ge=30, le=60)
     message: str

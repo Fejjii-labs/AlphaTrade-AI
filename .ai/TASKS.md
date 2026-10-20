@@ -2607,3 +2607,13 @@ PR251 correction: original focused run 38249795179 at 03be2d3 failed case 840
 Alembic CLI logging pollution from the activity migration fixture; repair and exact
 collection evidence are in docs/pr251_focused_ci_repair.md. Shared CI/duration
 changes belong to the PR249 release owner; automated research grants no trades.
+
+## AT-123 — Mirror BloFin demo hand trades into the journal
+
+Status: in progress on `cursor/blofin-demo-manual-journal-c6b5`, draft against
+`cursor/blofin-snapshot-worker-pnl-a220`. Read-only positions history, funding,
+fills, and orders. Flag `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and
+is not set here. `fillPnl` stays unused. No migration, no env or Render edit,
+no live trading. Contract: `docs/blofin_demo_manual_mirror.md`. Decision:
+AT-ADR-112. PR 279 uses AT-ADR-110 and AT-ADR-111. PR 280's snapshot
+decisions are AT-ADR-113, AT-ADR-114, and AT-ADR-115.

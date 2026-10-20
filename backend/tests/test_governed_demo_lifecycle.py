@@ -64,7 +64,16 @@ class ClosingVenue(Venue):
             data = (
                 []
                 if self.order is None or self.exited
-                else [{"instId": self.order["instId"], "positions": self.order["size"]}]
+                else [
+                    {
+                        "instId": self.order["instId"],
+                        "positionSide": "net",
+                        "marginMode": "cross",
+                        "positions": str(
+                            Decimal(self.filled) * (1 if self.order["side"] == "buy" else -1)
+                        ),
+                    }
+                ]
             )
         elif self.exited and endpoint == "orders-tpsl-pending":
             data = []

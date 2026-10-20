@@ -76,6 +76,16 @@ The LLM layer only **explains**; it cannot change risk decisions or approval sta
   bound discussion. Mutating paper actions require identity-bound confirmation. Telegram
   never executes, never mints a Candidate, never overrides SetupAssessment or risk, and
   never enables live trading. See `docs/telegram_paper_agent.md`.
+- Internal paper exit monitor (`app.workers.paper_exit_monitor`): optional component
+  of the paper worker. It closes canonical `PAPER_INTERNAL` /
+  `paper-internal-entry/v1` trades when a closed candle touches the stop or
+  the single full-size target. Live trades read the Binance USD-M (or Bybit)
+  public adapter that matches their evidence identity; replay stays on the
+  fixture. Both-in-bar
+  uses the stop. Writes go through `ExecutionService.close_canonical_paper_plan`.
+  `PAPER_EXIT_MONITOR_ENABLED` and `PAPER_EXIT_MONITOR_DRY_RUN` default false.
+  Production refuses the enabled flag. BloFin demo trades are not in scope.
+  See `docs/paper_exit_monitor.md`.
 - Paper Watcher runtime (`app.workers.watcher_paper`): continuous paper-only
   monitoring. Approved compiled strategy → live/read-only evidence →
   `WatcherOrchestrator` → `evaluate_canonical_strategy` → Candidate only on

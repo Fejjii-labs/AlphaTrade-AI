@@ -98,6 +98,7 @@ def _paper_settings() -> Settings:
         exchange_mode="paper_internal",
         execution_mode="paper",
         enable_real_trading=False,
+        autonomous_internal_paper_enabled=True,
     )
 
 

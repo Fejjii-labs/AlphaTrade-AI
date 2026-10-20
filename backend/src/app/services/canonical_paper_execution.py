@@ -4,9 +4,12 @@ EXECUTE_PAPER_PLAN for ``plan_authority=canonical`` must bind the exact approved
 immutable TradePlanRevision and re-verify Candidate, ActionEligibility, plan,
 approval, and account lineage immediately before the claim transaction.
 
-RiskEngine BLOCK and the kill switch remain final inside PaperPlanClaimService
-via ``evaluate_claim_predicate``. Missing Candidate, eligibility, or required
-lineage after ALLOW fails closed rather than skipping learning evidence.
+The claim predicate inside PaperPlanClaimService is final for the kill switch,
+daily lock, total exposure, daily loss, trade slots, and symbol exposure.
+``RiskEngine.evaluate()`` is not that gate. A kill switch that becomes active
+after approval and before claim still blocks the order. Missing Candidate,
+eligibility, or required lineage after ALLOW fails closed rather than skipping
+learning evidence.
 This module never calls an exchange.
 """
 
@@ -15,7 +18,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.services.risk_policy.profile import PolicyKind
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +31,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, TradingPolicyError, ValidationAppError
 from app.core.paper_safety import assert_paper_execution_allowed
 from app.db.canonical_trade_plans import PLAN_AUTHORITY_CANONICAL
+from app.db.models import ApprovalAuthorization as ApprovalAuthorizationRow
 from app.db.models import ExecutionCommand, ExecutionFillFact, JournalLifecycleEvent
 from app.repositories.journal_trades import JournalTradeRepository
 from app.runtime.canonical import ProductionCanonicalRuntime
@@ -170,11 +178,22 @@ class CanonicalPaperExecutionService:
                 if demo_protection is not None:
                     payload["venue_fill_fee_currency"] = venue_fill_fee_currency
                     payload["fee_convention"] = None
+            command = self._session.get(ExecutionCommand, command_id)
+            _attach_approval_channel(
+                self._session,
+                payload,
+                None if command is None else command.authorization_id,
+            )
             # Phase 1 paper claims do not create legacy Order rows. Command
             # identity is execution_lifecycle_id; linked_order_id stays unset.
             payload["lineage"] = _lineage_payload(envelope, command_id, self._runtime).model_dump(
                 mode="json", exclude_none=True
             )
+            if (
+                envelope.plan.risk_and_exits.margin_assumption_id == "paper-profile-isolated"
+                and fill.weighted_price is not None
+            ):
+                _journal_paper_liquidation(payload, envelope.plan, fill.weighted_price)
             if fill.replayed:
                 # A verified immutable fill may be replayed after PostgreSQL has
                 # applied its numeric scale, or after later partial fills have
@@ -292,7 +311,7 @@ class CanonicalPaperExecutionService:
                     "Paper close requires an exit reason.",
                     details={"reason": "missing_exit_reason"},
                 )
-            payload = {
+            payload: dict[str, object] = {
                 "exit_price": str(request.exit_price),
                 "exit_time": request.occurred_at.isoformat(),
                 "exit_reason": exit_reason,
@@ -306,6 +325,21 @@ class CanonicalPaperExecutionService:
                     mode="json", exclude_none=True
                 ),
             }
+            payload.update(paper_exit_audit_fields(request))
+            payload.update(
+                _closed_risk_facts(
+                    self._session,
+                    organization_id=request.organization_id,
+                    candidate_id=trade.candidate_id,
+                    net_pnl=economics.net_pnl,
+                )
+            )
+            command = self._session.get(ExecutionCommand, request.command_id)
+            _attach_approval_channel(
+                self._session,
+                payload,
+                None if command is None else command.authorization_id,
+            )
             event = JournalLifecycleEventInput(
                 event_type=JournalLifecycleEventType.CLOSE,
                 execution_lifecycle_id=request.command_id,
@@ -340,6 +374,25 @@ class CanonicalPaperExecutionService:
                     details={"reason": "missing_journal_trade"},
                 )
             self._session.refresh(trade)
+            # A live profile close feeds the consecutive streak and the daily
+            # lock. A labelled backfill does not. No calibration sample is
+            # written: a backfill is ineligible, and a live close has no
+            # walk-forward fold on this path.
+            if profile_close_should_note(
+                request,
+                replayed=projection.replayed,
+                margin_assumption_id=envelope.plan.risk_and_exits.margin_assumption_id,
+                net_pnl=trade.net_pnl,
+            ):
+                assert trade.net_pnl is not None
+                _note_profile_close(
+                    self._session,
+                    organization_id=request.organization_id,
+                    user_id=request.user_id,
+                    account_id=request.account_id,
+                    net_pnl=trade.net_pnl,
+                    now=request.occurred_at,
+                )
             if (
                 trade.entry_price is None
                 or trade.exit_price is None
@@ -501,6 +554,7 @@ class CanonicalPaperExecutionService:
         payload["lineage"] = _lineage_payload(
             envelope, result.command_id, self._runtime
         ).model_dump(mode="json", exclude_none=True)
+        _attach_approval_channel(self._session, payload, request.authorization_id)
         if result.replayed:
             # Preserve the original event preimage, including legacy events
             # without targets. Projection repair must never rewrite history.
@@ -554,6 +608,169 @@ def is_canonical_plan_authority(plan_authority: str | None) -> bool:
     return plan_authority == PLAN_AUTHORITY_CANONICAL
 
 
+def paper_exit_audit_fields(request: ClosePaperPlanRequest) -> dict[str, object]:
+    """Journal fields that mark an automated exit. Absent on a human close.
+
+    Keys are added only when the caller set them, so an HTTP close payload
+    keeps the same shape and content hash as before this monitor existed.
+    """
+
+    fields: dict[str, object] = {}
+    if request.exit_channel is not None:
+        fields["exit_channel"] = request.exit_channel
+    if request.exit_actor is not None:
+        fields["exit_actor"] = request.exit_actor
+    if request.exit_evidence is not None:
+        fields["exit_evidence"] = dict(request.exit_evidence)
+        origin = request.exit_evidence.get("exit_origin")
+        if origin is not None:
+            fields["exit_origin"] = origin
+        sample = request.exit_evidence.get("calibration_sample")
+        if sample is not None:
+            fields["calibration_sample"] = sample
+    return fields
+
+
+def profile_close_should_note(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    margin_assumption_id: str,
+    net_pnl: Decimal | None,
+) -> bool:
+    """Profile closes update the breaker. A labelled backfill does not.
+
+    ``_note_profile_close`` is what advances the consecutive-loss streak and
+    syncs the daily lock. Skipping it leaves both untouched. A human close
+    has no monitor label and still notes. A cash-margin plan does not.
+    """
+
+    if replayed or net_pnl is None:
+        return False
+    if margin_assumption_id != "paper-profile-isolated":
+        return False
+    from app.services.paper_exit_monitor import exit_monitor_backfill
+
+    return not exit_monitor_backfill(request)
+
+
+def _journal_paper_liquidation(
+    payload: dict[str, object], plan: TradePlanRevision, fill_price: Decimal
+) -> None:
+    """Record a post-fill liquidation-versus-stop verdict. Does not close or write."""
+
+    from app.services.risk_policy.decision import post_fill_recheck
+    from app.services.risk_policy.errors import RiskPolicyRejected
+    from app.services.risk_policy.liquidation import isolated_liquidation_price
+    from app.services.risk_policy.plan_sizing import (
+        PAPER_CONSERVATIVE_MAINTENANCE_RATE,
+        PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+    )
+
+    direction = "long" if plan.side is EntrySide.BUY else "short"
+    try:
+        liquidation = isolated_liquidation_price(
+            entry=fill_price,
+            leverage=plan.risk_and_exits.leverage,
+            maintenance_rate=PAPER_CONSERVATIVE_MAINTENANCE_RATE,
+            direction=direction,
+        )
+    except RiskPolicyRejected:
+        payload["post_fill_action"] = "hold"
+        payload["post_fill_reason"] = "unreadable_liquidation"
+        payload["exchange_write_attempted"] = False
+        return
+    outcome = post_fill_recheck(
+        fill_price=fill_price,
+        stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
+        atr=None,
+        leverage=plan.risk_and_exits.leverage,
+        notional=fill_price,
+        margin_mode="isolated",
+        tiers=PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+        direction=direction,
+        stop_price=plan.risk_and_exits.stop.value,
+        observed_liquidation_price=liquidation,
+    )
+    if outcome.accepted or outcome.exchange_write_attempted:
+        return
+    payload["post_fill_action"] = outcome.action
+    payload["post_fill_reason"] = outcome.reason
+    payload["exchange_write_attempted"] = False
+
+
+def _note_profile_close(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    account_id: UUID,
+    net_pnl: Decimal,
+    now: datetime,
+    kind: PolicyKind | None = None,
+) -> int | None:
+    """Advance consecutive losses, then persist the breaker verdict. No reset.
+
+    ``kind`` selects the active profile and the breaker row is the account's
+    row. Paper uses the internal-paper profile. Demo uses the demo profile.
+    A drawdown latch is not cleared.
+    """
+
+    from app.services.audit_service import AuditService
+    from app.services.automated_paper_loop import _load_active_profile
+    from app.services.risk_policy.breaker_trip import (
+        _as_utc,
+        persist_profile_breakers,
+        profile_close_consecutive,
+        streak_after_expiry,
+    )
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.profile import PolicyKind as StoredPolicyKind
+
+    selected = StoredPolicyKind.INTERNAL_PAPER if kind is None else kind
+    active = _load_active_profile(session, organization_id, selected.value, now)
+    if active is None:
+        return None
+    service = RiskPolicyService(session, AuditService(session))
+    row = service.load_breaker(organization_id=organization_id, account_id=account_id)
+    current = 0 if row is None else int(row.consecutive_losses)
+    paused_until = None if row is None else getattr(row, "consecutive_paused_until", None)
+    current = streak_after_expiry(current, paused_until, now)
+    pause_in_force = paused_until is not None and _as_utc(paused_until) > _as_utc(now)
+    consecutive = profile_close_consecutive(current, net_pnl, pause_in_force=pause_in_force)
+    persist_profile_breakers(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        profile=active.profile,
+        now=now,
+        consecutive_losses=consecutive,
+    )
+    return consecutive
+
+
+def _attach_approval_channel(
+    session: Session,
+    payload: dict[str, object],
+    authorization_id: UUID | None,
+) -> None:
+    """Copy the authorization channel onto a new journal payload.
+
+    Replay replaces this payload with the recorded event, so a legacy event
+    that has no channel stays a human approval. A missing authorization is
+    left unset for the same reason.
+    """
+
+    if authorization_id is None or "approval_channel" in payload:
+        return
+    row = session.get(ApprovalAuthorizationRow, authorization_id)
+    if row is None:
+        return
+    channel = row.channel
+    payload["approval_channel"] = channel.value if hasattr(channel, "value") else str(channel)
+
+
 def _instrument_payload(plan: TradePlanRevision) -> dict[str, object]:
     direction = TradeDirection.LONG if plan.side is EntrySide.BUY else TradeDirection.SHORT
     return {
@@ -603,3 +820,41 @@ def _lineage_payload(
         fusion_policy_version=lineage.fusion_policy_version,
         uniqueness_tuple_hash=envelope.uniqueness_hash,
     )
+
+
+def _closed_risk_facts(
+    session: Session,
+    *,
+    organization_id: UUID,
+    candidate_id: UUID | None,
+    net_pnl: Decimal,
+) -> dict[str, str]:
+    """Copy grade facts onto the close payload. The trade row stays append-only."""
+
+    if candidate_id is None:
+        return {}
+    from app.db.risk_policy import RiskPolicyTradeRecord
+
+    row = session.scalar(
+        select(RiskPolicyTradeRecord).where(
+            RiskPolicyTradeRecord.organization_id == organization_id,
+            RiskPolicyTradeRecord.trade_id == str(candidate_id),
+        )
+    )
+    if row is None:
+        return {}
+    calculation = row.calculation if isinstance(row.calculation, dict) else {}
+    facts = {"grade": str(row.grade), "outcome": "closed"}
+    for key in ("effective_risk_percent", "leverage", "entry", "stop", "target", "planned_r"):
+        if key in calculation:
+            name = "risk_percent" if key == "effective_risk_percent" else key
+            facts[name] = str(calculation[key])
+    raw_risk = calculation.get("risk_amount")
+    if raw_risk is not None:
+        amount = Decimal(str(raw_risk))
+        if amount > 0:
+            facts["r_multiple"] = format(
+                (net_pnl / amount).quantize(Decimal("0.00000001")),
+                "f",
+            )
+    return facts

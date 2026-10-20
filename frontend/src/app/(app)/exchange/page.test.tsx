@@ -33,6 +33,10 @@ vi.mock("@/components/BloFinSyncPanel", () => ({
   BloFinSyncPanel: () => <div data-testid="blofin-sync-panel">BloFin sync</div>,
 }));
 
+vi.mock("@/components/exchange/ExchangeDemoAccountSync", () => ({
+  ExchangeDemoAccountSync: () => <div data-testid="exchange-demo-sync">Demo sync</div>,
+}));
+
 const readySummary: ExchangeDiagnosticsSummary = {
   exchange_mode: "paper_exchange_demo",
   execution_mode: "paper",
@@ -110,5 +114,6 @@ describe("Exchange diagnostics route (/exchange) — FP2-129", () => {
     expect(screen.getByText("Real trading disabled")).toBeInTheDocument();
     expect(screen.getByText(/read-only, no orders placed/i)).toBeInTheDocument();
     expect(screen.getByTestId("blofin-sync-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("exchange-demo-sync")).toBeInTheDocument();
   });
 });
