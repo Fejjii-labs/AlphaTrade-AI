@@ -32464,7 +32464,8 @@
           "demo_liquidation_through_stop",
           "paper_exit_backfill_loss",
           "paper_exit_degraded_repeat",
-          "paper_exit_clock_skew"
+          "paper_exit_clock_skew",
+          "paper_exit_stale_loss"
         ],
         "title": "PaperAlertType",
         "type": "string"

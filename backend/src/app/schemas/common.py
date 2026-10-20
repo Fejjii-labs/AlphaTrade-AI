@@ -722,6 +722,7 @@ class PaperAlertType(StrEnum):
     PAPER_EXIT_BACKFILL_LOSS = "paper_exit_backfill_loss"
     PAPER_EXIT_DEGRADED_REPEAT = "paper_exit_degraded_repeat"
     PAPER_EXIT_CLOCK_SKEW = "paper_exit_clock_skew"
+    PAPER_EXIT_STALE_LOSS = "paper_exit_stale_loss"
 
 
 class PromotionSource(StrEnum):

@@ -20,6 +20,7 @@ from app.market_contracts.ohlcv import require_closed_series
 from app.schemas.common import Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanHttpRequest, ClosePaperPlanRequest
 from app.services.canonical_paper_execution import (
+    monitor_close_protection,
     paper_exit_audit_fields,
     profile_close_should_note,
 )
@@ -56,6 +57,7 @@ from app.services.paper_exit_monitor import (
     open_internal_paper_statement,
     parse_open_trade,
     run_paper_exit_monitor,
+    stale_live_loss_needs_protection,
 )
 from app.workers.paper_exit_monitor import (
     PaperExitMonitorCycle,
@@ -1298,6 +1300,131 @@ def test_live_loss_still_notes_the_breakers() -> None:
         margin_assumption_id="paper-profile-isolated",
         net_pnl=Decimal("-5"),
     )
+
+
+_PAUSE = timedelta(hours=1)
+_CANDLE_15M = timedelta(minutes=15)
+_CANDLE_4H = timedelta(hours=4)
+_PROFILE = "paper-profile-isolated"
+
+
+def _live_close(occurred_at: datetime) -> ClosePaperPlanRequest:
+    return ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="stop_hit",
+        occurred_at=occurred_at,
+        idempotency_key=exit_idempotency_key(COMMAND),
+        exit_channel=EXIT_CHANNEL,
+        exit_actor=EXIT_ACTOR,
+        exit_evidence={"exit_origin": "live", "calibration_sample": "eligible"},
+    )
+
+
+def _protection(
+    request: ClosePaperPlanRequest,
+    evaluated_at: datetime | None,
+    *,
+    pause: timedelta = _PAUSE,
+    candle: timedelta | None = _CANDLE_15M,
+    net_pnl: Decimal | None = Decimal("-5"),
+    margin: str = _PROFILE,
+    replayed: bool = False,
+) -> str:
+    return monitor_close_protection(
+        request,
+        replayed=replayed,
+        margin_assumption_id=margin,
+        net_pnl=net_pnl,
+        evaluated_at=evaluated_at,
+        pause_window=pause,
+        candle_period=candle,
+    )
+
+
+def test_six_hour_loss_across_utc_midnight_gets_the_kill_switch() -> None:
+    """A 6h-old loss labelled live must not lock yesterday or an expired pause."""
+
+    occurred = datetime(2026, 10, 19, 20, 0, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 20, 2, 0, tzinfo=UTC)
+    assert evaluated - occurred == timedelta(hours=6)
+    assert occurred.date() != evaluated.date()
+    request = _live_close(occurred)
+    assert classify_exit_origin(occurred, evaluated) == "live"
+    assert exit_monitor_backfill(request) is False
+    assert (
+        profile_close_should_note(
+            request,
+            replayed=False,
+            margin_assumption_id=_PROFILE,
+            net_pnl=Decimal("-5"),
+        )
+        is True
+    )
+    assert stale_live_loss_needs_protection(
+        request,
+        replayed=False,
+        net_pnl=Decimal("-5"),
+        evaluated_at=evaluated,
+        pause_window=_PAUSE,
+        candle_period=_CANDLE_15M,
+    )
+    assert _protection(request, evaluated) == "stale_kill_switch"
+    assert counts_for_adr109_calibration(request) is True
+    assert _protection(request, evaluated, net_pnl=Decimal("5")) == "note"
+    assert _protection(request, evaluated, net_pnl=Decimal("0")) == "note"
+    assert _protection(request, evaluated, replayed=True) == "skip"
+    assert _protection(request, evaluated, net_pnl=Decimal("NaN")) == "stale_kill_switch"
+
+
+def test_stale_live_loss_boundaries_and_a_recent_loss_notes() -> None:
+    """Equality stays live. One step past either bound, or a missing clock, protects."""
+
+    bar = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    request = _live_close(bar)
+    assert _protection(request, bar + timedelta(seconds=30)) == "note"
+    assert _protection(request, bar + _PAUSE, candle=_CANDLE_4H) == "note"
+    assert (
+        _protection(request, bar + _PAUSE + timedelta(microseconds=1), candle=_CANDLE_4H)
+        == "stale_kill_switch"
+    )
+    assert _protection(request, bar + _CANDLE_15M, pause=_PAUSE) == "note"
+    assert (
+        _protection(request, bar + _CANDLE_15M + timedelta(microseconds=1), pause=_PAUSE)
+        == "stale_kill_switch"
+    )
+    just_inside_backfill = bar + timedelta(hours=24) - timedelta(microseconds=1)
+    assert classify_exit_origin(bar, just_inside_backfill) == "live"
+    assert _protection(request, just_inside_backfill) == "stale_kill_switch"
+    at_backfill = bar + timedelta(hours=24)
+    assert classify_exit_origin(bar, at_backfill) == "backfill"
+    labelled = _backfill_request()
+    labelled = labelled.model_copy(update={"occurred_at": bar})
+    assert _protection(labelled, at_backfill) == "backfill_kill_switch"
+    live_at_24h = _live_close(bar)
+    assert _protection(live_at_24h, at_backfill) == "stale_kill_switch"
+    disabled_pause = _protection(
+        request, bar + timedelta(hours=2), pause=timedelta(0), candle=_CANDLE_4H
+    )
+    assert disabled_pause == "note"
+    assert _protection(request, None) == "stale_kill_switch"
+    assert _protection(request, bar + timedelta(seconds=30), candle=None) == "stale_kill_switch"
+    human = ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="manual",
+        occurred_at=bar,
+        idempotency_key="human-close",
+    )
+    assert _protection(human, bar + timedelta(hours=6)) == "note"
 
 
 def test_series_that_starts_after_entry_is_a_leading_gap() -> None:

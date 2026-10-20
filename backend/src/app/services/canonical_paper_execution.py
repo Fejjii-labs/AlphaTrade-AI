@@ -16,9 +16,9 @@ This module never calls an exchange.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 import structlog
@@ -397,16 +397,29 @@ class CanonicalPaperExecutionService:
                     details={"reason": "missing_journal_trade"},
                 )
             self._session.refresh(trade)
-            # A live profile close feeds the consecutive streak and the daily
-            # lock. A labelled backfill does not. No calibration sample is
-            # written: a backfill is ineligible, and a live close has no
-            # walk-forward fold on this path.
-            if profile_close_should_note(
+            # A fresh live profile close feeds the consecutive streak and the
+            # daily lock from the bar clock. A labelled backfill does not.
+            # A stale live loss does not either: that bar clock is already
+            # too old, so the kill switch refuses new entries instead.
+            # No calibration sample is written: a backfill is ineligible, and
+            # a live close has no walk-forward fold on this path.
+            action = monitor_close_protection(
                 request,
                 replayed=projection.replayed,
                 margin_assumption_id=envelope.plan.risk_and_exits.margin_assumption_id,
                 net_pnl=trade.net_pnl,
-            ):
+                evaluated_at=_live_loss_clock(
+                    self._session,
+                    request,
+                    replayed=projection.replayed,
+                    net_pnl=trade.net_pnl,
+                ),
+                pause_window=timedelta(
+                    seconds=int(self._settings.paper_signal_cooldown_after_loss_seconds)
+                ),
+                candle_period=_candle_period(trade.timeframe),
+            )
+            if action == "note":
                 assert trade.net_pnl is not None
                 _consecutive, refused_new_trades = _note_profile_close(
                     self._session,
@@ -423,13 +436,17 @@ class CanonicalPaperExecutionService:
                         account_id=str(request.account_id),
                         consecutive_losses=_consecutive,
                     )
-            elif _backfill_loss_needs_protection(
-                request,
-                replayed=projection.replayed,
-                net_pnl=trade.net_pnl,
-            ):
+            elif action == "backfill_kill_switch":
                 assert trade.net_pnl is not None
                 _protect_backfill_loss(
+                    self._session,
+                    request=request,
+                    net_pnl=trade.net_pnl,
+                    settings=self._settings,
+                )
+            elif action == "stale_kill_switch":
+                assert trade.net_pnl is not None
+                _protect_stale_live_loss(
                     self._session,
                     request=request,
                     net_pnl=trade.net_pnl,
@@ -686,7 +703,9 @@ def profile_close_should_note(
     syncs the daily lock. Skipping it leaves both untouched. A human close
     has no monitor label and still notes. A cash-margin plan does not.
     A losing backfill is not noted here. The close path refuses new entries
-    for that loss without writing the streak or the daily lock.
+    for that loss without writing the streak or the daily lock. A stale live
+    loss is also a profile close by this predicate; :func:`monitor_close_protection`
+    sends that loss to the kill switch instead of the note.
     """
 
     if replayed or net_pnl is None:
@@ -696,6 +715,78 @@ def profile_close_should_note(
     from app.services.paper_exit_monitor import exit_monitor_backfill
 
     return not exit_monitor_backfill(request)
+
+
+MonitorCloseAction = Literal["note", "backfill_kill_switch", "stale_kill_switch", "skip"]
+
+
+def monitor_close_protection(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    margin_assumption_id: str,
+    net_pnl: Decimal | None,
+    evaluated_at: datetime | None,
+    pause_window: timedelta,
+    candle_period: timedelta | None,
+) -> MonitorCloseAction:
+    """Choose the breaker write for one paper close.
+
+    The labelled ``>=24h`` backfill path is first and is unchanged. A stale
+    live loss arms the kill switch. A fresh live profile close, a human
+    close, and a stale win still note at the bar time.
+    """
+
+    if _backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl):
+        return "backfill_kill_switch"
+    from app.services.paper_exit_monitor import stale_live_loss_needs_protection
+
+    if stale_live_loss_needs_protection(
+        request,
+        replayed=replayed,
+        net_pnl=net_pnl,
+        evaluated_at=evaluated_at,
+        pause_window=pause_window,
+        candle_period=candle_period,
+    ):
+        return "stale_kill_switch"
+    if profile_close_should_note(
+        request,
+        replayed=replayed,
+        margin_assumption_id=margin_assumption_id,
+        net_pnl=net_pnl,
+    ):
+        return "note"
+    return "skip"
+
+
+def _live_loss_clock(
+    session: Session,
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+) -> datetime | None:
+    """Database ``now()`` when a live monitor loss has to be aged. Otherwise None."""
+
+    from app.services.paper_exit_monitor import database_now, live_monitor_loss_needs_clock
+
+    if not live_monitor_loss_needs_clock(request, replayed=replayed, net_pnl=net_pnl):
+        return None
+    return database_now(session)
+
+
+def _candle_period(timeframe: object) -> timedelta | None:
+    """One candle, or None when the timeframe cannot be read."""
+
+    from app.market_contracts.identity import interval_timedelta
+    from app.schemas.common import Timeframe
+
+    try:
+        parsed = timeframe if isinstance(timeframe, Timeframe) else Timeframe(str(timeframe))
+        return interval_timedelta(parsed)
+    except (ValueError, KeyError):
+        return None
 
 
 def _backfill_loss_needs_protection(
@@ -719,6 +810,23 @@ def _protect_backfill_loss(
     from app.services.paper_exit_protection import protect_account_from_backfill_loss
 
     protect_account_from_backfill_loss(
+        session,
+        request=request,
+        net_pnl=net_pnl,
+        settings=settings,
+    )
+
+
+def _protect_stale_live_loss(
+    session: Session,
+    *,
+    request: ClosePaperPlanRequest,
+    net_pnl: Decimal,
+    settings: Settings,
+) -> None:
+    from app.services.paper_exit_protection import protect_account_from_stale_live_loss
+
+    protect_account_from_stale_live_loss(
         session,
         request=request,
         net_pnl=net_pnl,

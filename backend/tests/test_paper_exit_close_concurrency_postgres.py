@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import ValidationAppError
 from app.db.models import (
+    AuditLog,
     DailyRiskState,
     JournalLifecycleEvent,
     JournalTrade,
@@ -23,6 +24,8 @@ from app.db.models import (
 )
 from app.db.risk_policy import RiskPolicyBreakerState
 from app.schemas.common import (
+    ActorType,
+    AuditEventType,
     JournalLifecycleEventType,
     JournalTradeStatus,
     PaperAlertType,
@@ -184,6 +187,7 @@ def _close_labeled(
     *,
     exit_price: Decimal,
     origin: str,
+    occurred_at: datetime | None = None,
 ) -> object:
     plan = envelope.plan  # type: ignore[attr-defined]
     request = ClosePaperPlanRequest(
@@ -197,7 +201,7 @@ def _close_labeled(
         funding=Decimal("0"),
         slippage=Decimal("0"),
         exit_reason="stop_hit",
-        occurred_at=EXECUTE_AT + timedelta(minutes=1),
+        occurred_at=occurred_at or EXECUTE_AT + timedelta(minutes=1),
         idempotency_key=f"paper-exit-monitor:{command_id}",
         exit_channel="PAPER_EXIT_MONITOR",
         exit_actor="paper_exit_monitor",
@@ -244,7 +248,18 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         )
         assert switch is not None
         assert switch.active is True
+        assert switch.activated_by is None
         assert "not folded into the live streak" in (switch.reason or "")
+        audit = session.scalar(
+            select(AuditLog).where(
+                AuditLog.organization_id == plan.organization_id,
+                AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+            )
+        )
+        assert audit is not None
+        assert audit.actor_type is ActorType.SYSTEM
+        assert audit.user_id is None
+        assert audit.actor == "system"
         alert = session.scalar(
             select(PaperValidationAlert).where(
                 PaperValidationAlert.organization_id == plan.organization_id,
@@ -311,6 +326,136 @@ def test_winning_backfill_does_not_refuse_or_move_breakers() -> None:
             )
         )
         assert breaker is None
+
+
+def _assert_breakers_untouched(
+    session: Session, organization_id: object, account_id: object
+) -> None:
+    breaker = session.scalar(
+        select(RiskPolicyBreakerState).where(
+            RiskPolicyBreakerState.organization_id == organization_id,
+            RiskPolicyBreakerState.account_id == account_id,
+        )
+    )
+    assert breaker is None
+    locked = session.scalars(
+        select(DailyRiskState).where(
+            DailyRiskState.organization_id == organization_id,
+            DailyRiskState.locked.is_(True),
+        )
+    ).all()
+    assert locked == []
+
+
+@requires_postgres
+def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> None:
+    """A loss about 6h old is labelled live and still gets working protection."""
+
+    factory = _factory()
+    envelope, command_id = _open_fill(factory, key="exit-stale-live-loss")
+    plan = envelope.plan  # type: ignore[attr-defined]
+    with factory() as session:
+        trusted = read_database_now(session)
+        trade = session.scalar(
+            select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
+        )
+        assert trusted is not None
+        assert trade is not None
+        assert trade.entry_price is not None
+        exit_price = _loss_exit(trade.direction, trade.entry_price)
+    occurred = trusted - timedelta(hours=6)
+    result = _close_labeled(
+        factory,
+        envelope,
+        command_id,
+        exit_price=exit_price,
+        origin="live",
+        occurred_at=occurred,
+    )
+    assert result.net_pnl < 0  # type: ignore[attr-defined]
+    with factory() as session:
+        trade = session.scalar(
+            select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
+        )
+        assert trade is not None
+        assert trade.exit_time is not None
+        assert abs(trade.exit_time - occurred) < timedelta(seconds=1)
+        switch = session.scalar(
+            select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
+        )
+        assert switch is not None
+        assert switch.active is True
+        assert switch.activated_by is None
+        assert "too old" in (switch.reason or "")
+        alert = session.scalar(
+            select(PaperValidationAlert).where(
+                PaperValidationAlert.organization_id == plan.organization_id,
+                PaperValidationAlert.alert_type == PaperAlertType.PAPER_EXIT_STALE_LOSS,
+            )
+        )
+        assert alert is not None
+        metadata = alert.metadata_json or {}
+        assert metadata.get("refusal") == "kill_switch"
+        assert metadata.get("exit_origin") == "live"
+        assert "net_pnl" not in metadata
+        audit = session.scalar(
+            select(AuditLog).where(
+                AuditLog.organization_id == plan.organization_id,
+                AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+            )
+        )
+        assert audit is not None
+        assert audit.actor_type is ActorType.SYSTEM
+        assert audit.user_id is None
+        _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
+
+
+@requires_postgres
+def test_recent_live_loss_does_not_arm_the_kill_switch() -> None:
+    """A loss inside the pause and inside one candle stays on the live path."""
+
+    factory = _factory()
+    envelope, command_id = _open_fill(factory, key="exit-recent-live-loss")
+    plan = envelope.plan  # type: ignore[attr-defined]
+    with factory() as session:
+        trusted = read_database_now(session)
+        trade = session.scalar(
+            select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
+        )
+        assert trusted is not None
+        assert trade is not None
+        assert trade.entry_price is not None
+        exit_price = _loss_exit(trade.direction, trade.entry_price)
+    occurred = trusted - timedelta(seconds=30)
+    result = _close_labeled(
+        factory,
+        envelope,
+        command_id,
+        exit_price=exit_price,
+        origin="live",
+        occurred_at=occurred,
+    )
+    assert result.net_pnl < 0  # type: ignore[attr-defined]
+    with factory() as session:
+        switch = session.scalar(
+            select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
+        )
+        assert switch is None or switch.active is False
+        alert = session.scalar(
+            select(PaperValidationAlert).where(
+                PaperValidationAlert.organization_id == plan.organization_id,
+                PaperValidationAlert.alert_type == PaperAlertType.PAPER_EXIT_STALE_LOSS,
+            )
+        )
+        assert alert is None
+        backfill = session.scalar(
+            select(PaperValidationAlert).where(
+                PaperValidationAlert.organization_id == plan.organization_id,
+                PaperValidationAlert.alert_type == PaperAlertType.PAPER_EXIT_BACKFILL_LOSS,
+            )
+        )
+        assert backfill is None
+        _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
 
 
 @requires_postgres

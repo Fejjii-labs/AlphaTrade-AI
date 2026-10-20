@@ -17,7 +17,7 @@ from typing import Literal
 from uuid import UUID
 
 import structlog
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.db.canonical_candidates import CanonicalCandidateRow
@@ -39,7 +39,9 @@ EXIT_CHANNEL = "PAPER_EXIT_MONITOR"
 EXIT_ACTOR = "paper_exit_monitor"
 # A crossing whose bar ended long before this evaluation is a reconstruction.
 # It is journaled and kept out of the breaker, the daily lock, and ADR-109.
-# A close processed within this window is live, including across UTC midnight.
+# A close processed within this window is labelled live, including across UTC
+# midnight. A losing live close that is already older than the loss pause or
+# one candle does not use that bar's breaker clock (AT-ADR-128).
 HISTORICAL_BACKFILL_AFTER = timedelta(hours=24)
 # Repeated degraded or refused cycles. Well under the 24-hour backfill horizon.
 DEGRADED_REPEAT_ALERT_AFTER = timedelta(minutes=15)
@@ -203,12 +205,14 @@ def downtime_is_historical_backfill(occurred_at: datetime, evaluated_at: datetim
     """True when the worker was down, or not evaluating, for 24 hours or more.
 
     Downtime is the gap from the crossing bar's end to this evaluation.
-    Exactly 24 hours is a backfill. A shorter gap is live, including a bar
-    that ended on the previous UTC date and is processed after midnight.
-    A naive timestamp is a backfill so it cannot move the breaker. The close
-    is still journaled. A backfill does not advance the consecutive-loss
-    streak, does not sync the daily lock, and is not an ADR-109 sample.
-    A backfill with a net loss alerts and refuses new entries instead.
+    Exactly 24 hours is a backfill. A shorter gap is labelled live, including
+    a bar that ended on the previous UTC date and is processed after
+    midnight. A naive timestamp is a backfill so it cannot move the breaker.
+    The close is still journaled. A backfill does not advance the
+    consecutive-loss streak, does not sync the daily lock, and is not an
+    ADR-109 sample. A backfill with a net loss alerts and refuses new entries
+    instead. A losing live close older than the loss pause or one candle
+    does the same, without changing this 24-hour rule (AT-ADR-128).
     """
 
     if occurred_at.tzinfo is None or evaluated_at.tzinfo is None:
@@ -236,6 +240,100 @@ def backfill_loss_needs_protection(
     if not isinstance(net_pnl, Decimal) or not net_pnl.is_finite():
         return isinstance(net_pnl, Decimal)
     return net_pnl < 0
+
+
+def database_now(session: Session) -> datetime | None:
+    """Database ``now()``, or None when the session cannot return an aware time."""
+
+    try:
+        value = session.scalar(select(func.now()))
+    except Exception:
+        return None
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return None
+    return value.astimezone(UTC)
+
+
+def _counts_as_monitor_loss(net_pnl: Decimal | None) -> bool:
+    """A negative result, or a non-finite decimal, counts as a loss.
+
+    A missing value does not. A non-finite value fails closed once the close
+    is otherwise a live monitor loss.
+    """
+
+    if not isinstance(net_pnl, Decimal):
+        return False
+    if not net_pnl.is_finite():
+        return True
+    return net_pnl < 0
+
+
+def _is_labelled_live_monitor_close(request: ClosePaperPlanRequest) -> bool:
+    """True when the monitor labelled this close live. A human close is not."""
+
+    if exit_monitor_backfill(request):
+        return False
+    evidence = request.exit_evidence
+    if not evidence:
+        return False
+    return evidence.get("exit_origin") == EXIT_ORIGIN_LIVE
+
+
+def live_monitor_loss_needs_clock(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+) -> bool:
+    """Whether staleness has to be measured against database ``now()``."""
+
+    if replayed or not _is_labelled_live_monitor_close(request):
+        return False
+    return _counts_as_monitor_loss(net_pnl)
+
+
+def _older_than(age: timedelta, window: timedelta) -> bool:
+    """Strictly older than a positive window. Zero and negative windows do not match."""
+
+    return window > timedelta(0) and age > window
+
+
+def stale_live_loss_needs_protection(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+    evaluated_at: datetime | None,
+    pause_window: timedelta,
+    candle_period: timedelta | None,
+) -> bool:
+    """A live losing close whose bar clock can no longer protect the account.
+
+    The pause window is the paper loss cooldown. The candle period is the
+    trade timeframe. Older than either one, while the close is still labelled
+    live, is stale. Equality with either bound stays on the live breaker
+    clock. A labelled backfill, including exactly 24 hours, is decided by
+    :func:`backfill_loss_needs_protection` and returns false here.
+
+    A live label on a bar that is already 24 hours old still protects, so
+    that bar's clock is not written into the breakers. A missing database
+    clock, a naive evaluation time, or an unreadable candle period fails
+    closed. A replay, a win, a zero, and a missing PnL do not.
+    """
+
+    if not live_monitor_loss_needs_clock(request, replayed=replayed, net_pnl=net_pnl):
+        return False
+    if candle_period is None or evaluated_at is None or evaluated_at.tzinfo is None:
+        return True
+    if request.occurred_at.tzinfo is None:
+        return True
+    age = evaluated_at.astimezone(UTC) - request.occurred_at.astimezone(UTC)
+    if age >= HISTORICAL_BACKFILL_AFTER:
+        # A live label must not write breakers from a bar that is already a
+        # backfill. The labelled backfill path is the normal case and is
+        # decided before this function.
+        return True
+    return _older_than(age, pause_window) or _older_than(age, candle_period)
 
 
 def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:

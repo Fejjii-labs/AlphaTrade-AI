@@ -56,6 +56,7 @@ ALERT_COOLDOWN_SECONDS: dict[PaperAlertType, int] = {
     PaperAlertType.PAPER_EXIT_BACKFILL_LOSS: 86400,
     PaperAlertType.PAPER_EXIT_DEGRADED_REPEAT: 900,
     PaperAlertType.PAPER_EXIT_CLOCK_SKEW: 900,
+    PaperAlertType.PAPER_EXIT_STALE_LOSS: 86400,
 }
 
 
