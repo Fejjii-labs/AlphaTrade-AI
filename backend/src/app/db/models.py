@@ -132,6 +132,7 @@ from app.db.telegram_security import (  # noqa: F401
     TelegramProtocolAuditEventRow,
 )
 from app.db.voice_realtime import VoiceSessionReservation  # noqa: F401
+from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow  # noqa: F401
 from app.db.watcher_assignments import (  # noqa: F401
     WatcherAssignmentReceiptRow,
     WatcherStrategyAssignmentRow,

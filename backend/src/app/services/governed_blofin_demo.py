@@ -697,6 +697,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             from app.services.risk_policy.liquidation import MaintenanceTier
 
             live_funding = self._verified_funding_rate()
+            autonomous = getattr(self, "_autonomous_settings", None)
+            fixed_risk = (
+                autonomous.risk_per_trade_percent if autonomous is not None else None
+            )
             sized = size_for_profile(
                 active=active_profile,
                 grade=grade,
@@ -721,6 +725,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     for floor, rate in snapshot.maintenance_tiers
                 ),
                 execution_channel="demo",
+                fixed_risk_percent=fixed_risk,
             )
             if isinstance(sized, str):
                 return sized
@@ -745,7 +750,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             profile_funding_rate = sized.funding_rate
             profile_funding_periods = sized.funding_periods
             profile_grade = sized.grade
-            profile_grade_cap = active_profile.profile.risk_percent(sized.grade)
+            profile_grade_cap = (
+                fixed_risk
+                if fixed_risk is not None
+                else active_profile.profile.risk_percent(sized.grade)
+            )
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"

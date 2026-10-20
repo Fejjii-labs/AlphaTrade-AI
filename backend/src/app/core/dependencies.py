@@ -73,6 +73,7 @@ from app.services.quota_service import QuotaService
 from app.services.rag_service import RagService, build_rag_service
 from app.services.research_validation_service import ResearchValidationService
 from app.services.risk.kill_switch import KillSwitchService
+from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.risk.settings_service import RiskSettingsService
 from app.services.risk_service import RiskService
 from app.services.setup_evidence_service import SetupEvidenceService
@@ -737,6 +738,19 @@ def get_risk_settings_service(
 
 
 RiskSettingsServiceDep = Annotated[RiskSettingsService, Depends(get_risk_settings_service)]
+
+
+def get_autonomous_trading_settings_service(
+    session: SessionDep,
+    audit_service: AuditServiceDep,
+) -> AutonomousTradingSettingsService:
+    return AutonomousTradingSettingsService(session, audit_service)
+
+
+AutonomousTradingSettingsServiceDep = Annotated[
+    AutonomousTradingSettingsService,
+    Depends(get_autonomous_trading_settings_service),
+]
 
 
 def get_kill_switch_service(

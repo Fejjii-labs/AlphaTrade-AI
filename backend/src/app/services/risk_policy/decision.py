@@ -65,8 +65,13 @@ def decide_trade(
             return TradeDecision(False, "ai_changed_grade", None, None)
     if sizing.entry is None:
         return TradeDecision(False, "entry_missing", None, None)
+    base_risk = (
+        sizing.grade_risk_percent
+        if sizing.grade_risk_percent is not None
+        else profile.risk_percent(grade.grade)
+    )
     try:
-        adjusted = apply_adjusters(profile.risk_percent(grade.grade), adjusters)
+        adjusted = apply_adjusters(base_risk, adjusters)
     except RiskPolicyRejected as exc:
         return TradeDecision(False, exc.code, None, None)
     requested = sizing.leverage if sizing.leverage is not None else profile.default_leverage

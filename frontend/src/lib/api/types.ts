@@ -1137,6 +1137,26 @@ export interface UserRiskSettingsUpdate {
   notes?: string | null;
 }
 
+export interface AutonomousStrategyOption {
+  strategy_id: string;
+  name: string;
+}
+
+export interface AutonomousTradingSettingsView {
+  organization_id: string;
+  user_id: string;
+  daily_loss_limit_percent: string;
+  max_trades_per_day: number;
+  risk_per_trade_percent: string | null;
+  strategy_id: string | null;
+  symbol: string | null;
+  using_defaults: boolean;
+  strategy_options: AutonomousStrategyOption[];
+  symbol_options: string[];
+  max_daily_loss_percent_ceiling: string;
+  max_risk_per_trade_percent_ceiling: string;
+}
+
 export interface KillSwitchStatus {
   organization_id: string;
   active: boolean;

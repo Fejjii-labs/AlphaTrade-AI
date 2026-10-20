@@ -3938,6 +3938,7 @@
           "paper_scheduler_tick",
           "paper_validation_runtime",
           "risk_settings_updated",
+          "autonomous_trading_settings_updated",
           "notification_preferences_updated",
           "notification_test_sent",
           "alert_telegram_delivery_requested",
@@ -4136,6 +4137,206 @@
         ],
         "title": "AuthorizationState",
         "type": "string"
+      },
+      "AutonomousStrategyOption": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "strategy_id": {
+            "format": "uuid",
+            "title": "Strategy Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id",
+          "name"
+        ],
+        "title": "AutonomousStrategyOption",
+        "type": "object"
+      },
+      "AutonomousTradingSettingsUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "clear_risk_per_trade_percent": {
+            "default": false,
+            "title": "Clear Risk Per Trade Percent",
+            "type": "boolean"
+          },
+          "daily_loss_limit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Loss Limit Percent"
+          },
+          "max_trades_per_day": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Trades Per Day"
+          },
+          "risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 5.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade Percent"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 3,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "title": "AutonomousTradingSettingsUpdate",
+        "type": "object"
+      },
+      "AutonomousTradingSettingsView": {
+        "additionalProperties": false,
+        "properties": {
+          "daily_loss_limit_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Daily Loss Limit Percent",
+            "type": "string"
+          },
+          "max_daily_loss_percent_ceiling": {
+            "default": "6",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Max Daily Loss Percent Ceiling",
+            "type": "string"
+          },
+          "max_risk_per_trade_percent_ceiling": {
+            "default": "5",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Max Risk Per Trade Percent Ceiling",
+            "type": "string"
+          },
+          "max_trades_per_day": {
+            "title": "Max Trades Per Day",
+            "type": "integer"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "risk_per_trade_percent": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade Percent"
+          },
+          "strategy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Id"
+          },
+          "strategy_options": {
+            "items": {
+              "$ref": "#/components/schemas/AutonomousStrategyOption"
+            },
+            "title": "Strategy Options",
+            "type": "array"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "symbol_options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbol Options",
+            "type": "array"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          },
+          "using_defaults": {
+            "default": false,
+            "title": "Using Defaults",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "organization_id",
+          "user_id",
+          "daily_loss_limit_percent",
+          "max_trades_per_day"
+        ],
+        "title": "AutonomousTradingSettingsView",
+        "type": "object"
       },
       "BacktestAssumptions-Input": {
         "additionalProperties": false,
@@ -59814,6 +60015,76 @@
         "summary": "Request Verify Email",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/autonomous/settings": {
+      "get": {
+        "operationId": "get_autonomous_trading_settings_autonomous_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomousTradingSettingsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get autonomous trading settings",
+        "tags": [
+          "autonomous-trading"
+        ]
+      },
+      "patch": {
+        "operationId": "update_autonomous_trading_settings_autonomous_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomousTradingSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomousTradingSettingsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update autonomous trading settings",
+        "tags": [
+          "autonomous-trading"
         ]
       }
     },

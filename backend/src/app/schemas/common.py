@@ -371,6 +371,7 @@ class AuditEventType(StrEnum):
     PAPER_SCHEDULER_TICK = "paper_scheduler_tick"
     PAPER_VALIDATION_RUNTIME = "paper_validation_runtime"
     RISK_SETTINGS_UPDATED = "risk_settings_updated"
+    AUTONOMOUS_TRADING_SETTINGS_UPDATED = "autonomous_trading_settings_updated"
     NOTIFICATION_PREFERENCES_UPDATED = "notification_preferences_updated"
     NOTIFICATION_TEST_SENT = "notification_test_sent"
     ALERT_TELEGRAM_DELIVERY_REQUESTED = "alert_telegram_delivery_requested"

@@ -599,6 +599,7 @@ def size_for_profile(
     funding_rate_verified: bool = False,
     expected_hold_hours: Decimal | None = None,
     execution_channel: str | None = None,
+    fixed_risk_percent: Decimal | None = None,
 ) -> SizedPlan | str:
     """Size one new paper or demo plan. Returns a reason code when refused.
 
@@ -620,6 +621,16 @@ def size_for_profile(
     if open_notional > 0 and open_risk_percent <= 0:
         # Open notional without a server-side risk-at-stop figure is not treated as zero.
         return "open_risk_uncomputed"
+    if fixed_risk_percent is not None:
+        if (
+            not isinstance(fixed_risk_percent, Decimal)
+            or not fixed_risk_percent.is_finite()
+            or fixed_risk_percent <= 0
+        ):
+            return "risk_override_invalid"
+        grade_risk = fixed_risk_percent
+    else:
+        grade_risk = active.profile.risk_percent(grade.grade)
     rate, periods = paper_demo_funding(
         funding_rate,
         live_verified=funding_rate_verified,
@@ -645,7 +656,7 @@ def size_for_profile(
             stop=stop,
             direction=direction,
             grade=grade.grade,
-            grade_risk_percent=active.profile.risk_percent(grade.grade),
+            grade_risk_percent=grade_risk,
             atr=atr,
             gap_beyond_stop=Decimal("0"),
             fee_rate=PAPER_DEMO_TAKER_FEE_RATE,

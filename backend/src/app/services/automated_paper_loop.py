@@ -155,6 +155,7 @@ class AutomatedPaperLoop:
         """Open one internal paper journal trade, or write nothing when a gate fails."""
 
         self._observed_kill_switch = kill_switch_active
+        self._autonomous_settings = None
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -169,6 +170,25 @@ class AutomatedPaperLoop:
         account = self._account(session, target)
         if account is None:
             return _proof(candidate, "skipped", "execution_account_missing")
+        from app.services.autonomous_trading_guard import autonomous_precheck_refusal
+        from app.services.autonomous_trading_settings_service import (
+            AutonomousTradingSettingsService,
+        )
+        from app.services.risk.daily_risk_accounting import DailyRiskAccounting
+
+        autonomous_settings = AutonomousTradingSettingsService(
+            session, AuditService(session)
+        ).resolve(organization_id=target.organization_id, user_id=target.user_id)
+        snapshot = DailyRiskAccounting(
+            session, _risk_settings(session), clock=lambda: self._clock.now()
+        ).sync_from_portfolio(
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+        )
+        autonomous_block = autonomous_precheck_refusal(autonomous_settings, target, snapshot)
+        if autonomous_block is not None:
+            return _proof(candidate, "blocked", autonomous_block)
+        self._autonomous_settings = autonomous_settings
         with self._runtime.bind_session(session):
             return self._bound(
                 session,
@@ -302,11 +322,21 @@ class AutomatedPaperLoop:
             open_exposure = _open_exposure(session, target, now=now)
         else:
             funding_rate = self._verified_funding_rate()
+            from app.services.autonomous_trading_guard import (
+                effective_autonomous_daily_loss_percent,
+            )
+
+            daily_cap = active.profile.daily_loss_limit_percent
+            autonomous = getattr(self, "_autonomous_settings", None)
+            if autonomous is not None:
+                daily_cap = effective_autonomous_daily_loss_percent(
+                    autonomous, active.profile.daily_loss_limit_percent
+                )
             book = _profile_open_book(
                 session,
                 target,
                 now=now,
-                daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
+                daily_loss_limit_percent=daily_cap,
                 include_book_buffer=self._risk_policy_kind() == "demo",
                 funding_rate=funding_rate,
                 live_verified=funding_rate is not None,
@@ -340,6 +370,7 @@ class AutomatedPaperLoop:
                     eligibility_id=eligibility.eligibility.eligibility_id,
                     eligibility_state=state.value,
                 )
+        autonomous = getattr(self, "_autonomous_settings", None)
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -356,6 +387,9 @@ class AutomatedPaperLoop:
             remaining_daily_budget_percent=remaining_daily,
             breaker_refusing=_breaker_refusing(session, target.organization_id, now),
             risk_records=records,
+            fixed_risk_percent=(
+                autonomous.risk_per_trade_percent if autonomous is not None else None
+            ),
         )
         if isinstance(terms, str):
             return AutomatedPaperLoopProof(
@@ -726,6 +760,7 @@ class AutomatedPaperLoop:
         remaining_daily_budget_percent: Decimal | None = None,
         breaker_refusing: bool = False,
         risk_records: list[object] | None = None,
+        fixed_risk_percent: Decimal | None = None,
     ) -> TradePlanRevisionCreate | str:
         return _plan_terms(
             candidate=candidate,
@@ -743,6 +778,7 @@ class AutomatedPaperLoop:
             remaining_daily_budget_percent=remaining_daily_budget_percent,
             breaker_refusing=breaker_refusing,
             risk_records=risk_records,
+            fixed_risk_percent=fixed_risk_percent,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -1306,6 +1342,7 @@ def _plan_terms(
     breaker_refusing: bool = False,
     risk_records: list[object] | None = None,
     accept_unprofiled_minimum: bool = False,
+    fixed_risk_percent: Decimal | None = None,
 ) -> TradePlanRevisionCreate | str:
     from app.strategy_brain.sfp.contracts import SfpSpec
 
@@ -1398,6 +1435,7 @@ def _plan_terms(
             remaining_daily_budget_percent=remaining_daily_budget_percent,
             breaker_refusing=breaker_refusing,
             execution_channel="internal_paper",
+            fixed_risk_percent=fixed_risk_percent,
         )
         if isinstance(sized, str):
             return sized
@@ -1405,7 +1443,11 @@ def _plan_terms(
         leverage = sized.leverage
         margin_mode = MarginMode.ISOLATED
         sizing_grade = sized.grade
-        sizing_cap = active_profile.profile.risk_percent(sized.grade)
+        sizing_cap = (
+            fixed_risk_percent
+            if fixed_risk_percent is not None
+            else active_profile.profile.risk_percent(sized.grade)
+        )
         if risk_records is not None:
             risk_records.append(sized.record)
     observed = quote.source_time
