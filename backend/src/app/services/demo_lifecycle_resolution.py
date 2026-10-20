@@ -7,6 +7,7 @@ loss allocation and consumed trade counts remain conservative, not replenished.
 from decimal import ROUND_FLOOR, Decimal
 from uuid import uuid5
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -56,6 +57,8 @@ from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
 from app.services.risk_policy.profile import PolicyKind
 from app.services.safety_epoch import SafetyEpochService
+
+logger = structlog.get_logger(__name__)
 
 
 def signed_verified_demo_pnl(
@@ -450,7 +453,7 @@ def resolve_verified_demo_exit(
             sum((fill.quantity * fill.price for fill in fills), Decimal("0"))
             / evidence.entry_quantity
         )
-        _note_profile_close(
+        _streak, refused_new_trades = _note_profile_close(
             session,
             organization_id=command.organization_id,
             user_id=command.user_id,
@@ -473,4 +476,11 @@ def resolve_verified_demo_exit(
             now=evidence.observed_at,
             kind=PolicyKind.DEMO,
         )
+        if refused_new_trades:
+            logger.info(
+                "profile_close_refuses_new_trades",
+                organization_id=str(command.organization_id),
+                account_id=str(command.account_id),
+                consecutive_losses=_streak,
+            )
     return resolution

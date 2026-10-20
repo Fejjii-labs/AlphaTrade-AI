@@ -656,7 +656,9 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
             poll_seconds=float(settings.blofin_demo_snapshot_sync_seconds),
             request_stop=snapshot.request_stop,
         )
-    if settings.paper_exit_monitor_enabled:
+    # Attached only after the disarmed check. A disarmed worker does not open
+    # PostgreSQL or public candles when PAPER_EXIT_MONITOR_ENABLED is true.
+    if settings.paper_exit_monitor_enabled and not settings_are_disarmed_paper_worker(settings):
         from app.workers.paper_exit_monitor import PaperExitMonitorCycle
 
         exit_monitor = PaperExitMonitorCycle(settings.model_copy(deep=True))
@@ -674,8 +676,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     Disarmed startup constructs Settings and returns ``disarmed`` without
     opening PostgreSQL, Redis, or provider clients. The demo snapshot cycle
     is not attached while its flag is off or the worker is disarmed. The
-    paper exit monitor is not attached while its flag is off. Armed
-    startup does not bind the disarmed role, so missing operational
+    paper exit monitor is not attached while its flag is off or the worker
+    is disarmed, including when ``PAPER_EXIT_MONITOR_ENABLED`` is true.
+    Armed startup does not bind the disarmed role, so missing operational
     dependencies fail closed.
     """
 

@@ -2,6 +2,70 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-124 — Paper exit monitor stays closed until a close is exactly once
+
+- Date: 2026-10-20
+- Decision: The internal-paper exit monitor may not be dry-run on staging or
+  switched on until a close is exactly once, unusable candles are refused,
+  a degraded cycle is warned, the 24-hour downtime rule is explicit, and a
+  disarmed worker ignores the enabled flag. Both flags stay default false.
+  This record does not arm them.
+- Exactly once: `close_filled_plan` holds `lock_execution_lifecycle` (advisory
+  key, then the journal row on PostgreSQL) and re-reads the trade before the
+  status check. The monitor key `paper-exit-monitor:{command_id}` replays.
+  A different key on an already closed trade raises `already_closed` and
+  writes no second close.
+- Candles: `candle_series_block` refuses a stop or target read when closed
+  bars do not meet, a bar is not one timeframe long, or the newest closed
+  bar ended at least one timeframe before evaluation. The trade stays open.
+  The pass counts `refused` and logs `paper_exit_monitor_candles_unusable`.
+- Degraded: a raised cycle or a `degraded` report logs
+  `paper_exit_monitor_cycle_degraded`.
+- Downtime: `downtime_is_historical_backfill` is the rule. Exactly 24 hours
+  from the crossing bar's end to evaluation is a backfill. Less than 24
+  hours is live, including a previous UTC date processed after midnight. A
+  naive timestamp is a backfill. The close is journaled either way.
+  AT-ADR-118 still keeps a backfill out of the breakers and out of ADR-109
+  calibration.
+- Disarmed: the monitor is attached only after the disarmed-worker check,
+  and only when the flag is true. A disarmed worker does not open PostgreSQL
+  or public candles when `PAPER_EXIT_MONITOR_ENABLED` is true. The flag is
+  not added to the disarmed-flag list, because that would treat the worker
+  as armed.
+- Safety: Real-money trading stays rejected. No environment, blueprint, or
+  deploy change.
+- Reference: AT-ADR-116; AT-ADR-117; AT-ADR-118;
+  `docs/paper_exit_monitor.md`.
+
+## AT-ADR-125 — Ruined equity still latches the profile breaker
+
+- Date: 2026-10-20
+- Decision: `persist_profile_breakers` writes the drawdown latch and the
+  loss streak when account equity is not a finite number greater than zero.
+  It arms the organization kill switch on the trip that sets the latch. It
+  does not return before that write. A stored positive equity peak is kept.
+  A new row uses peak `1` only so the column can be written; the latch, not
+  that peak, blocks new trades. The scan returns `breaker_active` when the
+  persist call refuses new trades, before sizing. A profile close that
+  refuses new trades is logged as `profile_close_refuses_new_trades`. The
+  close itself stands.
+- Safety: Real-money trading stays rejected. This does not clear a latch and
+  does not deactivate a kill switch.
+- Reference: AT-ADR-109; AT-ADR-110;
+  `backend/src/app/services/risk_policy/breaker_trip.py`.
+
+## AT-ADR-126 — A missing stored plan revokes leftover autonomous authority
+
+- Date: 2026-10-20
+- Decision: When the execution clock is present and the stored plan is
+  missing, both the internal-paper loop and the governed BloFin demo loop
+  call `revoke_leftover_autonomous_authorizations` with reason
+  `stored_plan_limits_uncomputed` before returning that reason. A missing
+  clock returns the same reason and does not revoke, because there is no
+  moment at which those rows can be revoked.
+- Safety: Real-money trading stays rejected. Flags stay default false.
+- Reference: AT-ADR-119; AT-ADR-120.
+
 ## AT-ADR-121 — Non-pull_request runs cannot cancel or replace each other
 
 - Date: 2026-10-19
@@ -3834,7 +3898,11 @@ UI labels. Manual demo tests remain excluded from the Attention/open-paper count
 recent Journal records can include them. Missing current PnL/exposure stays null.
 No legacy fallback after a canonical error or historical record rewrite.
 
-## AT-ADR-097 — Private conversational capture has no execution authority
+## AT-ADR-123 — Private conversational capture has no execution authority
+
+- Id: Filed on 2026-10-09 as a second AT-ADR-097. Renumbered on 2026-10-20.
+  AT-ADR-097 remains “Separate native closure from protection attribution”
+  (AT-117, BloFin reconciliation). The decision text is unchanged.
 
 2026-10-09. Consolidate navigation into Dashboard, Agent, Journal & Knowledge,
 Strategies and Settings while reusing PR232 native account/lifecycle contracts.

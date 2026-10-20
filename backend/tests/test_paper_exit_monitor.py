@@ -37,8 +37,10 @@ from app.services.paper_exit_monitor import (
     FetchedBars,
     OpenInternalPaperTrade,
     PaperExitCloser,
+    candle_series_block,
     classify_exit_origin,
     counts_for_adr109_calibration,
+    downtime_is_historical_backfill,
     exit_idempotency_key,
     exit_monitor_backfill,
     fill_entry_time,
@@ -157,8 +159,11 @@ def _run(
     dry_run: bool = False,
     covers: bool = True,
     closer: PaperExitCloser | None = None,
-    evaluated_at: datetime = NOW,
+    evaluated_at: datetime | None = None,
 ) -> tuple[object, RecordingCloser]:
+    moment = evaluated_at
+    if moment is None:
+        moment = max((bar.interval_end for bar in bars), default=NOW)
     recorder = closer if closer is not None else RecordingCloser()
     report = run_paper_exit_monitor(
         enabled=enabled,
@@ -166,9 +171,32 @@ def _run(
         trades=(trade,),
         candles=lambda _trade: _fetched(bars, covers=covers),
         closer=recorder,
-        evaluated_at=evaluated_at,
+        evaluated_at=moment,
     )
     return report, recorder
+
+
+def _continuous(
+    start: datetime,
+    until: datetime,
+    *,
+    low: str = "96",
+    high: str = "109",
+    hits: dict[datetime, tuple[str, str]] | None = None,
+) -> tuple[ExitBar, ...]:
+    """15m bars from ``start`` up to, but not past, ``until``."""
+
+    step = timedelta(minutes=15)
+    bars: list[ExitBar] = []
+    cursor = start
+    while cursor + step <= until:
+        touch = (hits or {}).get(cursor)
+        if touch is None:
+            bars.append(_bar(cursor, low=low, high=high))
+        else:
+            bars.append(_bar(cursor, low=touch[0], high=touch[1]))
+        cursor += step
+    return tuple(bars)
 
 
 def test_long_stop_hit_closes_at_the_stop_with_zero_internal_paper_costs() -> None:
@@ -296,17 +324,29 @@ def test_dry_run_logs_the_close_without_writing() -> None:
 
 
 def test_historical_crossing_closes_at_the_first_bar_not_a_later_one() -> None:
-    """Models trades that had already crossed on 6 Oct and stayed open."""
+    """Models trades that had already crossed on 6 Oct and stayed open.
 
-    before = datetime(2026, 9, 30, 0, 0, tzinfo=UTC)
+    The series is continuous through an evaluation exactly 24 hours after the
+    crossing bar. That downtime is a backfill. A later bar also touches the
+    stop and is not the fill.
+    """
+
+    from app.services.paper_exit_monitor import HISTORICAL_BACKFILL_AFTER
+
+    before = datetime(2026, 9, 30, 23, 45, tzinfo=UTC)
     crossing = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
-    later = datetime(2026, 10, 7, 0, 0, tzinfo=UTC)
-    bars = (
-        _bar(before, low="80", high="130"),
-        _bar(crossing, low="94", high="101"),
-        _bar(later, low="90", high="120"),
+    later = datetime(2026, 10, 6, 0, 15, tzinfo=UTC)
+    evaluated = crossing + timedelta(minutes=15) + HISTORICAL_BACKFILL_AFTER
+    bars = _continuous(
+        before,
+        evaluated,
+        hits={
+            before: ("80", "130"),
+            crossing: ("94", "101"),
+            later: ("90", "120"),
+        },
     )
-    report, closer = _run(_trade(), bars)
+    report, closer = _run(_trade(), bars, evaluated_at=evaluated)
     assert report.closed == 1
     request = closer.requests[0]
     assert request.exit_reason == "stop_hit"
@@ -336,7 +376,7 @@ def test_same_day_crossing_feeds_the_breaker_and_stays_eligible() -> None:
     evaluated = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
     _report, closer = _run(
         _trade(),
-        (_bar(start, low="94", high="101"),),
+        _continuous(start, evaluated, hits={start: ("94", "101")}),
         evaluated_at=evaluated,
     )
     request = closer.requests[0]
@@ -393,6 +433,63 @@ def test_naive_exit_time_is_labelled_backfill() -> None:
     naive = datetime(2026, 10, 18, 12, 0)
     assert classify_exit_origin(naive, NOW) == "backfill"
     assert classify_exit_origin(NOW, naive) == "backfill"
+    assert downtime_is_historical_backfill(naive, NOW) is True
+    assert downtime_is_historical_backfill(NOW, naive) is True
+
+
+def test_worker_down_for_24h_is_backfill_and_a_shorter_gap_is_live() -> None:
+    """Exactly 24 hours of downtime is a backfill. One microsecond less is live."""
+
+    from app.services.paper_exit_monitor import HISTORICAL_BACKFILL_AFTER
+
+    occurred = datetime(2026, 10, 17, 12, 15, tzinfo=UTC)
+    assert timedelta(hours=24) == HISTORICAL_BACKFILL_AFTER
+    assert downtime_is_historical_backfill(occurred, occurred + HISTORICAL_BACKFILL_AFTER)
+    assert classify_exit_origin(occurred, occurred + HISTORICAL_BACKFILL_AFTER) == "backfill"
+    just_inside = occurred + HISTORICAL_BACKFILL_AFTER - timedelta(microseconds=1)
+    assert downtime_is_historical_backfill(occurred, just_inside) is False
+    assert classify_exit_origin(occurred, just_inside) == "live"
+
+
+def test_gapped_candles_are_not_evaluated() -> None:
+    start = datetime(2026, 10, 18, 11, 0, tzinfo=UTC)
+    skipped = start + timedelta(minutes=30)
+    evaluated = skipped + timedelta(minutes=15)
+    with capture_logs() as logs:
+        report, closer = _run(
+            _trade(),
+            (
+                _bar(start, low="94", high="101"),
+                _bar(skipped, low="94", high="101"),
+            ),
+            evaluated_at=evaluated,
+        )
+    assert report.status == "degraded"
+    assert report.closed == 0
+    assert report.refused == 1
+    assert report.error == "candles_unusable"
+    assert closer.requests == []
+    assert (
+        candle_series_block(
+            (_bar(start, low="96", high="109"), _bar(skipped, low="96", high="109")),
+            timeframe=Timeframe.M15,
+            evaluated_at=evaluated,
+        )
+        == "gap"
+    )
+    assert any(entry["event"] == "paper_exit_monitor_candles_unusable" for entry in logs)
+
+
+def test_stale_candles_are_not_evaluated() -> None:
+    start = datetime(2026, 10, 18, 11, 0, tzinfo=UTC)
+    bar = _bar(start, low="94", high="101")
+    evaluated = bar.interval_end + timedelta(minutes=15)
+    report, closer = _run(_trade(), (bar,), evaluated_at=evaluated)
+    assert report.status == "degraded"
+    assert report.refused == 1
+    assert report.closed == 0
+    assert closer.requests == []
+    assert candle_series_block((bar,), timeframe=Timeframe.M15, evaluated_at=evaluated) == "stale"
 
 
 def test_trade_opened_at_bar_close_exits_on_the_next_bar() -> None:
@@ -441,7 +538,10 @@ def test_settlement_gap_after_the_boundary_exits_on_the_opening_bar() -> None:
     trade = _trade(entry_time=entry)
     missed, idle = _run(
         trade,
-        (_bar(signal, low="90", high="101"),),
+        (
+            _bar(signal, low="90", high="101"),
+            _bar(boundary, low="96", high="109"),
+        ),
         evaluated_at=evaluated,
     )
     assert missed.closed == 0
@@ -511,7 +611,7 @@ def test_live_close_across_midnight_feeds_the_breaker_for_the_close_day() -> Non
     entry = datetime(2026, 10, 17, 22, 0, tzinfo=UTC)
     _report, closer = _run(
         _trade(entry_time=entry),
-        (_bar(bar_start, low="94", high="101"),),
+        _continuous(bar_start, evaluated, hits={bar_start: ("94", "101")}),
         evaluated_at=evaluated,
     )
     request = closer.requests[0]
@@ -828,9 +928,20 @@ def test_october_6_live_crossings_are_read_from_binance_not_replay() -> None:
         entry_time=entry,
         journal_trade_id=UUID("60000000-0000-4000-8000-000000000099"),
     )
-    bars = (
-        _bar(fill_bar, low="85000", high="86000"),
-        _bar(crossing, low="85650", high="86881.1", open_="85680"),
+    bars = tuple(
+        _bar(crossing, low="85650", high="86881.1", open_="85680")
+        if bar.interval_start == crossing
+        else bar
+        for bar in _continuous(
+            fill_bar,
+            NOW,
+            low="85650",
+            high="85700",
+            hits={
+                fill_bar: ("85000", "86000"),
+                crossing: ("85650", "86881.1"),
+            },
+        )
     )
 
     class LiveBinance:
@@ -880,6 +991,41 @@ def test_october_6_live_crossings_are_read_from_binance_not_replay() -> None:
     assert journal["calibration_sample"] == "excluded"
 
 
+def test_degraded_cycle_emits_a_structured_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Boom:
+        def __call__(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("candle source down")
+
+        def request_stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.workers.paper_exit_monitor.run_configured_exit_monitor",
+        Boom(),
+    )
+    settings = Settings(_env_file=None, paper_exit_monitor_enabled=True)
+    with capture_logs() as logs:
+        outcome = PaperExitMonitorCycle(settings)()
+    assert outcome.status == "degraded"
+    assert any(entry["event"] == "paper_exit_monitor_cycle_degraded" for entry in logs)
+
+
+def test_disarmed_cycle_does_not_open_a_session_when_the_flag_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden() -> None:
+        raise AssertionError("disarmed monitor opened a session")
+
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr("app.workers.paper_exit_monitor._session_factory", forbidden)
+    settings = Settings(_env_file=None, paper_exit_monitor_enabled=True)
+    outcome = PaperExitMonitorCycle(settings)()
+    assert outcome.status == "disarmed"
+
+
 def test_disabled_cycle_does_not_open_a_session(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden() -> None:
         raise AssertionError("disabled monitor opened a session")
@@ -907,6 +1053,24 @@ def test_enabled_dry_run_reads_without_building_a_closer() -> None:
     assert report.status == "dry_run"
     assert report.examined == 0
     assert report.closed == 0
+
+
+def test_disarmed_supervisor_does_not_attach_the_monitor_when_the_flag_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: True,
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("disarmed worker constructed the exit monitor")
+
+    monkeypatch.setattr("app.workers.paper_exit_monitor.PaperExitMonitorCycle", forbidden)
+    settings = Settings(_env_file=None, paper_exit_monitor_enabled=True)
+    worker = build_paper_worker_supervisor(settings)
+    assert worker.run_round().exit_monitor is None
+    worker.close()
 
 
 def test_supervisor_leaves_the_monitor_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -223,7 +223,20 @@ def persist_profile_breakers(
     ).sync_from_portfolio(organization_id=organization_id, user_id=user_id)
     equity = daily.account_equity
     if not isinstance(equity, Decimal) or not equity.is_finite() or equity <= 0:
-        return True
+        # A close that ruins the book must still latch drawdown and the streak.
+        # Returning here used to refuse without writing either.
+        return _latch_ruined_equity(
+            session,
+            organization_id=organization_id,
+            user_id=user_id,
+            account_id=account_id,
+            profile=profile,
+            now=now,
+            consecutive_losses=consecutive_losses,
+            realized_pnl=daily.realized_pnl,
+            unrealized_pnl=daily.unrealized_pnl,
+            settings=settings,
+        )
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
     peak = equity
@@ -283,6 +296,84 @@ def persist_profile_breakers(
             settings=settings,
         )
     return verdict.refuse_new_trades
+
+
+def _finite_money(value: object) -> Decimal:
+    if isinstance(value, Decimal) and value.is_finite():
+        return value
+    return Decimal("0")
+
+
+def _latch_ruined_equity(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    account_id: UUID,
+    profile: RiskPolicyProfile,
+    now: datetime,
+    consecutive_losses: int | None,
+    realized_pnl: object,
+    unrealized_pnl: object,
+    settings: Settings | None,
+) -> bool:
+    """Arm the profile breaker when equity is missing, non-finite, or not positive.
+
+    The drawdown latch and the loss streak are written. The kill switch arms
+    on the trip that sets the latch. New trades are refused.
+    """
+
+    from app.services.audit_service import AuditService
+    from app.services.risk_policy.persistence import RiskPolicyService
+
+    service = RiskPolicyService(session, AuditService(session))
+    row = service.load_breaker(organization_id=organization_id, account_id=account_id)
+    stored = 0 if row is None else int(row.consecutive_losses)
+    existing_pause = None if row is None else getattr(row, "consecutive_paused_until", None)
+    existing_daily = None if row is None else getattr(row, "daily_paused_until", None)
+    if consecutive_losses is None:
+        consecutive = streak_after_expiry(stored, existing_pause, now)
+    else:
+        consecutive = consecutive_losses
+    kept_pause = existing_pause if _pause_still_in_force(existing_pause, now) else None
+    kept_daily = existing_daily if _pause_still_in_force(existing_daily, now) else None
+    if kept_pause is not None and consecutive < stored:
+        consecutive = stored
+    latched = False if row is None else bool(row.drawdown_latched)
+    peak = Decimal("1")
+    stored_peak = None if row is None else row.equity_peak
+    if isinstance(stored_peak, Decimal) and stored_peak.is_finite() and stored_peak > 0:
+        peak = stored_peak
+    if consecutive >= profile.consecutive_loss_limit:
+        consecutive_until = consecutive_pause_expiry(
+            now,
+            cooldown_hours=profile.consecutive_loss_cooldown_hours,
+            existing_paused_until=kept_pause,
+        )
+    elif kept_pause is not None:
+        consecutive_until = _as_utc(kept_pause)
+    else:
+        consecutive_until = None
+    service.record_breaker(
+        organization_id=organization_id,
+        account_id=account_id,
+        equity_peak=peak,
+        consecutive_losses=consecutive,
+        realized_pnl=_finite_money(realized_pnl),
+        unrealized_pnl=_finite_money(unrealized_pnl),
+        daily_paused_until=_as_utc(kept_daily) if kept_daily is not None else None,
+        consecutive_paused_until=consecutive_until,
+        drawdown_latched=True,
+        now=now,
+    )
+    if not latched:
+        _arm_drawdown_kill_switch(
+            session,
+            organization_id=organization_id,
+            user_id=user_id,
+            settings=settings,
+        )
+    return True
 
 
 def _arm_drawdown_kill_switch(

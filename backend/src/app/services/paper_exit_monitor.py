@@ -135,6 +135,7 @@ class MonitorReport:
     replayed: int = 0
     would_close: int = 0
     skipped: int = 0
+    refused: int = 0
     errors: int = 0
     error: str = ""
 
@@ -177,24 +178,74 @@ def counts_for_adr109_calibration(request: ClosePaperPlanRequest) -> bool:
     return evidence.get("calibration_sample") == CALIBRATION_ELIGIBLE
 
 
-def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:
-    """Label a reconstruction from before the monitor tracked the trade.
+def downtime_is_historical_backfill(occurred_at: datetime, evaluated_at: datetime) -> bool:
+    """True when the worker was down, or not evaluating, for 24 hours or more.
 
-    The open October 6 trades close on a later armed run, more than a day
-    after those bars. That is a historical backfill. A naive timestamp fails
-    closed to ``backfill`` so it cannot move the breaker. A crossing processed
-    within ``HISTORICAL_BACKFILL_AFTER`` is live, including when the worker
-    crosses UTC midnight. The close then feeds the breaker and the daily lock
-    for the bar's own end time.
+    Downtime is the gap from the crossing bar's end to this evaluation.
+    Exactly 24 hours is a backfill. A shorter gap is live, including a bar
+    that ended on the previous UTC date and is processed after midnight.
+    A naive timestamp is a backfill so it cannot move the breaker. The close
+    is still journaled. A backfill does not advance the consecutive-loss
+    streak, does not sync the daily lock, and is not an ADR-109 sample.
     """
 
     if occurred_at.tzinfo is None or evaluated_at.tzinfo is None:
-        return EXIT_ORIGIN_BACKFILL
+        return True
     occurred = occurred_at.astimezone(UTC)
     evaluated = evaluated_at.astimezone(UTC)
-    if evaluated - occurred >= HISTORICAL_BACKFILL_AFTER:
+    return evaluated - occurred >= HISTORICAL_BACKFILL_AFTER
+
+
+def classify_exit_origin(occurred_at: datetime, evaluated_at: datetime) -> str:
+    """Label a reconstruction from before the monitor tracked the trade.
+
+    See :func:`downtime_is_historical_backfill`. The open October 6 trades
+    close on a later armed run, more than a day after those bars.
+    """
+
+    if downtime_is_historical_backfill(occurred_at, evaluated_at):
         return EXIT_ORIGIN_BACKFILL
     return EXIT_ORIGIN_LIVE
+
+
+def candle_series_block(
+    bars: Sequence[ExitBar],
+    *,
+    timeframe: Timeframe,
+    evaluated_at: datetime,
+) -> str | None:
+    """Refuse a stop or target read when the closed series is gapped or stale.
+
+    A gap is two closed bars that do not meet, or a bar that is not one
+    timeframe long. Stale means the newest closed bar ended at least one full
+    timeframe before evaluation, so a later stop or target may be missing.
+    Neither hole is filled. ``None`` means the series may be evaluated.
+    """
+
+    step = interval_timedelta(timeframe)
+    if step.total_seconds() <= 0 or evaluated_at.tzinfo is None:
+        return "gap"
+    closed = [
+        bar
+        for bar in bars
+        if bar.interval_start.tzinfo is not None
+        and bar.interval_end.tzinfo is not None
+        and bar.interval_end <= evaluated_at
+    ]
+    ordered = sorted(closed, key=lambda bar: (bar.interval_start, bar.interval_end))
+    if not ordered:
+        return "stale"
+    previous: ExitBar | None = None
+    for bar in ordered:
+        if bar.interval_end - bar.interval_start != step:
+            return "gap"
+        if previous is not None and bar.interval_start != previous.interval_end:
+            return "gap"
+        previous = bar
+    last = ordered[-1]
+    if evaluated_at - last.interval_end >= step:
+        return "stale"
+    return None
 
 
 def fill_entry_time(*, trigger_end: datetime, clock: datetime) -> datetime:
@@ -548,6 +599,7 @@ def run_paper_exit_monitor(
     replayed = 0
     would_close = 0
     skipped = rejected
+    refused = 0
     errors = 0
     error = ""
     ordered = sorted(
@@ -575,6 +627,21 @@ def run_paper_exit_monitor(
                 journal_trade_id=str(trade.journal_trade_id),
                 symbol=trade.symbol,
                 timeframe=trade.timeframe.value,
+            )
+            continue
+        block = candle_series_block(
+            fetched.bars,
+            timeframe=trade.timeframe,
+            evaluated_at=evaluated_at,
+        )
+        if block is not None:
+            refused += 1
+            logger.warning(
+                "paper_exit_monitor_candles_unusable",
+                journal_trade_id=str(trade.journal_trade_id),
+                symbol=trade.symbol,
+                timeframe=trade.timeframe.value,
+                reason=block,
             )
             continue
         decision = decide_exit(
@@ -618,8 +685,10 @@ def run_paper_exit_monitor(
             replayed=bool(getattr(result, "replayed", False)),
             **_decision_log(decision),
         )
-    if errors:
+    if errors or refused:
         status = "degraded"
+        if not error and refused:
+            error = "candles_unusable"
     elif dry_run:
         status = "dry_run"
     elif closed or replayed:
@@ -633,6 +702,7 @@ def run_paper_exit_monitor(
         replayed=replayed,
         would_close=would_close,
         skipped=skipped,
+        refused=refused,
         errors=errors,
         error=error,
     )
