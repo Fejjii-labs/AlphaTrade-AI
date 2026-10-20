@@ -2,6 +2,25 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-133 — Kill-switch bookkeeping cannot undo the activation
+
+- Date: 2026-10-20
+- Decision: The `paper_kill_switch` posture write runs inside a savepoint
+  and uses an upsert. A failed bookkeeping write, including two concurrent
+  first inserts of the same slot, leaves the kill-switch activation
+  committed. Each organization has its own pending-alert component: `k`
+  plus the first 31 hex digits of the organization id, because the column
+  is 32 characters. The legacy `paper_kill_switch` row is still read.
+  `GET /health/paper-worker` schedules the Telegram retry after the
+  response, in a worker thread. A version is attempted at most once per
+  60 seconds, including a failed attempt. Worker boot may still retry
+  directly under that same limit.
+- Safety: Flags stay default false. Production refusal is unchanged.
+  Real-money trading stays rejected. No environment, Render, or workflow
+  change.
+- Reference: AT-ADR-132; Griller pre-arming conditions on the exit-monitor
+  follow-up.
+
 ## AT-ADR-132 — A disarmed reboot clears stale arming rows
 
 - Date: 2026-10-20

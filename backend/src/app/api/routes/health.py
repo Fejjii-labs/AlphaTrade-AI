@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 
 from app import __version__
 from app.core.config import Settings
@@ -207,12 +207,17 @@ async def telegram_paper_activation(settings: SettingsDep, request: Request) -> 
     response_model=PaperWorkerHeartbeatResponse,
     summary="Paper worker heartbeat",
 )
-async def paper_worker_heartbeat(settings: SettingsDep) -> PaperWorkerHeartbeatResponse:
+async def paper_worker_heartbeat(
+    settings: SettingsDep,
+    background_tasks: BackgroundTasks,
+) -> PaperWorkerHeartbeatResponse:
     """Report the worker heartbeat and alert when it is stale or missing.
 
     This route does not arm the worker, the exit monitor, or real trading.
     A Telegram send uses the existing bot token and chat id. The response
-    does not include those values.
+    does not include those values. An unsent kill-switch page is retried
+    after the response, in a worker thread, at most once per 60 seconds
+    per activation version.
     """
 
     from sqlalchemy.orm import Session, sessionmaker
@@ -294,7 +299,7 @@ async def paper_worker_heartbeat(settings: SettingsDep) -> PaperWorkerHeartbeatR
         retry_unsent_kill_switch_alert,
     )
 
-    retry_unsent_kill_switch_alert(settings)
+    background_tasks.add_task(retry_unsent_kill_switch_alert, settings)
     return PaperWorkerHeartbeatResponse(
         status=heartbeat_status(observation),
         observation=observation,

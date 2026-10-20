@@ -270,6 +270,13 @@ Kill-switch activations from the manual route, the global setting, the
 drawdown breaker, the other breaker and demo-protection paths, and a
 fail-closed read use that same redacted, deduplicated Telegram path. The
 free-text reason is not copied. No P&L amount is included. A committed
-activation is marked unsent in the same transaction. If Telegram fails, or
-the process stops before the send, `GET /health/paper-worker` and the next
-worker boot retry that version. A version already sent is not sent again.
+activation is marked unsent in the same transaction, in a savepoint, one
+row per organization. A failed bookkeeping write, including two concurrent
+first inserts of the same slot, does not roll the activation back. The
+component key is `k` plus the first 31 hex digits of the organization id,
+because the column is 32 characters. An older single `paper_kill_switch`
+row is still read. If Telegram fails, or the process stops before the
+send, the next worker boot retries that version. `GET /health/paper-worker`
+schedules the same retry after the response, in a worker thread, at most
+once per 60 seconds per version. A poll of that route does not send during
+the request. A version already sent is not sent again.

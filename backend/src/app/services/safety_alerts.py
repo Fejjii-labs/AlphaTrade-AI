@@ -108,6 +108,9 @@ def reset_safety_alert_dedup() -> None:
 
     with _LOCK:
         _SENT.clear()
+    from app.services.risk.kill_switch import reset_kill_switch_retry_window
+
+    reset_kill_switch_retry_window()
 
 
 def safety_alert_message(
