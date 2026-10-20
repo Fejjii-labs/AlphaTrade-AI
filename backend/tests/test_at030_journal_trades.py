@@ -766,9 +766,7 @@ def test_update_and_delete_journal_trade_require_owner(
         assert row is not None
         assert row.notes == "Owner notes"
 
-    denied_org_delete = test_client.delete(
-        f"/journal/trades/{trade_id}", headers=headers_other_org
-    )
+    denied_org_delete = test_client.delete(f"/journal/trades/{trade_id}", headers=headers_other_org)
     assert denied_org_delete.status_code == 404
     denied_user_delete = test_client.delete(
         f"/journal/trades/{trade_id}", headers=headers_other_user
