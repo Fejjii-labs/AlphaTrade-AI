@@ -53,6 +53,7 @@ ORG_B = uuid.UUID("00000000-0000-0000-0000-000000009002")
 USER_A = uuid.UUID("00000000-0000-0000-0000-000000009011")
 USER_B = uuid.UUID("00000000-0000-0000-0000-000000009012")
 VIEWER_A = uuid.UUID("00000000-0000-0000-0000-000000009013")
+OTHER_TRADER_A = uuid.UUID("00000000-0000-0000-0000-000000009014")
 
 _BASE = {
     "environment": "local",
@@ -130,6 +131,30 @@ def client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
 
     app.dependency_overrides.clear()
     engine.dispose()
+
+
+def _seed_other_trader_in_org_a(factory: sessionmaker[Session]) -> None:
+    with factory() as session:
+        if session.get(User, OTHER_TRADER_A) is not None:
+            return
+        settings = Settings(**_BASE)
+        session.add(
+            User(
+                id=OTHER_TRADER_A,
+                email="journal-other-trader-a@test.example",
+                hashed_password=hash_password("SecurePass123!", settings),
+                email_verified=True,
+            )
+        )
+        session.flush()
+        session.add(
+            Membership(
+                user_id=OTHER_TRADER_A,
+                organization_id=ORG_A,
+                role=MembershipRole.TRADER,
+            )
+        )
+        session.commit()
 
 
 def _auth(client: TestClient, email: str, password: str = "SecurePass123!") -> dict[str, str]:
@@ -704,30 +729,62 @@ def test_get_journal_trade_detail_includes_exit_reason_and_tags(
     assert body["tags"] == ["blofin-reconciled", "session:london"]
 
 
+def test_update_and_delete_journal_trade_require_owner(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "journal-a@test.example")
+    headers_other_org = _auth(test_client, "journal-b@test.example")
+    headers_other_user = _auth(test_client, "journal-other-trader-a@test.example")
+    trade_id = test_client.post(
+        "/journal/trades", json=_manual_trade_body(), headers=headers_owner
+    ).json()["id"]
+
+    updated = test_client.patch(
+        f"/journal/trades/{trade_id}",
+        json={"notes": "Owner notes"},
+        headers=headers_owner,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["notes"] == "Owner notes"
+
+    denied_org_patch = test_client.patch(
+        f"/journal/trades/{trade_id}",
+        json={"notes": "Foreign org"},
+        headers=headers_other_org,
+    )
+    assert denied_org_patch.status_code == 404
+    denied_user_patch = test_client.patch(
+        f"/journal/trades/{trade_id}",
+        json={"notes": "Same org intruder"},
+        headers=headers_other_user,
+    )
+    assert denied_user_patch.status_code == 404
+    with factory() as session:
+        row = session.get(JournalTrade, uuid.UUID(trade_id))
+        assert row is not None
+        assert row.notes == "Owner notes"
+
+    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_other_org).status_code == 404
+    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_other_user).status_code == 404
+    with factory() as session:
+        assert session.get(JournalTrade, uuid.UUID(trade_id)) is not None
+
+    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_owner).status_code == 204
+    with factory() as session:
+        assert session.get(JournalTrade, uuid.UUID(trade_id)) is None
+
+
 def test_reconciled_mirror_annotation_scopes_organization_and_owner(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, factory = client
     headers_owner = _auth(test_client, "journal-a@test.example")
     headers_other_org = _auth(test_client, "journal-b@test.example")
-    other_trader_id = uuid.UUID("00000000-0000-0000-0000-000000009014")
+    _seed_other_trader_in_org_a(factory)
+    headers_other_user = _auth(test_client, "journal-other-trader-a@test.example")
     with factory() as session:
-        session.add(
-            User(
-                id=other_trader_id,
-                email="journal-other-trader-a@test.example",
-                hashed_password=hash_password("SecurePass123!", Settings(**_BASE)),
-                email_verified=True,
-            )
-        )
-        session.flush()
-        session.add(
-            Membership(
-                user_id=other_trader_id,
-                organization_id=ORG_A,
-                role=MembershipRole.TRADER,
-            )
-        )
         trade = JournalTrade(
             organization_id=ORG_A,
             user_id=USER_A,
@@ -762,6 +819,10 @@ def test_reconciled_mirror_annotation_scopes_organization_and_owner(
         manual_id = str(trade.id)
         demo_id = str(demo_test.id)
 
+    assert (
+        test_client.get(f"/journal/trades/{demo_id}", headers=headers_other_user).status_code == 404
+    )
+
     for trade_id in (manual_id, demo_id):
         detail = test_client.get(f"/journal/trades/{trade_id}", headers=headers_owner)
         assert detail.status_code == 200, detail.text
@@ -786,9 +847,14 @@ def test_reconciled_mirror_annotation_scopes_organization_and_owner(
         denied_user = test_client.patch(
             f"/journal/trades/{trade_id}/annotation",
             json={"grade": "F"},
-            headers=_auth(test_client, "journal-other-trader-a@test.example"),
+            headers=headers_other_user,
         )
         assert denied_user.status_code == 404
+        with factory() as session:
+            row = session.get(JournalTrade, uuid.UUID(trade_id))
+            assert row is not None
+            assert row.strategy_label == "Breakout"
+            assert row.grade == "B+"
 
 
 def test_children_cross_org_fails_closed(

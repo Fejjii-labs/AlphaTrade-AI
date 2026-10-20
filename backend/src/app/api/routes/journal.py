@@ -85,6 +85,11 @@ from app.services.manual_demo_history import ManualDemoHistoryService
 router = APIRouter(prefix="/journal", tags=["journal"])
 
 
+def _require_journal_trade_owner(trade: JournalTradeRead, tenant: TenantDep) -> None:
+    if trade.user_id != tenant.user_id:
+        raise NotFoundError("Journal trade not found.")
+
+
 @router.post("/entries", response_model=JournalEntry, summary="Create journal entry")
 async def create_journal_entry(
     body: JournalEntryCreate,
@@ -625,10 +630,11 @@ async def get_journal_trade(
 ) -> JournalTradeDetail:
     detail = service.get_detail(journal_trade_id, organization_id=tenant.organization_id)
     if detail.trade.source == JournalTradeSource.MANUAL_DEMO_TEST:
+        _require_journal_trade_owner(detail.trade, tenant)
         ref = detail.trade.external_ref or ""
         if ref.startswith("blofin-demo-history:"):
             return detail
-        if detail.trade.user_id != tenant.user_id or detail.trade.execution_lifecycle_id is None:
+        if detail.trade.execution_lifecycle_id is None:
             raise NotFoundError("Journal trade not found.")
         attempt = ManualDemoHistoryService(session).get(tenant, detail.trade.execution_lifecycle_id)
         if attempt.evidence.journal_trade_id != journal_trade_id:
@@ -649,6 +655,8 @@ async def update_journal_trade(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> JournalTradeRead:
+    trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
+    _require_journal_trade_owner(trade, tenant)
     result = service.update(
         journal_trade_id,
         body,
@@ -669,6 +677,8 @@ async def delete_journal_trade(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> None:
+    trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
+    _require_journal_trade_owner(trade, tenant)
     service.delete(journal_trade_id, organization_id=tenant.organization_id)
     session.commit()
 
@@ -732,8 +742,7 @@ async def annotate_journal_trade(
     session: SessionDep,
 ) -> JournalTradeRead:
     trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
-    if trade.user_id != tenant.user_id:
-        raise NotFoundError("Journal trade not found.")
+    _require_journal_trade_owner(trade, tenant)
     result = service.annotate(
         journal_trade_id,
         body,
