@@ -862,6 +862,73 @@ def test_candle_fetch_pages_back_to_the_entry() -> None:
     assert len(source.calls) > 1
 
 
+def test_paging_continues_when_the_source_rejects_an_exact_bar_end() -> None:
+    """A short page must walk back past a close the source refuses to re-read.
+
+    Binance treats ``evaluated_at`` equal to a bar's ``interval_end`` as still
+    inside the post-close settlement guard and rejects every page size. The
+    next cursor is that close. Stopping there leaves only the recent bars, so
+    an older entry is a leading gap and the pass reports ``candles_unusable``.
+    """
+
+    first = datetime(2026, 10, 6, 0, 0, tzinfo=UTC)
+    # Ten minutes after the last close, so the first page is outside the guard.
+    # The walk's next cursor is a bar close, which the source refuses.
+    far = datetime(2026, 10, 6, 1, 10, tzinfo=UTC)
+    delta = timedelta(minutes=15)
+    market = identity()
+    bars = [
+        closed_bar(open_time=first + (delta * index), index=index, evaluated_at=far)
+        for index in range(4)
+    ]
+    guard = timedelta(seconds=5)
+
+    class BoundarySource:
+        name = "boundary-perpetual"
+
+        def __init__(self) -> None:
+            self.evaluated: list[datetime] = []
+
+        def fetch_closed_ohlcv(
+            self,
+            *,
+            identity: object,
+            instrument: object,
+            timeframe: Timeframe,
+            min_final_bars: int,
+            evaluated_at: datetime,
+        ) -> object:
+            self.evaluated.append(evaluated_at)
+            if any(timedelta(0) <= evaluated_at - bar.interval_end < guard for bar in bars):
+                raise FormingCandleError("post-close settlement guard")
+            eligible = [bar for bar in bars if bar.interval_end <= evaluated_at]
+            if min_final_bars > 1 or len(eligible) < min_final_bars:
+                raise FormingCandleError("short history")
+            selected = eligible[-min_final_bars:]
+            return require_closed_series(
+                selected,
+                identity=market,
+                timeframe=timeframe,
+                evaluated_at=evaluated_at,
+                min_bars=min_final_bars,
+            )
+
+    source = BoundarySource()
+    fetched = fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=first,
+        evaluated_at=far,
+    )
+    assert fetched.covers_entry is True
+    assert fetched.bars[0].interval_start == first
+    assert len(fetched.bars) == 4
+    bar_ends = {bar.interval_end for bar in bars}
+    assert any(moment != far and moment not in bar_ends for moment in source.evaluated)
+
+
 def test_replay_source_is_the_strategy_evidence_source() -> None:
     source = ReplayPerpetualSource()
     market, instrument = identity_for_trade(
