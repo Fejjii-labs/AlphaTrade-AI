@@ -2,6 +2,32 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-130 — A refused arming and a dead exit-monitor thread are visible
+
+- Date: 2026-10-20
+- Decision: When the exit monitor or an autonomous loop refuses to arm at
+  boot (`consecutive_loss_cooldown_invalid` or
+  `cycle_interval_exceeds_timeframe`), the worker writes a `paper_arming`
+  runtime-status row. `GET /health` and `GET /health/paper-worker` show that
+  reason. One deduplicated Telegram alert uses the existing safety-alert
+  path. The exit-monitor thread writes a separate `paper_exit_monitor`
+  heartbeat. A dead or hung thread is `stale` or `missing` on
+  `GET /health/paper-worker` and alerts. A monitor that was not armed is
+  `disabled` and does not alert.
+- Kill switch: activations from the manual route, the global setting, the
+  drawdown breaker, the other breaker and demo-protection paths, and a
+  fail-closed read use the same redacted deduplicated Telegram path. The
+  message has no secret and no P&L amount. The caller's free-text reason is
+  not copied. A rolled-back activation is logged and not sent.
+- Database outage: a queued safety alert discarded with a rollback is logged
+  at error outside the transaction. An observed exit-monitor alert (repeated
+  degradation or clock) is still sent from memory. A kill-switch activation
+  that did not commit is not sent.
+- Safety: Flags stay default false. Production still refuses them. This
+  record does not arm them, change an environment, or change a blueprint.
+  Real-money trading stays rejected.
+- Reference: AT-ADR-129; issue #291; `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-129 — Arming refuses a disabled loss cooldown, a slow cycle, and a silent alert
 
 - Date: 2026-10-20

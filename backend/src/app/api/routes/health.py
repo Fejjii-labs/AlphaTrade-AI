@@ -19,6 +19,7 @@ from app.market_activation.profile import perpetual_evidence_health
 from app.persistence.runtime_health import project_worker_component
 from app.providers.base import ProviderHealth
 from app.schemas.health import (
+    ArmingRefusalObservation,
     HealthResponse,
     PaperWorkerHeartbeatResponse,
     ReadinessResponse,
@@ -31,65 +32,114 @@ from app.telegram_activation.preflight import run_preflight
 router = APIRouter(tags=["health"])
 
 
+def _arming_refusal(rows: dict[str, object] | None) -> ArmingRefusalObservation:
+    """Project the boot refusal. A database miss is not a refusal."""
+
+    if rows is None:
+        return ArmingRefusalObservation()
+    from app.persistence.runtime_status import PAPER_ARMING_COMPONENT
+    from app.services.arming_visibility import project_arming_refusal
+
+    return project_arming_refusal(rows.get(PAPER_ARMING_COMPONENT))
+
+
+def _load_runtime_rows() -> dict[str, object] | None:
+    """Runtime rows, or None when the database cannot be read."""
+
+    try:
+        from app.db.session import get_session_factory
+        from app.persistence.runtime_status import load_runtime_rows
+
+        with get_session_factory()() as session:
+            return dict(load_runtime_rows(session))
+    except Exception:
+        return None
+
+
 def _read_worker_runtime(
     settings: Settings,
     *,
     now: datetime | None = None,
 ) -> WorkerRuntimeObservation:
-    """Best-effort read of worker rows. A database error leaves liveness intact.
-
-    Component ``available`` follows heartbeat freshness. A stored row alone is
-    not ``RUNNING``.
-    """
+    """Best-effort read of worker rows. A database error leaves liveness intact."""
 
     observed_at = now or datetime.now(UTC)
-    limit = settings.watcher_heartbeat_stale_after_seconds
-    try:
-        from app.db.session import get_session_factory
-        from app.persistence.runtime_status import (
-            PAPER_WORKER_COMPONENT,
-            TELEGRAM_COMPONENT,
-            WATCHER_COMPONENT,
-            load_runtime_rows,
-        )
-        from app.services.worker_heartbeat import (
-            paper_worker_stale_after_seconds,
-            project_paper_worker_heartbeat,
-        )
+    return _project_worker_runtime(settings, _load_runtime_rows(), now=observed_at)
 
-        with get_session_factory()() as session:
-            rows = load_runtime_rows(session)
-    except Exception:
+
+def _project_worker_runtime(
+    settings: Settings,
+    rows: dict[str, object] | None,
+    *,
+    now: datetime,
+) -> WorkerRuntimeObservation:
+    """Project already loaded rows. ``None`` means the database could not be read.
+
+    Component ``available`` follows heartbeat freshness. A stored row alone is
+    not ``RUNNING``. ``exit_monitor`` is the exit-monitor thread. It is not
+    the watcher heartbeat.
+    """
+
+    observed_at = now
+    limit = settings.watcher_heartbeat_stale_after_seconds
+    loaded = rows
+    if loaded is None:
+        absent = project_worker_component(None, now=observed_at, stale_after_seconds=limit)
         return WorkerRuntimeObservation(
             available=False,
-            watcher=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
-            telegram=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
-            paper_worker=project_worker_component(None, now=observed_at, stale_after_seconds=limit),
+            watcher=absent,
+            telegram=absent,
+            paper_worker=absent,
+            exit_monitor=absent,
         )
+    from app.persistence.runtime_status import (
+        PAPER_ARMING_COMPONENT,
+        PAPER_EXIT_MONITOR_COMPONENT,
+        PAPER_WORKER_COMPONENT,
+        TELEGRAM_COMPONENT,
+        WATCHER_COMPONENT,
+    )
+    from app.services.arming_visibility import exit_monitor_expected
+    from app.services.worker_heartbeat import (
+        exit_monitor_liveness_status,
+        paper_worker_stale_after_seconds,
+        project_paper_worker_heartbeat,
+    )
+
     worker_limit = paper_worker_stale_after_seconds(settings)
+    _status, exit_monitor = exit_monitor_liveness_status(
+        expected=exit_monitor_expected(loaded.get(PAPER_ARMING_COMPONENT)),
+        row=loaded.get(PAPER_EXIT_MONITOR_COMPONENT),
+        now=observed_at,
+        stale_after_seconds=worker_limit,
+    )
     return WorkerRuntimeObservation(
         available=True,
         watcher=project_worker_component(
-            rows.get(WATCHER_COMPONENT),
+            loaded.get(WATCHER_COMPONENT),
             now=observed_at,
             stale_after_seconds=limit,
         ),
         telegram=project_worker_component(
-            rows.get(TELEGRAM_COMPONENT),
+            loaded.get(TELEGRAM_COMPONENT),
             now=observed_at,
             stale_after_seconds=limit,
         ),
         paper_worker=project_paper_worker_heartbeat(
-            rows.get(PAPER_WORKER_COMPONENT),
+            loaded.get(PAPER_WORKER_COMPONENT),
             now=observed_at,
             stale_after_seconds=worker_limit,
         ),
+        exit_monitor=exit_monitor,
     )
 
 
 @router.get("/health", response_model=HealthResponse, summary="Liveness probe")
 async def health(settings: SettingsDep) -> HealthResponse:
     evidence = perpetual_evidence_health(settings)
+    observed_at = datetime.now(UTC)
+    rows = _load_runtime_rows()
+    arming = _arming_refusal(rows)
     return HealthResponse(
         app=settings.app_name,
         version=__version__,
@@ -129,8 +179,9 @@ async def health(settings: SettingsDep) -> HealthResponse:
         live_quote_freshness_seconds=evidence["live_quote_freshness_seconds"],
         first_perpetual_symbol=evidence["first_perpetual_symbol"],
         git_sha=resolve_git_sha(),
-        worker_runtime=_read_worker_runtime(settings),
-        timestamp=datetime.now(UTC),
+        worker_runtime=_project_worker_runtime(settings, rows, now=observed_at),
+        arming_refusal=arming,
+        timestamp=observed_at,
     )
 
 
@@ -164,37 +215,89 @@ async def paper_worker_heartbeat(settings: SettingsDep) -> PaperWorkerHeartbeatR
     does not include those values.
     """
 
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from app.persistence.runtime_status import (
+        PAPER_ARMING_COMPONENT,
+        PAPER_EXIT_MONITOR_COMPONENT,
+        PAPER_WORKER_COMPONENT,
+    )
+    from app.services.arming_visibility import (
+        ARMING_ALERT_COMPONENT,
+        exit_monitor_expected,
+        raise_arming_refusal_alert,
+    )
     from app.services.worker_heartbeat import (
+        EXIT_MONITOR_ALERT_COMPONENT,
         HeartbeatAlertLedger,
         MemoryHeartbeatAlertLedger,
         RuntimeStatusHeartbeatLedger,
+        exit_monitor_heartbeat_alert,
+        exit_monitor_liveness_status,
         heartbeat_status,
-        load_paper_worker_row,
         paper_worker_stale_after_seconds,
         project_paper_worker_heartbeat,
         raise_heartbeat_alert,
+        raise_prepared_alert,
     )
 
     observed_at = datetime.now(UTC)
     limit = paper_worker_stale_after_seconds(settings)
-    row: object | None = None
+    rows = _load_runtime_rows()
     ledger: HeartbeatAlertLedger
+    factory: sessionmaker[Session] | None
     try:
         from app.db.session import get_session_factory
 
-        factory = get_session_factory()
-        with factory() as session:
-            row = load_paper_worker_row(session)
-        ledger = RuntimeStatusHeartbeatLedger(factory)
+        factory = get_session_factory() if rows is not None else None
     except Exception:
-        row = None
+        factory = None
+    if factory is None:
         ledger = MemoryHeartbeatAlertLedger()
+    else:
+        ledger = RuntimeStatusHeartbeatLedger(factory)
+    row = None if rows is None else rows.get(PAPER_WORKER_COMPONENT)
     observation = project_paper_worker_heartbeat(row, now=observed_at, stale_after_seconds=limit)
     alert_raised = raise_heartbeat_alert(settings, observation, now=observed_at, ledger=ledger)
+    arming = _arming_refusal(rows)
+    arming_alert = False
+    if arming.refused and factory is not None:
+        arming_alert = raise_arming_refusal_alert(
+            settings,
+            arming,
+            now=observed_at,
+            ledger=RuntimeStatusHeartbeatLedger(
+                factory,
+                component=ARMING_ALERT_COMPONENT,
+            ),
+        )
+    expected = rows is not None and exit_monitor_expected(rows.get(PAPER_ARMING_COMPONENT))
+    exit_status, exit_observation = exit_monitor_liveness_status(
+        expected=expected,
+        row=None if rows is None else rows.get(PAPER_EXIT_MONITOR_COMPONENT),
+        now=observed_at,
+        stale_after_seconds=limit,
+    )
+    exit_alert = False
+    if expected and factory is not None:
+        exit_alert = raise_prepared_alert(
+            settings,
+            exit_monitor_heartbeat_alert(exit_observation, exit_status),
+            now=observed_at,
+            ledger=RuntimeStatusHeartbeatLedger(
+                factory,
+                component=EXIT_MONITOR_ALERT_COMPONENT,
+            ),
+        )
     return PaperWorkerHeartbeatResponse(
         status=heartbeat_status(observation),
         observation=observation,
         alert_raised=alert_raised,
+        arming_refusal=arming,
+        arming_alert_raised=arming_alert,
+        exit_monitor_status=exit_status,
+        exit_monitor=exit_observation,
+        exit_monitor_alert_raised=exit_alert,
         timestamp=observed_at,
     )
 

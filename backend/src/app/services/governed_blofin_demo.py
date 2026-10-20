@@ -1271,6 +1271,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 organization_id=command.organization_id,
                 actor_user_id=command.user_id,
                 payload=KillSwitchMutationRequest(confirm=True, reason=reason),
+                source="demo_protection",
             )
             if through_stop:
                 _alert_liquidation_through_stop(session, command)
@@ -1429,6 +1430,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                             confirm=True,
                             reason="BloFin demo position differs from owned fills; operator hold",
                         ),
+                        source="demo_protection",
                     )
                     session.commit()
                     return "demo_position_lineage_operator_hold"
@@ -1457,6 +1459,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 confirm=True,
                                 reason="BloFin demo exit projection requires operator review",
                             ),
+                            source="demo_protection",
                         )
                         session.commit()  # Preserve previously committed entry facts.
                         return "demo_exit_projection_operator_hold"
@@ -1475,6 +1478,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         confirm=True,
                         reason="BloFin demo protection missing; operator action required",
                     ),
+                    source="demo_protection",
                 )
                 reason = "demo_protection_failed_operator_hold"
                 effect.reconciliation_disposition = (

@@ -174,6 +174,7 @@ def _protect(
         actor_user_id=request.user_id,
         payload=KillSwitchMutationRequest(confirm=True, reason=reason),
         actor_type=ActorType.SYSTEM,
+        source="exit_monitor",
     )
     logger.warning("paper_exit_monitor_alert", **alert.as_log())
     return alert

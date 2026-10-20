@@ -1,14 +1,17 @@
 """Send safety alerts through the existing Telegram delivery path.
 
 Kill-switch arming, backfill and stale-loss alerts, repeated degraded or
-refused cycles, clock skew, and a missing worker heartbeat all use
-``telegram_bot_token`` and ``telegram_chat_id``. No new secret is added.
-The message never includes a secret or a P&L amount. A repeated dedup key
-inside the cooldown does not send again.
+refused cycles, clock skew, an arming refusal, and a missing worker or
+exit-monitor heartbeat all use ``telegram_bot_token`` and
+``telegram_chat_id``. No new secret is added. The message never includes a
+secret or a P&L amount. A repeated dedup key inside the cooldown does not
+send again.
 
 Delivery is queued on the caller's session and flushed after commit, so a
 rolled-back close does not notify and a Telegram call does not hold the
-transaction open.
+transaction open. A rollback logs the dropped alert at error. An observed
+monitor alert (not a kill-switch activation) can still be sent after that
+rollback, because the condition already happened.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -30,6 +34,7 @@ from app.services.paper_exit_monitor import ExitMonitorAlert
 logger = structlog.get_logger(__name__)
 
 _QUEUE_KEY = "alphatrade_safety_alerts"
+_HOOKS_KEY = "alphatrade_safety_alert_hooks"
 _SAFE_FIELDS = frozenset(
     {
         "account_id",
@@ -50,9 +55,22 @@ _SAFE_FIELDS = frozenset(
         "refused",
         "severity",
         "skew_seconds",
+        "source",
         "status",
         "threshold_seconds",
         "trusted_source",
+    }
+)
+_KILL_SWITCH_SOURCES = frozenset(
+    {
+        "manual",
+        "global_setting",
+        "drawdown",
+        "breaker",
+        "fail_closed",
+        "exit_monitor",
+        "demo_protection",
+        "system",
     }
 )
 _COOLDOWN_SECONDS = {
@@ -63,6 +81,10 @@ _COOLDOWN_SECONDS = {
     "clock_untrusted": 900,
     "worker_heartbeat_missing": 900,
     "worker_heartbeat_stale": 900,
+    "arming_refused": 900,
+    "kill_switch_activated": 900,
+    "exit_monitor_heartbeat_missing": 900,
+    "exit_monitor_heartbeat_stale": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 _AMOUNT = re.compile(
@@ -147,12 +169,111 @@ def deliver_safety_alert(
     return True
 
 
+def kill_switch_source(source: str) -> str:
+    """A source token safe to put in a Telegram message."""
+
+    token = source.strip().lower()
+    if token in _KILL_SWITCH_SOURCES:
+        return token
+    return "system"
+
+
+def build_kill_switch_alert(
+    *,
+    source: str,
+    organization_id: str,
+    dedup_key: str,
+) -> ExitMonitorAlert:
+    """One kill-switch page. The text has no secret and no P&L amount.
+
+    ``source`` is a fixed token (manual, global setting, drawdown, the other
+    breaker and demo paths, or fail-closed). The caller's free-text reason is
+    not copied. It can contain an amount or a secret.
+    """
+
+    token = kill_switch_source(source)
+    if token == "global_setting":
+        message = "Global kill switch is active. New entries are refused."
+    elif token == "fail_closed":
+        message = "Kill switch state could not be read. New entries are refused."
+    else:
+        message = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    org = organization_id.strip()
+    if not org:
+        org = "system"
+    return ExitMonitorAlert(
+        code="kill_switch_activated",
+        severity="critical",
+        message=message,
+        fields={
+            "source": token,
+            "organization_id": org[:64],
+            "component": "kill_switch",
+            "refusal": "kill_switch",
+            "dedup_key": dedup_key[:200],
+        },
+    )
+
+
+def notify_kill_switch_activation(
+    settings: Settings,
+    *,
+    source: str,
+    organization_id: str,
+    version: int | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Send one kill-switch page outside a database transaction.
+
+    Global-setting and fail-closed observations use this. A successful
+    ``activate`` queues instead, and sends only after commit.
+    """
+
+    token = kill_switch_source(source)
+    org = organization_id.strip() or "system"
+    if token == "global_setting":
+        key = "kill_switch_activated:global_setting"
+    elif version is None:
+        key = f"kill_switch_activated:{token}:{org}"
+    else:
+        key = f"kill_switch_activated:{token}:{org}:{version}"
+    alert = build_kill_switch_alert(source=token, organization_id=org, dedup_key=key)
+    moment = now or datetime.now(UTC)
+    if not telegram_safety_configured(settings):
+        if not _recently_sent(key, moment, _cooldown(alert.code)):
+            logger.warning("safety_alert_telegram_unconfigured", code=alert.code)
+            _remember(key, moment)
+        return False
+    return deliver_safety_alert(settings, alert, now=moment)
+
+
+def queue_kill_switch_activation(
+    session: Session,
+    settings: Settings,
+    *,
+    source: str,
+    organization_id: str,
+    version: int,
+) -> None:
+    """Queue a page for one committed activation. A rollback must not send it."""
+
+    token = kill_switch_source(source)
+    org = organization_id.strip() or "system"
+    key = f"kill_switch_activated:{token}:{org}:{version}"
+    queue_safety_alert(
+        session,
+        settings,
+        build_kill_switch_alert(source=token, organization_id=org, dedup_key=key),
+    )
+
+
 def queue_safety_alert(session: Session, settings: Settings, alert: ExitMonitorAlert) -> None:
     """Hold one alert until the caller commits. A rollback must not send it."""
 
     pending = session.info.setdefault(_QUEUE_KEY, [])
     if isinstance(pending, list):
         pending.append((settings, alert))
+    _bind_safety_alert_hooks(session)
 
 
 def deliver_queued_safety_alerts(session: Session) -> None:
@@ -178,9 +299,72 @@ def deliver_queued_safety_alerts(session: Session) -> None:
 
 
 def discard_queued_safety_alerts(session: Session) -> None:
-    """Drop queued alerts after a rollback."""
+    """Drop queued alerts after a rollback and log each one at error.
 
-    session.info.pop(_QUEUE_KEY, None)
+    The log is the record that a database failure did not send the page.
+    This function does not send. A rolled-back kill-switch activation did
+    not happen. Observed monitor alerts are sent by
+    :func:`deliver_observed_alert_outside_transaction`.
+    """
+
+    pending = session.info.pop(_QUEUE_KEY, [])
+    if not isinstance(pending, list):
+        return
+    for item in pending:
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        _settings, alert = item
+        if not isinstance(alert, ExitMonitorAlert):
+            continue
+        logger.error("safety_alert_discarded_with_rollback", code=alert.code)
+
+
+def deliver_observed_alert_outside_transaction(
+    settings: Settings,
+    alert: ExitMonitorAlert,
+) -> bool:
+    """Send an alert whose database write rolled back.
+
+    Use this for a condition that already happened, such as a repeated
+    degraded exit-monitor cycle. Do not use it for a kill-switch activation
+    that rolled back with the transaction.
+    """
+
+    logger.error("safety_alert_unpersisted", code=alert.code)
+    try:
+        return deliver_safety_alert(settings, alert)
+    except Exception as exc:
+        logger.error(
+            "safety_alert_telegram_failed",
+            code=alert.code,
+            error=redact_text(str(exc))[:200],
+        )
+        return False
+
+
+def _bind_safety_alert_hooks(session: Session) -> None:
+    """Send after commit. Log at error after rollback. Bind once per session."""
+
+    if not isinstance(session, Session):
+        return
+    if session.info.get(_HOOKS_KEY):
+        return
+    session.info[_HOOKS_KEY] = True
+
+    def _after_commit(sess: Session) -> None:
+        try:
+            deliver_queued_safety_alerts(sess)
+        except Exception as exc:
+            logger.error(
+                "safety_alert_telegram_failed",
+                error=redact_text(str(exc))[:200],
+            )
+
+    def _after_rollback(sess: Session) -> None:
+        discard_queued_safety_alerts(sess)
+
+    event.listen(session, "after_commit", _after_commit)
+    event.listen(session, "after_rollback", _after_rollback)
 
 
 def _cooldown(code: str) -> timedelta:
