@@ -112,7 +112,7 @@ export function TraderDashboardView({
     .join(", ");
 
   return (
-    <div className="space-y-5" data-testid="trader-dashboard">
+    <div className="page-sections" data-testid="trader-dashboard">
       <PageHeader
         eyebrow="Overview"
         title="Dashboard"
@@ -167,7 +167,7 @@ export function TraderDashboardView({
         </select>
       </label>
       {!simulator && user && organization ? (
-        <div key={accountContext} className="space-y-5">
+        <div key={accountContext} className="page-sections">
           <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
           <NativeActivity statistics refreshKey={demoRefreshKey} />
         </div>

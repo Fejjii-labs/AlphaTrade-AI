@@ -42,7 +42,7 @@ it("separates persisted captures from authored configurations with compact expan
   render(<StrategiesPage />);
   const notes = await screen.findByTestId("captured-strategy-note");
   expect(savedEntries.list).toHaveBeenCalledWith({ category: "strategies", limit: 6 });
-  expect(screen.getByRole("heading", { name: "Captured strategy notes" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Captured strategy drafts" })).toBeInTheDocument();
   expect(notes).not.toHaveAttribute("open");
   expect(within(notes).getByText(note.title, { selector: "summary" })).toBeVisible();
   expect(within(notes).getByText(note.summary)).not.toBeVisible();

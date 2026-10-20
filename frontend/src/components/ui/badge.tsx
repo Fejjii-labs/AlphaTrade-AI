@@ -10,14 +10,14 @@ const badgeVariants = cva(
       variant: {
         default: "border-border bg-surface-2 text-text-primary",
         success: "border-success-border bg-success-muted text-success",
-        warning: "border-warning-border bg-warning-muted text-warning",
-        danger: "border-danger-border bg-danger-muted text-danger",
+        warning: "border-warning-border bg-warning-muted text-badge-warning",
+        danger: "border-danger-border bg-danger-muted text-badge-danger",
         info: "border-info-border bg-info-muted text-info",
         muted: "border-border-subtle bg-surface-0 text-text-muted",
         paper: "border-mode-paper-border bg-mode-paper-muted text-mode-paper",
         demo: "border-mode-demo-border bg-mode-demo-muted text-mode-demo",
         count: "border-border-subtle bg-surface-2 font-data text-text-secondary",
-        blocked: "border-blocked-border bg-blocked-muted text-blocked",
+        blocked: "border-blocked-border bg-blocked-muted text-badge-blocked",
         stale: "border-stale-border bg-stale-muted text-stale",
         riskInfo:
           "border-[color:color-mix(in_srgb,var(--color-risk-info)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--color-risk-info)_12%,transparent)] text-risk-info",

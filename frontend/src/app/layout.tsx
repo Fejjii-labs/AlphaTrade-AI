@@ -1,7 +1,14 @@
 import type { Metadata, Viewport } from "next";
+import { JetBrains_Mono } from "next/font/google";
 import "@fontsource-variable/figtree/wght.css";
 
 import "./globals.css";
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AlphaTrade AI",
@@ -30,7 +37,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" data-theme="dark">
-      <body className="min-h-screen bg-background font-sans antialiased">
+      <body
+        className={`${jetbrainsMono.variable} min-h-screen bg-background font-sans antialiased`}
+      >
         {children}
       </body>
     </html>

@@ -7,6 +7,7 @@ import { KnowledgeDetailPanel } from "@/components/knowledge/KnowledgeDetailPane
 import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
+import { cn } from "@/lib/utils";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { useAuth } from "@/contexts/AuthContext";
@@ -327,7 +328,7 @@ function JournalWorkspaceContent() {
               : d.source_type === "general_note")),
   );
   return (
-    <div className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
+    <div className="page-sections [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
       <PageHeader
         eyebrow="Review"
         title="Journal & Knowledge"
@@ -343,13 +344,18 @@ function JournalWorkspaceContent() {
       />
       <nav
         aria-label="Journal and Knowledge"
-        className="flex gap-3 border-b border-border-subtle"
+        className="flex gap-1 rounded-card border border-border-subtle bg-surface-1 p-1"
       >
         <Link
           onClick={remember}
           href="/journal"
           aria-current={!knowledge ? "page" : undefined}
-          className="min-h-11 px-3 py-3"
+          className={cn(
+            "min-h-10 flex-1 rounded-control px-3 py-2 text-center text-[length:var(--text-label)] font-medium",
+            !knowledge
+              ? "border border-accent-border bg-accent-muted text-accent"
+              : "text-text-secondary hover:bg-surface-2",
+          )}
         >
           Journal
         </Link>
@@ -357,14 +363,22 @@ function JournalWorkspaceContent() {
           onClick={remember}
           href="/journal?tab=knowledge"
           aria-current={knowledge ? "page" : undefined}
-          className="min-h-11 px-3 py-3"
+          className={cn(
+            "min-h-10 flex-1 rounded-control px-3 py-2 text-center text-[length:var(--text-label)] font-medium",
+            knowledge
+              ? "border border-accent-border bg-accent-muted text-accent"
+              : "text-text-secondary hover:bg-surface-2",
+          )}
         >
           Knowledge
         </Link>
       </nav>
       {savedId || documentId ? <JournalReturnLink /> : null}
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
-      <div data-testid="knowledge-filters" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap">
+      <div
+        data-testid="knowledge-filters"
+        className="card-inner rounded-card border border-border-subtle bg-surface-1 p-3 sm:flex sm:flex-wrap sm:items-center"
+      >
         <Input
           aria-label="Search entries"
           placeholder="Search"

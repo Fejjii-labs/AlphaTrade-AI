@@ -66,6 +66,9 @@ export default {
         },
         positive: "var(--color-positive)",
         negative: "var(--color-negative)",
+        "badge-danger": "var(--color-badge-danger)",
+        "badge-blocked": "var(--color-badge-blocked)",
+        "badge-warning": "var(--color-badge-warning)",
         paper: {
           DEFAULT: "var(--color-paper)",
           muted: "var(--color-paper-muted)",

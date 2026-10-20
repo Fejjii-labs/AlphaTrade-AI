@@ -22,7 +22,7 @@
 
   /* Text hierarchy. Muted is AA on surface 1/2 (never use #3a4558 for body). */
   --color-text-primary: #eef2f8;
-  --color-text-secondary: #7d8ba0;
+  --color-text-secondary: #a3aec2;
   --color-text-muted: #7d8ba0;
   --color-text-inverse: #07090f;
   --color-text-disabled: #3a4558;
@@ -49,6 +49,10 @@
   --color-danger: #ef4444;
   --color-danger-muted: rgba(239, 68, 68, 0.12);
   --color-danger-border: rgba(239, 68, 68, 0.4);
+  /* Badge labels on tinted fills (AA on muted backgrounds). */
+  --color-badge-danger: #f87171;
+  --color-badge-blocked: #f87171;
+  --color-badge-warning: #fbbf24;
   --color-info: #47d7ff;
   --color-info-muted: rgba(71, 215, 255, 0.12);
   --color-info-border: rgba(71, 215, 255, 0.35);
@@ -126,7 +130,8 @@
   --content-max: 1280px;
   --page-gutter-mobile: 1rem;
   --page-gutter-desktop: 1.5rem;
-  --section-gap: 0.5rem;
+  --section-gap: 1.25rem;
+  --card-inner-gap: 0.5rem;
   --card-padding-mobile: 1rem;
   --card-padding-desktop: 1.25rem;
 
@@ -180,6 +185,9 @@
   --color-danger: #b91c1c;
   --color-danger-muted: rgba(185, 28, 28, 0.1);
   --color-danger-border: rgba(185, 28, 28, 0.35);
+  --color-badge-danger: #991b1b;
+  --color-badge-blocked: #991b1b;
+  --color-badge-warning: #854d0b;
   --color-info: #0369a1;
   --color-info-muted: rgba(3, 105, 161, 0.1);
   --color-info-border: rgba(3, 105, 161, 0.35);

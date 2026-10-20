@@ -87,5 +87,19 @@ body {
   .font-data {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
+    font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      "Liberation Mono", "Courier New", monospace;
+  }
+
+  .page-sections {
+    display: flex;
+    flex-direction: column;
+    gap: var(--section-gap);
+  }
+
+  .card-inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--card-inner-gap);
   }
 }

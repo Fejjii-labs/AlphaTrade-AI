@@ -64,6 +64,17 @@ function composite(overlay: string, background: string): string {
   return `#${parts.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function rgbaOverlay(hex: string, alpha: number): string {
+  const [r, g, b] = rgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function topBarSurface(vars: Vars): string {
+  const background = color(vars, "--color-background");
+  const surface = color(vars, "--color-surface-0");
+  return composite(rgbaOverlay(surface, 0.9), background);
+}
+
 const css = readFileSync(resolve(__dirname, "tokens.css"), "utf8");
 const themes = {
   dark: parseTheme(css, "dark"),
@@ -149,6 +160,41 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
     }
   });
 
+  it("keeps safety badge text at WCAG AA on tinted fills across surfaces and the top bar", () => {
+    const badgeRoles = [
+      { name: "danger", text: "--color-badge-danger", muted: "--color-danger-muted" },
+      { name: "blocked", text: "--color-badge-blocked", muted: "--color-blocked-muted" },
+      { name: "warning", text: "--color-badge-warning", muted: "--color-warning-muted" },
+    ] as const;
+    const surfaces = [
+      "--color-surface-0",
+      "--color-surface-1",
+      "--color-surface-2",
+    ] as const;
+
+    for (const theme of ["dark", "light"] as const) {
+      const vars = themes[theme];
+      const bar = topBarSurface(vars);
+      for (const role of badgeRoles) {
+        for (const surface of surfaces) {
+          const base = color(vars, surface);
+          const fill = composite(color(vars, role.muted), base);
+          const ratio = contrast(color(vars, role.text), fill);
+          expect(
+            ratio,
+            `${theme} ${role.name} badge on ${surface} is ${ratio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(AA);
+        }
+        const barFill = composite(color(vars, role.muted), bar);
+        const barRatio = contrast(color(vars, role.text), barFill);
+        expect(
+          barRatio,
+          `${theme} ${role.name} badge on top bar is ${barRatio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(AA);
+      }
+    }
+  });
+
   it("separates profit, interactive blue, and paper", () => {
     for (const theme of ["dark", "light"] as const) {
       const vars = themes[theme];
@@ -174,7 +220,10 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
     expect(color(dark, "--color-negative")).toBe("#ef4444");
     expect(color(dark, "--color-paper")).toBe("#a78bfa");
     expect(color(dark, "--color-mode-demo")).toBe("#22d3ee");
+    expect(color(dark, "--color-text-secondary")).toBe("#a3aec2");
     expect(color(dark, "--color-text-muted")).toBe("#7d8ba0");
+    expect(color(dark, "--color-badge-danger")).toBe("#f87171");
+    expect(dark["--section-gap"]).toBe("1.25rem");
     expect(color(light, "--color-accent")).toBe("#1d4ed8");
     expect(color(light, "--color-highlight")).toBe("#9a3412");
     expect(color(light, "--color-positive")).toBe("#047857");

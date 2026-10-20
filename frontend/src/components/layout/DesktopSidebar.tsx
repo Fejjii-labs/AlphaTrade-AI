@@ -110,8 +110,8 @@ export function DesktopSidebar({ onOpenCommandMenu }: DesktopSidebarProps) {
                 "min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
                 collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
                 active
-                  ? "border-accent-border bg-accent-muted text-accent"
-                  : "text-text-secondary hover:bg-surface-1 hover:text-text-primary",
+                  ? "border-l-2 border-accent bg-accent-muted text-accent"
+                  : "border-l-2 border-transparent text-text-secondary hover:bg-surface-1 hover:text-text-primary",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />

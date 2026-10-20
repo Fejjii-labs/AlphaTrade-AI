@@ -18,7 +18,7 @@ export function MobileBottomNavigation() {
       aria-label="Primary mobile"
       data-testid="mobile-bottom-navigation"
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 border-t border-border-subtle bg-surface-0",
+        "fixed inset-x-0 bottom-0 z-50 border-t border-border-subtle bg-surface-0/95 backdrop-blur-md",
         "pb-[env(safe-area-inset-bottom,0px)] lg:hidden",
       )}
     >
@@ -39,7 +39,7 @@ export function MobileBottomNavigation() {
                 "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 border-t-2 px-0 text-[10px] leading-tight min-[360px]:px-0.5 min-[360px]:text-[11px] sm:text-xs",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
                 active
-                  ? "border-accent bg-accent-muted text-accent"
+                  ? "border-accent-solid bg-accent-muted text-accent"
                   : "border-transparent text-text-secondary",
               )}
             >

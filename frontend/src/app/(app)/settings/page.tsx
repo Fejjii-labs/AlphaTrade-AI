@@ -42,7 +42,7 @@ function SettingsWorkspace() {
     return () => window.removeEventListener("hashchange", openAnchor);
   }, []);
   return (
-    <div className="space-y-4 [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
+    <div className="page-sections [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
       <PageHeader
         eyebrow="Workspace"
         title="Settings"

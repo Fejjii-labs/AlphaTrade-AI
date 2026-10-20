@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("next/font/google", () => ({
+  JetBrains_Mono: () => ({ variable: "--font-mono" }),
+}));
 
 const { viewport } = await import("@/app/layout");
 
