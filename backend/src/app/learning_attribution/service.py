@@ -244,7 +244,12 @@ class LearningAttributionService:
             trade=trade,
             payload=dict(event.payload),
         )
-        behavior = behavior_facts(event_type=event.event_type, candidate=candidate, trade=trade)
+        behavior = behavior_facts(
+            event_type=event.event_type,
+            candidate=candidate,
+            trade=trade,
+            payload=dict(event.payload),
+        )
         outcome = outcome_facts(event_type=event.event_type, trade=trade)
         pattern = strategy_pattern_facts(
             candidate=candidate,
@@ -252,6 +257,7 @@ class LearningAttributionService:
             trade=trade,
             outcome=outcome,
             learning_venue_mode=learning_venue_mode,
+            payload=dict(event.payload),
         )
         human = HumanVsSystemAttributionFacts(
             decision_actor=behavior.actor,
@@ -445,7 +451,12 @@ class LearningAttributionService:
             trade=trade,
             payload=dict(command.event.payload),
         )
-        behavior = behavior_facts(event_type=event_type, candidate=candidate, trade=trade)
+        behavior = behavior_facts(
+            event_type=event_type,
+            candidate=candidate,
+            trade=trade,
+            payload=dict(command.event.payload),
+        )
         outcome = outcome_facts(event_type=event_type, trade=trade)
         if event_type in {
             JournalLifecycleEventType.REJECT,
@@ -461,6 +472,7 @@ class LearningAttributionService:
             trade=trade,
             outcome=outcome,
             learning_venue_mode=command.learning_venue_mode,
+            payload=dict(command.event.payload),
         )
         human = HumanVsSystemAttributionFacts(
             decision_actor=behavior.actor,
@@ -524,12 +536,18 @@ class LearningAttributionService:
         if previous is None:
             return current
         prior = previous.facts.strategy_pattern
+        autonomous = prior.autonomous_approval or current.autonomous_approval
         return current.model_copy(
             update={
                 "candidate_confirmed": True,
                 "rejected": prior.rejected or current.rejected,
                 "skipped": prior.skipped or current.skipped,
-                "plan_approved": prior.plan_approved or current.plan_approved,
+                "autonomous_approval": autonomous,
+                # Autonomous stays sticky. A later fill or close with no channel
+                # must not OR plan_approved back to a human approval.
+                "plan_approved": (
+                    False if autonomous else (prior.plan_approved or current.plan_approved)
+                ),
                 "filled": prior.filled or current.filled,
                 "closed": prior.closed or current.closed,
                 "executed_outcome": prior.executed_outcome or current.executed_outcome,

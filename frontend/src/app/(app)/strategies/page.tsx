@@ -268,9 +268,10 @@ function StrategiesWorkspace() {
         </summary>
         <div className="space-y-3 pt-3">
           <RiskSettingsSummary />
-          <Link href="/risk" className="text-accent">
-            Configure account limits
-          </Link>
+          <div className="flex flex-wrap gap-4 text-accent">
+            <Link href="/risk/autonomous">Autonomous trading settings</Link>
+            <Link href="/risk">Configure account limits</Link>
+          </div>
           <p className="text-sm text-text-muted">
             Strategy limits remain bounded by the enforced account policy.
           </p>

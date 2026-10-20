@@ -1,7 +1,6 @@
 """Stored executor attestations, separate from manual identity and HTTP sample claims.
 
-No writer, execution adapter or endpoint is installed here. The reviewed executor
-must persist these exact bindings in existing AuditLog storage; hashes detect
+The native producer persists exact bindings in existing AuditLog storage; hashes detect
 content corruption, while the server-only producer and relational checks establish
 trust. An echoed client order ID is never an attestation.
 """

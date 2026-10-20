@@ -218,6 +218,27 @@ class Settings(BaseSettings):
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""
+    # Autonomous continuation (AT-ADR-106). Both default off. Neither flag
+    # authorizes real-money trading. Setting both fails closed.
+    autonomous_internal_paper_enabled: bool = False
+    autonomous_blofin_demo_enabled: bool = False
+    # Automatic stop/target exits for canonical internal paper only.
+    # Default off. Production refuses the enabled flag. Dry-run evaluates and
+    # logs without calling the paper close service. Neither flag is set in
+    # the deploy blueprint by the change that introduced them.
+    paper_exit_monitor_enabled: bool = False
+    paper_exit_monitor_dry_run: bool = False
+    # Repeated degraded or refused exit-monitor cycles raise a structured
+    # alert after this many seconds. Default 15 minutes, capped at 1 hour,
+    # so the wait stays well under the 24-hour backfill horizon. At least
+    # two cycles are required. This does not arm the monitor.
+    paper_exit_monitor_degraded_alert_after_seconds: int = Field(default=900, ge=60, le=3600)
+    # Worker wall clock versus database now(), and versus exchange server
+    # time when that source is supplied. A larger gap refuses the cycle.
+    # Default 15 seconds. This does not arm the monitor.
+    paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
+    risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)
@@ -254,6 +275,13 @@ class Settings(BaseSettings):
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---
     blofin_sync_stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+    # Off until explicitly enabled. A disarmed worker never attaches the cycle.
+    blofin_demo_snapshot_sync_enabled: bool = False
+    # Worker read-only snapshot cadence. The browser polls the same interval.
+    blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
+    # Read-only journal mirror for hand trades on the BloFin demo account.
+    # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
+    blofin_demo_manual_mirror_enabled: bool = False
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
 
@@ -683,6 +711,11 @@ class Settings(BaseSettings):
             and self.blofin_readonly_api_secret.strip()
             and self.blofin_readonly_api_passphrase.strip()
         )
+
+    @property
+    def blofin_worker_readonly_ready(self) -> bool:
+        """Unattended snapshot sync may use only the dedicated read-only credentials."""
+        return self.blofin_readonly_sync_enabled and self.blofin_readonly_configured
 
     @property
     def blofin_demo_configured(self) -> bool:

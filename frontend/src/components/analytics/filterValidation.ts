@@ -122,6 +122,7 @@ export const JOURNAL_TRADE_SOURCE_OPTIONS: JournalTradeSource[] = [
   "backtest",
   "imported",
   "system",
+  "blofin_demo_manual",
 ];
 const VALID_JOURNAL_SOURCES = new Set<JournalTradeSource>(JOURNAL_TRADE_SOURCE_OPTIONS);
 const VALID_SETUP_GROUP_BY = new Set<SetupGroupBy>(["setup", "setup_version", "strategy"]);

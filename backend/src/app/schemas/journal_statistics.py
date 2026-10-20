@@ -63,9 +63,10 @@ class ExecutionActor(StrEnum):
     """Derived human-vs-system execution dimension.
 
     Classified by decision authority over the recorded trade:
-    ``human`` — manual entries, imported human history, and human-approved
-    proposal-flow paper executions; ``system`` — automated paper-validation,
-    backtest, and system-generated trades.
+    ``human`` — manual entries, imported human history, human-approved
+    proposal-flow paper executions, manual demo tests, and BloFin demo hand
+    trades; ``system`` — automated paper-validation, backtest, and
+    system-generated trades. An unmapped source is omitted.
     """
 
     HUMAN = "human"

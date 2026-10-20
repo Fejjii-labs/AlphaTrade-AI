@@ -286,6 +286,39 @@ def test_blocked_trades_and_eligible_not_approved() -> None:
     assert facts.missed_opportunities.counterfactual_pnl is None
 
 
+def test_autonomous_unfilled_approval_is_not_a_missed_opportunity() -> None:
+    world = make_world()
+    candidate_id = world.evaluation.eligibility.candidate_id
+    record = make_attribution_record(
+        organization_id=ORG_ID,
+        candidate_id=candidate_id,
+        plan_approved=False,
+        filled=False,
+    )
+    autonomous = record.model_copy(
+        update={
+            "facts": record.facts.model_copy(
+                update={
+                    "strategy_pattern": record.facts.strategy_pattern.model_copy(
+                        update={"autonomous_approval": True, "plan_approved": False}
+                    )
+                }
+            )
+        }
+    )
+    facts = rollup_facts(
+        PaperEvaluationInput(
+            organization_id=ORG_ID,
+            generated_at=GENERATED_AT,
+            attributions=(autonomous,),
+            eligibility=(world.evaluation,),
+        )
+    )
+    assert facts.missed_opportunities.eligible_not_approved == 0
+    assert facts.conversion.approved == 0
+    assert facts.human_vs_system.human_approvals == 0
+
+
 def test_strategy_version_comparison_and_refinement_cannot_activate() -> None:
     strong = tuple(
         closed_win(pnl="12", strategy_version_id=STRATEGY_VERSION_ID, candidate_id=uuid4())

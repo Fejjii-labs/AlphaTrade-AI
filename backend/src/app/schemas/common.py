@@ -217,6 +217,7 @@ class RiskRuleId(StrEnum):
     STRONG_GREEN_DAY = "strong_green_day"
     COOLDOWN_AFTER_LOSS = "cooldown_after_loss"
     KILL_SWITCH = "kill_switch"
+    RISK_PERCENT = "risk_percent"
 
 
 class StrategyId(StrEnum):
@@ -370,6 +371,7 @@ class AuditEventType(StrEnum):
     PAPER_SCHEDULER_TICK = "paper_scheduler_tick"
     PAPER_VALIDATION_RUNTIME = "paper_validation_runtime"
     RISK_SETTINGS_UPDATED = "risk_settings_updated"
+    AUTONOMOUS_TRADING_SETTINGS_UPDATED = "autonomous_trading_settings_updated"
     NOTIFICATION_PREFERENCES_UPDATED = "notification_preferences_updated"
     NOTIFICATION_TEST_SENT = "notification_test_sent"
     ALERT_TELEGRAM_DELIVERY_REQUESTED = "alert_telegram_delivery_requested"
@@ -399,6 +401,10 @@ class AuditEventType(StrEnum):
     POSITION_UPDATE = "position_update"
     JOURNAL_ENTRY = "journal_entry"
     KILL_SWITCH = "kill_switch"
+    RISK_POLICY_PROPOSED = "risk_policy_proposed"
+    RISK_POLICY_APPLIED = "risk_policy_applied"
+    RISK_POLICY_APPLY_REFUSED = "risk_policy_apply_refused"
+    RISK_POLICY_CONSECUTIVE_RESET = "risk_policy_consecutive_reset"
 
 
 # Backward-compatible alias used by earlier slices
@@ -471,6 +477,7 @@ class JournalTradeSource(StrEnum):
     MANUAL = "manual"
     PAPER_EXECUTION = "paper_execution"
     MANUAL_DEMO_TEST = "manual_demo_test"
+    BLOFIN_DEMO_MANUAL = "blofin_demo_manual"
     PAPER_VALIDATION = "paper_validation"
     BACKTEST = "backtest"
     IMPORTED = "imported"
@@ -712,6 +719,11 @@ class PaperAlertType(StrEnum):
     DAILY_LOSS_LOCK_WARNING = "daily_loss_lock_warning"
     RESEARCH_VALIDATION_PROMOTION = "research_validation_promotion"
     TRADINGVIEW_SIGNAL = "tradingview_signal"
+    DEMO_LIQUIDATION_THROUGH_STOP = "demo_liquidation_through_stop"
+    PAPER_EXIT_BACKFILL_LOSS = "paper_exit_backfill_loss"
+    PAPER_EXIT_DEGRADED_REPEAT = "paper_exit_degraded_repeat"
+    PAPER_EXIT_CLOCK_SKEW = "paper_exit_clock_skew"
+    PAPER_EXIT_STALE_LOSS = "paper_exit_stale_loss"
 
 
 class PromotionSource(StrEnum):
@@ -824,6 +836,7 @@ class PaperAlertSource(StrEnum):
     MARKET_WATCHER = "market_watcher"
     MARKET_WATCHER_BRIDGE = "market_watcher_bridge"
     MANUAL_ACTION = "manual_action"
+    PAPER_EXIT_MONITOR = "paper_exit_monitor"
 
 
 class SetupAlertReviewStatus(StrEnum):

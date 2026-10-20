@@ -54,4 +54,18 @@ describe("generated native outcome boundary", () => {
     await expect(experimentNativeOutcome(experimentId, versionId, experimentId)).rejects.toMatchObject({ status: 0, message: "API response did not match its contract. Refresh or try again later." });
     expect(apiFetch).toHaveBeenCalledOnce();
   });
+  it("accepts owned price statistics while fee-adjusted results remain unavailable", () => {
+    const owned = { ...nativeOutcomeFixture, status: "unavailable", reason: "native_monetary_semantics_unverified",
+      reported_realized_pnl: null, fee_cost: null, realized_pnl_after_fees_excluding_funding: null,
+      closure_verified: true, price_pnl_excluding_fees_and_funding: "2.5",
+      price_pnl_methodology: "verified-linear-fill-prices/v1" };
+    const report = { ...performance, sample_count: 1, required_sample_count: 1,
+      price_pnl_sample_count: 1, price_pnl_excluding_fees_and_funding: "2.5", price_pnl_win_rate: "1",
+      price_pnl_currency: "USDT", price_pnl_methodology: "verified-linear-fill-prices/v1", outcomes: [owned] };
+    expect(validators.experimentNativeOutcomeResponse(owned)).toBe(true);
+    expect(validators.experimentNativePerformanceResponse(report)).toBe(true);
+    expect(validators.experimentNativeOutcomeResponse({ ...owned, proof: null })).toBe(false);
+    expect(validators.experimentNativePerformanceResponse({ ...report, price_pnl_methodology: null })).toBe(false);
+    expect(validators.experimentNativePerformanceResponse({ ...report, fee_cost: "0" })).toBe(false);
+  });
 });

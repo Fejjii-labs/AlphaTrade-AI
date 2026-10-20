@@ -340,7 +340,11 @@ def nested_runtime_world(tenant_store, monkeypatch, *, forming=False, risk_block
     from sqlalchemy.orm import sessionmaker
 
     factory = sessionmaker(bind=session.bind, expire_on_commit=False)
-    settings = _settings(watcher_orchestration_enabled=True, exchange_mode="paper_internal")
+    settings = _settings(
+        watcher_orchestration_enabled=True,
+        exchange_mode="paper_internal",
+        autonomous_internal_paper_enabled=True,
+    )
     if risk_block:
         # Use the existing daily loss gate; do not invent a Nested risk engine.
         from app.db.models import DailyRiskState

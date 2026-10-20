@@ -165,6 +165,19 @@ class JournalLifecycleProjector:
         self._trades = JournalTradeRepository(session)
         self._audit = audit_service
 
+    def lock_execution_lifecycle(
+        self,
+        organization_id: uuid.UUID,
+        execution_lifecycle_id: uuid.UUID | None,
+    ) -> None:
+        """Hold this lifecycle until the caller's transaction ends.
+
+        The lock order matches projection: the advisory key, then the journal
+        row. A second close waits here and then sees the committed status.
+        """
+
+        self._lock_lifecycle(organization_id, execution_lifecycle_id)
+
     def project(
         self,
         event: JournalLifecycleEventInput,

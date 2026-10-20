@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+import structlog
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -20,15 +21,28 @@ from app.schemas.common import MembershipRole
 from app.schemas.manual_demo import ManualDemoPreviewRequest
 from app.schemas.trade_plan import EntrySide
 from app.security.tenant import TenantContext
+from app.services import manual_demo_service
 from app.services.manual_demo_service import ManualDemoService
 from tests.support.phase5_market import EVALUATED_AT
 from tests.test_governed_blofin_demo import Venue
+
+
+@pytest.fixture(autouse=True)
+def fresh_preflight_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Production caches bound loggers; a preceding test can initialize one
+    # before capture_logs, so this file would see the event on stdout only.
+    monkeypatch.setattr(
+        manual_demo_service, "logger", structlog.get_logger(manual_demo_service.__name__)
+    )
+
 
 STAGES = (
     ("permissions", "/api/v1/user/query-apikey"),
     ("position_mode", "/api/v1/account/position-mode"),
     ("instrument", "/api/v1/market/instruments"),
+    ("margin_mode", "/api/v1/account/margin-mode"),
     ("leverage", "/api/v1/account/leverage-info"),
+    ("position_tiers", "/api/v1/market/position-tiers"),
     ("positions", "/api/v1/account/positions"),
     ("pending_orders", "/api/v1/trade/orders-pending"),
     ("pending_protection", "/api/v1/trade/orders-tpsl-pending"),
@@ -108,21 +122,31 @@ def test_every_snapshot_read_reports_its_failing_stage_without_secret_text(stage
         ("permissions", STAGES[0][1], {"readOnly": 1}, "permissions_not_read_trade_only"),
         ("position_mode", STAGES[1][1], {"positionMode": "hedge_mode"}, "position_mode_not_net"),
         ("instrument", STAGES[2][1], [], "instrument_unavailable"),
-        ("leverage", STAGES[3][1], {"leverage": "2"}, "leverage_not_one"),
-        ("positions", STAGES[4][1], [{"positions": "1"}], "account_not_flat"),
+        ("margin_mode", STAGES[3][1], {}, "margin_mode_omitted"),
+        ("margin_mode", STAGES[3][1], {"marginMode": "isolated"}, "margin_mode_not_cross"),
+        ("leverage", STAGES[4][1], {"leverage": "2", "marginMode": "cross"}, "leverage_not_one"),
+        ("leverage", STAGES[4][1], {"leverage": "1"}, "margin_mode_omitted"),
+        (
+            "leverage",
+            STAGES[4][1],
+            {"leverage": "1", "marginMode": "isolated"},
+            "leverage_info_margin_mode_mismatch",
+        ),
+        ("position_tiers", STAGES[5][1], [], "maintenance_tiers_unavailable"),
+        ("positions", STAGES[6][1], [{"positions": "1"}], "account_not_flat"),
         (
             "positions",
-            STAGES[4][1],
+            STAGES[6][1],
             [{"positions": PRIVATE_TEXT}],
             "malformed_or_unsupported_response",
         ),
-        ("pending_orders", STAGES[5][1], [{}], "pending_orders_present"),
-        ("pending_protection", STAGES[6][1], [{}], "pending_orders_present"),
-        ("balance", STAGES[7][1], [], "usdt_balance_unavailable"),
-        ("quote", STAGES[8][1], [], "quote_unavailable"),
+        ("pending_orders", STAGES[7][1], [{}], "pending_orders_present"),
+        ("pending_protection", STAGES[8][1], [{}], "pending_orders_present"),
+        ("balance", STAGES[9][1], [], "usdt_balance_unavailable"),
+        ("quote", STAGES[10][1], [], "quote_unavailable"),
         (
             "quote",
-            STAGES[8][1],
+            STAGES[10][1],
             [{"instId": "BTC-USDT", "ts": PRIVATE_TEXT}],
             "malformed_or_unsupported_response",
         ),

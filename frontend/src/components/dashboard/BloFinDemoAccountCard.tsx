@@ -11,9 +11,11 @@ import {
   formatCount,
   formatDateTime,
   formatMoney,
+  formatPercent,
   formatPrice,
   formatQuantity,
 } from "@/lib/format";
+import { DEMO_REFRESH_INTERVAL_MS } from "./demoAccountRefresh";
 
 const statusLabel = {
   ok: "Fresh snapshot",
@@ -36,6 +38,23 @@ export function BloFinDemoAccountCard({
     : null;
   const performance = account?.performance;
   const verifiedPerformance = performance?.status === "partial";
+  const activityStatus = performance?.activity_sync_status ?? "disabled";
+  const activityDisabled = activityStatus === "disabled";
+  const mirrorStatus = performance?.manual_mirror_status ?? "disabled";
+  const mirrorReady = mirrorStatus === "ready";
+  const activityCoverage = performance?.activity_coverage ?? "";
+  const activityCoverageWithheld =
+    /win rate and realized p&l are withheld/i.test(activityCoverage);
+  const intervalSeconds =
+    account?.refresh_interval_seconds ?? DEMO_REFRESH_INTERVAL_MS / 1000;
+  const winRate =
+    performance?.win_rate == null
+      ? null
+      : formatPercent(Number(performance.win_rate));
+  const hideHeadline = !mirrorReady && (activityDisabled || mirrorStatus === "withheld");
+  const showWinRate =
+    winRate != null &&
+    (mirrorReady || (activityStatus === "ready" && mirrorStatus !== "withheld"));
 
   return (
     <Card data-testid="dashboard-demo-account">
@@ -84,8 +103,8 @@ export function BloFinDemoAccountCard({
           <p className="text-xs text-text-secondary">
             Configured demo venue account · balances and native open positions.
             {account?.can_refresh
-              ? " Native data refreshes every 3 minutes while visible; retries slow down after failures."
-              : " Saved snapshots reload every 3 minutes while visible."}
+              ? ` Native data refreshes when this page opens, then every ${intervalSeconds} seconds while it is visible.`
+              : ` Saved snapshots reload every ${intervalSeconds} seconds while it is visible.`}
             All balances and positions below use this configured account.
           </p>
         </details>
@@ -114,14 +133,34 @@ export function BloFinDemoAccountCard({
           />
           <TradingMetric
             label="Win rate"
-            value="—"
-            note="Incomplete verified history"
+            value={showWinRate ? winRate : "—"}
+            note={
+              mirrorReady
+                ? "Closed mirrored BloFin demo trades"
+                : mirrorStatus === "withheld"
+                  ? "Withheld until positions-history price, fee, and funding match"
+                  : activityDisabled
+                    ? "Activity sync disabled"
+                    : activityStatus === "ready"
+                      ? "Closed round-trips from stored fills"
+                      : "Withheld until fee basis and a flat start are verified"
+            }
             testId="dashboard-win-rate"
           />
           <TradingMetric
-            label="Verified net PnL"
-            value={`${formatMoney(verifiedPerformance ? performance.net_pnl : null)} USDT`}
-            note="Verified recorded closures only"
+            label="Realized PnL"
+            value={`${formatMoney(hideHeadline ? null : performance?.realized_pnl)} USDT`}
+            note={
+              mirrorReady
+                ? "Positions-history price P&L minus fee and funding. fillPnl is not used"
+                : mirrorStatus === "withheld"
+                  ? "Withheld. A mirrored trade does not match the price formula"
+                  : activityDisabled
+                    ? "Withheld until activity sync is enabled"
+                    : performance?.realized_pnl == null
+                      ? "Withheld. fillPnl fee basis and fee sign are not verified"
+                      : "Stored fillPnl. Fees are not added"
+            }
             testId="dashboard-pnl"
           />
         </div>
@@ -205,8 +244,46 @@ export function BloFinDemoAccountCard({
                 : account.message}
             </p>
             {account.synced_at ? (
-              <p className="text-xs text-text-secondary">
-                As of {formatDateTime(account.synced_at)}
+              <p
+                data-testid="demo-last-synced"
+                className={
+                  status === "stale"
+                    ? "text-sm text-warning"
+                    : "text-xs text-text-secondary"
+                }
+              >
+                Last synced {formatDateTime(account.synced_at)}
+                {status === "stale" ? " · stale" : ""}
+              </p>
+            ) : null}
+            {mirrorReady ? (
+              <p role="status" data-testid="manual-mirror-ready" className="text-sm text-text-secondary">
+                {performance?.manual_mirror_reason}
+                {performance?.trade_count != null
+                  ? ` ${formatCount(performance.trade_count)} closed trades.`
+                  : ""}
+                {performance?.average_r != null ? ` Average R ${performance.average_r}.` : " Average R —."}
+              </p>
+            ) : null}
+            {mirrorStatus === "withheld" ? (
+              <p role="status" data-testid="manual-mirror-withheld" className="text-sm text-warning">
+                {performance?.manual_mirror_reason}
+              </p>
+            ) : null}
+            {activityDisabled && !mirrorReady ? (
+              <p role="status" data-testid="activity-sync-disabled" className="text-sm text-warning">
+                Activity sync disabled. Win rate and realized P&L are withheld
+                until the activity worker is enabled.
+              </p>
+            ) : activityCoverage && !(mirrorReady && (activityDisabled || activityCoverageWithheld)) ? (
+              <p className="text-xs text-text-secondary" data-testid="activity-coverage">
+                {activityCoverage}
+                {!mirrorReady && performance?.trade_count != null
+                  ? ` ${formatCount(performance.trade_count)} closed trades · ${formatCount(performance.wins)} wins · ${formatCount(performance.losses)} losses.`
+                  : ""}
+                {!mirrorReady && performance?.window_start
+                  ? ` Window ${formatDateTime(performance.window_start)} – ${formatDateTime(performance.window_end)}.`
+                  : ""}
               </p>
             ) : null}
             {account.last_attempt_at ? (

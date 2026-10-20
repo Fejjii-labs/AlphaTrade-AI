@@ -643,6 +643,18 @@ def test_postgres_restart_and_conflict_on_real_db() -> None:
         loaded = store.get(organization_id=ORG_ID, candidate_id=CANDIDATE_ID)
         assert loaded is not None
         assert loaded.attribution_id == attribution_id
+        row = session.get(LearningAttributionRecordRow, attribution_id)
+        assert row is not None
+        legacy_payload = dict(row.facts_payload)
+        legacy_pattern = dict(legacy_payload["strategy_pattern"])
+        legacy_pattern.pop("autonomous_approval", None)
+        legacy_payload["strategy_pattern"] = legacy_pattern
+        row.facts_payload = legacy_payload
+        session.commit()
+        reloaded = store.get(organization_id=ORG_ID, candidate_id=CANDIDATE_ID)
+        assert reloaded is not None
+        assert reloaded.facts.content_hash == loaded.facts.content_hash
+        assert reloaded.facts.strategy_pattern.autonomous_approval is False
         query = LearningQueryService(store)
         stats = query.strategy_pattern_stats(organization_id=ORG_ID)
         assert stats.human_vs_system.executed_outcomes == 1

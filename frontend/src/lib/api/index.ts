@@ -112,6 +112,7 @@ import type {
   PositionSizingResult,
   HumanVsSystemComparison,
   UserStrategy,
+  AutonomousTradingSettingsView,
   UserRiskSettings,
   UserRiskSettingsUpdate,
   KillSwitchStatus,
@@ -1305,6 +1306,16 @@ export const api = {
     analyze: (body: Record<string, unknown>) =>
       apiFetch<PreTradeAnalyzeResponse>("/pretrade/analyze", {
         method: "POST",
+        body: JSON.stringify(body),
+        auth: true,
+      }),
+  },
+  autonomous: {
+    settings: () =>
+      apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", { auth: true }),
+    updateSettings: (body: Record<string, unknown>) =>
+      apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", {
+        method: "PATCH",
         body: JSON.stringify(body),
         auth: true,
       }),

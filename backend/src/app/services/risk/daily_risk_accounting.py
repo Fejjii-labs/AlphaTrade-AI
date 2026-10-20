@@ -24,6 +24,7 @@ from app.schemas.common import (
     OrderStatus,
     PositionStatus,
 )
+from app.services.risk.mirror_economics import journal_mirror_economics
 from app.services.risk.settings_service import RiskSettingsService, normalize_timezone
 
 
@@ -175,7 +176,14 @@ class DailyRiskAccounting:
         start_utc: datetime,
         end_utc: datetime,
     ) -> tuple[Decimal, int, Decimal]:
-        """Canonical fills and net outcomes, excluding legacy position mirrors."""
+        """Canonical fills and net outcomes, excluding legacy position mirrors.
+
+        Mirrored BloFin demo venue P&L is omitted from realized loss. The
+        omission is source ``blofin_demo_manual`` or the exact server prefix
+        ``blofin-demo-history:`` on ``external_ref``. Tags are not read. A
+        closed row contributes zero open exposure. The day's trade count still
+        includes that row when its entry time is inside the day.
+        """
         scope = (
             JournalTrade.organization_id == organization_id,
             JournalTrade.user_id == user_id,
@@ -191,6 +199,7 @@ class DailyRiskAccounting:
                 JournalTrade.status == JournalTradeStatus.CLOSED,
                 JournalTrade.exit_time >= start_utc,
                 JournalTrade.exit_time < end_utc,
+                ~journal_mirror_economics(),
             )
         )
         count = self._session.scalar(
@@ -201,6 +210,8 @@ class DailyRiskAccounting:
                 JournalTrade.status.in_((JournalTradeStatus.OPEN, JournalTradeStatus.CLOSED)),
             )
         )
+        # A closed row, including a mirror-reconciled demo test, is not open
+        # exposure. New blofin_demo_manual rows are outside ``scope``.
         exposure = self._session.scalar(
             select(
                 func.sum(

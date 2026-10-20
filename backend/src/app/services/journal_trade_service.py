@@ -11,6 +11,7 @@ Unit of work (AT-ADR-008): the service flushes; the route commits.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -54,6 +55,7 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.schemas.journal_trades import (
+    JournalTradeAnnotation,
     JournalTradeCreate,
     JournalTradeDetail,
     JournalTradeEvidenceCreate,
@@ -66,9 +68,55 @@ from app.schemas.journal_trades import (
     JournalTradeUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.blofin_demo_manual_mirror import (
+    annotation_allowed,
+    cycle_marker_locked,
+    cycle_tags_rewritten,
+    grade_tag,
+)
 from app.services.canonical_serialization import canonical_sha256
+from app.services.risk.mirror_economics import (
+    HISTORY_REF_PREFIX,
+    client_mirror_ref,
+    client_reserved_tag,
+)
 
 _REQUEST_TAG = "journal-trades-api"
+_GRADE = re.compile(r"^(?:[A-D][+-]?|F)$")
+
+
+def _reject_client_mirror_ref(value: object) -> None:
+    if client_mirror_ref(value):
+        raise ValidationAppError(
+            "A blofin-demo- external ref is written only by the read-only mirror.",
+            details={"reason": "mirror_ref_immutable"},
+        )
+
+
+def _reject_client_tags(value: object) -> None:
+    tags = value if isinstance(value, list) else []
+    if any(client_reserved_tag(tag) for tag in tags):
+        raise ValidationAppError(
+            "Tags with a quote or a blofin- prefix are written only by the server.",
+            details={"reason": "mirror_tag_immutable"},
+        )
+
+
+def _clean_grade(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValidationAppError("Grade must be text.")
+    text = value.strip().upper()
+    if not text:
+        return None
+    if _GRADE.fullmatch(text) is None:
+        raise ValidationAppError(
+            "Grade must be A through D with an optional + or -, or F.",
+            details={"reason": "invalid_grade"},
+        )
+    return text
+
 
 VENUE_FACT_FIELDS = frozenset(
     {
@@ -89,8 +137,41 @@ VENUE_FACT_FIELDS = frozenset(
         "linked_order_id",
         "linked_position_id",
         "linked_paper_trade_id",
+        "external_ref",
     }
 )
+
+
+_MIRROR_LOCKED_FIELDS = VENUE_FACT_FIELDS | frozenset({"external_ref"})
+_PNL_TAGS = frozenset({"pnl-verified", "pnl-unverified"})
+
+
+def _reject_mirror_venue_edit(row: JournalTrade, updates: dict[str, Any]) -> None:
+    """The mirror owns venue facts. Annotation stays on strategy, grade, and notes."""
+    blocked = sorted(key for key in updates if key in _MIRROR_LOCKED_FIELDS)
+    if "tags" in updates and _mirror_tags_changed(row.tags, updates.get("tags")):
+        blocked.append("tags")
+    if blocked:
+        raise ValidationAppError(
+            "Venue facts on a mirrored BloFin demo trade cannot be edited here.",
+            details={"reason": "mirror_venue_immutable", "fields": blocked},
+        )
+
+
+def _pnl_tags(tags: object) -> set[str]:
+    if not isinstance(tags, list):
+        return set()
+    return {tag for tag in tags if isinstance(tag, str) and tag in _PNL_TAGS}
+
+
+def _blofin_tags(tags: object) -> set[str]:
+    if not isinstance(tags, list):
+        return set()
+    return {tag for tag in tags if isinstance(tag, str) and tag.startswith("blofin-")}
+
+
+def _mirror_tags_changed(before: object, after: object) -> bool:
+    return _pnl_tags(before) != _pnl_tags(after) or _blofin_tags(before) != _blofin_tags(after)
 
 
 class VenueFactImmutableError(ValidationAppError):
@@ -121,6 +202,18 @@ class JournalTradeService:
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> JournalTradeRead:
+        if data.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
+            raise ValidationAppError(
+                "A BloFin demo hand-trade row is written only by the read-only mirror.",
+                details={"reason": "mirror_source_immutable"},
+            )
+        _reject_client_mirror_ref(data.external_ref)
+        _reject_client_tags(data.tags)
+        if data.external_ref == "blofin-demo-mirror-cycle" or cycle_tags_rewritten([], data.tags):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be created here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
         self._validate_strategy_links(
             organization_id=organization_id,
             setup_id=data.setup_id,
@@ -392,6 +485,22 @@ class JournalTradeService:
     ) -> JournalTradeRead:
         row = self._get_row(trade_id, organization_id=organization_id)
         updates = data.model_dump(exclude_unset=True)
+        if "external_ref" in updates:
+            _reject_client_mirror_ref(updates.get("external_ref"))
+        if "tags" in updates:
+            _reject_client_tags(updates.get("tags"))
+        if cycle_marker_locked(row) or updates.get("external_ref") == "blofin-demo-mirror-cycle":
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
+        if "tags" in updates and cycle_tags_rewritten(row.tags, updates.get("tags")):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
+        if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL:
+            _reject_mirror_venue_edit(row, updates)
         if row.execution_lifecycle_id is not None:
             blocked = sorted(key for key in updates if key in VENUE_FACT_FIELDS)
             if blocked:
@@ -415,6 +524,50 @@ class JournalTradeService:
         self._record_audit(row, AuditEventType.JOURNAL_TRADE_UPDATED, action="update")
         return JournalTradeRead.model_validate(row)
 
+    def annotate(
+        self,
+        trade_id: uuid.UUID,
+        data: JournalTradeAnnotation,
+        *,
+        organization_id: uuid.UUID,
+    ) -> JournalTradeRead:
+        """Tag strategy, grade, and notes. Venue facts stay untouched."""
+        row = self._get_row(trade_id, organization_id=organization_id)
+        if cycle_marker_locked(row):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be edited here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
+        if not annotation_allowed(row):
+            raise ValidationAppError(
+                "Only a mirrored BloFin demo journal trade can be tagged here.",
+                details={"reason": "annotation_source"},
+            )
+        updates = data.model_dump(exclude_unset=True)
+        if "user_strategy_id" in updates:
+            self._validate_strategy_links(
+                organization_id=organization_id,
+                setup_id=None,
+                user_strategy_id=updates["user_strategy_id"],
+                strategy_version_id=None,
+            )
+            row.user_strategy_id = updates["user_strategy_id"]
+            if updates["user_strategy_id"] is not None and "strategy_label" not in updates:
+                strategy = self._session.get(UserStrategy, updates["user_strategy_id"])
+                if strategy is not None and not (row.strategy_label or "").strip():
+                    row.strategy_label = strategy.name
+        if "strategy_label" in updates:
+            label = updates["strategy_label"]
+            row.strategy_label = label.strip() if isinstance(label, str) and label.strip() else None
+        if "notes" in updates:
+            notes = updates["notes"]
+            row.notes = notes.strip() if isinstance(notes, str) and notes.strip() else None
+        if "grade" in updates:
+            row.tags = grade_tag(list(row.tags or []), _clean_grade(updates["grade"]))
+        self._trades.add(row)
+        self._record_audit(row, AuditEventType.JOURNAL_TRADE_UPDATED, action="annotate")
+        return JournalTradeRead.model_validate(row)
+
     def correct_venue_facts(
         self,
         trade_id: uuid.UUID,
@@ -430,15 +583,32 @@ class JournalTradeService:
                 "Venue corrections require an explicit reason.",
                 details={"reason": "missing_correction_reason"},
             )
+        if "tags" in fields:
+            _reject_client_tags(fields.get("tags"))
+        if "external_ref" in fields:
+            _reject_client_mirror_ref(fields.get("external_ref"))
         unknown = sorted(key for key in fields if key not in VENUE_FACT_FIELDS)
         if unknown:
             raise ValidationAppError(
                 "Correction includes fields that are not venue facts.",
                 details={"fields": unknown},
             )
+        if "external_ref" in fields:
+            raise ValidationAppError(
+                "external_ref is written only by the server.",
+                details={"reason": "mirror_ref_immutable"},
+            )
         if not fields:
             raise ValidationAppError("Venue correction requires at least one field.")
         row = self._get_row(trade_id, organization_id=organization_id)
+        history_ref = isinstance(row.external_ref, str) and row.external_ref.startswith(
+            HISTORY_REF_PREFIX
+        )
+        if row.source is JournalTradeSource.BLOFIN_DEMO_MANUAL or history_ref:
+            raise ValidationAppError(
+                "Venue facts on a mirrored BloFin demo trade cannot be corrected here.",
+                details={"reason": "mirror_venue_immutable"},
+            )
         for field_name, new_value in fields.items():
             previous = getattr(row, field_name)
             correction = JournalTradeVenueCorrection(
@@ -473,6 +643,17 @@ class JournalTradeService:
 
     def delete(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> None:
         row = self._get_row(trade_id, organization_id=organization_id)
+        ref = row.external_ref or ""
+        if cycle_marker_locked(row):
+            raise ValidationAppError(
+                "The hand-trade mirror cycle marker cannot be deleted here.",
+                details={"reason": "mirror_cycle_immutable"},
+            )
+        if ref.startswith("blofin-demo-history:"):
+            raise ValidationAppError(
+                "A mirrored BloFin demo close cannot be deleted here.",
+                details={"reason": "mirror_row_immutable"},
+            )
         for child_repo in (self._evidence, self._rule_checks, self._observations):
             for child in child_repo.list_for_trade(row.id):
                 self._session.delete(child)

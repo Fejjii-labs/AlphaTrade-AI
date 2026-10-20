@@ -7,11 +7,11 @@ Neither method is exposed through
 HTTP or selected by a strategy/client-order similarity match. Transactions belong
 to that caller, not this producer. No order is sent.
 
-Normal activity history and the existing governed close projection do not carry
-complete protected parent/child ancestry or independently verified money semantics.
-``reconcile`` therefore records a durable diagnostic, never a guessed exit proof.
-The existing reader preserves its separately trusted resolver contract, while
-producer-owned commands remain unavailable. HTTP sample admission remains closed.
+Reconciliation verifies complete mirrored fills against the governed protected
+close and original position receipts. Only verified closures enter samples;
+price-based results explicitly exclude fees and funding. Raw native monetary
+fields never supply an undocumented fee/sign convention. HTTP sample admission
+remains closed.
 """
 
 import hashlib
@@ -44,7 +44,8 @@ from app.db.models import (
 from app.db.strategy_immutability import strategy_version_content_hash
 from app.experiments.blofin_source import BloFinExperimentSourceResolver, exact, plan_symbol, refuse
 from app.experiments.identity import utc
-from app.experiments.native_lineage import NativeEntryBinding
+from app.experiments.native_closure import CLOSURE, EXIT, NativeClosureReceipt, verify_closure
+from app.experiments.native_lineage import NativeEntryBinding, NativeExitLineage
 from app.experiments.outcome_contract import NativeOutcome
 from app.experiments.repository import ExperimentRepository
 from app.experiments.service import ExperimentService, semantic_hash
@@ -54,7 +55,7 @@ from app.providers.exchange.blofin_activity import BloFinActivityProvider, ident
 from app.schemas.canonical_trade_plan import CanonicalTradePlanRevision
 from app.schemas.common import ActorType, AuditResult, JournalLifecycleEventType
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
-from app.schemas.experiments import ExperimentSource, ExperimentVersion
+from app.schemas.experiments import ExperimentSampleCreate, ExperimentSource, ExperimentVersion
 from app.schemas.trade_plan import AuthorizationState, QuantityUnit, TradePlanRevisionSemantic
 from app.security.tenant import TenantContext
 from app.services.canonical_execution_journal import CANONICAL_EXECUTION_SOURCE_SYSTEM
@@ -196,6 +197,10 @@ class BloFinNativeOutcomeProducer:
             model = NativePreEntryPosition
         elif operation == ENTRY:
             model = NativeEntryBinding
+        elif operation == EXIT:
+            model = NativeExitLineage
+        elif operation == CLOSURE:
+            model = NativeClosureReceipt
         elif isinstance(operation, str) and operation.startswith(DIAGNOSTIC + ":"):
             model = (
                 NativeProducerEvidenceDiagnostic
@@ -626,18 +631,39 @@ class BloFinNativeOutcomeProducer:
     def reconcile(self, command_id: UUID) -> NativeOutcome:
         """Durable, scoped reconciliation; incomplete facts never become samples.
 
-        Diagnose the exact missing source. The governed resolution's isolated
-        close does not substitute for native protected parent evidence, and raw
-        exit-attestation booleans are never evidence for this producer.
+        The close projection alone is insufficient. Verify parent pointers,
+        native coverage and fill receipts before storing lineage/admitting once.
         """
-        self._lock(f"native-entry:{self.tenant.organization_id}:{command_id}")
         command = self._command(command_id)
         origin_audit, origin = self._origin(command)
+        ExperimentRepository(self.session, self.tenant).version(
+            origin.experiment_id, origin.version_id, lock=True
+        )
+        self._lock(f"native-entry:{self.tenant.organization_id}:{command_id}")
         version = self._version(origin.experiment_id, origin.version_id)
         self._position(command, origin_audit)
+        reason, resolution = self._closing_diagnostic(command, origin)
+        if resolution is not None:
+            try:
+                closure = verify_closure(self, command, origin, resolution)
+                self._store(command.id, EXIT, closure.lineage)
+                self._store(command.id, CLOSURE, closure)
+            except ConflictError as error:
+                reason = error.code
         result = self.resolver.read(version, origin.variant_key, str(command.id))
         result = self.qualify_existing_origin(version, origin.variant_key, str(command.id), result)
-        reason, resolution = self._closing_diagnostic(command, origin)
+        if result.closure_verified and result.proof is not None:
+            ExperimentService(
+                self.session, self.settings, clock=self.clock, source_resolver=self.resolver
+            ).record_sample(
+                self.tenant,
+                origin.experiment_id,
+                origin.version_id,
+                ExperimentSampleCreate(
+                    variant_key=origin.variant_key, source_record_id=str(command.id)
+                ),
+            )
+            return result
         position_row = self._audit(command.id, POSITION)
         assert position_row is not None
         diagnostic = NativeProducerEvidenceDiagnostic(
@@ -665,8 +691,8 @@ class BloFinNativeOutcomeProducer:
         """Database-only reader guard for producer-owned commands.
 
         Retain the prior resolver contract for separately trusted legacy adapters.
-        This producer's newly registered commands cannot obtain performance merely
-        by storing legacy exit booleans. Its closing evidence source is incomplete.
+        New commands need a recomputed closure receipt. Legacy exit booleans and
+        editable Journal money cannot confer sample or monetary authority.
         """
         try:
             command_id = UUID(source_record_id)
@@ -690,6 +716,26 @@ class BloFinNativeOutcomeProducer:
             ):
                 refuse("experiment_attribution_mismatch")
             reason, resolution = self._closing_diagnostic(command, origin)
+            closure_row = self._audit(command.id, CLOSURE)
+            if closure_row is not None and resolution is not None:
+                closure = NativeClosureReceipt.model_validate(self._body(closure_row))
+                verified = verify_closure(self, command, origin, resolution)
+                if closure != verified:
+                    refuse("native_closure_receipt_changed")
+                if result.proof is not None and (
+                    result.proof.native_entry_fill_ids == closure.lineage.entry_fill_ids
+                    and result.proof.native_exit_fill_ids == closure.lineage.exit_fill_ids
+                    and result.proof.native_exit_order_ids == closure.lineage.native_exit_order_ids
+                ):
+                    return result.model_copy(
+                        update={
+                            "closure_verified": True,
+                            "price_pnl_excluding_fees_and_funding": (
+                                closure.price_pnl_excluding_fees_and_funding
+                            ),
+                            "price_pnl_methodology": closure.calculation_method,
+                        }
+                    )
             missing = self._missing_closing_evidence(command, resolution, reason)
         except ConflictError as error:
             reason = error.code
@@ -708,6 +754,9 @@ class BloFinNativeOutcomeProducer:
                 "realized_pnl_after_fees_excluding_funding": None,
                 "coverage": "incomplete",
                 "freshness": "unavailable",
+                "closure_verified": False,
+                "price_pnl_excluding_fees_and_funding": None,
+                "price_pnl_methodology": None,
                 "limitations": tuple(dict.fromkeys((*result.limitations, *missing))),
             }
         )

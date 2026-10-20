@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -31,15 +32,23 @@ from app.schemas.common import (
     AuditEventType,
     AuditResult,
     AuditSeverity,
+    JournalTradeSource,
     JournalTradeStatus,
     TradeDirection,
 )
 from app.schemas.execution_protocol import ExecutePaperPlanRequest, ExecutionCommandOutcome
 from app.schemas.trade_plan import (
     AuthorizationChannel,
+    AuthorizationState,
+    MarginMode,
     TradePlanRevisionCreate,
 )
-from app.services.approval_service import ApprovalService
+from app.services.approval_service import (
+    CHANNEL_MISMATCH_REASON,
+    ApprovalService,
+    revoke_leftover_autonomous_authorizations,
+    stored_issuance_matches,
+)
 from app.services.audit_service import AuditService
 from app.services.canonical_trade_plan import CanonicalTradePlanService
 from app.services.execution_service import ExecutionService
@@ -71,6 +80,10 @@ from app.signal_fusion.ports import Clock
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.workers.watcher_paper_targets import PaperScanTarget
 
+if TYPE_CHECKING:
+    from app.services.risk_policy.grader import GradeDecision
+    from app.services.risk_policy.plan_sizing import ActiveProfile, ProfileOpenBook
+
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 _POLICY_VERSION = "paper-internal-entry/v1"
 _QUOTE_FRESH_SECONDS = 10
@@ -94,6 +107,12 @@ class AutomatedPaperLoopProof:
     paper_fill_id: UUID | None = None
     journal_trade_id: UUID | None = None
     journal_status: str | None = None
+
+
+def _global_kill_switch_active(settings: object) -> bool:
+    """True only for an explicit boolean global kill switch."""
+
+    return getattr(settings, "global_kill_switch_active", None) is True
 
 
 def paper_loop_posture_refusal(settings: Settings) -> str | None:
@@ -135,6 +154,8 @@ class AutomatedPaperLoop:
     ) -> AutomatedPaperLoopProof:
         """Open one internal paper journal trade, or write nothing when a gate fails."""
 
+        self._observed_kill_switch = kill_switch_active
+        self._autonomous_settings = None
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -149,6 +170,25 @@ class AutomatedPaperLoop:
         account = self._account(session, target)
         if account is None:
             return _proof(candidate, "skipped", "execution_account_missing")
+        from app.services.autonomous_trading_guard import autonomous_precheck_refusal
+        from app.services.autonomous_trading_settings_service import (
+            AutonomousTradingSettingsService,
+        )
+        from app.services.risk.daily_risk_accounting import DailyRiskAccounting
+
+        autonomous_settings = AutonomousTradingSettingsService(
+            session, AuditService(session)
+        ).resolve(organization_id=target.organization_id, user_id=target.user_id)
+        snapshot = DailyRiskAccounting(
+            session, _risk_settings(session), clock=lambda: self._clock.now()
+        ).sync_from_portfolio(
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+        )
+        autonomous_block = autonomous_precheck_refusal(autonomous_settings, target, snapshot)
+        if autonomous_block is not None:
+            return _proof(candidate, "blocked", autonomous_block)
+        self._autonomous_settings = autonomous_settings
         with self._runtime.bind_session(session):
             return self._bound(
                 session,
@@ -172,11 +212,13 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
-        if kill_switch_active:
-            return _proof(candidate, "blocked", "kill_switch_active")
         if assessment.state is not SetupAssessmentState.CONFIRMED_SETUP:
             return _proof(candidate, "skipped", "setup_not_confirmed")
         lineage = _lineage_refusal(
@@ -228,6 +270,7 @@ class AutomatedPaperLoop:
                 candidate=candidate,
                 revision_id=existing.plan.revision_id,
                 account_id=account.id,
+                entry_occurred_at=assembled.trigger_bar.interval_end,
             )
         eligibility = self._eligibility_service().evaluate(
             self._eligibility_command(
@@ -266,15 +309,89 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
+        now = self._clock.now()
+        active = _load_active_profile(
+            session, target.organization_id, self._risk_policy_kind(), now
+        )
+        records: list[object] = []
+        open_exposure = Decimal("0")
+        open_risk_percent = Decimal("0")
+        open_positions: int | None = None
+        remaining_daily: Decimal | None = None
+        if active is None:
+            open_exposure = _open_exposure(session, target, now=now)
+        else:
+            funding_rate = self._verified_funding_rate()
+            from app.services.autonomous_trading_guard import (
+                effective_autonomous_daily_loss_percent,
+            )
+
+            daily_cap = active.profile.daily_loss_limit_percent
+            autonomous = getattr(self, "_autonomous_settings", None)
+            if autonomous is not None and not autonomous.using_defaults:
+                daily_cap = effective_autonomous_daily_loss_percent(
+                    autonomous, active.profile.daily_loss_limit_percent
+                )
+            book = _profile_open_book(
+                session,
+                target,
+                now=now,
+                daily_loss_limit_percent=daily_cap,
+                include_book_buffer=self._risk_policy_kind() == "demo",
+                funding_rate=funding_rate,
+                live_verified=funding_rate is not None,
+            )
+            if isinstance(book, str):
+                return AutomatedPaperLoopProof(
+                    stage="skipped",
+                    reason_code=book,
+                    candidate_id=candidate.candidate_id,
+                    eligibility_id=eligibility.eligibility.eligibility_id,
+                    eligibility_state=state.value,
+                )
+            open_exposure = book.open_notional
+            open_risk_percent = book.open_risk_percent
+            open_positions = book.open_positions
+            remaining_daily = book.remaining_daily_budget_percent
+            from app.services.risk_policy.breaker_trip import persist_profile_breakers
+
+            if persist_profile_breakers(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                account_id=account.id,
+                profile=active.profile,
+                now=now,
+            ):
+                return AutomatedPaperLoopProof(
+                    stage="skipped",
+                    reason_code="breaker_active",
+                    candidate_id=candidate.candidate_id,
+                    eligibility_id=eligibility.eligibility.eligibility_id,
+                    eligibility_state=state.value,
+                )
+        autonomous = getattr(self, "_autonomous_settings", None)
         terms = self._plan_terms(
             candidate=candidate,
             assembled=assembled,
             policy=policy,
             account_id=account.id,
-            equity=_equity(session, target, now=self._clock.now()),
-            now=self._clock.now(),
+            equity=_equity(session, target, now=now),
+            now=now,
             eligibility_valid_until=eligibility.eligibility.valid_until,
             eligibility_id=eligibility.eligibility.eligibility_id,
+            active_profile=active,
+            open_exposure=open_exposure,
+            open_risk_percent=open_risk_percent,
+            open_positions=open_positions,
+            remaining_daily_budget_percent=remaining_daily,
+            breaker_refusing=_breaker_refusing(session, target.organization_id, now),
+            risk_records=records,
+            fixed_risk_percent=(
+                autonomous.risk_per_trade_percent
+                if autonomous is not None and not autonomous.using_defaults
+                else None
+            ),
         )
         if isinstance(terms, str):
             return AutomatedPaperLoopProof(
@@ -284,6 +401,9 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
+        # The open row is written only after the claim accepts. A refused claim
+        # must not leave an outcome of open.
+        self._pending_risk_records = records
         envelope = self._plan_service().create(
             _plan_command(
                 target=target,
@@ -301,6 +421,7 @@ class AutomatedPaperLoop:
             account_id=account.id,
             eligibility_id=eligibility.eligibility.eligibility_id,
             eligibility_state=state.value,
+            entry_occurred_at=assembled.trigger_bar.interval_end,
         )
 
     def _execute_existing(
@@ -313,6 +434,7 @@ class AutomatedPaperLoop:
         account_id: UUID,
         eligibility_id: UUID | None = None,
         eligibility_state: str | None = None,
+        entry_occurred_at: datetime | None = None,
     ) -> AutomatedPaperLoopProof:
         plans = self._plan_service()
         envelope = plans.get_scoped(
@@ -320,10 +442,49 @@ class AutomatedPaperLoop:
             organization_id=target.organization_id,
             user_id=target.user_id,
         )
+        plan = getattr(envelope, "plan", None)
+        missing = _missing_stored_plan_proof(
+            self,
+            session,
+            target,
+            candidate,
+            revision_id,
+            plan=plan,
+        )
+        if missing is not None:
+            return missing
         if eligibility_id is None:
             eligibility_id = envelope.lineage.eligibility_id
         if eligibility_state is None:
             eligibility_state = envelope.lineage.eligibility_state.value
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason=blocked,
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason="autonomous_precheck_blocked",
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        from app.services.autonomous_trading import (
+            AUTONOMOUS_ACTOR_TYPE,
+            AutonomousMode,
+            autonomous_decision_metadata,
+        )
+
         approval = ApprovalService(
             session,
             AuditService(session),
@@ -341,10 +502,53 @@ class AutomatedPaperLoop:
             ApprovalDecisionRequest(action=_approve_action(), modified_fields=None),
             principal_organization_id=target.organization_id,
             principal_user_id=target.user_id,
-            channel=AuthorizationChannel.API,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+            audit_metadata=autonomous_decision_metadata(
+                mode=AutonomousMode.INTERNAL_PAPER,
+                settings=self._settings,
+                limits=None,
+                limits_note=("account ledger limits are enforced at claim, not at this approval"),
+            ),
         )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
+        blocked = self._autonomous_approval_refusal(session, target.organization_id)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason="post_approval_recheck",
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        if not stored_issuance_matches(
+            decided.authorization,
+            channel=AuthorizationChannel.AUTONOMOUS,
+            actor_type=AUTONOMOUS_ACTOR_TYPE,
+        ):
+            if getattr(decided.authorization, "state", None) is AuthorizationState.AVAILABLE:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason=CHANNEL_MISMATCH_REASON,
+                )
+            return _proof(
+                candidate,
+                "blocked",
+                CHANNEL_MISMATCH_REASON,
+                revision_id=revision_id,
+            )
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         execution = ExecutionService(
             session,
             self._settings,
@@ -358,10 +562,18 @@ class AutomatedPaperLoop:
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=True,
             ),
             clock=self._clock.now,
         )
         if result.outcome is ExecutionCommandOutcome.ALLOW and result.command_id is not None:
+            _commit_risk_record(
+                self,
+                session,
+                organization_id=target.organization_id,
+                trade_id=str(candidate.candidate_id),
+                now=self._clock.now(),
+            )
             already_open = _find_open_journal(
                 session,
                 organization_id=target.organization_id,
@@ -383,6 +595,12 @@ class AutomatedPaperLoop:
                     journal_status=_journal_status_value(already_open),
                 )
         if result.outcome is not ExecutionCommandOutcome.ALLOW or result.command_id is None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason="claim_blocked",
+            )
             self._audit(
                 session,
                 target=target,
@@ -409,12 +627,15 @@ class AutomatedPaperLoop:
                 trade_plan_revision_id=revision_id,
                 execution_command_id=result.command_id,
             )
+        from app.services.paper_exit_monitor import fill_entry_time
+
+        trigger_end = self._clock.now() if entry_occurred_at is None else entry_occurred_at
         filled = execution.apply_paper_plan_fill(
             command_id=result.command_id,
             fill_quantity=envelope.plan.quantity.value,
             fill_price=envelope.plan.basis_policy.execution_price.value,
             source_identity=f"paper-internal:{candidate.candidate_id}",
-            occurred_at=self._clock.now(),
+            occurred_at=fill_entry_time(trigger_end=trigger_end, clock=self._clock.now()),
             venue_source="paper_internal",
         )
         trade = _open_journal(
@@ -454,11 +675,46 @@ class AutomatedPaperLoop:
             else str(trade.status),
         )
 
+    def _autonomous_approval_refusal(self, session: Session, organization_id: UUID) -> str | None:
+        """Re-check mode and kill switch immediately before auto-approval."""
+
+        from app.services.autonomous_trading import (
+            AutonomousMode,
+            continuation_refusal,
+            kill_switch_refusal,
+        )
+
+        refusal = continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
+        if refusal is not None:
+            return refusal
+        observed = getattr(self, "_observed_kill_switch", None)
+        if observed is not None and not isinstance(observed, bool):
+            return "kill_switch_unverified"
+        return kill_switch_refusal(
+            self._settings,
+            session,
+            organization_id,
+            observed=observed if isinstance(observed, bool) else None,
+        )
+
     def _posture_refusal(self) -> str | None:
-        return paper_loop_posture_refusal(self._settings)
+        refusal = paper_loop_posture_refusal(self._settings)
+        if refusal is not None:
+            return refusal
+        from app.services.autonomous_trading import AutonomousMode, continuation_refusal
+
+        return continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
 
     def _policy_version(self) -> str:
         return _POLICY_VERSION
+
+    def _risk_policy_kind(self) -> str:
+        return "internal_paper"
+
+    def _verified_funding_rate(self) -> Decimal | None:
+        """Paper has no venue funding read. Demo overrides this with a live GET."""
+
+        return None
 
     def _account(self, session: Session, target: PaperScanTarget) -> ExecutionAccount | None:
         return _paper_account(session, target)
@@ -499,6 +755,14 @@ class AutomatedPaperLoop:
         now: datetime,
         eligibility_valid_until: datetime,
         eligibility_id: UUID,
+        active_profile: object | None = None,
+        open_exposure: Decimal = Decimal("0"),
+        open_risk_percent: Decimal = Decimal("0"),
+        open_positions: int | None = None,
+        remaining_daily_budget_percent: Decimal | None = None,
+        breaker_refusing: bool = False,
+        risk_records: list[object] | None = None,
+        fixed_risk_percent: Decimal | None = None,
     ) -> TradePlanRevisionCreate | str:
         return _plan_terms(
             candidate=candidate,
@@ -509,6 +773,14 @@ class AutomatedPaperLoop:
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
+            active_profile=active_profile,
+            open_exposure=open_exposure,
+            open_risk_percent=open_risk_percent,
+            open_positions=open_positions,
+            remaining_daily_budget_percent=remaining_daily_budget_percent,
+            breaker_refusing=breaker_refusing,
+            risk_records=risk_records,
+            fixed_risk_percent=fixed_risk_percent,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -652,6 +924,305 @@ def _paper_account(session: Session, target: PaperScanTarget) -> ExecutionAccoun
     )
 
 
+def _profile_open_book(
+    session: Session,
+    target: PaperScanTarget,
+    *,
+    now: datetime,
+    daily_loss_limit_percent: Decimal,
+    include_book_buffer: bool = False,
+    funding_rate: Decimal | None = None,
+    live_verified: bool = False,
+) -> ProfileOpenBook | str:
+    """Server figures for one profile-sized plan. Never invents a full daily budget."""
+
+    from app.db.models import Position
+    from app.schemas.common import PositionStatus
+    from app.services.risk_policy.plan_sizing import (
+        ProfileOpenBook,
+        canonical_open_stop_positions,
+        open_risk_from_stops,
+        remaining_daily_budget_percent,
+    )
+
+    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+    snapshot = accounting.sync_from_portfolio(
+        organization_id=target.organization_id,
+        user_id=target.user_id,
+    )
+    remaining = remaining_daily_budget_percent(
+        daily_loss_limit_percent=daily_loss_limit_percent,
+        realized_pnl=snapshot.realized_pnl,
+        equity=snapshot.account_equity,
+    )
+    if isinstance(remaining, str):
+        return remaining
+    rows = list(
+        session.scalars(
+            select(Position).where(
+                Position.organization_id == target.organization_id,
+                Position.user_id == target.user_id,
+                Position.status == PositionStatus.OPEN,
+            )
+        ).all()
+    )
+    canonical = canonical_open_stop_positions(
+        [
+            (row.size, row.entry_price, row.planned_stop_price)
+            for row in _canonical_open_lifecycles(session, target)
+        ]
+    )
+    if isinstance(canonical, str):
+        return canonical
+    # Same open rows on both sides of the notional check. Closed lifecycles
+    # and closed positions are excluded. Snapshot exposure is not used here:
+    # a later canonical exposure rule may count closed reconciled demo rows,
+    # and that figure must not fail every open-risk plan.
+    priced = [
+        *[(row.size, row.entry_price, row.stop_loss) for row in rows],
+        *canonical,
+    ]
+    open_notional = Decimal("0")
+    for size, entry, _stop in priced:
+        if isinstance(size, Decimal) and isinstance(entry, Decimal):
+            open_notional += size * entry
+    measured = open_risk_from_stops(
+        equity=snapshot.account_equity,
+        positions=priced,
+        open_notional=open_notional,
+        include_book_buffer=include_book_buffer,
+        funding_rate=funding_rate,
+        live_verified=live_verified,
+    )
+    if isinstance(measured, str):
+        return measured
+    open_risk, count = measured
+    return ProfileOpenBook(
+        open_risk_percent=open_risk,
+        open_notional=open_notional,
+        open_positions=count,
+        remaining_daily_budget_percent=remaining,
+    )
+
+
+def _stored_plan_terms(plan: object) -> tuple[Decimal, Decimal, Decimal, Decimal] | None:
+    quantity = getattr(getattr(plan, "quantity", None), "value", None)
+    basis = getattr(plan, "basis_policy", None)
+    entry = getattr(getattr(basis, "execution_price", None), "value", None)
+    exits = getattr(plan, "risk_and_exits", None)
+    stop = getattr(getattr(exits, "stop", None), "value", None)
+    rules = getattr(plan, "instrument_rules", None)
+    multiplier = getattr(rules, "contract_multiplier", None)
+    terms = (quantity, entry, stop, multiplier)
+    if not all(isinstance(value, Decimal) and value.is_finite() and value > 0 for value in terms):
+        return None
+    return (
+        cast(Decimal, quantity),
+        cast(Decimal, entry),
+        cast(Decimal, stop),
+        cast(Decimal, multiplier),
+    )
+
+
+def _stored_plan_execution_refusal(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    target: PaperScanTarget,
+    plan: object,
+) -> str | None:
+    """Re-check breakers and current limits before a stored plan is approved.
+
+    A pause or drawdown latch written after the plan was sized still refuses.
+    Deactivating the kill switch does not clear that latch. When a profile is
+    active, the stored quantity is priced again against the current open book.
+    """
+
+    now = _execution_moment(loop)
+    if now is None or plan is None:
+        return "stored_plan_limits_uncomputed"
+    if _breaker_refusing(session, target.organization_id, now):
+        return "breaker_active"
+    active = _load_active_profile(session, target.organization_id, loop._risk_policy_kind(), now)
+    if active is None:
+        return None
+    from app.services.risk_policy.plan_sizing import (
+        stored_plan_limit_refusal,
+        stored_sizing_grade_cap,
+    )
+
+    funding_rate = loop._verified_funding_rate()
+    book = _profile_open_book(
+        session,
+        target,
+        now=now,
+        daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
+        include_book_buffer=loop._risk_policy_kind() == "demo",
+        funding_rate=funding_rate,
+        live_verified=funding_rate is not None,
+    )
+    if isinstance(book, str):
+        return book
+    terms = _stored_plan_terms(plan)
+    if terms is None:
+        return "stored_plan_limits_uncomputed"
+    quantity, entry, stop, multiplier = terms
+    grade_cap = stored_sizing_grade_cap(plan, active.profile)
+    if grade_cap is None:
+        return "stored_plan_limits_uncomputed"
+    return stored_plan_limit_refusal(
+        quantity=quantity,
+        entry=entry,
+        stop=stop,
+        contract_multiplier=multiplier,
+        equity=_equity(session, target, now=now),
+        book=book,
+        profile=active.profile,
+        execution_channel=loop._risk_policy_kind(),
+        include_book_buffer=loop._risk_policy_kind() == "demo",
+        sizing_grade_cap=grade_cap,
+        funding_rate=funding_rate,
+        live_verified=funding_rate is not None,
+    )
+
+
+def _canonical_open_lifecycles(session: Session, target: PaperScanTarget) -> list[JournalTrade]:
+    """Open paper and demo lifecycles that are not already a Position row.
+
+    The same scope as daily-risk exposure, so stop risk can explain that
+    notional. A missing stop is refused by the caller.
+    """
+
+    return list(
+        session.scalars(
+            select(JournalTrade).where(
+                JournalTrade.organization_id == target.organization_id,
+                JournalTrade.user_id == target.user_id,
+                JournalTrade.source.in_(
+                    (JournalTradeSource.PAPER_EXECUTION, JournalTradeSource.MANUAL_DEMO_TEST)
+                ),
+                JournalTrade.execution_lifecycle_id.is_not(None),
+                JournalTrade.linked_position_id.is_(None),
+                JournalTrade.status == JournalTradeStatus.OPEN,
+            )
+        ).all()
+    )
+
+
+def _open_exposure(session: Session, target: PaperScanTarget, *, now: datetime) -> Decimal:
+    accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
+    snapshot = accounting.sync_from_portfolio(
+        organization_id=target.organization_id,
+        user_id=target.user_id,
+    )
+    return snapshot.open_exposure_notional
+
+
+def _execution_moment(loop: AutomatedPaperLoop) -> datetime | None:
+    """Clock reading for a stored-plan recheck. A missing time is not guessed."""
+
+    clock = getattr(loop, "_clock", None)
+    now = getattr(clock, "now", None)
+    if not callable(now):
+        return None
+    moment = now()
+    if not isinstance(moment, datetime):
+        return None
+    return moment
+
+
+def _missing_stored_plan_proof(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    target: PaperScanTarget,
+    candidate: Candidate,
+    revision_id: UUID,
+    *,
+    plan: object,
+) -> AutomatedPaperLoopProof | None:
+    """Block a stored-plan execution whose clock or plan cannot be read.
+
+    When the clock is present and the plan is missing, leftover autonomous
+    authorizations for that revision are revoked before the refusal. A missing
+    clock is not a moment at which those rows can be revoked.
+    """
+
+    moment = _execution_moment(loop)
+    if plan is not None and moment is not None:
+        return None
+    if plan is None and moment is not None:
+        revoke_leftover_autonomous_authorizations(
+            session,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            revision_id=revision_id,
+            reason="stored_plan_limits_uncomputed",
+            clock=loop._clock.now,
+        )
+    return _proof(candidate, "blocked", "stored_plan_limits_uncomputed", revision_id=revision_id)
+
+
+def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
+    from app.services.risk_policy.persistence import RiskPolicyService
+
+    return RiskPolicyService(session, AuditService(session)).breaker_active(
+        organization_id=organization_id, now=now
+    )
+
+
+def _commit_risk_record(
+    loop: AutomatedPaperLoop,
+    session: Session,
+    *,
+    organization_id: UUID,
+    trade_id: str,
+    now: datetime,
+) -> None:
+    records = getattr(loop, "_pending_risk_records", None)
+    if not isinstance(records, list) or not records:
+        return
+    _persist_risk_record(
+        session,
+        organization_id=organization_id,
+        trade_id=trade_id,
+        records=records,
+        now=now,
+    )
+    loop._pending_risk_records = []
+
+
+def _persist_risk_record(
+    session: Session,
+    *,
+    organization_id: UUID,
+    trade_id: str,
+    records: list[object],
+    now: datetime,
+) -> None:
+    if not records:
+        return
+    from app.db.risk_policy import RiskPolicyTradeRecord
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.records import TradeRiskRecord
+
+    record = records[-1]
+    if not isinstance(record, TradeRiskRecord):
+        return
+    existing = session.scalar(
+        select(RiskPolicyTradeRecord.id).where(
+            RiskPolicyTradeRecord.organization_id == organization_id,
+            RiskPolicyTradeRecord.trade_id == trade_id,
+        )
+    )
+    if existing is not None:
+        return
+    RiskPolicyService(session, AuditService(session)).record_trade(
+        organization_id=organization_id,
+        trade_id=trade_id,
+        record=record,
+        now=now,
+    )
+
+
 def _equity(session: Session, target: PaperScanTarget, *, now: datetime) -> Decimal:
     accounting = DailyRiskAccounting(session, _risk_settings(session), clock=lambda: now)
     snapshot = accounting.sync_from_portfolio(
@@ -765,6 +1336,15 @@ def _plan_terms(
     now: datetime,
     eligibility_valid_until: datetime,
     eligibility_id: UUID,
+    active_profile: object | None = None,
+    open_exposure: Decimal = Decimal("0"),
+    open_risk_percent: Decimal = Decimal("0"),
+    open_positions: int | None = None,
+    remaining_daily_budget_percent: Decimal | None = None,
+    breaker_refusing: bool = False,
+    risk_records: list[object] | None = None,
+    accept_unprofiled_minimum: bool = False,
+    fixed_risk_percent: Decimal | None = None,
 ) -> TradePlanRevisionCreate | str:
     from app.strategy_brain.sfp.contracts import SfpSpec
 
@@ -810,9 +1390,6 @@ def _plan_terms(
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)
-    quantity = _quantity(equity=equity, entry=entry, distance=distance)
-    if quantity is None:
-        return "size_below_minimum"
     target = nested_target if nested else entry - distance
     if (
         target is None
@@ -821,6 +1398,60 @@ def _plan_terms(
         or (not is_long and target >= entry)
     ):
         return "invalidation_unavailable"
+    leverage = Decimal("1")
+    margin_mode = MarginMode.CROSS
+    sizing_grade = None
+    sizing_cap = None
+    if active_profile is None:
+        quantity = _quantity(equity=equity, entry=entry, distance=distance)
+        if quantity is None:
+            if not accept_unprofiled_minimum:
+                return "size_below_minimum"
+            # Geometry only. GovernedBloFinDemoLoop replaces this with
+            # size_for_profile and does not submit the placeholder.
+            quantity = _LOT
+    else:
+        from app.services.risk_policy.plan_sizing import ActiveProfile, size_for_profile
+
+        if not isinstance(active_profile, ActiveProfile):
+            return "risk_profile_unavailable"
+        if open_positions is None or remaining_daily_budget_percent is None:
+            return "open_book_uncomputed"
+        if open_exposure > 0 and open_risk_percent <= 0:
+            return "open_risk_uncomputed"
+        grade, atr = _grade_for_plan(candidate, assembled)
+        sized = size_for_profile(
+            active=active_profile,
+            grade=grade,
+            equity=equity,
+            entry=entry,
+            stop=stop,
+            target=target,
+            direction="long" if is_long else "short",
+            atr=atr,
+            lot_step=_LOT,
+            min_quantity=_LOT,
+            open_risk_percent=open_risk_percent,
+            open_notional=open_exposure,
+            open_positions=open_positions,
+            remaining_daily_budget_percent=remaining_daily_budget_percent,
+            breaker_refusing=breaker_refusing,
+            execution_channel="internal_paper",
+            fixed_risk_percent=fixed_risk_percent,
+        )
+        if isinstance(sized, str):
+            return sized
+        quantity = sized.quantity
+        leverage = sized.leverage
+        margin_mode = MarginMode.ISOLATED
+        sizing_grade = sized.grade
+        sizing_cap = (
+            fixed_risk_percent
+            if fixed_risk_percent is not None
+            else active_profile.profile.risk_percent(sized.grade)
+        )
+        if risk_records is not None:
+            risk_records.append(sized.record)
     observed = quote.source_time
     if observed > now:
         return "stale_evidence"
@@ -829,7 +1460,7 @@ def _plan_terms(
     valid_until = min(candidate.valid_until, eligibility_valid_until)
     if valid_until <= now:
         return "candidate_expired"
-    return build_internal_paper_terms(
+    terms = build_internal_paper_terms(
         candidate=candidate,
         account_id=account_id,
         entry=entry,
@@ -837,6 +1468,8 @@ def _plan_terms(
         target=target,
         quantity=quantity,
         observed=observed,
+        leverage=leverage,
+        margin_mode=margin_mode,
         now=now,
         valid_until=valid_until,
         freshness=freshness,
@@ -859,6 +1492,48 @@ def _plan_terms(
             "decision_reference": str(eligibility_id),
         },
     )
+    if sizing_grade is not None and sizing_cap is not None:
+        from app.services.risk_policy.plan_sizing import with_profile_sizing_grade
+
+        return with_profile_sizing_grade(terms, sizing_grade, sizing_cap)
+    return terms
+
+
+def _grade_for_plan(
+    candidate: Candidate, assembled: AssembledCanonicalEvidence
+) -> tuple[GradeDecision, Decimal | None]:
+    """Grade from bars already on the assembly. Does not fetch another price."""
+
+    from app.services.risk_policy.grader import GradeDecision
+    from app.services.risk_policy.plan_sizing import grade_from_bars
+
+    direction = "long" if candidate.direction is TradeDirection.LONG else "short"
+    try:
+        return grade_from_bars(
+            direction=direction,
+            symbol=candidate.evidence_instrument.symbol
+            if hasattr(candidate.evidence_instrument, "symbol")
+            else str(candidate.evidence_instrument),
+            timeframe=candidate.timeframe.value,
+            bars=assembled.bundle.bars_15m,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return GradeDecision(None, "deterministic-grade/v1", None, None, "grade_unavailable"), None
+
+
+def _load_active_profile(
+    session: Session, organization_id: UUID, kind_value: str, now: datetime
+) -> ActiveProfile | None:
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.plan_sizing import ActiveProfile
+    from app.services.risk_policy.profile import PolicyKind
+
+    profile, row, _scheduled = RiskPolicyService(session, AuditService(session)).read(
+        organization_id=organization_id, kind=PolicyKind(kind_value), now=now
+    )
+    if row is None:
+        return None
+    return ActiveProfile(profile=profile, version_id=row.id)
 
 
 def _quantity(*, equity: Decimal, entry: Decimal, distance: Decimal) -> Decimal | None:
@@ -914,14 +1589,30 @@ def _execute_request(
     revision_id: UUID,
     authorization_id: UUID,
     candidate_id: UUID,
+    autonomous: bool = False,
 ) -> ExecutePaperPlanRequest:
+    """Build one paper execution request.
+
+    Human and API approvals keep ``paper-exec:{candidate_id}`` so an existing
+    human binding still replays. An autonomous attempt appends the authorization
+    id. The canonical payload hash includes that id, so a committed blocked
+    command for a revoked or expired authorization would conflict with the
+    reissued authorization if both reused the candidate key. The plan-entry
+    claim still admits one ALLOW per revision across keys, authorizations, and
+    workers. A consumed authorization is reused, so an allowed binding stays
+    single-use.
+    """
+
+    key = f"paper-exec:{candidate_id}"
+    if autonomous:
+        key = f"paper-exec:{candidate_id}:{authorization_id}"
     return ExecutePaperPlanRequest(
         organization_id=target.organization_id,
         user_id=target.user_id,
         account_id=account_id,
         authorization_id=authorization_id,
         revision_id=revision_id,
-        idempotency_key=f"paper-exec:{candidate_id}",
+        idempotency_key=key,
     )
 
 
