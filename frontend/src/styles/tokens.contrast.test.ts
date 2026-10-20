@@ -69,10 +69,10 @@ function rgbaOverlay(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function topBarSurface(vars: Vars): string {
-  const background = color(vars, "--color-background");
+function topBarOver(vars: Vars, under: string): string {
   const surface = color(vars, "--color-surface-0");
-  return composite(rgbaOverlay(surface, 0.9), background);
+  const base = color(vars, under);
+  return composite(rgbaOverlay(surface, 0.9), base);
 }
 
 const css = readFileSync(resolve(__dirname, "tokens.css"), "utf8");
@@ -165,6 +165,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
       { name: "danger", text: "--color-badge-danger", muted: "--color-danger-muted" },
       { name: "blocked", text: "--color-badge-blocked", muted: "--color-blocked-muted" },
       { name: "warning", text: "--color-badge-warning", muted: "--color-warning-muted" },
+      { name: "stale", text: "--color-stale", muted: "--color-stale-muted" },
     ] as const;
     const surfaces = [
       "--color-surface-0",
@@ -172,9 +173,14 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
       "--color-surface-2",
     ] as const;
 
+    const topBarBackdrops = [
+      { name: "background", under: "--color-background" },
+      { name: "surface-1", under: "--color-surface-1" },
+      { name: "surface-2", under: "--color-surface-2" },
+    ] as const;
+
     for (const theme of ["dark", "light"] as const) {
       const vars = themes[theme];
-      const bar = topBarSurface(vars);
       for (const role of badgeRoles) {
         for (const surface of surfaces) {
           const base = color(vars, surface);
@@ -185,12 +191,15 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
             `${theme} ${role.name} badge on ${surface} is ${ratio.toFixed(2)}:1`,
           ).toBeGreaterThanOrEqual(AA);
         }
-        const barFill = composite(color(vars, role.muted), bar);
-        const barRatio = contrast(color(vars, role.text), barFill);
-        expect(
-          barRatio,
-          `${theme} ${role.name} badge on top bar is ${barRatio.toFixed(2)}:1`,
-        ).toBeGreaterThanOrEqual(AA);
+        for (const backdrop of topBarBackdrops) {
+          const bar = topBarOver(vars, backdrop.under);
+          const barFill = composite(color(vars, role.muted), bar);
+          const barRatio = contrast(color(vars, role.text), barFill);
+          expect(
+            barRatio,
+            `${theme} ${role.name} badge on top bar over ${backdrop.name} is ${barRatio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(AA);
+        }
       }
     }
   });
