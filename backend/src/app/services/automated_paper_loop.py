@@ -328,7 +328,7 @@ class AutomatedPaperLoop:
 
             daily_cap = active.profile.daily_loss_limit_percent
             autonomous = getattr(self, "_autonomous_settings", None)
-            if autonomous is not None:
+            if autonomous is not None and not autonomous.using_defaults:
                 daily_cap = effective_autonomous_daily_loss_percent(
                     autonomous, active.profile.daily_loss_limit_percent
                 )

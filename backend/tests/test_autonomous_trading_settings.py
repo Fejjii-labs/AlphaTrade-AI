@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -24,6 +26,8 @@ from app.main import create_app
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
 from app.schemas.common import AuditEventType, MembershipRole, StrategyId
 from app.security.passwords import hash_password
+from app.services.audit_service import AuditService
+from app.services.automated_paper_loop import AutomatedPaperLoop, AutomatedPaperLoopProof
 from app.services.autonomous_trading_guard import (
     autonomous_daily_loss_exceeded,
     autonomous_max_trades_reached,
@@ -31,6 +35,7 @@ from app.services.autonomous_trading_guard import (
 )
 from app.services.autonomous_trading_settings_service import (
     AutonomousSettingsValidationError,
+    AutonomousTradingSettingsService,
     ResolvedAutonomousSettings,
     validate_daily_loss_limit_percent,
     validate_max_trades_per_day,
@@ -38,8 +43,17 @@ from app.services.autonomous_trading_settings_service import (
 )
 from app.services.risk.daily_risk_accounting import AuthoritativeDailySnapshot
 from app.services.risk_policy.grader import Grade, GradeDecision
-from app.services.risk_policy.plan_sizing import ActiveProfile, size_for_profile
-from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
+from app.services.risk_policy.plan_sizing import (
+    PROFILE_SIZING_GRADE,
+    ActiveProfile,
+    size_for_profile,
+)
+from app.services.risk_policy.profile import (
+    PolicyKind,
+    placeholder_profile,
+    sofien_aggressive_profile,
+)
+from app.signal_fusion.memory import FrozenClock
 from app.workers.watcher_paper_targets import PaperScanTarget
 
 ORG = uuid.UUID("00000000-0000-0000-0000-000000000284")
@@ -190,7 +204,7 @@ def test_get_defaults_and_patch(client: TestClient) -> None:
     )
     assert saved.status_code == 200
     assert saved.json()["using_defaults"] is False
-    assert saved.json()["risk_per_trade_percent"] == "2"
+    assert Decimal(saved.json()["risk_per_trade_percent"]) == Decimal("2")
 
     cleared = client.patch(
         "/autonomous/settings",
@@ -327,9 +341,25 @@ def test_enforcement_guards() -> None:
         autonomous_precheck_refusal(
             resolved,
             _target(),
+            _snapshot(trade_count=2, realized_pnl=Decimal("-400")),
+        )
+        is None
+    )
+    assert (
+        autonomous_precheck_refusal(
+            configured,
+            _target(),
             _snapshot(trade_count=2),
         )
         == "autonomous_max_trades_per_day"
+    )
+    assert (
+        autonomous_precheck_refusal(
+            configured,
+            _target(),
+            _snapshot(realized_pnl=Decimal("-250"), account_equity=Decimal("10000")),
+        )
+        == "autonomous_daily_loss_limit"
     )
 
 
@@ -357,11 +387,556 @@ def test_risk_override_replaces_grade_cap() -> None:
         "execution_channel": "internal_paper",
     }
     graded = size_for_profile(**common)
-    override = size_for_profile(**common, fixed_risk_percent=Decimal("2"))
+    explicit_empty = size_for_profile(**common, fixed_risk_percent=None)
+    override = size_for_profile(**common, fixed_risk_percent=Decimal("3"))
     invalid = size_for_profile(**common, fixed_risk_percent=Decimal("0"))
+    above_ceiling = size_for_profile(**common, fixed_risk_percent=Decimal("6"))
+    tight = ActiveProfile(
+        profile=placeholder_profile(PolicyKind.INTERNAL_PAPER),
+        version_id=uuid4(),
+    )
+    above_profile = size_for_profile(
+        **{**common, "active": tight},
+        fixed_risk_percent=Decimal("2"),
+    )
+    c_grade = GradeDecision(Grade.C, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    c_unset = size_for_profile(**{**common, "grade": c_grade})
+    c_override = size_for_profile(**{**common, "grade": c_grade}, fixed_risk_percent=Decimal("4"))
     assert not isinstance(graded, str)
+    assert not isinstance(explicit_empty, str)
     assert not isinstance(override, str)
+    assert not isinstance(c_override, str)
+    assert explicit_empty.quantity == graded.quantity
+    assert explicit_empty.risk_cash_ceiling == graded.risk_cash_ceiling == Decimal("500")
+    assert override.risk_cash_ceiling == Decimal("300")
     assert invalid == "risk_override_invalid"
-    assert graded.risk_cash_ceiling == Decimal("500")
-    assert override.risk_cash_ceiling == Decimal("200")
-    assert override.quantity < graded.quantity
+    assert above_ceiling == "risk_override_exceeds_ceiling"
+    assert above_profile == "risk_override_exceeds_profile_max"
+    assert c_unset == "grade_not_tradable"
+    assert c_override.risk_cash_ceiling == Decimal("400")
+
+
+def _grade_cap(terms: object) -> Decimal:
+    inputs = getattr(terms, "calculation_inputs", ())
+    for item in inputs:
+        if getattr(item, "name", None) == PROFILE_SIZING_GRADE:
+            value = item.result_value
+            assert isinstance(value, Decimal)
+            return value
+    raise AssertionError("profile sizing grade was not recorded")
+
+
+def _paper_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    fixed: Decimal | None,
+    *,
+    grade: Grade = Grade.A_PLUS,
+    profile_kind: str = "sofien",
+) -> object:
+    from app.services.automated_paper_loop import _plan_terms
+    from app.signal_fusion.first_slice_adapter import default_first_slice_evaluation_params
+    from tests.support.phase5_market import EVALUATED_AT
+    from tests.support.phase7_trade_plan import make_world
+
+    world = make_world()
+    now = EVALUATED_AT
+    decision = GradeDecision(grade, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop.first_slice_short_invalidation_price",
+        lambda **_kwargs: Decimal("110"),
+    )
+    monkeypatch.setattr(
+        "app.services.automated_paper_loop._grade_for_plan",
+        lambda *_args, **_kwargs: (decision, Decimal("1")),
+    )
+    if profile_kind == "sofien":
+        from app.services.risk_policy.profile import profile_with
+
+        profile = profile_with(
+            PolicyKind.INTERNAL_PAPER,
+            profile_name="override_probe",
+            risk_percent_by_grade={
+                Grade.A_PLUS: Decimal("5"),
+                Grade.A: Decimal("3"),
+                Grade.B_PLUS: Decimal("2"),
+                Grade.B: Decimal("1"),
+                Grade.C: Decimal("0"),
+            },
+            max_leverage=Decimal("20"),
+            default_leverage=Decimal("1"),
+            daily_loss_limit_percent=Decimal("6"),
+            max_aggregate_open_risk_percent=Decimal("6"),
+            max_open_positions=3,
+            max_notional_per_trade_percent=Decimal("100"),
+            max_aggregate_notional_percent=Decimal("200"),
+            paper_demo_data_collection=True,
+        )
+    else:
+        profile = placeholder_profile(PolicyKind.INTERNAL_PAPER)
+    assembled = SimpleNamespace(
+        current_price=SimpleNamespace(
+            price=Decimal("100"),
+            source_time=now - timedelta(seconds=1),
+            provider_symbol="BTCUSDT",
+        ),
+        trigger_bar=object(),
+        evaluated_at=now,
+        bundle=SimpleNamespace(bars_15m=[], tick_size=Decimal("0.1")),
+    )
+    policy = SimpleNamespace(
+        authored_spec=object(),
+        evaluation_params=default_first_slice_evaluation_params(),
+        strategy_id=uuid4(),
+        organization_id=world.candidate.organization_id,
+        strategy_version_id=world.candidate.strategy_version_id,
+    )
+    return _plan_terms(
+        candidate=world.candidate,
+        assembled=assembled,  # type: ignore[arg-type]
+        policy=policy,  # type: ignore[arg-type]
+        account_id=uuid4(),
+        equity=Decimal("10000"),
+        now=now,
+        eligibility_valid_until=world.candidate.valid_until,
+        eligibility_id=uuid4(),
+        active_profile=ActiveProfile(profile=profile, version_id=uuid4()),
+        open_positions=0,
+        remaining_daily_budget_percent=Decimal("6"),
+        fixed_risk_percent=fixed,
+    )
+
+
+def test_paper_plan_terms_risk_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    unset = _paper_plan(monkeypatch, None)
+    three = _paper_plan(monkeypatch, Decimal("3"))
+    assert not isinstance(unset, str)
+    assert not isinstance(three, str)
+    assert _grade_cap(unset) == Decimal("5")
+    assert _grade_cap(three) == Decimal("3")
+    assert _paper_plan(monkeypatch, Decimal("6")) == "risk_override_exceeds_ceiling"
+    assert (
+        _paper_plan(monkeypatch, Decimal("2"), profile_kind="placeholder")
+        == "risk_override_exceeds_profile_max"
+    )
+    c_grade = _paper_plan(monkeypatch, Decimal("4"), grade=Grade.C)
+    assert not isinstance(c_grade, str)
+    assert _grade_cap(c_grade) == Decimal("4")
+
+
+def test_demo_plan_terms_risk_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace as replace_dc
+
+    from app.schemas.trade_plan import EntrySide
+    from app.services import governed_blofin_demo
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+    from tests.support.phase5_market import EVALUATED_AT
+    from tests.support.phase7_trade_plan import make_world, plan_terms
+    from tests.test_demo_preflight_diagnostics import provider
+    from tests.test_governed_blofin_demo import Venue
+
+    entry = Decimal("3000000")
+    stop = Decimal("2880000")
+    distance = entry - stop
+    world = make_world()
+    drafted = plan_terms(world.candidate)
+    risk = drafted.risk_and_exits.model_copy(
+        update={
+            "stop": drafted.risk_and_exits.stop.model_copy(update={"value": stop}),
+            "targets": (
+                drafted.risk_and_exits.targets[0].model_copy(
+                    update={
+                        "quantity_fraction": Decimal("1"),
+                        "price": drafted.risk_and_exits.targets[0].price.model_copy(
+                            update={"value": entry + distance}
+                        ),
+                    }
+                ),
+            ),
+            "runner": drafted.risk_and_exits.runner.model_copy(
+                update={
+                    "enabled": False,
+                    "activation_target_order": None,
+                    "remaining_quantity_fraction": Decimal("0"),
+                }
+            ),
+        }
+    )
+    basis = drafted.basis_policy.model_copy(
+        update={
+            "evidence_price": drafted.basis_policy.evidence_price.model_copy(
+                update={"value": entry}
+            ),
+            "execution_price": drafted.basis_policy.execution_price.model_copy(
+                update={"value": entry}
+            ),
+        }
+    )
+    terms = drafted.model_copy(
+        update={"side": EntrySide.BUY, "risk_and_exits": risk, "basis_policy": basis}
+    )
+    monkeypatch.setattr(governed_blofin_demo, "_plan_terms", lambda **_kwargs: terms)
+    from app.services.risk_policy.profile import profile_with
+
+    active = ActiveProfile(
+        profile=profile_with(
+            PolicyKind.DEMO,
+            profile_name="override_probe_demo",
+            risk_percent_by_grade={
+                Grade.A_PLUS: Decimal("5"),
+                Grade.A: Decimal("3"),
+                Grade.B_PLUS: Decimal("2"),
+                Grade.B: Decimal("1"),
+                Grade.C: Decimal("0"),
+            },
+            max_leverage=Decimal("20"),
+            default_leverage=Decimal("1"),
+            daily_loss_limit_percent=Decimal("6"),
+            max_aggregate_open_risk_percent=Decimal("6"),
+            max_open_positions=3,
+            max_notional_per_trade_percent=Decimal("100"),
+            max_aggregate_notional_percent=Decimal("200"),
+            paper_demo_data_collection=True,
+        ),
+        version_id=uuid4(),
+    )
+    tight = ActiveProfile(
+        profile=placeholder_profile(PolicyKind.DEMO),
+        version_id=uuid4(),
+    )
+    grade = GradeDecision(Grade.A_PLUS, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None)
+    grades = {"current": grade}
+
+    def _graded(*_args: object, **_kwargs: object) -> tuple[GradeDecision, Decimal]:
+        return grades["current"], Decimal("1")
+
+    monkeypatch.setattr("app.services.automated_paper_loop._grade_for_plan", _graded)
+    venue = Venue(entry - Decimal("0.1"))
+    snapshot = provider(venue.handle).snapshot(
+        symbol="BTCUSDT",
+        now=EVALUATED_AT,
+        side=terms.side,
+    )
+    loop = GovernedBloFinDemoLoop(None, None, None)  # type: ignore[arg-type]
+    loop._snapshot = replace_dc(snapshot, account_leverage=Decimal("1"), margin_mode="isolated")
+    common = {
+        "candidate": world.candidate,
+        "assembled": None,
+        "policy": None,
+        "account_id": uuid4(),
+        "equity": Decimal("10000"),
+        "now": EVALUATED_AT,
+        "eligibility_valid_until": terms.valid_until,
+        "eligibility_id": uuid4(),
+        "active_profile": active,
+        "open_exposure": Decimal("0"),
+        "open_risk_percent": Decimal("0"),
+        "open_positions": 0,
+        "remaining_daily_budget_percent": Decimal("6"),
+        "breaker_refusing": False,
+    }
+    unset = loop._plan_terms(**common)  # type: ignore[arg-type]
+    three = loop._plan_terms(**common, fixed_risk_percent=Decimal("3"))  # type: ignore[arg-type]
+    assert not isinstance(unset, str)
+    assert not isinstance(three, str)
+    assert _grade_cap(unset) == Decimal("5")
+    assert _grade_cap(three) == Decimal("3")
+    assert (
+        loop._plan_terms(**common, fixed_risk_percent=Decimal("6"))  # type: ignore[arg-type]
+        == "risk_override_exceeds_ceiling"
+    )
+    assert (
+        loop._plan_terms(  # type: ignore[arg-type]
+            **{**common, "active_profile": tight},
+            fixed_risk_percent=Decimal("2"),
+        )
+        == "risk_override_exceeds_profile_max"
+    )
+    grades["current"] = GradeDecision(
+        Grade.C, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None
+    )
+    c_trade = loop._plan_terms(**common, fixed_risk_percent=Decimal("4"))  # type: ignore[arg-type]
+    assert not isinstance(c_trade, str)
+    assert _grade_cap(c_trade) == Decimal("4")
+
+
+def test_api_rejects_non_numeric_and_explicit_null(client: TestClient) -> None:
+    headers = _token(client, "owner-284@test.example")
+    for payload in (
+        {"daily_loss_limit_percent": "nope"},
+        {"risk_per_trade_percent": "NaN"},
+        {"risk_per_trade_percent": "Infinity"},
+        {"risk_per_trade_percent": "-1"},
+        {"max_trades_per_day": 1001},
+        {"max_trades_per_day": "many"},
+    ):
+        denied = client.patch("/autonomous/settings", headers=headers, json=payload)
+        assert denied.status_code == 422, payload
+
+    with pytest.raises(AutonomousSettingsValidationError) as exc:
+        validate_risk_per_trade_percent(Decimal("NaN"))
+    assert exc.value.code == "risk_per_trade_invalid"
+    with pytest.raises(AutonomousSettingsValidationError) as exc:
+        validate_max_trades_per_day(1001)
+    assert exc.value.code == "max_trades_per_day_too_large"
+
+    saved = client.patch(
+        "/autonomous/settings",
+        headers=headers,
+        json={"risk_per_trade_percent": "2", "strategy_id": str(STRATEGY), "symbol": "BTCUSDT"},
+    )
+    assert saved.status_code == 200
+    cleared = client.patch(
+        "/autonomous/settings",
+        headers=headers,
+        json={"risk_per_trade_percent": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["risk_per_trade_percent"] is None
+
+
+def test_same_org_non_owner_cannot_read_or_write_another_user(
+    client: TestClient, settings_db
+) -> None:
+    owner_headers = _token(client, "owner-284@test.example")
+    saved = client.patch(
+        "/autonomous/settings",
+        headers=owner_headers,
+        json={"max_trades_per_day": 2, "daily_loss_limit_percent": "2"},
+    )
+    assert saved.status_code == 200
+    trader_headers = _token(client, "trader-284@test.example")
+    denied = client.patch(
+        "/autonomous/settings",
+        headers=trader_headers,
+        json={"max_trades_per_day": 9},
+    )
+    assert denied.status_code == 403
+    seen = client.get("/autonomous/settings", headers=trader_headers)
+    assert seen.status_code == 200
+    body = seen.json()
+    assert body["user_id"] == str(TRADER)
+    assert body["using_defaults"] is True
+    assert body["max_trades_per_day"] == 5
+    factory, _settings = settings_db
+    with factory() as session:
+        owner = AutonomousTradingSettingsService(session, AuditService(session)).resolve(
+            organization_id=ORG, user_id=OWNER
+        )
+        trader = AutonomousTradingSettingsService(session, AuditService(session)).resolve(
+            organization_id=ORG, user_id=TRADER
+        )
+    assert owner.using_defaults is False
+    assert owner.max_trades_per_day == 2
+    assert trader.using_defaults is True
+
+
+def test_strategy_must_belong_to_the_caller(client: TestClient, settings_db) -> None:
+    factory, _settings = settings_db
+    other = uuid4()
+    with factory() as session:
+        session.add(
+            UserStrategy(
+                id=other,
+                organization_id=ORG,
+                user_id=TRADER,
+                name="Trader strategy",
+                setup_type=StrategyId.HTF_TREND_PULLBACK,
+                enabled=True,
+            )
+        )
+        session.commit()
+    headers = _token(client, "owner-284@test.example")
+    denied = client.patch(
+        "/autonomous/settings",
+        headers=headers,
+        json={"strategy_id": str(other)},
+    )
+    assert denied.status_code == 422
+    assert denied.json()["detail"] == "strategy_not_available"
+
+
+def test_audit_request_id_is_unique_per_change(client: TestClient, settings_db) -> None:
+    headers = _token(client, "owner-284@test.example")
+    first = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 3})
+    second = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 4})
+    assert first.status_code == second.status_code == 200
+    factory, _settings = settings_db
+    with factory() as session:
+        rows = session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == AuditEventType.AUTONOMOUS_TRADING_SETTINGS_UPDATED
+            )
+        ).all()
+    ids = [row.request_id for row in rows]
+    assert len(ids) >= 2
+    assert len(set(ids)) == len(ids)
+    assert all(item is not None and item.startswith("settings-") for item in ids)
+
+
+def test_concurrent_first_save_does_not_error(settings_db) -> None:
+    factory, _settings = settings_db
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _save(trades: int) -> None:
+        barrier.wait()
+        try:
+            with factory() as session:
+                from app.schemas.autonomous_trading_settings import (
+                    AutonomousTradingSettingsUpdate,
+                )
+
+                AutonomousTradingSettingsService(session, AuditService(session)).update(
+                    AutonomousTradingSettingsUpdate(max_trades_per_day=trades),
+                    organization_id=ORG,
+                    user_id=OWNER,
+                )
+                session.commit()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_save, args=(3,)), threading.Thread(target=_save, args=(4,))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    with factory() as session:
+        resolved = AutonomousTradingSettingsService(session, AuditService(session)).resolve(
+            organization_id=ORG, user_id=OWNER
+        )
+    assert resolved.using_defaults is False
+    assert resolved.max_trades_per_day in {3, 4}
+
+
+class _ProbeLoop(AutomatedPaperLoop):
+    def __init__(self, settings: object) -> None:
+        super().__init__(
+            SimpleNamespace(bind_session=lambda _session: nullcontext()),  # type: ignore[arg-type]
+            settings,  # type: ignore[arg-type]
+            FrozenClock(datetime(2026, 10, 20, tzinfo=UTC)),
+        )
+        self.bound_calls = 0
+
+    def _preface(self, **_kwargs: object) -> None:
+        return None
+
+    def _account(self, _session: object, _target: object) -> SimpleNamespace:
+        return SimpleNamespace(id=uuid4())
+
+    def _bound(self, *_args: object, **_kwargs: object) -> AutomatedPaperLoopProof:
+        self.bound_calls += 1
+        return AutomatedPaperLoopProof(stage="opened", reason_code="probe_reached_bound")
+
+
+def _run_probe(
+    factory: object,
+    settings: object,
+    snapshot: AuthoritativeDailySnapshot,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target: PaperScanTarget | None = None,
+) -> AutomatedPaperLoopProof:
+    class _Accounting:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def sync_from_portfolio(self, **_kwargs: object) -> AuthoritativeDailySnapshot:
+            return snapshot
+
+    monkeypatch.setattr(
+        "app.services.risk.daily_risk_accounting.DailyRiskAccounting",
+        _Accounting,
+    )
+    loop = _ProbeLoop(settings)
+    with factory() as session:  # type: ignore[operator]
+        proof = loop.continue_confirmed_setup(
+            session,
+            target=_target() if target is None else target,
+            candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+            assessment=None,  # type: ignore[arg-type]
+            window=None,  # type: ignore[arg-type]
+            assembled=None,  # type: ignore[arg-type]
+            policy=None,  # type: ignore[arg-type]
+            kill_switch_active=False,
+        )
+    assert loop.bound_calls == (1 if proof.reason_code == "probe_reached_bound" else 0)
+    return proof
+
+
+def test_saved_stops_block_the_loop_and_defaults_do_not(
+    settings_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    factory, settings = settings_db
+    harsh = _snapshot(realized_pnl=Decimal("-400"), trade_count=6)
+    unsaved = _run_probe(factory, settings, harsh, monkeypatch)
+    assert unsaved.reason_code == "probe_reached_bound"
+
+    with factory() as session:
+        from app.schemas.autonomous_trading_settings import AutonomousTradingSettingsUpdate
+
+        AutonomousTradingSettingsService(session, AuditService(session)).update(
+            AutonomousTradingSettingsUpdate(
+                daily_loss_limit_percent=Decimal("2"),
+                max_trades_per_day=2,
+                strategy_id=STRATEGY,
+                symbol="BTCUSDT",
+            ),
+            organization_id=ORG,
+            user_id=OWNER,
+        )
+        session.commit()
+
+    loss = _run_probe(
+        factory,
+        settings,
+        _snapshot(realized_pnl=Decimal("-250"), trade_count=0),
+        monkeypatch,
+    )
+    assert loss.reason_code == "autonomous_daily_loss_limit"
+    trades = _run_probe(factory, settings, _snapshot(trade_count=2), monkeypatch)
+    assert trades.reason_code == "autonomous_max_trades_per_day"
+    allowed = _run_probe(factory, settings, _snapshot(), monkeypatch)
+    assert allowed.reason_code == "probe_reached_bound"
+    mismatch = _run_probe(
+        factory,
+        settings,
+        _snapshot(),
+        monkeypatch,
+        target=_target(symbol="ETHUSDT"),
+    )
+    assert mismatch.reason_code == "autonomous_symbol_mismatch"
+
+
+def test_kill_switch_still_refuses_when_settings_allow(settings_db) -> None:
+    factory, settings = settings_db
+    with factory() as session:
+        from app.schemas.autonomous_trading_settings import AutonomousTradingSettingsUpdate
+
+        AutonomousTradingSettingsService(session, AuditService(session)).update(
+            AutonomousTradingSettingsUpdate(
+                daily_loss_limit_percent=Decimal("4"),
+                max_trades_per_day=5,
+                strategy_id=STRATEGY,
+                symbol="BTCUSDT",
+            ),
+            organization_id=ORG,
+            user_id=OWNER,
+        )
+        session.commit()
+    loop = AutomatedPaperLoop(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        settings,
+        FrozenClock(datetime(2026, 10, 20, tzinfo=UTC)),
+    )
+    proof = loop.continue_confirmed_setup(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=_target(),
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=None,  # type: ignore[arg-type]
+        kill_switch_active=True,
+    )
+    assert proof.reason_code == "kill_switch_active"

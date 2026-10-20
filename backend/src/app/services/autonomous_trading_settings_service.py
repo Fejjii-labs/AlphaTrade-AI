@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -196,7 +197,11 @@ class AutonomousTradingSettingsService:
         if "strategy_id" in data:
             strategy_id = data["strategy_id"]
             if strategy_id is not None:
-                self._assert_strategy(organization_id=organization_id, strategy_id=strategy_id)
+                self._assert_strategy(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    strategy_id=strategy_id,
+                )
             changes["strategy_id"] = str(strategy_id) if strategy_id else "null"
         if "symbol" in data:
             symbol = None if data["symbol"] is None else data["symbol"].strip().upper()
@@ -204,30 +209,19 @@ class AutonomousTradingSettingsService:
                 self._assert_symbol(organization_id=organization_id, symbol=symbol)
             changes["symbol"] = symbol or "null"
 
-        row = self._load_row(organization_id=organization_id, user_id=user_id)
-        if row is None:
-            row = AutonomousTradingSettingsRow(
-                organization_id=organization_id,
-                user_id=user_id,
-                daily_loss_limit_percent=daily,
-                max_trades_per_day=max_trades,
-                risk_per_trade_percent=risk,
-                strategy_id=strategy_id,
-                symbol=symbol,
-            )
-            self._session.add(row)
-        else:
-            row.daily_loss_limit_percent = daily
-            row.max_trades_per_day = max_trades
-            row.risk_per_trade_percent = risk
-            row.strategy_id = strategy_id
-            row.symbol = symbol
-
-        self._session.flush()
+        row = self._upsert(
+            organization_id=organization_id,
+            user_id=user_id,
+            daily_loss_limit_percent=daily,
+            max_trades_per_day=max_trades,
+            risk_per_trade_percent=risk,
+            strategy_id=strategy_id,
+            symbol=symbol,
+        )
         if changes:
             self._audit.record(
                 AuditRecordCreate(
-                    request_id=f"autonomous-settings-{organization_id}",
+                    request_id=f"settings-{uuid.uuid4()}",
                     trace_id=str(uuid.uuid4()),
                     event_type=AuditEventType.AUTONOMOUS_TRADING_SETTINGS_UPDATED,
                     organization_id=organization_id,
@@ -241,6 +235,60 @@ class AutonomousTradingSettingsService:
                 )
             )
         return self.get(organization_id=organization_id, user_id=user_id)
+
+    def _upsert(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        daily_loss_limit_percent: Decimal,
+        max_trades_per_day: int,
+        risk_per_trade_percent: Decimal | None,
+        strategy_id: uuid.UUID | None,
+        symbol: str | None,
+    ) -> AutonomousTradingSettingsRow:
+        """Insert or update one settings row. Concurrent first saves do not 500."""
+
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as dialect_insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert as dialect_insert
+
+        now = datetime.now(UTC)
+        stmt = dialect_insert(AutonomousTradingSettingsRow).values(
+            id=uuid.uuid4(),
+            organization_id=organization_id,
+            user_id=user_id,
+            daily_loss_limit_percent=daily_loss_limit_percent,
+            max_trades_per_day=max_trades_per_day,
+            risk_per_trade_percent=risk_per_trade_percent,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["organization_id", "user_id"],
+            set_={
+                "daily_loss_limit_percent": daily_loss_limit_percent,
+                "max_trades_per_day": max_trades_per_day,
+                "risk_per_trade_percent": risk_per_trade_percent,
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "updated_at": now,
+            },
+        )
+        self._session.execute(stmt)
+        self._session.flush()
+        self._session.expire_all()
+        row = self._load_row(organization_id=organization_id, user_id=user_id)
+        if row is None:
+            raise AutonomousSettingsValidationError(
+                "settings_persist_failed",
+                "Autonomous trading settings could not be saved.",
+            )
+        return row
 
     def _load_row(
         self,
@@ -281,18 +329,25 @@ class AutonomousTradingSettingsService:
             "max_risk_per_trade_percent_ceiling": PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
         }
 
-    def _assert_strategy(self, *, organization_id: uuid.UUID, strategy_id: uuid.UUID) -> None:
+    def _assert_strategy(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        strategy_id: uuid.UUID,
+    ) -> None:
         row = self._session.scalar(
             select(UserStrategy).where(
                 UserStrategy.id == strategy_id,
                 UserStrategy.organization_id == organization_id,
+                UserStrategy.user_id == user_id,
                 UserStrategy.enabled.is_(True),
             )
         )
         if row is None:
             raise AutonomousSettingsValidationError(
                 "strategy_not_available",
-                "Selected strategy is not enabled for this organization.",
+                "Selected strategy must be one of your enabled strategies.",
             )
 
     def _assert_symbol(self, *, organization_id: uuid.UUID, symbol: str) -> None:

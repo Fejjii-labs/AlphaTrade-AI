@@ -22,7 +22,11 @@ from app.providers.market_data import OHLCVBar
 from app.schemas.trade_plan import CalculationInput, TradePlanRevisionCreate
 from app.services.risk_policy.adjusters import AdjusterInputs
 from app.services.risk_policy.breakers import BreakerVerdict
-from app.services.risk_policy.ceilings import PAPER_DEMO_KINDS
+from app.services.risk_policy.ceilings import (
+    PAPER_DEMO_KINDS,
+    PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
+    risk_ceiling_for,
+)
 from app.services.risk_policy.decision import decide_trade
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.grader import GradeDecision, grade_setup
@@ -77,6 +81,9 @@ _GRADE_CODE: dict[Grade, Decimal] = {
     Grade.A: Decimal("2"),
     Grade.B_PLUS: Decimal("3"),
     Grade.B: Decimal("4"),
+    # C does not trade on its grade percent. An autonomous risk override may
+    # still size it, and the stored code has to name that grade.
+    Grade.C: Decimal("5"),
 }
 _GRADE_BY_CODE: dict[Decimal, Grade] = {code: grade for grade, code in _GRADE_CODE.items()}
 
@@ -326,8 +333,12 @@ def stored_sizing_grade_cap(plan: object, profile: RiskPolicyProfile) -> Decimal
         current = profile.risk_percent(grade)
     except RiskPolicyRejected:
         return None
-    if not isinstance(current, Decimal) or not current.is_finite() or current <= 0:
+    if not isinstance(current, Decimal) or not current.is_finite():
         return None
+    if current <= 0:
+        # Grade C's table risk is zero. The stored percent is the override
+        # that was accepted at sizing time, still inside the code ceiling.
+        return stored
     return min(stored, current)
 
 
@@ -575,6 +586,37 @@ def grade_from_bars(
     return decision, _atr(result.indicators)
 
 
+def profile_max_risk_percent(profile: RiskPolicyProfile) -> Decimal:
+    """Highest grade risk the profile allows. C is zero and is not the cap."""
+
+    return max(profile.risk_percent_by_grade.values())
+
+
+def fixed_risk_override_refusal(
+    fixed_risk_percent: Decimal,
+    profile: RiskPolicyProfile,
+) -> str | None:
+    """Refuse an autonomous risk override. Never clamp it down and continue.
+
+    The override may exceed the grade that was graded, including a C that
+    would not trade on its own. It may not exceed the paper/demo code ceiling
+    or the active profile's highest grade risk.
+    """
+
+    if (
+        not isinstance(fixed_risk_percent, Decimal)
+        or not fixed_risk_percent.is_finite()
+        or fixed_risk_percent <= 0
+    ):
+        return "risk_override_invalid"
+    ceiling = min(PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT, risk_ceiling_for(profile.kind))
+    if fixed_risk_percent > ceiling:
+        return "risk_override_exceeds_ceiling"
+    if fixed_risk_percent > profile_max_risk_percent(profile):
+        return "risk_override_exceeds_profile_max"
+    return None
+
+
 def size_for_profile(
     *,
     active: ActiveProfile,
@@ -612,22 +654,22 @@ def size_for_profile(
     is omitted, the profile kind is used.
     """
 
-    if not grade.tradable or grade.grade is None:
+    if grade.grade is None:
         return grade.refusal or "grade_not_tradable"
     if grade.trend_score is None or grade.momentum_score is None:
         return "grade_unavailable"
+    replace_grade_cap = fixed_risk_percent is not None
+    if not replace_grade_cap and not grade.tradable:
+        return grade.refusal or "grade_not_tradable"
     if atr is None or atr <= 0:
         return "atr_missing"
     if open_notional > 0 and open_risk_percent <= 0:
         # Open notional without a server-side risk-at-stop figure is not treated as zero.
         return "open_risk_uncomputed"
     if fixed_risk_percent is not None:
-        if (
-            not isinstance(fixed_risk_percent, Decimal)
-            or not fixed_risk_percent.is_finite()
-            or fixed_risk_percent <= 0
-        ):
-            return "risk_override_invalid"
+        refusal = fixed_risk_override_refusal(fixed_risk_percent, active.profile)
+        if refusal is not None:
+            return refusal
         grade_risk = fixed_risk_percent
     else:
         grade_risk = active.profile.risk_percent(grade.grade)
@@ -678,21 +720,27 @@ def size_for_profile(
         ),
         preserve_grade_risk=True,
         reduce_leverage=False,
+        replace_grade_cap=replace_grade_cap,
     )
     if not decision.accepted or decision.record is None or decision.sizing is None:
         return decision.reason or "risk_policy_refused"
     channel = active.profile.kind.value if execution_channel is None else execution_channel
+    profile_cap = (
+        profile_max_risk_percent(active.profile)
+        if replace_grade_cap
+        else active.profile.risk_percent(grade.grade)
+    )
     if _sized_risk_blocked_for_channel(
         channel=channel,
         risk_percent=decision.sizing.effective_risk_percent,
-        profile_cap=active.profile.risk_percent(grade.grade),
+        profile_cap=profile_cap,
     ):
         return "risk_percent_exceeds_channel_ceiling"
     cash_ceiling = (
         equity
         * min(
             decision.sizing.grade_risk_percent,
-            decision.sizing.profile_risk_percent,
+            profile_cap,
             decision.sizing.ceiling_percent,
             decision.sizing.budget_room_percent,
         )
