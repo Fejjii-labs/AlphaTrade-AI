@@ -766,12 +766,19 @@ def test_update_and_delete_journal_trade_require_owner(
         assert row is not None
         assert row.notes == "Owner notes"
 
-    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_other_org).status_code == 404
-    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_other_user).status_code == 404
+    denied_org_delete = test_client.delete(
+        f"/journal/trades/{trade_id}", headers=headers_other_org
+    )
+    assert denied_org_delete.status_code == 404
+    denied_user_delete = test_client.delete(
+        f"/journal/trades/{trade_id}", headers=headers_other_user
+    )
+    assert denied_user_delete.status_code == 404
     with factory() as session:
         assert session.get(JournalTrade, uuid.UUID(trade_id)) is not None
 
-    assert test_client.delete(f"/journal/trades/{trade_id}", headers=headers_owner).status_code == 204
+    owner_delete = test_client.delete(f"/journal/trades/{trade_id}", headers=headers_owner)
+    assert owner_delete.status_code == 204
     with factory() as session:
         assert session.get(JournalTrade, uuid.UUID(trade_id)) is None
 
