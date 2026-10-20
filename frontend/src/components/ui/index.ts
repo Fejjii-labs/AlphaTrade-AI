@@ -4,9 +4,40 @@ export {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
+  type CardProps,
 } from "./card";
+export { Chip, FilterChips, type ChipProps, type FilterChipOption, type FilterChipsProps } from "./chip";
+export {
+  DataTable,
+  type DataTableColumn,
+  type DataTableProps,
+} from "./data-table";
+export { Eyebrow, type EyebrowProps } from "./eyebrow";
+export { Gauge, type GaugeProps } from "./gauge";
+export { IconTile, type IconTileProps, type IconTileTone } from "./icon-tile";
+export {
+  ModePill,
+  VerifiedModePill,
+  resolveModePill,
+  type ModePillContext,
+  type ModePillInput,
+  type ModePillKind,
+  type ModePillProps,
+  type ModePillResolution,
+} from "./mode-pill";
+export { SectionHeader, formatSectionNumber, type SectionHeaderProps } from "./section-header";
+export {
+  SegmentedControl,
+  type SegmentedControlProps,
+  type SegmentedOption,
+  type SegmentedTone,
+} from "./segmented-control";
+export { Sheet, type SheetProps, type SheetSide } from "./sheet";
+export { Sparkline, type SparklineProps, type SparklineTone } from "./sparkline";
+export { Stat, StatStrip, type StatProps, type StatStripProps } from "./stat-strip";
 export { ContentContainer, PageSection } from "./content-container";
 export { DataNumber, type DataNumberProps, type DataNumberTone } from "./data-number";
 export { Divider } from "./divider";
@@ -29,7 +60,13 @@ export {
   type PaperModeIndicatorProps,
 } from "./paper-mode-indicator";
 export { RiskBlock, type RiskBlockProps } from "./risk-block";
-export { Skeleton, SkeletonCard, SkeletonText } from "./skeleton";
+export {
+  Skeleton,
+  SkeletonCard,
+  SkeletonText,
+  StatStripSkeleton,
+  TableSkeleton,
+} from "./skeleton";
 export {
   TabPanel,
   Tabs,

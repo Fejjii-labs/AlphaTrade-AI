@@ -1,12 +1,15 @@
 import { Badge } from "@/components/ui/badge";
 import type { RiskSeverity } from "@/lib/api/types";
 
-const variantMap: Record<RiskSeverity, "info" | "success" | "warning" | "danger"> = {
-  info: "info",
-  low: "success",
-  medium: "warning",
-  high: "danger",
-  critical: "danger",
+const variantMap: Record<
+  RiskSeverity,
+  "riskInfo" | "riskLow" | "riskMedium" | "riskHigh" | "riskCritical"
+> = {
+  info: "riskInfo",
+  low: "riskLow",
+  medium: "riskMedium",
+  high: "riskHigh",
+  critical: "riskCritical",
 };
 
 export function RiskBadge({ level }: { level: RiskSeverity | string | null | undefined }) {
