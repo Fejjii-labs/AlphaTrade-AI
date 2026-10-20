@@ -22,11 +22,20 @@ PAPER_KILL_SWITCH_COMPONENT = "paper_kill_switch"
 def paper_kill_switch_component(organization_id: uuid.UUID) -> str:
     """One pending-alert slot per organization.
 
-    ``controlled_runtime_status.component`` is 32 characters. The key is
-    ``k`` plus the first 31 hex digits of ``organization_id.hex``. The last
-    hex digit is dropped. Two organizations that share those 31 digits would
-    share one slot. The legacy ``paper_kill_switch`` row is still read so an
-    unsent page written before this key is retried.
+    The key is ``k`` plus the full ``organization_id.hex`` (33 characters).
+    The component column is 64 characters, so two organizations that differ
+    only in the last hex digit do not share a row.
+    """
+
+    return "k" + organization_id.hex
+
+
+def paper_kill_switch_truncated_component(organization_id: uuid.UUID) -> str:
+    """The 32-character key written while the column was 32 characters.
+
+    That key is ``k`` plus the first 31 hex digits. New writes use
+    :func:`paper_kill_switch_component`. Readers still load this row, and
+    the older single ``paper_kill_switch`` row, so an unsent page is retried.
     """
 
     return ("k" + organization_id.hex)[:32]
