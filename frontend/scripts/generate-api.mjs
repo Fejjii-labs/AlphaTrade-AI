@@ -95,6 +95,13 @@ availability("NativeOutcome", ["proof", "facts", "quantity", "currency",
   native_exit_order_ids: { ...schemas.NativeOutcome.properties.native_exit_order_ids, minItems: 1 },
   coverage: { const: "reconciled_lineage_only" }, freshness: { const: "fresh" },
 });
+schemas.NativeOutcome.allOf.push({
+  if: { properties: { closure_verified: { const: true } }, required: ["closure_verified"] },
+  then: { required: ["proof", "price_pnl_excluding_fees_and_funding", "price_pnl_methodology"],
+    properties: { proof: { not: { type: "null" } },
+      price_pnl_excluding_fees_and_funding: { type: "string" },
+      price_pnl_methodology: { const: "verified-linear-fill-prices/v1" } } },
+});
 availability("ExperimentPerformance", ["currency", "reported_realized_pnl", "fee_cost",
   "realized_pnl_after_fees_excluding_funding", "win_rate", "outcomes"], {
   currency: { type: "string", minLength: 1 }, sample_count: { type: "integer", minimum: 1 },
@@ -106,6 +113,14 @@ schemas.ExperimentPerformance.allOf.push({
   if: { properties: { status: { const: "unavailable" } }, required: ["status"] },
   then: { properties: Object.fromEntries(["reported_realized_pnl", "fee_cost",
     "realized_pnl_after_fees_excluding_funding", "win_rate"].map(property => [property, { type: "null" }])) },
+});
+schemas.ExperimentPerformance.allOf.push({
+  if: { properties: { price_pnl_sample_count: { minimum: 1 } }, required: ["price_pnl_sample_count"] },
+  then: { required: ["price_pnl_excluding_fees_and_funding", "price_pnl_win_rate", "price_pnl_currency", "price_pnl_methodology", "outcomes"],
+    properties: { price_pnl_excluding_fees_and_funding: { type: "string" },
+      price_pnl_win_rate: { type: "string" }, price_pnl_currency: { type: "string", minLength: 1 },
+      price_pnl_methodology: { const: "verified-linear-fill-prices/v1" },
+      outcomes: { type: "array", minItems: 1, items: { type: "object", required: ["closure_verified"], properties: { closure_verified: { const: true } } } } } },
 });
 const used = new Set();
 function visit(value) {

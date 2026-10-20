@@ -540,7 +540,11 @@ def runtime_world(postgres_store, *, bearish=False, risk_block=False, forming=Fa
             ),
         )
 
-    settings = _settings(watcher_orchestration_enabled=True, exchange_mode="paper_internal")
+    settings = _settings(
+        watcher_orchestration_enabled=True,
+        exchange_mode="paper_internal",
+        autonomous_internal_paper_enabled=True,
+    )
     runtime = build_watcher_paper_runtime(
         settings, factory, evidence_factory=evidence_factory, clock=FrozenClock(now), enabled=True
     )

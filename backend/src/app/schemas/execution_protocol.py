@@ -131,6 +131,11 @@ class ClosePaperPlanRequest(BaseModel):
     exit_reason: str = Field(min_length=1, max_length=60)
     occurred_at: datetime
     idempotency_key: str = Field(min_length=1, max_length=128)
+    # Set only by the paper exit monitor. The HTTP body cannot carry these,
+    # so a human close stays distinguishable in the journal lifecycle payload.
+    exit_channel: str | None = Field(default=None, min_length=1, max_length=40)
+    exit_actor: str | None = Field(default=None, min_length=1, max_length=40)
+    exit_evidence: dict[str, str] | None = None
 
 
 class ClosePaperPlanHttpRequest(BaseModel):

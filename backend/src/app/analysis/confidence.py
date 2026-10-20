@@ -76,6 +76,18 @@ def compute_confidence(
     return ConfidenceScore(score=round(score, 2), factors=factors)
 
 
+def trend_alignment_score(direction: str | None, structure: MarketStructure) -> float:
+    """Public trend score in ``[0, 1]`` used by the grade policy."""
+
+    return _trend_alignment(direction, structure)
+
+
+def momentum_score(direction: str | None, indicators: Indicators) -> float:
+    """Public momentum score in ``[0, 1]`` used by the grade policy."""
+
+    return _momentum(direction, indicators)
+
+
 def _trend_alignment(direction: str | None, structure: MarketStructure) -> float:
     if direction is None:
         return 0.0

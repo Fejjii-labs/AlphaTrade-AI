@@ -23,14 +23,14 @@ export function useAsyncData<T>(loader: () => Promise<T>, deps: unknown[] = []) 
     setError(null);
     try {
       const result = await loader();
-      if (generation !== generationRef.current) return;
+      if (!canCommit(generation, generationRef.current)) return;
       setData(result);
     } catch (err) {
-      if (generation !== generationRef.current) return;
+      if (!canCommit(generation, generationRef.current)) return;
       setData(null);
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
-      if (generation === generationRef.current) {
+      if (canCommit(generation, generationRef.current)) {
         setLoading(false);
       }
     }
@@ -38,8 +38,17 @@ export function useAsyncData<T>(loader: () => Promise<T>, deps: unknown[] = []) 
 
   useEffect(() => {
     void reload();
+    return () => {
+      // Drop the in-flight load so a late callback cannot call setState
+      // after unmount, including once the test environment has removed window.
+      generationRef.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   return { data, loading, error, reload };
+}
+
+function canCommit(generation: number, current: number): boolean {
+  return generation === current && typeof window !== "undefined";
 }

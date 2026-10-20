@@ -425,7 +425,9 @@ class VenueSubmitDispatcher:
         )
         effect = self._require_effect_locked(command_id)
         receipt = self._receipts.get_by_command(command_id)
-        projection = self._projections.get_by_receipt(receipt.id) if receipt is not None else None
+        projection = (
+            self._projections.get_by_receipt_for_update(receipt.id) if receipt is not None else None
+        )
         if receipt is None or projection is None:
             raise NotFoundError("Demo cancellation receipt missing.")
         if projection.state in {
@@ -528,7 +530,12 @@ class VenueSubmitDispatcher:
                 details={"reason": "missing_authoritative_occurred_at"},
             )
         fill_time = _aware(occurred_at)
-        if fill_quantity <= 0 or fill_price <= 0:
+        if (
+            not fill_quantity.is_finite()
+            or not fill_price.is_finite()
+            or fill_quantity <= 0
+            or fill_price <= 0
+        ):
             raise ConflictError(
                 "Fill quantity and price must be positive.",
                 details={"reason": "invalid_fill_amounts"},
@@ -539,10 +546,17 @@ class VenueSubmitDispatcher:
             organization_id=command.organization_id, account_id=command.account_id
         )
         receipt = self._receipts.get_by_command(command_id)
-        projection = self._projections.get_by_receipt(receipt.id) if receipt is not None else None
+        projection = (
+            self._projections.get_by_receipt_for_update(receipt.id) if receipt is not None else None
+        )
         reservation = self._reservations.get_by_command_for_update(command_id)
         if receipt is None or projection is None or reservation is None:
             raise NotFoundError("Fill target identities were not found.")
+        existing_fact = self._fills.get_by_source(
+            receipt_id=receipt.id, source_fill_identity=source_identity
+        )
+        if existing_fact is None and fill_quantity > projection.remaining_quantity:
+            raise ConflictError("Fill exceeds the immutable authorized quantity.")
         digest = fill_content_hash(
             receipt_id=str(receipt.id),
             command_id=str(command.id),
@@ -831,7 +845,7 @@ class VenueSubmitDispatcher:
         self._epochs.lock_epoch(
             organization_id=command.organization_id, account_id=command.account_id
         )
-        reservation = self._reservations.get_by_command(command_id)
+        reservation = self._reservations.get_by_command_for_update(command_id)
         if reservation is None:
             return
         unused = reservation.remaining_reserved_notional
@@ -877,6 +891,7 @@ class VenueSubmitDispatcher:
         reservation.release_state = RiskReservationReleaseState.RELEASED
         reservation.release_reason = reason
         reservation.updated_at = now
+        accounting.version = int(accounting.version) + 1
 
     def _safety_blocks_dispatch(
         self,

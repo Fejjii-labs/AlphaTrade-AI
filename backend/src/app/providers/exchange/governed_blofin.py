@@ -27,6 +27,17 @@ if TYPE_CHECKING:
     from app.providers.exchange.governed_blofin_exit import VerifiedDemoExit
 
 
+def demo_order_margin_mode(margin_assumption_id: str) -> str:
+    """Profile plans send the isolated mode that was read. Every other plan stays cross.
+
+    This is the existing order field. It is not a leverage or margin-mode setting call.
+    """
+
+    if margin_assumption_id == "verified-demo-read-leverage":
+        return "isolated"
+    return "cross"
+
+
 @dataclass(frozen=True)
 class DemoVenueSnapshot:
     instrument: str
@@ -42,6 +53,11 @@ class DemoVenueSnapshot:
     book: DemoOrderBook
     account_observed_at: datetime
     native_account_uid: str | None = None
+    # Read from the margin-mode endpoint and leverage-info. Never written.
+    account_leverage: Decimal = Decimal("1")
+    margin_mode: str = "cross"
+    # (notional floor, maintenance rate) from public position tiers. Empty refuses a profile plan.
+    maintenance_tiers: tuple[tuple[Decimal, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +104,48 @@ def _account_rows(data: Any) -> list[dict[str, Any]]:
     return data
 
 
+def tier_notional_floor(min_size: Decimal) -> Decimal:
+    """Use a position-tier ``minSize`` as quote notional. Do not scale it.
+
+    https://docs.blofin.com/index.html (GET /api/v1/market/position-tiers)
+    calls ``minSize`` "Minimum position size" and does not say contracts.
+    GET Instruments on that page does say order ``minSize`` is in contracts.
+    The public BTC-USDT isolated ladder is 0, 2500, 5000, … USDT while
+    ``contractValue`` is 0.001. Scaling by contract value and price would
+    inflate those brackets and leave the lowest maintenance rate in force.
+    The conservative reading uses the published number unchanged.
+    """
+
+    return min_size
+
+
+def _tier_sizes(data: Any) -> tuple[tuple[Decimal, Decimal], ...]:
+    """Public position tiers as (quote-notional floor, maintenance rate). No write."""
+
+    message = "Demo maintenance tiers unavailable; no leverage mutation."
+    if not isinstance(data, list) or not data:
+        raise ValueError(message)
+    tiers: list[tuple[Decimal, Decimal]] = []
+    for row in data:
+        if not isinstance(row, dict):
+            raise ValueError(message)
+        try:
+            rate = Decimal(str(row.get("maintenanceMarginRate")))
+            min_size = Decimal(str(row.get("minSize") or "0"))
+        except Exception as exc:
+            raise ValueError(message) from exc
+        if (
+            not rate.is_finite()
+            or rate < 0
+            or rate >= 1
+            or not min_size.is_finite()
+            or min_size < 0
+        ):
+            raise ValueError(message)
+        tiers.append((min_size, rate))
+    return tuple(tiers)
+
+
 def _positive(value: Any) -> Decimal:
     parsed = Decimal(str(value))
     if not parsed.is_finite() or parsed <= 0:
@@ -109,9 +167,23 @@ class GovernedBloFinDemoProvider:
         self._client = client
         self._account = BloFinAccountProvider(client)
         self._clock = clock
+        self._expected_native_uid: str | None = None
+
+    def require_account_identity(self, native_uid: str) -> None:
+        """Pin explicit server experiment ownership before any execution IO."""
+        if not native_uid or self._expected_native_uid not in {None, native_uid}:
+            raise ValueError("Demo provider cannot change its expected native account.")
+        self._expected_native_uid = native_uid
 
     def snapshot(
-        self, *, symbol: str, now: datetime, side: EntrySide, quantity: Decimal | None = None
+        self,
+        *,
+        symbol: str,
+        now: datetime,
+        side: EntrySide,
+        quantity: Decimal | None = None,
+        required_leverage: Decimal | None = Decimal("1"),
+        margin_mode: str = "cross",
     ) -> DemoVenueSnapshot:
         self.verify_permissions()
         with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
@@ -141,10 +213,46 @@ class GovernedBloFinDemoProvider:
             minimum = venue_decimal(row.get("minSize"))
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
+        with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
+            # Read only. This provider never sends a margin-mode or leverage write.
+            account_mode = self._account.get_account_margin_mode()
+            if not account_mode.supplied or account_mode.margin_mode not in {"cross", "isolated"}:
+                raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
+            observed_mode = account_mode.margin_mode
+            if margin_mode == "isolated" and observed_mode != "isolated":
+                raise ValueError(
+                    "Demo account margin mode is not isolated; no margin-mode mutation."
+                )
+            if margin_mode == "cross" and observed_mode != "cross":
+                raise ValueError("Demo account margin mode is not cross; no margin-mode mutation.")
         with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
-            leverage = self._account.get_leverage_info(inst_id=instrument, margin_mode="cross")
-            if leverage.leverage != Decimal("1"):
-                raise ValueError("Demo account must already use leverage 1; no leverage mutation.")
+            # Ask with the mode the account endpoint reported. The payload must
+            # repeat that mode. A missing field is not replaced by the request.
+            leverage = self._account.get_leverage_info(
+                inst_id=instrument, margin_mode=observed_mode
+            )
+            if not leverage.margin_mode_supplied:
+                raise ValueError("Demo leverage-info omitted margin mode; no margin-mode mutation.")
+            if leverage.margin_mode != observed_mode:
+                raise ValueError(
+                    "Demo leverage-info margin mode does not match the account; "
+                    "no margin-mode mutation."
+                )
+            if required_leverage is not None and leverage.leverage != required_leverage:
+                if required_leverage == Decimal("1"):
+                    raise ValueError(
+                        "Demo account must already use leverage 1; no leverage mutation."
+                    )
+                raise ValueError(
+                    "Demo account leverage does not match required leverage; no leverage mutation."
+                )
+        with preflight_stage("position_tiers", "GET /api/v1/market/position-tiers"):
+            tier_rows = self._client.request(
+                "GET",
+                "/api/v1/market/position-tiers",
+                params={"instId": instrument, "marginMode": observed_mode},
+            )
+            tier_sizes = _tier_sizes(tier_rows)
         account_observed_at = self._clock()
         self.verify_flat_account()
         with preflight_stage("balance", "GET /api/v1/account/balance"):
@@ -178,6 +286,9 @@ class GovernedBloFinDemoProvider:
             book.worst_price(
                 minimum if quantity is None else quantity, lot=lot, minimum=minimum, maximum=maximum
             )
+        maintenance_tiers = tuple(
+            (tier_notional_floor(min_size), rate) for min_size, rate in tier_sizes
+        )
         return DemoVenueSnapshot(
             instrument=instrument,
             price=book.price,
@@ -192,6 +303,9 @@ class GovernedBloFinDemoProvider:
             book=book,
             account_observed_at=account_observed_at,
             native_account_uid=self._account.native_account_uid,
+            account_leverage=leverage.leverage,
+            margin_mode=observed_mode,
+            maintenance_tiers=maintenance_tiers,
         )
 
     def verify_flat_account(self) -> None:
@@ -227,23 +341,82 @@ class GovernedBloFinDemoProvider:
                 or permissions.can_transfer
             ):
                 raise ValueError("Verified read/trade-only demo permissions required.")
+            if (
+                self._expected_native_uid is not None
+                and self._account.native_account_uid != self._expected_native_uid
+            ):
+                raise ValueError("Demo execution connection differs from the owned native account.")
+
+    def read_funding_rate(self, *, symbol: str) -> Decimal | None:
+        """Finite public funding print, or None when the GET fails.
+
+        A failure is not replaced with the mock 0.0001 fallback. Callers use
+        the documented floor instead. This does not place an order.
+        """
+
+        try:
+            data = self._client.request(
+                "GET",
+                "/api/v1/market/funding-rate",
+                params={"instId": to_blofin_inst_id(symbol)},
+            )
+        except Exception:
+            return None
+        row = data[0] if isinstance(data, list) and data else data
+        if not isinstance(row, dict):
+            return None
+        raw = row.get("fundingRate")
+        if raw is None or raw == "":
+            return None
+        try:
+            rate = Decimal(str(raw))
+        except Exception:
+            return None
+        if not rate.is_finite():
+            return None
+        return rate
+
+    def read_open_liquidation(self, *, inst_id: str) -> Decimal | None:
+        """Liquidation price of one open position. None when that market is flat.
+
+        A missing price on an open position is not treated as safe. Callers
+        distinguish None (flat) from a read that raises.
+        """
+
+        for position in self._account.get_positions():
+            if position.inst_id == inst_id:
+                if position.liquidation_price is None or position.liquidation_price <= 0:
+                    raise ValueError("Demo liquidation price unavailable.")
+                return position.liquidation_price
+        return None
 
     def reconcile_exit(
         self, *, plan: TradePlanRevision, entry: DemoOrderEvidence
     ) -> VerifiedDemoExit | None:
         from app.providers.exchange.governed_blofin_exit import reconcile_demo_exit
 
-        return reconcile_demo_exit(self._client, plan=plan, entry=entry, clock=self._clock)
+        self.verify_permissions()
+        uid = self._account.native_account_uid
+        if uid != entry.native_account_uid:
+            raise ValueError("Demo account identity changed before exit reconciliation.")
+        result = reconcile_demo_exit(self._client, plan=plan, entry=entry, clock=self._clock)
+        self.verify_permissions()
+        if self._account.native_account_uid != uid:
+            raise ValueError("Demo account identity changed during exit reconciliation.")
+        return result
 
     def submit(
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
+        profile_sized = plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage"
         snapshot = self.snapshot(
             symbol=plan.execution_instrument.replace("-", ""),
             now=self._clock(),
             side=plan.side,
             quantity=plan.quantity.value,
+            required_leverage=plan.risk_and_exits.leverage if profile_sized else Decimal("1"),
+            margin_mode="isolated" if profile_sized else "cross",
         )
         rules = plan.instrument_rules
         if (snapshot.tick, snapshot.lot, snapshot.minimum, snapshot.multiplier) != (
@@ -287,7 +460,7 @@ class GovernedBloFinDemoProvider:
             validate_manual_demo(plan, snapshot, now=self._clock())
         body = {
             "instId": plan.execution_instrument,
-            "marginMode": "cross",
+            "marginMode": demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id),
             "positionSide": "net",
             "side": "buy" if plan.side is EntrySide.BUY else "sell",
             "orderType": "market",

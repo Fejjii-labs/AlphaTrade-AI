@@ -7,6 +7,7 @@ loss allocation and consumed trade counts remain conservative, not replenished.
 from decimal import ROUND_FLOOR, Decimal
 from uuid import uuid5
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -39,18 +40,82 @@ from app.schemas.execution_protocol import (
     RiskReservationReleaseState,
 )
 from app.schemas.journal_lifecycle import JournalLifecycleEventInput
-from app.schemas.trade_plan import AuthorizationState
+from app.schemas.trade_plan import AuthorizationState, EntrySide
 from app.services.audit_service import AuditService
 from app.services.canonical_execution_journal import (
     CANONICAL_EXECUTION_SOURCE_SYSTEM,
     project_canonical_execution_event,
 )
 from app.services.canonical_execution_learning import attribute_canonical_paper_event
-from app.services.canonical_paper_execution import _lineage_payload
+from app.services.canonical_paper_execution import (
+    _attach_approval_channel,
+    _lineage_payload,
+    _note_profile_close,
+)
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
+from app.services.risk_policy.profile import PolicyKind
 from app.services.safety_epoch import SafetyEpochService
+
+logger = structlog.get_logger(__name__)
+
+
+def signed_verified_demo_pnl(
+    *,
+    is_long: bool,
+    entry_price: Decimal,
+    exit_price: Decimal,
+    quantity: Decimal,
+    contract_multiplier: Decimal,
+    reported_pnl: Decimal | None,
+    fees: Decimal | None = None,
+    funding: Decimal | None = None,
+    notional: Decimal | None = None,
+) -> Decimal:
+    """Net sign for the consecutive-loss rule. Does not write journal net PnL.
+
+    Gross is the verified entry-to-exit price difference. Venue ``fillPnl``
+    (``reported_pnl``) has no declared gross, net, or funding basis, so a
+    positive fill PnL cannot reset the streak. Verified fees are subtracted.
+    A missing or non-finite fee figure does not treat a non-negative price
+    result as a win. Verified funding cash is subtracted (a credit is
+    negative). Missing or non-finite funding is not a win either: the
+    0.0001-per-8h sizing floor is an estimate, not verified funding cash.
+    ``notional`` is accepted and ignored so a caller cannot turn that
+    estimate into a streak reset.
+    """
+
+    # ``reported_pnl`` is accepted so callers can pass the venue figure and
+    # tests can show it is ignored. It is not the streak gross.
+    if reported_pnl is not None and not reported_pnl.is_finite():
+        reported_pnl = None
+    del reported_pnl
+    del notional
+    cash = (exit_price - entry_price) * quantity * contract_multiplier
+    gross = cash if is_long else -cash
+    if fees is None or not fees.is_finite() or fees < 0:
+        if gross < 0:
+            return gross
+        return Decimal("-0.00000001")
+    net = gross - fees
+    if funding is None or not funding.is_finite():
+        if net < 0:
+            return net
+        return Decimal("-0.00000001")
+    return net - funding
+
+
+def verified_demo_funding_cash(evidence: VerifiedDemoExit) -> Decimal | None:
+    """Funding cash the exit proof already verified, or None when it did not.
+
+    A missing figure is not the sizing floor and is not zero.
+    """
+
+    value = evidence.funding
+    if isinstance(value, Decimal) and value.is_finite():
+        return value
+    return None
 
 
 def resolve_verified_demo_exit(
@@ -156,9 +221,13 @@ def resolve_verified_demo_exit(
         select(VenueSubmitEffect)
         .where(VenueSubmitEffect.command_id == command.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     reservation = session.scalar(
-        select(RiskReservation).where(RiskReservation.command_id == command.id).with_for_update()
+        select(RiskReservation)
+        .where(RiskReservation.command_id == command.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     fills = list(
         session.scalars(
@@ -255,7 +324,7 @@ def resolve_verified_demo_exit(
             (f.fee for f in evidence.fills if f.fee is not None), Decimal("0")
         )
     source_id = f"verified-demo-exit:{command.id}"
-    close_payload = {
+    close_payload: dict[str, object] = {
         "exit_time": close_time.isoformat(),
         "exit_price": str(exit_price),
         "exit_reason": "verified_blofin_demo_"
@@ -286,6 +355,7 @@ def resolve_verified_demo_exit(
             mode="json", exclude_none=True
         ),
     }
+    _attach_approval_channel(session, close_payload, command.authorization_id)
     event = JournalLifecycleEventInput(
         event_type=JournalLifecycleEventType.CLOSE,
         execution_lifecycle_id=command.id,
@@ -378,4 +448,39 @@ def resolve_verified_demo_exit(
     session.add(resolution)
     effect.reconciliation_disposition = "DEMO_CLOSED_RECONCILED"
     session.flush()
+    if plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage":
+        entry_price = (
+            sum((fill.quantity * fill.price for fill in fills), Decimal("0"))
+            / evidence.entry_quantity
+        )
+        _streak, refused_new_trades = _note_profile_close(
+            session,
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            account_id=command.account_id,
+            net_pnl=signed_verified_demo_pnl(
+                is_long=plan.side is EntrySide.BUY,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=evidence.entry_quantity,
+                contract_multiplier=plan.instrument_rules.contract_multiplier,
+                reported_pnl=reported_pnl,
+                fees=fees,
+                funding=verified_demo_funding_cash(evidence),
+                notional=(
+                    entry_price
+                    * evidence.entry_quantity
+                    * plan.instrument_rules.contract_multiplier
+                ),
+            ),
+            now=evidence.observed_at,
+            kind=PolicyKind.DEMO,
+        )
+        if refused_new_trades:
+            logger.info(
+                "profile_close_refuses_new_trades",
+                organization_id=str(command.organization_id),
+                account_id=str(command.account_id),
+                consecutive_losses=_streak,
+            )
     return resolution

@@ -17,8 +17,27 @@ _ACCOUNT_PATHS = frozenset(
     {
         "/api/v1/account/balance",
         "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+        "/api/v1/account/funding-fees",
         "/api/v1/user/query-apikey",
         "/api/v1/market/instruments",
+        "/api/v1/trade/orders-history",
+        "/api/v1/trade/fills-history",
+    }
+)
+_HISTORY_PATHS = frozenset(
+    {
+        "/api/v1/trade/orders-history",
+        "/api/v1/trade/fills-history",
+        "/api/v1/account/positions-history",
+        "/api/v1/account/funding-fees",
+    }
+)
+_LIST_PATHS = frozenset(
+    {
+        "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+        "/api/v1/account/funding-fees",
         "/api/v1/trade/orders-history",
         "/api/v1/trade/fills-history",
     }
@@ -42,11 +61,11 @@ class BloFinReadOnlyClient(BloFinClient):
             raise ExchangeDemoInactiveError("BloFin sync permits account GET requests only.")
         if path == "/api/v1/market/instruments" and (signed or params):
             raise ExchangeDemoInactiveError("BloFin sync permits only public bulk metadata reads.")
-        if path in {"/api/v1/trade/orders-history", "/api/v1/trade/fills-history"}:
+        if path in _HISTORY_PATHS:
             allowed = {"begin", "end", "after", "limit"}
             if not signed or not params or set(params) - allowed:
                 raise ExchangeDemoInactiveError("BloFin history permits bounded signed GET only.")
-            required = {"begin", "end", "limit"} if path.endswith("fills-history") else {"limit"}
+            required = {"limit"} if path.endswith("orders-history") else {"begin", "end", "limit"}
             if not required <= set(params) or (("begin" in params) != ("end" in params)):
                 raise ExchangeDemoInactiveError("BloFin history requires bounded pagination.")
             if any(
@@ -74,13 +93,7 @@ class BloFinReadOnlyClient(BloFinClient):
                 raise ExchangeDemoInactiveError("BloFin history cursor is invalid.")
         data = super().request(method, path, params=params, signed=signed, before_send=before_send)
         if not isinstance(data, list | dict) or (
-            path
-            in {
-                "/api/v1/account/positions",
-                "/api/v1/trade/orders-history",
-                "/api/v1/trade/fills-history",
-            }
-            and not isinstance(data, list)
+            path in _LIST_PATHS and not isinstance(data, list)
         ):
             raise ExchangeDemoInactiveError("BloFin account response has an invalid shape.")
         return data

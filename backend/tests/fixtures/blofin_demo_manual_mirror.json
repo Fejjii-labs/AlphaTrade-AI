@@ -1,0 +1,226 @@
+{
+  "comment": "Recorded-shape BloFin demo payloads. Amounts are strings, as the venue returns them. fillPnl is present and must be ignored.",
+  "instruments": [
+    {"instId": "BTC-USDT", "contractValue": "0.01", "settleCurrency": "USDT"},
+    {"instId": "ETH-USDT", "contractValue": "1", "settleCurrency": "USDT"},
+    {"instId": "BCH-USDT", "contractValue": "0.01", "settleCurrency": "USDT"}
+  ],
+  "long": {
+    "positions": [],
+    "history": [
+      {
+        "historyId": "h-long",
+        "positionId": "p-long",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionSide": "long",
+        "closePositions": "2",
+        "maxPositions": "2",
+        "openAveragePrice": "100",
+        "closeAveragePrice": "110",
+        "createTime": "1792195200000",
+        "updateTime": "1792238400000",
+        "leverage": "5",
+        "realizedPnl": "0.2",
+        "fee": "0.01"
+      }
+    ],
+    "fills": [
+      {
+        "tradeId": "t-long",
+        "orderId": "o-long",
+        "instId": "BTC-USDT",
+        "ts": "1792195205000",
+        "fillPnl": "999"
+      }
+    ],
+    "funding": [
+      {
+        "billId": "b-long",
+        "instId": "BTC-USDT",
+        "fundingFee": "-0.004",
+        "fundingTime": "1792224000000"
+      }
+    ],
+    "orders": [
+      {
+        "orderId": "o-long",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "reduceOnly": "false",
+        "createTime": "1792195205000",
+        "slTriggerPrice": "90",
+        "tpTriggerPrice": "120"
+      }
+    ]
+  },
+  "short": {
+    "positions": [],
+    "history": [
+      {
+        "historyId": "h-short",
+        "positionId": "p-short",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "positionSide": "short",
+        "closePositions": "2",
+        "maxPositions": "2",
+        "openAveragePrice": "100",
+        "closeAveragePrice": "90",
+        "createTime": "1792195200000",
+        "updateTime": "1792238400000",
+        "leverage": "3",
+        "realizedPnl": "0.2",
+        "fee": "-0.003"
+      }
+    ],
+    "fills": [
+      {
+        "tradeId": "t-short",
+        "orderId": "o-short",
+        "instId": "BTC-USDT",
+        "ts": "1792238400000",
+        "fillPnl": "999"
+      }
+    ],
+    "funding": [
+      {
+        "billId": "b-short",
+        "instId": "BTC-USDT",
+        "fundingFee": "0.005",
+        "fundingTime": "1792224000000"
+      }
+    ],
+    "orders": [
+      {
+        "orderId": "o-short",
+        "instId": "BTC-USDT",
+        "side": "sell",
+        "reduceOnly": "false",
+        "createTime": "1792195205000",
+        "slTriggerPrice": "110",
+        "tpTriggerPrice": "80"
+      }
+    ]
+  },
+  "partial_open": {
+    "positions": [
+      {
+        "positionId": "p-part",
+        "instId": "BTC-USDT",
+        "positions": "1",
+        "positionSide": "long",
+        "createTime": "1792195200000",
+        "averagePrice": "100",
+        "leverage": "5"
+      }
+    ],
+    "history": [
+      {
+        "historyId": "h-part-1",
+        "positionId": "p-part",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionSide": "long",
+        "closePositions": "1",
+        "maxPositions": "2",
+        "openAveragePrice": "100",
+        "closeAveragePrice": "105",
+        "createTime": "1792195200000",
+        "updateTime": "1792216800000",
+        "leverage": "5",
+        "realizedPnl": "0.05",
+        "fee": "0.001"
+      }
+    ],
+    "fills": [],
+    "funding": [],
+    "orders": []
+  },
+  "partial_flat": {
+    "positions": [],
+    "history": [
+      {
+        "historyId": "h-part-1",
+        "positionId": "p-part",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionSide": "long",
+        "closePositions": "1",
+        "maxPositions": "2",
+        "openAveragePrice": "100",
+        "closeAveragePrice": "105",
+        "createTime": "1792195200000",
+        "updateTime": "1792216800000",
+        "leverage": "5",
+        "realizedPnl": "0.05",
+        "fee": "0.001"
+      },
+      {
+        "historyId": "h-part-2",
+        "positionId": "p-part",
+        "instId": "BTC-USDT",
+        "side": "buy",
+        "positionSide": "long",
+        "closePositions": "1",
+        "maxPositions": "2",
+        "openAveragePrice": "100",
+        "closeAveragePrice": "110",
+        "createTime": "1792195200000",
+        "updateTime": "1792238400000",
+        "leverage": "5",
+        "realizedPnl": "0.1",
+        "fee": "0.002"
+      }
+    ],
+    "fills": [],
+    "funding": [
+      {
+        "billId": "b-part",
+        "instId": "BTC-USDT",
+        "fundingFee": "-0.002",
+        "fundingTime": "1792224000000"
+      }
+    ],
+    "orders": []
+  },
+  "eth_doc": {
+    "history": [
+      {
+        "historyId": "eth-doc",
+        "positionId": "eth-pos",
+        "instId": "ETH-USDT",
+        "side": "buy",
+        "positionSide": "long",
+        "closePositions": "1",
+        "maxPositions": "1",
+        "openAveragePrice": "1591.8",
+        "closeAveragePrice": "1592.5",
+        "createTime": "1672531200000",
+        "updateTime": "1672534800000",
+        "leverage": "10",
+        "realizedPnl": "0.7",
+        "fee": "0.190536"
+      }
+    ]
+  },
+  "bch_doc": {
+    "history": [
+      {
+        "historyId": "bch-doc",
+        "positionId": "bch-pos",
+        "instId": "BCH-USDT",
+        "side": "sell",
+        "closePositions": "290",
+        "maxPositions": "290",
+        "openAveragePrice": "1890",
+        "closeAveragePrice": "1887",
+        "createTime": "1792195200000",
+        "updateTime": "1792238400000",
+        "leverage": "10",
+        "realizedPnl": "-8.7",
+        "fee": "0.5472"
+      }
+    ]
+  }
+}

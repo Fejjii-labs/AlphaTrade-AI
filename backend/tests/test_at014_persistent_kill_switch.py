@@ -27,6 +27,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import (
+    ActorType,
     ApprovalAction,
     AuditEventType,
     MembershipRole,
@@ -368,6 +369,38 @@ def test_idempotent_activate_deactivate(
         assert off1.active is False
         assert off2.active is False
         assert off2.version == off1.version
+
+
+def test_system_activation_is_not_stored_as_the_user(
+    at014_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    factory, settings = at014_db
+    with factory() as session:
+        svc = _kill(session, settings)
+        status = svc.activate(
+            organization_id=ORG_A,
+            actor_user_id=OWNER_A,
+            payload=KillSwitchMutationRequest(confirm=True, reason="monitor loss"),
+            actor_type=ActorType.SYSTEM,
+        )
+        session.commit()
+        assert status.active is True
+        assert status.activated_by is None
+        row = session.scalar(
+            select(KillSwitchState).where(KillSwitchState.organization_id == ORG_A)
+        )
+        assert row is not None
+        assert row.activated_by is None
+        audit = session.scalar(
+            select(AuditLog).where(
+                AuditLog.organization_id == ORG_A,
+                AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+            )
+        )
+        assert audit is not None
+        assert audit.actor_type is ActorType.SYSTEM
+        assert audit.user_id is None
+        assert audit.actor == "system"
 
 
 def test_tenant_isolation(at014_db: tuple[sessionmaker[Session], Settings]) -> None:

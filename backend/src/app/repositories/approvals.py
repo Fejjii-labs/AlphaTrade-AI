@@ -71,16 +71,27 @@ class ApprovalRepository(SQLAlchemyRepository[ApprovalRequest]):
         return list(self._session.scalars(list_stmt.limit(limit).offset(offset)).all()), total
 
 
+_REUSABLE_AUTHORIZATION_STATES = (
+    AuthorizationState.AVAILABLE,
+    AuthorizationState.CONSUMED,
+)
+
+
 class ApprovalAuthorizationRepository(SQLAlchemyRepository[ApprovalAuthorization]):
     model = ApprovalAuthorization
 
-    def get_for_approval(self, approval_request_id: uuid.UUID) -> ApprovalAuthorization | None:
+    def get_reusable_for_approval(
+        self, approval_request_id: uuid.UUID
+    ) -> ApprovalAuthorization | None:
+        """Return the AVAILABLE or CONSUMED row. REVOKED and EXPIRED are history."""
+
         stmt = select(ApprovalAuthorization).where(
-            ApprovalAuthorization.approval_request_id == approval_request_id
+            ApprovalAuthorization.approval_request_id == approval_request_id,
+            ApprovalAuthorization.state.in_(_REUSABLE_AUTHORIZATION_STATES),
         )
         return self._session.scalar(stmt)
 
-    def get_by_binding(
+    def get_reusable_by_binding(
         self,
         *,
         organization_id: uuid.UUID,
@@ -90,6 +101,8 @@ class ApprovalAuthorizationRepository(SQLAlchemyRepository[ApprovalAuthorization
         plan_content_hash: str,
         operation: PlanOperation,
     ) -> ApprovalAuthorization | None:
+        """Return the reusable binding. A revoked or expired row is not reused."""
+
         stmt = select(ApprovalAuthorization).where(
             ApprovalAuthorization.organization_id == organization_id,
             ApprovalAuthorization.account_id == account_id,
@@ -98,6 +111,7 @@ class ApprovalAuthorizationRepository(SQLAlchemyRepository[ApprovalAuthorization
             ApprovalAuthorization.revision_id == revision_id,
             ApprovalAuthorization.plan_content_hash == plan_content_hash,
             ApprovalAuthorization.operation == operation,
+            ApprovalAuthorization.state.in_(_REUSABLE_AUTHORIZATION_STATES),
         )
         return self._session.scalar(stmt)
 

@@ -4,9 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
-  schedule:
-    # 02:00 UTC. GitHub runs scheduled workflows from the default branch only.
-    - cron: "0 2 * * *"
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   workflow_dispatch:
     inputs:
       full_backend:
@@ -14,6 +12,27 @@ on:
         type: boolean
         required: true
         default: true
+
+# Pull requests share one group per PR number, so a newer commit cancels the
+# older run of that PR. A title or body edit is not a base change: it gets
+# github.run_id and cannot cancel or replace the PR run. Push and
+# workflow_dispatch, including full_backend, always use github.run_id, so no
+# push or manual run can cancel another or replace one that is still pending.
+# No schedule. Do not set a queue max together with cancel-in-progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base.ref.from) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI_SCOPE_EVENT_NAME: ${{ github.event_name }}
+  CI_SCOPE_PR_ACTION: ${{ github.event.action }}
+  CI_SCOPE_PR_DRAFT: ${{ github.event.pull_request.draft }}
+  CI_SCOPE_PR_LABEL: ${{ github.event.label.name }}
+  CI_SCOPE_PR_LABELS: ${{ github.event_name == 'pull_request' && join(github.event.pull_request.labels.*.name, ',') || '' }}
+  CI_SCOPE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+  CI_SCOPE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  CI_SCOPE_PR_NUMBER: ${{ github.event.pull_request.number }}
+  CI_SCOPE_BASE_CHANGED: ${{ github.event.changes.base.ref.from && 'true' || 'false' }}
 
 jobs:
   backend:
@@ -47,29 +66,42 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Decide CI scope
+        id: scope
+        working-directory: ${{ github.workspace }}
+        run: bash .github/workflows/ci-scope.sh
       - uses: astral-sh/setup-uv@v5
+        if: steps.scope.outputs.heavy != 'false'
         with:
           enable-cache: true
       - name: Install dependencies
+        if: steps.scope.outputs.heavy != 'false'
         run: uv sync --extra dev
       - name: Ruff check
+        if: steps.scope.outputs.heavy != 'false'
         run: uv run ruff check . ../scripts/run_backend_focused.py
       - name: Ruff format
+        if: steps.scope.outputs.heavy != 'false'
         run: uv run ruff format --check . ../scripts/run_backend_focused.py
       - name: Focused backend development tests
-        if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || !inputs.full_backend)
+        if: github.event_name != 'workflow_dispatch' || !inputs.full_backend
         env:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
+        run: |
+          if [[ "${{ steps.scope.outputs.heavy }}" == "false" ]]; then
+            echo "Skipping focused backend tests (${{ steps.scope.outputs.reason }})."
+            exit 0
+          fi
+          uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_backend
         timeout-minutes: 140
         # bash -e does not fail a pipeline when pytest fails and tee succeeds.
         shell: bash -eo pipefail {0}
         run: uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
       - name: Upload full backend pytest artifacts
-        if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_backend))
+        if: always() && (github.event_name == 'workflow_dispatch' && inputs.full_backend)
         uses: actions/upload-artifact@v4
         with:
           name: full-backend-pytest
@@ -85,6 +117,9 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      - name: CI scope self-test
+        working-directory: ${{ github.workspace }}
+        run: bash .github/workflows/ci-scope.sh --self-test
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -148,20 +183,32 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide CI scope
+        id: scope
+        working-directory: ${{ github.workspace }}
+        run: bash .github/workflows/ci-scope.sh
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.app != 'false'
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
+        if: steps.scope.outputs.app != 'false'
         run: npm ci
       - name: Lint
+        if: steps.scope.outputs.app != 'false'
         run: npm run lint
       - name: Typecheck
+        if: steps.scope.outputs.app != 'false'
         run: npm run typecheck
       - name: Unit tests
+        if: steps.scope.outputs.app != 'false'
         run: npm run test
       - name: Build
+        if: steps.scope.outputs.app != 'false'
         run: npm run build
 
   evaluation:
@@ -169,19 +216,29 @@ jobs:
     needs: [backend]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide CI scope
+        id: scope
+        run: bash .github/workflows/ci-scope.sh
       - uses: astral-sh/setup-uv@v5
+        if: steps.scope.outputs.heavy != 'false'
         with:
           enable-cache: true
       - name: Install backend
+        if: steps.scope.outputs.heavy != 'false'
         working-directory: backend
         run: uv sync --extra dev
       - name: Evaluate agent
+        if: steps.scope.outputs.heavy != 'false'
         working-directory: backend
         run: uv run python ../evaluation/evaluate_agent.py
       - name: Evaluate RAG
+        if: steps.scope.outputs.heavy != 'false'
         working-directory: backend
         run: uv run python ../evaluation/evaluate_rag.py
       - name: Evaluate guardrails
+        if: steps.scope.outputs.heavy != 'false'
         working-directory: backend
         run: uv run python ../evaluation/evaluate_guardrails.py
 
@@ -189,7 +246,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide CI scope
+        id: scope
+        run: bash .github/workflows/ci-scope.sh
       - name: Build backend Docker image
+        if: steps.scope.outputs.heavy != 'false'
         run: docker build -t alphatrade-backend:ci ./backend
 
   e2e-smoke:
@@ -200,22 +263,34 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide CI scope
+        id: scope
+        working-directory: ${{ github.workspace }}
+        run: bash .github/workflows/ci-scope.sh
       - uses: astral-sh/setup-uv@v5
+        if: steps.scope.outputs.heavy != 'false'
         with:
           enable-cache: true
       - uses: actions/setup-node@v4
+        if: steps.scope.outputs.heavy != 'false'
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install backend
+        if: steps.scope.outputs.heavy != 'false'
         working-directory: backend
         run: uv sync --extra dev
       - name: Install frontend
+        if: steps.scope.outputs.heavy != 'false'
         run: npm ci
       - name: Install Playwright browsers
+        if: steps.scope.outputs.heavy != 'false'
         run: npx playwright install chromium --with-deps
       - name: E2E smoke (API + public UI)
+        if: steps.scope.outputs.heavy != 'false'
         env:
           CI: "true"
         run: npm run test:e2e
