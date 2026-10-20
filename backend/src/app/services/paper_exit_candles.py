@@ -12,7 +12,7 @@ bars.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from app.core.config import Environment, Settings
@@ -38,6 +38,12 @@ from app.services.paper_exit_monitor import ExitBar, FetchedBars, OpenInternalPa
 _MAX_PAGE_BARS = 1400
 _MAX_PAGES = 24
 _FALLBACK_PAGES = (200, 50, 1)
+# Binance USD-M rejects a page whose evaluation time is inside 5 seconds
+# after a bar close, and age zero counts. The next cursor is the oldest
+# bar's start, which is the previous bar's end. Stay past that guard or a
+# short first page can never be extended. Matches
+# ``BINANCE_REST_SETTLEMENT_GRACE``.
+_PAGE_CURSOR_CLEARANCE = timedelta(seconds=5)
 
 CandleMode = Literal["replay", "binance_usdm", "bybit_usdt_perpetual"]
 CandleOrigin = Literal["trade", "process", "staging_live"]
@@ -204,6 +210,9 @@ def fetch_closed_bars_since(
 
     Each page uses the source contract the strategies use. The page size stays
     under the public REST cap. At most ``_MAX_PAGES`` pages are requested.
+    The next page is evaluated just after the oldest bar's start, past the
+    public REST settlement guard. The guard rejects a request whose time
+    equals that close, which would stop the walk on a short first page.
     """
 
     interval = interval_timedelta(timeframe)
@@ -234,7 +243,9 @@ def fetch_closed_bars_since(
             break
         if earliest >= cursor:
             break
-        cursor = earliest
+        cursor = earliest + _PAGE_CURSOR_CLEARANCE
+        if cursor >= evaluated_at:
+            break
         needed = _MAX_PAGE_BARS
     ordered = tuple(
         _exit_bar(bar) for bar in sorted(collected.values(), key=lambda bar: bar.interval_start)

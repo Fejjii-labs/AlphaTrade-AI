@@ -68,7 +68,10 @@ from the trade, not from a separate monitor setting:
   keeps that source when the trade has no stored identity.
 
 It walks bars that start at or after the entry boundary. The first bar whose
-range touches a level is the exit.
+range touches a level is the exit. A later page is evaluated just after the
+oldest bar's start, past the public REST settlement guard. Asking again at
+that exact close makes the guard reject every page size, so a short first
+page would never reach an older entry.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.
