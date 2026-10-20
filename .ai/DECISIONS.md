@@ -2,6 +2,47 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-132 — A disarmed reboot clears stale arming rows
+
+- Date: 2026-10-20
+- Decision: A worker that boots disarmed deletes leftover `paper_arming`
+  and `paper_exit_monitor` rows. An old armed row must not page as stale,
+  and an old refused row must not stay on `GET /health`. The delete does
+  not attach the monitor and does not write a new posture. If the database
+  cannot be opened, the failure is logged and the process still returns
+  disarmed.
+- Kill switch: a committed activation records its page as unsent, keyed by
+  the row version, in the same transaction. A failed Telegram send or a
+  crash before the send leaves that marker. `GET /health/paper-worker` and
+  the next worker boot retry it. A version already sent is not sent again.
+  The HTTP send timeout stays at most 5 seconds.
+- Safety: Flags stay default false. Production refusal is unchanged.
+  Real-money trading stays rejected. No environment, Render, or workflow
+  change.
+- Reference: AT-ADR-131; Griller second pass on the exit-monitor follow-up.
+
+## AT-ADR-131 — An attached exit monitor stays visible when the loop refuses
+
+- Date: 2026-10-20
+- Decision: Exit-monitor liveness follows whether the monitor thread is
+  attached. An autonomous-loop boot refusal still marks `paper_arming` as
+  `refused`. It does not delete the `paper_exit_monitor` heartbeat and it
+  does not report that attached thread as `disabled`. A stale heartbeat on
+  the attached thread is `stale` on `GET /health/paper-worker` and raises
+  the existing deduped alert.
+- Kill switch: `GET /health/paper-worker` includes `kill_switch` with
+  `active`, `source`, and `since`. The free-text reason, secrets, and P&L
+  amounts are not included. A committed activation whose Telegram send
+  fails is logged at error. Global-setting and fail-closed pages from
+  `evaluate()` are sent after any open transaction ends, including when
+  that transaction rolls back.
+- Telegram: the HTTP send timeout is at most 5 seconds. The stored setting
+  may still be higher so an older environment value boots. Sends clamp it.
+- Safety: Flags stay default false. Production refusal is unchanged.
+  Real-money trading stays rejected. No environment, Render, or workflow
+  change.
+- Reference: AT-ADR-130; PR #296 review comment 6294327165.
+
 ## AT-ADR-130 — A refused arming and a dead exit-monitor thread are visible
 
 - Date: 2026-10-20

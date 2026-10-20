@@ -41,6 +41,7 @@ from app.services.worker_heartbeat import (
 logger = structlog.get_logger(__name__)
 
 ARMING_ALERT_COMPONENT = "paper_arming_alert"
+_MONITOR_RUNNING = "monitor_running"
 _ARMING_REASONS = frozenset({COOLDOWN_INVALID, CYCLE_INTERVAL_EXCEEDS_TIMEFRAME})
 _REASON_TOKEN = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
@@ -81,10 +82,12 @@ def describe_boot_arming(
             reason = str(resolution.refusal)
     if exit_monitor_attached and "exit_monitor" not in sources:
         sources.append("exit_monitor")
+    # Attachment is the caller's fact. An autonomous-loop refusal must not
+    # pretend the exit-monitor thread is gone.
     return BootArmingPosture(
         reason=reason,
         source="+".join(sorted(sources)),
-        exit_monitor_attached=exit_monitor_attached and not reason,
+        exit_monitor_attached=exit_monitor_attached,
     )
 
 
@@ -138,6 +141,31 @@ def publish_boot_arming_posture(
     return posture
 
 
+def clear_disarmed_boot_rows() -> None:
+    """Delete leftover arming and exit-monitor rows on a disarmed reboot.
+
+    An old ``armed`` row pages on every cooldown once its heartbeat is
+    stale. An old ``refused`` row stays on ``GET /health``. This opens the
+    database only to delete those two rows. It does not attach the monitor,
+    write a new posture, or send Telegram. A database failure is logged and
+    does not raise, so a disarmed boot still returns disarmed.
+    """
+
+    from app.db.runtime_status import ControlledRuntimeStatusRow
+    from app.db.session import get_session_factory
+    from app.persistence.runtime_status import PAPER_EXIT_MONITOR_COMPONENT
+
+    try:
+        factory = get_session_factory()
+        with factory() as session, session.begin():
+            for component in (PAPER_ARMING_COMPONENT, PAPER_EXIT_MONITOR_COMPONENT):
+                row = session.get(ControlledRuntimeStatusRow, component)
+                if row is not None:
+                    session.delete(row)
+    except Exception:
+        logger.error("paper_arming_disarmed_clear_failed")
+
+
 def project_arming_refusal(row: object | None) -> ArmingRefusalObservation:
     """Read the boot row. Anything other than a refused token stays quiet."""
 
@@ -151,11 +179,23 @@ def project_arming_refusal(row: object | None) -> ArmingRefusalObservation:
 
 
 def exit_monitor_expected(row: object | None) -> bool:
-    """True only when boot recorded that the exit-monitor thread was attached."""
+    """True when the exit-monitor thread is attached.
 
-    if row is None or str(getattr(row, "activation_state", "")) != "armed":
+    A refused autonomous loop does not clear this. Boot records
+    ``monitor_running`` on the arming row when the thread is attached, and
+    that marker counts even if ``activation_state`` is ``refused``. A row
+    marked ``armed`` whose source includes ``exit_monitor`` also counts, so
+    a thread that was attached and then wrote no heartbeat is ``missing``.
+    """
+
+    if row is None:
         return False
-    return "exit_monitor" in _safe_source(str(getattr(row, "last_scan_reason", ""))).split("+")
+    raw = str(getattr(row, "last_scan_reason", ""))
+    if _MONITOR_RUNNING in raw.split("+"):
+        return True
+    if str(getattr(row, "activation_state", "")) != "armed":
+        return False
+    return "exit_monitor" in _safe_source(raw).split("+")
 
 
 def arming_refusal_alert(observation: ArmingRefusalObservation) -> ExitMonitorAlert | None:
@@ -235,11 +275,13 @@ def _persist_posture(settings: Settings, posture: BootArmingPosture, *, now: dat
             worker_id=settings.watcher_paper_worker_id[:80],
             heartbeat_at=now,
             activation_state=state,
-            last_scan_reason=posture.source[:64],
+            last_scan_reason=_arming_scan_reason(posture)[:64],
             last_error_code=posture.reason[:64],
             market_source="paper_arming",
         ),
     )
+    # Keep the heartbeat when the thread is attached. A loop refusal must
+    # not delete it, or a later hang is reported as disabled.
     if posture.exit_monitor_attached:
         publish_exit_monitor_heartbeat(
             settings,
@@ -249,6 +291,16 @@ def _persist_posture(settings: Settings, posture: BootArmingPosture, *, now: dat
         )
         return
     delete_exit_monitor_heartbeat(factory)
+
+
+def _arming_scan_reason(posture: BootArmingPosture) -> str:
+    """Public source tokens, plus ``monitor_running`` when the thread is up."""
+
+    if not posture.exit_monitor_attached:
+        return posture.source
+    if not posture.source:
+        return _MONITOR_RUNNING
+    return f"{posture.source}+{_MONITOR_RUNNING}"
 
 
 def _row_view(posture: BootArmingPosture, *, now: datetime) -> object:

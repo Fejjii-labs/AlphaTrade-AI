@@ -5,6 +5,22 @@ Validation, Recommended model. Gap-analysis items (Phase 7) are **not implemente
 
 Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DONE / BLOCKED.
 
+## AT-131 — Exit-monitor liveness when the autonomous loop refuses
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: main `6c425158` (merged PR #296). Griller comment 6294327165.
+- Scope: An attached exit monitor stays expected when the autonomous loop
+  refuses at boot. A disarmed reboot deletes leftover `paper_arming` and
+  `paper_exit_monitor` rows. Telegram HTTP sends clamp to 5 seconds.
+  Global-setting and fail-closed pages leave the open transaction. A
+  committed kill-switch page that did not reach Telegram is marked unsent
+  and retried on the next health check or boot, once per row version.
+  `GET /health/paper-worker` includes `kill_switch` (`active`, `source`,
+  `since`) with no secret and no P&L.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+- Reference: AT-ADR-131; AT-ADR-132; `docs/paper_exit_monitor.md`.
+
 ## AT-117 — BloFin reconciliation and presentation repair
 
 - Priority: P0 · Status: DONE (implementation; review/live acceptance pending).

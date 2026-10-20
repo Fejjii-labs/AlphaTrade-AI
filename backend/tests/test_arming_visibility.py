@@ -21,13 +21,17 @@ from structlog.testing import capture_logs
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import Organization, User
+from app.db.runtime_status import ControlledRuntimeStatusRow
 from app.persistence.runtime_status import (
     PAPER_ARMING_COMPONENT,
     PAPER_EXIT_MONITOR_COMPONENT,
+    PAPER_KILL_SWITCH_COMPONENT,
     PAPER_WORKER_COMPONENT,
     RuntimeStatusWrite,
+    load_runtime_rows,
+    publish_runtime_status,
 )
-from app.providers.alert_delivery.base import AlertDeliveryResult
+from app.providers.alert_delivery.base import AlertDeliveryPayload, AlertDeliveryResult
 from app.providers.alert_delivery.telegram import TelegramAlertDeliveryProvider
 from app.schemas.common import AlertDeliveryChannel
 from app.schemas.risk import KillSwitchMutationRequest
@@ -35,8 +39,9 @@ from app.security.passwords import hash_password
 from app.services.arming_gates import COOLDOWN_INVALID, CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
 from app.services.arming_visibility import describe_boot_arming, publish_boot_arming_posture
 from app.services.audit_service import AuditService
+from app.services.autonomous_trading import AutonomousMode, AutonomousModeResolution
 from app.services.paper_exit_monitor import ExitMonitorAlert
-from app.services.risk.kill_switch import KillSwitchService
+from app.services.risk.kill_switch import KillSwitchService, retry_unsent_kill_switch_alert
 from app.services.safety_alerts import (
     deliver_observed_alert_outside_transaction,
     notify_kill_switch_activation,
@@ -55,6 +60,7 @@ from app.workers.paper_worker import (
     CycleOutcome,
     PaperWorkerSupervisor,
     build_paper_worker_supervisor,
+    run_paper_worker_process,
 )
 
 _NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
@@ -537,6 +543,288 @@ def test_manual_and_drawdown_activations_page_after_commit(
     assert all("drawdown" not in message for message in sent)
 
 
+def test_attached_exit_monitor_stays_expected_when_the_autonomous_loop_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """Loop refused, monitor attached, then the monitor heartbeat goes stale."""
+
+    reset_safety_alert_dedup()
+    sent = _capture_telegram(monkeypatch)
+    factory, base = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    monkeypatch.setattr(
+        "app.services.arming_visibility.resolve_autonomous_mode",
+        lambda _settings: AutonomousModeResolution(
+            AutonomousMode.OFF,
+            CYCLE_INTERVAL_EXCEEDS_TIMEFRAME,
+        ),
+    )
+    settings = base.model_copy(
+        update={
+            "paper_exit_monitor_enabled": True,
+            "autonomous_internal_paper_enabled": True,
+            "watcher_paper_poll_interval_seconds": 5,
+            "paper_signal_allowed_timeframes": ["1m"],
+            "watcher_heartbeat_stale_after_seconds": 30,
+            "paper_signal_cooldown_after_loss_seconds": 3600,
+        }
+    )
+    published_at = datetime.now(UTC)
+    posture = publish_boot_arming_posture(
+        settings,
+        exit_monitor_attached=True,
+        now=published_at,
+    )
+    assert posture is not None
+    assert posture.refused is True
+    assert posture.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
+    assert posture.exit_monitor_attached is True
+    assert "autonomous" in posture.source
+    with factory() as session:
+        rows = load_runtime_rows(session)
+        arming = rows[PAPER_ARMING_COMPONENT]
+        assert arming.activation_state == "refused"
+        assert "monitor_running" in arming.last_scan_reason
+        monitor = rows[PAPER_EXIT_MONITOR_COMPONENT]
+        assert monitor.heartbeat_at is not None
+    stale_at = published_at - timedelta(minutes=10)
+    with factory() as session, session.begin():
+        row = session.get(ControlledRuntimeStatusRow, PAPER_EXIT_MONITOR_COMPONENT)
+        assert row is not None
+        row.heartbeat_at = stale_at
+    from app.api.routes.health import paper_worker_heartbeat
+
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert report.arming_refusal.refused is True
+    assert report.arming_refusal.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
+    assert report.exit_monitor_status == "stale"
+    assert report.exit_monitor_alert_raised is True
+    assert any("exit_monitor_heartbeat_stale" in message for message in sent)
+    blob = "\n".join(sent)
+    assert _TOKEN not in blob
+    assert _CHAT not in blob
+    assert "pnl" not in blob.lower()
+    rendered = report.model_dump_json()
+    assert _TOKEN not in rendered
+    assert "pnl" not in rendered.lower()
+
+
+def test_unattached_monitor_heartbeat_is_deleted_when_the_loop_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    _capture_telegram(monkeypatch)
+    factory, base = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    settings = base.model_copy(
+        update={
+            "paper_exit_monitor_enabled": True,
+            "autonomous_internal_paper_enabled": True,
+            "paper_signal_cooldown_after_loss_seconds": 0,
+        }
+    )
+    moment = datetime.now(UTC)
+    publish_exit_monitor_heartbeat(settings, now=moment, status="running", session_factory=factory)
+    posture = publish_boot_arming_posture(settings, exit_monitor_attached=False, now=moment)
+    assert posture is not None
+    assert posture.refused is True
+    assert posture.exit_monitor_attached is False
+    with factory() as session:
+        rows = load_runtime_rows(session)
+        assert PAPER_EXIT_MONITOR_COMPONENT not in rows
+        assert rows[PAPER_ARMING_COMPONENT].activation_state == "refused"
+    from app.api.routes.health import paper_worker_heartbeat
+
+    def _rows() -> dict[str, object]:
+        with factory() as session:
+            return dict(load_runtime_rows(session))
+
+    monkeypatch.setattr("app.api.routes.health._load_runtime_rows", _rows)
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert report.exit_monitor_status == "disabled"
+    assert report.exit_monitor_alert_raised is False
+
+
+def test_telegram_http_send_timeout_is_at_most_five_seconds() -> None:
+    from app.providers.alert_delivery.telegram import telegram_http_send_timeout_seconds
+    from app.telegram_activation.transport import HttpTelegramTransport
+
+    assert telegram_http_send_timeout_seconds(5) <= 5
+    assert telegram_http_send_timeout_seconds(30) == 5.0
+    assert telegram_http_send_timeout_seconds(1) == 1.0
+    captured: dict[str, float] = {}
+
+    def _post(url: str, *, json: object, timeout: float) -> MagicMock:
+        del url, json
+        captured["timeout"] = float(timeout)
+        response = MagicMock()
+        response.status_code = 200
+        return response
+
+    payload = AlertDeliveryPayload(
+        alert_id="timeout-check",
+        organization_id="system",
+        alert_type="kill_switch_activated",
+        severity="critical",
+        message="Kill switch activated.",
+    )
+    high = _settings(telegram_timeout_seconds=30)
+    TelegramAlertDeliveryProvider(high, http_post=_post).deliver(
+        payload,
+        bypass_enable_check=True,
+    )
+    assert captured["timeout"] <= 5
+    TelegramAlertDeliveryProvider(_settings(), http_post=_post).deliver(
+        payload,
+        bypass_enable_check=True,
+    )
+    assert captured["timeout"] <= 5
+    transport = HttpTelegramTransport(
+        token=_TOKEN,
+        timeout_seconds=30,
+        network_permitted=True,
+        http_post=_post,
+    )
+    transport.send_private_message(
+        bot_id="bot",
+        chat_id=_CHAT,
+        text="ping",
+        idempotency_key="timeout-check",
+    )
+    assert captured["timeout"] <= 5
+
+
+def test_global_and_fail_closed_pages_leave_the_open_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    sent = _capture_telegram(monkeypatch)
+    factory, base = _kill_db
+    settings = base.model_copy(update={"global_kill_switch_active": True})
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        with session.begin():
+            evaluation = service.evaluate(organization_id=_ORG)
+            assert evaluation.reason_code == "global_kill_switch_active"
+            assert evaluation.blocked is True
+            assert sent == []
+            assert session.in_transaction() is True
+        assert session.in_transaction() is False
+        assert any("global_setting" in message for message in sent)
+    reset_safety_alert_dedup()
+    sent.clear()
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), base)
+        service.get_status = MagicMock(side_effect=RuntimeError("postgres password=secret down"))  # type: ignore[method-assign]
+        try:
+            with session.begin():
+                evaluation = service.evaluate(organization_id=_ORG)
+                assert evaluation.reason_code == "kill_switch_unavailable"
+                assert sent == []
+                raise RuntimeError("abort the transaction")
+        except RuntimeError as exc:
+            assert str(exc) == "abort the transaction"
+        blob = "\n".join(sent)
+        assert "fail_closed" in blob
+        assert "secret" not in blob
+        assert "password" not in blob
+        assert _TOKEN not in blob
+        assert "pnl" not in blob.lower()
+
+
+def test_committed_kill_switch_activation_logs_a_failed_telegram_send_at_error(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+
+    def _deliver(
+        self: TelegramAlertDeliveryProvider,
+        payload: object,
+        *,
+        bypass_enable_check: bool = False,
+    ) -> AlertDeliveryResult:
+        del self, payload, bypass_enable_check
+        return AlertDeliveryResult(
+            success=False,
+            channel=AlertDeliveryChannel.TELEGRAM,
+            error="http 500",
+        )
+
+    monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _deliver)
+    factory, settings = _kill_db
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(
+                confirm=True,
+                reason="operator note net_pnl=-1.25",
+            ),
+            source="drawdown",
+        )
+        with capture_logs() as logs:
+            session.commit()
+    failed = [
+        entry
+        for entry in logs
+        if entry.get("event") == "safety_alert_telegram_failed"
+        and entry.get("log_level") == "error"
+    ]
+    assert failed
+    blob = repr(logs)
+    assert _TOKEN not in blob
+    assert "-1.25" not in blob
+    assert "net_pnl" not in blob.lower()
+
+
+def test_paper_worker_health_reports_kill_switch_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    _capture_telegram(monkeypatch)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    from app.api.routes.health import paper_worker_heartbeat
+
+    idle = asyncio.run(paper_worker_heartbeat(settings))
+    assert idle.kill_switch.active is False
+    assert idle.kill_switch.source == ""
+    assert idle.kill_switch.since is None
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(
+                confirm=True,
+                reason="operator note net_pnl=-99.50",
+            ),
+            source="manual",
+        )
+        session.commit()
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert report.kill_switch.active is True
+    assert report.kill_switch.source == "manual"
+    assert report.kill_switch.since is not None
+    rendered = report.model_dump_json()
+    assert "net_pnl" not in rendered.lower()
+    assert "-99.50" not in rendered
+    assert "operator note" not in rendered
+    assert _TOKEN not in rendered
+    assert _CHAT not in rendered
+    global_settings = settings.model_copy(update={"global_kill_switch_active": True})
+    covered = asyncio.run(paper_worker_heartbeat(global_settings))
+    assert covered.kill_switch.active is True
+    assert covered.kill_switch.source == "global_setting"
+    assert covered.kill_switch.since is None
+
+
 def _heartbeat_row(*, at: datetime, state: str) -> object:
     return type(
         "Beat",
@@ -569,3 +857,230 @@ def _heartbeat_row(*, at: datetime, state: str) -> object:
             "process_rss_peak_bytes": None,
         },
     )()
+
+
+def _fresh_worker_heartbeat(factory: sessionmaker[Session]) -> None:
+    publish_runtime_status(
+        factory,
+        RuntimeStatusWrite(
+            component=PAPER_WORKER_COMPONENT,
+            worker_id="watcher-paper-1",
+            heartbeat_at=datetime.now(UTC),
+            activation_state="running",
+            market_source="paper_worker",
+        ),
+    )
+
+
+def test_disarmed_reboot_clears_an_armed_monitor_and_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """Armed boot, then a disarmed reboot, leaves no stale page and no refusal."""
+
+    reset_safety_alert_dedup()
+    sent = _capture_telegram(monkeypatch)
+    factory, base = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    settings = base.model_copy(
+        update={
+            "paper_exit_monitor_enabled": True,
+            "watcher_paper_poll_interval_seconds": 5,
+            "paper_signal_allowed_timeframes": ["1m"],
+            "watcher_heartbeat_stale_after_seconds": 30,
+            "paper_signal_cooldown_after_loss_seconds": 3600,
+        }
+    )
+    posture = publish_boot_arming_posture(
+        settings,
+        exit_monitor_attached=True,
+        now=datetime.now(UTC) - timedelta(hours=1),
+    )
+    assert posture is not None
+    assert posture.refused is False
+    with factory() as session:
+        heartbeat = session.get(ControlledRuntimeStatusRow, PAPER_EXIT_MONITOR_COMPONENT)
+        assert heartbeat is not None
+        status, _observation = exit_monitor_liveness_status(
+            expected=True,
+            row=heartbeat,
+            now=datetime.now(UTC),
+            stale_after_seconds=30,
+        )
+    assert status == "stale"
+
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.load_worker_process_settings",
+        lambda _role: settings,
+    )
+    assert run_paper_worker_process(once=True) == "disarmed"
+    with factory() as session:
+        assert session.get(ControlledRuntimeStatusRow, PAPER_ARMING_COMPONENT) is None
+        assert session.get(ControlledRuntimeStatusRow, PAPER_EXIT_MONITOR_COMPONENT) is None
+
+    from app.api.routes.health import health, paper_worker_heartbeat
+
+    sent.clear()
+    _fresh_worker_heartbeat(factory)
+    body = asyncio.run(health(settings))
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert body.arming_refusal.refused is False
+    assert report.arming_refusal.refused is False
+    assert report.exit_monitor_status == "disabled"
+    assert report.exit_monitor_alert_raised is False
+    assert all("exit monitor heartbeat" not in message.lower() for message in sent)
+
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: False,
+    )
+    refused = _settings(
+        paper_exit_monitor_enabled=True,
+        paper_signal_cooldown_after_loss_seconds=0,
+        telegram_bot_token=base.telegram_bot_token,
+        telegram_chat_id=base.telegram_chat_id,
+    )
+    refused_posture = publish_boot_arming_posture(
+        refused,
+        exit_monitor_attached=False,
+        now=datetime.now(UTC),
+    )
+    assert refused_posture is not None
+    assert refused_posture.refused is True
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.load_worker_process_settings",
+        lambda _role: settings,
+    )
+    assert run_paper_worker_process(once=True) == "disarmed"
+    sent.clear()
+    _fresh_worker_heartbeat(factory)
+    body = asyncio.run(health(settings))
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert body.arming_refusal.refused is False
+    assert report.exit_monitor_status == "disabled"
+    assert report.exit_monitor_alert_raised is False
+    assert all("exit monitor heartbeat" not in message.lower() for message in sent)
+
+
+def test_worker_boot_clears_disarmed_rows_and_retries_unsent_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleared: list[bool] = []
+    retried: list[bool] = []
+    monkeypatch.setattr(
+        "app.services.arming_visibility.clear_disarmed_boot_rows",
+        lambda: cleared.append(True),
+    )
+    monkeypatch.setattr(
+        "app.services.risk.kill_switch.retry_unsent_kill_switch_alert",
+        lambda _settings: retried.append(True) or False,
+    )
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.load_worker_process_settings",
+        lambda _role: _settings(),
+    )
+    monkeypatch.setattr(
+        "app.core.disarmed_worker_boot.settings_are_disarmed_paper_worker",
+        lambda _settings: True,
+    )
+    assert run_paper_worker_process(once=True) == "disarmed"
+    assert cleared == [True]
+    assert retried == [True]
+
+
+def test_failed_kill_switch_page_retries_once_per_version(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+
+    def _fail(
+        self: TelegramAlertDeliveryProvider,
+        payload: object,
+        *,
+        bypass_enable_check: bool = False,
+    ) -> AlertDeliveryResult:
+        del self, payload, bypass_enable_check
+        return AlertDeliveryResult(
+            success=False,
+            channel=AlertDeliveryChannel.TELEGRAM,
+            error="http 500",
+        )
+
+    monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _fail)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="drawdown",
+        )
+        session.commit()
+        row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        assert row is not None
+        version = int(row.lease_epoch)
+        assert row.last_error_code == "unsent"
+        assert version >= 1
+
+    sent = _capture_telegram(monkeypatch)
+    _fresh_worker_heartbeat(factory)
+    from app.api.routes.health import paper_worker_heartbeat
+
+    report = asyncio.run(paper_worker_heartbeat(settings))
+    assert report.kill_switch.active is True
+    assert report.kill_switch.source == "drawdown"
+    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    assert sum(page in message for message in sent) == 1
+    with factory() as session:
+        row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        assert row is not None
+        assert row.last_error_code == "sent"
+        assert int(row.lease_epoch) == version
+
+    reset_safety_alert_dedup()
+    sent.clear()
+    again = asyncio.run(paper_worker_heartbeat(settings))
+    assert again.kill_switch.active is True
+    assert page not in sent
+
+
+def test_crash_before_kill_switch_send_retries_on_boot(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_queued_safety_alerts",
+        lambda _session: None,
+    )
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="manual",
+        )
+        session.commit()
+    sent = _capture_telegram(monkeypatch)
+    assert retry_unsent_kill_switch_alert(settings) is True
+    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    assert sent and page in sent[0]
+    assert "operator note" not in sent[0]
+    reset_safety_alert_dedup()
+    sent.clear()
+    assert retry_unsent_kill_switch_alert(settings) is False
+    assert sent == []

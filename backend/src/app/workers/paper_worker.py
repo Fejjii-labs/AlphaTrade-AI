@@ -691,10 +691,13 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     """Start the supervised paper worker, or idle once when disarmed.
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
-    opening PostgreSQL, Redis, or provider clients. The demo snapshot cycle
-    is not attached while its flag is off or the worker is disarmed. The
-    paper exit monitor is not attached while its flag is off or the worker
-    is disarmed, including when ``PAPER_EXIT_MONITOR_ENABLED`` is true.
+    opening Redis or provider clients. It opens PostgreSQL only to delete
+    leftover ``paper_arming`` and ``paper_exit_monitor`` rows and to retry
+    an unsent kill-switch page. A failure of that open is logged and the
+    process still returns ``disarmed``. The demo snapshot cycle is not
+    attached while its flag is off or the worker is disarmed. The paper
+    exit monitor is not attached while its flag is off or the worker is
+    disarmed, including when ``PAPER_EXIT_MONITOR_ENABLED`` is true.
     Armed startup does not bind the disarmed role, so missing operational
     dependencies fail closed.
     """
@@ -712,6 +715,13 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     assert_execution_capable_composition_root(settings)
     disarmed = settings_are_disarmed_paper_worker(settings)
     supervisor = build_paper_worker_supervisor(settings)
+    if disarmed:
+        from app.services.arming_visibility import clear_disarmed_boot_rows
+
+        clear_disarmed_boot_rows()
+    from app.services.risk.kill_switch import retry_unsent_kill_switch_alert
+
+    retry_unsent_kill_switch_alert(settings)
     if not disarmed and settings.global_kill_switch_active:
         from app.services.safety_alerts import notify_kill_switch_activation
 

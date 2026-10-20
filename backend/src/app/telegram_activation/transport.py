@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
+from app.providers.alert_delivery.telegram import telegram_http_send_timeout_seconds
 from app.telegram_activation.errors import TelegramActivationError
 from app.telegram_security.backoff import RATE_LIMITED_ERROR
 from app.telegram_security.clock import Clock
@@ -229,7 +230,7 @@ class HttpTelegramTransport:
             response = self._http_post(
                 f"https://api.telegram.org/bot{self._token}/sendMessage",
                 json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-                timeout=self._timeout,
+                timeout=telegram_http_send_timeout_seconds(self._timeout),
             )
         except Exception:
             return TransportSendResult(ok=False, retryable=True, error_code="TRANSPORT_FAILURE")

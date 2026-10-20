@@ -15,6 +15,7 @@ TELEGRAM_COMPONENT = "telegram"
 PAPER_WORKER_COMPONENT = "paper_worker"
 PAPER_ARMING_COMPONENT = "paper_arming"
 PAPER_EXIT_MONITOR_COMPONENT = "paper_exit_monitor"
+PAPER_KILL_SWITCH_COMPONENT = "paper_kill_switch"
 
 
 @dataclass(frozen=True, slots=True)
