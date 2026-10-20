@@ -55,9 +55,11 @@ vi.mock("@/lib/api", () => ({
   },
   ApiError: class ApiError extends Error {
     status: number;
-    constructor(message: string, status: number) {
+    body: unknown;
+    constructor(message: string, status: number, body: unknown = null) {
       super(message);
       this.status = status;
+      this.body = body;
     }
   },
 }));
@@ -90,7 +92,7 @@ describe("Autonomous trading settings form", () => {
   it("shows a ceiling validation message from the API", async () => {
     const { api, ApiError } = await import("@/lib/api");
     vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
-      new ApiError("daily_loss_limit_exceeds_ceiling", 422),
+      new ApiError("daily_loss_limit_exceeds_ceiling", 422, null),
     );
     render(<AutonomousTradingSettingsPage />);
     fireEvent.change(screen.getByTestId("autonomous-daily-loss-percent"), {

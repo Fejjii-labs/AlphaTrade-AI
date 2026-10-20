@@ -30,6 +30,7 @@ from app.services.autonomous_trading_guard import (
 )
 from app.services.autonomous_trading_settings_service import (
     AutonomousSettingsValidationError,
+    ResolvedAutonomousSettings,
     validate_daily_loss_limit_percent,
     validate_max_trades_per_day,
     validate_risk_per_trade_percent,
@@ -38,10 +39,6 @@ from app.services.risk.daily_risk_accounting import AuthoritativeDailySnapshot
 from app.services.risk_policy.grader import Grade, GradeDecision
 from app.services.risk_policy.plan_sizing import ActiveProfile, size_for_profile
 from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
-from app.services.autonomous_trading_settings_service import (
-    AutonomousTradingDefaults,
-    ResolvedAutonomousSettings,
-)
 from app.workers.watcher_paper_targets import PaperScanTarget
 
 ORG = uuid.UUID("00000000-0000-0000-0000-000000000284")
@@ -289,7 +286,6 @@ def _target(**updates: object) -> PaperScanTarget:
 
 
 def test_enforcement_guards() -> None:
-    defaults = AutonomousTradingDefaults()
     resolved = ResolvedAutonomousSettings(
         daily_loss_limit_percent=Decimal("2"),
         max_trades_per_day=2,

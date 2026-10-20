@@ -116,7 +116,7 @@ function AutonomousSettingsWorkspace() {
       setForm(toFormState(updated));
       setSavedMessage("Autonomous trading settings saved.");
     } catch (err) {
-      if (err instanceof ApiError && typeof err.message === "string") {
+      if (err instanceof ApiError && typeof err.message === "string" && data) {
         setSaveError(validationMessage(err.message, data));
       } else {
         setSaveError(
