@@ -592,6 +592,8 @@ def test_postgres_streak_store_round_trips_without_pnl() -> None:
 def test_paper_worker_health_route_reports_a_missing_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from fastapi import BackgroundTasks
+
     from app.api.routes.health import _read_worker_runtime, paper_worker_heartbeat
 
     def _down() -> object:
@@ -602,7 +604,7 @@ def test_paper_worker_health_route_reports_a_missing_heartbeat(
     runtime = _read_worker_runtime(settings, now=_NOW)
     assert runtime.available is False
     assert runtime.paper_worker.health_state == "UNAVAILABLE"
-    report = asyncio.run(paper_worker_heartbeat(settings))
+    report = asyncio.run(paper_worker_heartbeat(settings, BackgroundTasks()))
     assert report.status == "missing"
     assert report.alert_raised is False
     assert report.observation.health_state == "UNAVAILABLE"

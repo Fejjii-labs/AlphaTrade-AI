@@ -693,7 +693,8 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     Disarmed startup constructs Settings and returns ``disarmed`` without
     opening Redis or provider clients. It opens PostgreSQL only to delete
     leftover ``paper_arming`` and ``paper_exit_monitor`` rows and to retry
-    an unsent kill-switch page. A failure of that open is logged and the
+    an unsent kill-switch page, at most once per 60 seconds per version.
+    A failure of that open is logged and the
     process still returns ``disarmed``. The demo snapshot cycle is not
     attached while its flag is off or the worker is disarmed. The paper
     exit monitor is not attached while its flag is off or the worker is

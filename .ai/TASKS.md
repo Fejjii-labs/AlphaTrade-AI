@@ -5,6 +5,20 @@ Validation, Recommended model. Gap-analysis items (Phase 7) are **not implemente
 
 Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DONE / BLOCKED.
 
+## AT-133 — Isolate kill-switch bookkeeping and health retries
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: `a0f761c8` on `cursor/exit-monitor-kill-switch-followup-d9f3`
+  (PR #297, not merged). Griller comment 6295811355. New branch only.
+- Scope: A failed `paper_kill_switch` bookkeeping write, including two
+  concurrent first inserts, must not roll back the activation. Pending
+  alerts are keyed per organization. `GET /health/paper-worker` retries an
+  unsent page after the response, at most once per 60 seconds per version.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+  Do not push PR #297. Do not merge.
+- Reference: AT-ADR-133; `docs/paper_exit_monitor.md`.
+
 ## AT-131 — Exit-monitor liveness when the autonomous loop refuses
 
 - Priority: P1 · Status: DONE (implementation; review pending).

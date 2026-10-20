@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -16,6 +17,19 @@ PAPER_WORKER_COMPONENT = "paper_worker"
 PAPER_ARMING_COMPONENT = "paper_arming"
 PAPER_EXIT_MONITOR_COMPONENT = "paper_exit_monitor"
 PAPER_KILL_SWITCH_COMPONENT = "paper_kill_switch"
+
+
+def paper_kill_switch_component(organization_id: uuid.UUID) -> str:
+    """One pending-alert slot per organization.
+
+    ``controlled_runtime_status.component`` is 32 characters. The key is
+    ``k`` plus the first 31 hex digits of ``organization_id.hex``. The last
+    hex digit is dropped. Two organizations that share those 31 digits would
+    share one slot. The legacy ``paper_kill_switch`` row is still read so an
+    unsent page written before this key is retried.
+    """
+
+    return ("k" + organization_id.hex)[:32]
 
 
 @dataclass(frozen=True, slots=True)

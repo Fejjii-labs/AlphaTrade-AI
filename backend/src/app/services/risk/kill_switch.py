@@ -10,6 +10,8 @@ is refused.
 
 from __future__ import annotations
 
+import contextlib
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,7 +27,10 @@ from app.core.config import Settings
 from app.core.errors import ConflictError, TradingPolicyError, ValidationAppError
 from app.db.models import KillSwitchState
 from app.db.runtime_status import ControlledRuntimeStatusRow
-from app.persistence.runtime_status import PAPER_KILL_SWITCH_COMPONENT
+from app.persistence.runtime_status import (
+    PAPER_KILL_SWITCH_COMPONENT,
+    paper_kill_switch_component,
+)
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
 from app.schemas.health import PaperWorkerKillSwitch
@@ -39,6 +44,9 @@ logger = structlog.get_logger(__name__)
 
 _ALERT_UNSENT = "unsent"
 _ALERT_SENT = "sent"
+_RETRY_MIN_INTERVAL_SECONDS = 60.0
+_RETRY_LOCK = threading.Lock()
+_RETRY_CLAIMED: dict[str, datetime] = {}
 
 
 class ExecutionKillSwitch(Protocol):
@@ -153,16 +161,18 @@ class KillSwitchService:
             row=row,
             actor_type=actor_type,
         )
-        self._queue_activation_alert(
-            organization_id=organization_id,
-            source=source,
-            version=int(row.version),
-        )
         self._record_kill_switch_posture(
             organization_id=organization_id,
             source=source,
             active=True,
             at=now,
+            version=int(row.version),
+        )
+        # Queue after the savepoint. A nested commit emits after_commit, and
+        # the page must stay attached to the outer commit.
+        self._queue_activation_alert(
+            organization_id=organization_id,
+            source=source,
             version=int(row.version),
         )
         return self._to_status(row)
@@ -516,8 +526,10 @@ class KillSwitchService:
         """Remember a safe source token on this session. The reason is not stored.
 
         An activation marks its page ``unsent`` in the same transaction as
-        the kill-switch row. The version is the dedup key. A later send
-        marks that same version ``sent``.
+        the kill-switch row, inside a savepoint. The slot is one row per
+        organization, written with an upsert so two first inserts of the
+        same key cannot roll the activation back. The version is the dedup
+        key. A later send marks that same version ``sent``.
         """
 
         try:
@@ -526,31 +538,18 @@ class KillSwitchService:
             token = kill_switch_source(source) if active else ""
             alert_state = _ALERT_UNSENT if active else ""
             epoch = version if active else 0
-            row = self._session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
-            if row is None:
-                self._session.add(
-                    ControlledRuntimeStatusRow(
-                        component=PAPER_KILL_SWITCH_COMPONENT,
-                        worker_id=str(organization_id),
-                        heartbeat_at=at,
-                        activation_state="active" if active else "clear",
-                        last_scan_reason=token,
-                        last_error_code=alert_state,
-                        lease_epoch=epoch,
-                        last_delivery_at=None,
-                        market_source="kill_switch",
-                    )
+            with self._session.begin_nested():
+                _upsert_kill_switch_posture(
+                    self._session,
+                    organization_id=organization_id,
+                    token=token,
+                    active=active,
+                    at=at,
+                    epoch=epoch,
+                    alert_state=alert_state,
                 )
-                return
-            row.worker_id = str(organization_id)
-            row.heartbeat_at = at
-            row.activation_state = "active" if active else "clear"
-            row.last_scan_reason = token
-            row.last_error_code = alert_state
-            row.lease_epoch = epoch
-            if active:
-                row.last_delivery_at = None
-            row.market_source = "kill_switch"
+        except AssertionError:
+            raise
         except Exception:
             logger.error("kill_switch_source_unrecorded")
 
@@ -620,7 +619,7 @@ def _project_kill_switch(session: Session, settings: Settings) -> PaperWorkerKil
 def _recorded_kill_switch_source(session: Session, organization_id: uuid.UUID) -> str:
     from app.services.safety_alerts import kill_switch_source
 
-    row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+    row = _kill_switch_posture_row(session, organization_id)
     if row is None or str(row.activation_state) != "active":
         return "organization"
     if str(row.worker_id) != str(organization_id):
@@ -648,87 +647,236 @@ def mark_kill_switch_alert_sent(
         bind = session.get_bind()
         factory = sessionmaker(bind=bind, expire_on_commit=False)
         with factory() as fresh, fresh.begin():
-            row = fresh.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
-            if row is None or str(row.worker_id) != organization_id:
-                return
-            if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
-                return
-            row.last_error_code = _ALERT_SENT
-            row.last_delivery_at = now
+            _apply_sent_marker(fresh, organization_id, version, now)
     except Exception:
         logger.error("kill_switch_alert_sent_unrecorded")
 
 
-def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None = None) -> bool:
-    """Send a committed kill-switch page that never reached Telegram.
+def reset_kill_switch_retry_window() -> None:
+    """Forget the in-process retry limit. Tests call this between cases."""
 
-    The activation row stores the version as ``unsent``. A failed send or a
-    crash before the send leaves that marker. The next health check or
-    worker boot calls this. A version already sent is not sent again.
+    with _RETRY_LOCK:
+        _RETRY_CLAIMED.clear()
+
+
+def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None = None) -> bool:
+    """Send committed kill-switch pages that never reached Telegram.
+
+    Each organization has its own unsent slot. A failed send or a crash
+    before the send leaves that marker. Worker boot calls this directly.
+    ``GET /health/paper-worker`` schedules it after the response. A version
+    is attempted at most once per 60 seconds, including a failed attempt.
+    A version already sent is not sent again.
     """
 
     moment = now or datetime.now(UTC)
     try:
-        pending = _load_unsent_kill_switch_alert()
+        pending = _load_unsent_kill_switch_alerts()
     except Exception:
         logger.error("kill_switch_alert_retry_failed")
         return False
-    if pending is None:
+    if not pending:
         return False
-    source, organization_id, version = pending
+    try:
+        from app.services.safety_alerts import telegram_safety_configured
+
+        if not telegram_safety_configured(settings):
+            return False
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed")
+        return False
+    sent_any = False
+    for source, organization_id, version in pending:
+        if _deliver_unsent_kill_switch_alert(
+            settings,
+            source=source,
+            organization_id=organization_id,
+            version=version,
+            now=moment,
+        ):
+            sent_any = True
+    return sent_any
+
+
+def _upsert_kill_switch_posture(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    token: str,
+    active: bool,
+    at: datetime,
+    epoch: int,
+    alert_state: str,
+) -> None:
+    """Insert or update one organization's slot. A concurrent first insert commits."""
+
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        dialect_insert = cast(Any, pg_insert)
+    else:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        dialect_insert = cast(Any, sqlite_insert)
+
+    values: dict[str, object] = {
+        "component": paper_kill_switch_component(organization_id),
+        "worker_id": str(organization_id),
+        "heartbeat_at": at,
+        "activation_state": "active" if active else "clear",
+        "lease_owner": "",
+        "lease_epoch": epoch,
+        "fence_held": False,
+        "last_scan_reason": token,
+        "market_source": "kill_switch",
+        "telegram_runtime_state": "absent",
+        "inbound_mode": "off",
+        "outbox_pending": 0,
+        "outbox_retryable": 0,
+        "outbox_dead_letter": 0,
+        "last_delivery_at": None,
+        "last_error_code": alert_state,
+        "kill_switch_active": False,
+        "request_count": 0,
+        "request_weight": 0,
+        "rate_limited_count": 0,
+        "cache_hits": 0,
+    }
+    statement = dialect_insert(ControlledRuntimeStatusRow).values(**values)
+    assignments = {
+        "worker_id": values["worker_id"],
+        "heartbeat_at": values["heartbeat_at"],
+        "activation_state": values["activation_state"],
+        "lease_epoch": values["lease_epoch"],
+        "last_scan_reason": values["last_scan_reason"],
+        "last_error_code": values["last_error_code"],
+        "market_source": values["market_source"],
+    }
+    if active:
+        assignments["last_delivery_at"] = None
+    session.execute(statement.on_conflict_do_update(index_elements=["component"], set_=assignments))
+    session.flush()
+
+
+def _kill_switch_posture_row(
+    session: Session,
+    organization_id: uuid.UUID,
+) -> ControlledRuntimeStatusRow | None:
+    per_org = session.get(
+        ControlledRuntimeStatusRow,
+        paper_kill_switch_component(organization_id),
+    )
+    if per_org is not None and str(per_org.worker_id) == str(organization_id):
+        return per_org
+    legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+    if legacy is not None and str(legacy.worker_id) == str(organization_id):
+        return legacy
+    return None
+
+
+def _claim_kill_switch_retry(organization_id: str, version: int, now: datetime) -> bool:
+    moment = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    key = f"{organization_id}:{version}"
+    with _RETRY_LOCK:
+        previous = _RETRY_CLAIMED.get(key)
+        if (
+            previous is not None
+            and (moment - previous).total_seconds() < _RETRY_MIN_INTERVAL_SECONDS
+        ):
+            return False
+        _RETRY_CLAIMED[key] = moment
+        return True
+
+
+def _deliver_unsent_kill_switch_alert(
+    settings: Settings,
+    *,
+    source: str,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> bool:
     try:
         from app.services.safety_alerts import (
             build_kill_switch_alert,
             deliver_safety_alert,
             kill_switch_page_recently_sent,
-            telegram_safety_configured,
         )
 
-        if not telegram_safety_configured(settings):
-            return False
         key = f"kill_switch_activated:{source}:{organization_id}:{version}"
-        if kill_switch_page_recently_sent(key, moment):
-            _mark_kill_switch_alert_sent(organization_id, version, moment)
+        if kill_switch_page_recently_sent(key, now):
+            _mark_kill_switch_alert_sent(organization_id, version, now)
+            return False
+        if not _claim_kill_switch_retry(organization_id, version, now):
             return False
         alert = build_kill_switch_alert(
             source=source,
             organization_id=organization_id,
             dedup_key=key,
         )
-        sent = deliver_safety_alert(settings, alert, now=moment, failure_log="error")
+        sent = deliver_safety_alert(settings, alert, now=now, failure_log="error")
     except Exception:
         logger.error("kill_switch_alert_retry_failed", source=source)
         return False
     if sent:
-        _mark_kill_switch_alert_sent(organization_id, version, moment)
+        _mark_kill_switch_alert_sent(organization_id, version, now)
     return sent
 
 
-def _load_unsent_kill_switch_alert() -> tuple[str, str, int] | None:
+def _load_unsent_kill_switch_alerts() -> list[tuple[str, str, int]]:
     from app.db.session import get_session_factory
 
     factory = get_session_factory()
+    pending: list[tuple[str, str, int]] = []
     with factory() as session:
-        row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
-        if row is None:
-            return None
-        if str(row.activation_state) != "active" or str(row.last_error_code) != _ALERT_UNSENT:
-            return None
-        version = int(row.lease_epoch or 0)
-        organization_id = str(row.worker_id or "").strip()
-        source = str(row.last_scan_reason or "").strip()
-        if version < 1 or not organization_id or not source:
-            return None
-        try:
-            organization = uuid.UUID(organization_id)
-        except ValueError:
-            return None
-        state = session.scalar(
-            select(KillSwitchState).where(KillSwitchState.organization_id == organization)
+        rows = session.scalars(
+            select(ControlledRuntimeStatusRow).where(
+                ControlledRuntimeStatusRow.market_source == "kill_switch",
+                ControlledRuntimeStatusRow.activation_state == "active",
+                ControlledRuntimeStatusRow.last_error_code == _ALERT_UNSENT,
+            )
+        ).all()
+        for row in rows:
+            version = int(row.lease_epoch or 0)
+            organization_id = str(row.worker_id or "").strip()
+            source = str(row.last_scan_reason or "").strip()
+            if version < 1 or not organization_id or not source:
+                continue
+            try:
+                organization = uuid.UUID(organization_id)
+            except ValueError:
+                continue
+            state = session.scalar(
+                select(KillSwitchState).where(KillSwitchState.organization_id == organization)
+            )
+            if state is None or not bool(state.active) or int(state.version) != version:
+                continue
+            pending.append((source, organization_id, version))
+    return pending
+
+
+def _apply_sent_marker(
+    session: Session,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> None:
+    components = [PAPER_KILL_SWITCH_COMPONENT]
+    with contextlib.suppress(ValueError):
+        components.append(paper_kill_switch_component(uuid.UUID(organization_id)))
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.component.in_(components)
         )
-        if state is None or not bool(state.active) or int(state.version) != version:
-            return None
-        return source, organization_id, version
+    ).all()
+    for row in rows:
+        if str(row.worker_id) != organization_id:
+            continue
+        if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
 
 
 def _mark_kill_switch_alert_sent(organization_id: str, version: int, now: datetime) -> None:
@@ -737,12 +885,6 @@ def _mark_kill_switch_alert_sent(organization_id: str, version: int, now: dateti
     try:
         factory = get_session_factory()
         with factory() as session, session.begin():
-            row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
-            if row is None or str(row.worker_id) != organization_id:
-                return
-            if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
-                return
-            row.last_error_code = _ALERT_SENT
-            row.last_delivery_at = now
+            _apply_sent_marker(session, organization_id, version, now)
     except Exception:
         logger.error("kill_switch_alert_sent_unrecorded")
