@@ -1,7 +1,8 @@
 """Paper-worker component that closes canonical internal paper trades at SL/TP.
 
 Disabled unless ``PAPER_EXIT_MONITOR_ENABLED`` is true. ``PAPER_EXIT_MONITOR_DRY_RUN``
-logs the closes it would record and does not call the paper close service.
+defaults true. It logs the closes it would record and does not call the paper
+close service. Live closes require an explicit false.
 The write path is :meth:`ExecutionService.close_canonical_paper_plan`, the
 same method as ``POST /paper-plan/close``. No exchange write is added.
 """

@@ -2,6 +2,41 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-136 — Stale kill-switch rows do not keep the health retry hot
+
+- Date: 2026-10-20
+- Decision: The first write of an organization's full-hex kill-switch slot
+  marks that organization's 31-hex slot and its legacy `paper_kill_switch`
+  row sent when those rows are still unsent. `GET /health/paper-worker`
+  does not schedule a retry for an unsent row whose version is older than
+  the current activation. A later full-hex row that is no longer active
+  also supersedes those older unsent rows. A same-version unsent row on
+  the only remaining slot is still retried.
+- Migration `a21killswitchkey001` is already applied on staging. Its file
+  is not edited to add `SET LOCAL lock_timeout`. A downgrade still refuses
+  while any component is longer than 32 characters, so the full-hex rows
+  have to be removed first. See `docs/deploy_rollback_runbook.md` §5.6.
+- Bybit's closed-candle post-close grace is 0 seconds
+  (`FIRST_SLICE_OHLCV_GRACE_SECONDS`). It is not longer than the 5-second
+  Binance settlement guard, so the exit-monitor paging cursor stays one
+  value for every source.
+- Safety: `PAPER_EXIT_MONITOR_ENABLED` stays default false. Production
+  refusal is unchanged. Real-money trading stays rejected. No Render or
+  workflow change.
+- Reference: AT-ADR-134; AT-ADR-135.
+
+## AT-ADR-135 — Exit-monitor dry-run is the default
+
+- Date: 2026-10-20
+- Decision: `paper_exit_monitor_dry_run` (`PAPER_EXIT_MONITOR_DRY_RUN`)
+  defaults true. Removing the variable must not start internal-paper
+  closes. Live closes require an explicit `false` and the enabled flag.
+  `paper_exit_monitor_enabled` stays default false. Production still
+  refuses the enabled flag.
+- Safety: Real-money trading stays rejected. The example template records
+  the safe default. No Render blueprint or workflow change.
+- Reference: AT-ADR-116; Griller follow-up on PR #299.
+
 ## AT-ADR-134 — Kill-switch alert rows use the full organization hex
 
 - Date: 2026-10-20

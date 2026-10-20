@@ -35,7 +35,9 @@ def paper_kill_switch_truncated_component(organization_id: uuid.UUID) -> str:
 
     That key is ``k`` plus the first 31 hex digits. New writes use
     :func:`paper_kill_switch_component`. Readers still load this row, and
-    the older single ``paper_kill_switch`` row, so an unsent page is retried.
+    the older single ``paper_kill_switch`` row, so an unsent page for the
+    current activation is retried. The first full-hex write marks those
+    older rows sent.
     """
 
     return ("k" + organization_id.hex)[:32]

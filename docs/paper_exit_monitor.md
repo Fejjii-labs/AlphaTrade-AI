@@ -25,19 +25,20 @@ No exchange write endpoint is added. Real-money trading stays rejected.
 
 ## Flags
 
-Both default false. This change does not set them in `render.yaml` or in any
-deployed environment.
+The enabled flag defaults false. Dry-run defaults true. This change does not
+set them in `render.yaml` or in any deployed environment.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
 | `paper_exit_monitor_enabled` | `PAPER_EXIT_MONITOR_ENABLED` | `false` |
-| `paper_exit_monitor_dry_run` | `PAPER_EXIT_MONITOR_DRY_RUN` | `false` |
+| `paper_exit_monitor_dry_run` | `PAPER_EXIT_MONITOR_DRY_RUN` | `true` |
 
 `PAPER_EXIT_MONITOR_ENABLED=false` does not read candles and does not write.
 Production refuses `paper_exit_monitor_enabled=true` at startup. Staging and
-local may arm it. `PAPER_EXIT_MONITOR_DRY_RUN=true` still requires the enabled
-flag. It logs `paper_exit_monitor_would_close` and does not call the close
-service.
+local may arm it. Removing `PAPER_EXIT_MONITOR_DRY_RUN` leaves dry-run on, so
+it cannot start internal-paper closes. Live closes require an explicit
+`PAPER_EXIT_MONITOR_DRY_RUN=false` in addition to the enabled flag. Dry-run
+logs `paper_exit_monitor_would_close` and does not call the close service.
 
 The component is attached to the existing paper worker
 (`python -m app.workers.paper_worker`) and uses that worker's poll interval
@@ -68,10 +69,11 @@ from the trade, not from a separate monitor setting:
   keeps that source when the trade has no stored identity.
 
 It walks bars that start at or after the entry boundary. The first bar whose
-range touches a level is the exit. A later page is evaluated just after the
-oldest bar's start, past the public REST settlement guard. Asking again at
-that exact close makes the guard reject every page size, so a short first
-page would never reach an older entry.
+range touches a level is the exit. A later page is evaluated 5 seconds after
+the oldest bar's start, past Binance's public REST settlement guard. Asking
+again at that exact close makes the guard reject every page size, so a short
+first page would never reach an older entry. Bybit's post-close grace is 0
+seconds, so the same 5-second clearance is used for every source.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.
@@ -277,11 +279,15 @@ activation is marked unsent in the same transaction, in a savepoint, one
 row per organization. A failed bookkeeping write, including two concurrent
 first inserts of the same slot, does not roll the activation back. The
 component key is `k` plus the full organization UUID hex. The column is
-64 characters so that key is not truncated. An older `k` plus the first 31
-hex digits, and the single `paper_kill_switch` row, are still read. If
-Telegram fails, or the process stops before the send, the next worker boot
+64 characters so that key is not truncated. The first write of that full-hex
+row marks that organization's 31-hex key and its legacy `paper_kill_switch`
+row sent, so those leftover rows are not pending. Readers still load them
+when they carry the current activation and the full-hex row is not present.
+If Telegram fails, or the process stops before the send, the next worker boot
 retries that version. `GET /health/paper-worker` schedules the same retry
 after the response, in a worker thread, at most once per 60 seconds per
-version. A poll does not start that thread when no unsent page is visible
-or the 60 second limit is still open. A poll of that route does not send
-during the request. A version already sent is not sent again.
+version. A poll does not start that thread when no unsent page is visible,
+when the only unsent rows are older than the current activation (or a later
+full-hex row is no longer active), or the 60 second limit is still open. A
+poll of that route does not send during the request. A version already sent
+is not sent again.

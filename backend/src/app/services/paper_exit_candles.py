@@ -42,7 +42,9 @@ _FALLBACK_PAGES = (200, 50, 1)
 # after a bar close, and age zero counts. The next cursor is the oldest
 # bar's start, which is the previous bar's end. Stay past that guard or a
 # short first page can never be extended. Matches
-# ``BINANCE_REST_SETTLEMENT_GRACE``.
+# ``BINANCE_REST_SETTLEMENT_GRACE``. Bybit classifies a bar with
+# ``FIRST_SLICE_OHLCV_GRACE_SECONDS`` (0), so its post-close guard is not
+# longer than 5 seconds and this clearance stays one value for every source.
 _PAGE_CURSOR_CLEARANCE = timedelta(seconds=5)
 
 CandleMode = Literal["replay", "binance_usdm", "bybit_usdt_perpetual"]

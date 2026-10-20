@@ -212,6 +212,19 @@ Re-run `./scripts/post-deploy-smoke-gate.sh` and, when validating the canonical
 path, `INCLUDE_CANONICAL=true ./scripts/post-deploy-smoke-gate.sh` or
 `./scripts/canonical-staging-smoke.sh`.
 
+### 5.6 Kill-switch component widen (`a21killswitchkey001`)
+
+Staging has already applied this revision. Do not edit the applied file to add
+`SET LOCAL lock_timeout`. The widen is a metadata-only `varchar` change. A
+lock timeout would run only on databases that have not applied it, and
+changing the applied revision would make a fresh install diverge from staging.
+
+Downgrade refuses while any `controlled_runtime_status.component` is longer
+than 32 characters. Before `alembic downgrade` of `a21killswitchkey001`,
+delete the full-hex kill-switch rows first. Those components are `k` plus the
+full organization UUID hex (33 characters). The downgrade does not truncate
+them. Leaving them in place makes the downgrade raise.
+
 ---
 
 ## 6. Post-rollback verification

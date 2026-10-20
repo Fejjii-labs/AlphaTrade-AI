@@ -136,13 +136,35 @@ def test_production_rejects_either_autonomous_flag() -> None:
 def test_production_rejects_paper_exit_monitor() -> None:
     with pytest.raises(ValidationError, match="paper_exit_monitor_enabled"):
         Settings(**{**_PRODUCTION_BASE, "paper_exit_monitor_enabled": True})
+    with pytest.raises(ValidationError, match="paper_exit_monitor_enabled"):
+        Settings(
+            **{
+                **_PRODUCTION_BASE,
+                "paper_exit_monitor_enabled": True,
+                "paper_exit_monitor_dry_run": False,
+            }
+        )
 
 
 def test_staging_accepts_paper_exit_monitor_flag() -> None:
     settings = Settings(**{**_STAGING_BASE, "paper_exit_monitor_enabled": True})
     assert settings.paper_exit_monitor_enabled is True
-    assert settings.paper_exit_monitor_dry_run is False
+    assert settings.paper_exit_monitor_dry_run is True
     validate_deployment_settings(settings)
+
+
+def test_live_paper_exit_closes_require_explicit_dry_run_false() -> None:
+    armed = Settings(**{**_STAGING_BASE, "paper_exit_monitor_enabled": True})
+    assert armed.paper_exit_monitor_dry_run is True
+    live = Settings(
+        **{
+            **_STAGING_BASE,
+            "paper_exit_monitor_enabled": True,
+            "paper_exit_monitor_dry_run": False,
+        }
+    )
+    assert live.paper_exit_monitor_dry_run is False
+    validate_deployment_settings(live)
 
 
 def test_staging_accepts_an_autonomous_internal_paper_flag() -> None:
@@ -243,7 +265,7 @@ def test_deployment_posture_reports_at018_hardening() -> None:
     assert posture["autonomous_internal_paper_enabled"] is False
     assert posture["autonomous_blofin_demo_enabled"] is False
     assert posture["paper_exit_monitor_enabled"] is False
-    assert posture["paper_exit_monitor_dry_run"] is False
+    assert posture["paper_exit_monitor_dry_run"] is True
     assert posture["paper_exit_monitor_degraded_alert_after_seconds"] == 900
     assert posture["paper_exit_monitor_max_clock_skew_seconds"] == 15
 
