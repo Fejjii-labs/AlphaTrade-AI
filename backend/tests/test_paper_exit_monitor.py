@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import structlog
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
@@ -79,6 +80,19 @@ COMMAND = UUID("50000000-0000-4000-8000-000000000005")
 JOURNAL = UUID("60000000-0000-4000-8000-000000000006")
 ENTRY = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_worker_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace a logger already bound by an earlier test.
+
+    ``configure_logging`` caches the worker logger on first use. ``capture_logs``
+    then only sees events on stdout.
+    """
+
+    from app.workers import paper_exit_monitor as worker
+
+    monkeypatch.setattr(worker, "logger", structlog.get_logger(worker.__name__))
 
 
 class RecordingCloser(PaperExitCloser):
