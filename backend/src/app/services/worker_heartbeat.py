@@ -5,8 +5,8 @@ The exit-monitor thread publishes a separate ``paper_exit_monitor`` row.
 ``GET /health/paper-worker`` is the check a staging cron or an uptime
 monitor can hit. A missing or stale row raises a deduped Telegram alert.
 A disarmed worker does not open the database; the check then reports the
-worker heartbeat missing. The exit-monitor row is reported only when that
-thread was armed.
+worker heartbeat missing. The exit-monitor row is reported when that
+thread is attached, including when the autonomous loop refused at boot.
 """
 
 from __future__ import annotations
@@ -300,9 +300,10 @@ def exit_monitor_liveness_status(
 ) -> tuple[Literal["fresh", "stale", "missing", "disabled"], WorkerComponentObservation]:
     """Liveness of the exit-monitor thread, separate from the watcher heartbeat.
 
-    ``disabled`` means the thread was not armed. A disabled monitor is not
-    stale and does not alert. ``missing`` means it was armed and no row was
-    written. ``stale`` means the armed thread stopped updating.
+    ``disabled`` means the thread is not attached. A disabled monitor is not
+    stale and does not alert. ``missing`` means it is attached and no row
+    was written. ``stale`` means the attached thread stopped updating.
+    Attachment does not depend on the autonomous loop's boot status.
     """
 
     if not expected:
@@ -332,12 +333,12 @@ def exit_monitor_heartbeat_alert(
     if status == "missing":
         message = (
             "Paper exit monitor heartbeat is missing. "
-            "The monitor thread was armed and the external check did not see a heartbeat."
+            "The monitor thread was attached and the external check did not see a heartbeat."
         )
     else:
         message = (
             "Paper exit monitor heartbeat is stale. "
-            "The monitor thread was armed and its heartbeat is outside the freshness window."
+            "The monitor thread was attached and its heartbeat is outside the freshness window."
         )
     age = observation.heartbeat_age_seconds
     return ExitMonitorAlert(

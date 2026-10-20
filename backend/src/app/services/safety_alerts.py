@@ -11,7 +11,12 @@ Delivery is queued on the caller's session and flushed after commit, so a
 rolled-back close does not notify and a Telegram call does not hold the
 transaction open. A rollback logs the dropped alert at error. An observed
 monitor alert (not a kill-switch activation) can still be sent after that
-rollback, because the condition already happened.
+rollback, because the condition already happened. Global-setting and
+fail-closed pages from ``KillSwitchService.evaluate`` are not sent while a
+transaction is open. They are sent after that transaction ends, including
+after rollback, because the condition already happened. A committed
+activation whose Telegram send fails is logged at error. The HTTP send
+timeout is at most 5 seconds.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import re
 import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import structlog
 from sqlalchemy import event
@@ -132,6 +138,7 @@ def deliver_safety_alert(
     alert: ExitMonitorAlert,
     *,
     now: datetime | None = None,
+    failure_log: Literal["warning", "error"] = "warning",
 ) -> bool:
     """Send one alert. False when it is deduped, unconfigured, or refused.
 
@@ -159,7 +166,8 @@ def deliver_safety_alert(
     )
     result = TelegramAlertDeliveryProvider(settings).deliver(payload, bypass_enable_check=True)
     if not result.success:
-        logger.warning(
+        log = logger.error if failure_log == "error" else logger.warning
+        log(
             "safety_alert_telegram_failed",
             code=alert.code,
             skipped=result.skipped,
@@ -289,9 +297,9 @@ def deliver_queued_safety_alerts(session: Session) -> None:
         if not isinstance(settings, Settings) or not isinstance(alert, ExitMonitorAlert):
             continue
         try:
-            deliver_safety_alert(settings, alert)
+            deliver_safety_alert(settings, alert, failure_log="error")
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "safety_alert_telegram_failed",
                 code=alert.code,
                 error=redact_text(str(exc))[:200],

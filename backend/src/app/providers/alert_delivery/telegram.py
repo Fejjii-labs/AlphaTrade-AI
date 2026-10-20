@@ -11,6 +11,27 @@ from app.guardrails.redaction import redact_text
 from app.providers.alert_delivery.base import AlertDeliveryPayload, AlertDeliveryResult
 from app.schemas.common import AlertDeliveryChannel
 
+TELEGRAM_HTTP_SEND_TIMEOUT_CEILING_SECONDS = 5.0
+
+
+def telegram_http_send_timeout_seconds(configured: float) -> float:
+    """Return the HTTP send timeout, never above 5 seconds.
+
+    ``telegram_timeout_seconds`` may be stored up to 30 so an older
+    environment value still boots. A send does not wait that long.
+    """
+
+    ceiling = TELEGRAM_HTTP_SEND_TIMEOUT_CEILING_SECONDS
+    try:
+        value = float(configured)
+    except (TypeError, ValueError):
+        return ceiling
+    if value != value or value <= 0 or value == float("inf"):
+        return ceiling
+    if value > ceiling:
+        return ceiling
+    return value
+
 
 def _mask_chat_id(chat_id: str) -> str:
     if len(chat_id) <= 4:
@@ -84,7 +105,7 @@ class TelegramAlertDeliveryProvider:
             response = self._http_post(
                 url,
                 json=body,
-                timeout=self._settings.telegram_timeout_seconds,
+                timeout=telegram_http_send_timeout_seconds(self._settings.telegram_timeout_seconds),
             )
             if response.status_code >= 400:
                 masked = _mask_chat_id(chat_id)

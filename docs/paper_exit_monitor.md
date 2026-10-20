@@ -240,10 +240,17 @@ Telegram alert.
 
 The exit-monitor thread writes a separate `paper_exit_monitor` heartbeat.
 `GET /health/paper-worker` reports that thread as `fresh`, `stale`,
-`missing`, or `disabled`. `disabled` means the thread was not armed, and it
-does not alert. `stale` or `missing` means the thread was armed and then
-died or hung, and that raises its own deduped Telegram alert. The watcher
-heartbeat can stay fresh while this one does not.
+`missing`, or `disabled`. `disabled` means the thread is not attached, and
+it does not alert. `stale` or `missing` means the thread is attached and
+then died or hung, and that raises its own deduped Telegram alert. An
+autonomous-loop boot refusal still marks `paper_arming` as `refused`. It
+does not delete the exit-monitor heartbeat and it does not report that
+attached thread as `disabled`. The watcher heartbeat can stay fresh while
+this one does not.
+
+`GET /health/paper-worker` also includes `kill_switch` with `active`,
+`source`, and `since`. The free-text reason is not included. No secret and
+no P&L amount are included. Telegram HTTP sends wait at most 5 seconds.
 
 Backfill-loss, stale-loss, kill-switch arming, repeated degraded or refused
 cycles, and clock-skew alerts use the same Telegram path. The message uses

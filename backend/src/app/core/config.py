@@ -179,6 +179,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_bot_id: str = Field(default="", max_length=64)
     telegram_chat_id: str = ""
+    # Send paths clamp this to 5 seconds. The stored maximum stays 30 so an
+    # older environment value still boots.
     telegram_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
     email_alerts_enabled: bool = False

@@ -85,12 +85,30 @@ class WorkerRuntimeObservation(BaseModel):
     exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
 
 
+class PaperWorkerKillSwitch(BaseModel):
+    """Kill-switch posture for the external paper-worker poll.
+
+    ``active`` is true when the global setting is on, when the scoped
+    organization switch is on, or when that state cannot be read.
+    ``source`` is a fixed token such as ``manual`` or ``global_setting``.
+    ``since`` is the organization row's activation time when one exists.
+    The free-text reason is not included. No secret and no P&L amount.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool = False
+    source: str = ""
+    since: datetime | None = None
+
+
 class PaperWorkerHeartbeatResponse(BaseModel):
     """External liveness of the paper worker.
 
     ``status`` is ``fresh``, ``stale``, or ``missing``. ``alert_raised`` is
     true only when this request sent a new Telegram alert. A repeated poll
     inside the cooldown reports the same status and does not send again.
+    ``kill_switch`` is the switch posture. It is not a P&L figure.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -105,6 +123,7 @@ class PaperWorkerHeartbeatResponse(BaseModel):
     exit_monitor_status: Literal["fresh", "stale", "missing", "disabled"] = "disabled"
     exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     exit_monitor_alert_raised: bool = False
+    kill_switch: PaperWorkerKillSwitch = Field(default_factory=PaperWorkerKillSwitch)
     timestamp: datetime
 
 

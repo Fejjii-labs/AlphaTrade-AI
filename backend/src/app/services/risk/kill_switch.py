@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,8 +24,11 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import ConflictError, TradingPolicyError, ValidationAppError
 from app.db.models import KillSwitchState
+from app.db.runtime_status import ControlledRuntimeStatusRow
+from app.persistence.runtime_status import PAPER_KILL_SWITCH_COMPONENT
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
+from app.schemas.health import PaperWorkerKillSwitch
 from app.schemas.risk import KillSwitchMutationRequest, KillSwitchScope, KillSwitchStatus
 from app.services.audit_service import AuditService
 
@@ -152,6 +155,12 @@ class KillSwitchService:
             source=source,
             version=int(row.version),
         )
+        self._record_kill_switch_posture(
+            organization_id=organization_id,
+            source=source,
+            active=True,
+            at=now,
+        )
         return self._to_status(row)
 
     def deactivate(
@@ -213,10 +222,21 @@ class KillSwitchService:
             event_type=AuditEventType.KILL_SWITCH_DEACTIVATED,
             row=row,
         )
+        self._record_kill_switch_posture(
+            organization_id=organization_id,
+            source="",
+            active=False,
+            at=now,
+        )
         return self._to_status(row)
 
     def evaluate(self, *, organization_id: uuid.UUID) -> KillSwitchEvaluation:
-        """Read authoritative state; fail closed on storage errors."""
+        """Read authoritative state and fail closed on storage errors.
+
+        A global-setting or fail-closed page is not sent inside an open
+        transaction. It is sent after that transaction ends. A rollback
+        still pages, because the condition already happened.
+        """
         global_active = bool(self._settings.global_kill_switch_active)
         try:
             status = self.get_status(organization_id=organization_id)
@@ -423,7 +443,50 @@ class KillSwitchService:
             logger.error("kill_switch_alert_failed", source="activation")
 
     def _notify_activation(self, *, source: str, organization_id: uuid.UUID) -> None:
-        """Page for a global setting or a fail-closed read. No database write."""
+        """Page for a global setting or a fail-closed read. No database write.
+
+        When the caller still holds a transaction, the HTTP send waits until
+        that transaction ends so it does not hold the connection.
+        """
+
+        session = self._session
+        if isinstance(session, Session) and session.in_transaction():
+            self._defer_activation_page(source=source, organization_id=organization_id)
+            return
+        self._send_activation_page(source=source, organization_id=organization_id)
+
+    def _defer_activation_page(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Send after the outermost transaction ends, including on rollback."""
+
+        session = self._session
+        pending = session.info.get("_deferred_kill_pages")
+        if not isinstance(pending, list):
+            pending = []
+            session.info["_deferred_kill_pages"] = pending
+        pending.append((source, organization_id))
+        if session.info.get("_deferred_kill_pages_bound"):
+            return
+        session.info["_deferred_kill_pages_bound"] = True
+
+        def _after(sess: Session, transaction: object) -> None:
+            del transaction
+            if sess.in_transaction():
+                return
+            pages = sess.info.pop("_deferred_kill_pages", [])
+            if not isinstance(pages, list):
+                return
+            for item in pages:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                page_source, page_org = item
+                if not isinstance(page_source, str) or not isinstance(page_org, uuid.UUID):
+                    continue
+                self._send_activation_page(source=page_source, organization_id=page_org)
+
+        event.listen(session, "after_transaction_end", _after)
+
+    def _send_activation_page(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Send one page. A failure is logged and does not raise."""
 
         try:
             from app.services.safety_alerts import notify_kill_switch_activation
@@ -435,6 +498,41 @@ class KillSwitchService:
             )
         except Exception:
             logger.error("kill_switch_alert_failed", source=source)
+
+    def _record_kill_switch_posture(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        source: str,
+        active: bool,
+        at: datetime,
+    ) -> None:
+        """Remember a safe source token on this session. The reason is not stored."""
+
+        try:
+            from app.services.safety_alerts import kill_switch_source
+
+            token = kill_switch_source(source) if active else ""
+            row = self._session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+            if row is None:
+                self._session.add(
+                    ControlledRuntimeStatusRow(
+                        component=PAPER_KILL_SWITCH_COMPONENT,
+                        worker_id=str(organization_id),
+                        heartbeat_at=at,
+                        activation_state="active" if active else "clear",
+                        last_scan_reason=token,
+                        market_source="kill_switch",
+                    )
+                )
+                return
+            row.worker_id = str(organization_id)
+            row.heartbeat_at = at
+            row.activation_state = "active" if active else "clear"
+            row.last_scan_reason = token
+            row.market_source = "kill_switch"
+        except Exception:
+            logger.error("kill_switch_source_unrecorded")
 
     def _audit_trigger(
         self,
@@ -459,3 +557,55 @@ class KillSwitchService:
                 metadata={"reason": reason, "scope": KillSwitchScope.ORGANIZATION},
             )
         )
+
+
+def read_paper_worker_kill_switch(settings: Settings) -> PaperWorkerKillSwitch:
+    """Kill-switch posture for ``GET /health/paper-worker``.
+
+    The global setting wins. Otherwise one active organization row is
+    reported. An unreadable database fails closed. The free-text reason is
+    not copied.
+    """
+
+    if bool(settings.global_kill_switch_active):
+        return PaperWorkerKillSwitch(active=True, source="global_setting", since=None)
+    try:
+        from app.db.session import get_session_factory
+
+        with get_session_factory()() as session:
+            return _project_kill_switch(session, settings)
+    except Exception:
+        logger.error("paper_worker_kill_switch_unreadable")
+        return PaperWorkerKillSwitch(active=True, source="fail_closed", since=None)
+
+
+def _project_kill_switch(session: Session, settings: Settings) -> PaperWorkerKillSwitch:
+    statement = select(KillSwitchState).where(KillSwitchState.active.is_(True))
+    org_token = settings.watcher_paper_organization_id.strip()
+    if org_token:
+        statement = statement.where(KillSwitchState.organization_id == uuid.UUID(org_token))
+    rows = list(session.scalars(statement).all())
+    if not rows:
+        return PaperWorkerKillSwitch()
+    since_values = [row.activated_at for row in rows if row.activated_at is not None]
+    since = min(since_values) if since_values else None
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    source = "organization"
+    if len(rows) == 1:
+        source = _recorded_kill_switch_source(session, rows[0].organization_id)
+    return PaperWorkerKillSwitch(active=True, source=source, since=since)
+
+
+def _recorded_kill_switch_source(session: Session, organization_id: uuid.UUID) -> str:
+    from app.services.safety_alerts import kill_switch_source
+
+    row = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+    if row is None or str(row.activation_state) != "active":
+        return "organization"
+    if str(row.worker_id) != str(organization_id):
+        return "organization"
+    token = str(row.last_scan_reason or "").strip().lower()
+    if token and kill_switch_source(token) == token:
+        return token
+    return "organization"
