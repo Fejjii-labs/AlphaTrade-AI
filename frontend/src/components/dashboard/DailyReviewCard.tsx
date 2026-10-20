@@ -2,7 +2,8 @@
 
 import { useCallback, useState } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import type {
@@ -279,10 +280,10 @@ export function DailyReviewCard({ compact = false }: { compact?: boolean }) {
   );
   return (
     <Card data-testid="dashboard-daily-review">
-      <CardHeader>
-        <CardTitle>Daily Review</CardTitle>
+      <CardHeader className="gap-2 pb-2">
+        <SectionHeader eyebrow="Discipline" title="Daily Review" />
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="card-inner pt-0">
         {compact ? (
           <details>
             <summary className="min-h-11 cursor-pointer text-sm">

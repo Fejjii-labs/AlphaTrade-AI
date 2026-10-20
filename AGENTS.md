@@ -8,6 +8,8 @@ authoritative for trading safety, secrets, and git. This file adds the
 reporting duty below. Filing a report does not authorize live trading, secret
 disclosure, merging, or deploying.
 
+UI redesign phases 3-9 follow the "Design direction: MindPillar-inspired" section in `docs/alphatrade_workspace_redesign.md`.
+
 ## Agent Reports
 
 After completing ANY task, prompt, or investigation — including a stop for

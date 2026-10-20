@@ -64,6 +64,17 @@ function composite(overlay: string, background: string): string {
   return `#${parts.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
 }
 
+function rgbaOverlay(hex: string, alpha: number): string {
+  const [r, g, b] = rgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function topBarOver(vars: Vars, under: string): string {
+  const surface = color(vars, "--color-surface-0");
+  const base = color(vars, under);
+  return composite(rgbaOverlay(surface, 0.9), base);
+}
+
 const css = readFileSync(resolve(__dirname, "tokens.css"), "utf8");
 const themes = {
   dark: parseTheme(css, "dark"),
@@ -80,7 +91,7 @@ function expectAA(theme: Theme, foreground: string, background: string) {
   expect(ratio, `${theme} ${foreground} on ${background} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(AA);
 }
 
-describe("phase 1 token contrast", () => {
+describe("MindPillar-inspired token contrast (phases 3–9)", () => {
   const surfaces = [
     "--color-background",
     "--color-surface-1",
@@ -149,6 +160,50 @@ describe("phase 1 token contrast", () => {
     }
   });
 
+  it("keeps safety badge text at WCAG AA on tinted fills across surfaces and the top bar", () => {
+    const badgeRoles = [
+      { name: "danger", text: "--color-badge-danger", muted: "--color-danger-muted" },
+      { name: "blocked", text: "--color-badge-blocked", muted: "--color-blocked-muted" },
+      { name: "warning", text: "--color-badge-warning", muted: "--color-warning-muted" },
+      { name: "stale", text: "--color-stale", muted: "--color-stale-muted" },
+    ] as const;
+    const surfaces = [
+      "--color-surface-0",
+      "--color-surface-1",
+      "--color-surface-2",
+    ] as const;
+
+    const topBarBackdrops = [
+      { name: "background", under: "--color-background" },
+      { name: "surface-1", under: "--color-surface-1" },
+      { name: "surface-2", under: "--color-surface-2" },
+    ] as const;
+
+    for (const theme of ["dark", "light"] as const) {
+      const vars = themes[theme];
+      for (const role of badgeRoles) {
+        for (const surface of surfaces) {
+          const base = color(vars, surface);
+          const fill = composite(color(vars, role.muted), base);
+          const ratio = contrast(color(vars, role.text), fill);
+          expect(
+            ratio,
+            `${theme} ${role.name} badge on ${surface} is ${ratio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(AA);
+        }
+        for (const backdrop of topBarBackdrops) {
+          const bar = topBarOver(vars, backdrop.under);
+          const barFill = composite(color(vars, role.muted), bar);
+          const barRatio = contrast(color(vars, role.text), barFill);
+          expect(
+            barRatio,
+            `${theme} ${role.name} badge on top bar over ${backdrop.name} is ${barRatio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(AA);
+        }
+      }
+    }
+  });
+
   it("separates profit, interactive blue, and paper", () => {
     for (const theme of ["dark", "light"] as const) {
       const vars = themes[theme];
@@ -162,31 +217,35 @@ describe("phase 1 token contrast", () => {
     }
   });
 
-  it("uses the approved phase 1 values", () => {
+  it("uses the approved MindPillar-inspired values", () => {
     const dark = themes.dark;
     const light = themes.light;
-    expect(color(dark, "--color-background")).toBe("#080b14");
+    expect(color(dark, "--color-background")).toBe("#07090f");
     expect(color(dark, "--color-accent")).toBe("#4c8dff");
     expect(color(dark, "--color-accent-hover")).toBe("#6ea2ff");
-    expect(color(dark, "--color-accent-solid")).toBe("#2563eb");
-    expect(color(dark, "--color-highlight")).toBe("#fb923c");
-    expect(color(dark, "--color-positive")).toBe("#22c55e");
-    expect(color(dark, "--color-negative")).toBe("#f87171");
+    expect(color(dark, "--color-accent-solid")).toBe("#4b59eb");
+    expect(color(dark, "--color-highlight")).toBe("#f97316");
+    expect(color(dark, "--color-positive")).toBe("#10b981");
+    expect(color(dark, "--color-negative")).toBe("#ef4444");
     expect(color(dark, "--color-paper")).toBe("#a78bfa");
     expect(color(dark, "--color-mode-demo")).toBe("#22d3ee");
-    expect(color(dark, "--color-text-muted")).toBe("#8b97ab");
+    expect(color(dark, "--color-text-secondary")).toBe("#a3aec2");
+    expect(color(dark, "--color-text-muted")).toBe("#7d8ba0");
+    expect(color(dark, "--color-badge-danger")).toBe("#f87171");
+    expect(dark["--section-gap"]).toBe("1.25rem");
     expect(color(light, "--color-accent")).toBe("#1d4ed8");
-    expect(color(light, "--color-highlight")).toBe("#c2410c");
+    expect(color(light, "--color-highlight")).toBe("#9a3412");
     expect(color(light, "--color-positive")).toBe("#047857");
     expect(color(light, "--color-negative")).toBe("#b91c1c");
-    expect(color(light, "--color-warning")).toBe("#9a5b06");
+    expect(color(light, "--color-warning")).toBe("#854d0b");
     expect(color(light, "--color-paper")).toBe("#6d28d9");
-    expect(color(light, "--color-mode-demo")).toBe("#0e7490");
+    expect(color(light, "--color-mode-demo")).toBe("#0a6378");
     expect(color(light, "--color-text-muted")).toBe("#556378");
     expect(dark["--text-eyebrow"]).toBe("0.6875rem");
     expect(dark["--text-body"]).toBe("0.875rem");
     expect(dark["--text-display"]).toBe("2rem");
-    expect(dark["--content-max"]).toBe("1200px");
+    expect(dark["--content-max"]).toBe("1280px");
+    expect(dark["--radius-card"]).toBe("0.625rem");
     expect(dark["--elevation-1"]).toBe("none");
   });
 });

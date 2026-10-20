@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/font/google", () => ({
-  Figtree: () => ({ variable: "--font-figtree" }),
   JetBrains_Mono: () => ({ variable: "--font-mono" }),
 }));
 
@@ -17,5 +16,9 @@ describe("root viewport metadata", () => {
 
   it("enables iOS safe-area insets via viewport-fit=cover", () => {
     expect(viewport.viewportFit).toBe("cover");
+  });
+
+  it("uses the MindPillar-inspired theme color", () => {
+    expect(viewport.themeColor).toBe("#07090f");
   });
 });

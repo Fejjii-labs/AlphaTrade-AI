@@ -482,8 +482,8 @@ for (const width of [1280, 390]) {
     await screenshot("strategies");
     await noOverflow();
     await page
-      .getByText("SFP", { exact: true })
-      .locator("..")
+      .getByTestId("strategy-family")
+      .filter({ has: page.getByRole("heading", { name: "SFP", exact: true }) })
       .getByRole("link", { name: "Open", exact: true })
       .click();
     await expect(page.getByText("BTCUSDT · long · 1h")).toBeVisible();

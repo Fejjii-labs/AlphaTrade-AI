@@ -66,6 +66,9 @@ export default {
         },
         positive: "var(--color-positive)",
         negative: "var(--color-negative)",
+        "badge-danger": "var(--color-badge-danger)",
+        "badge-blocked": "var(--color-badge-blocked)",
+        "badge-warning": "var(--color-badge-warning)",
         paper: {
           DEFAULT: "var(--color-paper)",
           muted: "var(--color-paper-muted)",
@@ -114,8 +117,20 @@ export default {
         "gutter-lg": "var(--page-gutter-desktop)",
       },
       fontFamily: {
-        sans: ["var(--font-figtree)", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: [
+          '"Figtree Variable"',
+          "Figtree",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
+        mono: [
+          '"Figtree Variable"',
+          "Figtree",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
       },
       fontSize: {
         eyebrow: [

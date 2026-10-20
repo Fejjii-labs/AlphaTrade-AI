@@ -6,6 +6,9 @@ import { useCallback, useEffect, useState } from "react";
 import { RiskSettingsSummary } from "@/components/settings/RiskSettingsSummary";
 import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
 import { Button } from "@/components/ui/button";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
@@ -60,15 +63,24 @@ function StrategiesWorkspace() {
     return () => window.removeEventListener("hashchange", openRisk);
   }, []);
   return (
-    <div className="space-y-5" data-testid="trader-strategies">
-      <div className="flex flex-wrap justify-between gap-3">
-        <h1 className="text-2xl font-semibold">
-          {family?.name ?? "Strategies"}
-        </h1>
-        <Link href="/agent?discuss=strategy" className="text-accent">
-          Discuss a strategy
-        </Link>
-      </div>
+    <div className="page-sections" data-testid="trader-strategies">
+      <PageHeader
+        eyebrow={family ? "Strategy family" : "Research"}
+        title={family?.name ?? "Strategies"}
+        description={
+          family
+            ? "Directional configurations and revisions. Approval and automation stay separate."
+            : "Nested Continuation and SFP families, detections, and captured drafts."
+        }
+        actions={
+          <Link
+            href="/agent?discuss=strategy"
+            className="inline-flex min-h-10 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-[length:var(--text-label)] font-medium text-accent"
+          >
+            Discuss a strategy
+          </Link>
+        }
+      />
       {family ? (
         <>
           <Link
@@ -118,8 +130,8 @@ function StrategiesWorkspace() {
         </>
       ) : (
         <>
-          <h2 className="text-lg font-semibold">Strategy library</h2>
-          <div className="grid items-start gap-4 md:grid-cols-2">
+          <SectionHeader eyebrow="Library" title="Strategy families" />
+          <div className="grid items-start gap-3 md:grid-cols-2">
             {families.map((f) => {
               const configs = data?.brain?.strategies.filter(
                 (s) => s.spec.kind === f.kind,
@@ -131,9 +143,12 @@ function StrategiesWorkspace() {
                 <article
                   key={f.id}
                   data-testid="strategy-family"
-                  className="space-y-3 rounded-card border border-border-subtle bg-surface-1 p-4"
+                  className="card-inner rounded-card border border-border-subtle bg-surface-1 p-4"
                 >
-                  <h2 className="text-lg font-semibold">{f.name}</h2>
+                  <div className="flex items-start justify-between gap-2">
+                    <h2 className="text-section">{f.name}</h2>
+                    <Eyebrow as="span">{f.id}</Eyebrow>
+                  </div>
                   <p className="text-sm text-text-secondary">
                     {loading
                       ? "Loading…"
@@ -177,17 +192,20 @@ function StrategiesWorkspace() {
             Recent detections →
           </Link>
           <ExperimentsPanel initialExperiment={params.get("experiment")} />
-          <section className="space-y-3" data-testid="captured-strategy-notes">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">Captured strategy notes</h2>
-              <Link
-                href="/journal?tab=knowledge&category=strategies"
-                className="inline-flex min-h-11 items-center text-sm text-accent"
-              >
-                All strategy notes
-              </Link>
-            </div>
-            <p className="text-sm text-text-muted">
+          <section className="page-sections" data-testid="captured-strategy-notes">
+            <SectionHeader
+              eyebrow="Agent capture"
+              title="Captured strategy drafts"
+              actions={
+                <Link
+                  href="/journal?tab=knowledge&category=strategies"
+                  className="inline-flex min-h-10 items-center text-[length:var(--text-label)] text-accent"
+                >
+                  All strategy notes
+                </Link>
+              }
+            />
+            <p className="text-[length:var(--text-caption)] text-text-muted">
               Recent Agent captures. Configuration and approval remain separate.
             </p>
             {loading ? (

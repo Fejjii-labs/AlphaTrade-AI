@@ -4,7 +4,8 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useDemoAccountSnapshot } from "./useDemoAccountSnapshot";
 import { TradingMetric } from "./TradingMetric";
 import {
@@ -59,8 +60,8 @@ export function BloFinDemoAccountCard({
   return (
     <Card data-testid="dashboard-demo-account">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <CardTitle>BloFin demo account</CardTitle>
+        <div className="card-inner min-w-0 flex-1">
+          <SectionHeader eyebrow="Account" title="BloFin demo account" />
           <div className="flex flex-wrap gap-2">
             <Badge variant="info">BLOFIN_DEMO</Badge>
             <Badge variant={status === "ok" ? "success" : "warning"}>
@@ -95,7 +96,7 @@ export function BloFinDemoAccountCard({
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="card-inner">
         <details>
           <summary className="min-h-11 cursor-pointer text-sm">
             Snapshot scope &amp; refresh
@@ -108,7 +109,7 @@ export function BloFinDemoAccountCard({
             All balances and positions below use this configured account.
           </p>
         </details>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
           <TradingMetric
             label="Account equity"
             value={`${formatMoney(hasData ? account?.total_equity_usd : null)} USD`}

@@ -44,7 +44,7 @@ export function TopBar({
   const known = killSwitchStatus != null && !killSwitchError;
   const paused = known && killSwitchStatus.execution_blocked;
   return (
-    <header className="sticky top-0 z-30 border-b border-border-subtle bg-surface-0/95 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-border-subtle bg-surface-0/90 backdrop-blur-md">
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-gutter py-2 sm:flex lg:px-gutter-lg">
         <p
           data-testid="topbar-page-identity"
@@ -57,16 +57,22 @@ export function TopBar({
           role="status"
           aria-label="Execution status"
           aria-live="polite"
+          data-testid="execution-safety-strip"
         >
-          <StatusBadge label={mode.label} tone={mode.tone} />
+          <StatusBadge
+            label={mode.label}
+            tone={mode.tone}
+            className="px-3 py-1 text-[length:var(--text-label)] font-semibold shadow-[0_0_0_1px_rgba(255,255,255,0.06)]"
+          />
           <StatusBadge
             label={
               !known ? "Pause unknown" : paused ? "Paused" : "No global pause"
             }
             tone={!known ? "warn" : paused ? "blocked" : "muted"}
+            className="px-3 py-1 text-[length:var(--text-label)] font-semibold"
           />
         </div>
-        <div className="order-4 justify-self-end sm:order-3">
+        <div className="order-4 justify-self-end sm:order-3 [&_button]:text-[length:var(--text-label)] [&_button]:font-semibold">
           <KillSwitchButton compact />
         </div>
         <details
@@ -83,7 +89,7 @@ export function TopBar({
           <summary className="min-h-11 cursor-pointer rounded-control border border-border-subtle px-3 py-2.5 text-sm">
             Status
           </summary>
-          <div className="absolute right-0 z-40 mt-2 max-h-[calc(100dvh-5rem)] w-[min(22rem,calc(100vw-2rem))] space-y-3 overflow-y-auto rounded-card border border-border-subtle bg-surface-0 p-4 shadow-lg">
+          <div className="absolute right-0 z-40 mt-2 max-h-[calc(100dvh-5rem)] w-[min(22rem,calc(100vw-2rem))] space-y-3 overflow-y-auto rounded-card border border-border-subtle bg-surface-0/95 p-4 shadow-elevation2 backdrop-blur-md">
             <Button
               aria-label="Search pages and destinations"
               variant="outline"

@@ -12,6 +12,8 @@ export interface PageHeaderProps {
   eyebrow?: string;
   /** Optional status row above the title. Kept for existing callers. */
   meta?: React.ReactNode;
+  /** Hides eyebrow and description (mobile Agent). */
+  compact?: boolean;
 }
 
 /** One page title per screen — eyebrow, title, description, actions. */
@@ -22,14 +24,17 @@ export function PageHeader({
   className,
   eyebrow,
   meta,
+  compact = false,
 }: PageHeaderProps) {
   return (
     <header className={cn("flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between", className)}>
       <div className="min-w-0 space-y-1">
-        {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
+        {eyebrow && !compact ? <Eyebrow>{eyebrow}</Eyebrow> : null}
         {meta ? <div className="flex flex-wrap items-center gap-2">{meta}</div> : null}
-        <h1 className="text-heading">{title}</h1>
-        {description ? <div className="text-body max-w-2xl">{description}</div> : null}
+        <h1 className={cn("text-heading", compact && "text-section")}>{title}</h1>
+        {description && !compact ? (
+          <div className="text-body max-w-2xl">{description}</div>
+        ) : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </header>
