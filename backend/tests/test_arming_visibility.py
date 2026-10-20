@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,7 +26,10 @@ from structlog.testing import capture_logs
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import KillSwitchState, Organization, User
-from app.db.runtime_status import ControlledRuntimeStatusRow
+from app.db.runtime_status import (
+    CONTROLLED_RUNTIME_COMPONENT_LENGTH,
+    ControlledRuntimeStatusRow,
+)
 from app.persistence.runtime_status import (
     PAPER_ARMING_COMPONENT,
     PAPER_EXIT_MONITOR_COMPONENT,
@@ -34,6 +38,7 @@ from app.persistence.runtime_status import (
     RuntimeStatusWrite,
     load_runtime_rows,
     paper_kill_switch_component,
+    paper_kill_switch_truncated_component,
     publish_runtime_status,
 )
 from app.providers.alert_delivery.base import AlertDeliveryPayload, AlertDeliveryResult
@@ -47,7 +52,12 @@ from app.services.arming_visibility import describe_boot_arming, publish_boot_ar
 from app.services.audit_service import AuditService
 from app.services.autonomous_trading import AutonomousMode, AutonomousModeResolution
 from app.services.paper_exit_monitor import ExitMonitorAlert
-from app.services.risk.kill_switch import KillSwitchService, retry_unsent_kill_switch_alert
+from app.services.risk.kill_switch import (
+    KillSwitchService,
+    kill_switch_retry_should_schedule,
+    reset_kill_switch_retry_window,
+    retry_unsent_kill_switch_alert,
+)
 from app.services.safety_alerts import (
     deliver_observed_alert_outside_transaction,
     notify_kill_switch_activation,
@@ -464,6 +474,7 @@ def test_global_and_fail_closed_pages_are_deduped(monkeypatch: pytest.MonkeyPatc
 
 @pytest.fixture
 def _kill_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
+    reset_kill_switch_retry_window()
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -496,6 +507,7 @@ def _kill_db() -> Iterator[tuple[sessionmaker[Session], Settings]]:
         )
         session.commit()
     yield factory, settings
+    reset_kill_switch_retry_window()
     engine.dispose()
 
 
@@ -1251,7 +1263,8 @@ def test_two_organizations_keep_separate_unsent_kill_switch_slots(
                 source="manual",
             )
         session.commit()
-    assert len(paper_kill_switch_component(_ORG)) == 32
+    assert paper_kill_switch_component(_ORG) == "k" + _ORG.hex
+    assert len(paper_kill_switch_component(_ORG)) == 33
     assert paper_kill_switch_component(_ORG) != paper_kill_switch_component(org_b)
     with factory() as session:
         first = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
@@ -1354,3 +1367,200 @@ def test_unsent_kill_switch_retry_is_limited_to_once_per_minute(
     assert len(calls) == 1
     assert retry_unsent_kill_switch_alert(settings, now=started + timedelta(seconds=61)) is False
     assert len(calls) == 2
+
+
+def test_full_hex_keys_do_not_collide_on_the_last_digit(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """Orgs that share the first 31 hex digits used to share one slot."""
+
+    reset_safety_alert_dedup()
+
+    def _fail(
+        self: TelegramAlertDeliveryProvider,
+        payload: object,
+        *,
+        bypass_enable_check: bool = False,
+    ) -> AlertDeliveryResult:
+        del self, payload, bypass_enable_check
+        return AlertDeliveryResult(
+            success=False,
+            channel=AlertDeliveryChannel.TELEGRAM,
+            error="http 500",
+        )
+
+    monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _fail)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    left = uuid.UUID("11111111-1111-1111-1111-111111111110")
+    right = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    assert ("k" + left.hex)[:32] == ("k" + right.hex)[:32]
+    assert paper_kill_switch_component(left) == "k" + left.hex
+    assert paper_kill_switch_component(right) == "k" + right.hex
+    assert paper_kill_switch_component(left) != paper_kill_switch_component(right)
+    assert len(paper_kill_switch_component(left)) <= CONTROLLED_RUNTIME_COMPONENT_LENGTH
+    with factory() as session:
+        session.add(Organization(id=left, name="Left Org"))
+        session.add(Organization(id=right, name="Right Org"))
+        session.commit()
+        service = KillSwitchService(session, AuditService(session), settings)
+        for organization_id in (left, right):
+            service.activate(
+                organization_id=organization_id,
+                actor_user_id=_USER,
+                payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+                source="manual",
+            )
+        session.commit()
+    with factory() as session:
+        first = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(left))
+        second = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(right))
+        assert first is not None and second is not None
+        assert first.component != second.component
+        assert first.worker_id == str(left)
+        assert second.worker_id == str(right)
+        assert first.last_error_code == "unsent"
+        assert second.last_error_code == "unsent"
+
+
+def test_truncated_kill_switch_slot_is_still_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_queued_safety_alerts",
+        lambda _session: None,
+    )
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="manual",
+        )
+        session.commit()
+    with factory() as session, session.begin():
+        current = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
+        assert current is not None
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(_ORG),
+                worker_id=current.worker_id,
+                heartbeat_at=current.heartbeat_at,
+                activation_state=current.activation_state,
+                last_scan_reason=current.last_scan_reason,
+                last_error_code=current.last_error_code,
+                lease_epoch=current.lease_epoch,
+                market_source=current.market_source,
+            )
+        )
+        session.delete(current)
+    assert len(paper_kill_switch_truncated_component(_ORG)) == 32
+    sent = _capture_telegram(monkeypatch)
+    assert retry_unsent_kill_switch_alert(settings) is True
+    page = "Kill switch activated. New entries stay blocked until a human deactivates it."
+    assert sent and page in sent[0]
+    with factory() as session:
+        legacy = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(_ORG),
+        )
+        assert legacy is not None
+        assert legacy.last_error_code == "sent"
+        assert session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG)) is None
+
+
+def test_health_skips_the_retry_thread_when_nothing_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    _capture_telegram(monkeypatch)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    from app.api.routes.health import paper_worker_heartbeat
+
+    tasks = BackgroundTasks()
+    asyncio.run(paper_worker_heartbeat(settings, tasks))
+    assert tasks.tasks == []
+    assert kill_switch_retry_should_schedule(None) is True
+    assert kill_switch_retry_should_schedule({}) is False
+
+
+def test_health_skips_the_retry_thread_inside_the_minute(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+
+    def _fail(
+        self: TelegramAlertDeliveryProvider,
+        payload: object,
+        *,
+        bypass_enable_check: bool = False,
+    ) -> AlertDeliveryResult:
+        del self, payload, bypass_enable_check
+        return AlertDeliveryResult(
+            success=False,
+            channel=AlertDeliveryChannel.TELEGRAM,
+            error="http 500",
+        )
+
+    monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _fail)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    with factory() as session:
+        service = KillSwitchService(session, AuditService(session), settings)
+        service.activate(
+            organization_id=_ORG,
+            actor_user_id=_USER,
+            payload=KillSwitchMutationRequest(confirm=True, reason="operator note"),
+            source="drawdown",
+        )
+        session.commit()
+    from app.api.routes.health import paper_worker_heartbeat
+
+    due = BackgroundTasks()
+    asyncio.run(paper_worker_heartbeat(settings, due))
+    assert len(due.tasks) == 1
+    asyncio.run(due())
+    quiet = BackgroundTasks()
+    asyncio.run(paper_worker_heartbeat(settings, quiet))
+    assert quiet.tasks == []
+
+
+def test_precheck_uses_the_same_sixty_second_window() -> None:
+    reset_kill_switch_retry_window()
+    started = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+    pending = {
+        "slot": SimpleNamespace(
+            market_source="kill_switch",
+            activation_state="active",
+            last_error_code="unsent",
+            lease_epoch=4,
+            worker_id=str(_ORG),
+            last_scan_reason="manual",
+        )
+    }
+    assert kill_switch_retry_should_schedule(pending, now=started) is True
+    from app.services.risk.kill_switch import _claim_kill_switch_retry
+
+    assert _claim_kill_switch_retry(str(_ORG), 4, started) is True
+    assert kill_switch_retry_should_schedule(pending, now=started + timedelta(seconds=59)) is False
+    assert kill_switch_retry_should_schedule(pending, now=started + timedelta(seconds=61)) is True
+    ignored = {
+        "slot": SimpleNamespace(
+            market_source="kill_switch",
+            activation_state="active",
+            last_error_code="sent",
+            lease_epoch=4,
+            worker_id=str(_ORG),
+            last_scan_reason="manual",
+        )
+    }
+    assert kill_switch_retry_should_schedule(ignored, now=started) is False
+    reset_kill_switch_retry_window()

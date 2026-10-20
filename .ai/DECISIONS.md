@@ -2,6 +2,23 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-134 — Kill-switch alert rows use the full organization hex
+
+- Date: 2026-10-20
+- Decision: `controlled_runtime_status.component` is widened from 32 to 64
+  characters. A new pending kill-switch alert is keyed `k` plus the full
+  organization UUID hex (33 characters). The previous `k` plus 31 hex
+  digits, and the single `paper_kill_switch` row, are still read and can
+  still be marked sent. Downgrade of the widen refuses while any component
+  is longer than 32 characters. `GET /health/paper-worker` starts the
+  Telegram retry thread only when an unsent page is visible and that
+  page's 60 second limit is open. A failed runtime read still schedules
+  the thread.
+- Safety: Flags stay default false. Production refusal is unchanged.
+  Real-money trading stays rejected. No environment, Render, or workflow
+  change.
+- Reference: AT-ADR-133; Griller comment 6297076089 conditions C3 and C4.
+
 ## AT-ADR-133 — Kill-switch bookkeeping cannot undo the activation
 
 - Date: 2026-10-20

@@ -217,7 +217,8 @@ async def paper_worker_heartbeat(
     A Telegram send uses the existing bot token and chat id. The response
     does not include those values. An unsent kill-switch page is retried
     after the response, in a worker thread, at most once per 60 seconds
-    per activation version.
+    per activation version. No thread is started when no unsent page is
+    visible, or when every visible page is still inside that limit.
     """
 
     from sqlalchemy.orm import Session, sessionmaker
@@ -295,11 +296,13 @@ async def paper_worker_heartbeat(
             ),
         )
     from app.services.risk.kill_switch import (
+        kill_switch_retry_should_schedule,
         read_paper_worker_kill_switch,
         retry_unsent_kill_switch_alert,
     )
 
-    background_tasks.add_task(retry_unsent_kill_switch_alert, settings)
+    if kill_switch_retry_should_schedule(rows, now=observed_at):
+        background_tasks.add_task(retry_unsent_kill_switch_alert, settings)
     return PaperWorkerHeartbeatResponse(
         status=heartbeat_status(observation),
         observation=observation,

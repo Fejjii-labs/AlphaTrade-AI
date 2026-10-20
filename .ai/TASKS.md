@@ -5,6 +5,21 @@ Validation, Recommended model. Gap-analysis items (Phase 7) are **not implemente
 
 Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DONE / BLOCKED.
 
+## AT-134 — Full-hex kill-switch alert keys
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: main `d8db9aee` (merged PR #298). Griller comment 6297076089, C3
+  required and C4 optional.
+- Scope: Key pending kill-switch alerts on the full organization UUID hex.
+  Widen `controlled_runtime_status.component` with a reversible migration.
+  Keep reading the legacy `paper_kill_switch` row and the 31-hex rows.
+  Skip the health-check retry thread when nothing is pending or the 60
+  second limit is still open.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+  One push. No force push. No `workflow_dispatch`.
+- Reference: AT-ADR-134; `docs/paper_exit_monitor.md`.
+
 ## AT-133 — Isolate kill-switch bookkeeping and health retries
 
 - Priority: P1 · Status: DONE (implementation; review pending).

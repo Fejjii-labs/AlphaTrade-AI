@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -30,6 +31,7 @@ from app.db.runtime_status import ControlledRuntimeStatusRow
 from app.persistence.runtime_status import (
     PAPER_KILL_SWITCH_COMPONENT,
     paper_kill_switch_component,
+    paper_kill_switch_truncated_component,
 )
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
@@ -659,6 +661,33 @@ def reset_kill_switch_retry_window() -> None:
         _RETRY_CLAIMED.clear()
 
 
+def kill_switch_retry_should_schedule(
+    rows: Mapping[str, object] | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether ``GET /health/paper-worker`` should start a retry thread.
+
+    ``None`` means the runtime rows could not be read. The thread is still
+    scheduled so a failed read is not treated as an empty queue. No thread
+    is scheduled when no unsent page is visible, or when every visible page
+    is still inside the 60 second limit. This does not claim that limit and
+    does not send.
+    """
+
+    if rows is None:
+        return True
+    moment = now or datetime.now(UTC)
+    for row in rows.values():
+        identity = _visible_unsent_alert(row)
+        if identity is None:
+            continue
+        organization_id, version = identity
+        if not _retry_claimed_recently(organization_id, version, moment):
+            return True
+    return False
+
+
 def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None = None) -> bool:
     """Send committed kill-switch pages that never reached Telegram.
 
@@ -763,27 +792,40 @@ def _kill_switch_posture_row(
     session: Session,
     organization_id: uuid.UUID,
 ) -> ControlledRuntimeStatusRow | None:
-    per_org = session.get(
-        ControlledRuntimeStatusRow,
-        paper_kill_switch_component(organization_id),
-    )
-    if per_org is not None and str(per_org.worker_id) == str(organization_id):
-        return per_org
-    legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
-    if legacy is not None and str(legacy.worker_id) == str(organization_id):
-        return legacy
+    """Prefer the full-hex slot, then the 31-hex slot, then the legacy row."""
+
+    expected = str(organization_id)
+    for component in _kill_switch_slot_components(expected):
+        row = session.get(ControlledRuntimeStatusRow, component)
+        if row is not None and str(row.worker_id) == expected:
+            return row
     return None
 
 
+def _aware(now: datetime) -> datetime:
+    return now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+
+
+def _within_retry_interval(previous: datetime, moment: datetime) -> bool:
+    return (moment - previous).total_seconds() < _RETRY_MIN_INTERVAL_SECONDS
+
+
+def _retry_claimed_recently(organization_id: str, version: int, now: datetime) -> bool:
+    key = f"{organization_id}:{version}"
+    moment = _aware(now)
+    with _RETRY_LOCK:
+        previous = _RETRY_CLAIMED.get(key)
+        if previous is None:
+            return False
+        return _within_retry_interval(previous, moment)
+
+
 def _claim_kill_switch_retry(organization_id: str, version: int, now: datetime) -> bool:
-    moment = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    moment = _aware(now)
     key = f"{organization_id}:{version}"
     with _RETRY_LOCK:
         previous = _RETRY_CLAIMED.get(key)
-        if (
-            previous is not None
-            and (moment - previous).total_seconds() < _RETRY_MIN_INTERVAL_SECONDS
-        ):
+        if previous is not None and _within_retry_interval(previous, moment):
             return False
         _RETRY_CLAIMED[key] = moment
         return True
@@ -856,15 +898,48 @@ def _load_unsent_kill_switch_alerts() -> list[tuple[str, str, int]]:
     return pending
 
 
+def _visible_unsent_alert(row: object) -> tuple[str, int] | None:
+    """Org id and version when this row looks like a page the retry would send."""
+
+    if str(getattr(row, "market_source", "")) != "kill_switch":
+        return None
+    if str(getattr(row, "activation_state", "")) != "active":
+        return None
+    if str(getattr(row, "last_error_code", "")) != _ALERT_UNSENT:
+        return None
+    try:
+        version = int(getattr(row, "lease_epoch", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    organization_id = str(getattr(row, "worker_id", "") or "").strip()
+    source = str(getattr(row, "last_scan_reason", "") or "").strip()
+    if version < 1 or not organization_id or not source:
+        return None
+    try:
+        uuid.UUID(organization_id)
+    except ValueError:
+        return None
+    return organization_id, version
+
+
+def _kill_switch_slot_components(organization_id: str) -> list[str]:
+    """Full-hex key, the old 31-hex key, and the single legacy row."""
+
+    components = [PAPER_KILL_SWITCH_COMPONENT]
+    with contextlib.suppress(ValueError):
+        parsed = uuid.UUID(organization_id)
+        components.insert(0, paper_kill_switch_truncated_component(parsed))
+        components.insert(0, paper_kill_switch_component(parsed))
+    return components
+
+
 def _apply_sent_marker(
     session: Session,
     organization_id: str,
     version: int,
     now: datetime,
 ) -> None:
-    components = [PAPER_KILL_SWITCH_COMPONENT]
-    with contextlib.suppress(ValueError):
-        components.append(paper_kill_switch_component(uuid.UUID(organization_id)))
+    components = _kill_switch_slot_components(organization_id)
     rows = session.scalars(
         select(ControlledRuntimeStatusRow).where(
             ControlledRuntimeStatusRow.component.in_(components)

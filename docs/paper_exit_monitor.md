@@ -276,10 +276,12 @@ free-text reason is not copied. No P&L amount is included. A committed
 activation is marked unsent in the same transaction, in a savepoint, one
 row per organization. A failed bookkeeping write, including two concurrent
 first inserts of the same slot, does not roll the activation back. The
-component key is `k` plus the first 31 hex digits of the organization id,
-because the column is 32 characters. An older single `paper_kill_switch`
-row is still read. If Telegram fails, or the process stops before the
-send, the next worker boot retries that version. `GET /health/paper-worker`
-schedules the same retry after the response, in a worker thread, at most
-once per 60 seconds per version. A poll of that route does not send during
-the request. A version already sent is not sent again.
+component key is `k` plus the full organization UUID hex. The column is
+64 characters so that key is not truncated. An older `k` plus the first 31
+hex digits, and the single `paper_kill_switch` row, are still read. If
+Telegram fails, or the process stops before the send, the next worker boot
+retries that version. `GET /health/paper-worker` schedules the same retry
+after the response, in a worker thread, at most once per 60 seconds per
+version. A poll does not start that thread when no unsent page is visible
+or the 60 second limit is still open. A poll of that route does not send
+during the request. A version already sent is not sent again.
