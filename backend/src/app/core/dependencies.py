@@ -22,6 +22,7 @@ from app.services.alert_delivery_service import AlertDeliveryService
 from app.services.analytics.facade import TradingAnalyticsFacade
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
+from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.backtest_journal_service import BacktestJournalService
 from app.services.backtest_service import BacktestService
 from app.services.blofin_sync_service import BloFinSyncService
@@ -737,6 +738,19 @@ def get_risk_settings_service(
 
 
 RiskSettingsServiceDep = Annotated[RiskSettingsService, Depends(get_risk_settings_service)]
+
+
+def get_autonomous_trading_settings_service(
+    session: SessionDep,
+    audit_service: AuditServiceDep,
+) -> AutonomousTradingSettingsService:
+    return AutonomousTradingSettingsService(session, audit_service)
+
+
+AutonomousTradingSettingsServiceDep = Annotated[
+    AutonomousTradingSettingsService,
+    Depends(get_autonomous_trading_settings_service),
+]
 
 
 def get_kill_switch_service(

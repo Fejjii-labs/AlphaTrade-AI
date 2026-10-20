@@ -6,14 +6,23 @@ import {
   demoAccountApi,
   type DashboardDemoAccount,
 } from "@/lib/api/dashboard-demo-account";
+import {
+  DEMO_MAX_BACKOFF_MS,
+  DEMO_REFRESH_INTERVAL_MS,
+  DEMO_REQUEST_TIMEOUT_MS,
+  demoRefreshIntervalMs,
+} from "./demoAccountRefresh";
 
-// At most 20 scheduled attempts/hour/tab; server also enforces 30/org/hour.
-export const DEMO_REFRESH_INTERVAL_MS = 180_000;
-export const DEMO_MAX_BACKOFF_MS = 900_000;
-export const DEMO_REQUEST_TIMEOUT_MS = 30_000;
+export {
+  DEMO_MAX_BACKOFF_MS,
+  DEMO_REFRESH_INTERVAL_MS,
+  DEMO_REQUEST_TIMEOUT_MS,
+} from "./demoAccountRefresh";
 
 const hasSnapshot = (value: DashboardDemoAccount | null) =>
   value && ["ok", "degraded", "stale"].includes(value.status);
+
+const gatesOpen = (value: DashboardDemoAccount) => value.status !== "inactive";
 
 export function useDemoAccountSnapshot(refreshKey: number) {
   const [account, setAccount] = useState<DashboardDemoAccount | null>(null);
@@ -25,6 +34,8 @@ export function useDemoAccountSnapshot(refreshKey: number) {
   const nextDue = useRef(Date.now() + DEMO_REFRESH_INTERVAL_MS);
   const generation = useRef(0);
   const mounted = useRef(false);
+  const armImmediate = useRef(false);
+  const opened = useRef(false);
   const flight = useRef<{
     native: boolean;
     controller: AbortController;
@@ -74,8 +85,13 @@ export function useDemoAccountSnapshot(refreshKey: number) {
       }
       setError(null);
       failures.current = 0;
-      if (native || automatic) {
-        nextDue.current = Date.now() + DEMO_REFRESH_INTERVAL_MS;
+      const interval = demoRefreshIntervalMs(result.refresh_interval_seconds);
+      const ownerRefresh = result.can_refresh === true && gatesOpen(result);
+      if (native || automatic || opened.current || !ownerRefresh) {
+        nextDue.current = Date.now() + interval;
+      } else {
+        opened.current = true;
+        armImmediate.current = true;
       }
     } catch {
       if (!mounted.current || request !== generation.current) return;
@@ -85,11 +101,12 @@ export function useDemoAccountSnapshot(refreshKey: number) {
         "Demo account refresh failed. Showing the last successful snapshot when available. Retry or check Exchange settings.",
       );
       failures.current += 1;
+      const interval = demoRefreshIntervalMs(saved.current?.refresh_interval_seconds);
       nextDue.current =
         Date.now() +
         Math.min(
           DEMO_MAX_BACKOFF_MS,
-          DEMO_REFRESH_INTERVAL_MS * 2 ** Math.min(failures.current, 3),
+          interval * 2 ** Math.min(failures.current, 3),
         );
     } finally {
       clearTimeout(timeout);
@@ -98,6 +115,11 @@ export function useDemoAccountSnapshot(refreshKey: number) {
         flight.current = null;
         setBusy(false);
         setNow(Date.now());
+        if (armImmediate.current) {
+          armImmediate.current = false;
+          void load(true, true);
+          return;
+        }
         schedule.current();
       }
     }
@@ -118,7 +140,11 @@ export function useDemoAccountSnapshot(refreshKey: number) {
       ) return;
       timer.current = setTimeout(() => {
         if (document.visibilityState !== "hidden") {
-          void load(saved.current?.can_refresh === true, true);
+          const current = saved.current;
+          void load(
+            current?.can_refresh === true && current.status !== "inactive",
+            true,
+          );
         }
       }, Math.max(0, nextDue.current - Date.now()));
     };

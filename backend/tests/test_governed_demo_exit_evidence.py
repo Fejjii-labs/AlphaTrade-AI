@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.providers.exchange.governed_blofin import DemoFill, DemoOrderEvidence
+from app.schemas.trade_plan import MarginMode
 from tests.support.phase5_market import EVALUATED_AT
 from tests.test_governed_blofin_quote_freshness import _plan
 from tests.test_governed_demo_readiness import provider_for
@@ -79,6 +80,7 @@ def exit_world(category="normal", *, partial=False):
         "createTime": ts,
     }
     responses = {
+        "query-apikey": {"readOnly": 0},
         "positions": [],
         "orders-pending": [],
         "orders-tpsl-pending": [],
@@ -105,6 +107,19 @@ def exit_world(category="normal", *, partial=False):
     return plan, entry, provider, responses, calls
 
 
+def test_undocumented_fill_funding_fields_stay_unverified():
+    """BloFin fills-history does not document funding or its sign."""
+
+    plan, entry, provider, responses, _calls = exit_world()
+    responses["fills-history"][0]["funding"] = "-0.4"
+    responses["fills-history"][0]["fundingFee"] = "0.4"
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None
+    assert closed.funding is None
+    assert closed.fills[0].funding is None
+    assert closed.facts()["funding"] is None
+
+
 @pytest.mark.parametrize("category,partial", [("normal", False), ("tp", False), ("sl", True)])
 def test_verified_actual_close_and_partial_entry_keep_real_economics(category, partial):
     plan, entry, provider, _, calls = exit_world(category, partial=partial)
@@ -115,7 +130,7 @@ def test_verified_actual_close_and_partial_entry_keep_real_economics(category, p
     assert closed.fills[0].fee == Decimal("0.03")
     assert closed.facts()["funding"] is None and closed.facts()["net_pnl"] is None
     assert closed.protection_ids == (() if category == "normal" else ("protect-1",))
-    assert len(calls) <= 9
+    assert len(calls) <= 11  # UID/permission checks bracket the history reads.
 
 
 @pytest.mark.parametrize(
@@ -124,7 +139,14 @@ def test_verified_actual_close_and_partial_entry_keep_real_economics(category, p
 def test_absence_or_partial_close_never_infers_closed(reason):
     plan, entry, provider, responses, _ = exit_world()
     if reason == "open":
-        responses["positions"] = [{"positions": "1", "instId": "ETH-USDT"}]
+        responses["positions"] = [
+            {
+                "positions": str(-plan.quantity.value),
+                "instId": plan.execution_instrument,
+                "positionSide": "net",
+                "marginMode": "cross",
+            }
+        ]
     elif reason == "pending":
         responses["orders-pending"] = [{"orderId": "other-market-pending"}]
     elif reason == "live_entry":
@@ -212,6 +234,27 @@ def test_unexplained_or_incomplete_exit_evidence_is_refused(reason):
         provider.reconcile_exit(plan=plan, entry=entry)
 
 
+def test_isolated_profile_exit_reads_back_the_posted_margin_mode():
+    plan, entry, provider, responses, calls = exit_world()
+    plan = plan.model_copy(
+        update={
+            "margin_mode": MarginMode.ISOLATED,
+            "risk_and_exits": plan.risk_and_exits.model_copy(
+                update={"margin_assumption_id": "verified-demo-read-leverage"}
+            ),
+        }
+    )
+    for row in responses["orders-history"]:
+        row["marginMode"] = "isolated"
+    closed = provider.reconcile_exit(plan=plan, entry=entry)
+    assert closed is not None
+    assert all(call.method == "GET" for call in calls)
+    for row in responses["orders-history"]:
+        row["marginMode"] = "cross"
+    with pytest.raises(ValueError, match="identity mismatch"):
+        provider.reconcile_exit(plan=plan, entry=entry)
+
+
 def test_missing_reported_realized_pnl_is_explicit_not_computed_from_prices():
     plan, entry, provider, responses, _ = exit_world()
     responses["fills-history"][0].pop("fillPnl")
@@ -229,3 +272,56 @@ def test_actual_exit_retains_fee_currency_without_inferred_monetary_basis(curren
     assert closed.facts()["exit_fills"][0]["fee_currency"] == currency
     assert closed.facts()["fee_convention"] is None
     assert closed.facts()["net_pnl"] is closed.facts()["funding"] is None
+
+
+@pytest.mark.parametrize("problem", ["foreign", "oversized", "wrong_side", "duplicate", "hedge"])
+def test_open_position_must_be_explained_by_owned_net_fills(problem):
+    from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
+
+    plan, entry, *_ = exit_world()
+    row = {
+        "instId": plan.execution_instrument,
+        "positionSide": "net",
+        "marginMode": "cross",
+        "positions": str(-plan.quantity.value),
+    }
+    rows = [row]
+    if problem == "foreign":
+        row["instId"] = "ETH-USDT"
+    elif problem == "oversized":
+        row["positions"] = str(-plan.quantity.value * 2)
+    elif problem == "wrong_side":
+        row["positions"] = str(plan.quantity.value)
+    elif problem == "duplicate":
+        rows = [row, dict(row)]
+    elif problem == "hedge":
+        row["positionSide"] = "short"
+
+    def handle(request):
+        assert request.method == "GET"
+        if request.url.path.endswith("query-apikey"):
+            return httpx.Response(200, json={"code": "0", "data": {"readOnly": 0}})
+        assert request.url.path.endswith("positions")
+        return httpx.Response(200, json={"code": "0", "data": rows})
+
+    with pytest.raises(DemoPositionLineageError):
+        provider_for(handle).reconcile_exit(plan=plan, entry=entry)
+
+
+def test_execution_connection_requires_the_experiment_owned_uid_before_entry_io():
+    from app.providers.exchange.demo_preflight import DemoPreflightError
+
+    requests = []
+
+    def handler(request):
+        requests.append((request.method, request.url.path))
+        assert request.method == "GET" and request.url.path.endswith("query-apikey")
+        return httpx.Response(
+            200, json={"code": "0", "data": {"readOnly": 0, "uid": "foreign-uid"}}
+        )
+
+    provider = provider_for(handler)
+    provider.require_account_identity("owned-uid")
+    with pytest.raises(DemoPreflightError):
+        provider.verify_permissions()
+    assert requests == [("GET", "/api/v1/user/query-apikey")]

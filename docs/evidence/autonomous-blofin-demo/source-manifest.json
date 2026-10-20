@@ -1,0 +1,123 @@
+{
+  "reviewed_candidate": "de5c010c7c85dfe5cde1ec8fabf60b6262500fe0",
+  "implementation_commit": "59f14dfe8bd4edd179e7794fdd055c7495fec99a",
+  "implementation_tree": "f21b7fca9a8f5e1cbb84dba5926623b37c58ea66",
+  "files": [
+    {
+      "path": "backend/src/app/experiments/blofin_source.py",
+      "sha256": "112b9362c4a24068267ac667922fae1a5761f1e7456c2bb01384246672068cac"
+    },
+    {
+      "path": "backend/src/app/experiments/execution_risk.py",
+      "sha256": "9f5a74694e8d35ed1e797d18d613bbced04b5865abf8edbd2b399d2c75ca3052"
+    },
+    {
+      "path": "backend/src/app/experiments/execution_selection.py",
+      "sha256": "bb65200874209a3d582a815e5f44490496b4a00407e43278164dc26431b7538a"
+    },
+    {
+      "path": "backend/src/app/experiments/native_closure.py",
+      "sha256": "df465d1a53880666201a4bd4f58087bf9772bd9439ee396a3b40b9cc3fc3a5c0"
+    },
+    {
+      "path": "backend/src/app/experiments/native_lineage.py",
+      "sha256": "625925662a2a6b6e6d96dd5c424ed779041ffc50948cc54f689ecf556f528f3b"
+    },
+    {
+      "path": "backend/src/app/experiments/native_producer.py",
+      "sha256": "71e989fcee279941b92b184f21184e6aee6696a43d8c913e0260defc6b158338"
+    },
+    {
+      "path": "backend/src/app/experiments/outcome_contract.py",
+      "sha256": "23e45dca9df3b4d3a515bbc4cab7c2529b3579ed12b28689441d86dfcadde24e"
+    },
+    {
+      "path": "backend/src/app/experiments/outcomes.py",
+      "sha256": "d434bfa7451c02c783388d5c55f80a590ac9d809fba58dc010efc2bf854974ba"
+    },
+    {
+      "path": "backend/src/app/providers/exchange/governed_blofin.py",
+      "sha256": "d4899d6e6b81289045749b03725d5ca802e97a8156dba50d9f0f98d8687c2d05"
+    },
+    {
+      "path": "backend/src/app/providers/exchange/governed_blofin_exit.py",
+      "sha256": "a94cb1be28ef9cae23693b0543000423e7f8558ddc45649f71491d252091386e"
+    },
+    {
+      "path": "backend/src/app/repositories/execution_protocol.py",
+      "sha256": "4a3efba33a82643a65e95aef792b711f9b7cd09d1c09d77bd4e815ac430e6c8a"
+    },
+    {
+      "path": "backend/src/app/services/demo_account_history.py",
+      "sha256": "f9dbfbf64ad500a5c791b2273c56835142bbaef37eea4e01202297568e0cc0e8"
+    },
+    {
+      "path": "backend/src/app/services/demo_lifecycle_resolution.py",
+      "sha256": "48811120c3932b2d098a7b6cf3d1e4ecdb881577f35e7b61b53fab37344603c5"
+    },
+    {
+      "path": "backend/src/app/services/execution_claim.py",
+      "sha256": "360d2ebd4e78ce76e2944da4986dfa20f3783826b905801273b5f528df7697e4"
+    },
+    {
+      "path": "backend/src/app/services/governed_blofin_demo.py",
+      "sha256": "5e6707b5b5672f9a5b796047a0b70c77d34dc0fa9e3065365cde3e110f767f0b"
+    },
+    {
+      "path": "backend/src/app/services/venue_submit_dispatcher.py",
+      "sha256": "ef95eb25f5733cd6217639443eb136637e7e1695fcfbb227c7b595e08e5af494"
+    },
+    {
+      "path": "backend/src/app/workers/watcher_paper.py",
+      "sha256": "a8284b5a19e32b6dd093078fcbfd6708523381d7fffe5e3a4a8805282023ed37"
+    },
+    {
+      "path": "backend/tests/test_autonomous_blofin_demo_postgres.py",
+      "sha256": "beff6a66e57430701d0051e8be86d7b334a1493b7671af41b6b436b826b6af9f"
+    },
+    {
+      "path": "backend/tests/test_governed_demo_exit_evidence.py",
+      "sha256": "676673b6a4f73db7b89a0c45bd1883a22a90afaa43ab4da60d0f102b381e3c08"
+    },
+    {
+      "path": "backend/tests/test_governed_demo_lifecycle.py",
+      "sha256": "b676ebc7d0cf0b355a1ccd6853c70e846a05b9905b7488394fb612dff02dbbf3"
+    },
+    {
+      "path": "backend/tests/test_manual_blofin_demo.py",
+      "sha256": "4a5e8ca74ee4ea22124000a011f814a587a5ce37f7bc1dd2267eec6a40946d96"
+    },
+    {
+      "path": "backend/tests/test_phase1_slices_7_9_execution_protocol.py",
+      "sha256": "75fee038530fbccb8e2354607004c33417a0e6b4a577f064cb6715224e2f1f16"
+    },
+    {
+      "path": "docs/contracts/experiments_v1.openapi.json",
+      "sha256": "f9aff660f5a0a16d96c8c66fbf9b264cfd664aada457b55951b0bdedaf7d1613"
+    },
+    {
+      "path": "frontend/scripts/generate-api.mjs",
+      "sha256": "bb67e6059ff99f890bc788e38cc13ce1dc907a507d984b149d290ced4d15b3e4"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/hashes.json",
+      "sha256": "7d5e3cb8f9aa6e69a4dae79a6c513d596fe454ddbb3ce00e1765068fa7cb72c6"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/openapi.json",
+      "sha256": "0609f8b3f088153e23e7f4ae52a2b5d99a0712f7e494b80ef13719d55f645155"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/types.ts",
+      "sha256": "be81a4b65e333705645a400e34391a5202687790d6c16da2b93234729ace9703"
+    },
+    {
+      "path": "frontend/src/lib/api/generated/validators.js",
+      "sha256": "868d3912a29512b6d3db641c4c2bd90a7a1b4b121818ca7d7aa4ebc8b6c493b9"
+    },
+    {
+      "path": "frontend/src/lib/api/native-outcomes.test.ts",
+      "sha256": "b9f771b9e8627ce1847e953fee011e3c479ba6d69360f62121cae2a1f3a88951"
+    }
+  ]
+}

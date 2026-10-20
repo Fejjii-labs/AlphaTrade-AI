@@ -85,7 +85,13 @@ class _Trade:
     def dimension(self, dimension: StrategyAnalyticsDimension) -> str | None:
         match dimension:
             case StrategyAnalyticsDimension.STRATEGY:
-                return str(self.strategy_id) if self.strategy_id else None
+                from app.services.blofin_demo_manual_mirror import strategy_group_key
+
+                return strategy_group_key(
+                    source=self.row.source,
+                    strategy_id=self.strategy_id,
+                    strategy_label=self.row.strategy_label,
+                )
             case StrategyAnalyticsDimension.STRATEGY_VERSION:
                 return str(self.strategy_version_id) if self.strategy_version_id else None
             case StrategyAnalyticsDimension.SYMBOL:

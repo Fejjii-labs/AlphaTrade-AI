@@ -122,6 +122,17 @@ describe("useAsyncData", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("does not apply a load that resolves after unmount", async () => {
+    const pending = deferred<string>();
+    const { unmount } = renderHook(() => useAsyncData(() => pending.promise, []));
+
+    unmount();
+    await act(async () => {
+      pending.resolve("late");
+      await pending.promise;
+    });
+  });
+
   it("reloads when deps change and never renders the previous deps' data beside an error", async () => {
     let mode: "ok" | "fail" = "ok";
     const { result, rerender } = renderHook(

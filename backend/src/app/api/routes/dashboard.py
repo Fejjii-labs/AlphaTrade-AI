@@ -27,6 +27,7 @@ from app.schemas.dashboard_demo_account import DashboardDemoAccount
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep
 from app.services.dashboard.demo_account import demo_account_active, preserved_demo_account
+from app.services.dashboard.demo_activity_performance import present_demo_account
 from app.services.dashboard.demo_performance import attach_demo_performance
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -63,18 +64,28 @@ def demo_account(
     if not demo_account_active(settings) or not _demo_account_scope(
         settings, tenant.organization_id
     ):
-        return DashboardDemoAccount(
-            status="inactive",
-            message="BloFin demo sync is not configured. Configure it in Exchange settings.",
+        return present_demo_account(
+            DashboardDemoAccount(
+                status="inactive",
+                message="BloFin demo sync is not configured. Configure it in Exchange settings.",
+            ),
+            session=session,
+            settings=settings,
+            tenant=tenant,
         )
     can_refresh = tenant.membership_role is MembershipRole.OWNER
     try:
         snapshot = service.latest(organization_id=tenant.organization_id)
     except NotFoundError:
-        return DashboardDemoAccount(
-            status="not_synced",
-            can_refresh=can_refresh,
-            message="No demo snapshot yet. Refresh to retrieve balances and open positions.",
+        return present_demo_account(
+            DashboardDemoAccount(
+                status="not_synced",
+                can_refresh=can_refresh,
+                message="No demo snapshot yet. Refresh to retrieve balances and open positions.",
+            ),
+            session=session,
+            settings=settings,
+            tenant=tenant,
         )
     result = preserved_demo_account(
         snapshot,
@@ -83,7 +94,12 @@ def demo_account(
         settings=settings,
         can_refresh=can_refresh,
     )
-    return attach_demo_performance(result, session=session, settings=settings, tenant=tenant)
+    return present_demo_account(
+        attach_demo_performance(result, session=session, settings=settings, tenant=tenant),
+        session=session,
+        settings=settings,
+        tenant=tenant,
+    )
 
 
 @router.post(
@@ -93,7 +109,7 @@ def demo_account(
     dependencies=[
         Depends(
             tenant_rate_limit_dependency(
-                "dashboard:demo-refresh", limit=30, window_seconds=3600, user_limit=30
+                "dashboard:demo-refresh", limit=240, window_seconds=3600, user_limit=240
             )
         )
     ],
@@ -123,7 +139,12 @@ def refresh_demo_account(
         settings=settings,
         can_refresh=True,
     )
-    return attach_demo_performance(account, session=session, settings=settings, tenant=tenant)
+    return present_demo_account(
+        attach_demo_performance(account, session=session, settings=settings, tenant=tenant),
+        session=session,
+        settings=settings,
+        tenant=tenant,
+    )
 
 
 @router.get(

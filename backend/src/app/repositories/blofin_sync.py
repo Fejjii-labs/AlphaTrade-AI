@@ -39,6 +39,7 @@ class BloFinSyncRepository:
         native_uid: str,
         binding: str,
         successful_only: bool = False,
+        user_id: uuid.UUID | None = None,
     ) -> SnapshotModel | None:
         stmt = (
             select(SnapshotModel)
@@ -61,6 +62,8 @@ class BloFinSyncRepository:
             .order_by(SnapshotModel.synced_at.desc(), SnapshotModel.id.desc())
             .limit(1)
         )
+        if user_id is not None:
+            stmt = stmt.where(SnapshotModel.user_id == user_id)
         if successful_only:
             stmt = stmt.where(SnapshotModel.health_status.in_(["ok", "degraded", "stale"]))
         return self._session.scalars(stmt).first()

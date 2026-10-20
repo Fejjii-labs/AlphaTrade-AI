@@ -157,7 +157,8 @@ async function fixtures(page: Page) {
           version: 1,
         });
       if (path === "/providers/status") return send({ providers: [] });
-      if (path === "/dashboard/demo-account") return send(snapshot);
+      if (path === "/dashboard/demo-account" || path === "/dashboard/demo-account/refresh")
+        return send(snapshot);
       if (path === "/execution/manual-demo/commands")
         return send({ items: [], total: 0 });
       if (path === "/execution/accounts/paper")
@@ -499,6 +500,10 @@ for (const width of [1280, 390]) {
     await expect(page.getByRole("link", { name: "Diagnostics" })).toBeVisible();
     await screenshot("settings");
     await noOverflow();
-    expect(writes).toEqual(["/agent/turns"]);
+    const otherWrites = writes.filter(
+      (path) => path !== "/dashboard/demo-account/refresh",
+    );
+    expect(writes).toContain("/dashboard/demo-account/refresh");
+    expect(otherWrites).toEqual(["/agent/turns"]);
   });
 }
