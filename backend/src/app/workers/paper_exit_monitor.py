@@ -139,14 +139,18 @@ def run_configured_exit_monitor(
                 _emit_clock_alert(session, alert, trades, alert_sink, settings)
             except Exception as exc:
                 session.rollback()
-                from app.services.safety_alerts import discard_queued_safety_alerts
+                from app.services.safety_alerts import (
+                    deliver_observed_alert_outside_transaction,
+                    discard_queued_safety_alerts,
+                )
 
                 discard_queued_safety_alerts(session)
-                logger.warning(
+                logger.error(
                     "paper_exit_monitor_alert_persist_failed",
                     error=redact_text(str(exc))[:200],
                     code=alert.code,
                 )
+                deliver_observed_alert_outside_transaction(settings, alert)
             logger.warning("paper_exit_monitor_alert", **alert.as_log())
             return MonitorReport(
                 status="refused",
@@ -209,6 +213,7 @@ class PaperExitMonitorCycle:
             not self._settings.paper_exit_monitor_enabled
         ):
             return CycleOutcome("disarmed")
+        self._beat("running", "")
         try:
             report = run_configured_exit_monitor(
                 self._settings,
@@ -222,9 +227,9 @@ class PaperExitMonitorCycle:
                 error=redact_text(str(exc))[:200],
                 failed=True,
             )
-            return CycleOutcome("degraded", error="paper_exit_monitor_failed")
+            return self._beat_outcome(CycleOutcome("degraded", error="paper_exit_monitor_failed"))
         if report.status == "stopped":
-            return CycleOutcome("stopped")
+            return self._beat_outcome(CycleOutcome("stopped"))
         if report.status == "refused":
             self._note_repetition(
                 "refused",
@@ -237,7 +242,9 @@ class PaperExitMonitorCycle:
                 error=report.error or "paper_exit_monitor_refused",
                 examined=report.examined,
             )
-            return CycleOutcome("refused", error=report.error or "paper_exit_monitor_refused")
+            return self._beat_outcome(
+                CycleOutcome("refused", error=report.error or "paper_exit_monitor_refused")
+            )
         if report.status == "degraded":
             self._note_repetition(
                 "degraded",
@@ -254,12 +261,30 @@ class PaperExitMonitorCycle:
                 skipped=report.skipped,
                 failed=report.errors > 0,
             )
-            return CycleOutcome("degraded", error=report.error or "paper_exit_monitor_failed")
+            return self._beat_outcome(
+                CycleOutcome("degraded", error=report.error or "paper_exit_monitor_failed")
+            )
         self._note_repetition(report.status, error="", refused=0, report=report)
-        return CycleOutcome("running")
+        return self._beat_outcome(CycleOutcome("running"))
 
     def request_stop(self) -> None:
         self._stop.set()
+
+    def _beat(self, status: str, error: str) -> None:
+        """Publish this thread's heartbeat. A failure here does not stop the cycle."""
+
+        from app.services.worker_heartbeat import publish_exit_monitor_heartbeat
+
+        publish_exit_monitor_heartbeat(
+            self._settings,
+            now=self._clock(),
+            status=status,
+            error=error,
+        )
+
+    def _beat_outcome(self, outcome: CycleOutcome) -> CycleOutcome:
+        self._beat(outcome.status, outcome.error)
+        return outcome
 
     def _note_repetition(
         self,
@@ -323,14 +348,25 @@ class PaperExitMonitorCycle:
         if self._alert_sink is not None:
             self._alert_sink(alert)
             return
-        factory = _session_factory()
-        session = factory()
+        from app.services.safety_alerts import (
+            deliver_observed_alert_outside_transaction,
+            deliver_queued_safety_alerts,
+            discard_queued_safety_alerts,
+        )
+
+        try:
+            factory = _session_factory()
+            session = factory()
+        except Exception as exc:
+            logger.error(
+                "paper_exit_monitor_alert_persist_failed",
+                error=redact_text(str(exc))[:200],
+                code=alert.code,
+            )
+            deliver_observed_alert_outside_transaction(self._settings, alert)
+            return
         try:
             from app.services.paper_exit_protection import record_exit_monitor_alert
-            from app.services.safety_alerts import (
-                deliver_queued_safety_alerts,
-                discard_queued_safety_alerts,
-            )
 
             orgs = () if report is None else report.organization_ids
             if orgs:
@@ -355,11 +391,12 @@ class PaperExitMonitorCycle:
         except Exception as exc:
             session.rollback()
             discard_queued_safety_alerts(session)
-            logger.warning(
+            logger.error(
                 "paper_exit_monitor_alert_persist_failed",
                 error=redact_text(str(exc))[:200],
                 code=alert.code,
             )
+            deliver_observed_alert_outside_transaction(self._settings, alert)
         finally:
             session.close()
 

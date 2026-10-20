@@ -858,6 +858,7 @@ class ManualDemoService:
                                 "Manual demo protection is not verified; operator action required"
                             ),
                         ),
+                        source="demo_protection",
                     )
                 status = "protection_failed_operator_hold"
             elif evidence.fills and evidence.protected:
@@ -888,6 +889,7 @@ class ManualDemoService:
                             confirm=True,
                             reason="Manual demo fill exceeded the entry range; operator review",
                         ),
+                        source="breaker",
                     )
                 status = "actual_fill_outside_plan_operator_hold"
             self.session.commit()

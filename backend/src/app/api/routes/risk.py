@@ -152,6 +152,7 @@ async def activate_kill_switch(
             organization_id=tenant.organization_id,
             actor_user_id=tenant.user_id,
             payload=payload,
+            source="manual",
         )
         session.commit()
         return result

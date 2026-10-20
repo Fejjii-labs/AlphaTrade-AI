@@ -52,12 +52,28 @@ class WorkerComponentObservation(BaseModel):
     heartbeat_stale_after_seconds: int = 90
 
 
+class ArmingRefusalObservation(BaseModel):
+    """Boot refusal of the exit monitor or an autonomous loop.
+
+    ``refused`` is true only when the worker recorded an arming-gate reason
+    such as ``consecutive_loss_cooldown_invalid`` or
+    ``cycle_interval_exceeds_timeframe``. ``source`` names which loop refused.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refused: bool = False
+    reason: str = ""
+    source: str = ""
+
+
 class WorkerRuntimeObservation(BaseModel):
     """Observed worker rows.
 
     ``available`` is false when the status read fails. It does not mean either
     worker is fresh. Each component's ``health_state`` is the liveness claim.
-    These fields are not the API process configuration.
+    These fields are not the API process configuration. ``exit_monitor`` is
+    the exit-monitor thread, not the watcher heartbeat.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -66,6 +82,7 @@ class WorkerRuntimeObservation(BaseModel):
     watcher: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     telegram: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     paper_worker: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
 
 
 class PaperWorkerHeartbeatResponse(BaseModel):
@@ -81,6 +98,13 @@ class PaperWorkerHeartbeatResponse(BaseModel):
     status: Literal["fresh", "stale", "missing"]
     observation: WorkerComponentObservation
     alert_raised: bool = False
+    arming_refusal: ArmingRefusalObservation = Field(
+        default_factory=lambda: ArmingRefusalObservation()
+    )
+    arming_alert_raised: bool = False
+    exit_monitor_status: Literal["fresh", "stale", "missing", "disabled"] = "disabled"
+    exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    exit_monitor_alert_raised: bool = False
     timestamp: datetime
 
 
@@ -125,6 +149,9 @@ class HealthResponse(BaseModel):
     first_perpetual_symbol: Literal["BTCUSDT"] = "BTCUSDT"
     git_sha: str | None = None
     worker_runtime: WorkerRuntimeObservation = Field(default_factory=WorkerRuntimeObservation)
+    arming_refusal: ArmingRefusalObservation = Field(
+        default_factory=lambda: ArmingRefusalObservation()
+    )
     timestamp: datetime
 
 

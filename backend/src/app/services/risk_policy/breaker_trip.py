@@ -400,4 +400,5 @@ def _arm_drawdown_kill_switch(
         organization_id=organization_id,
         actor_user_id=user_id,
         payload=KillSwitchMutationRequest(confirm=True, reason=DRAWDOWN_KILL_REASON),
+        source="drawdown",
     )

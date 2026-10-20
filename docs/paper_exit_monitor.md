@@ -223,6 +223,12 @@ The same two checks refuse `resolve_autonomous_mode` when either autonomous
 flag is set. Production still refuses those flags, and both monitor flags
 stay default false. These checks do not arm anything.
 
+A refusal at boot is written to the `paper_arming` runtime-status row.
+`GET /health` and `GET /health/paper-worker` both show `arming_refusal`
+(`refused`, `reason`, `source`). One deduplicated Telegram alert uses the
+code `arming_refused`. A disarmed worker still does not open the database,
+so it does not write that row.
+
 ## Heartbeat and Telegram
 
 Each watcher cycle of the paper worker writes a `paper_worker` heartbeat on
@@ -232,8 +238,24 @@ so it does not write that row. `GET /health` reports the row.
 `stale`, or `missing`, and a stale or missing heartbeat raises one deduped
 Telegram alert.
 
+The exit-monitor thread writes a separate `paper_exit_monitor` heartbeat.
+`GET /health/paper-worker` reports that thread as `fresh`, `stale`,
+`missing`, or `disabled`. `disabled` means the thread was not armed, and it
+does not alert. `stale` or `missing` means the thread was armed and then
+died or hung, and that raises its own deduped Telegram alert. The watcher
+heartbeat can stay fresh while this one does not.
+
 Backfill-loss, stale-loss, kill-switch arming, repeated degraded or refused
 cycles, and clock-skew alerts use the same Telegram path. The message uses
 the existing `telegram_bot_token` and `telegram_chat_id`. It does not include
 a secret or a P&L amount. A repeated dedup key inside the alert cooldown
 does not send again. Telegram is attempted only after the database commit.
+If that commit rolls back, the dropped page is logged at error. A repeated
+degraded or clock alert is still sent from memory, because the condition
+already happened. A kill-switch page is not sent when its activation rolls
+back.
+
+Kill-switch activations from the manual route, the global setting, the
+drawdown breaker, the other breaker and demo-protection paths, and a
+fail-closed read use that same redacted, deduplicated Telegram path. The
+free-text reason is not copied. No P&L amount is included.

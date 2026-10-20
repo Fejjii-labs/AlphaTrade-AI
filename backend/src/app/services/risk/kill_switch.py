@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+import structlog
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -30,6 +31,8 @@ from app.services.audit_service import AuditService
 
 if TYPE_CHECKING:
     from app.services.safety_epoch import SafetyEpochService
+
+logger = structlog.get_logger(__name__)
 
 
 class ExecutionKillSwitch(Protocol):
@@ -84,6 +87,7 @@ class KillSwitchService:
         actor_user_id: uuid.UUID,
         payload: KillSwitchMutationRequest,
         actor_type: ActorType = ActorType.USER,
+        source: str = "system",
     ) -> KillSwitchStatus:
         self._require_confirm(payload)
         row = self._get_or_create_row(organization_id=organization_id)
@@ -142,6 +146,11 @@ class KillSwitchService:
             event_type=AuditEventType.KILL_SWITCH_ACTIVATED,
             row=row,
             actor_type=actor_type,
+        )
+        self._queue_activation_alert(
+            organization_id=organization_id,
+            source=source,
+            version=int(row.version),
         )
         return self._to_status(row)
 
@@ -212,6 +221,7 @@ class KillSwitchService:
         try:
             status = self.get_status(organization_id=organization_id)
         except Exception:
+            self._notify_activation(source="fail_closed", organization_id=organization_id)
             return KillSwitchEvaluation(
                 blocked=True,
                 reason_code="kill_switch_unavailable",
@@ -222,6 +232,7 @@ class KillSwitchService:
 
         org_active = bool(status.active)
         if global_active:
+            self._notify_activation(source="global_setting", organization_id=organization_id)
             return KillSwitchEvaluation(
                 blocked=True,
                 reason_code="global_kill_switch_active",
@@ -388,6 +399,42 @@ class KillSwitchService:
             self._settings,
             RiskSettingsService(self._session, self._audit),
         )
+
+    def _queue_activation_alert(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        source: str,
+        version: int,
+    ) -> None:
+        """Queue the page. The session hook sends it after commit."""
+
+        try:
+            from app.services.safety_alerts import queue_kill_switch_activation
+
+            queue_kill_switch_activation(
+                self._session,
+                self._settings,
+                source=source,
+                organization_id=str(organization_id),
+                version=version,
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source="activation")
+
+    def _notify_activation(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Page for a global setting or a fail-closed read. No database write."""
+
+        try:
+            from app.services.safety_alerts import notify_kill_switch_activation
+
+            notify_kill_switch_activation(
+                self._settings,
+                source=source,
+                organization_id=str(organization_id),
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source=source)
 
     def _audit_trigger(
         self,

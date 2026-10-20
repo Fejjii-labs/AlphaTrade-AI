@@ -1,10 +1,12 @@
 """Paper-worker heartbeat written each cycle and read outside the process.
 
 The worker publishes one ``paper_worker`` row after every watcher cycle.
+The exit-monitor thread publishes a separate ``paper_exit_monitor`` row.
 ``GET /health/paper-worker`` is the check a staging cron or an uptime
 monitor can hit. A missing or stale row raises a deduped Telegram alert.
 A disarmed worker does not open the database; the check then reports the
-heartbeat missing.
+worker heartbeat missing. The exit-monitor row is reported only when that
+thread was armed.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
 from app.db.runtime_status import ControlledRuntimeStatusRow
 from app.persistence.runtime_health import project_worker_component
 from app.persistence.runtime_status import (
+    PAPER_EXIT_MONITOR_COMPONENT,
     PAPER_WORKER_COMPONENT,
     RuntimeStatusWrite,
     publish_runtime_status,
@@ -33,10 +36,13 @@ from app.services.safety_alerts import deliver_safety_alert, telegram_safety_con
 logger = structlog.get_logger(__name__)
 
 PAPER_WORKER_ALERT_COMPONENT = "paper_worker_alert"
+EXIT_MONITOR_ALERT_COMPONENT = "exit_monitor_alert"
 HEARTBEAT_ALERT_COOLDOWN_SECONDS = 900
 
 _MISSING = "worker_heartbeat_missing"
 _STALE = "worker_heartbeat_stale"
+_EXIT_MISSING = "exit_monitor_heartbeat_missing"
+_EXIT_STALE = "exit_monitor_heartbeat_stale"
 
 
 class HeartbeatAlertLedger(Protocol):
@@ -206,19 +212,147 @@ def raise_heartbeat_alert(
 ) -> bool:
     """Send the heartbeat alert once per cooldown. False when nothing is sent."""
 
-    alert = heartbeat_alert(observation)
+    return raise_prepared_alert(
+        settings,
+        heartbeat_alert(observation),
+        now=now,
+        ledger=ledger,
+    )
+
+
+def raise_prepared_alert(
+    settings: Settings,
+    alert: ExitMonitorAlert | None,
+    *,
+    now: datetime,
+    ledger: HeartbeatAlertLedger,
+    remember_when_unconfigured: bool = True,
+) -> bool:
+    """Send one already-built alert once per dedup key."""
+
     if alert is None:
         return False
-    if not ledger.should_send(alert.code, now):
+    token = alert.fields.get("dedup_key") or alert.code
+    if not ledger.should_send(token, now):
         return False
     if not telegram_safety_configured(settings):
         logger.warning("safety_alert_telegram_unconfigured", code=alert.code)
-        ledger.remember(alert.code, now)
+        if remember_when_unconfigured:
+            ledger.remember(token, now)
         return False
     sent = deliver_safety_alert(settings, alert, now=now)
     if sent:
-        ledger.remember(alert.code, now)
+        ledger.remember(token, now)
     return sent
+
+
+def publish_exit_monitor_heartbeat(
+    settings: Settings,
+    *,
+    now: datetime,
+    status: str,
+    error: str = "",
+    session_factory: sessionmaker[Session] | None = None,
+) -> None:
+    """Upsert the exit-monitor thread heartbeat. A disarmed worker does not write."""
+
+    if settings_are_disarmed_paper_worker(settings) or not settings.paper_exit_monitor_enabled:
+        return
+    try:
+        factory = session_factory or _session_factory()
+        publish_runtime_status(
+            factory,
+            RuntimeStatusWrite(
+                component=PAPER_EXIT_MONITOR_COMPONENT,
+                worker_id=settings.watcher_paper_worker_id[:80],
+                heartbeat_at=now,
+                activation_state=(status or "running")[:32],
+                last_error_code=error[:64],
+                market_source="paper_exit_monitor",
+            ),
+        )
+    except Exception as exc:
+        if type(exc) is AssertionError:
+            raise
+        logger.warning("paper_exit_monitor_heartbeat_unpublished")
+
+
+def delete_exit_monitor_heartbeat(
+    session_factory: sessionmaker[Session] | None = None,
+) -> None:
+    """Remove a leftover exit-monitor heartbeat when the thread is not armed."""
+
+    from app.db.runtime_status import ControlledRuntimeStatusRow
+
+    factory = session_factory or _session_factory()
+    with factory() as session, session.begin():
+        row = session.get(ControlledRuntimeStatusRow, PAPER_EXIT_MONITOR_COMPONENT)
+        if row is not None:
+            session.delete(row)
+
+
+def exit_monitor_liveness_status(
+    *,
+    expected: bool,
+    row: object | None,
+    now: datetime,
+    stale_after_seconds: int,
+) -> tuple[Literal["fresh", "stale", "missing", "disabled"], WorkerComponentObservation]:
+    """Liveness of the exit-monitor thread, separate from the watcher heartbeat.
+
+    ``disabled`` means the thread was not armed. A disabled monitor is not
+    stale and does not alert. ``missing`` means it was armed and no row was
+    written. ``stale`` means the armed thread stopped updating.
+    """
+
+    if not expected:
+        return "disabled", WorkerComponentObservation(
+            available=False,
+            activation_state="disabled",
+            health_state="UNAVAILABLE",
+            heartbeat_stale_after_seconds=stale_after_seconds,
+        )
+    observation = project_paper_worker_heartbeat(
+        row,
+        now=now,
+        stale_after_seconds=stale_after_seconds,
+    )
+    return heartbeat_status(observation), observation
+
+
+def exit_monitor_heartbeat_alert(
+    observation: WorkerComponentObservation,
+    status: str,
+) -> ExitMonitorAlert | None:
+    """Alert when an armed exit-monitor thread is stale or missing."""
+
+    if status not in {"missing", "stale"}:
+        return None
+    code = _EXIT_MISSING if status == "missing" else _EXIT_STALE
+    if status == "missing":
+        message = (
+            "Paper exit monitor heartbeat is missing. "
+            "The monitor thread was armed and the external check did not see a heartbeat."
+        )
+    else:
+        message = (
+            "Paper exit monitor heartbeat is stale. "
+            "The monitor thread was armed and its heartbeat is outside the freshness window."
+        )
+    age = observation.heartbeat_age_seconds
+    return ExitMonitorAlert(
+        code=code,
+        severity="critical",
+        message=message,
+        fields={
+            "component": PAPER_EXIT_MONITOR_COMPONENT,
+            "health_state": observation.health_state,
+            "heartbeat_age_seconds": "" if age is None else f"{age:.3f}",
+            "threshold_seconds": str(observation.heartbeat_stale_after_seconds),
+            "refusal": "heartbeat",
+            "dedup_key": code,
+        },
+    )
 
 
 class RuntimeStatusHeartbeatLedger:
@@ -229,17 +363,19 @@ class RuntimeStatusHeartbeatLedger:
         session_factory: sessionmaker[Session],
         *,
         cooldown_seconds: int = HEARTBEAT_ALERT_COOLDOWN_SECONDS,
+        component: str = PAPER_WORKER_ALERT_COMPONENT,
     ) -> None:
         self._session_factory = session_factory
         self._cooldown = timedelta(seconds=cooldown_seconds)
         self._memory = MemoryHeartbeatAlertLedger(cooldown_seconds=cooldown_seconds)
+        self._component = component
 
     def should_send(self, code: str, now: datetime) -> bool:
         if not self._memory.should_send(code, now):
             return False
         try:
             with self._session_factory() as session:
-                row = session.get(ControlledRuntimeStatusRow, PAPER_WORKER_ALERT_COMPONENT)
+                row = session.get(ControlledRuntimeStatusRow, self._component)
         except Exception:
             return True
         if row is None or row.last_error_code != code or row.last_delivery_at is None:
@@ -256,7 +392,7 @@ class RuntimeStatusHeartbeatLedger:
             publish_runtime_status(
                 self._session_factory,
                 RuntimeStatusWrite(
-                    component=PAPER_WORKER_ALERT_COMPONENT,
+                    component=self._component,
                     worker_id="health-check",
                     heartbeat_at=now,
                     activation_state="alerted",

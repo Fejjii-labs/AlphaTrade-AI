@@ -677,6 +677,13 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
                 request_stop=exit_monitor.request_stop,
             )
+    if not settings_are_disarmed_paper_worker(settings):
+        from app.services.arming_visibility import publish_boot_arming_posture
+
+        publish_boot_arming_posture(
+            settings,
+            exit_monitor_attached=supervisor.snapshot().exit_monitor is not None,
+        )
     return supervisor
 
 
@@ -705,6 +712,17 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     assert_execution_capable_composition_root(settings)
     disarmed = settings_are_disarmed_paper_worker(settings)
     supervisor = build_paper_worker_supervisor(settings)
+    if not disarmed and settings.global_kill_switch_active:
+        from app.services.safety_alerts import notify_kill_switch_activation
+
+        try:
+            notify_kill_switch_activation(
+                settings,
+                source="global_setting",
+                organization_id="system",
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source="global_setting")
     logger.warning(
         "paper_worker_boot",
         posture="disarmed" if disarmed else "armed",

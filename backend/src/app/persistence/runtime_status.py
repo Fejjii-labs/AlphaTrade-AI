@@ -13,6 +13,8 @@ from app.db.runtime_status import ControlledRuntimeStatusRow
 WATCHER_COMPONENT = "watcher"
 TELEGRAM_COMPONENT = "telegram"
 PAPER_WORKER_COMPONENT = "paper_worker"
+PAPER_ARMING_COMPONENT = "paper_arming"
+PAPER_EXIT_MONITOR_COMPONENT = "paper_exit_monitor"
 
 
 @dataclass(frozen=True, slots=True)

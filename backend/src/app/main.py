@@ -123,6 +123,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         real_trading_enabled=runtime.flags.real_trading_enabled,
     )
 
+    _notify_global_kill_switch(settings)
     worker_driver = _maybe_start_in_process_worker(settings)
     app.state.worker_driver = worker_driver
     paper_runtime = _maybe_start_watcher_paper_runtime(
@@ -142,6 +143,23 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 class _BackgroundStoppable(Protocol):
     def stop(self) -> None: ...
+
+
+def _notify_global_kill_switch(settings: Settings) -> None:
+    """Page once when the process-wide kill switch is already on. Does not arm it."""
+
+    if not settings.global_kill_switch_active:
+        return
+    try:
+        from app.services.safety_alerts import notify_kill_switch_activation
+
+        notify_kill_switch_activation(
+            settings,
+            source="global_setting",
+            organization_id="system",
+        )
+    except Exception:
+        logger.error("kill_switch_alert_failed", source="global_setting")
 
 
 def _maybe_start_in_process_worker(settings: Settings) -> _BackgroundStoppable | None:

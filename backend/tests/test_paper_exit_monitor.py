@@ -1545,13 +1545,15 @@ def test_cycle_emits_a_structured_alert_when_refusals_repeat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
-    moments = iter(
-        (
-            started,
-            started + timedelta(minutes=1),
-            started + DEGRADED_REPEAT_ALERT_AFTER,
-        )
+    # Each cycle reads the clock for the start heartbeat, the degradation
+    # observation, and the outcome heartbeat. Repeating the observation time
+    # keeps the streak on the same schedule.
+    sequence = (
+        started,
+        started + timedelta(minutes=1),
+        started + DEGRADED_REPEAT_ALERT_AFTER,
     )
+    moments = iter(moment for moment in sequence for _ in range(3))
     alerts: list[ExitMonitorAlert] = []
 
     def clock() -> datetime:
