@@ -148,16 +148,51 @@ it("renders annotation notes as plain text", async () => {
   expect(view.container.innerHTML).not.toContain("<script");
 });
 
-it("shows the strategy form for a reconciled manual row", async () => {
+it("shows reconciled close details and strategy tags for a reconciled manual row", async () => {
   vi.mocked(journalTradeApi.detail).mockResolvedValue({
     ...fixture,
     trade: {
       ...fixture.trade,
       source: "manual",
+      status: "closed",
+      result: "win",
       external_ref: "blofin-demo-history:h-reconciled",
+      exit_reason: "venue_close",
+      exit_price: "105",
+      exit_time: "2026-10-09T08:00:00Z",
+      net_pnl: "0.186",
+      tags: ["blofin-reconciled"],
     },
     manual_demo: null,
   });
   render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-reconciled-badge");
+  expect(screen.getByTestId("journal-reconciled-close")).toHaveTextContent("Manual");
+  expect(screen.getByText("Venue Close")).toBeInTheDocument();
+  expect(screen.getByText("h-reconciled")).toBeInTheDocument();
+  expect(screen.getByText("105.00 USDT")).toBeInTheDocument();
   await screen.findByTestId("journal-mirror-annotation");
+});
+
+it("shows reconciled state for a stuck manual demo row closed on the venue", async () => {
+  vi.mocked(journalTradeApi.detail).mockResolvedValue({
+    ...fixture,
+    trade: {
+      ...fixture.trade,
+      source: "manual_demo_test",
+      status: "closed",
+      external_ref: "blofin-demo-history:h-long",
+      exit_reason: "venue_close",
+      exit_price: "90",
+      exit_time: "2026-10-09T08:00:00Z",
+      net_pnl: "-0.2",
+      tags: ["blofin-reconciled"],
+    },
+    manual_demo: null,
+  });
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  const reconciled = await screen.findByTestId("journal-reconciled-close");
+  expect(reconciled).toHaveTextContent("Manual Demo Test");
+  expect(screen.getByText("h-long")).toBeInTheDocument();
+  expect(screen.getByText("90.00 USDT")).toBeInTheDocument();
 });

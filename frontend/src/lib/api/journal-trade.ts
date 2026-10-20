@@ -20,6 +20,8 @@ export type JournalTradeDetail = {
     leverage?: string | null;
     external_ref?: string | null;
     planned_stop_price?: string | null;
+    exit_reason?: string | null;
+    tags?: string[] | null;
   };
   manual_demo?: ManualDemoAttempt | null;
   evidence: Array<{ id: string; kind: string; caption: string | null; ref: string | null }>;

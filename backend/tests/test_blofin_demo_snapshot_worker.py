@@ -400,6 +400,49 @@ def test_synced_degraded_snapshot_is_unhealthy_without_backoff(
     assert len(synced) == 2
 
 
+def test_each_worker_snapshot_sync_uses_a_distinct_audit_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _open_settings()
+    now = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = {"now": now}
+    request_ids: list[str] = []
+    session = SimpleNamespace(committed=False, closed=False)
+
+    def commit() -> None:
+        session.committed = True
+
+    session.commit = commit
+    session.rollback = lambda: None
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **kwargs: object) -> SimpleNamespace:
+            request_id = kwargs.get("request_id")
+            assert isinstance(request_id, str)
+            request_ids.append(request_id)
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: clock["now"])
+    assert cycle().status == "ok"
+    clock["now"] = now + timedelta(seconds=settings.blofin_demo_snapshot_sync_seconds * 2)
+    assert cycle().status == "ok"
+    assert len(request_ids) == 2
+    assert request_ids[0] != request_ids[1]
+    assert all(rid.startswith("blofin-snapshot-") for rid in request_ids)
+    assert all(len(rid) <= 64 for rid in request_ids)
+
+
 def test_stale_connection_syncs_and_commits(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _open_settings()
     now = datetime(2026, 10, 18, 12, tzinfo=UTC)

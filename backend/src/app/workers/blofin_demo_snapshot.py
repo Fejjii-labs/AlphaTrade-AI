@@ -124,7 +124,7 @@ class BloFinDemoSnapshotCycle:
             result = service.sync(
                 organization_id=organization_id,
                 user_id=user_id,
-                request_id=f"blofin-snapshot-worker-{organization_id}",
+                request_id=f"blofin-snapshot-{uuid.uuid4()}",
                 include_instrument_metadata=True,
                 actor_type=ActorType.SYSTEM,
                 sync_origin="worker",

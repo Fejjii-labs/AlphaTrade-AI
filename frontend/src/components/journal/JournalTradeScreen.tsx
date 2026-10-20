@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/states";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { journalTradeApi } from "@/lib/api/journal-trade";
+import {
+  blofinHistoryId,
+  isBlofinReconciledJournalTrade,
+} from "@/lib/journal-blofin-reconciliation";
 import { formatDateTime, formatMoney, formatQuantity, humanizeToken } from "@/lib/format";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
@@ -41,10 +46,15 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   if (data.trade.id !== tradeId) return <ErrorState message="The linked Journal trade could not be verified." />;
   const { trade, manual_demo: attempt } = data;
   const evidence = attempt?.evidence;
-  const manual = trade.source === "manual_demo_test";
+  const manual = trade.source === "manual_demo_test" && !isBlofinReconciledJournalTrade(trade);
   const cycleMarker = (trade.external_ref ?? "") === "blofin-demo-mirror-cycle";
-  const mirrored = !cycleMarker && (trade.source === "blofin_demo_manual"
+  const reconciled = isBlofinReconciledJournalTrade(trade);
+  const mirrored = !cycleMarker && !reconciled && (trade.source === "blofin_demo_manual"
     || (trade.external_ref ?? "").startsWith("blofin-demo-"));
+  const mirrorAnnotated = !cycleMarker && (trade.source === "blofin_demo_manual"
+    || reconciled
+    || (trade.external_ref ?? "").startsWith("blofin-demo-"));
+  const venueHistoryId = blofinHistoryId(trade.external_ref);
   const currency = trade.exchange === "BLOFIN_DEMO" ? "USDT" : null;
   const money = (value: string | null | undefined) => `${formatMoney(value)}${currency ? ` ${currency}` : ""}`;
   const fields = [
@@ -108,10 +118,38 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
     <PageHeader title={`${trade.symbol} · ${humanizeToken(trade.direction)}`}
       description="Journal trade · recorded execution evidence"
       actions={<Link href="/journal" className="inline-flex min-h-11 items-center text-sm text-accent">All Journal records</Link>} />
+    {reconciled ? (
+      <Card data-testid="journal-reconciled-close">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle>BloFin reconciliation</CardTitle>
+          <Badge variant="info" data-testid="journal-reconciled-badge">Reconciled</Badge>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-text-secondary">
+          <p>
+            Recorded origin <span className="font-medium text-text-primary">{humanizeToken(trade.source)}</span>
+            {" · "}close matched from BloFin positions history
+          </p>
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs">Close reason</dt>
+              <dd className="mt-1 font-medium text-text-primary">
+                {trade.exit_reason ? humanizeToken(trade.exit_reason) : "Unavailable"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs">Venue history id</dt>
+              <dd className="mt-1 break-all font-medium text-text-primary">
+                {venueHistoryId ?? "Unavailable"}
+              </dd>
+            </div>
+          </dl>
+        </CardContent>
+      </Card>
+    ) : null}
     <Card>
       <CardHeader><CardTitle>Execution evidence</CardTitle></CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-text-secondary">{evidence ? humanizeToken(evidence.position_status ?? "unverified") : humanizeToken(trade.status)} · Entry {formatDateTime(trade.entry_time)}{trade.exit_time ? ` · Exit ${formatDateTime(trade.exit_time)}` : ""}</p>
+        <p className="text-sm text-text-secondary">{reconciled ? humanizeToken(trade.status) : evidence ? humanizeToken(evidence.position_status ?? "unverified") : humanizeToken(trade.status)} · Entry {formatDateTime(trade.entry_time)}{trade.exit_time ? ` · Exit ${formatDateTime(trade.exit_time)}` : ""}</p>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {fields.map(([label, value]) => <div key={label} className="min-w-0"><dt className="text-xs text-text-secondary">{label}</dt><dd className="mt-1 break-words text-sm font-medium tabular-nums">{value}</dd></div>)}
         </dl>
@@ -130,7 +168,7 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
         </details>
       </CardContent>
     </Card>
-    {mirrored ? (
+    {mirrorAnnotated ? (
       <Card data-testid="journal-mirror-annotation">
         <CardHeader><CardTitle>Strategy tag</CardTitle></CardHeader>
         <CardContent className="space-y-4">
