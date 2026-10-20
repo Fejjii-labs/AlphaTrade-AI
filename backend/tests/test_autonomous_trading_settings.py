@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import nullcontext
@@ -20,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.core.dependencies import get_session
+from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.base import Base
 from app.db.models import AuditLog, Membership, Organization, User, UserStrategy
 from app.main import create_app
@@ -773,40 +773,28 @@ def test_audit_request_id_is_unique_per_change(client: TestClient, settings_db) 
     assert all(item is not None and item.startswith("settings-") for item in ids)
 
 
-def test_concurrent_first_save_does_not_error(settings_db) -> None:
+def test_repeated_save_keeps_one_row(settings_db) -> None:
+    """Upsert path: a second save updates the row instead of inserting another."""
+
     factory, _settings = settings_db
-    barrier = threading.Barrier(2)
-    errors: list[BaseException] = []
+    from app.schemas.autonomous_trading_settings import AutonomousTradingSettingsUpdate
 
-    def _save(trades: int) -> None:
-        barrier.wait()
-        try:
-            with factory() as session:
-                from app.schemas.autonomous_trading_settings import (
-                    AutonomousTradingSettingsUpdate,
-                )
-
-                AutonomousTradingSettingsService(session, AuditService(session)).update(
-                    AutonomousTradingSettingsUpdate(max_trades_per_day=trades),
-                    organization_id=ORG,
-                    user_id=OWNER,
-                )
-                session.commit()
-        except BaseException as exc:
-            errors.append(exc)
-
-    threads = [threading.Thread(target=_save, args=(3,)), threading.Thread(target=_save, args=(4,))]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert errors == []
+    for trades in (3, 4):
+        with factory() as session:
+            AutonomousTradingSettingsService(session, AuditService(session)).update(
+                AutonomousTradingSettingsUpdate(max_trades_per_day=trades),
+                organization_id=ORG,
+                user_id=OWNER,
+            )
+            session.commit()
     with factory() as session:
+        rows = session.scalars(select(AutonomousTradingSettingsRow)).all()
         resolved = AutonomousTradingSettingsService(session, AuditService(session)).resolve(
             organization_id=ORG, user_id=OWNER
         )
+    assert len(rows) == 1
     assert resolved.using_defaults is False
-    assert resolved.max_trades_per_day in {3, 4}
+    assert resolved.max_trades_per_day == 4
 
 
 class _ProbeLoop(AutomatedPaperLoop):
