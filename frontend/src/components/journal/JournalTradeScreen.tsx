@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 import { ErrorState, LoadingState } from "@/components/states";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { journalTradeApi } from "@/lib/api/journal-trade";
+import {
+  blofinHistoryId,
+  isBlofinReconciledJournalTrade,
+} from "@/lib/journal-blofin-reconciliation";
 import { formatDateTime, formatMoney, formatQuantity, humanizeToken } from "@/lib/format";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
@@ -41,10 +46,15 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   if (data.trade.id !== tradeId) return <ErrorState message="The linked Journal trade could not be verified." />;
   const { trade, manual_demo: attempt } = data;
   const evidence = attempt?.evidence;
-  const manual = trade.source === "manual_demo_test";
+  const manual = trade.source === "manual_demo_test" && !isBlofinReconciledJournalTrade(trade);
   const cycleMarker = (trade.external_ref ?? "") === "blofin-demo-mirror-cycle";
-  const mirrored = !cycleMarker && (trade.source === "blofin_demo_manual"
+  const reconciled = isBlofinReconciledJournalTrade(trade);
+  const mirrored = !cycleMarker && !reconciled && (trade.source === "blofin_demo_manual"
     || (trade.external_ref ?? "").startsWith("blofin-demo-"));
+  const mirrorAnnotated = !cycleMarker && (trade.source === "blofin_demo_manual"
+    || reconciled
+    || (trade.external_ref ?? "").startsWith("blofin-demo-"));
+  const venueHistoryId = blofinHistoryId(trade.external_ref);
   const currency = trade.exchange === "BLOFIN_DEMO" ? "USDT" : null;
   const money = (value: string | null | undefined) => `${formatMoney(value)}${currency ? ` ${currency}` : ""}`;
   const fields = [
@@ -108,29 +118,57 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
     <PageHeader title={`${trade.symbol} · ${humanizeToken(trade.direction)}`}
       description="Journal trade · recorded execution evidence"
       actions={<Link href="/journal" className="inline-flex min-h-11 items-center text-sm text-accent">All Journal records</Link>} />
+    {reconciled ? (
+      <Card data-testid="journal-reconciled-close">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle>BloFin reconciliation</CardTitle>
+          <Badge variant="info" data-testid="journal-reconciled-badge">Reconciled</Badge>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-text-secondary">
+          <p>
+            Recorded origin <span className="font-medium text-text-primary">{humanizeToken(trade.source)}</span>
+            {" · "}close matched from BloFin positions history
+          </p>
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs">Close reason</dt>
+              <dd className="mt-1 font-medium text-text-primary">
+                {trade.exit_reason ? humanizeToken(trade.exit_reason) : "Unavailable"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs">Venue history id</dt>
+              <dd className="mt-1 break-all font-medium text-text-primary">
+                {venueHistoryId ?? "Unavailable"}
+              </dd>
+            </div>
+          </dl>
+        </CardContent>
+      </Card>
+    ) : null}
     <Card>
       <CardHeader><CardTitle>Execution evidence</CardTitle></CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-text-secondary">{evidence ? humanizeToken(evidence.position_status ?? "unverified") : humanizeToken(trade.status)} · Entry {formatDateTime(trade.entry_time)}{trade.exit_time ? ` · Exit ${formatDateTime(trade.exit_time)}` : ""}</p>
+        <p className="text-sm text-text-secondary">{reconciled ? humanizeToken(trade.status) : evidence ? humanizeToken(evidence.position_status ?? "unverified") : humanizeToken(trade.status)} · Entry {formatDateTime(trade.entry_time)}{trade.exit_time ? ` · Exit ${formatDateTime(trade.exit_time)}` : ""}</p>
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {fields.map(([label, value]) => <div key={label} className="min-w-0"><dt className="text-xs text-text-secondary">{label}</dt><dd className="mt-1 break-words text-sm font-medium tabular-nums">{value}</dd></div>)}
         </dl>
         <p className="text-xs text-text-secondary">Unavailable values (—) remain unverified. Account flatness alone does not establish this trade’s closure.</p>
-        {evidence?.missing_evidence[0] ? <p role="status" className="text-sm text-warning">{evidence.missing_evidence[0]}</p> : null}
-        {attempt ? <Link href={`/execution/manual-demo/${encodeURIComponent(attempt.command_id)}`} className="inline-flex min-h-11 items-center text-sm text-accent">Open this exact attempt</Link> : null}
+        {!reconciled && evidence?.missing_evidence[0] ? <p role="status" className="text-sm text-warning">{evidence.missing_evidence[0]}</p> : null}
+        {attempt && !reconciled ? <Link href={`/execution/manual-demo/${encodeURIComponent(attempt.command_id)}`} className="inline-flex min-h-11 items-center text-sm text-accent">Open this exact attempt</Link> : null}
         <details className="rounded-control border border-border-subtle p-3 text-sm">
           <summary className="cursor-pointer">Supporting evidence and identities</summary>
           <div className="mt-3 space-y-2 break-words [overflow-wrap:anywhere]">
             <p>Journal trade: {trade.id}</p>
-            {attempt ? <><p>Command: {attempt.command_id}</p><p>Native entry order: {evidence?.venue_order_id ?? "Unverified"}</p><p>Historically configured protection: {humanizeToken(evidence?.historical_protection)}</p><p>Active protection: {evidence?.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence?.protection)}</p><p>Triggered protection: {humanizeToken(evidence?.triggered_protection)}</p><p>Evidence observed: {formatDateTime(evidence?.observed_at)}</p></> : null}
-            {evidence?.missing_evidence.map((note) => <p key={note}>{note}</p>)}
+            {attempt && !reconciled ? <><p>Command: {attempt.command_id}</p><p>Native entry order: {evidence?.venue_order_id ?? "Unverified"}</p><p>Historically configured protection: {humanizeToken(evidence?.historical_protection)}</p><p>Active protection: {evidence?.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence?.protection)}</p><p>Triggered protection: {humanizeToken(evidence?.triggered_protection)}</p><p>Evidence observed: {formatDateTime(evidence?.observed_at)}</p></> : null}
+            {!reconciled ? evidence?.missing_evidence.map((note) => <p key={note}>{note}</p>) : null}
             {data.evidence.map((item) => <p key={item.id}>{humanizeToken(item.kind)}: {item.caption ?? item.ref ?? "Recorded evidence"}</p>)}
             {data.rule_checks.map((item) => <p key={item.id}>{humanizeToken(item.rule_key)}: {humanizeToken(item.status)}{item.notes ? ` · ${item.notes}` : ""}</p>)}
           </div>
         </details>
       </CardContent>
     </Card>
-    {mirrored ? (
+    {mirrorAnnotated ? (
       <Card data-testid="journal-mirror-annotation">
         <CardHeader><CardTitle>Strategy tag</CardTitle></CardHeader>
         <CardContent className="space-y-4">
