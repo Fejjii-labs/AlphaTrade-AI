@@ -673,9 +673,10 @@ def kill_switch_retry_should_schedule(
     is scheduled when no unsent page is visible, when every visible page is
     still inside the 60 second limit, or when the only unsent rows are older
     than the current activation. A 31-hex or legacy row is older when the
-    full-hex row for that organization is active at a higher version, or
-    when that full-hex row is no longer an active activation. This does not
-    claim the limit and does not send.
+    full-hex row for that organization is active at a higher version, when
+    that full-hex row is already sent at the same version, or when that
+    full-hex row is no longer an active activation. This does not claim the
+    limit and does not send.
     """
 
     if rows is None:
@@ -703,7 +704,7 @@ def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None =
 
     moment = now or datetime.now(UTC)
     try:
-        pending = _load_unsent_kill_switch_alerts()
+        pending = _load_unsent_kill_switch_alerts(now=moment)
     except Exception:
         logger.error("kill_switch_alert_retry_failed")
         return False
@@ -873,12 +874,14 @@ def _deliver_unsent_kill_switch_alert(
     return sent
 
 
-def _load_unsent_kill_switch_alerts() -> list[tuple[str, str, int]]:
+def _load_unsent_kill_switch_alerts(*, now: datetime) -> list[tuple[str, str, int]]:
     from app.db.session import get_session_factory
 
     factory = get_session_factory()
     pending: list[tuple[str, str, int]] = []
     with factory() as session:
+        if _mark_same_version_old_slots_sent(session, now=now):
+            session.commit()
         rows = session.scalars(
             select(ControlledRuntimeStatusRow).where(
                 ControlledRuntimeStatusRow.market_source == "kill_switch",
@@ -934,6 +937,7 @@ class _PreferredSlot:
     component: str
     version: int
     active: bool
+    sent: bool
 
 
 def _preferred_kill_switch_slot(
@@ -975,6 +979,7 @@ def _preferred_kill_switch_slot(
             component=component,
             version=version,
             active=str(getattr(row, "activation_state", "")) == "active",
+            sent=str(getattr(row, "last_error_code", "")) == _ALERT_SENT,
         )
     return None
 
@@ -983,9 +988,11 @@ def _unsent_row_is_stale(row: object, rows: Mapping[str, object]) -> bool:
     """True when this unsent row is not the current activation.
 
     The current activation is the preferred slot. A lower-priority row is
-    stale when that slot is active at a newer version, or when that slot
-    exists and is no longer active. The preferred row itself is not stale.
-    A same-version unsent row is still retried.
+    stale when that slot is active at a newer version, when the full-hex
+    slot is already sent at the same version, or when that slot exists and
+    is no longer active. The preferred row itself is not stale. A
+    same-version unsent row is still retried when it is the only remaining
+    slot.
     """
 
     identity = _visible_unsent_alert(row)
@@ -1000,7 +1007,72 @@ def _unsent_row_is_stale(row: object, rows: Mapping[str, object]) -> bool:
         return False
     if not preferred.active:
         return True
-    return version < preferred.version
+    if version < preferred.version:
+        return True
+    return _sent_full_hex_covers(preferred, organization_id, version)
+
+
+def _sent_full_hex_covers(preferred: _PreferredSlot, organization_id: str, version: int) -> bool:
+    """True when the sent full-hex slot already delivered this version."""
+
+    if not preferred.sent or version != preferred.version:
+        return False
+    try:
+        parsed = uuid.UUID(organization_id)
+    except ValueError:
+        return False
+    return preferred.component == paper_kill_switch_component(parsed)
+
+
+def _mark_same_version_old_slots_sent(session: Session, *, now: datetime) -> bool:
+    """Mark 31-hex and legacy rows sent when that version's full-hex row is sent.
+
+    The send marker already covers slots that exist at send time. A later
+    write can leave the old slot unsent at the same version. Health would
+    then schedule a retry, and a process restart clears the in-process page
+    dedup. Recording the old slot as sent stops that second page. A
+    same-version unsent row with no sent full-hex slot is left alone.
+    """
+
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.market_source == "kill_switch"
+        )
+    ).all()
+    sent_versions: set[tuple[str, int]] = set()
+    for row in rows:
+        organization_id = str(row.worker_id or "").strip()
+        if str(row.last_error_code) != _ALERT_SENT:
+            continue
+        try:
+            parsed = uuid.UUID(organization_id)
+        except ValueError:
+            continue
+        if str(row.component) != paper_kill_switch_component(parsed):
+            continue
+        sent_versions.add((organization_id, int(row.lease_epoch or 0)))
+    changed = False
+    for row in rows:
+        organization_id = str(row.worker_id or "").strip()
+        version = int(row.lease_epoch or 0)
+        if (organization_id, version) not in sent_versions:
+            continue
+        if str(row.last_error_code) == _ALERT_SENT:
+            continue
+        try:
+            parsed = uuid.UUID(organization_id)
+        except ValueError:
+            continue
+        old_slots = {
+            paper_kill_switch_truncated_component(parsed),
+            PAPER_KILL_SWITCH_COMPONENT,
+        }
+        if str(row.component) not in old_slots:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
+        changed = True
+    return changed
 
 
 def _retire_previous_kill_switch_slots(

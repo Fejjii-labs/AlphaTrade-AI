@@ -189,6 +189,7 @@ def test_ohlcv_volume_and_provenance_exclude_forming_candles() -> None:
         assert request.url.host == "api.bybit.com"
         assert request.url.params["category"] == "linear"
         assert request.url.params["symbol"] == "BTCUSDT"
+        assert request.url.params["end"] == str(int(T0.timestamp() * 1000))
         assert "api-key" not in {name.lower() for name in request.headers}
         return _ok(
             {

@@ -169,11 +169,12 @@ def run_configured_exit_monitor(
     def candles(trade: OpenInternalPaperTrade) -> FetchedBars:
         return loader(trade, evaluated_at=evaluated_at)
 
-    exit_closer = closer
-    if exit_closer is None and not settings.paper_exit_monitor_dry_run:
+    if settings.paper_exit_monitor_dry_run:
+        exit_closer: PaperExitCloser = _RefusingCloser()
+    elif closer is None:
         exit_closer = ExecutionServicePaperExitCloser(factory, settings)
-    if exit_closer is None:
-        exit_closer = _RefusingCloser()
+    else:
+        exit_closer = closer
     return run_paper_exit_monitor(
         enabled=True,
         dry_run=settings.paper_exit_monitor_dry_run,

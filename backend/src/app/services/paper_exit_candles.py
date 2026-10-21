@@ -2,11 +2,12 @@
 
 Live trades read the same public perpetual source the live watcher uses for
 that evidence identity (Binance USD-M, or Bybit when the trade's evidence is
-Bybit). Replay fixtures stay on the replay adapter and are used for tests and
-backtests. The process default ``perpetual_evidence_source=replay`` does not
-hide a live trade. A window that does not reach the entry is incomplete: the
-monitor must not close, because an earlier stop may sit outside the fetched
-bars.
+Bybit). A live Binance trade keeps a configured Bybit secondary, and a
+primary failure rebinds the page to that secondary identity. Replay fixtures
+stay on the replay adapter and are used for tests and backtests. The process
+default ``perpetual_evidence_source=replay`` does not hide a live trade. A
+window that does not reach the entry is incomplete: the monitor must not
+close, because an earlier stop may sit outside the fetched bars.
 """
 
 from __future__ import annotations
@@ -24,14 +25,14 @@ from app.market_contracts.adapters.factory import resolve_perpetual_evidence_sou
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
 from app.market_contracts.enums import SourceFamily, VenueId
-from app.market_contracts.errors import MarketContractError
+from app.market_contracts.errors import EvidenceSourceSwitchRequiredError, MarketContractError
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
     EvidenceMarketIdentity,
     InstrumentIdentity,
     interval_timedelta,
 )
-from app.market_contracts.ohlcv import OhlcvBar
+from app.market_contracts.ohlcv import ClosedOhlcvSeries, OhlcvBar
 from app.schemas.common import Timeframe
 from app.services.paper_exit_monitor import ExitBar, FetchedBars, OpenInternalPaperTrade
 
@@ -159,8 +160,10 @@ def build_candle_source(
     """Construct the read-only adapter for one resolved mode.
 
     ``process`` keeps the watcher's configured source, including secondary
-    failover. A trade identity or the staging live default builds that venue
-    alone and does not follow the replay default.
+    failover. A live Binance trade keeps a configured Bybit secondary so a
+    regional primary failure can rebind. Any other trade identity, and the
+    staging live default, builds that venue alone and does not follow the
+    replay default.
     """
 
     if mode == "replay":
@@ -169,6 +172,15 @@ def build_candle_source(
         return ReplayPerpetualSource()
     if origin == "process":
         return resolve_perpetual_evidence_source(settings, shared=True)
+    secondary = settings.perpetual_evidence_secondary_source.strip().lower()
+    if mode == "binance_usdm" and secondary == "bybit_usdt_perpetual":
+        tuned = settings.model_copy(
+            update={
+                "perpetual_evidence_source": "binance_usdm",
+                "perpetual_evidence_secondary_source": "bybit_usdt_perpetual",
+            }
+        )
+        return resolve_perpetual_evidence_source(tuned, shared=True)
     tuned = settings.model_copy(
         update={
             "perpetual_evidence_source": mode,
@@ -224,11 +236,13 @@ def fetch_closed_bars_since(
     needed = int(span / interval) + 3
     collected: dict[str, OhlcvBar] = {}
     cursor = evaluated_at
+    active_identity = identity
+    active_instrument = instrument
     for _page in range(_MAX_PAGES):
-        page = _fetch_page(
+        page, active_identity, active_instrument = _fetch_page(
             source,
-            identity=identity,
-            instrument=instrument,
+            identity=active_identity,
+            instrument=active_instrument,
             timeframe=timeframe,
             evaluated_at=cursor,
             needed=needed,
@@ -283,20 +297,73 @@ def _fetch_page(
     timeframe: Timeframe,
     evaluated_at: datetime,
     needed: int,
-) -> tuple[OhlcvBar, ...] | None:
+) -> tuple[tuple[OhlcvBar, ...] | None, EvidenceMarketIdentity, InstrumentIdentity]:
+    """Read one page, rebinding once when the primary venue requires a switch.
+
+    ``EvidenceSourceSwitchRequiredError`` means the next read must use the
+    secondary instrument. Retrying the same identity fails every page size
+    and the monitor then reports an empty leading gap. One rebind is kept
+    for the rest of this page and returned for later pages. A second failure
+    tries the next page size and still returns no bars when every size fails.
+    """
+
+    current_identity = identity
+    current_instrument = instrument
+    rebound_used = False
     for size in _page_sizes(needed):
         try:
-            series = source.fetch_closed_ohlcv(
-                identity=identity,
-                instrument=instrument,
+            series = _read_closed_page(
+                source,
+                identity=current_identity,
+                instrument=current_instrument,
                 timeframe=timeframe,
-                min_final_bars=size,
                 evaluated_at=evaluated_at,
+                size=size,
             )
+        except EvidenceSourceSwitchRequiredError as exc:
+            if rebound_used or not isinstance(exc.instrument, InstrumentIdentity):
+                continue
+            rebound_used = True
+            current_instrument = exc.instrument
+            current_identity = first_slice_identity(
+                timeframe=timeframe,
+                replay=False,
+                is_live=True,
+                instrument=current_instrument,
+            )
+            try:
+                series = _read_closed_page(
+                    source,
+                    identity=current_identity,
+                    instrument=current_instrument,
+                    timeframe=timeframe,
+                    evaluated_at=evaluated_at,
+                    size=size,
+                )
+            except MarketContractError:
+                continue
         except MarketContractError:
             continue
-        return tuple(series.bars)
-    return None
+        return tuple(series.bars), current_identity, current_instrument
+    return None, current_identity, current_instrument
+
+
+def _read_closed_page(
+    source: PerpetualMarketSource,
+    *,
+    identity: EvidenceMarketIdentity,
+    instrument: InstrumentIdentity,
+    timeframe: Timeframe,
+    evaluated_at: datetime,
+    size: int,
+) -> ClosedOhlcvSeries:
+    return source.fetch_closed_ohlcv(
+        identity=identity,
+        instrument=instrument,
+        timeframe=timeframe,
+        min_final_bars=size,
+        evaluated_at=evaluated_at,
+    )
 
 
 def _page_sizes(needed: int) -> tuple[int, ...]:

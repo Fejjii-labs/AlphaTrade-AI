@@ -15,9 +15,19 @@ from structlog.testing import capture_logs
 from app.core.config import Environment, Settings
 from app.core.errors import ValidationAppError
 from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
+from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
+from app.market_contracts.adapters.failover import FailoverPerpetualSource
 from app.market_contracts.adapters.replay import ReplayPerpetualSource
-from app.market_contracts.errors import FormingCandleError
+from app.market_contracts.errors import FormingCandleError, RegionalProviderFailureError
+from app.market_contracts.first_slice import first_slice_identity
+from app.market_contracts.identity import (
+    EvidenceMarketIdentity,
+    InstrumentIdentity,
+    binance_usdm_btcusdt,
+    bybit_usdt_perpetual_btcusdt,
+)
 from app.market_contracts.ohlcv import require_closed_series
+from app.providers.base import ProviderKind
 from app.schemas.common import Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanHttpRequest, ClosePaperPlanRequest
 from app.services.canonical_paper_execution import (
@@ -929,6 +939,118 @@ def test_paging_continues_when_the_source_rejects_an_exact_bar_end() -> None:
     assert any(moment != far and moment not in bar_ends for moment in source.evaluated)
 
 
+def test_binance_regional_failure_pages_bybit_back_to_the_entry() -> None:
+    """A Binance switch must rebind, and the secondary must honor the cursor.
+
+    Staging open trades are live Binance evidence. Pinning Binance and
+    treating the switch error as a short page returns zero bars, so the
+    monitor reports ``leading_gap`` with an empty series. Bybit without an
+    ``end`` cursor would then return only the latest window and still miss
+    an entry older than one page.
+    """
+
+    first = datetime(2026, 10, 6, 6, 15, tzinfo=UTC)
+    far = datetime(2026, 10, 20, 23, 0, tzinfo=UTC)
+    delta = timedelta(minutes=15)
+    binance = binance_usdm_btcusdt()
+    bybit = bybit_usdt_perpetual_btcusdt()
+    market = first_slice_identity(
+        timeframe=Timeframe.M15,
+        replay=False,
+        is_live=True,
+        instrument=binance,
+    )
+    bars = [
+        closed_bar(
+            open_time=first + (delta * index),
+            index=index,
+            evaluated_at=far,
+            instrument=bybit,
+        )
+        for index in range(5)
+    ]
+
+    class _Venue:
+        def __init__(self, name: str, *, fail: bool) -> None:
+            self.name = name
+            self.kind = ProviderKind.MARKET_DATA
+            self.calls: list[tuple[datetime, str]] = []
+            self._fail = fail
+
+        def fetch_closed_ohlcv(
+            self,
+            *,
+            identity: EvidenceMarketIdentity,
+            instrument: InstrumentIdentity,
+            timeframe: Timeframe,
+            min_final_bars: int,
+            evaluated_at: datetime,
+        ) -> object:
+            del instrument
+            self.calls.append((evaluated_at, identity.venue.value))
+            if self._fail:
+                raise RegionalProviderFailureError("primary perpetual source rejected")
+            eligible = [bar for bar in bars if bar.interval_end <= evaluated_at]
+            if len(eligible) < min_final_bars:
+                raise FormingCandleError("short history")
+            selected = eligible[-min_final_bars:]
+            return require_closed_series(
+                selected,
+                identity=identity,
+                timeframe=timeframe,
+                evaluated_at=evaluated_at,
+                min_bars=min_final_bars,
+            )
+
+    primary = _Venue("binance-usdm-perpetual", fail=True)
+    secondary = _Venue("bybit-usdt-perpetual", fail=False)
+    source = FailoverPerpetualSource(
+        primary,  # type: ignore[arg-type]
+        secondary,  # type: ignore[arg-type]
+        primary_instrument=binance,
+        secondary_instrument=bybit,
+    )
+    fetched = fetch_closed_bars_since(
+        source,
+        identity=market,
+        instrument=binance,
+        timeframe=Timeframe.M15,
+        entry_time=first,
+        evaluated_at=far,
+    )
+    assert primary.calls
+    assert secondary.calls
+    assert fetched.covers_entry is True
+    assert fetched.bars[0].interval_start == first
+    assert fetched.source_name == "bybit-usdt-perpetual"
+    assert all(venue == "bybit" for _moment, venue in secondary.calls)
+    assert secondary.calls[0][0] == far
+    assert any(moment < far for moment, _venue in secondary.calls[1:])
+
+
+def test_live_binance_trade_keeps_configured_bybit_failover() -> None:
+    settings = Settings(
+        _env_file=None,
+        perpetual_evidence_source="binance_usdm",
+        perpetual_evidence_secondary_source="bybit_usdt_perpetual",
+    )
+    trade = _live_btc(COMMAND)
+    mode, origin = candle_mode_for_trade(trade, settings)
+    source = build_candle_source(settings, mode, origin)
+    assert isinstance(source, FailoverPerpetualSource)
+    bybit_trade = _trade(
+        evidence_venue="bybit",
+        evidence_source_family="bybit_usdt_perpetual_public",
+        evidence_is_live=True,
+        evidence_is_mock=False,
+    )
+    bybit_mode, bybit_origin = candle_mode_for_trade(bybit_trade, settings)
+    assert isinstance(
+        build_candle_source(settings, bybit_mode, bybit_origin),
+        BybitUsdtPerpetualSource,
+    )
+
+
 def test_replay_source_is_the_strategy_evidence_source() -> None:
     source = ReplayPerpetualSource()
     market, instrument = identity_for_trade(
@@ -1207,6 +1329,77 @@ def test_enabled_dry_run_reads_without_building_a_closer() -> None:
     assert report.status == "dry_run"
     assert report.examined == 0
     assert report.closed == 0
+
+
+def test_dry_run_refuses_an_injected_closer(monkeypatch: pytest.MonkeyPatch) -> None:
+    moment = datetime.now(UTC).replace(second=0, microsecond=0)
+    closed_end = moment.replace(minute=(moment.minute // 15) * 15)
+    start = closed_end - timedelta(minutes=15)
+    trade = _trade(entry_time=start)
+    closer = RecordingCloser()
+    seen: dict[str, object] = {}
+
+    def load(_session: object) -> tuple[tuple[OpenInternalPaperTrade, ...], tuple[object, ...]]:
+        return (trade,), ()
+
+    class Loader:
+        def __init__(self, _settings: Settings, sources: object | None = None) -> None:
+            del sources
+
+        def __call__(
+            self,
+            _trade: OpenInternalPaperTrade,
+            *,
+            evaluated_at: datetime,
+        ) -> FetchedBars:
+            del evaluated_at
+            return _fetched((_bar(start, low="94", high="101"),))
+
+    def capture(**kwargs: object) -> MonitorReport:
+        seen["closer"] = kwargs["closer"]
+        seen["dry_run"] = kwargs["dry_run"]
+        from app.services.paper_exit_monitor import run_paper_exit_monitor as real
+
+        return real(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("app.workers.paper_exit_monitor.load_open_internal_paper_trades", load)
+    monkeypatch.setattr("app.workers.paper_exit_monitor.PaperExitCandleLoader", Loader)
+    monkeypatch.setattr("app.workers.paper_exit_monitor.run_paper_exit_monitor", capture)
+    settings = Settings(
+        _env_file=None,
+        paper_exit_monitor_enabled=True,
+        paper_exit_monitor_dry_run=True,
+    )
+    report = run_configured_exit_monitor(
+        settings,
+        session_factory=_clock_session_factory(),  # type: ignore[arg-type]
+        closer=closer,
+    )
+    installed = seen["closer"]
+    assert seen["dry_run"] is True
+    assert isinstance(installed, PaperExitCloser)
+    assert installed is not closer
+    assert type(installed).__name__ == "_RefusingCloser"
+    with pytest.raises(RuntimeError, match="dry-run attempted a close"):
+        installed.close(_request_for_refusal())
+    assert closer.requests == []
+    assert report.status == "dry_run"
+    assert report.closed == 0
+    assert report.would_close == 1
+
+
+def _request_for_refusal() -> ClosePaperPlanRequest:
+    return ClosePaperPlanRequest(
+        organization_id=ORG,
+        user_id=USER,
+        account_id=ACCOUNT,
+        revision_id=REVISION,
+        command_id=COMMAND,
+        exit_price=Decimal("95"),
+        exit_reason="stop_hit",
+        occurred_at=NOW,
+        idempotency_key="dry-run-refusal",
+    )
 
 
 def test_disarmed_supervisor_does_not_attach_the_monitor_when_the_flag_is_on(

@@ -2,6 +2,29 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-137 — Exit-monitor empty candles are a failed fetch, not a loose freshness check
+
+- Date: 2026-10-21
+- Decision: Staging `candles_unusable` / `leading_gap` with an empty
+  `series_start` was a failed candle fetch. Live Binance paper trades were
+  read with the Bybit secondary stripped, and
+  `EvidenceSourceSwitchRequiredError` was treated as a page-size miss, so
+  every size failed and the series stayed empty. Bybit `fetch_closed_ohlcv`
+  also omitted the kline `end` parameter, so a cursor could not move behind
+  the latest window. The loader now keeps a configured Bybit secondary for a
+  live Binance trade and rebinds once to that identity. Bybit kline requests
+  pass `end` equal to `evaluated_at`. `candle_series_block` thresholds are
+  unchanged. A same-version 31-hex or legacy kill-switch row is marked sent
+  once the full-hex row of that version is sent. A same-version unsent row
+  on the only remaining slot is still retried (AT-ADR-136).
+- Safety: `PAPER_EXIT_MONITOR_ENABLED` stays default false.
+  `PAPER_EXIT_MONITOR_DRY_RUN` stays default true. An injected closer is
+  replaced by the refusing closer while dry-run is on. Production refusal
+  is unchanged. Real-money trading stays rejected. No Render, environment,
+  or workflow change.
+- Reference: AT-ADR-135; AT-ADR-136; staging worker
+  `srv-daqej7o473hc73fsc1k0` at `b031f740`.
+
 ## AT-ADR-136 — Stale kill-switch rows do not keep the health retry hot
 
 - Date: 2026-10-20
