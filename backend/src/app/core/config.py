@@ -799,11 +799,13 @@ class Settings(BaseSettings):
         )
 
     @property
-    def blofin_paper_internal_snapshot_read_requested(self) -> bool:
-        """Paper-internal demo-key snapshot was requested, before the host check.
+    def blofin_paper_internal_main_key_selected(self) -> bool:
+        """True when the main ``BLOFIN_API_*`` key is the paper_internal GET credential.
 
-        A non-allowlisted host still selects this path so the client can refuse
-        it. It does not make the snapshot ready.
+        This is the selector for that key. It is not a user-facing request
+        flag, and it is not proof that the host is allowlisted. A
+        non-allowlisted host still selects the key so the client can refuse
+        it. Readiness is :attr:`blofin_paper_internal_snapshot_read_ready`.
         """
         return self._paper_internal_demo_key_snapshot_gates()
 
@@ -817,7 +819,7 @@ class Settings(BaseSettings):
         """
         from app.core.exchange_safety import is_allowlisted_demo_host
 
-        return self.blofin_paper_internal_snapshot_read_requested and is_allowlisted_demo_host(
+        return self.blofin_paper_internal_main_key_selected and is_allowlisted_demo_host(
             self.blofin_demo_rest_base_url
         )
 

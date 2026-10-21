@@ -881,6 +881,7 @@ class BloFinDemoManualMirror:
             raise ExchangeDemoInactiveError("BloFin manual mirror stays paper-only.")
         if not settings.blofin_demo_manual_mirror_enabled:
             return MirrorReport(True, 0, 0, 0, 0, 0)
+        self._require_internal_read_pin(organization_id=organization_id, settings=settings)
         begin, end, begin_ms, end_ms = _window(self._now)
         instruments = self._client.request("GET", _INSTRUMENTS, params=None, signed=False)
         positions = self._client.request("GET", _POSITIONS, params=None, signed=True)
@@ -933,6 +934,31 @@ class BloFinDemoManualMirror:
             outcome=outcome,
         )
         return report
+
+    def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
+        """Run the #304 org pin and UID check before any account read.
+
+        This is the paper_internal main-key path only. The check lives here,
+        rather than as a startup refusal of the mirror flag, so it still runs
+        when the snapshot cycle skips ``BloFinSyncService.sync`` because the
+        stored snapshot is fresh. A missing pin raises before a socket. The
+        UID check's only request is ``GET /api/v1/user/query-apikey``.
+        ``paper_exchange_demo`` and the dedicated read-only key are unchanged.
+        """
+
+        if not settings.blofin_paper_internal_main_key_selected:
+            return
+        from app.providers.exchange.blofin_account import PERMISSIONS_ENDPOINT
+        from app.services.blofin_sync_service import require_internal_snapshot_mirror_identity
+
+        def fetch_identity() -> Any:
+            return self._client.request("GET", PERMISSIONS_ENDPOINT, params=None, signed=True)
+
+        require_internal_snapshot_mirror_identity(
+            settings,
+            organization_id,
+            fetch_identity=fetch_identity,
+        )
 
     def _persist(
         self,

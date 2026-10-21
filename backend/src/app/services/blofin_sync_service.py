@@ -7,6 +7,7 @@ Never places, modifies, or cancels orders. Demo mode only.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -28,7 +29,7 @@ from app.providers.exchange.base import (
     ExchangeBalance,
     ExchangePositionData,
 )
-from app.providers.exchange.blofin_account import BloFinAccountProvider
+from app.providers.exchange.blofin_account import BloFinAccountProvider, parse_account_permissions
 from app.providers.exchange.errors import ExchangeError
 from app.repositories.blofin_sync import BloFinSyncRepository
 from app.schemas.audit import AuditRecordCreate
@@ -51,8 +52,7 @@ def _demo_key_read(settings: Settings) -> bool:
     """True when GET sync uses the main demo key. Execution stays sealed."""
 
     return (
-        settings.blofin_demo_read_fallback_ready
-        or settings.blofin_paper_internal_snapshot_read_requested
+        settings.blofin_demo_read_fallback_ready or settings.blofin_paper_internal_main_key_selected
     )
 
 
@@ -102,6 +102,36 @@ def _require_fallback_account_pin(settings: Settings, organization_id: uuid.UUID
         return
     logger.warning("blofin_fallback_sync_refused", reason=reason)
     raise ValueError(message)
+
+
+def require_internal_snapshot_mirror_identity(
+    settings: Settings,
+    organization_id: uuid.UUID,
+    *,
+    fetch_identity: Callable[[], Any],
+) -> None:
+    """Refuse the paper_internal main demo key unless the #304 pin matches.
+
+    No-op for the dedicated read-only key and for ``paper_exchange_demo``.
+    The organization and expected-UID pins are checked before
+    ``fetch_identity``. That callable is the identity GET only. A mismatch
+    or an unverified UID raises before the caller reads positions or history.
+    """
+
+    if not settings.blofin_paper_internal_main_key_selected:
+        return
+    _require_fallback_account_pin(settings, organization_id)
+    payload = fetch_identity()
+    permissions = parse_account_permissions(payload)
+    uid = native_uid(payload) if permissions.can_read else None
+    if native_uid({"uid": uid}) is None:
+        raise ValueError("BloFin sync native account UID is unverified.")
+    expected = get_activity_settings().expected_uid.strip()
+    if expected != uid:
+        _log_snapshot_identity("mismatch")
+        logger.warning("blofin_fallback_sync_refused", reason="native_account_mismatch")
+        raise ValueError("BloFin sync native account UID does not match connection pin.")
+    _log_snapshot_identity("verified")
 
 
 class BloFinSyncService:

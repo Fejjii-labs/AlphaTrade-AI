@@ -2,6 +2,26 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-143 — Internal-read mirror runs the #304 pin before account reads
+
+- Date: 2026-10-21
+- Decision: When `blofin_paper_internal_main_key_selected` is true and the
+  manual mirror is enabled, `BloFinDemoManualMirror.apply` runs the AT-ADR-141
+  organization pin and the AT-ADR-140 UID compare before instruments,
+  positions, or history. A missing pin raises before any venue call. The UID
+  compare's only request is `GET /api/v1/user/query-apikey`. A mismatch or an
+  unverified UID raises before the other reads. The check lives in the mirror
+  so the fresh-snapshot path, which skips `BloFinSyncService.sync`, cannot
+  read without it. A startup refusal of `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`
+  together with the internal-read flag was not used. `paper_exchange_demo`
+  and the dedicated read-only key are unchanged.
+- The selector property was renamed from
+  `blofin_paper_internal_snapshot_read_requested` to
+  `blofin_paper_internal_main_key_selected`. It means the main `BLOFIN_API_*`
+  key is selected for the paper_internal GET snapshot, before the host
+  allowlist. It does not by itself make the snapshot ready.
+- Reference: `docs/blofin_demo_manual_mirror.md`. Supplements AT-ADR-142.
+
 ## AT-ADR-142 — Paper-internal demo snapshot is a GET opt-in, not demo execution
 
 - Date: 2026-10-21

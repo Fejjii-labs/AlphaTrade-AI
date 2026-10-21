@@ -1,7 +1,10 @@
 """Read-only BloFin demo snapshot cycle for the paper worker.
 
 Calls the existing ``BloFinSyncService.sync`` on a 30-60 second cadence.
-Demo gates and native identity checks stay inside that service. A closed gate
+Demo gates stay on this cycle. Native identity checks for a snapshot fetch
+stay inside that service. On the paper_internal main-key path the manual
+mirror repeats the #304 pin before its own reads, including when this cycle
+skips the fetch because the stored snapshot is fresh. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
 browser refresh and this cycle do not both hit the venue. A degraded snapshot

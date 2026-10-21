@@ -35,8 +35,9 @@ are true:
   key.
 
 Otherwise the cycle is not attached, or its status is `skipped`, and it does
-not open the database or call BloFin. Identity and UID checks stay inside
-`BloFinSyncService`. The dedicated key and the main demo-key fallback both
+not open the database or call BloFin. Identity and UID checks for a snapshot
+fetch stay inside `BloFinSyncService`. The dedicated key and the main demo-key
+fallback both
 refuse a native UID that differs from `BLOFIN_ACTIVITY_EXPECTED_UID` for
 `BLOFIN_ACTIVITY_ORGANIZATION_ID`, and both apply the activity-account
 snapshot proof on read. The fallback also refuses before any venue call
@@ -75,6 +76,11 @@ refresh from the dashboard still calls BloFin. When
 `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` is on, the same cycle still mirrors hand
 trades while the snapshot is fresh, including a fresh degraded snapshot, and
 also when the snapshot sync returns a health status outside ok or degraded.
+On the paper_internal main-key path that mirror runs the #304 organization
+pin and UID check before any account read, including this fresh skip. See
+[blofin_demo_manual_mirror.md](blofin_demo_manual_mirror.md). The property
+`blofin_paper_internal_main_key_selected` is what selects that main
+`BLOFIN_API_*` key, before the demo-host allowlist.
 The mirror does not run unless this cycle is attached: the snapshot flag is
 on, the worker is armed, and either the read-only set or the main demo key
 fallback above is present. A partial read-only set still skips with

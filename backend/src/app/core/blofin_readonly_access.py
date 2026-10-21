@@ -144,7 +144,7 @@ def get_readonly_client(
             )
         credentials = dedicated
     elif settings.blofin_demo_read_fallback_ready or (
-        settings.blofin_paper_internal_snapshot_read_requested
+        settings.blofin_paper_internal_main_key_selected
         and (not activity_history or paper_internal_snapshot)
     ):
         credentials = (

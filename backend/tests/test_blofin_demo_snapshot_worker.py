@@ -36,6 +36,7 @@ from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.factory import resolve_exchange_provider
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
 from app.services.blofin_activity_config import BloFinActivitySettings
+from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror, MirrorReadError
 from app.services.blofin_sync_service import BloFinSyncService
 from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
@@ -1528,3 +1529,302 @@ def test_telegram_projection_and_internal_snapshot_pass_deployment_safety() -> N
     validate_deployment_settings(settings)
     with pytest.raises(ValidationError, match="blofin_demo_enabled must be false"):
         Settings.model_validate(settings.model_dump() | {"blofin_demo_enabled": True})
+
+
+_IDENTITY = "/api/v1/user/query-apikey"
+
+
+class _PinClient:
+    """Records mirror GETs. Account reads are refused until the test allows them."""
+
+    def __init__(self, *, uid: str | None, account_reads: bool) -> None:
+        self.paths: list[str] = []
+        self._uid = uid
+        self._account_reads = account_reads
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: object = None,
+        body: object = None,
+        signed: bool = False,
+        before_send: object = None,
+    ) -> object:
+        assert method == "GET"
+        self.paths.append(path)
+        if path == _IDENTITY:
+            assert self._uid is not None
+            return {"readOnly": 0, "uid": self._uid}
+        if not self._account_reads:
+            raise AssertionError(path)
+        if path in {"/api/v1/market/instruments", "/api/v1/account/positions"}:
+            return []
+        raise MirrorReadError("stopped after the pin")
+
+
+def _mirror_settings(**updates: object) -> Settings:
+    settings = _internal_key_settings(blofin_demo_manual_mirror_enabled=True, **updates)
+    assert settings.blofin_paper_internal_main_key_selected is True
+    return settings
+
+
+def _apply_mirror(client: _PinClient, settings: Settings, organization_id: UUID) -> None:
+    BloFinDemoManualMirror(client, now=datetime(2026, 10, 21, tzinfo=UTC)).apply(
+        MagicMock(),
+        organization_id=organization_id,
+        user_id=uuid4(),
+        settings=settings,
+    )
+
+
+def _assert_secrets_absent(logs: list[object], *extra: str) -> None:
+    rendered = repr(logs)
+    for secret in (
+        "fixture-trading-key",
+        "fixture-trading-secret",
+        "fixture-trading-pass",
+        "pinned-demo-account",
+        "other-demo-account",
+        *extra,
+    ):
+        assert secret not in rendered
+
+
+@pytest.mark.parametrize(
+    ("case", "reason", "match"),
+    [
+        ("unset_org", "activity_organization_unset", "BLOFIN_ACTIVITY_ORGANIZATION_ID"),
+        ("unset_uid", "activity_expected_uid_unset", "BLOFIN_ACTIVITY_EXPECTED_UID"),
+        ("mismatched_org", "activity_organization_mismatch", "does not match"),
+    ],
+)
+def test_internal_mirror_refuses_before_any_read_when_the_pin_is_missing(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str, match: str
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    if case == "unset_uid":
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=""
+        )
+    elif case == "unset_org":
+        config = BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    else:
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=uuid4(), expected_uid="pinned-demo-account"
+        )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    client = _PinClient(uid=None, account_reads=False)
+    with structlog.testing.capture_logs() as logs, pytest.raises(ValueError, match=match):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == []
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused" and item.get("reason") == reason
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_internal_mirror_refuses_a_uid_mismatch_after_the_identity_get_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(ValueError, match="does not match connection pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "mismatch"
+        for item in logs
+    )
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "native_account_mismatch"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_internal_mirror_refuses_an_unverified_uid_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="", account_reads=False)
+    with pytest.raises(ValueError, match="UID is unverified"):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+
+
+def test_internal_mirror_runs_the_pin_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(MirrorReadError, match="stopped after the pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [
+        _IDENTITY,
+        "/api/v1/market/instruments",
+        "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+    ]
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_disabled_internal_mirror_does_not_read_or_pin() -> None:
+    settings = _internal_key_settings(blofin_demo_manual_mirror_enabled=False)
+    client = _PinClient(uid=None, account_reads=False)
+    report = BloFinDemoManualMirror(client, now=datetime(2026, 10, 21, tzinfo=UTC)).apply(
+        MagicMock(),
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        settings=settings,
+    )
+    assert report.created == 0
+    assert client.paths == []
+
+
+@pytest.mark.parametrize("mode", ["paper_exchange_demo", "dedicated_readonly"])
+def test_other_mirror_paths_do_not_take_the_internal_pin(mode: str) -> None:
+    if mode == "paper_exchange_demo":
+        settings = _trading_key_settings().model_copy(
+            update={"blofin_demo_manual_mirror_enabled": True}
+        )
+    else:
+        settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    assert settings.blofin_paper_internal_main_key_selected is False
+    client = _PinClient(uid=None, account_reads=True)
+    with pytest.raises(MirrorReadError, match="stopped after the pin"):
+        _apply_mirror(client, settings, uuid4())
+    assert _IDENTITY not in client.paths
+    assert client.paths[0] == "/api/v1/market/instruments"
+
+
+def _fresh_internal_cycle(
+    monkeypatch: pytest.MonkeyPatch, client: _PinClient
+) -> tuple[BloFinDemoSnapshotCycle, list[str], list[str]]:
+    settings = _mirror_settings()
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    synced: list[str] = []
+    recorded: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None, commit=lambda: None)
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
+            return SimpleNamespace(
+                health_status=BloFinSyncHealthStatus.OK,
+                synced_at=now - timedelta(seconds=10),
+            )
+
+        def sync(self, **_kwargs: object) -> None:
+            synced.append("sync")
+            raise AssertionError("fresh snapshot must not sync")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: client,
+    )
+
+    def remember(*_args: object, **kwargs: object) -> None:
+        recorded.append(str(kwargs.get("outcome")))
+
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.record_mirror_cycle", remember)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    return cycle, synced, recorded
+
+
+def test_fresh_internal_snapshot_refuses_the_mirror_before_any_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid=None, account_reads=False)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(_env_file=None),
+    )
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths == []
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "activity_organization_unset"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_fresh_internal_snapshot_refuses_a_uid_mismatch_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths == [_IDENTITY]
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "mismatch"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_fresh_internal_snapshot_checks_the_uid_before_the_mirror_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths[0] == _IDENTITY
+    assert client.paths == [
+        _IDENTITY,
+        "/api/v1/market/instruments",
+        "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+    ]
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
