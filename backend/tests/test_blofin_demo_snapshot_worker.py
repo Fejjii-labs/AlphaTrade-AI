@@ -24,6 +24,7 @@ from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
 from app.services.blofin_activity_config import BloFinActivitySettings
+from app.services import blofin_sync_service
 from app.services.blofin_sync_service import BloFinSyncService
 from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
@@ -423,18 +424,26 @@ def test_fallback_refuses_without_a_matching_account_pin(
 
     monkeypatch.setattr(service._snapshots, "add", keep)
     monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
-    with structlog.testing.capture_logs() as logs:
-        result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    refused: list[tuple[str, str]] = []
+    real_warning = blofin_sync_service.logger.warning
+
+    def record_refusal(event: str, **kwargs: object) -> None:
+        if event == "blofin_fallback_sync_refused" and isinstance(kwargs.get("reason"), str):
+            refused.append((event, str(kwargs["reason"])))
+        real_warning(event, **kwargs)
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.logger.warning",
+        record_refusal,
+    )
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
     assert calls == []
     assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
     assert result.snapshot.provenance.get("error_type") == "ValueError"
     assert result.snapshot.provenance.get("native_account_uid") is None
     assert result.snapshot.balance_count == 0
-    assert any(
-        item.get("event") == "blofin_fallback_sync_refused" and item.get("reason") == reason
-        for item in logs
-    )
-    rendered = repr(logs)
+    assert refused == [("blofin_fallback_sync_refused", reason)]
+    rendered = repr(refused)
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
     assert "fixture-trading-pass" not in rendered
