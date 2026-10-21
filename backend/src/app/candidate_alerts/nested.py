@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field
 
-from app.market_contracts.models import CanonicalModel
+from app.market_contracts.models import CanonicalModel, PositiveCanonicalDecimal
 from app.signal_fusion.assessment import SetupAssessment
 from app.signal_fusion.evidence_window import CanonicalEvidenceWindowV1
 
@@ -21,6 +21,10 @@ class NestedAlertSummary(CanonicalModel):
     decision: str = Field(min_length=1, max_length=80)
     risk_state: str = Field(min_length=1, max_length=80)
     reasons: tuple[str, ...]
+    # Detector prices. None when that leg was not measured.
+    entry: PositiveCanonicalDecimal | None = None
+    stop: PositiveCanonicalDecimal | None = None
+    target: PositiveCanonicalDecimal | None = None
     paper_mode: Literal[True] = True
     freshness: Literal["AVAILABLE"] = "AVAILABLE"
 

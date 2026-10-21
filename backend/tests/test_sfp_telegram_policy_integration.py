@@ -164,6 +164,27 @@ def test_closed_reclaim_projects_sweep_forming_and_confirmation_without_actions(
             "Risk state:",
         ):
             assert text in row.text
+    confirmed_text = next(
+        row.text for row in rows if row.notification_event.event_type is EventType.SFP_CONFIRMED
+    )
+    confirmed_fact = next(
+        fact
+        for fact in summaries(session, policy, now)
+        if fact.event_type is EventType.SFP_CONFIRMED
+    )
+    assert confirmed_fact.entry and confirmed_fact.stop and confirmed_fact.take_profit
+    for label, price in (
+        ("Entry:", confirmed_fact.entry),
+        ("Stop:", confirmed_fact.stop),
+        ("Take-profit:", confirmed_fact.take_profit),
+    ):
+        assert f"{label} {price}" in confirmed_text
+    assert "Real trading is not authorized." in confirmed_text
+    assert all(
+        "Entry:" not in row.text
+        for row in rows
+        if row.notification_event.event_type is not EventType.SFP_CONFIRMED
+    )
     assert world.transport.sent == []
     assert (
         world.gateway.store.get_by_identity_hash(rows[0].notification_event.duplicate_key) is None

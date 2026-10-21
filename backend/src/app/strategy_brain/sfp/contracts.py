@@ -26,6 +26,14 @@ from app.services.canonical_serialization import canonical_sha256
 
 SFP_KIND: Literal["swing_failure_pattern/v1"] = "swing_failure_pattern/v1"
 SFP_NAMESPACE = UUID("1ba10002-0000-4000-8000-000000000001")
+# Fraction of the swept reference price, placed beyond the sweep extreme.
+# 0.001 is 0.1%. It does not change sweep, reclaim, or invalidation thresholds.
+DEFAULT_SFP_STOP_BUFFER = Decimal("0.001")
+# One tick, applied only when a tick size is known. Zero would leave a coarse
+# tick inside the percent buffer. This is not a sweep or invalidation threshold.
+DEFAULT_SFP_MIN_STOP_TICKS = 1
+# Zero keeps a short history from refusing a plan before Wilder ATR can print.
+DEFAULT_SFP_MIN_STOP_ATR_MULTIPLE = Decimal("0")
 
 
 class SfpParameters(CanonicalModel):
@@ -47,6 +55,15 @@ class SfpParameters(CanonicalModel):
     required_evidence_max_age_bars: int = Field(ge=1, le=10)
     quality_lookback: int = Field(ge=2, le=500)
     htf_alignment_tolerance: NonNegativeCanonicalDecimal = Field(lt=1)
+    # Paper stop distance beyond the sweep extreme. Not an invalidation threshold.
+    stop_buffer: NonNegativeCanonicalDecimal = Field(default=DEFAULT_SFP_STOP_BUFFER, lt=1)
+    # The paper stop uses the largest of the percent buffer, this many ticks,
+    # and min_stop_atr_multiple times Wilder ATR. Detection thresholds stay put.
+    min_stop_ticks: int = Field(default=DEFAULT_SFP_MIN_STOP_TICKS, ge=0, le=10_000)
+    min_stop_atr_multiple: NonNegativeCanonicalDecimal = Field(
+        default=DEFAULT_SFP_MIN_STOP_ATR_MULTIPLE,
+        lt=100,
+    )
     confirmation: Literal["closed_break_of_reclaim_extreme"] = "closed_break_of_reclaim_extreme"
     # None keeps stored v1 specs from alerting. A new version sets the distance.
     approach_proximity: NonNegativeCanonicalDecimal | None = None
@@ -90,6 +107,9 @@ def sfp_research_v2_parameters() -> SfpParameters:
         required_evidence_max_age_bars=1,
         quality_lookback=3,
         htf_alignment_tolerance=Decimal("0.01"),
+        stop_buffer=DEFAULT_SFP_STOP_BUFFER,
+        min_stop_ticks=DEFAULT_SFP_MIN_STOP_TICKS,
+        min_stop_atr_multiple=DEFAULT_SFP_MIN_STOP_ATR_MULTIPLE,
         approach_proximity=Decimal("0.001"),
         approach_cooldown_seconds=900,
     )
@@ -271,6 +291,16 @@ class QualityComponent(CanonicalModel):
         return self
 
 
+class SfpTradePlan(CanonicalModel):
+    """Structural paper plan. Wrong-side or zero-distance geometry is not stored."""
+
+    entry: PositiveCanonicalDecimal
+    stop: PositiveCanonicalDecimal
+    take_profit: PositiveCanonicalDecimal
+    stop_buffer: NonNegativeCanonicalDecimal = Field(lt=1)
+    paper_only: Literal[True] = True
+
+
 class SfpQuality(CanonicalModel):
     level_importance: QualityComponent
     higher_timeframe_alignment: QualityComponent
@@ -301,6 +331,7 @@ class SfpDetection(CanonicalModel):
     reclaim_observation_id: UUID | None
     confirmation_observation_id: UUID | None
     quality: SfpQuality
+    trade_plan: SfpTradePlan | None = None
     reason_codes: tuple[str, ...]
 
 

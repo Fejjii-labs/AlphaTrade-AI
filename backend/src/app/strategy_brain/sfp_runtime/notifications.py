@@ -15,6 +15,20 @@ from app.schemas.telegram_policy import NotificationEventType as EventType
 from app.strategy_brain.records import aware
 
 
+def _plan_prices(plan: object) -> tuple[str | None, str | None, str | None]:
+    """Copy a stored structural plan. Missing or partial plans stay unset."""
+
+    if not isinstance(plan, dict):
+        return None, None, None
+    prices = []
+    for name in ("entry", "stop", "take_profit"):
+        value = plan.get(name)
+        if not isinstance(value, str) or not value:
+            return None, None, None
+        prices.append(value)
+    return prices[0], prices[1], prices[2]
+
+
 def notification_type(kind: str, payload: dict[str, Any]) -> EventType | None:
     if kind == "setup_expired" or payload.get("state") == "EXPIRED":
         return EventType.SFP_EXPIRED
@@ -89,6 +103,8 @@ def sfp_notification_summaries(
             missing += ("quality:MISSING",)
         if payload.get("required_evidence") != "AVAILABLE":
             missing += (f"required_evidence:{payload.get('required_evidence', 'MISSING')}",)
+        plan = payload.get("trade_plan")
+        plan_prices = _plan_prices(plan)
         summary = SfpAlertSummary(
             organization_id=organization_id,
             strategy_version_id=strategy_version_id,
@@ -108,6 +124,9 @@ def sfp_notification_summaries(
             missing_evidence=missing,
             risk_state=payload.get("risk_state", "not_evaluated"),
             risk_reasons=tuple(payload.get("risk_reason_codes", [])),
+            entry=plan_prices[0],
+            stop=plan_prices[1],
+            take_profit=plan_prices[2],
         )
         # A closed candle can first reveal both the sweep and reclaim. The
         # canonical sweep proof still supplies its own timestamp; do not require
@@ -131,6 +150,9 @@ def sfp_notification_summaries(
                         "missing_evidence": ("quality:MISSING",),
                         "risk_state": "not_evaluated",
                         "risk_reasons": (),
+                        "entry": None,
+                        "stop": None,
+                        "take_profit": None,
                     }
                 )
             )

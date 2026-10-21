@@ -128,6 +128,12 @@ def test_confirmed_paper_event_content_and_duplicate_episode(nested_world):
     ):
         assert value in text
     assert "Reason summary:" in text
+    assert w.summary.entry is not None and w.summary.stop is not None
+    assert w.summary.target is not None
+    assert format(w.summary.entry, "f") in text
+    assert format(w.summary.stop, "f") in text
+    assert format(w.summary.target, "f") in text
+    assert "Entry:" in text and "Stop:" in text and "Target:" in text
     # Risk/decision changes and a later canonical candidate revision cannot re-alert the episode.
     updated = w.gateway.lifecycle.transition(
         organization_id=w.candidate.organization_id,

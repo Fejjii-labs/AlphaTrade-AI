@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.candidate_alerts.nested import NestedAlertSummary, required_evidence_fresh
 from app.evidence_pipeline.canonical import semantic_source_from_identity
 from app.evidence_pipeline.current_price import quote_current_price
+from app.evidence_pipeline.instrument_tick import resolve_bundle_tick_size
 from app.evidence_pipeline.types import (
     AssembledCanonicalEvidence,
     CompletenessReport,
@@ -27,12 +28,13 @@ from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.hashing import with_content_hash
 from app.market_contracts.identity import interval_timedelta
 from app.market_contracts.observation import observation_from_ohlcv
+from app.market_contracts.provider_contracts import default_contract_book
 from app.services.canonical_serialization import canonical_sha256
 from app.signal_fusion.adapters import AssessmentCommand, evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceAdapterKind, EvidenceRole
 from app.signal_fusion.first_slice_types import FirstSliceEvidenceBundle
 from app.signal_fusion.types import HalfOpenInterval, TriggerIdentity
-from app.strategy_brain.detector import NAMESPACE, detect_nested
+from app.strategy_brain.detector import NAMESPACE, NestedDetection, detect_nested
 from app.strategy_brain.records import attach_paper_result, record_detections, scoped_setup_id
 
 logger = structlog.get_logger(__name__)
@@ -73,6 +75,15 @@ def assemble_ohlcv_family(
     clock = assembler._default_clock
     now = clock()
     instrument = instrument_for_source(source, catalog, spec.symbol)
+    contract_book = getattr(assembler, "_contract_book", None)
+    if not replay and (contract_book is None or not contract_book.contracts):
+        contract_book = default_contract_book()
+    tick_size = resolve_bundle_tick_size(
+        symbol=spec.symbol,
+        venue=instrument.venue,
+        book=contract_book,
+        replay=replay,
+    )
     identity = first_slice_identity(
         timeframe=spec.trigger_timeframe, replay=replay, is_live=not replay, instrument=instrument
     )
@@ -136,7 +147,7 @@ def assemble_ohlcv_family(
             ordered = sorted(pairs.values(), key=lambda pair: pair[0].interval_start)
             bars = tuple(b for b, _ in ordered)
             observations = tuple(o for _, o in ordered)
-        scan = detect_sfp(bars, observations, spec, evaluated_at=now)
+        scan = detect_sfp(bars, observations, spec, evaluated_at=now, tick_size=tick_size)
         latest = select_detection(scan, bars)
         events = scan.events
     else:
@@ -260,7 +271,7 @@ def assemble_ohlcv_family(
             else spec.parameters.confirmation_window,
             setup_trigger_bar_hash=trigger.content_hash,
         ),
-        bundle=FirstSliceEvidenceBundle(bars_15m=bars),
+        bundle=FirstSliceEvidenceBundle(bars_15m=bars, tick_size=tick_size),
         assessment_command=command,
         evidence_window=window,
         evidence_window_hash=window.content_hash,
@@ -285,12 +296,14 @@ def record_paper_link(
     assembled, policy = last
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.signal_fusion.enums import EvidenceRole
-    from app.strategy_brain.sfp.contracts import SfpSpec
+    from app.strategy_brain.sfp.contracts import SfpDetection, SfpSpec
     from app.strategy_brain.sfp.detector import detect_sfp
     from app.strategy_brain.sfp_runtime.assessment import select_detection
 
     if not isinstance(policy.authored_spec, (NestedContinuationSpec, SfpSpec)):
         return
+    events: tuple[SfpDetection, ...] | tuple[NestedDetection, ...]
+    nested_latest: NestedDetection | None = None
     if isinstance(policy.authored_spec, SfpSpec):
         observations = tuple(
             o
@@ -306,13 +319,16 @@ def record_paper_link(
             observations,
             policy.authored_spec,
             evaluated_at=assembled.evaluated_at,
+            tick_size=assembled.bundle.tick_size,
         )
         detection = select_detection(scan, assembled.bundle.bars_15m)
         events = (detection,) if detection is not None else ()
     else:
-        events = detect_nested(
+        nested_events = detect_nested(
             assembled.bundle.bars_15m, policy.authored_spec, evaluated_at=assembled.evaluated_at
         )
+        events = nested_events
+        nested_latest = nested_events[-1] if nested_events else None
     if not events:
         return
     identity = scoped_setup_id(
@@ -333,8 +349,10 @@ def record_paper_link(
     # The Nested-only alert adapter cannot interpret SFP detection fields.
     if isinstance(policy.authored_spec, SfpSpec):
         return None
+    if nested_latest is None:
+        return None
 
-    latest = events[-1]
+    latest = nested_latest
     if (
         latest.state.value != "CONFIRMED"
         or latest.confirmed_index != len(assembled.bundle.bars_15m) - 1
@@ -351,4 +369,7 @@ def record_paper_link(
         decision=report.paper_loop_reason or "not_evaluated",
         risk_state=report.eligibility_state or "not_evaluated",
         reasons=tuple(dict.fromkeys([*latest.reason_codes, report.paper_loop_reason])),
+        entry=latest.entry,
+        stop=latest.stop,
+        target=latest.targets[0] if latest.targets else None,
     )

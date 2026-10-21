@@ -273,6 +273,7 @@ class SymbolMarketFactory:
         self._entries: OrderedDict[str, tuple] = OrderedDict()
         self._replay = perpetual_source_is_replay(settings)
         self._reads: dict[str, int] = {}
+        self._assembler_contract_book: ContractBook | None = None
 
     def retain(self, symbols: Sequence[str]) -> None:
         for symbol in list(self._entries):
@@ -334,6 +335,15 @@ class SymbolMarketFactory:
             self._reads.pop(old_symbol, None)
         return entry
 
+    def _contract_book_for_assembler(self) -> ContractBook:
+        if self._assembler_contract_book is not None:
+            return self._assembler_contract_book
+        if self.discovery.book.contracts:
+            self._assembler_contract_book = self.discovery.book
+        else:
+            self._assembler_contract_book = default_contract_book()
+        return self._assembler_contract_book
+
     def __call__(self, session: Session | None, store: WatcherStore, symbol: str):
         source, catalog, monitor, _ = self.composition(symbol)
         lifetime = (
@@ -341,7 +351,11 @@ class SymbolMarketFactory:
         )
         return AssemblingWatcherScanEvidence(
             FirstSliceEvidenceAssembler(
-                source, replay=self._replay, catalog=catalog, lifetime=lifetime
+                source,
+                replay=self._replay,
+                catalog=catalog,
+                lifetime=lifetime,
+                contract_book=self._contract_book_for_assembler(),
             ),
             session=session,
             watcher_store=store,

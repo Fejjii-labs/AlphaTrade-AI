@@ -123,13 +123,14 @@ def evidence(
     return tuple(bars), tuple(observations)
 
 
-def scan(prices=BULL, *, bearish=False, config=None, **kwargs):
+def scan(prices=BULL, *, bearish=False, config=None, tick_size=None, **kwargs):
     bars, observations = evidence(prices, **kwargs)
     return detect_sfp(
         bars,
         observations,
         config or spec(bearish=bearish),
         evaluated_at=observations[-1].observed_at,
+        tick_size=tick_size,
     )
 
 
@@ -487,6 +488,10 @@ def test_structural_buffer_exact_boundary_is_intact_then_breach_invalidates():
         {"reclaim_window": -1},
         {"expiry_bars": 0},
         {"structural_invalidation_buffer": "1"},
+        {"stop_buffer": "1"},
+        {"min_stop_ticks": -1},
+        {"min_stop_atr_multiple": "-1"},
+        {"min_stop_atr_multiple": "100"},
         {"minimum_level_significance": True},
         {"minimum_sweep_depth": 0.02},
         {"maximum_sweep_depth": "NaN"},
@@ -816,3 +821,69 @@ def test_expiry_event_time_is_the_deadline_when_confirmation_arrives_late():
     assert event.state is BrainSetupState.EXPIRED
     assert event.event_time == event.expires_at < event.observed_at
     assert event.event_time > bars[-1].interval_end
+    assert event.trade_plan is None
+
+
+def test_confirmed_sfp_plan_uses_close_sweep_buffer_and_opposing_level():
+    forming, confirmed = at_level(scan())
+    assert forming.trade_plan is None
+    plan = confirmed.trade_plan
+    assert plan is not None and plan.paper_only is True
+    assert plan.entry == Decimal("104")
+    assert plan.stop == Decimal("98") - Decimal("100") * Decimal("0.001")
+    assert plan.take_profit == Decimal("105")
+    assert plan.stop_buffer == Decimal("0.001")
+    wider = at_level(scan(config=spec(stop_buffer="0.01")))[-1]
+    assert wider.state is BrainSetupState.CONFIRMED
+    assert wider.trade_plan is not None
+    assert wider.trade_plan.stop == Decimal("97")
+    assert wider.trade_plan.entry == plan.entry
+    assert wider.trade_plan.take_profit == plan.take_profit
+
+
+def test_bearish_sfp_plan_is_beyond_the_sweep_high():
+    plan = at_level(scan(BEAR, bearish=True))[-1].trade_plan
+    assert plan is not None
+    assert plan.entry == Decimal("96")
+    assert plan.stop == Decimal("102") + Decimal("100") * Decimal("0.001")
+    assert plan.take_profit == Decimal("95")
+
+
+def test_coarse_tick_widens_the_stop_past_the_percent_buffer():
+    plan = at_level(scan(tick_size=Decimal("1")))[-1].trade_plan
+    assert plan is not None
+    # Default is one tick. 1.0 is larger than 0.1% of the 100 reference.
+    assert plan.stop == Decimal("97")
+    wider = at_level(scan(config=spec(min_stop_ticks=4), tick_size=Decimal("1")))[-1].trade_plan
+    assert wider is not None and wider.stop == Decimal("94")
+    assert wider.entry == plan.entry == Decimal("104")
+    assert wider.take_profit == plan.take_profit
+
+
+def test_atr_multiple_uses_the_larger_distance_and_refuses_when_atr_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: Decimal("3"),
+    )
+    atr_plan = at_level(scan(config=spec(min_stop_atr_multiple="1")))[-1].trade_plan
+    assert atr_plan is not None and atr_plan.stop == Decimal("95")
+    both = at_level(
+        scan(config=spec(min_stop_ticks=4, min_stop_atr_multiple="1"), tick_size=Decimal("1"))
+    )[-1].trade_plan
+    assert both is not None and both.stop == Decimal("94")
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: None,
+    )
+    missing = at_level(scan(config=spec(min_stop_atr_multiple="1")))[-1]
+    assert missing.state is BrainSetupState.CONFIRMED
+    assert missing.trade_plan is None
+
+
+def test_confirmed_sfp_without_opposing_structure_or_positive_stop_has_no_plan():
+    above = [*BULL[:5], (104, 106, 103, 106)]
+    assert at_level(scan(above))[-1].state is BrainSetupState.CONFIRMED
+    assert at_level(scan(above))[-1].trade_plan is None
+    buried = at_level(scan(config=spec(stop_buffer="0.99")))[-1]
+    assert buried.state is BrainSetupState.CONFIRMED
+    assert buried.trade_plan is None

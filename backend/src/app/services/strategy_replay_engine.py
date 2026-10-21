@@ -410,7 +410,8 @@ class StrategyReplayEngine:
             replay=report.model_dump(mode="json"),
             note="SFP lifecycle research only. No execution plan or trade-return metrics.",
             limitations=[
-                "No SFP entry, stop, trade target, R, PnL, fill, or paper trade is inferred.",
+                "A confirmed detection may carry a paper structure plan. "
+                "This replay does not score R, PnL, fills, or open a paper trade.",
                 "Candle receipt clocks are preserved; proofs received after a window are missing.",
                 "Required evidence gaps reset history; earlier observations stay recorded.",
                 "Training/evaluation histories are independent; no tuning or improvement claim.",

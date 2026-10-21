@@ -92,8 +92,13 @@ def create_template(
                 ],
                 "confirmation_conditions": ["Confirmed reclaim; fresh final canonical OHLCV"],
                 "invalidation": ["Failed reclaim, breakout or structural failure"],
-                "stop_loss": ["No SFP execution plan is authorized by this foundation"],
-                "take_profit_plan": ["Available structural target space is advisory evidence only"],
+                "stop_loss": [
+                    "Beyond the sweep extreme by the larger of the configured stop buffer, "
+                    "ticks, and ATR multiple; paper only"
+                ],
+                "take_profit_plan": [
+                    "Nearest known opposing structure; invalid geometry is refused"
+                ],
                 "brain": StrategyBrainDefinition(
                     family="sfp",
                     market_regime="structural liquidity sweep and reclaim",

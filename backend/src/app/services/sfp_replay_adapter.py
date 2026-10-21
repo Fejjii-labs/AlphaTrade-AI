@@ -32,6 +32,7 @@ from app.schemas.strategy_replay import (
     ReplayLevelConsideration,
     SfpReplayEvidence,
 )
+from app.signal_fusion.first_slice_types import FIRST_SLICE_TICK_SIZE
 from app.strategy_brain.sfp.contracts import (
     SfpSpec,
     StructuralLevel,
@@ -175,7 +176,14 @@ class SfpReplayAdapter:
         # Context levels retain their closed proof and actual known_at. The real
         # detector filters them at the sweep open, including target-space facts.
         context = tuple(self.evidence.context_levels)
-        scan = detect_sfp(bars, observations, spec, evaluated_at=end, context_levels=context)
+        scan = detect_sfp(
+            bars,
+            observations,
+            spec,
+            evaluated_at=end,
+            context_levels=context,
+            tick_size=FIRST_SLICE_TICK_SIZE,
+        )
         if scan.required_evidence is not EvidenceAvailability.AVAILABLE:
             self.gaps.append(
                 ReplayEvidenceGap(
@@ -208,7 +216,9 @@ class SfpReplayAdapter:
         indices = {bar.interval_end: index for index, item in segment for bar in (item.bar,)}
         for event in scan.events:
             # Lifecycle and quality come directly from the canonical detector.
-            # The detector never supplies entry/stop/target prices for SFP.
+            # Replay candidates stay non-executable. A confirmed detection may
+            # carry a paper structure plan; this adapter does not copy it into
+            # entry, stop, or targets and does not score a trade.
             if event.observed_at < event.event_time or event.observed_at > end:
                 raise ValueError("SFP replay event must be a knowable closed-candle decision.")
             assert event.evidence.interval_end is not None

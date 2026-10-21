@@ -168,6 +168,7 @@ class AssemblingWatcherScanEvidence:
                 observations,
                 executable.authored_spec,
                 evaluated_at=assembled.evaluated_at,
+                tick_size=assembled.bundle.tick_size,
             )
             detection = select_detection(scan, assembled.bundle.bars_15m)
             events = (detection,) if detection is not None else ()

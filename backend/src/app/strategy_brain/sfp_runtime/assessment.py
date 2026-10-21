@@ -58,7 +58,13 @@ def evaluate_sfp_setup(
         for o, role in zip(command.public_observations, command.selected_roles, strict=True)
         if role.value == "structure"
     )
-    scan = detect_sfp(bars, observations, spec, evaluated_at=evaluated_at)
+    scan = detect_sfp(
+        bars,
+        observations,
+        spec,
+        evaluated_at=evaluated_at,
+        tick_size=evidence.tick_size,
+    )
     latest = select_detection(scan, bars)
     trigger_proofs = tuple(
         o

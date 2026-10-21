@@ -146,7 +146,7 @@ def test_comparison_grounding_has_both_families_scopes_rules_and_distinct_states
         assert "research_validation=draft" in facts
         assert "closed_break_of_impulse_extreme" in facts
         assert "closed_break_of_reclaim_extreme" in facts
-        assert "No SFP execution plan" in facts
+        assert "configured stop buffer" in facts
         assert "Current market conditions are unknown" in facts
         assert "not execution eligibility" in facts
         assert result.recorded_evidence == facts
