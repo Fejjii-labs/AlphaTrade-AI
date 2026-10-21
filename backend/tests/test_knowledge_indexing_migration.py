@@ -14,6 +14,8 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
+from tests.support.alembic_heads import single_alembic_head
+
 
 def test_indexing_migration_from_reviewed_head_and_roundtrip(monkeypatch):
     url = (
@@ -35,7 +37,10 @@ def test_indexing_migration_from_reviewed_head_and_roundtrip(monkeypatch):
     isolated = make_url(url).update_query_dict({"options": f"-csearch_path={schema}"})
     monkeypatch.setenv("ALEMBIC_DATABASE_URL", isolated.render_as_string(hide_password=False))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["a19riskpolicy004"]
+    head = single_alembic_head(scripts)
+    assert scripts.get_heads() == [head]
+    assert scripts.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
+    assert scripts.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
     assert scripts.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
     assert scripts.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
     assert scripts.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
@@ -69,10 +74,7 @@ def test_indexing_migration_from_reviewed_head_and_roundtrip(monkeypatch):
             )
         command.upgrade(config, "head")
         with engine.connect() as connection:
-            assert (
-                connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "a19riskpolicy004"
-            )
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == head
             assert (
                 connection.scalar(
                     text("SELECT title FROM documents WHERE id=:id"), {"id": identifier}

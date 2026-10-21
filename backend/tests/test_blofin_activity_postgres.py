@@ -10,14 +10,13 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.routes.blofin_activity import router
 from app.core.auth import get_current_tenant
 from app.core.config import get_settings
 from app.core.errors import ValidationAppError, register_exception_handlers
-from app.db.base import Base
 from app.db.blofin_activity import BloFinActivityAccount, BloFinActivityCursor, BloFinActivityFact
 from app.db.models import Organization
 from app.db.session import get_session
@@ -45,12 +44,9 @@ def world():
     url = os.environ.get("BLOFIN_ACTIVITY_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("Set BLOFIN_ACTIVITY_TEST_POSTGRES_URL to disposable PostgreSQL.")
-    admin = create_engine(url)
-    schema = "activity_" + uuid4().hex
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(url, connect_args={"options": f"-csearch_path={schema}"})
-    Base.metadata.create_all(engine)
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(url)
     org_id = uuid4()
     with Session(engine) as session:
         session.add(Organization(id=org_id, name="Activity fixture organization"))
@@ -64,11 +60,10 @@ def world():
         expected_uid=venue.uid,
     )
     scope = ActivityScope(org_id, venue.uid)
-    yield engine, settings, config, scope, venue
-    engine.dispose()
-    with admin.begin() as connection:
-        connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-    admin.dispose()
+    try:
+        yield engine, settings, config, scope, venue
+    finally:
+        drop_clone(engine)
 
 
 def sync(world, **kwargs):

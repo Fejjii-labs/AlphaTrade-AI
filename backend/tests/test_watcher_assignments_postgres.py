@@ -8,12 +8,10 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
-from app.db.base import Base
 from app.db.models import Membership, Organization, User, UserStrategy, UserStrategyVersion
 from app.db.session import get_session
 from app.db.watcher_assignments import WatcherAssignmentReceiptRow, WatcherStrategyAssignmentRow
@@ -53,12 +51,9 @@ def factory():
     url = os.environ.get("EXPERIMENT_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("Explicit disposable PostgreSQL required")
-    schema = "watcher_assignments_" + uuid4().hex
-    admin = create_engine(url)
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(make_url(url).update_query_dict({"options": "-csearch_path=" + schema}))
-    Base.metadata.create_all(engine)
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(url)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as db:
         db.add_all(
@@ -82,10 +77,7 @@ def factory():
     try:
         yield factory
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+        drop_clone(engine)
 
 
 def item(db, version_id, *, enabled=True, identity=None):

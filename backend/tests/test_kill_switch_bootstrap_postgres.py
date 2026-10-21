@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session, sessionmaker
 import app.db.session as session_module
 from app.core.config import Settings
 from app.core.errors import TradingPolicyError
-from app.db.base import Base
 from app.db.models import AuditLog, KillSwitchState, Membership, Organization, User
 from app.main import create_app
 from app.schemas.common import AuditEventType, MembershipRole
@@ -39,18 +38,19 @@ def postgres_world(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]
         pytest.skip("Requires disposable EXPERIMENT_TEST_POSTGRES_URL or PHASE1_POSTGRES_URL")
     url = make_url(raw_url)
     assert url.get_backend_name() == "postgresql", "Requires an explicit disposable PostgreSQL URL"
-    schema = "kill_switch_test_" + uuid4().hex
+    from tests.support.postgres_template import clone_database, drop_clone
+
     application_name = "kill-switch-" + uuid4().hex
-    admin = create_engine(url)
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    isolated = url.update_query_dict(
+    cloned = clone_database(raw_url)
+    isolated = cloned.url.update_query_dict(
         {
-            "options": f"-csearch_path={schema} -clock_timeout=2000ms -cstatement_timeout=4000ms",
+            "options": "-clock_timeout=2000ms -cstatement_timeout=4000ms",
             "application_name": application_name,
         }
     )
+    cloned.dispose()
     engine = create_engine(isolated)
+    admin = create_engine(url)
     control = SimpleNamespace(fail_next_commit=False, rollbacks=0)
 
     class ControlledSession(Session):
@@ -66,7 +66,6 @@ def postgres_world(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]
 
     factory = sessionmaker(bind=engine, class_=ControlledSession, expire_on_commit=False)
     try:
-        Base.metadata.create_all(engine)
         settings = Settings(
             _env_file=None,
             environment="local",
@@ -141,9 +140,7 @@ def postgres_world(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]
             headers=headers,
         )
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        drop_clone(engine)
         admin.dispose()
 
 

@@ -35,14 +35,29 @@ POSTGRES_URL = os.environ.get(
 
 
 def postgres_available() -> bool:
-    try:
-        engine = create_engine(POSTGRES_URL, poolclass=NullPool)
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        engine.dispose()
-        return True
-    except Exception:
-        return False
+    """Return True when the disposable fixture database accepts a connection.
+
+    Template-clone refresh briefly drops and recreates ``alphatrade_test``; retry
+    so collection-time ``requires_postgres`` does not mark the whole module skipped.
+    """
+    import time
+
+    for attempt in range(8):
+        try:
+            engine = create_engine(
+                POSTGRES_URL,
+                poolclass=NullPool,
+                connect_args={"connect_timeout": 2},
+            )
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            engine.dispose()
+            return True
+        except Exception:
+            if attempt == 7:
+                return False
+            time.sleep(0.05 * (attempt + 1))
+    return False
 
 
 requires_postgres = pytest.mark.skipif(

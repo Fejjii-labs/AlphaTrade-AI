@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseStatus
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.experiment_fixtures import World
 from tests.support.trendpulse_screening import after_close
 from tests.test_trendpulse_1r_domain import configure
@@ -22,7 +23,10 @@ from tests.test_trendpulse_screening import request, service
 def test_one_additive_revision_follows_reserved_a11():
     cfg = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     scripts = ScriptDirectory.from_config(cfg)
-    assert scripts.get_heads() == ["a19riskpolicy004"]
+    head = single_alembic_head(scripts)
+    assert scripts.get_heads() == [head]
+    assert scripts.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
+    assert scripts.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
     assert scripts.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
     assert scripts.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
     assert scripts.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
@@ -32,6 +36,8 @@ def test_one_additive_revision_follows_reserved_a11():
     assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert len(scripts.get_bases()) == 1
     assert [r.revision for r in scripts.iterate_revisions("heads", "a11experiments001")] == [
+        head,
+        "a20autonomoussettings001",
         "a19riskpolicy004",
         "a18riskpolicy003",
         "a17riskpolicy002",

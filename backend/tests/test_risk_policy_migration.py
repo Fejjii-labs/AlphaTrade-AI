@@ -22,6 +22,8 @@ _A16 = "a16riskpolicy001"
 _A17 = "a17riskpolicy002"
 _A18 = "a18riskpolicy003"
 _A19 = "a19riskpolicy004"
+_A20 = "a20autonomoussettings001"
+_A21 = "a21killswitchkey001"
 _PARENT = "a15reissueauth001"
 _A16_MIGRATION = "a16riskpolicy001_grade_based_risk_policy.py"
 _A17_MIGRATION = "a17riskpolicy002_risk_policy_review_guards.py"
@@ -59,7 +61,12 @@ def test_risk_policy_revision_is_the_only_head() -> None:
     assert a17.down_revision == _A16
     assert a18.down_revision == _A17
     assert a19.down_revision == _A18
-    assert single_alembic_head(script) == _A19
+    a20 = script.get_revision(_A20)
+    a21 = script.get_revision(_A21)
+    assert a20 is not None and a21 is not None
+    assert a20.down_revision == _A19
+    assert a21.down_revision == _A20
+    assert single_alembic_head(script) == _A21
     versions = Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions"
     source = (versions / _A16_MIGRATION).read_text(encoding="utf-8")
     for check in _A16_RISK_CHECKS:

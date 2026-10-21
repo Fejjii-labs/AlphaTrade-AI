@@ -1,7 +1,7 @@
 """Fixed-seed synthetic regime replay. Zero real market/performance coverage claims.
 
 Run explicitly with a disposable loopback EXPERIMENT_TEST_POSTGRES_URL. The
-bounded harness creates/drops its own UUID schema and never calls a provider.
+bounded harness clones a disposable template database and never calls a provider.
 """
 
 import argparse
@@ -12,13 +12,12 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.db.base import Base
 from app.experiments.models import ExperimentSampleRow
 from app.market_contracts.enums import FreshnessState
 from app.market_contracts.first_slice import first_slice_identity
@@ -138,11 +137,9 @@ def run(output):
     parsed = make_url(url)
     if parsed.host not in {"127.0.0.1", "localhost"} or "test" not in (parsed.database or ""):
         raise ValueError("Synthetic replay requires a disposable loopback test database")
-    admin = create_engine(url)
-    schema = "screening_regime_replay_" + uuid4().hex
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(parsed.update_query_dict({"options": "-csearch_path=" + schema}))
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(url)
     report = {
         "contract_version": "trendpulse-synthetic-replay-report/v1",
         "adapter_version": TRENDPULSE_ADAPTER_VERSION,
@@ -164,7 +161,6 @@ def run(output):
     }
     snapshots = []
     try:
-        Base.metadata.create_all(engine)
         with Session(engine, expire_on_commit=False) as session:
             w = World(session)
             config = configure(w)
@@ -239,10 +235,7 @@ def run(output):
         Path(output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         print(json.dumps(report, indent=2, sort_keys=True))
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+        drop_clone(engine)
 
 
 if __name__ == "__main__":

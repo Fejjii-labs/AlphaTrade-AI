@@ -10,16 +10,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.grounding import read_grounding
 from app.agent_voice.service import shared_turn
 from app.core.config import Settings
-from app.db.base import Base
 from app.db.models import (
     AgentSavedEntry,
     ConversationMessage,
@@ -56,14 +54,9 @@ def voice_database(request):
     url = os.environ.get("EXPERIMENT_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("EXPERIMENT_TEST_POSTGRES_URL must identify disposable PostgreSQL")
-    schema = "voice_evidence_" + uuid4().hex
-    admin = create_engine(url, poolclass=NullPool)
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(
-        url, poolclass=NullPool, connect_args={"options": f"-csearch_path={schema}"}
-    )
-    Base.metadata.create_all(engine)
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(url)
     sessions = sessionmaker(engine, expire_on_commit=False)
     settings = Settings(
         _env_file=None,
@@ -112,13 +105,12 @@ def voice_database(request):
         conversation_id=conversation_id,
         organization_id=organization_id,
         user_id=user_id,
-        schema=schema,
+        schema="public",
     )
-    yield fixture
-    engine.dispose()
-    with admin.begin() as connection:
-        connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-    admin.dispose()
+    try:
+        yield fixture
+    finally:
+        drop_clone(engine)
 
 
 def ledger_for(database):

@@ -5,12 +5,9 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.base import Base
 from app.db.models import (
     ExecutionAccount,
     Membership,
@@ -39,20 +36,14 @@ def experiment_engine():
     url = os.getenv("EXPERIMENT_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("Requires an explicitly supplied disposable EXPERIMENT_TEST_POSTGRES_URL")
-    schema = "experiment_test_" + uuid4().hex
-    admin = create_engine(url)
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    isolated = make_url(url).update_query_dict({"options": "-csearch_path=" + schema})
-    engine = create_engine(isolated)
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    # One clone for the module. experiment_world rolls each test back with a savepoint.
+    engine = clone_database(url, retain=True)
     try:
-        Base.metadata.create_all(engine)
         yield engine
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+        drop_clone(engine)
 
 
 @pytest.fixture(name="experiment_world")

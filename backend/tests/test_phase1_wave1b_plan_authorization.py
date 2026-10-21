@@ -2471,6 +2471,9 @@ def test_armed_demo_cycle_replaces_a_leftover_api_authorization(
         autonomous_blofin_demo_enabled=True,
         environment="staging",
         global_kill_switch_active=False,
+        paper_signal_cooldown_after_loss_seconds=3600,
+        watcher_paper_poll_interval_seconds=15.0,
+        paper_signal_allowed_timeframes=["15m", "1h"],
     )
     demo = GovernedBloFinDemoLoop(
         None,  # type: ignore[arg-type]

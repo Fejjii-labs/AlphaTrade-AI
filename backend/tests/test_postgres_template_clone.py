@@ -31,12 +31,13 @@ from tests.support.postgres_template import (
 LEAKED_ORG = UUID("00000000-0000-0000-0000-00000000c10e")
 # Local clones are ~0.10s. A full create_all rebuild is ~0.65s. Stay under the rebuild.
 SETUP_BUDGET_SECONDS = float(os.environ.get("ALPHATRADE_PG_FIXTURE_SETUP_BUDGET_SECONDS", "0.75"))
-# Modules that are not on main were omitted: test_pr237_migration_aware_rollback.py,
-# test_experiment_migration.py, and test_blofin_activity_migration.py.
 MIGRATION_MODULES = (
     "test_release_wave002_migrations.py",
     "test_phase2_4_alembic_postgres.py",
     "test_phase8_learning_persistence.py",
+    "test_pr237_migration_aware_rollback.py",
+    "test_experiment_migration.py",
+    "test_blofin_activity_migration.py",
     "test_journal_trades_alembic_empty_tenant.py",
 )
 

@@ -17,8 +17,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.routes.experiments import get_native_reads, router
@@ -26,7 +25,6 @@ from app.core.auth import get_current_tenant
 from app.core.blofin_readonly_access import get_readonly_client
 from app.core.dependencies import get_settings
 from app.core.errors import ConflictError, NotFoundError, register_exception_handlers
-from app.db.base import Base
 from app.db.models import (
     ApprovalAuthorization,
     AuditLog,
@@ -71,19 +69,13 @@ def producer_engine():
     url = os.environ.get("EXPERIMENT_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("Explicit disposable EXPERIMENT_TEST_POSTGRES_URL required")
-    schema = "native_producer_" + uuid4().hex
-    admin = create_engine(url)
-    with admin.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(make_url(url).update_query_dict({"options": "-csearch_path=" + schema}))
+    from tests.support.postgres_template import clone_database, drop_clone
+
+    engine = clone_database(url)
     try:
-        Base.metadata.create_all(engine)
         yield engine
     finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+        drop_clone(engine)
 
 
 class ProducerWorld:

@@ -10,6 +10,23 @@ disclosure, merging, or deploying.
 
 UI redesign phases 3-9 follow the "Design direction: MindPillar-inspired" section in `docs/alphatrade_workspace_redesign.md`.
 
+## Backend test policy (agents)
+
+While you are actively fixing or building a feature, run only the focused pytest
+targets that cover the code you changed (for example the matching test module or
+a narrow `-k` expression). Do not run the full backend suite on every edit.
+
+Run the full backend gate once per batch, when the work is ready for merge review
+(for example before opening or updating a PR for human review). From `backend/`:
+`uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest` against
+Postgres when persistence tests apply.
+
+Do not trigger CI with `workflow_dispatch`. Avoid pushing repeatedly just to
+re-run broad CI; batch related fixes and use one full run at the merge gate.
+After any push that follows a review comment or a merge from `main`, re-run the
+full backend gate locally before you rely on CI.
+All trading, secrets, and git safety rules in `.cursor/rules/` still apply.
+
 ## Agent Reports
 
 After completing ANY task, prompt, or investigation — including a stop for
