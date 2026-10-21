@@ -23,6 +23,8 @@ Postgres when persistence tests apply.
 
 Do not trigger CI with `workflow_dispatch`. Avoid pushing repeatedly just to
 re-run broad CI; batch related fixes and use one full run at the merge gate.
+After any push that follows a review comment or a merge from `main`, re-run the
+full backend gate locally before you rely on CI.
 All trading, secrets, and git safety rules in `.cursor/rules/` still apply.
 
 ## Agent Reports
