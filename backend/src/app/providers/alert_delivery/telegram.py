@@ -93,12 +93,15 @@ class TelegramAlertDeliveryProvider:
 
         token = self._settings.telegram_bot_token.strip()
         prefix = "[TEST] " if payload.is_test else ""
-        text = (
-            f"{prefix}AlphaTrade alert ({payload.severity})\n"
-            f"Type: {payload.alert_type}\n"
-            f"{payload.message}\n"
-            f"Paper only — no trade executed."
-        )
+        if payload.use_message_verbatim:
+            text = f"{prefix}{payload.message}"
+        else:
+            text = (
+                f"{prefix}AlphaTrade alert ({payload.severity})\n"
+                f"Type: {payload.alert_type}\n"
+                f"{payload.message}\n"
+                f"Paper only — no trade executed."
+            )
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         body = {"chat_id": chat_id, "text": text}
         try:

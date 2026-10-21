@@ -37,7 +37,9 @@ def paper_kill_switch_truncated_component(organization_id: uuid.UUID) -> str:
     :func:`paper_kill_switch_component`. Readers still load this row, and
     the older single ``paper_kill_switch`` row, so an unsent page for the
     current activation is retried. The first full-hex write marks those
-    older rows sent.
+    older rows sent. Once the full-hex row of a version has been sent, the
+    same-version old slot is marked sent as well. A same-version unsent
+    row on the only remaining slot is still retried.
     """
 
     return ("k" + organization_id.hex)[:32]

@@ -465,6 +465,14 @@ class CanonicalPaperExecutionService:
                     "Paper close did not record exit, fees, and PnL.",
                     details={"reason": "incomplete_close"},
                 )
+            from app.services.paper_exit_telegram import queue_paper_exit_close_telegram
+
+            queue_paper_exit_close_telegram(
+                self._session,
+                self._settings,
+                trade,
+                replayed=projection.replayed,
+            )
             return ClosePaperPlanResult(
                 replayed=projection.replayed,
                 command_id=request.command_id,

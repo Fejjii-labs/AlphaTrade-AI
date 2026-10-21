@@ -2,7 +2,7 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
-## AT-ADR-139 — Fallback demo key fails closed without the activity pin
+## AT-ADR-141 — Fallback demo key fails closed without the activity pin
 
 - Date: 2026-10-21
 - Decision: The main demo-key fallback refuses to sync unless
@@ -14,9 +14,9 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   only when that pin is present for the same organization. Activity sync
   still requires a venue read-only key. `BLOFIN_ACTIVITY_ENABLED` is not
   required for this pin.
-- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-138.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-140.
 
-## AT-ADR-138 — Fallback demo key uses the same native account pin
+## AT-ADR-140 — Fallback demo key uses the same native account pin
 
 - Date: 2026-10-21
 - Decision: The main demo-key fallback is subject to the same native account
@@ -27,9 +27,9 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   (`readonly=False`). A dedicated key that can trade is still refused. The
   fallback key is not refused only because `readOnly` is 0. The GET-only
   client, `assert_demo_host`, and the partial-set fail-closed rule are unchanged.
-- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-137.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-139.
 
-## AT-ADR-137 — Demo snapshot and read sync may use the main demo key for GET only
+## AT-ADR-139 — Demo snapshot and read sync may use the main demo key for GET only
 
 - Date: 2026-10-21
 - Decision: Staging keeps one Read+Trade demo key (`BLOFIN_API_KEY`,
@@ -52,6 +52,47 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Supersedes the credential sentence of AT-ADR-115 only. The snapshot flag
   still defaults false, and a disarmed worker still opens no client.
 - Reference: `docs/blofin_demo_snapshot_worker.md`.
+
+## AT-ADR-138 — One exit-monitor candle series is one venue
+
+- Date: 2026-10-21
+- Decision: A paper exit candle walk never stitches two venues into one
+  series. When the primary source requires a switch, bars already collected
+  are discarded and the walk restarts on the secondary venue alone. A second
+  switch, or a page whose bars are not that venue, returns no bars and the
+  trade stays open. The switch is logged with the journal trade id, the from
+  venue, the to venue, and the timeframe. The venue that supplied the series
+  is stored on the journal close payload as `exit_evidence.candle_venue`.
+  That payload is the close record. No new column is required. Closes that
+  use Bybit fallback candles stay enabled. Staging remains dry-run unless an
+  operator sets the flag.
+- Safety: `PAPER_EXIT_MONITOR_ENABLED` stays default false.
+  `PAPER_EXIT_MONITOR_DRY_RUN` stays default true. Real-money trading stays
+  rejected. No Render, environment, or workflow change.
+- Reference: AT-ADR-137; Griller conditions on PR #303.
+
+## AT-ADR-137 — Exit-monitor empty candles are a failed fetch, not a loose freshness check
+
+- Date: 2026-10-21
+- Decision: Staging `candles_unusable` / `leading_gap` with an empty
+  `series_start` was a failed candle fetch. Live Binance paper trades were
+  read with the Bybit secondary stripped, and
+  `EvidenceSourceSwitchRequiredError` was treated as a page-size miss, so
+  every size failed and the series stayed empty. Bybit `fetch_closed_ohlcv`
+  also omitted the kline `end` parameter, so a cursor could not move behind
+  the latest window. The loader now keeps a configured Bybit secondary for a
+  live Binance trade and rebinds once to that identity. Bybit kline requests
+  pass `end` equal to `evaluated_at`. `candle_series_block` thresholds are
+  unchanged. A same-version 31-hex or legacy kill-switch row is marked sent
+  once the full-hex row of that version is sent. A same-version unsent row
+  on the only remaining slot is still retried (AT-ADR-136).
+- Safety: `PAPER_EXIT_MONITOR_ENABLED` stays default false.
+  `PAPER_EXIT_MONITOR_DRY_RUN` stays default true. An injected closer is
+  replaced by the refusing closer while dry-run is on. Production refusal
+  is unchanged. Real-money trading stays rejected. No Render, environment,
+  or workflow change.
+- Reference: AT-ADR-135; AT-ADR-136; staging worker
+  `srv-daqej7o473hc73fsc1k0` at `b031f740`.
 
 ## AT-ADR-136 — Stale kill-switch rows do not keep the health retry hot
 

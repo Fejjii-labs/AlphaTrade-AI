@@ -198,15 +198,9 @@ def test_boot_records_a_cooldown_refusal_and_sends_one_alert(
     assert posture.reason == COOLDOWN_INVALID
     assert posture.source == "autonomous+exit_monitor"
     assert published[0] == (PAPER_ARMING_COMPONENT, "refused", COOLDOWN_INVALID)
-    assert len(sent) == 1
+    assert sent == []
     publish_boot_arming_posture(settings, exit_monitor_attached=False, now=_NOW)
-    assert len(sent) == 1
-    text = sent[0]
-    assert "arming_refused" in text
-    assert COOLDOWN_INVALID in text
-    assert _TOKEN not in text
-    assert _CHAT not in text
-    assert "pnl" not in text.lower()
+    assert sent == []
 
 
 def test_autonomous_interval_refusal_is_separate_from_the_exit_monitor(
@@ -232,8 +226,7 @@ def test_autonomous_interval_refusal_is_separate_from_the_exit_monitor(
     assert posture.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
     assert posture.source == "autonomous"
     assert publish_boot_arming_posture(settings, exit_monitor_attached=False, now=_NOW) is not None
-    assert len(sent) == 1
-    assert CYCLE_INTERVAL_EXCEEDS_TIMEFRAME in sent[0]
+    assert sent == []
 
 
 def test_disarmed_boot_does_not_open_a_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,10 +294,12 @@ def test_health_shows_the_refusal_and_pages_once(monkeypatch: pytest.MonkeyPatch
     assert body.real_trading_enabled is False
     report = _run_heartbeat(settings)
     assert report.arming_refusal.reason == COOLDOWN_INVALID
-    assert report.arming_alert_raised is True
+    assert report.arming_alert_raised is False
+    assert report.alert_raised is True
     assert report.exit_monitor_status == "disabled"
     again = _run_heartbeat(settings)
     assert again.arming_alert_raised is False
+    assert again.alert_raised is False
     blob = "\n".join(sent)
     assert _TOKEN not in blob
     assert "pnl" not in blob.lower()
@@ -378,13 +373,15 @@ def test_exit_monitor_heartbeat_is_not_the_watcher_row(monkeypatch: pytest.Monke
     assert status == "missing"
     alert = exit_monitor_heartbeat_alert(_observation, status)
     assert alert is not None
-    assert raise_prepared_alert(
-        settings,
-        alert,
-        now=_NOW,
-        ledger=MemoryHeartbeatAlertLedger(),
+    assert (
+        raise_prepared_alert(
+            settings,
+            alert,
+            now=_NOW,
+            ledger=MemoryHeartbeatAlertLedger(),
+        )
+        is True
     )
-    assert sent
     assert "exit_monitor_heartbeat_missing" in sent[0]
     assert _TOKEN not in sent[0]
 
@@ -409,12 +406,10 @@ def test_observed_alert_is_sent_when_the_database_write_fails(
         from app.services.safety_alerts import discard_queued_safety_alerts
 
         discard_queued_safety_alerts(session)
-        assert deliver_observed_alert_outside_transaction(settings, alert) is True
+        assert deliver_observed_alert_outside_transaction(settings, alert) is False
     assert any(entry["event"] == "safety_alert_unpersisted" for entry in logs)
     assert any(entry["event"] == "safety_alert_discarded_with_rollback" for entry in logs)
-    assert len(sent) == 1
-    assert "degraded_repeat" in sent[0]
-    assert "pnl" not in sent[0].lower()
+    assert sent == []
 
 
 def test_kill_switch_page_drops_secrets_and_amounts() -> None:
@@ -1600,7 +1595,7 @@ def test_precheck_ignores_rows_older_than_the_current_activation() -> None:
         full: _pending_slot(full, epoch=4, error="sent"),
         truncated: _pending_slot(truncated, epoch=4),
     }
-    assert kill_switch_retry_should_schedule(same_version, now=started) is True
+    assert kill_switch_retry_should_schedule(same_version, now=started) is False
     cleared = {
         full: _pending_slot(full, epoch=0, error="", state="clear"),
         truncated: _pending_slot(truncated, epoch=3),
@@ -1609,6 +1604,90 @@ def test_precheck_ignores_rows_older_than_the_current_activation() -> None:
     only_old_key = {truncated: _pending_slot(truncated, epoch=4)}
     assert kill_switch_retry_should_schedule(only_old_key, now=started) is True
     reset_kill_switch_retry_window()
+
+
+def test_retry_marks_same_version_old_slot_sent_without_paging(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    reset_kill_switch_retry_window()
+
+    def _forbidden(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("telegram configuration was consulted")
+
+    monkeypatch.setattr("app.services.safety_alerts.telegram_safety_configured", _forbidden)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    other = uuid.UUID("00000000-0000-0000-0000-0000000001d3")
+    now = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
+    with factory() as session, session.begin():
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="sent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=PAPER_KILL_SWITCH_COMPONENT,
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(other),
+                worker_id=str(other),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+    assert retry_unsent_kill_switch_alert(settings, now=now) is False
+    with factory() as session:
+        full = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
+        truncated = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(_ORG),
+        )
+        legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        untouched = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(other),
+        )
+        assert full is not None and full.last_error_code == "sent"
+        assert truncated is not None and truncated.last_error_code == "sent"
+        assert truncated.last_delivery_at is not None
+        assert truncated.last_delivery_at.replace(tzinfo=UTC) == now
+        assert legacy is not None and legacy.last_error_code == "sent"
+        assert untouched is not None and untouched.last_error_code == "unsent"
 
 
 def test_first_full_hex_write_marks_older_slots_sent(
