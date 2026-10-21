@@ -35,6 +35,12 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     registry=REGISTRY,
 )
 
+MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL = Counter(
+    "model_router_tier_a_timeout_fallback_total",
+    "Tier A provider timeouts that fell back to Tier B",
+    registry=REGISTRY,
+)
+
 _METRICS_PATHS = frozenset({"/metrics"})
 
 

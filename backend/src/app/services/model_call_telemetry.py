@@ -21,15 +21,14 @@ from app.core.errors import AppError
 from app.schemas.common import CostSource
 from app.schemas.model_routing import ModelCallAttempt
 from app.schemas.usage import UsageEventCreate
-from app.services.cost_estimator import estimate_placeholder_cost
+from app.services.cost_estimator import estimate_model_cost, model_has_cost_entry
+from app.services.llm_cost_startup import log_missing_call_cost_table
 from app.services.usage_cost import build_provider_metadata
 
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from app.services.usage_service import UsageService
-
-_KNOWN_RATE_MODELS = frozenset({"gpt-4o-mini", "gpt-4o"})
 
 
 class ModelTelemetryPersistenceError(AppError):
@@ -53,18 +52,28 @@ def resolve_model_call_cost(
     model: str | None,
     input_tokens: int,
     output_tokens: int,
+    reasoning_tokens: int = 0,
+    cached_input_tokens: int = 0,
 ) -> ResolvedModelCallCost:
     """Return labelled cost. Never invent a provider-reported price."""
     name = (model or "").strip()
-    if name not in _KNOWN_RATE_MODELS:
+    if not model_has_cost_entry(name):
+        log_missing_call_cost_table(
+            name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
     if input_tokens <= 0 and output_tokens <= 0:
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
-    estimated = estimate_placeholder_cost(
+    estimated = estimate_model_cost(
         model=name,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        cached_input_tokens=cached_input_tokens,
     )
+    if estimated is None:
+        return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
     return ResolvedModelCallCost(estimated, CostSource.STATIC_ESTIMATED)
 
 
@@ -175,6 +184,8 @@ class ModelCallTelemetryService:
                 correlation_id=attempt.correlation_id,
                 failure_category=attempt.failure_category.value,
                 usage_category="actual_provider_attempt",
+                reasoning_tokens=attempt.reasoning_tokens,
+                cached_input_tokens=attempt.cached_input_tokens,
             )
             try:
                 with session.begin_nested():

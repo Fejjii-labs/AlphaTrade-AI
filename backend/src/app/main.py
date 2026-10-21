@@ -101,6 +101,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         **deployment_posture(settings),
     )
     run_exchange_demo_startup_check(settings, app.state.provider_registry)
+    from app.services.llm_cost_startup import validate_llm_cost_configuration
+
+    validate_llm_cost_configuration(settings)
     # TODO(slice-18): open real Qdrant/Redis clients when credentials are present.
     app.state.vector_store = get_process_vector_store()
     resolved = resolve_providers(settings)

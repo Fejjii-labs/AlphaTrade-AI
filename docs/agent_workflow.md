@@ -29,15 +29,30 @@ The model explains supplied facts. Application code controls the proposal lifecy
 
 | Setting or route | Inspected default/behavior |
 | --- | --- |
-| `LLM_MODEL` | `gpt-4o-mini`, used by the base provider. |
-| `LLM_TIER_A_MODEL` | `gpt-4o`, used for higher-tier purposes permitted by policy. |
-| `LLM_TIER_B_MODEL` | `gpt-4o-mini`, used for eligible lower-tier purposes. |
+| `LLM_MODEL` | `gpt-6-luna`, used by the base provider. |
+| `LLM_TIER_A_MODEL` | `gpt-6.1-sol`, used for higher-tier purposes permitted by policy. |
+| `LLM_TIER_B_MODEL` | `gpt-6-luna`, used for eligible lower-tier purposes. |
+| `LLM_TIER_A_REASONING_EFFORT` | `low` (Responses API reasoning budget for Tier A routed purposes). |
+| `LLM_TIER_B_REASONING_EFFORT` | `none` (omit reasoning block when `none`). |
+| `LLM_TIER_A_TIMEOUT_SECONDS` | Tier A provider timeout; timeout falls back to Tier B when allowed. Failed/timed-out attempts record **$0** estimated cost. |
+| `LLM_MAX_COMPLETION_TOKENS` | Per-call `max_output_tokens` / `max_tokens` cap via ModelRouter. |
+| `LLM_DAILY_SPEND_WARNING_USD` | Logs `llm_daily_spend_threshold_exceeded` when in-process daily estimates exceed this (not Telegram). |
+| `GENERAL_AGENT_SYNTHESIS` reasoning | Uses the **request** `reasoning_effort` (schema default `low`), not `LLM_TIER_A_REASONING_EFFORT`. Capture/voice set `AGENT_REASONING_EFFORT` on the request explicitly. |
 | `MODEL_ROUTER_POLICY_VERSION` | `model-router/v1`. Callers request typed purposes, not arbitrary authority or model elevation. |
-| Current conversational turn | `ModelConversationalResponder` requests `GENERAL_AGENT_SYNTHESIS`, a Tier A purpose (default `gpt-4o`), from the existing ModelRouter. |
+| Current conversational turn | `ModelConversationalResponder` requests `GENERAL_AGENT_SYNTHESIS`, a Tier A purpose, from the existing ModelRouter (capture/voice use `AGENT_REASONING_MODEL=gpt-6-astra`, unchanged). |
 | Embeddings | `EMBEDDINGS_MODEL=text-embedding-3-small`; dimensions resolve separately from the conversational model. |
 | Deterministic authority (Tier C) | Not dispatched to an LLM: risk, permissions, freshness, kill switch and execution authority remain code. |
 
 Sources: [Settings](../backend/src/app/core/config.py), [model routing contracts](../backend/src/app/schemas/model_routing.py), [router](../backend/src/app/services/model_router.py), [conversational responder](../backend/src/app/interactive_agent/conversation.py). `LLM_MODEL` alone does not establish the model actually selected by a routed turn. Environment overrides and provider responses must be observed to report a resolved deployed model.
+
+Static cost estimates live in [cost_estimator.py](../backend/src/app/services/cost_estimator.py). Provider `output_tokens` already include reasoning; `reasoning_tokens` are stored for telemetry only. Cached prompt tokens use the cached input rate when reported in usage (`cached_input_tokens` on usage metadata). Legacy `gpt-4o` / `gpt-4o-mini` rows remain for historical telemetry. Staging startup fails if any configured model lacks a table entry (`llm_cost_startup.py`). Tier A timeout fallbacks increment `model_router_tier_a_timeout_fallback_total` (Prometheus when metrics are enabled).
+
+**Alerts to watch (staging/production logs, ERROR):**
+
+| Log event | Meaning |
+| --- | --- |
+| `llm_cost_table_incomplete` | A configured `LLM_MODEL` / tier model has no cost-table row at startup (staging refuses boot; production logs ERROR). |
+| `llm_call_missing_cost_table` | A provider call returned token usage for a model with no cost row — estimated cost is **$0** until the table is updated. |
 
 Local `PROVIDER_MODE=mock` forces mock LLM/embeddings even with a key present. Current staging/production policy requires configured OpenAI and authoritative Qdrant and prohibits silent mock substitutions. A failed conversational call can report “Conversational model reply is unavailable” while preserving factual context; that is not a successful model reply. [Retrieval/provider details](rag_system.md).
 

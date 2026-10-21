@@ -17,6 +17,7 @@ import structlog
 
 from app.core.errors import ForbiddenError, ServiceUnavailableError, ValidationAppError
 from app.core.provider_policy import provider_fail_closed
+from app.observability.metrics import MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL
 from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMMessage, LLMProvider
 from app.schemas.common import CostSource, UsageStatus
 from app.schemas.model_routing import (
@@ -34,6 +35,7 @@ from app.schemas.model_routing import (
     ModelTaskRequest,
     ModelTaskResult,
 )
+from app.services.llm_spend_guard import record_llm_spend
 from app.services.model_call_telemetry import (
     ModelCallTelemetryService,
     ModelTelemetryPersistenceError,
@@ -41,6 +43,8 @@ from app.services.model_call_telemetry import (
 )
 
 logger = structlog.get_logger(__name__)
+
+_tier_a_timeout_fallback_total = 0
 
 _POLICY_VERSION = "model-router/v1"
 
@@ -69,6 +73,11 @@ class CrossTenantModelContextError(ForbiddenError):
     code = "model_cross_tenant_rejected"
 
 
+def tier_a_timeout_fallback_count() -> int:
+    """Process-wide count of Tier A timeout fallbacks to Tier B."""
+    return _tier_a_timeout_fallback_total
+
+
 class ModelRouter:
     """Route typed purposes to Tier A/B models and record actual-call telemetry."""
 
@@ -82,15 +91,25 @@ class ModelRouter:
         policy_version: str = _POLICY_VERSION,
         fail_closed: bool = False,
         telemetry: ModelCallTelemetryService | None = None,
+        tier_a_reasoning_effort: str = "low",
+        tier_b_reasoning_effort: str = "none",
+        tier_a_timeout_seconds: float = _TIER_A_LATENCY_MS / 1000.0,
+        max_completion_tokens: int = _TIER_A_TOKEN_BUDGET,
+        daily_spend_warning_usd: Decimal | None = None,
     ) -> None:
         self._llm = llm_provider
-        self._tier_a_model = (tier_a_model or "").strip() or "gpt-4o"
-        self._tier_b_model = (tier_b_model or "").strip() or "gpt-4o-mini"
+        self._tier_a_model = _require_configured_model(tier_a_model, "tier_a_model")
+        self._tier_b_model = _require_configured_model(tier_b_model, "tier_b_model")
         self._provider_name = provider_name or llm_provider.name
         self._policy_version = policy_version
         self._fail_closed = fail_closed
         self._telemetry = telemetry or ModelCallTelemetryService()
         self._attempts: list[ModelCallAttempt] = []
+        self._tier_a_reasoning_effort = tier_a_reasoning_effort
+        self._tier_b_reasoning_effort = tier_b_reasoning_effort
+        self._tier_a_timeout_seconds = tier_a_timeout_seconds
+        self._max_completion_tokens = max(64, max_completion_tokens)
+        self._daily_spend_warning_usd = daily_spend_warning_usd
 
     @classmethod
     def from_settings(
@@ -102,8 +121,9 @@ class ModelRouter:
         fail_closed = bool(getattr(settings, "model_router_fail_closed", False))
         fail_closed = fail_closed or provider_fail_closed(settings)
         tier_b = str(getattr(settings, "llm_tier_b_model", "") or settings.llm_model).strip()
-        tier_a = str(getattr(settings, "llm_tier_a_model", "") or "").strip() or "gpt-4o"
+        tier_a = str(getattr(settings, "llm_tier_a_model", "") or "").strip()
         policy = str(getattr(settings, "model_router_policy_version", "") or _POLICY_VERSION)
+        warning = getattr(settings, "llm_daily_spend_warning_usd", None)
         return cls(
             llm_provider,
             tier_a_model=tier_a,
@@ -112,6 +132,19 @@ class ModelRouter:
             policy_version=policy,
             fail_closed=fail_closed,
             telemetry=telemetry,
+            tier_a_reasoning_effort=str(
+                getattr(settings, "llm_tier_a_reasoning_effort", "low") or "low"
+            ),
+            tier_b_reasoning_effort=str(
+                getattr(settings, "llm_tier_b_reasoning_effort", "none") or "none"
+            ),
+            tier_a_timeout_seconds=float(
+                getattr(settings, "llm_tier_a_timeout_seconds", _TIER_A_LATENCY_MS / 1000.0)
+            ),
+            max_completion_tokens=int(
+                getattr(settings, "llm_max_completion_tokens", _TIER_A_TOKEN_BUDGET)
+            ),
+            daily_spend_warning_usd=warning if isinstance(warning, Decimal) else None,
         )
 
     def attempts_for(self, correlation_id: str) -> list[ModelCallAttempt]:
@@ -147,8 +180,14 @@ class ModelRouter:
             latency_budget_ms=_TIER_A_LATENCY_MS
             if tier is ModelRoutingTier.TIER_A
             else _TIER_B_LATENCY_MS,
-            token_budget=request.max_output_tokens
-            or (_TIER_A_TOKEN_BUDGET if tier is ModelRoutingTier.TIER_A else _TIER_B_TOKEN_BUDGET),
+            token_budget=self._cap_output_tokens(
+                request.max_output_tokens
+                or (
+                    _TIER_A_TOKEN_BUDGET
+                    if tier is ModelRoutingTier.TIER_A
+                    else _TIER_B_TOKEN_BUDGET
+                )
+            ),
             retention_category=retention,
             organization_id=request.context.organization_id,
             user_id=request.context.user_id,
@@ -204,6 +243,11 @@ class ModelRouter:
                 if quota.hard_blocked:
                     raise QuotaExceededError(quota.message)
             attempt_started = datetime.now(UTC)
+            timeout_seconds = (
+                self._tier_a_timeout_seconds
+                if model == self._tier_a_model and not model_fallback
+                else None
+            )
             try:
                 llm_result = self._llm.complete(
                     LLMCompletionRequest(
@@ -213,7 +257,8 @@ class ModelRouter:
                         max_tokens=decision.token_budget,
                         response_format=request.response_format,
                         allow_internal_fallback=False,
-                        reasoning_effort=request.reasoning_effort,
+                        reasoning_effort=self._reasoning_effort_for(model, request),
+                        timeout_seconds=timeout_seconds,
                     )
                 )
             except Exception as exc:
@@ -277,6 +322,23 @@ class ModelRouter:
                 return self._telemetry_failed_result(
                     task_id, decision, attempts, llm_result, started
                 )
+            prior_timeouts = [
+                row
+                for row in attempts[:-1]
+                if not row.success and row.failure_category is ModelFailureCategory.TIMEOUT
+            ]
+            if model_fallback and model == self._tier_b_model and prior_timeouts:
+                global _tier_a_timeout_fallback_total
+                _tier_a_timeout_fallback_total += 1
+                MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL.inc()
+                logger.warning(
+                    "model_router_tier_a_timeout_fallback",
+                    purpose=request.purpose.value,
+                    tier_a_model=self._tier_a_model,
+                    tier_b_model=self._tier_b_model,
+                    timeout_attempts=len(prior_timeouts),
+                    fallback_count=_tier_a_timeout_fallback_total,
+                )
             return self._success_result(
                 task_id, decision, attempts, llm_result, fallback_used, started
             )
@@ -321,11 +383,24 @@ class ModelRouter:
         input_tokens = llm_result.input_tokens if llm_result is not None else 0
         output_tokens = llm_result.output_tokens if llm_result is not None else 0
         latency = llm_result.latency_ms if llm_result is not None else _elapsed_ms(started_at)
-        cost = resolve_model_call_cost(
-            model=resolved_model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+        reasoning_tokens = llm_result.reasoning_tokens if llm_result is not None else 0
+        cached_input_tokens = llm_result.cached_input_tokens if llm_result is not None else 0
+        if success:
+            cost = resolve_model_call_cost(
+                model=resolved_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_input_tokens,
+            )
+            if cost.estimated_cost > 0:
+                record_llm_spend(cost.estimated_cost, threshold_usd=self._daily_spend_warning_usd)
+        else:
+            cost = resolve_model_call_cost(
+                model=resolved_model,
+                input_tokens=0,
+                output_tokens=0,
+                cached_input_tokens=0,
+            )
         attempt = ModelCallAttempt(
             attempt_id=uuid.uuid5(task_id, f"attempt:{attempt_number}:{requested_model}"),
             task_request_id=task_id,
@@ -340,6 +415,8 @@ class ModelRouter:
             fallback_used=fallback_used,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            cached_input_tokens=cached_input_tokens,
             latency_ms=latency,
             success=success,
             failure_category=category,
@@ -657,6 +734,25 @@ class ModelRouter:
                 "Model prompts must not contain secrets.",
                 details={"reason": ModelFailureCategory.SECRET_IN_CONTEXT.value},
             )
+
+    def _cap_output_tokens(self, budget: int) -> int:
+        return min(max(budget, 64), self._max_completion_tokens)
+
+    def _reasoning_effort_for(self, model: str, request: ModelTaskRequest) -> str:
+        if request.purpose is ModelRoutingPurpose.GENERAL_AGENT_SYNTHESIS:
+            return request.reasoning_effort
+        if model == self._tier_a_model:
+            return self._tier_a_reasoning_effort
+        if model == self._tier_b_model:
+            return self._tier_b_reasoning_effort
+        return request.reasoning_effort
+
+
+def _require_configured_model(value: str, label: str) -> str:
+    name = (value or "").strip()
+    if not name:
+        raise ValidationAppError(f"Model router {label} must be configured.")
+    return name
 
 
 def _feature_for(purpose: ModelRoutingPurpose) -> str:

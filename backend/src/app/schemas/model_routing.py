@@ -129,7 +129,7 @@ class ModelTaskRequest(StrictModel):
     caller_resource_id: UUID | None = None
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     response_format: dict[str, object] | None = None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "low"
     max_output_tokens: int | None = Field(default=None, ge=64, le=65536)
     # Optional override is accepted only when it matches the policy model or an
     # explicitly allowed *lower* capability fallback. Elevation is rejected.
@@ -154,6 +154,8 @@ class ModelCallAttempt(StrictModel):
     fallback_used: bool = False
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     success: bool
     failure_category: ModelFailureCategory = ModelFailureCategory.NONE

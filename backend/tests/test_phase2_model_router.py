@@ -54,6 +54,9 @@ STRATEGY_B = uuid.UUID("00000000-0000-0000-0000-00000000a006")
 JOURNAL_A = uuid.UUID("00000000-0000-0000-0000-00000000a007")
 JOURNAL_B = uuid.UUID("00000000-0000-0000-0000-00000000a008")
 
+TIER_A_MODEL = "gpt-6.1-sol"
+TIER_B_MODEL = "gpt-6-luna"
+
 
 class _FailingLLM:
     name = "failing-llm"
@@ -209,8 +212,8 @@ def _router(
 ) -> ModelRouter:
     return ModelRouter(
         provider or MockLLMProvider(),  # type: ignore[arg-type]
-        tier_a_model="gpt-4o",
-        tier_b_model="gpt-4o-mini",
+        tier_a_model=TIER_A_MODEL,
+        tier_b_model=TIER_B_MODEL,
         fail_closed=fail_closed,
         telemetry=telemetry,
     )
@@ -221,9 +224,9 @@ def test_routing_by_purpose_assigns_tiers() -> None:
     a = router.decide(_request(ModelRoutingPurpose.STRATEGY_REVIEW))
     b = router.decide(_request(ModelRoutingPurpose.INTENT_CLASSIFICATION))
     assert a.selected_tier is ModelRoutingTier.TIER_A
-    assert a.selected_model == "gpt-4o"
+    assert a.selected_model == TIER_A_MODEL
     assert b.selected_tier is ModelRoutingTier.TIER_B
-    assert b.selected_model == "gpt-4o-mini"
+    assert b.selected_model == TIER_B_MODEL
     assert a.policy_version == "model-router/v1"
     assert a.token_budget == 4096
     assert b.token_budget == 1024
@@ -233,12 +236,12 @@ def test_tier_a_selection() -> None:
     router = _router()
     decision = router.decide(_request(ModelRoutingPurpose.EVIDENCE_EXPLANATION))
     assert decision.selected_tier is ModelRoutingTier.TIER_A
-    assert decision.selected_model == "gpt-4o"
+    assert decision.selected_model == TIER_A_MODEL
     assert decision.retention_category is ModelRetentionCategory.AUDIT_REQUIRED
 
 
 def test_agent_conversation_uses_configured_reasoning_tier() -> None:
-    router = ModelRouter(MockLLMProvider(), tier_a_model="gpt-6.1-sol", tier_b_model="gpt-4o-mini")
+    router = ModelRouter(MockLLMProvider(), tier_a_model=TIER_A_MODEL, tier_b_model=TIER_B_MODEL)
     decision = router.decide(_request(ModelRoutingPurpose.GENERAL_AGENT_SYNTHESIS))
     assert decision.selected_tier is ModelRoutingTier.TIER_A
     assert decision.selected_model == "gpt-6.1-sol"
@@ -250,33 +253,42 @@ def test_tier_b_selection() -> None:
     router = _router()
     decision = router.decide(_request(ModelRoutingPurpose.NARRATIVE_SYNTHESIS))
     assert decision.selected_tier is ModelRoutingTier.TIER_B
-    assert decision.selected_model == "gpt-4o-mini"
+    assert decision.selected_model == TIER_B_MODEL
 
 
 def test_unauthorized_model_override_rejected() -> None:
     router = _router()
     with pytest.raises(ModelRoutingError, match="Unauthorized model override"):
-        router.decide(_request(ModelRoutingPurpose.INTENT_CLASSIFICATION, override="gpt-4o"))
+        router.decide(_request(ModelRoutingPurpose.INTENT_CLASSIFICATION, override=TIER_A_MODEL))
 
 
 def test_tier_a_may_request_explicit_lower_fallback() -> None:
     router = _router()
-    decision = router.decide(_request(ModelRoutingPurpose.STRATEGY_REVIEW, override="gpt-4o-mini"))
-    assert decision.selected_model == "gpt-4o-mini"
+    decision = router.decide(_request(ModelRoutingPurpose.STRATEGY_REVIEW, override=TIER_B_MODEL))
+    assert decision.selected_model == TIER_B_MODEL
     assert decision.selected_tier is ModelRoutingTier.TIER_A
 
 
 def test_provider_fallback_uses_lower_model() -> None:
-    provider = _SelectiveFailLLM(fail_model="gpt-4o")
+    provider = _SelectiveFailLLM(fail_model=TIER_A_MODEL)
     router = _router(provider)
     result = router.complete(_request(ModelRoutingPurpose.STRATEGY_REVIEW), _messages())
     assert result.fallback_used is True
     assert result.unavailable is False
     assert result.mutation_allowed is False
-    assert provider.calls == ["gpt-4o", "gpt-4o-mini"]
-    assert result.resolved_model == "gpt-4o-mini"
+    assert provider.calls == [TIER_A_MODEL, TIER_B_MODEL]
+    assert result.resolved_model == TIER_B_MODEL
     assert any(not row.success for row in result.attempts)
     assert any(row.success for row in result.attempts)
+
+
+def test_tier_a_timeout_fallback_is_counted() -> None:
+    from app.services.model_router import tier_a_timeout_fallback_count
+
+    before = tier_a_timeout_fallback_count()
+    provider = _SelectiveFailLLM(fail_model=TIER_A_MODEL)
+    _router(provider).complete(_request(ModelRoutingPurpose.STRATEGY_REVIEW), _messages())
+    assert tier_a_timeout_fallback_count() == before + 1
 
 
 def test_fail_closed_mode_returns_unavailable() -> None:
@@ -286,7 +298,7 @@ def test_fail_closed_mode_returns_unavailable() -> None:
     assert result.unavailable is True
     assert result.mutation_allowed is False
     assert result.failure_category is ModelFailureCategory.PROVIDER_UNAVAILABLE
-    assert provider.calls == ["gpt-4o-mini"]
+    assert provider.calls == [TIER_B_MODEL]
     assert result.deterministic_facts is not None
     assert result.deterministic_facts["mutation_allowed"] is False
 
@@ -318,7 +330,7 @@ def test_telemetry_success(session: Session) -> None:
     assert row.success is True
     assert row.purpose.value == "narrative_synthesis"
     assert row.tier.value == "tier_b"
-    assert row.requested_model == "gpt-4o-mini"
+    assert row.requested_model == TIER_B_MODEL
     assert row.resolved_model
     assert row.input_tokens >= 1
     assert row.latency_ms is not None
@@ -366,9 +378,19 @@ def test_cost_unavailable_for_unknown_model() -> None:
 
 
 def test_cost_static_estimated_for_known_model() -> None:
-    cost = resolve_model_call_cost(model="gpt-4o-mini", input_tokens=1_000_000, output_tokens=0)
+    cost = resolve_model_call_cost(model=TIER_B_MODEL, input_tokens=1_000_000, output_tokens=0)
     assert cost.cost_source is CostSource.STATIC_ESTIMATED
     assert cost.estimated_cost > Decimal("0")
+
+
+def test_failed_provider_attempt_records_zero_cost() -> None:
+    result = _router(_SelectiveFailLLM(fail_model=TIER_A_MODEL)).complete(
+        _request(ModelRoutingPurpose.STRATEGY_REVIEW),
+        _messages(),
+    )
+    failed = next(row for row in result.attempts if not row.success)
+    assert failed.estimated_cost == Decimal("0")
+    assert failed.cost_source is CostSource.UNAVAILABLE
 
 
 def test_cross_tenant_context_rejected() -> None:
@@ -476,13 +498,13 @@ def test_usage_tracking_does_not_call_llm() -> None:
 
 
 def test_fallback_attempts_record_actual_tiers() -> None:
-    provider = _SelectiveFailLLM(fail_model="gpt-4o")
+    provider = _SelectiveFailLLM(fail_model=TIER_A_MODEL)
     result = _router(provider).complete(_request(ModelRoutingPurpose.STRATEGY_REVIEW), _messages())
     assert [row.tier for row in result.attempts] == [
         ModelRoutingTier.TIER_A,
         ModelRoutingTier.TIER_B,
     ]
-    assert [row.requested_model for row in result.attempts] == ["gpt-4o", "gpt-4o-mini"]
+    assert [row.requested_model for row in result.attempts] == [TIER_A_MODEL, TIER_B_MODEL]
     assert result.attempts[0].success is False
     assert result.attempts[1].success is True
     assert result.decision.selected_tier is ModelRoutingTier.TIER_A
@@ -505,7 +527,7 @@ def test_one_successful_call_is_one_usage_event(session: Session) -> None:
 def test_tier_a_fail_plus_tier_b_fallback_is_two_attempts(session: Session) -> None:
     usage = UsageService(session)
     telemetry = ModelCallTelemetryService(session, usage)
-    router = _router(_SelectiveFailLLM(fail_model="gpt-4o"), telemetry=telemetry)
+    router = _router(_SelectiveFailLLM(fail_model=TIER_A_MODEL), telemetry=telemetry)
     result = router.complete(
         _request(ModelRoutingPurpose.STRATEGY_REVIEW, correlation_id="fb-2"),
         _messages(),
@@ -602,19 +624,19 @@ def test_openai_routed_calls_do_not_hide_upstream_failure() -> None:
     from app.core.errors import ServiceUnavailableError
     from app.providers.llm import LLMCompletionRequest, OpenAILLMProvider
 
-    provider = OpenAILLMProvider(api_key="", base_url="https://example.invalid", model="gpt-4o")
+    provider = OpenAILLMProvider(api_key="", base_url="https://example.invalid", model=TIER_A_MODEL)
     with pytest.raises(ServiceUnavailableError):
         provider.complete(
             LLMCompletionRequest(
                 messages=_messages(),
-                model="gpt-4o",
+                model=TIER_A_MODEL,
                 allow_internal_fallback=False,
             )
         )
     fallback = provider.complete(
         LLMCompletionRequest(
             messages=_messages(),
-            model="gpt-4o",
+            model=TIER_A_MODEL,
             allow_internal_fallback=True,
         )
     )
@@ -667,8 +689,8 @@ def test_retry_same_attempt_id_is_exactly_once(session: Session) -> None:
         purpose=ModelRoutingPurpose.NARRATIVE_SYNTHESIS,
         tier=ModelRoutingTier.TIER_B,
         provider="mock-llm",
-        requested_model="gpt-4o-mini",
-        resolved_model="gpt-4o-mini",
+        requested_model=TIER_B_MODEL,
+        resolved_model=TIER_B_MODEL,
         policy_version="model-router/v1",
         fallback_policy=ModelFallbackPolicy.DETERMINISTIC_FACTS,
         success=True,
