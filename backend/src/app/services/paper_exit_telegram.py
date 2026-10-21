@@ -58,10 +58,7 @@ def format_realized_pnl_display(pnl: Decimal, *, quote_currency: str) -> str:
     """Signed quote P&L from the canonical stored net amount."""
 
     amount = pnl.quantize(_PNL_QUANT)
-    if amount > 0:
-        signed = f"+{format(amount, 'f')}"
-    else:
-        signed = format(amount, "f")
+    signed = f"+{format(amount, 'f')}" if amount > 0 else format(amount, "f")
     return f"{signed} {quote_currency}"
 
 

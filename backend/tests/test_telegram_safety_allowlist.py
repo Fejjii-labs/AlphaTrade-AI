@@ -87,7 +87,9 @@ def test_degraded_repeat_is_not_delivered_to_telegram(monkeypatch: pytest.Monkey
     assert calls == []
 
 
-def test_stop_hit_verbatim_body_omits_prices_and_optional_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_hit_verbatim_body_omits_prices_and_optional_pnl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reset_safety_alert_dedup()
     calls: list[str] = []
 

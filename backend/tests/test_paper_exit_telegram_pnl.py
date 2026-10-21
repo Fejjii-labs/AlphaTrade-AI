@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.config import Settings
 from app.db.models import JournalTrade
 from app.schemas.common import TradeDirection, TradeResult
+from app.services import paper_exit_telegram as paper_exit_telegram_module
 from app.services.paper_exit_telegram import (
     format_paper_exit_close_telegram_text,
     format_realized_pnl_display,
@@ -19,7 +20,12 @@ from app.services.paper_exit_telegram import (
     realized_pnl_display_for_trade,
 )
 from tests.support.postgres_persistence import requires_postgres
-from tests.test_paper_exit_close_concurrency_postgres import _close_together, _factory, _open_fill
+from tests.test_paper_exit_close_concurrency_postgres import (
+    _close_labeled,
+    _factory,
+    _loss_exit,
+    _open_fill,
+)
 
 
 class _TradeStub:
@@ -115,33 +121,78 @@ def test_queue_builds_alert_without_session_flush(monkeypatch: pytest.MonkeyPatc
 def test_postgres_close_commits_when_telegram_omits_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = _factory()
     envelope, command_id = _open_fill(factory, key="exit-telegram-pnl-omit")
-    key = f"paper-exit-monitor:{command_id}"
-    results, errors = _close_together(factory, envelope, command_id, (key, key))
-    assert errors == []
-    assert len(results) == 2
+    with factory() as session:
+        open_trade = session.scalar(
+            select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
+        )
+        assert open_trade is not None
+        assert open_trade.entry_price is not None
+        exit_price = _loss_exit(open_trade.direction, open_trade.entry_price)
 
     messages: list[str] = []
+    real_queue = paper_exit_telegram_module.queue_paper_exit_close_telegram
 
     def _queue_safety_alert(_session: object, _settings: object, alert: object) -> None:
         del _session, _settings
         messages.append(alert.message)  # type: ignore[attr-defined]
 
-    monkeypatch.setattr("app.services.paper_exit_telegram.queue_safety_alert", _queue_safety_alert)
+    def _queue_with_missing_net_pnl(
+        session: object,
+        settings: object,
+        trade: object,
+        *,
+        replayed: bool,
+    ) -> None:
+        backup = trade.net_pnl  # type: ignore[attr-defined]
+        trade.net_pnl = None  # type: ignore[attr-defined]
+        try:
+            real_queue(session, settings, trade, replayed=replayed)  # type: ignore[arg-type]
+        finally:
+            trade.net_pnl = backup  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        "app.services.paper_exit_telegram.queue_safety_alert",
+        _queue_safety_alert,
+    )
+    monkeypatch.setattr(
+        "app.services.paper_exit_telegram.queue_paper_exit_close_telegram",
+        _queue_with_missing_net_pnl,
+    )
+
+    result = _close_labeled(
+        factory,
+        envelope,
+        command_id,
+        exit_price=exit_price,
+        origin="live",
+    )
+    assert result.net_pnl is not None  # type: ignore[attr-defined]
 
     with factory() as session:
-        trade = session.scalar(
+        closed = session.scalar(
             select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
         )
-        assert trade is not None
-        assert trade.net_pnl is not None
-        stored_net_pnl = trade.net_pnl
-        trade.net_pnl = None
-        session.flush = MagicMock(side_effect=AssertionError("flush during telegram formatting"))  # type: ignore[method-assign]
-        settings = Settings(_env_file=None)
-        queue_paper_exit_close_telegram(session, settings, trade, replayed=False)
-        assert trade.net_pnl is None
-        assert stored_net_pnl is not None
+        assert closed is not None
+        assert closed.net_pnl is not None
+        exit_reason = (closed.exit_reason or "").strip()
+        assert exit_reason == "stop_hit"
+        expected = format_paper_exit_close_telegram_text(
+            symbol=closed.symbol,
+            direction=closed.direction,
+            r_multiple=paper_exit_telegram_module.realized_r_multiple_label(
+                direction=closed.direction,
+                entry_price=closed.entry_price,  # type: ignore[arg-type]
+                exit_price=closed.exit_price,  # type: ignore[arg-type]
+                stop_price=closed.planned_stop_price,
+                planned_risk_amount=closed.planned_risk_amount,
+                net_pnl=None,
+            ),
+            timeframe=closed.timeframe,
+            exit_reason=exit_reason,
+            pnl_display=None,
+        )
 
     assert len(messages) == 1
-    assert messages[0].endswith("R: -1.00") or "R:" in messages[0]
-    assert " USDT)" not in messages[0]
+    assert messages[0] == expected
+    assert messages[0].splitlines()[-1].startswith("R: ")
+    assert "(" not in messages[0].splitlines()[-1]
