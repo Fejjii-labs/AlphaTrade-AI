@@ -383,6 +383,16 @@ def test_cost_static_estimated_for_known_model() -> None:
     assert cost.estimated_cost > Decimal("0")
 
 
+def test_failed_provider_attempt_records_zero_cost() -> None:
+    result = _router(_SelectiveFailLLM(fail_model=TIER_A_MODEL)).complete(
+        _request(ModelRoutingPurpose.STRATEGY_REVIEW),
+        _messages(),
+    )
+    failed = next(row for row in result.attempts if not row.success)
+    assert failed.estimated_cost == Decimal("0")
+    assert failed.cost_source is CostSource.UNAVAILABLE
+
+
 def test_cross_tenant_context_rejected() -> None:
     router = _router()
     with pytest.raises(CrossTenantModelContextError):

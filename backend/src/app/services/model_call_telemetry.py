@@ -58,13 +58,12 @@ def resolve_model_call_cost(
     name = (model or "").strip()
     if not model_has_cost_entry(name):
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
-    if input_tokens <= 0 and output_tokens <= 0 and reasoning_tokens <= 0:
+    if input_tokens <= 0 and output_tokens <= 0:
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
     estimated = estimate_model_cost(
         model=name,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        reasoning_tokens=reasoning_tokens,
         cached_input_tokens=cached_input_tokens,
     )
     if estimated is None:
@@ -180,6 +179,7 @@ class ModelCallTelemetryService:
                 failure_category=attempt.failure_category.value,
                 usage_category="actual_provider_attempt",
                 reasoning_tokens=attempt.reasoning_tokens,
+                cached_input_tokens=0,
             )
             try:
                 with session.begin_nested():

@@ -34,6 +34,7 @@ from app.schemas.model_routing import (
     ModelTaskRequest,
     ModelTaskResult,
 )
+from app.observability.metrics import MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL
 from app.services.llm_spend_guard import record_llm_spend
 from app.services.model_call_telemetry import (
     ModelCallTelemetryService,
@@ -321,20 +322,21 @@ class ModelRouter:
                 return self._telemetry_failed_result(
                     task_id, decision, attempts, llm_result, started
                 )
-            if (
-                model_fallback
-                and attempts
-                and not attempts[0].success
-                and attempts[0].failure_category is ModelFailureCategory.TIMEOUT
-                and model == self._tier_b_model
-            ):
+            prior_timeouts = [
+                row
+                for row in attempts[:-1]
+                if not row.success and row.failure_category is ModelFailureCategory.TIMEOUT
+            ]
+            if model_fallback and model == self._tier_b_model and prior_timeouts:
                 global _tier_a_timeout_fallback_total
                 _tier_a_timeout_fallback_total += 1
+                MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL.inc()
                 logger.warning(
                     "model_router_tier_a_timeout_fallback",
                     purpose=request.purpose.value,
                     tier_a_model=self._tier_a_model,
                     tier_b_model=self._tier_b_model,
+                    timeout_attempts=len(prior_timeouts),
                     fallback_count=_tier_a_timeout_fallback_total,
                 )
             return self._success_result(
@@ -382,14 +384,25 @@ class ModelRouter:
         output_tokens = llm_result.output_tokens if llm_result is not None else 0
         latency = llm_result.latency_ms if llm_result is not None else _elapsed_ms(started_at)
         reasoning_tokens = llm_result.reasoning_tokens if llm_result is not None else 0
-        cost = resolve_model_call_cost(
-            model=resolved_model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            reasoning_tokens=reasoning_tokens,
+        cached_input_tokens = (
+            llm_result.cached_input_tokens if llm_result is not None else 0
         )
-        if success and cost.estimated_cost > 0:
-            record_llm_spend(cost.estimated_cost, threshold_usd=self._daily_spend_warning_usd)
+        if success:
+            cost = resolve_model_call_cost(
+                model=resolved_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_input_tokens,
+            )
+            if cost.estimated_cost > 0:
+                record_llm_spend(cost.estimated_cost, threshold_usd=self._daily_spend_warning_usd)
+        else:
+            cost = resolve_model_call_cost(
+                model=resolved_model,
+                input_tokens=0,
+                output_tokens=0,
+                cached_input_tokens=0,
+            )
         attempt = ModelCallAttempt(
             attempt_id=uuid.uuid5(task_id, f"attempt:{attempt_number}:{requested_model}"),
             task_request_id=task_id,

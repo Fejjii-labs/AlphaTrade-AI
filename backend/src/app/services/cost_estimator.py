@@ -1,7 +1,8 @@
 """Static model cost table for observability — not billing-grade.
 
 Rates are informational placeholders until provider-reported costs are wired.
-Reasoning tokens are billed at the output rate (OpenAI-style).
+Provider ``output_tokens`` already include reasoning; ``reasoning_tokens`` are
+telemetry-only and must not be added again for cost.
 """
 
 from __future__ import annotations
@@ -102,8 +103,8 @@ def estimate_model_cost(
     cached = min(max(cached_input_tokens, 0), input_tokens)
     input_cost = (Decimal(billable_input) / Decimal(1_000_000)) * rates.input_usd_per_million
     cached_cost = (Decimal(cached) / Decimal(1_000_000)) * rates.cached_input_usd_per_million
-    effective_output = max(output_tokens, 0) + max(reasoning_tokens, 0)
-    output_cost = (Decimal(effective_output) / Decimal(1_000_000)) * rates.output_usd_per_million
+    del reasoning_tokens  # telemetry only; output_tokens already include reasoning
+    output_cost = (Decimal(max(output_tokens, 0)) / Decimal(1_000_000)) * rates.output_usd_per_million
     return (input_cost + cached_cost + output_cost).quantize(Decimal("0.00000001"))
 
 
@@ -115,7 +116,7 @@ def estimate_placeholder_cost(
     reasoning_tokens: int = 0,
     cached_input_tokens: int = 0,
 ) -> Decimal:
-    """Backward-compatible wrapper; unknown models use a conservative default rate."""
+    """Backward-compatible wrapper; unknown models return zero estimated cost."""
     estimated = estimate_model_cost(
         model=model,
         input_tokens=input_tokens,
@@ -125,13 +126,7 @@ def estimate_placeholder_cost(
     )
     if estimated is not None:
         return estimated
-    default = MODEL_COST_TABLE.get("gpt-6-luna")
-    if default is None:
-        return Decimal("0")
-    effective_output = max(output_tokens, 0) + max(reasoning_tokens, 0)
-    input_cost = (Decimal(max(input_tokens, 0)) / Decimal(1_000_000)) * default.input_usd_per_million
-    output_cost = (Decimal(effective_output) / Decimal(1_000_000)) * default.output_usd_per_million
-    return (input_cost + output_cost).quantize(Decimal("0.00000001"))
+    return Decimal("0")
 
 
 def rates_metadata(model: str | None) -> dict[str, Any] | None:

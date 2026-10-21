@@ -58,6 +58,7 @@ class LLMCompletionResult:
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    cached_input_tokens: int = 0
     latency_ms: float = 0.0
     fallback_used: bool = False
     parsed_json: dict[str, Any] | None = None
@@ -295,14 +296,24 @@ class OpenAILLMProvider:
                     reasoning_effort=effort,
                     timeout_seconds=timeout,
                 )
-                content, input_tokens, output_tokens, reasoning_tokens, resolved_model = (
-                    self._parse_responses_payload(payload, fallback_model=model)
-                )
+                (
+                    content,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cached_input_tokens,
+                    resolved_model,
+                ) = self._parse_responses_payload(payload, fallback_model=model)
             else:
                 payload = self._post_chat_completions(request, model=model, timeout_seconds=timeout)
-                content, input_tokens, output_tokens, reasoning_tokens, resolved_model = (
-                    self._parse_chat_completions_payload(payload, fallback_model=model)
-                )
+                (
+                    content,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cached_input_tokens,
+                    resolved_model,
+                ) = self._parse_chat_completions_payload(payload, fallback_model=model)
             if (request.response_format or {}).get("type") in {
                 "json_object",
                 "json_schema",
@@ -376,6 +387,7 @@ class OpenAILLMProvider:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
+            cached_input_tokens=cached_input_tokens,
             latency_ms=latency_ms,
             fallback_used=False,
             parsed_json=_try_parse_json(content),
@@ -463,7 +475,7 @@ class OpenAILLMProvider:
 
     def _parse_chat_completions_payload(
         self, payload: dict[str, Any], *, fallback_model: str
-    ) -> tuple[str, int, int, int, str]:
+    ) -> tuple[str, int, int, int, int, str]:
         choice = (payload.get("choices") or [{}])[0]
         if not isinstance(choice, dict):
             raise ValueError("malformed choices")
@@ -486,12 +498,13 @@ class OpenAILLMProvider:
             int(usage.get("prompt_tokens") or 0),
             int(usage.get("completion_tokens") or 0),
             _reasoning_tokens_from_usage(usage),
+            _cached_tokens_from_usage(usage),
             str(payload.get("model") or fallback_model),
         )
 
     def _parse_responses_payload(
         self, payload: dict[str, Any], *, fallback_model: str
-    ) -> tuple[str, int, int, int, str]:
+    ) -> tuple[str, int, int, int, int, str]:
         if payload.get("status") in {"incomplete", "failed", "cancelled", "in_progress", "queued"}:
             raise ValueError("incomplete generation")
         for item in payload.get("output") or []:
@@ -511,6 +524,7 @@ class OpenAILLMProvider:
             int(usage.get("input_tokens") or 0),
             int(usage.get("output_tokens") or 0),
             _reasoning_tokens_from_usage(usage),
+            _cached_tokens_from_usage(usage),
             str(payload.get("model") or fallback_model),
         )
 
@@ -637,7 +651,7 @@ class OpenAILLMProvider:
                     timeout_seconds=_GENERATION_PROBE_TIMEOUT_SECONDS,
                     max_retries=_GENERATION_PROBE_MAX_RETRIES,
                 )
-                content, _, _, _, _ = self._parse_responses_payload(payload, fallback_model=model)
+                content, _, _, _, _, _ = self._parse_responses_payload(payload, fallback_model=model)
             else:
                 payload = self._post_chat_completions(
                     request,
@@ -645,7 +659,7 @@ class OpenAILLMProvider:
                     timeout_seconds=_GENERATION_PROBE_TIMEOUT_SECONDS,
                     max_retries=_GENERATION_PROBE_MAX_RETRIES,
                 )
-                content, _, _, _, _ = self._parse_chat_completions_payload(
+                content, _, _, _, _, _ = self._parse_chat_completions_payload(
                     payload, fallback_model=model
                 )
         except Exception as exc:
@@ -774,6 +788,23 @@ def _reasoning_tokens_from_usage(usage: dict[str, Any]) -> int:
     details = usage.get("output_tokens_details")
     if isinstance(details, dict):
         nested = details.get("reasoning_tokens")
+        if isinstance(nested, int) and nested >= 0:
+            return nested
+    return 0
+
+
+def _cached_tokens_from_usage(usage: dict[str, Any]) -> int:
+    direct = usage.get("cached_tokens")
+    if isinstance(direct, int) and direct >= 0:
+        return direct
+    details = usage.get("input_tokens_details")
+    if isinstance(details, dict):
+        nested = details.get("cached_tokens")
+        if isinstance(nested, int) and nested >= 0:
+            return nested
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        nested = prompt_details.get("cached_tokens")
         if isinstance(nested, int) and nested >= 0:
             return nested
     return 0
