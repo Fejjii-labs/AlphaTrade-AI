@@ -28,6 +28,16 @@ WATCHER_PAPER_RUNTIME_ACTIVE = Gauge(
     "1 when the paper Watcher loop is running",
     registry=REGISTRY,
 )
+WATCHER_PAPER_BAR_CLOSE_WAITS_TOTAL = Counter(
+    "watcher_paper_bar_close_waits_total",
+    "Post-close settlement waits before a paper Watcher scan",
+    registry=REGISTRY,
+)
+WATCHER_PAPER_FORMING_CANDLE_RETRIES_TOTAL = Counter(
+    "watcher_paper_forming_candle_retries_total",
+    "Single bounded retries after a forming-candle scan refusal",
+    registry=REGISTRY,
+)
 
 _SCAN_RESULTS = frozenset(
     {
@@ -70,6 +80,14 @@ def observe_candidates(count: int) -> None:
 
 def set_runtime_active(active: bool) -> None:
     WATCHER_PAPER_RUNTIME_ACTIVE.set(1 if active else 0)
+
+
+def observe_bar_close_wait() -> None:
+    WATCHER_PAPER_BAR_CLOSE_WAITS_TOTAL.inc()
+
+
+def observe_forming_candle_retry() -> None:
+    WATCHER_PAPER_FORMING_CANDLE_RETRIES_TOTAL.inc()
 
 
 def _bounded(result: str) -> str:

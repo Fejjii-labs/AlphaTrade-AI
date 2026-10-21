@@ -18,7 +18,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from math import ceil
 from types import FrameType
 from typing import TYPE_CHECKING, Any
@@ -68,8 +68,10 @@ from app.watcher.hashing import policy_content_hash
 from app.watcher.memory import SideEffectProbe
 from app.watcher.orchestrator import WatcherOrchestrator
 from app.watcher.paper_metrics import (
+    observe_bar_close_wait,
     observe_candidates,
     observe_cycle,
+    observe_forming_candle_retry,
     observe_scan,
     set_runtime_active,
 )
@@ -174,14 +176,27 @@ class WatcherPaperStatusState:
     last_scans: tuple[WatcherPaperScanReport, ...] = field(default_factory=tuple)
 
 
-def last_closed_interval_end(moment: datetime, *, minutes: int = 15) -> datetime:
-    """Interval end of the last fully closed ``minutes`` bar (UTC)."""
+_MAX_WATCHER_IDEMPOTENCY_INTERVAL_SECONDS = 7 * 24 * 3600
 
+
+def last_closed_interval_end(
+    moment: datetime,
+    *,
+    interval_seconds: int = 900,
+) -> datetime:
+    """UTC end time of the last fully closed bar for ``interval_seconds``.
+
+    Bars are aligned to Unix epoch boundaries (same as idempotency floor).
+    ``interval_seconds`` must be positive and at most one week.
+    """
+
+    if interval_seconds <= 0 or interval_seconds > _MAX_WATCHER_IDEMPOTENCY_INTERVAL_SECONDS:
+        raise ValueError("interval_seconds must be between 1 and one week.")
     aware = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
     aware = aware.astimezone(UTC)
-    floored = aware.replace(second=0, microsecond=0)
-    remainder = floored.minute % minutes
-    return floored - timedelta(minutes=remainder)
+    epoch = int(aware.timestamp())
+    closed_end_epoch = (epoch // interval_seconds) * interval_seconds
+    return datetime.fromtimestamp(closed_end_epoch, UTC)
 
 
 def new_worker_instance_id(configured_id: str) -> str:
@@ -952,19 +967,11 @@ class WatcherPaperRuntime:
             ),
             side_effects=self._side_effects,
         )
-        result = orchestrator.run_worker(
-            request,
-            worker_id=self._worker_id,
-            held_fencing_token=self._held_fencing_tokens.get(target.scan_scope),
+        result = self._run_worker_with_forming_retry(
+            orchestrator,
+            request=request,
+            target=target,
         )
-        if self._should_retry_after_forming_candle(result) and self._wait_for_closed_bar(
-            target.symbol
-        ):
-            result = orchestrator.run_worker(
-                request,
-                worker_id=self._worker_id,
-                held_fencing_token=self._held_fencing_tokens.get(target.scan_scope),
-            )
         if result.fencing_token is not None:
             self._held_fencing_tokens[target.scan_scope] = result.fencing_token
             self._held_fencing_tokens.move_to_end(target.scan_scope)
@@ -1102,7 +1109,46 @@ class WatcherPaperRuntime:
         ensure = getattr(self._evidence_factory, "ensure_bar_close_ready", None)
         if not callable(ensure):
             return False
-        return bool(ensure(symbol))
+        slept = bool(ensure(symbol))
+        if slept:
+            observe_bar_close_wait()
+            logger.info(
+                "watcher_paper_bar_close_wait",
+                worker_id=self._worker_id,
+                symbol=symbol,
+            )
+        return slept
+
+    def _run_worker_with_forming_retry(
+        self,
+        orchestrator: WatcherOrchestrator,
+        *,
+        request: ScanRequest,
+        target: PaperScanTarget,
+    ) -> WorkerCycleResult:
+        held = self._held_fencing_tokens.get(target.scan_scope)
+        result = orchestrator.run_worker(
+            request,
+            worker_id=self._worker_id,
+            held_fencing_token=held,
+        )
+        if self._should_retry_after_forming_candle(result) and self._wait_for_closed_bar(
+            target.symbol
+        ):
+            observe_forming_candle_retry()
+            logger.info(
+                "watcher_paper_forming_candle_retry",
+                worker_id=self._worker_id,
+                organization_id=str(target.organization_id),
+                scan_scope=target.scan_scope,
+                symbol=target.symbol,
+            )
+            result = orchestrator.run_worker(
+                request,
+                worker_id=self._worker_id,
+                held_fencing_token=held,
+            )
+        return result
 
     @staticmethod
     def _should_retry_after_forming_candle(result: WorkerCycleResult) -> bool:
@@ -1163,8 +1209,7 @@ class WatcherPaperRuntime:
         from app.schemas.common import Timeframe
 
         seconds = int(interval_timedelta(Timeframe(target.timeframe)).total_seconds())
-        minutes = max(1, seconds // 60)
-        closed = last_closed_interval_end(self._clock.now(), minutes=minutes)
+        closed = last_closed_interval_end(self._clock.now(), interval_seconds=seconds)
         stamp = closed.strftime("%Y%m%dT%H%M%SZ")
         return f"watcher-paper:{target.policy_id}:{target.symbol}:{stamp}"
 
