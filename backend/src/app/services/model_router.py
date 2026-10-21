@@ -418,6 +418,7 @@ class ModelRouter:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
+            cached_input_tokens=cached_input_tokens,
             latency_ms=latency,
             success=success,
             failure_category=category,

@@ -45,7 +45,14 @@ The model explains supplied facts. Application code controls the proposal lifecy
 
 Sources: [Settings](../backend/src/app/core/config.py), [model routing contracts](../backend/src/app/schemas/model_routing.py), [router](../backend/src/app/services/model_router.py), [conversational responder](../backend/src/app/interactive_agent/conversation.py). `LLM_MODEL` alone does not establish the model actually selected by a routed turn. Environment overrides and provider responses must be observed to report a resolved deployed model.
 
-Static cost estimates live in [cost_estimator.py](../backend/src/app/services/cost_estimator.py). Provider `output_tokens` already include reasoning; `reasoning_tokens` are stored for telemetry only. Cached prompt tokens use the cached input rate when reported in usage. Legacy `gpt-4o` / `gpt-4o-mini` rows remain for historical telemetry. Staging startup fails if any configured model lacks a table entry (`llm_cost_startup.py`). Tier A timeout fallbacks increment `model_router_tier_a_timeout_fallback_total` (Prometheus when metrics are enabled).
+Static cost estimates live in [cost_estimator.py](../backend/src/app/services/cost_estimator.py). Provider `output_tokens` already include reasoning; `reasoning_tokens` are stored for telemetry only. Cached prompt tokens use the cached input rate when reported in usage (`cached_input_tokens` on usage metadata). Legacy `gpt-4o` / `gpt-4o-mini` rows remain for historical telemetry. Staging startup fails if any configured model lacks a table entry (`llm_cost_startup.py`). Tier A timeout fallbacks increment `model_router_tier_a_timeout_fallback_total` (Prometheus when metrics are enabled).
+
+**Alerts to watch (staging/production logs, ERROR):**
+
+| Log event | Meaning |
+| --- | --- |
+| `llm_cost_table_incomplete` | A configured `LLM_MODEL` / tier model has no cost-table row at startup (staging refuses boot; production logs ERROR). |
+| `llm_call_missing_cost_table` | A provider call returned token usage for a model with no cost row — estimated cost is **$0** until the table is updated. |
 
 Local `PROVIDER_MODE=mock` forces mock LLM/embeddings even with a key present. Current staging/production policy requires configured OpenAI and authoritative Qdrant and prohibits silent mock substitutions. A failed conversational call can report “Conversational model reply is unavailable” while preserving factual context; that is not a successful model reply. [Retrieval/provider details](rag_system.md).
 

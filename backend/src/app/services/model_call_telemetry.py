@@ -22,6 +22,7 @@ from app.schemas.common import CostSource
 from app.schemas.model_routing import ModelCallAttempt
 from app.schemas.usage import UsageEventCreate
 from app.services.cost_estimator import estimate_model_cost, model_has_cost_entry
+from app.services.llm_cost_startup import log_missing_call_cost_table
 from app.services.usage_cost import build_provider_metadata
 
 logger = structlog.get_logger(__name__)
@@ -57,6 +58,11 @@ def resolve_model_call_cost(
     """Return labelled cost. Never invent a provider-reported price."""
     name = (model or "").strip()
     if not model_has_cost_entry(name):
+        log_missing_call_cost_table(
+            name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
     if input_tokens <= 0 and output_tokens <= 0:
         return ResolvedModelCallCost(Decimal("0"), CostSource.UNAVAILABLE)
@@ -179,7 +185,7 @@ class ModelCallTelemetryService:
                 failure_category=attempt.failure_category.value,
                 usage_category="actual_provider_attempt",
                 reasoning_tokens=attempt.reasoning_tokens,
-                cached_input_tokens=0,
+                cached_input_tokens=attempt.cached_input_tokens,
             )
             try:
                 with session.begin_nested():

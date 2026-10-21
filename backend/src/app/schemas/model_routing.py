@@ -155,6 +155,7 @@ class ModelCallAttempt(StrictModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     reasoning_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     success: bool
     failure_category: ModelFailureCategory = ModelFailureCategory.NONE
