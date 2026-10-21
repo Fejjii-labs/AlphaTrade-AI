@@ -32,7 +32,11 @@ not open the database or call BloFin. Identity and UID checks stay inside
 `BloFinSyncService`. The dedicated key and the main demo-key fallback both
 refuse a native UID that differs from `BLOFIN_ACTIVITY_EXPECTED_UID` for
 `BLOFIN_ACTIVITY_ORGANIZATION_ID`, and both apply the activity-account
-snapshot proof on read. A dedicated key that can trade is still refused.
+snapshot proof on read. The fallback also refuses before any venue call
+when `BLOFIN_ACTIVITY_ORGANIZATION_ID` is unset, when that organization
+does not match the sync organization, or when `BLOFIN_ACTIVITY_EXPECTED_UID`
+is unset. The refusal log is `blofin_fallback_sync_refused` plus a reason
+token. A dedicated key that can trade is still refused.
 The main demo key is not refused only because it can trade. The worker
 records actor `system` and provenance `sync_origin=worker`. When the
 read-only set is absent, the dashboard refresh uses the same GET-only client
@@ -178,8 +182,14 @@ Worker names for snapshot sync and autonomous demo orders:
 - `WATCHER_ORCHESTRATION_ENABLED`
 - `WATCHER_PAPER_STAGING_ACTIVATION`
 - `WATCHER_PAPER_ORGANIZATION_ID`
+- `BLOFIN_ACTIVITY_ORGANIZATION_ID`
+- `BLOFIN_ACTIVITY_EXPECTED_UID`
 
-Leave `AUTONOMOUS_INTERNAL_PAPER_ENABLED` unset. The worker must be armed. A
+`BLOFIN_ACTIVITY_ORGANIZATION_ID` must equal `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`.
+`BLOFIN_ACTIVITY_EXPECTED_UID` is the native demo account id. The main demo-key
+fallback refuses to sync when either name is unset or the organization does
+not match. `BLOFIN_ACTIVITY_ENABLED` stays unset for this pin. Leave
+`AUTONOMOUS_INTERNAL_PAPER_ENABLED` unset. The worker must be armed. A
 disarmed boot does not attach the snapshot cycle. Optional mirror name:
 `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`.
 
@@ -196,8 +206,13 @@ It does not need the snapshot flag or the autonomous flag:
 - `BLOFIN_API_PASSPHRASE`
 - `BLOFIN_DEMO_REST_BASE_URL`
 - `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`
+- `BLOFIN_ACTIVITY_ORGANIZATION_ID`
+- `BLOFIN_ACTIVITY_EXPECTED_UID`
 
-Set the organization id to the same organization the worker pins, so the
+`BLOFIN_ACTIVITY_ORGANIZATION_ID` must equal `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`.
+`BLOFIN_ACTIVITY_EXPECTED_UID` is the same native demo account id as on the
+worker. Read sync on the fallback key refuses without both names. Set the
+organization id to the same organization the worker pins, so the
 dashboard scope matches the snapshot owner. Activity sync is unchanged: its
 identity check still requires a key the venue reports as read-only, so the
 Read+Trade fallback does not satisfy `BLOFIN_ACTIVITY_ENABLED`.

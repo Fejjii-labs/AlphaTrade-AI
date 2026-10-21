@@ -16,6 +16,7 @@ from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.errors import ExchangeRequestError
 from app.schemas.blofin_sync import BloFinSyncSnapshotItem
+from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.dashboard.demo_account import project_demo_account
 from tests.test_at037_tradingview_blofin import ORG_A, _login
 from tests.test_at037_tradingview_blofin import client as demo_client
@@ -245,6 +246,12 @@ def test_dashboard_read_sync_uses_the_demo_key_for_gets_when_readonly_is_absent(
     monkeypatch.setattr(
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(
+            _env_file=None, organization_id=ORG_A, expected_uid="dashboard-native-uid"
+        ),
     )
     owner = _login(client, "at037-a@test.example")
     data = client.post("/dashboard/demo-account/refresh", headers=owner).json()

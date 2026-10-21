@@ -275,8 +275,12 @@ def test_worker_sync_uses_get_only_demo_key_and_refuses_trade_permission_on_dedi
 
     monkeypatch.setattr(service._snapshots, "add", keep)
     monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    organization_id = uuid4()
+    _pin_activity(monkeypatch, organization_id, "demo-read-fallback")
     with structlog.testing.capture_logs() as logs:
-        result = service.sync(organization_id=uuid4(), user_id=uuid4(), sync_origin="worker")
+        result = service.sync(
+            organization_id=organization_id, user_id=uuid4(), sync_origin="worker"
+        )
     assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
     assert [request.method for request in seen] == ["GET", "GET", "GET"]
     rendered = repr(logs)
@@ -379,6 +383,62 @@ def test_fallback_key_refuses_a_different_demo_account(monkeypatch: pytest.Monke
     assert result.snapshot.provenance.get("error_type") == "ValueError"
     assert result.snapshot.provenance.get("native_account_uid") is None
     assert result.snapshot.balance_count == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("unset_uid", "activity_expected_uid_unset"),
+        ("unset_org", "activity_organization_unset"),
+        ("mismatched_org", "activity_organization_mismatch"),
+    ],
+)
+def test_fallback_refuses_without_a_matching_account_pin(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    organization_id = uuid4()
+    if case == "unset_uid":
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=""
+        )
+    elif case == "unset_org":
+        config = BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    else:
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=uuid4(), expected_uid="pinned-demo-account"
+        )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    calls: list[str] = []
+
+    def provider(_cfg: object) -> None:
+        calls.append("provider")
+        raise AssertionError("unpinned fallback opened a client")
+
+    monkeypatch.setattr("app.services.blofin_sync_service.get_readonly_account_provider", provider)
+    service = BloFinSyncService(MagicMock(), _trading_key_settings())
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    assert calls == []
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("error_type") == "ValueError"
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert result.snapshot.balance_count == 0
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused" and item.get("reason") == reason
+        for item in logs
+    )
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert "fixture-trading-pass" not in rendered
+    assert "pinned-demo-account" not in rendered
 
 
 def test_fallback_key_accepts_the_pinned_demo_account(monkeypatch: pytest.MonkeyPatch) -> None:

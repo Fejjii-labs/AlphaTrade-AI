@@ -2,6 +2,20 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-139 — Fallback demo key fails closed without the activity pin
+
+- Date: 2026-10-21
+- Decision: The main demo-key fallback refuses to sync unless
+  `BLOFIN_ACTIVITY_ORGANIZATION_ID` is set and equals the sync organization,
+  and `BLOFIN_ACTIVITY_EXPECTED_UID` is set. A mismatch or a missing pin is
+  logged as `blofin_fallback_sync_refused` with a reason token and no
+  credential or UID value. The refusal happens before a venue call. The
+  dedicated read-only key keeps its previous pin: it compares the native UID
+  only when that pin is present for the same organization. Activity sync
+  still requires a venue read-only key. `BLOFIN_ACTIVITY_ENABLED` is not
+  required for this pin.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-138.
+
 ## AT-ADR-138 — Fallback demo key uses the same native account pin
 
 - Date: 2026-10-21

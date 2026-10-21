@@ -61,6 +61,34 @@ def _account_pin_applies(settings: Settings) -> bool:
     )
 
 
+def _require_fallback_account_pin(settings: Settings, organization_id: uuid.UUID) -> None:
+    """Refuse the main demo key unless the activity org and UID pins match.
+
+    A missing pin, or a pin for a different organization, does not fall open.
+    The log carries a reason token only.
+    """
+
+    if not settings.blofin_demo_read_fallback_ready:
+        return
+    config = get_activity_settings()
+    pinned_org = config.organization_id
+    if pinned_org is None:
+        reason = "activity_organization_unset"
+        message = "BloFin fallback sync requires BLOFIN_ACTIVITY_ORGANIZATION_ID."
+    elif pinned_org != organization_id:
+        reason = "activity_organization_mismatch"
+        message = (
+            "BloFin fallback sync organization does not match BLOFIN_ACTIVITY_ORGANIZATION_ID."
+        )
+    elif not config.expected_uid.strip():
+        reason = "activity_expected_uid_unset"
+        message = "BloFin fallback sync requires BLOFIN_ACTIVITY_EXPECTED_UID."
+    else:
+        return
+    logger.warning("blofin_fallback_sync_refused", reason=reason)
+    raise ValueError(message)
+
+
 class BloFinSyncService:
     """Read-only BloFin demo account/position reconciliation."""
 
@@ -122,6 +150,7 @@ class BloFinSyncService:
 
         try:
             uses_dedicated = self._settings.blofin_read_sync_uses_dedicated_credentials
+            _require_fallback_account_pin(self._settings, organization_id)
             binding = connection_binding(self._settings, readonly=uses_dedicated)
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
@@ -146,9 +175,11 @@ class BloFinSyncService:
             if (
                 _account_pin_applies(self._settings)
                 and config.organization_id == organization_id
-                and config.expected_uid
-                and config.expected_uid != uid
+                and config.expected_uid.strip()
+                and config.expected_uid.strip() != uid
             ):
+                if self._settings.blofin_demo_read_fallback_ready:
+                    logger.warning("blofin_fallback_sync_refused", reason="native_account_mismatch")
                 raise ValueError("BloFin sync native account UID does not match connection pin.")
             provenance.update(native_account_uid=uid, identity_status="verified")
             balances = provider.get_balances()
