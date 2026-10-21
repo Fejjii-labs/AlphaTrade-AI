@@ -22,6 +22,7 @@ from app.evidence_pipeline.types import AssembledCanonicalEvidence
 from app.market_contracts.enums import SourceFamily
 from app.market_contracts.errors import (
     ContractUnavailableError,
+    FormingCandleError,
     MarketContractError,
     RegionalProviderFailureError,
     StaleEvidenceError,
@@ -319,6 +320,11 @@ class AssemblingWatcherScanEvidence:
             raise WatcherEvidenceUnavailableError(
                 "Perpetual market provider is unavailable.",
                 reason_code="provider_outage",
+            ) from exc
+        if isinstance(exc, FormingCandleError):
+            raise WatcherEvidenceUnavailableError(
+                "Canonical scan evidence is unavailable.",
+                reason_code="forming_candle",
             ) from exc
         if isinstance(exc, MarketContractError):
             raise WatcherEvidenceUnavailableError(

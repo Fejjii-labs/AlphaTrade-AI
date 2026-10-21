@@ -31,6 +31,7 @@ from app.candidate_alerts.nested import NestedAlertSummary
 from app.candidate_alerts.sfp import SfpAlertSummary
 from app.core.config import Environment, ExecutionMode, Settings
 from app.market_contracts.enums import VenueId
+from app.market_contracts.evidence_diagnostics import DiagnosticReason
 from app.market_contracts.provider_contracts import (
     ContractBook,
     ContractProviderUnreachableError,
@@ -920,6 +921,7 @@ class WatcherPaperRuntime:
             timeframe=target.timeframe,
             idempotency_key=self._idempotency_key(target),
         )
+        self._wait_for_closed_bar(target.symbol)
         evidence = self._build_evidence(session, target.symbol)
         if target.fusion_policy_version == DEFAULT_FUSION_POLICY_VERSION:
             # Successful evaluations replay until the next 15m bar. The live
@@ -955,6 +957,14 @@ class WatcherPaperRuntime:
             worker_id=self._worker_id,
             held_fencing_token=self._held_fencing_tokens.get(target.scan_scope),
         )
+        if self._should_retry_after_forming_candle(result) and self._wait_for_closed_bar(
+            target.symbol
+        ):
+            result = orchestrator.run_worker(
+                request,
+                worker_id=self._worker_id,
+                held_fencing_token=self._held_fencing_tokens.get(target.scan_scope),
+            )
         if result.fencing_token is not None:
             self._held_fencing_tokens[target.scan_scope] = result.fencing_token
             self._held_fencing_tokens.move_to_end(target.scan_scope)
@@ -1088,6 +1098,27 @@ class WatcherPaperRuntime:
             raise RuntimeError("Paper Watcher evidence factory is required.")
         return self._evidence_factory(session, self._store, symbol)
 
+    def _wait_for_closed_bar(self, symbol: str) -> bool:
+        ensure = getattr(self._evidence_factory, "ensure_bar_close_ready", None)
+        if not callable(ensure):
+            return False
+        return bool(ensure(symbol))
+
+    @staticmethod
+    def _should_retry_after_forming_candle(result: WorkerCycleResult) -> bool:
+        if result.status is not WorkerCycleStatus.FAILED:
+            return False
+        outcome = result.outcome
+        if outcome is None:
+            return False
+        if outcome.reason_code == "forming_candle":
+            return True
+        if outcome.reason_code != "canonical_contract_invalid_contract":
+            return False
+        return any(
+            item.reason is DiagnosticReason.FORMING_CANDLE for item in outcome.evidence_diagnostics
+        )
+
     def _evaluation_observer(
         self, session: Session | None, target: PaperScanTarget
     ) -> EvaluationOutcomeObserver | None:
@@ -1132,9 +1163,8 @@ class WatcherPaperRuntime:
         from app.schemas.common import Timeframe
 
         seconds = int(interval_timedelta(Timeframe(target.timeframe)).total_seconds())
-        closed = datetime.fromtimestamp(
-            int(self._clock.now().timestamp()) // seconds * seconds, UTC
-        )
+        minutes = max(1, seconds // 60)
+        closed = last_closed_interval_end(self._clock.now(), minutes=minutes)
         stamp = closed.strftime("%Y%m%dT%H%M%SZ")
         return f"watcher-paper:{target.policy_id}:{target.symbol}:{stamp}"
 

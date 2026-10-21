@@ -208,6 +208,26 @@ def _active_rest_source(source: object) -> object:
     return current
 
 
+def _wait_past_configured_boundary(
+    evaluated_at: datetime,
+    delay: timedelta,
+    *,
+    now: Callable[[], datetime] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> bool:
+    """Pause until ``evaluated_at`` is at least ``delay`` past the last M15 close."""
+
+    pause = sleeper or sleep
+    close = evaluated_at.replace(second=0, microsecond=0) - timedelta(
+        minutes=evaluated_at.minute % 15
+    )
+    remaining = (close + delay) - evaluated_at
+    if remaining <= timedelta(0) or remaining > delay + timedelta(minutes=15):
+        return False
+    pause(remaining.total_seconds())
+    return True
+
+
 def _wait_for_binance_rest_settlement(
     evaluated_at: datetime,
     *,
@@ -335,6 +355,26 @@ class SymbolMarketFactory:
         if not self._replay:
             _, _, monitor, _ = self.composition(symbol)
             monitor.snapshot(symbol)
+
+    def ensure_bar_close_ready(self, symbol: str) -> bool:
+        """Block until the just-closed M15 bar may be evaluated. Never admits forming rows."""
+
+        if self._replay:
+            return False
+        now = self._clock() if self._clock is not None else datetime.now(UTC)
+        slept = False
+        configured = timedelta(seconds=float(self.settings.watcher_paper_bar_close_delay_seconds))
+        if configured > timedelta(0):
+            slept = _wait_past_configured_boundary(
+                now, configured, now=self._clock, sleeper=self._sleeper
+            )
+            now = self._clock() if self._clock is not None else datetime.now(UTC)
+        source, _, _, _ = self.composition(symbol)
+        if isinstance(_active_rest_source(source), BinanceUsdmPerpetualSource) and (
+            _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper)
+        ):
+            slept = True
+        return slept
 
     def probe(self, symbol: str) -> MarketProbeResult:
         if self._replay:
