@@ -73,6 +73,7 @@ class BloFinSyncService:
                 "blofin_worker_sync_readonly_required",
                 readonly_sync_enabled=self._settings.blofin_readonly_sync_enabled,
                 readonly_credentials_present=self._settings.blofin_readonly_configured,
+                demo_read_fallback_ready=self._settings.blofin_demo_read_fallback_ready,
             )
             raise ValueError("BloFin worker sync requires dedicated read-only credentials.")
         now = datetime.now(UTC)
@@ -92,7 +93,7 @@ class BloFinSyncService:
             "synced_at": now.isoformat(),
             "credentials_configured": (
                 self._settings.blofin_readonly_configured
-                if self._settings.blofin_readonly_sync_enabled
+                if self._settings.blofin_read_sync_uses_dedicated_credentials
                 else self._settings.blofin_demo_configured
             ),
             "readonly_sync_enabled": self._settings.blofin_readonly_sync_enabled,
@@ -106,18 +107,21 @@ class BloFinSyncService:
             provenance["configured_execution_account_id"] = str(configured.id)
 
         try:
-            binding = connection_binding(
-                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
-            )
+            uses_dedicated = self._settings.blofin_read_sync_uses_dedicated_credentials
+            binding = connection_binding(self._settings, readonly=uses_dedicated)
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
-            if origin == "worker" or self._settings.blofin_readonly_sync_enabled:
+            if (
+                origin == "worker"
+                or uses_dedicated
+                or self._settings.blofin_demo_read_fallback_ready
+            ):
                 provider = get_readonly_account_provider(self._settings)
             else:
                 ensure_demo_exchange_access(self._settings)
                 provider = get_demo_account_provider(self._settings)
             permissions = provider.get_account_permissions()
-            if self._settings.blofin_readonly_sync_enabled and permissions.can_trade:
+            if uses_dedicated and permissions.can_trade:
                 raise ValueError("Dedicated BloFin sync key must be read-only.")
             if permissions.can_withdraw or permissions.can_transfer or not permissions.can_read:
                 raise ValueError("BloFin sync requires read access without money-movement scopes.")
@@ -126,7 +130,7 @@ class BloFinSyncService:
                 raise ValueError("BloFin sync native account UID is unverified.")
             config = get_activity_settings()
             if (
-                self._settings.blofin_readonly_sync_enabled
+                uses_dedicated
                 and config.organization_id == organization_id
                 and config.expected_uid
                 and config.expected_uid != uid
@@ -295,12 +299,13 @@ class BloFinSyncService:
     ) -> BloFinSyncSnapshotItem:
         try:
             binding = connection_binding(
-                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
+                self._settings,
+                readonly=self._settings.blofin_read_sync_uses_dedicated_credentials,
             )
         except Exception:
             raise NotFoundError("Current BloFin connection is unverified.") from None
         uid = self._snapshots.verified_uid_for_binding(organization_id, binding)
-        if self._settings.blofin_readonly_sync_enabled:
+        if self._settings.blofin_read_sync_uses_dedicated_credentials:
             config = get_activity_settings()
             if config.organization_id == organization_id and config.expected_uid:
                 proof = self._session.get(

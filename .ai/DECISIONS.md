@@ -2,6 +2,30 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-137 — Demo snapshot and read sync may use the main demo key for GET only
+
+- Date: 2026-10-21
+- Decision: Staging keeps one Read+Trade demo key (`BLOFIN_API_KEY`,
+  `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`). Snapshot sync and read sync
+  use that key when the dedicated `BLOFIN_READONLY_*` set is absent. The
+  client stays `BloFinReadOnlyClient`: GET and the existing path allowlist
+  only. `assert_demo_host` and the demo-host allowlist stay in force. A
+  partial read-only set does not fall back. A complete read-only set is still
+  preferred, and a dedicated key that can trade is still refused.
+- `demo_account_active` accepts `paper_exchange_demo` as well as the existing
+  `paper_internal` read-only path, so snapshot sync, the manual mirror, and
+  autonomous demo orders can run in one mode. `paper_internal` without the
+  read-only set stays inactive.
+- Safety: `real_trading_enabled` stays false. Production refusals in
+  `deployment_safety.py` are unchanged, including `paper_exchange_demo` and
+  both autonomous flags. Setting both autonomous flags still resolves to
+  `autonomous_mode_ambiguous`. Activity identity still requires a venue
+  read-only key. This decision does not enable the snapshot flag, activity
+  sync, or real-money trading.
+- Supersedes the credential sentence of AT-ADR-115 only. The snapshot flag
+  still defaults false, and a disarmed worker still opens no client.
+- Reference: `docs/blofin_demo_snapshot_worker.md`.
+
 ## AT-ADR-136 — Stale kill-switch rows do not keep the health retry hot
 
 - Date: 2026-10-20

@@ -22,16 +22,27 @@ _TOKEN = re.compile(r"^[A-Za-z0-9_/-]{1,64}$")
 
 
 def demo_account_active(settings: Settings) -> bool:
+    """True when a paper demo snapshot may be shown or refreshed.
+
+    ``paper_exchange_demo`` stays open when the dedicated read-only flag is on,
+    so snapshot sync, the manual mirror, and autonomous demo orders can share
+    one mode. Real trading and a non-allowlisted host stay closed.
+    """
     if settings.execution_mode is not ExecutionMode.PAPER or settings.enable_real_trading:
+        return False
+    if settings.real_trading_enabled:
         return False
     if not is_allowlisted_demo_host(settings.blofin_demo_rest_base_url):
         return False
+    if settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO:
+        dedicated = settings.blofin_readonly_sync_enabled and settings.blofin_readonly_configured
+        return dedicated or settings.blofin_demo_configured
     if settings.blofin_readonly_sync_enabled:
         return (
             settings.exchange_mode is ExchangeMode.PAPER_INTERNAL
             and settings.blofin_readonly_configured
         )
-    return settings.exchange_demo_active and settings.blofin_demo_configured
+    return False
 
 
 def _number(value: Any, *, required: bool = False) -> Decimal | None:

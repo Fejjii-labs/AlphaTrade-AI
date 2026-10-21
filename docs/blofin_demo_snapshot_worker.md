@@ -15,18 +15,23 @@ are true:
 - The worker is armed. A disarmed staging boot does not construct the cycle,
   a database session, or an exchange client.
 - The existing demo gates are open (`demo_account_active`).
+  `paper_exchange_demo` and `paper_internal` both qualify. Real trading does not.
 - `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` and `GOVERNED_BLOFIN_DEMO_USER_ID`
   are set. The cycle does not guess an organization.
-- `BLOFIN_READONLY_SYNC_ENABLED` is true and `BLOFIN_READONLY_API_KEY`,
-  `BLOFIN_READONLY_API_SECRET`, and `BLOFIN_READONLY_API_PASSPHRASE` are
-  present. The unattended worker never falls back to the demo trading keys.
-  A missing read-only credential skips with a log of booleans only.
+- Either the dedicated read-only set is complete
+  (`BLOFIN_READONLY_SYNC_ENABLED` plus `BLOFIN_READONLY_API_KEY`,
+  `BLOFIN_READONLY_API_SECRET`, and `BLOFIN_READONLY_API_PASSPHRASE`), or that
+  set is absent and the main demo key is present (`BLOFIN_API_KEY`,
+  `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`) with
+  `EXCHANGE_MODE=paper_exchange_demo`. A partial read-only set does not fall
+  back. The worker logs booleans only. Snapshot and read sync issue GET
+  requests through the allowlisted demo client. They do not place orders.
 
 Otherwise the cycle is not attached, or its status is `skipped`, and it does
 not open the database or call BloFin. Identity and UID checks stay inside
 `BloFinSyncService.sync`. The worker records actor `system` and provenance
-`sync_origin=worker`. The interactive dashboard refresh can still use the
-existing demo path; that path is not the unattended worker.
+`sync_origin=worker`. When the read-only set is absent, the dashboard refresh
+uses the same GET-only client and the main demo key. It does not place orders.
 
 | Name | Role |
 | --- | --- |
@@ -34,13 +39,16 @@ existing demo path; that path is not the unattended worker.
 | `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` | Cadence, 30–60. Default 45. Used only after the flag is on. |
 | `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` | Owner organization pin. |
 | `GOVERNED_BLOFIN_DEMO_USER_ID` | Owner user pin. |
-| `BLOFIN_READONLY_SYNC_ENABLED` | Use the dedicated read-only sync path. |
-| `BLOFIN_READONLY_API_KEY` | Dedicated read-only key. Value stays in the environment. |
-| `BLOFIN_READONLY_API_SECRET` | Dedicated read-only secret. |
-| `BLOFIN_READONLY_API_PASSPHRASE` | Dedicated read-only passphrase. |
+| `BLOFIN_API_KEY` | Main demo key. Used for GET sync when the read-only set is absent. |
+| `BLOFIN_API_SECRET` | Main demo secret. Value stays in the environment. |
+| `BLOFIN_API_PASSPHRASE` | Main demo passphrase. Value stays in the environment. |
+| `BLOFIN_READONLY_SYNC_ENABLED` | Optional. Selects the dedicated read-only set when that set is complete. |
+| `BLOFIN_READONLY_API_KEY` | Optional dedicated read-only key. Not required when the set is absent. |
+| `BLOFIN_READONLY_API_SECRET` | Optional dedicated read-only secret. |
+| `BLOFIN_READONLY_API_PASSPHRASE` | Optional dedicated read-only passphrase. |
 | `BLOFIN_DEMO_REST_BASE_URL` | Allowlisted demo origin. |
 | `EXECUTION_MODE` | Must stay `paper`. |
-| `EXCHANGE_MODE` | `paper_internal` for the read-only path. |
+| `EXCHANGE_MODE` | `paper_exchange_demo` for the shared demo key. `paper_internal` still accepts a complete read-only set. |
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
 A successful snapshot younger than the interval is reused and the cycle stays
@@ -51,10 +59,11 @@ refresh from the dashboard still calls BloFin. When
 trades while the snapshot is fresh, including a fresh degraded snapshot, and
 also when the snapshot sync returns a health status outside ok or degraded.
 The mirror does not run unless this cycle is attached: the snapshot flag is
-on, the worker is armed, and the read-only credentials above are present.
-Trading keys skip with `readonly_credentials_required` and do not open the
-mirror. A degraded snapshot does not back off. A health status outside ok or
-degraded still backs off. A mirror read failure does not back off the snapshot.
+on, the worker is armed, and either the read-only set or the main demo key
+fallback above is present. A partial read-only set still skips with
+`readonly_credentials_required` and does not open the mirror. A degraded
+snapshot does not back off. A health status outside ok or degraded still
+backs off. A mirror read failure does not back off the snapshot.
 A failed snapshot sync backs off, doubling from the interval up to 900 seconds.
 The provider's existing request
 rate limit still applies. Supervisor health includes `demo_snapshot` status:
@@ -130,8 +139,60 @@ activity win rate above stays withheld.
 
 The mirror flag is `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`. It defaults off.
 Turning it on does not attach the cycle by itself. The snapshot flag, an
-armed worker, and the `BLOFIN_READONLY_*` setup above are still required.
-This document names the flag only. Do not set it in `render.yaml` or in a
-deployed environment from this change. Contract, formulas, and the journal
-source `blofin_demo_manual` are in
+armed worker, and the read credential setup above are still required. The
+mirror uses the same GET-only client. This document names the flag only. Do
+not set it in `render.yaml` or in a deployed environment from this change.
+Contract, formulas, and the journal source `blofin_demo_manual` are in
 [blofin_demo_manual_mirror.md](blofin_demo_manual_mirror.md).
+
+## Staging env names for sync and autonomous demo orders
+
+No values belong in this document. `BLOFIN_READONLY_*` is not required when
+that set is unset. Do not set both `AUTONOMOUS_INTERNAL_PAPER_ENABLED` and
+`AUTONOMOUS_BLOFIN_DEMO_ENABLED`. Both flags together fail closed. Production
+still refuses `paper_exchange_demo` and both autonomous flags. Real trading
+stays off.
+
+Worker names for snapshot sync and autonomous demo orders:
+
+- `ENVIRONMENT`
+- `EXECUTION_MODE`
+- `ENABLE_REAL_TRADING`
+- `EXCHANGE_MODE`
+- `BLOFIN_DEMO_ENABLED`
+- `BLOFIN_API_KEY`
+- `BLOFIN_API_SECRET`
+- `BLOFIN_API_PASSPHRASE`
+- `BLOFIN_DEMO_REST_BASE_URL`
+- `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED`
+- `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`
+- `GOVERNED_BLOFIN_DEMO_USER_ID`
+- `GOVERNED_BLOFIN_DEMO_ACCOUNT_ID`
+- `GOVERNED_BLOFIN_DEMO_ENABLED`
+- `AUTONOMOUS_BLOFIN_DEMO_ENABLED`
+- `WATCHER_ORCHESTRATION_ENABLED`
+- `WATCHER_PAPER_STAGING_ACTIVATION`
+- `WATCHER_PAPER_ORGANIZATION_ID`
+
+Leave `AUTONOMOUS_INTERNAL_PAPER_ENABLED` unset. The worker must be armed. A
+disarmed boot does not attach the snapshot cycle. Optional mirror name:
+`BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`.
+
+API names for dashboard read sync. The API uses the same demo key and mode.
+It does not need the snapshot flag or the autonomous flag:
+
+- `ENVIRONMENT`
+- `EXECUTION_MODE`
+- `ENABLE_REAL_TRADING`
+- `EXCHANGE_MODE`
+- `BLOFIN_DEMO_ENABLED`
+- `BLOFIN_API_KEY`
+- `BLOFIN_API_SECRET`
+- `BLOFIN_API_PASSPHRASE`
+- `BLOFIN_DEMO_REST_BASE_URL`
+- `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`
+
+Set the organization id to the same organization the worker pins, so the
+dashboard scope matches the snapshot owner. Activity sync is unchanged: its
+identity check still requires a key the venue reports as read-only, so the
+Read+Trade fallback does not satisfy `BLOFIN_ACTIVITY_ENABLED`.

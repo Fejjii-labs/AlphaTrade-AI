@@ -5,13 +5,22 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 import structlog
 
+from app.core.blofin_readonly_access import (
+    BloFinReadOnlyClient,
+    get_readonly_account_provider,
+    get_readonly_client,
+)
 from app.core.config import Settings
-from app.core.errors import NotFoundError
+from app.core.errors import ExchangeDemoInactiveError, NotFoundError
+from app.providers.exchange.base import AccountPermissions
+from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
 from app.services.blofin_sync_service import BloFinSyncService
+from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -129,11 +138,11 @@ def test_disarmed_worker_does_not_construct_a_cycle_even_when_enabled(
         reset_disarmed_worker_boot()
 
 
-def test_trading_keys_skip_without_a_database_or_a_secret_log(
+def test_partial_readonly_set_skips_without_a_database_or_a_secret_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def forbidden() -> None:
-        raise AssertionError("trading-key cycle opened a database")
+        raise AssertionError("partial read-only set opened a database")
 
     monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
     monkeypatch.setattr(
@@ -146,7 +155,7 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     )
 
     def forbidden_mirror(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("mirror ran on trading keys")
+        raise AssertionError("mirror ran on a partial read-only set")
 
     monkeypatch.setattr(
         "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
@@ -154,7 +163,10 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     )
     with structlog.testing.capture_logs() as logs:
         outcome = BloFinDemoSnapshotCycle(
-            _trading_key_settings(blofin_demo_manual_mirror_enabled=True)
+            _trading_key_settings(
+                blofin_demo_manual_mirror_enabled=True,
+                blofin_readonly_api_key="partial-only",
+            )
         )()
     assert outcome.status == "skipped"
     assert outcome.error == "readonly_credentials_required"
@@ -162,10 +174,40 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
     assert "fixture-trading-pass" not in rendered
+    assert "partial-only" not in rendered
     assert any(item.get("event") == "blofin_demo_snapshot_readonly_required" for item in logs)
 
 
-def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _trading_key_settings(blofin_demo_manual_mirror_enabled=True)
+    now = datetime(2026, 10, 21, tzinfo=UTC)
+    captured: dict[str, object] = {}
+    session = SimpleNamespace(committed=False, closed=False, rollback=lambda: None)
+    session.commit = lambda: setattr(session, "committed", True)
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(self, client: object, now: object = None) -> None:
+            captured["client"] = client
+
+        def apply(self, *_args: object, **_kwargs: object) -> None:
+            captured["applied"] = True
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
     monkeypatch.setattr(
         "app.services.blofin_sync_service.get_demo_account_provider",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
@@ -174,31 +216,146 @@ def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) ->
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
-    service = BloFinSyncService(MagicMock(), _trading_key_settings())
-    # The full suite calls configure_logging, which caches this module logger
-    # on first use. capture_logs then never sees that cached printer.
-    configuration = structlog.get_config()
-    try:
-        structlog.configure(cache_logger_on_first_use=False)
-        with (
-            structlog.testing.capture_logs() as logs,
-            pytest.raises(ValueError, match="read-only"),
-        ):
-            monkeypatch.setattr(
-                "app.services.blofin_sync_service.logger",
-                structlog.get_logger("app.services.blofin_sync_service"),
-            )
-            service.sync(
-                organization_id=uuid4(),
-                user_id=uuid4(),
-                sync_origin="worker",
-            )
-    finally:
-        structlog.configure(**configuration)
+    with structlog.testing.capture_logs() as logs:
+        outcome = BloFinDemoSnapshotCycle(settings, clock=lambda: now)()
+    assert outcome.status == "ok"
+    assert captured["applied"] is True
+    client = captured["client"]
+    assert isinstance(client, BloFinReadOnlyClient)
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request("POST", "/api/v1/trade/order", body={"instId": "BTC-USDT"})
     rendered = repr(logs)
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
-    assert any(item.get("event") == "blofin_worker_sync_readonly_required" for item in logs)
+    assert "fixture-trading-pass" not in rendered
+
+
+def test_worker_sync_uses_get_only_demo_key_and_refuses_trade_permission_on_dedicated_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _trading_key_settings()
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "GET"
+        assert request.headers["ACCESS-KEY"] == "fixture-trading-key"
+        data = {
+            "/api/v1/user/query-apikey": {"readOnly": 0, "uid": "demo-read-fallback"},
+            "/api/v1/account/balance": {
+                "totalEquity": "10",
+                "details": [{"currency": "USDT", "balance": "10", "available": "10"}],
+            },
+            "/api/v1/account/positions": [],
+        }[request.url.path]
+        return httpx.Response(200, json={"code": "0", "data": data})
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_readonly_account_provider",
+        lambda cfg: get_readonly_account_provider(cfg, transport=httpx.MockTransport(handle)),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(organization_id=uuid4(), user_id=uuid4(), sync_origin="worker")
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
+    assert [request.method for request in seen] == ["GET", "GET", "GET"]
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+
+    dedicated = _trading_key_settings(
+        blofin_readonly_sync_enabled=True,
+        blofin_readonly_api_key="fixture-reader",
+        blofin_readonly_api_secret="fixture-reader-secret",
+        blofin_readonly_api_passphrase="fixture-reader-pass",
+    )
+    trade_client = BloFinReadOnlyClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="fixture-reader",
+        api_secret="fixture-reader-secret",
+        api_passphrase="fixture-reader-pass",
+        transport=httpx.MockTransport(handle),
+    )
+
+    class TradingKeyProvider(BloFinAccountProvider):
+        def get_account_permissions(self) -> AccountPermissions:
+            self.native_account_uid = "demo-read-fallback"
+            return AccountPermissions(
+                can_read=True,
+                can_trade=True,
+                can_withdraw=False,
+                can_transfer=False,
+                raw_scopes=("read", "trade"),
+                response_keys=("readOnly",),
+            )
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_readonly_account_provider",
+        lambda _cfg: TradingKeyProvider(trade_client),
+    )
+    dedicated_service = BloFinSyncService(MagicMock(), dedicated)
+    monkeypatch.setattr(dedicated_service._snapshots, "add", keep)
+    monkeypatch.setattr(dedicated_service._audit, "record", lambda *_args, **_kwargs: None)
+    refused = dedicated_service.sync(organization_id=uuid4(), user_id=uuid4(), sync_origin="worker")
+    assert refused.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert refused.snapshot.provenance.get("error_type") == "ValueError"
+
+
+def test_demo_account_active_accepts_paper_exchange_demo_for_sync_and_orders() -> None:
+    assert demo_account_active(_trading_key_settings()) is True
+    assert demo_account_active(_trading_key_settings(blofin_readonly_sync_enabled=True)) is True
+    dedicated = _trading_key_settings(
+        blofin_readonly_sync_enabled=True,
+        blofin_readonly_api_key="fixture-reader",
+        blofin_readonly_api_secret="fixture-reader-secret",
+        blofin_readonly_api_passphrase="fixture-reader-pass",
+    )
+    assert demo_account_active(dedicated) is True
+    assert demo_account_active(readonly_settings()) is True
+    closed_host = readonly_settings().model_copy(
+        update={"blofin_demo_rest_base_url": "https://example.com"}
+    )
+    assert demo_account_active(closed_host) is False
+    real = _trading_key_settings().model_copy(update={"enable_real_trading": True})
+    assert demo_account_active(real) is False
+    assert real.real_trading_enabled is False
+
+
+def test_demo_key_fallback_prefers_a_complete_readonly_set_and_keeps_the_host_guard() -> None:
+    fallback = get_readonly_client(_trading_key_settings())
+    assert isinstance(fallback, BloFinReadOnlyClient)
+    assert fallback._api_key == "fixture-trading-key"
+    preferred = get_readonly_client(
+        _trading_key_settings(
+            blofin_readonly_sync_enabled=True,
+            blofin_readonly_api_key="fixture-reader",
+            blofin_readonly_api_secret="fixture-reader-secret",
+            blofin_readonly_api_passphrase="fixture-reader-pass",
+        )
+    )
+    assert preferred._api_key == "fixture-reader"
+    with pytest.raises(ExchangeDemoInactiveError):
+        get_readonly_client(_trading_key_settings(blofin_readonly_api_secret="partial-only"))
+    production = _trading_key_settings().model_copy(
+        update={"blofin_demo_rest_base_url": "https://openapi.blofin.com"}
+    )
+    with pytest.raises(ValueError, match="production"):
+        get_readonly_client(production)
 
 
 def test_closed_gates_skip_without_a_database(monkeypatch: pytest.MonkeyPatch) -> None:

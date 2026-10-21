@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     blofin_api_secret: str = Field(default="", repr=False)
     blofin_api_passphrase: str = Field(default="", repr=False)
     # Dedicated read-only demo sync credentials never open the execution gate.
+    # When this set is absent, snapshot and read sync may use the main demo
+    # key for GET requests only. A partial set does not fall back.
     blofin_readonly_sync_enabled: bool = False
     blofin_readonly_api_key: str = Field(default="", repr=False)
     blofin_readonly_api_secret: str = Field(default="", repr=False)
@@ -717,9 +719,46 @@ class Settings(BaseSettings):
         )
 
     @property
-    def blofin_worker_readonly_ready(self) -> bool:
-        """Unattended snapshot sync may use only the dedicated read-only credentials."""
+    def blofin_readonly_set_absent(self) -> bool:
+        """True when none of the dedicated read-only credential fields is set."""
+        return not (
+            self.blofin_readonly_api_key.strip()
+            or self.blofin_readonly_api_secret.strip()
+            or self.blofin_readonly_api_passphrase.strip()
+        )
+
+    @property
+    def blofin_read_sync_uses_dedicated_credentials(self) -> bool:
+        """The complete read-only set is selected. The demo key is not."""
         return self.blofin_readonly_sync_enabled and self.blofin_readonly_configured
+
+    @property
+    def blofin_demo_read_fallback_ready(self) -> bool:
+        """Main demo key may back GET reads only when the read-only set is absent.
+
+        Paper demo mode, demo trading disabled for real money, and the
+        allowlisted host are still required by the client. This property does
+        not authorize orders.
+        """
+        return (
+            self.blofin_readonly_set_absent
+            and self.execution_mode is ExecutionMode.PAPER
+            and not self.enable_real_trading
+            and self.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO
+            and self.blofin_demo_enabled
+            and self.blofin_demo_configured
+        )
+
+    @property
+    def blofin_worker_readonly_ready(self) -> bool:
+        """Unattended snapshot sync may read with the dedicated key or the demo key.
+
+        The demo key is used only when the read-only set is absent, and only
+        through the GET-only client.
+        """
+        return (
+            self.blofin_read_sync_uses_dedicated_credentials or self.blofin_demo_read_fallback_ready
+        )
 
     @property
     def blofin_demo_configured(self) -> bool:

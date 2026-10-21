@@ -213,6 +213,54 @@ def test_dashboard_uses_existing_execution_demo_account_sync(demo_client, monkey
     assert len(seen) == 4
 
 
+def test_dashboard_read_sync_uses_the_demo_key_for_gets_when_readonly_is_absent(
+    demo_client, monkeypatch
+):
+    client, _, settings = demo_client
+    configure(settings)
+    settings.blofin_readonly_sync_enabled = False
+    settings.blofin_readonly_api_key = ""
+    settings.blofin_readonly_api_secret = ""
+    settings.blofin_readonly_api_passphrase = ""
+    settings.exchange_mode = ExchangeMode.PAPER_EXCHANGE_DEMO
+    settings.blofin_demo_enabled = True
+    settings.blofin_api_key = "fixture-key"
+    settings.blofin_api_secret = "fixture-secret"
+    settings.blofin_api_passphrase = "fixture-pass"
+    seen: list[tuple[str, str]] = []
+
+    def provider(cfg):
+        assert cfg.blofin_demo_read_fallback_ready is True
+        assert cfg.blofin_read_sync_uses_dedicated_credentials is False
+        return get_readonly_account_provider(
+            cfg,
+            transport=transport(seen, identity={"readOnly": 0, "uid": "dashboard-native-uid"}),
+        )
+
+    monkeypatch.setattr("app.services.blofin_sync_service.get_readonly_account_provider", provider)
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    owner = _login(client, "at037-a@test.example")
+    data = client.post("/dashboard/demo-account/refresh", headers=owner).json()
+    assert data["status"] == "ok" and data["position_count"] == 1
+    assert data["read_only"] is True
+    assert seen == [
+        ("GET", path)
+        for path in (
+            "/api/v1/user/query-apikey",
+            "/api/v1/account/balance",
+            "/api/v1/account/positions",
+            "/api/v1/market/instruments",
+        )
+    ]
+
+
 def test_failed_attempt_preserves_successful_snapshot_with_stale_status(demo_client, monkeypatch):
     client, _, settings = demo_client
     configure(settings)
