@@ -262,6 +262,10 @@ class Settings(BaseSettings):
     # use organization-owned database rows, shared by API and dedicated worker.
     watcher_watchlist_path: str = ""
     watcher_paper_poll_interval_seconds: float = Field(default=15.0, ge=1.0, le=3600.0)
+    # Extra seconds to wait after each 15m close before a Watcher scan evaluates
+    # evidence. Zero defers to the Binance REST settlement guard only. Non-zero
+    # sleeps when the wall clock is still inside that post-close window.
+    watcher_paper_bar_close_delay_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
     # Optional tenant pin for controlled staging acceptance. Empty preserves
     # the normal round-robin tenant scheduler.
     watcher_paper_organization_id: str = ""
