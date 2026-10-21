@@ -21,6 +21,7 @@ from app.strategy_brain.sfp.contracts import (
     SfpDetection,
     SfpScan,
     SfpSpec,
+    SfpTradePlan,
     StructuralLevel,
     SweepDirection,
     SweepEvent,
@@ -29,6 +30,7 @@ from app.strategy_brain.sfp.contracts import (
 )
 from app.strategy_brain.sfp.levels import derive_levels, level_evidence_fresh, validate_level
 from app.strategy_brain.sfp.quality import quality_components
+from app.strategy_brain.sfp.trade_plan import derive_sfp_trade_plan
 
 
 @dataclass
@@ -47,6 +49,8 @@ class _Episode:
     reclaim_extreme: Decimal | None = None
     outside_closes: int = 0
     last_observed_at: datetime | None = None
+    trade_plan: SfpTradePlan | None = None
+    plan_resolved: bool = False
 
 
 def _known(level: StructuralLevel, bar: OhlcvBar, spec: SfpSpec) -> bool:
@@ -94,6 +98,22 @@ def _emit(
         rejection_bar=bars[rejection_index],
         rejection_observation=observations[rejection_index],
     )
+    if (
+        episode.state is BrainSetupState.CONFIRMED
+        and episode.confirmation_id == observation.observation_id
+        and not episode.plan_resolved
+    ):
+        # Entry is this confirmation close. Later intact bars keep this plan.
+        episode.trade_plan = derive_sfp_trade_plan(
+            direction=spec.direction,
+            entry=bar.close,
+            sweep_extreme=episode.sweep.extreme,
+            reference_price=episode.sweep.reference_level.price,
+            stop_buffer=spec.parameters.stop_buffer,
+            opposing_levels=levels,
+        )
+        episode.plan_resolved = True
+    trade_plan = episode.trade_plan if episode.state is BrainSetupState.CONFIRMED else None
     digest = canonical_sha256(
         {
             "setup": episode.setup_id,
@@ -136,6 +156,7 @@ def _emit(
         reclaim_observation_id=episode.reclaim_id,
         confirmation_observation_id=episode.confirmation_id,
         quality=quality,
+        trade_plan=trade_plan,
         reason_codes=reasons,
     )
 

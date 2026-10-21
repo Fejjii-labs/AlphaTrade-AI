@@ -26,6 +26,8 @@ def test_v2_defaults_are_a_new_version_and_v1_does_not_approach() -> None:
     assert current.minimum_sweep_depth == Decimal("0.002")
     assert current.maximum_sweep_depth == Decimal("0.003")
     assert current.approach_proximity == Decimal("0.001")
+    assert current.stop_buffer == Decimal("0.001")
+    assert parameters().stop_buffer == Decimal("0.001")
     assert parameters().approach_proximity is None
     assert parameters().version == "sfp-research/v1"
 

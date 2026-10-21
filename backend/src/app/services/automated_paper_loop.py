@@ -401,6 +401,23 @@ class AutomatedPaperLoop:
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
             )
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        if isinstance(policy.authored_spec, SfpSpec):
+            # Nearest structure can sit inside 1R. The existing gross floor still
+            # refuses that entry; record the skip instead of rolling the candidate back.
+            from app.services.planned_reward_risk import PlannedRewardRiskError, planned_reward_risk
+
+            try:
+                planned_reward_risk(terms)
+            except PlannedRewardRiskError as exc:
+                return AutomatedPaperLoopProof(
+                    stage="skipped",
+                    reason_code=exc.reason,
+                    candidate_id=candidate.candidate_id,
+                    eligibility_id=eligibility.eligibility.eligibility_id,
+                    eligibility_state=state.value,
+                )
         # The open row is written only after the claim accepts. A refused claim
         # must not leave an outcome of open.
         self._pending_risk_records = records
@@ -1326,6 +1343,44 @@ def _eligibility_command(
     )
 
 
+def _sfp_structural_plan(
+    assembled: AssembledCanonicalEvidence,
+    spec: object,
+) -> tuple[Decimal, Decimal, Decimal, UUID] | str:
+    """Read the confirmed SFP plan. Sizing and tick rounding stay with the caller."""
+
+    from app.schemas.nested_continuation import BrainSetupState
+    from app.signal_fusion.enums import EvidenceRole
+    from app.strategy_brain.sfp.contracts import SfpSpec
+    from app.strategy_brain.sfp.detector import detect_sfp
+    from app.strategy_brain.sfp_runtime.assessment import select_detection
+
+    if not isinstance(spec, SfpSpec):
+        return "execution_policy_unsupported"
+    observations = tuple(
+        observation
+        for observation, role in zip(
+            assembled.assessment_command.public_observations,
+            assembled.assessment_command.selected_roles,
+            strict=True,
+        )
+        if role is EvidenceRole.STRUCTURE
+    )
+    scan = detect_sfp(
+        assembled.bundle.bars_15m,
+        observations,
+        spec,
+        evaluated_at=assembled.evaluated_at,
+    )
+    detection = select_detection(scan, assembled.bundle.bars_15m)
+    if detection is None or detection.state is not BrainSetupState.CONFIRMED:
+        return "setup_not_confirmed"
+    plan = detection.trade_plan
+    if plan is None:
+        return "sfp_trade_plan_invalid"
+    return plan.entry, plan.stop, plan.take_profit, detection.setup_id
+
+
 def _plan_terms(
     *,
     candidate: Candidate,
@@ -1346,31 +1401,39 @@ def _plan_terms(
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
 ) -> TradePlanRevisionCreate | str:
-    from app.strategy_brain.sfp.contracts import SfpSpec
-
-    if isinstance(policy.authored_spec, SfpSpec):
-        return "sfp_execution_plan_not_authorized"
-    quote = assembled.current_price
-    if quote is None:
-        return "evidence_unavailable"
-    entry = quote.price
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.strategy_brain.detector import detect_nested
     from app.strategy_brain.records import scoped_setup_id
+    from app.strategy_brain.sfp.contracts import SfpSpec
 
-    nested = isinstance(policy.authored_spec, NestedContinuationSpec)
-    nested_target = None
-    if isinstance(policy.authored_spec, NestedContinuationSpec):
-        events = detect_nested(
-            assembled.bundle.bars_15m, policy.authored_spec, evaluated_at=assembled.evaluated_at
-        )
+    quote = assembled.current_price
+    if quote is None:
+        return "evidence_unavailable"
+    spec = policy.authored_spec
+    sfp = isinstance(spec, SfpSpec)
+    nested = isinstance(spec, NestedContinuationSpec)
+    structural_setup_id: UUID | None = None
+    nested_target: Decimal | None = None
+    sfp_target: Decimal | None = None
+    entry: Decimal
+    stop: Decimal | None
+    if sfp:
+        resolved = _sfp_structural_plan(assembled, spec)
+        if isinstance(resolved, str):
+            return resolved
+        entry, stop, sfp_target, structural_setup_id = resolved
+    elif isinstance(spec, NestedContinuationSpec):
+        events = detect_nested(assembled.bundle.bars_15m, spec, evaluated_at=assembled.evaluated_at)
         if not events or events[-1].state.value != "CONFIRMED":
             return "setup_not_confirmed"
+        entry = quote.price
         stop = events[-1].stop
         nested_target = events[-1].targets[0] if events[-1].targets else None
+        structural_setup_id = events[-1].setup_id
     else:
         from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
 
+        entry = quote.price
         if not isinstance(policy.evaluation_params, FirstSliceEvaluationParams):
             return "execution_policy_unsupported"
         stop = first_slice_short_invalidation_price(
@@ -1390,7 +1453,12 @@ def _plan_terms(
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)
-    target = nested_target if nested else entry - distance
+    if sfp:
+        target = sfp_target
+    elif nested:
+        target = nested_target
+    else:
+        target = entry - distance
     if (
         target is None
         or target <= 0
@@ -1475,18 +1543,28 @@ def _plan_terms(
         freshness=freshness,
         symbol=quote.provider_symbol,
         tick_size=assembled.bundle.tick_size,
-        target_formula="nested-measured-impulse" if nested else "paper-internal-1r",
+        target_formula=(
+            "sfp-nearest-opposing-structure"
+            if sfp
+            else "nested-measured-impulse"
+            if nested
+            else "paper-internal-1r"
+        ),
         presentation={
             "channel": AuthorizationChannel.API.value,
-            "display_title": "Internal paper confirmed setup",
+            "display_title": (
+                "Internal paper SFP structure plan" if sfp else "Internal paper confirmed setup"
+            ),
             "strategy_id": str(policy.strategy_id),
             "strategy_version_id": str(candidate.strategy_version_id),
             "setup_id": str(
                 scoped_setup_id(
-                    policy.organization_id, policy.strategy_version_id, events[-1].setup_id
+                    policy.organization_id,
+                    policy.strategy_version_id,
+                    structural_setup_id,
                 )
             )
-            if nested
+            if structural_setup_id is not None
             else str(candidate.setup_definition_id),
             "evidence_reference": candidate.evidence_window_hash,
             "decision_reference": str(eligibility_id),

@@ -32,7 +32,7 @@ from app.signal_fusion.adapters import AssessmentCommand, evidence_window_from_a
 from app.signal_fusion.enums import EvidenceAdapterKind, EvidenceRole
 from app.signal_fusion.first_slice_types import FirstSliceEvidenceBundle
 from app.signal_fusion.types import HalfOpenInterval, TriggerIdentity
-from app.strategy_brain.detector import NAMESPACE, detect_nested
+from app.strategy_brain.detector import NAMESPACE, NestedDetection, detect_nested
 from app.strategy_brain.records import attach_paper_result, record_detections, scoped_setup_id
 
 logger = structlog.get_logger(__name__)
@@ -285,12 +285,14 @@ def record_paper_link(
     assembled, policy = last
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.signal_fusion.enums import EvidenceRole
-    from app.strategy_brain.sfp.contracts import SfpSpec
+    from app.strategy_brain.sfp.contracts import SfpDetection, SfpSpec
     from app.strategy_brain.sfp.detector import detect_sfp
     from app.strategy_brain.sfp_runtime.assessment import select_detection
 
     if not isinstance(policy.authored_spec, (NestedContinuationSpec, SfpSpec)):
         return
+    events: tuple[SfpDetection, ...] | tuple[NestedDetection, ...]
+    nested_latest: NestedDetection | None = None
     if isinstance(policy.authored_spec, SfpSpec):
         observations = tuple(
             o
@@ -310,9 +312,11 @@ def record_paper_link(
         detection = select_detection(scan, assembled.bundle.bars_15m)
         events = (detection,) if detection is not None else ()
     else:
-        events = detect_nested(
+        nested_events = detect_nested(
             assembled.bundle.bars_15m, policy.authored_spec, evaluated_at=assembled.evaluated_at
         )
+        events = nested_events
+        nested_latest = nested_events[-1] if nested_events else None
     if not events:
         return
     identity = scoped_setup_id(
@@ -333,8 +337,10 @@ def record_paper_link(
     # The Nested-only alert adapter cannot interpret SFP detection fields.
     if isinstance(policy.authored_spec, SfpSpec):
         return None
+    if nested_latest is None:
+        return None
 
-    latest = events[-1]
+    latest = nested_latest
     if (
         latest.state.value != "CONFIRMED"
         or latest.confirmed_index != len(assembled.bundle.bars_15m) - 1
@@ -351,4 +357,7 @@ def record_paper_link(
         decision=report.paper_loop_reason or "not_evaluated",
         risk_state=report.eligibility_state or "not_evaluated",
         reasons=tuple(dict.fromkeys([*latest.reason_codes, report.paper_loop_reason])),
+        entry=latest.entry,
+        stop=latest.stop,
+        target=latest.targets[0] if latest.targets else None,
     )

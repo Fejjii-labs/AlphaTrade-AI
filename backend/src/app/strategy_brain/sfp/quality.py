@@ -17,6 +17,7 @@ from app.strategy_brain.sfp.contracts import (
     SweepEvent,
 )
 from app.strategy_brain.sfp.levels import level_evidence_fresh
+from app.strategy_brain.sfp.trade_plan import nearest_opposing_level
 
 
 def unavailable(
@@ -71,14 +72,7 @@ def quality_components(
         and abs(level.price - reference.price) / reference.price <= p.htf_alignment_tolerance
     ]
     htf = [level for level in matching_htf if level_evidence_fresh(level)]
-    targets = [
-        level
-        for level in levels
-        if level.kind.support != support
-        and level_evidence_fresh(level)
-        and (level.price > bar.close if support else level.price < bar.close)
-    ]
-    target = min(targets, key=lambda level: abs(level.price - bar.close)) if targets else None
+    target = nearest_opposing_level(levels, support=support, price=bar.close)
     prior = history[-p.quality_lookback :]
     prior_obs = history_observations[-p.quality_lookback :]
     prior_ids = tuple(o.observation_id for o in prior_obs)

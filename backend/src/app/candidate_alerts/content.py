@@ -6,6 +6,8 @@ No profitability claim. No LLM-authored setup truth.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.candidate_alerts.contracts import (
     MAX_ALERT_TEXT_BYTES_GUARD,
     CandidateAlertContent,
@@ -30,6 +32,14 @@ _PROFIT_CLAIMS = (
     "will win",
     "expected return",
 )
+
+
+def _price_text(value: object) -> str:
+    if value is None:
+        return "unavailable"
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    return str(value)
 
 
 def canonical_setup_name(assessment: SetupAssessment) -> str:
@@ -122,6 +132,9 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
                 f"Timeframe: {content.trigger_context.timeframe.value}",
                 f"Nested stage: {nested.stage}",
                 f"Direction: {content.direction.value}",
+                f"Entry: {_price_text(nested.entry)}",
+                f"Stop: {_price_text(nested.stop)}",
+                f"Target: {_price_text(nested.target)}",
                 f"Strategy version: {nested.strategy_version_id}",
                 f"Setup ID: {nested.setup_id}",
                 f"Evidence timestamp: {nested.evidence_at.isoformat()}",

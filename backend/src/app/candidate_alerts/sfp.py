@@ -44,6 +44,10 @@ class SfpAlertSummary(CanonicalModel):
     missing_evidence: tuple[str, ...]
     risk_state: str
     risk_reasons: tuple[str, ...] = ()
+    # Present only when a confirmed setup has a valid structural paper plan.
+    entry: str | None = None
+    stop: str | None = None
+    take_profit: str | None = None
     paper_mode: Literal[True] = True
     # Empty salt keeps the historical duplicate key. Approach alerts set a bucket.
     duplicate_salt: str = ""
@@ -96,6 +100,14 @@ class SfpAlertSummary(CanonicalModel):
                     f"Event timestamp: {self.occurred_at.isoformat()}",
                 )
             )
+        plan: tuple[str, ...] = ()
+        if self.entry is not None and self.stop is not None and self.take_profit is not None:
+            plan = (
+                f"Entry: {self.entry}",
+                f"Stop: {self.stop}",
+                f"Take-profit: {self.take_profit}",
+                "Paper trade plan. Real trading is not authorized.",
+            )
         return "\n".join(
             (
                 f"PAPER MODE — {self.event_type.value.replace('_', ' ')}",
@@ -103,6 +115,7 @@ class SfpAlertSummary(CanonicalModel):
                 f"Structural level: {self.level_type} {self.structural_level}",
                 f"Sweep extreme: {self.sweep_extreme}",
                 f"Reclaim state: {self.reclaim_state}",
+                *plan,
                 f"Strategy version: {self.strategy_version_id}",
                 f"Setup ID: {self.setup_id}",
                 f"Evidence timestamp: {self.evidence_at.isoformat()}",

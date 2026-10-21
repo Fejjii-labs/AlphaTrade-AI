@@ -468,7 +468,9 @@ def postgres_store():
         yield session, org, user, factory
 
 
-def runtime_world(postgres_store, *, bearish=False, risk_block=False, forming=False, start=START):
+def runtime_world(
+    postgres_store, *, bearish=False, risk_block=False, forming=False, start=START, prices=None
+):
     from app.db.models import DailyRiskState, ExecutionAccount, Membership
     from app.evidence_pipeline.watcher_port import AssemblingWatcherScanEvidence
     from app.schemas.common import MembershipRole
@@ -492,7 +494,7 @@ def runtime_world(postgres_store, *, bearish=False, risk_block=False, forming=Fa
             enabled=True,
         )
     )
-    path = BEAR if bearish else BULL
+    path = prices if prices is not None else (BEAR if bearish else BULL)
     bars, _ = padded_evidence(path, start=start)
     # Actual observations are acquired in chronological scans; no historical backdating.
     assemble_prefix(session, policy, bars[:260], replay=False)
@@ -562,11 +564,20 @@ def runtime_world(postgres_store, *, bearish=False, risk_block=False, forming=Fa
     )
 
 
+# The shared BULL/BEAR swing sits inside the unchanged 1R floor. These copies
+# move only that opposing swing so the nearest level clears the floor.
+BULL_TRADABLE = [*BULL[:3], (103, 112, 102, 104), *BULL[4:]]
+BEAR_TRADABLE = [*BEAR[:3], (97, 98, 88, 96), *BEAR[4:]]
+
+
 @pytest.mark.parametrize("bearish", [False, True])
-def test_governed_candidate_restart_replay_uses_existing_authority_and_never_executes(
+def test_governed_candidate_restart_replay_opens_one_internal_paper_trade(
     postgres_store, bearish, monkeypatch
 ):
-    from app.services.execution_service import ExecutionService
+    from decimal import Decimal
+
+    from app.core.config import ExchangeMode
+    from app.db.strategy_brain import BrainSetupRow
     from app.signal_fusion.lifecycle import CandidateLifecycleService
 
     calls = []
@@ -577,28 +588,31 @@ def test_governed_candidate_restart_replay_uses_existing_authority_and_never_exe
         return create(self, command)
 
     monkeypatch.setattr(CandidateLifecycleService, "create_from_confirmed_setup", canonical_create)
-    monkeypatch.setattr(
-        ExecutionService,
-        "execute_paper_plan",
-        lambda *args, **kwargs: pytest.fail("SFP must not execute"),
-    )
     from app.db.canonical_candidates import CanonicalCandidateRow
     from app.db.canonical_eligibility import ActionEligibilityEvaluationRow
     from app.db.models import ExecutionFillFact, JournalTrade, TradePlanRevision
 
-    runtime, restart, policy, now = runtime_world(postgres_store, bearish=bearish)
+    runtime, restart, policy, now = runtime_world(
+        postgres_store,
+        bearish=bearish,
+        prices=BEAR_TRADABLE if bearish else BULL_TRADABLE,
+    )
+    assert runtime._settings.enable_real_trading is False
+    assert runtime._settings.real_trading_enabled is False
+    assert runtime._settings.exchange_mode is ExchangeMode.PAPER_INTERNAL
     report = runtime.run_cycle()
     assert report.scans and report.scans[0].candidate_ids, report
     assert report.scans[0].nested_alert is None
     scan = report.scans[0]
     assert len(calls) == 1 and calls[0].assessment.state is SetupAssessmentState.CONFIRMED_SETUP
-    assert scan.paper_loop_reason == "sfp_execution_plan_not_authorized", scan
+    assert scan.paper_loop_stage == "filled" and scan.paper_loop_reason == "open_journal", scan
     assert scan.eligibility_id and scan.eligibility_state == "eligible", scan
     session, org, _, factory = postgres_store
     session.expire_all()
     assert session.scalar(select(func.count()).select_from(CanonicalCandidateRow)) == 1
-    for table in (TradePlanRevision, ExecutionFillFact, JournalTrade):
-        assert session.scalar(select(func.count()).select_from(table)) == 0
+    assert session.scalar(select(func.count()).select_from(TradePlanRevision)) == 1
+    assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 1
+    assert session.scalar(select(func.count()).select_from(JournalTrade)) == 1
     candidate_id = scan.candidate_ids[0]
     candidate = session.get(CanonicalCandidateRow, candidate_id)
     assert candidate.idempotency_key.startswith("watcher:sfp:")
@@ -610,12 +624,28 @@ def test_governed_candidate_restart_replay_uses_existing_authority_and_never_exe
     assert len(linked) == 1 and linked[0]["candidate_id"] == str(candidate_id)
     assert linked[0]["risk_state"] == "eligible"
     assert linked[0]["condition"] == "confirmed_sfp"
+    journal = session.get(JournalTrade, scan.journal_trade_id)
+    assert journal is not None and journal.status.value == "open"
+    setup = session.get(BrainSetupRow, UUID(linked[0]["setup_id"]))
+    plan = setup.payload["trade_plan"]
+    entry = Decimal(plan["entry"])
+    assert journal.planned_entry_price == journal.entry_price == entry
+    raw_stop = Decimal(plan["stop"])
+    if bearish:
+        assert entry < raw_stop <= journal.planned_stop_price
+    else:
+        assert journal.planned_stop_price <= raw_stop < entry
+    assert abs(journal.planned_stop_price - raw_stop) <= Decimal("0.1")
+    assert Decimal(journal.planned_targets[0]["price"]) == Decimal(plan["take_profit"])
+    revision = session.get(TradePlanRevision, scan.trade_plan_revision_id)
+    assert revision is not None and revision.execution_venue == "PAPER_INTERNAL"
     # Fresh runtime and fresh SQL sessions use durable receipts and episode identity.
     replay = restart().run_cycle()
     assert replay.scans and (replay.scans[0].candidate_ids in ((), (candidate_id,)))
     with factory() as restarted:
         assert restarted.scalar(select(func.count()).select_from(CanonicalCandidateRow)) == 1
-        assert restarted.scalar(select(func.count()).select_from(ExecutionFillFact)) == 0
+        assert restarted.scalar(select(func.count()).select_from(ExecutionFillFact)) == 1
+        assert restarted.scalar(select(func.count()).select_from(JournalTrade)) == 1
         assert overview(restarted, organization_id=uuid4())["setups"] == []
 
 
