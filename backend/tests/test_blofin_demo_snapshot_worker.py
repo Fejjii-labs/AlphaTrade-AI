@@ -700,10 +700,6 @@ def test_supervisor_reports_snapshot_health_when_gates_are_closed(
         raise AssertionError("skipped snapshot opened a database")
 
     monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
-    monkeypatch.setattr(
-        "app.services.arming_visibility.publish_boot_arming_posture",
-        lambda *_args, **_kwargs: None,
-    )
     worker = build_paper_worker_supervisor(
         _closed_settings().model_copy(update={"blofin_demo_snapshot_sync_enabled": True})
     )
