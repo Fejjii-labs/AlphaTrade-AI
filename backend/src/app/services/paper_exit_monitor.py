@@ -139,6 +139,8 @@ class ExitMonitorAlert:
     severity: str
     message: str
     fields: dict[str, str]
+    # Informational paper trade exits use ``message`` as the full Telegram body.
+    telegram_verbatim: bool = False
 
     def as_log(self) -> dict[str, str]:
         payload = {"code": self.code, "severity": self.severity, "message": self.message}

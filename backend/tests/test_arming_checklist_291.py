@@ -376,12 +376,7 @@ def test_external_check_reports_missing_and_stale_heartbeats_once(
     assert heartbeat_status(fresh) == "fresh"
     assert heartbeat_alert(fresh) is None
     assert raise_heartbeat_alert(settings, fresh, now=_NOW, ledger=ledger) is False
-    blob = "\n".join(sent)
-    assert _TOKEN not in blob
-    assert _CHAT not in blob
-    assert "pnl" not in blob.lower()
-    assert "worker_heartbeat_missing" in blob
-    assert "worker_heartbeat_stale" in blob
+    assert sent == []
 
 
 def test_safety_alert_text_drops_secrets_and_pnl_amounts() -> None:

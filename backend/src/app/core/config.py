@@ -183,6 +183,19 @@ class Settings(BaseSettings):
     # older environment value still boots.
     telegram_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
+    # Safety-alert codes that may use ``telegram_bot_token`` / ``telegram_chat_id``.
+    # Monitor-health warnings stay in logs and ``GET /health/paper-worker``.
+    telegram_safety_alert_allowlist: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "kill_switch_activated",
+            "backfill_loss",
+            "stale_live_loss",
+            "stop_hit",
+            "tp_hit",
+            "paper_trade_opened",
+            "paper_trade_closed",
+        ]
+    )
     email_alerts_enabled: bool = False
 
     # Interactive provider voice stays unavailable without a verified finite
@@ -522,6 +535,14 @@ class Settings(BaseSettings):
         """Allow a comma-separated string for ``JOURNAL_ATTACHMENT_ALLOWED_TYPES``."""
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("telegram_safety_alert_allowlist", mode="before")
+    @classmethod
+    def _split_telegram_safety_alert_allowlist(cls, value: object) -> object:
+        """Allow a comma-separated string for ``TELEGRAM_SAFETY_ALERT_ALLOWLIST``."""
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
     @field_validator("provider_mode", mode="before")

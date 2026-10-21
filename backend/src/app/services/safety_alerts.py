@@ -95,6 +95,17 @@ _COOLDOWN_SECONDS = {
     "exit_monitor_heartbeat_stale": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
+_DEFAULT_TELEGRAM_SAFETY_ALLOWLIST = frozenset(
+    {
+        "kill_switch_activated",
+        "backfill_loss",
+        "stale_live_loss",
+        "stop_hit",
+        "tp_hit",
+        "paper_trade_opened",
+        "paper_trade_closed",
+    }
+)
 _AMOUNT = re.compile(
     r"(?i)\b(?:net[_\s-]?pnl|pnl|p&l|profit|loss amount)\b\s*[:=]?\s*-?\d+(?:\.\d+)?"
 )
@@ -138,6 +149,16 @@ def telegram_safety_configured(settings: Settings) -> bool:
     return bool(settings.telegram_bot_token.strip() and settings.telegram_chat_id.strip())
 
 
+def safety_alert_telegram_allowed(settings: Settings, code: str) -> bool:
+    """True when this safety-alert code may be sent to Telegram."""
+
+    configured = settings.telegram_safety_alert_allowlist
+    allowlist = (
+        frozenset(configured) if configured else _DEFAULT_TELEGRAM_SAFETY_ALLOWLIST
+    )
+    return code in allowlist
+
+
 def deliver_safety_alert(
     settings: Settings,
     alert: ExitMonitorAlert,
@@ -157,10 +178,16 @@ def deliver_safety_alert(
     key = alert.fields.get("dedup_key") or alert.code
     if _recently_sent(key, moment, _cooldown(alert.code)):
         return False
+    if not safety_alert_telegram_allowed(settings, alert.code):
+        logger.info("safety_alert_telegram_suppressed", code=alert.code)
+        return False
     if not telegram_safety_configured(settings):
         logger.warning("safety_alert_telegram_unconfigured", code=alert.code)
         return False
-    text = safety_alert_message(code=alert.code, message=alert.message, fields=alert.fields)
+    if alert.telegram_verbatim:
+        text = alert.message
+    else:
+        text = safety_alert_message(code=alert.code, message=alert.message, fields=alert.fields)
     payload = AlertDeliveryPayload(
         alert_id=key[:120],
         organization_id=alert.fields.get("organization_id") or "system",
@@ -168,6 +195,7 @@ def deliver_safety_alert(
         severity=alert.severity,
         message=text,
         dedup_key=key[:200],
+        use_message_verbatim=alert.telegram_verbatim,
     )
     result = TelegramAlertDeliveryProvider(settings).deliver(payload, bypass_enable_check=True)
     if not result.success:
@@ -390,6 +418,22 @@ def kill_switch_page_recently_sent(key: str, now: datetime) -> bool:
     """True when this process already sent this kill-switch version."""
 
     return _recently_sent(key, now, _cooldown("kill_switch_activated"))
+
+
+def safety_alert_observation_recently_recorded(
+    dedup_key: str,
+    code: str,
+    now: datetime,
+) -> bool:
+    """True when this process already surfaced this alert inside the cooldown."""
+
+    return _recently_sent(dedup_key, now, _cooldown(code))
+
+
+def record_safety_alert_observation(dedup_key: str, now: datetime) -> None:
+    """Remember one surfaced alert for in-process health dedup."""
+
+    _remember(dedup_key, now)
 
 
 def _kill_switch_dedup_parts(alert: ExitMonitorAlert) -> tuple[str, int] | None:
