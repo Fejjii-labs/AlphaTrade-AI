@@ -30,7 +30,7 @@ from app.market_contracts.observation import observation_from_ohlcv
 from app.services.canonical_serialization import canonical_sha256
 from app.signal_fusion.adapters import AssessmentCommand, evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceAdapterKind, EvidenceRole
-from app.signal_fusion.first_slice_types import FirstSliceEvidenceBundle
+from app.signal_fusion.first_slice_types import FIRST_SLICE_TICK_SIZE, FirstSliceEvidenceBundle
 from app.signal_fusion.types import HalfOpenInterval, TriggerIdentity
 from app.strategy_brain.detector import NAMESPACE, NestedDetection, detect_nested
 from app.strategy_brain.records import attach_paper_result, record_detections, scoped_setup_id
@@ -136,7 +136,9 @@ def assemble_ohlcv_family(
             ordered = sorted(pairs.values(), key=lambda pair: pair[0].interval_start)
             bars = tuple(b for b, _ in ordered)
             observations = tuple(o for _, o in ordered)
-        scan = detect_sfp(bars, observations, spec, evaluated_at=now)
+        scan = detect_sfp(
+            bars, observations, spec, evaluated_at=now, tick_size=FIRST_SLICE_TICK_SIZE
+        )
         latest = select_detection(scan, bars)
         events = scan.events
     else:
@@ -260,7 +262,7 @@ def assemble_ohlcv_family(
             else spec.parameters.confirmation_window,
             setup_trigger_bar_hash=trigger.content_hash,
         ),
-        bundle=FirstSliceEvidenceBundle(bars_15m=bars),
+        bundle=FirstSliceEvidenceBundle(bars_15m=bars, tick_size=FIRST_SLICE_TICK_SIZE),
         assessment_command=command,
         evidence_window=window,
         evidence_window_hash=window.content_hash,
@@ -308,6 +310,7 @@ def record_paper_link(
             observations,
             policy.authored_spec,
             evaluated_at=assembled.evaluated_at,
+            tick_size=assembled.bundle.tick_size,
         )
         detection = select_detection(scan, assembled.bundle.bars_15m)
         events = (detection,) if detection is not None else ()

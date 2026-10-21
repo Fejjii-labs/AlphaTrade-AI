@@ -123,13 +123,14 @@ def evidence(
     return tuple(bars), tuple(observations)
 
 
-def scan(prices=BULL, *, bearish=False, config=None, **kwargs):
+def scan(prices=BULL, *, bearish=False, config=None, tick_size=None, **kwargs):
     bars, observations = evidence(prices, **kwargs)
     return detect_sfp(
         bars,
         observations,
         config or spec(bearish=bearish),
         evaluated_at=observations[-1].observed_at,
+        tick_size=tick_size,
     )
 
 
@@ -488,6 +489,9 @@ def test_structural_buffer_exact_boundary_is_intact_then_breach_invalidates():
         {"expiry_bars": 0},
         {"structural_invalidation_buffer": "1"},
         {"stop_buffer": "1"},
+        {"min_stop_ticks": -1},
+        {"min_stop_atr_multiple": "-1"},
+        {"min_stop_atr_multiple": "100"},
         {"minimum_level_significance": True},
         {"minimum_sweep_depth": 0.02},
         {"maximum_sweep_depth": "NaN"},
@@ -843,6 +847,37 @@ def test_bearish_sfp_plan_is_beyond_the_sweep_high():
     assert plan.entry == Decimal("96")
     assert plan.stop == Decimal("102") + Decimal("100") * Decimal("0.001")
     assert plan.take_profit == Decimal("95")
+
+
+def test_coarse_tick_widens_the_stop_past_the_percent_buffer():
+    plan = at_level(scan(tick_size=Decimal("1")))[-1].trade_plan
+    assert plan is not None
+    # Default is one tick. 1.0 is larger than 0.1% of the 100 reference.
+    assert plan.stop == Decimal("97")
+    wider = at_level(scan(config=spec(min_stop_ticks=4), tick_size=Decimal("1")))[-1].trade_plan
+    assert wider is not None and wider.stop == Decimal("94")
+    assert wider.entry == plan.entry == Decimal("104")
+    assert wider.take_profit == plan.take_profit
+
+
+def test_atr_multiple_uses_the_larger_distance_and_refuses_when_atr_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: Decimal("3"),
+    )
+    atr_plan = at_level(scan(config=spec(min_stop_atr_multiple="1")))[-1].trade_plan
+    assert atr_plan is not None and atr_plan.stop == Decimal("95")
+    both = at_level(
+        scan(config=spec(min_stop_ticks=4, min_stop_atr_multiple="1"), tick_size=Decimal("1"))
+    )[-1].trade_plan
+    assert both is not None and both.stop == Decimal("94")
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: None,
+    )
+    missing = at_level(scan(config=spec(min_stop_atr_multiple="1")))[-1]
+    assert missing.state is BrainSetupState.CONFIRMED
+    assert missing.trade_plan is None
 
 
 def test_confirmed_sfp_without_opposing_structure_or_positive_stop_has_no_plan():

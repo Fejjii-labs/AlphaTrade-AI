@@ -798,6 +798,7 @@ class AutomatedPaperLoop:
             breaker_refusing=breaker_refusing,
             risk_records=risk_records,
             fixed_risk_percent=fixed_risk_percent,
+            internal_paper_sfp=True,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -1371,6 +1372,7 @@ def _sfp_structural_plan(
         observations,
         spec,
         evaluated_at=assembled.evaluated_at,
+        tick_size=assembled.bundle.tick_size,
     )
     detection = select_detection(scan, assembled.bundle.bars_15m)
     if detection is None or detection.state is not BrainSetupState.CONFIRMED:
@@ -1379,6 +1381,30 @@ def _sfp_structural_plan(
     if plan is None:
         return "sfp_trade_plan_invalid"
     return plan.entry, plan.stop, plan.take_profit, detection.setup_id
+
+
+def _sfp_quote_refusal(
+    *,
+    quote: Decimal,
+    stop: Decimal,
+    target: Decimal,
+    is_long: bool,
+) -> str | None:
+    """Refuse a live quote that is already through the plan, or a rebased sub-1R.
+
+    The structural entry stays the confirmation close. The paper fill is this
+    quote, with the same stop and target. A quote on the stop or the target has
+    no remaining distance. Exactly 1R is still allowed.
+    """
+
+    beyond = (quote <= stop or quote >= target) if is_long else (quote >= stop or quote <= target)
+    if beyond:
+        return "sfp_quote_beyond_plan"
+    reward = (target - quote) if is_long else (quote - target)
+    risk = (quote - stop) if is_long else (stop - quote)
+    if reward < risk:
+        return "sfp_quote_reward_risk_below_minimum"
+    return None
 
 
 def _plan_terms(
@@ -1400,16 +1426,21 @@ def _plan_terms(
     risk_records: list[object] | None = None,
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
+    internal_paper_sfp: bool = False,
 ) -> TradePlanRevisionCreate | str:
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.strategy_brain.detector import detect_nested
     from app.strategy_brain.records import scoped_setup_id
     from app.strategy_brain.sfp.contracts import SfpSpec
 
+    spec = policy.authored_spec
+    # BloFin demo and every other caller keep this refusal. Only the internal
+    # paper loop opts in, and it still cannot route the plan to a live venue.
+    if isinstance(spec, SfpSpec) and not internal_paper_sfp:
+        return "sfp_execution_plan_not_authorized"
     quote = assembled.current_price
     if quote is None:
         return "evidence_unavailable"
-    spec = policy.authored_spec
     sfp = isinstance(spec, SfpSpec)
     nested = isinstance(spec, NestedContinuationSpec)
     structural_setup_id: UUID | None = None
@@ -1450,6 +1481,16 @@ def _plan_terms(
         if is_long
         else _ceil_to_tick(stop, assembled.bundle.tick_size)
     )
+    if sfp:
+        if sfp_target is None:
+            return "sfp_trade_plan_invalid"
+        refusal = _sfp_quote_refusal(
+            quote=quote.price, stop=stop, target=sfp_target, is_long=is_long
+        )
+        if refusal is not None:
+            return refusal
+        # Fill at the live quote. Stop and target stay on the structural plan.
+        entry = quote.price
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)

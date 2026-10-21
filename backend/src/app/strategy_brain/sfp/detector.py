@@ -30,7 +30,11 @@ from app.strategy_brain.sfp.contracts import (
 )
 from app.strategy_brain.sfp.levels import derive_levels, level_evidence_fresh, validate_level
 from app.strategy_brain.sfp.quality import quality_components
-from app.strategy_brain.sfp.trade_plan import derive_sfp_trade_plan
+from app.strategy_brain.sfp.trade_plan import (
+    SFP_STOP_ATR_PERIOD,
+    derive_sfp_trade_plan,
+    wilder_atr,
+)
 
 
 @dataclass
@@ -73,6 +77,7 @@ def _emit(
     levels: tuple[StructuralLevel, ...],
     spec: SfpSpec,
     reasons: tuple[str, ...],
+    tick_size: Decimal | None = None,
     observed_at: datetime | None = None,
     event_time: datetime | None = None,
 ) -> SfpDetection:
@@ -104,6 +109,9 @@ def _emit(
         and not episode.plan_resolved
     ):
         # Entry is this confirmation close. Later intact bars keep this plan.
+        # The stop is the larger of the percent buffer, N ticks, and k*ATR.
+        multiple = spec.parameters.min_stop_atr_multiple
+        atr = wilder_atr(bars[: index + 1], period=SFP_STOP_ATR_PERIOD) if multiple > 0 else None
         episode.trade_plan = derive_sfp_trade_plan(
             direction=spec.direction,
             entry=bar.close,
@@ -111,6 +119,10 @@ def _emit(
             reference_price=episode.sweep.reference_level.price,
             stop_buffer=spec.parameters.stop_buffer,
             opposing_levels=levels,
+            tick_size=tick_size,
+            min_stop_ticks=spec.parameters.min_stop_ticks,
+            atr=atr,
+            min_stop_atr_multiple=multiple,
         )
         episode.plan_resolved = True
     trade_plan = episode.trade_plan if episode.state is BrainSetupState.CONFIRMED else None
@@ -236,6 +248,7 @@ def detect_sfp(
     *,
     evaluated_at: datetime,
     context_levels: tuple[StructuralLevel, ...] = (),
+    tick_size: Decimal | None = None,
 ) -> SfpScan:
     """Replay causal detections from canonical evidence; no I/O or trading side effects.
 
@@ -432,6 +445,7 @@ def detect_sfp(
                     levels=known,
                     spec=spec,
                     reasons=reasons,
+                    tick_size=tick_size,
                 )
             )
     # A clock can expire a setup between closes without inventing another market candle.
@@ -454,6 +468,7 @@ def detect_sfp(
                     ),
                     spec=spec,
                     reasons=("setup_expired",),
+                    tick_size=tick_size,
                     event_time=episode.expires_at,
                     observed_at=evaluated_at,
                 )

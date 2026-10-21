@@ -634,6 +634,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # minimum is not a gate once a profile is active: that plan is sized
         # below with size_for_profile. Leverage and margin-mode reads still
         # refuse, and this method does not write the venue.
+        # SFP execution stays unauthorized on this path. Shared _plan_terms
+        # refuses it unless the internal paper loop opts in.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,

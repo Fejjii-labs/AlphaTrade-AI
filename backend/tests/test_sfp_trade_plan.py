@@ -51,7 +51,7 @@ def test_plan_refuses_wrong_side_and_zero_distance(monkeypatch) -> None:
     assert wrong_stop is None
 
 
-def _assembled(prices, *, quote: str):
+def _assembled(prices, *, quote: str, tick: str = "0.1"):
     bars, observations = evidence(prices)
     observed = observations[-1].observed_at
     return bars, SimpleNamespace(
@@ -61,7 +61,7 @@ def _assembled(prices, *, quote: str):
             provider_symbol="BTCUSDT",
         ),
         evaluated_at=observed,
-        bundle=SimpleNamespace(bars_15m=bars, tick_size=Decimal("0.1")),
+        bundle=SimpleNamespace(bars_15m=bars, tick_size=Decimal(tick)),
         assessment_command=SimpleNamespace(
             public_observations=observations,
             selected_roles=tuple(EvidenceRole.STRUCTURE for _ in observations),
@@ -69,9 +69,16 @@ def _assembled(prices, *, quote: str):
     )
 
 
-def _terms(*, bearish: bool, quote: str, stop_buffer: str | None = None):
+def _terms(
+    *,
+    bearish: bool,
+    quote: str,
+    tick: str = "0.1",
+    internal_paper_sfp: bool = True,
+    **changes: object,
+):
     prices = BEAR if bearish else BULL
-    _bars, assembled = _assembled(prices, quote=quote)
+    _bars, assembled = _assembled(prices, quote=quote, tick=tick)
     now = assembled.evaluated_at + timedelta(seconds=1)
     world = make_world()
     candidate = world.candidate.model_copy(
@@ -81,7 +88,6 @@ def _terms(*, bearish: bool, quote: str, stop_buffer: str | None = None):
             "valid_until": now + timedelta(hours=1),
         }
     )
-    changes = {} if stop_buffer is None else {"stop_buffer": stop_buffer}
     policy = SimpleNamespace(
         authored_spec=spec(bearish=bearish, **changes),
         strategy_id=uuid4(),
@@ -97,6 +103,7 @@ def _terms(*, bearish: bool, quote: str, stop_buffer: str | None = None):
         now=now,
         eligibility_valid_until=candidate.valid_until,
         eligibility_id=uuid4(),
+        internal_paper_sfp=internal_paper_sfp,
     )
 
 
@@ -142,34 +149,122 @@ def _assert_exit_monitor_accepts(terms: object, *, direction: TradeDirection) ->
     assert parsed.target == terms.risk_and_exits.targets[0].price.value
 
 
-def test_paper_assembly_uses_confirmation_close_not_the_quote() -> None:
-    terms = _terms(bearish=False, quote="90")
+def test_larger_stop_floor_can_land_on_exactly_one_reward_risk(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.trade_plan.nearest_opposing_level",
+        lambda *_args, **_kwargs: SimpleNamespace(price=Decimal("112")),
+    )
+    # Percent buffer is 0.1. Two ticks of 1.0 beat both that buffer and 1*ATR.
+    exact = derive_sfp_trade_plan(
+        direction=TradeDirection.LONG,
+        entry=Decimal("104"),
+        sweep_extreme=Decimal("98"),
+        reference_price=Decimal("100"),
+        stop_buffer=Decimal("0.001"),
+        opposing_levels=(),
+        tick_size=Decimal("1"),
+        min_stop_ticks=2,
+        atr=Decimal("1"),
+        min_stop_atr_multiple=Decimal("1"),
+    )
+    assert exact is not None
+    assert exact.stop == Decimal("96")
+    assert exact.entry - exact.stop == exact.take_profit - exact.entry
+    # ATR 5 beats two ticks and the percent buffer.
+    atr_wins = derive_sfp_trade_plan(
+        direction=TradeDirection.LONG,
+        entry=Decimal("104"),
+        sweep_extreme=Decimal("98"),
+        reference_price=Decimal("100"),
+        stop_buffer=Decimal("0.001"),
+        opposing_levels=(),
+        tick_size=Decimal("1"),
+        min_stop_ticks=2,
+        atr=Decimal("5"),
+        min_stop_atr_multiple=Decimal("1"),
+    )
+    assert atr_wins is not None and atr_wins.stop == Decimal("93")
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.trade_plan.nearest_opposing_level",
+        lambda *_args, **_kwargs: SimpleNamespace(price=Decimal("110")),
+    )
+    missing_atr = derive_sfp_trade_plan(
+        direction=TradeDirection.LONG,
+        entry=Decimal("100"),
+        sweep_extreme=Decimal("95"),
+        reference_price=Decimal("100"),
+        stop_buffer=Decimal("0.001"),
+        opposing_levels=(),
+        min_stop_atr_multiple=Decimal("1"),
+        atr=None,
+    )
+    assert missing_atr is None
+
+
+def test_quote_past_stop_or_target_refuses_long_and_short() -> None:
+    assert _terms(bearish=False, quote="90") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=False, quote="97.9") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=False, quote="105") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=False, quote="106") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=True, quote="110") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=True, quote="102.1") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=True, quote="95") == "sfp_quote_beyond_plan"
+    assert _terms(bearish=True, quote="90") == "sfp_quote_beyond_plan"
+
+
+def test_quote_rebase_accepts_exactly_one_r_and_refuses_less() -> None:
+    below = _terms(bearish=False, quote="104")
+    assert below == "sfp_quote_reward_risk_below_minimum"
+    assert _terms(bearish=False, quote="101.46") == "sfp_quote_reward_risk_below_minimum"
+    assert _terms(bearish=True, quote="96") == "sfp_quote_reward_risk_below_minimum"
+    exact = _terms(bearish=False, quote="101.45")
+    assert not isinstance(exact, str)
+    entry = exact.basis_policy.execution_price.value
+    stop = exact.risk_and_exits.stop.value
+    target = exact.risk_and_exits.targets[0].price.value
+    assert entry == Decimal("101.45")
+    assert stop == Decimal("97.9")
+    assert target == Decimal("105")
+    assert target - entry == entry - stop
+    short = _terms(bearish=True, quote="98.55")
+    assert not isinstance(short, str)
+    short_entry = short.basis_policy.execution_price.value
+    short_stop = short.risk_and_exits.stop.value
+    short_target = short.risk_and_exits.targets[0].price.value
+    assert short_entry == Decimal("98.55")
+    assert short_stop == Decimal("102.1")
+    assert short_target == Decimal("95")
+    assert short_entry - short_target == short_stop - short_entry
+
+
+def test_paper_assembly_rebases_a_valid_quote_and_keeps_sizing() -> None:
+    terms = _terms(bearish=False, quote="100")
     assert not isinstance(terms, str)
-    assert terms.basis_policy.execution_price.value == Decimal("104")
-    assert terms.entry_zone.lower == Decimal("104")
+    assert terms.basis_policy.execution_price.value == Decimal("100")
+    assert terms.entry_zone.lower == Decimal("100")
     assert terms.risk_and_exits.stop.value == Decimal("97.9")
     assert terms.risk_and_exits.targets[0].price.value == Decimal("105")
     assert terms.risk_and_exits.targets[0].derivation.formula_id == (
         "sfp-nearest-opposing-structure"
     )
     assert terms.execution_venue == "PAPER_INTERNAL"
-    distance = abs(terms.risk_and_exits.stop.value - Decimal("104"))
+    distance = abs(terms.risk_and_exits.stop.value - Decimal("100"))
     assert terms.quantity.value == _quantity(
-        equity=Decimal("10000"), entry=Decimal("104"), distance=distance
+        equity=Decimal("10000"), entry=Decimal("100"), distance=distance
     )
     _assert_exit_monitor_accepts(terms, direction=TradeDirection.LONG)
-    short = _terms(bearish=True, quote="110")
+    short = _terms(bearish=True, quote="100")
     assert not isinstance(short, str)
-    assert short.basis_policy.execution_price.value == Decimal("96")
+    assert short.basis_policy.execution_price.value == Decimal("100")
     assert short.risk_and_exits.stop.value == Decimal("102.1")
     assert short.risk_and_exits.targets[0].price.value == Decimal("95")
-    short_distance = abs(short.risk_and_exits.stop.value - Decimal("96"))
+    short_distance = abs(short.risk_and_exits.stop.value - Decimal("100"))
     assert short.quantity.value == _quantity(
-        equity=Decimal("10000"), entry=Decimal("96"), distance=short_distance
+        equity=Decimal("10000"), entry=Decimal("100"), distance=short_distance
     )
     _assert_exit_monitor_accepts(short, direction=TradeDirection.SHORT)
-    assert _terms(bearish=False, quote="90", stop_buffer="0.99") == ("sfp_trade_plan_invalid")
-    # Quote freshness is unchanged: a missing quote still refuses before a plan.
+    assert _terms(bearish=False, quote="100", stop_buffer="0.99") == "sfp_trade_plan_invalid"
+    # Quote presence is unchanged: a missing quote still refuses before geometry.
     _bars, assembled = _assembled(BULL, quote="104")
     assembled.current_price = None
     world = make_world()
@@ -193,5 +288,32 @@ def test_paper_assembly_uses_confirmation_close_not_the_quote() -> None:
         now=assembled.evaluated_at + timedelta(seconds=1),
         eligibility_valid_until=assembled.evaluated_at + timedelta(hours=1),
         eligibility_id=uuid4(),
+        internal_paper_sfp=True,
     )
     assert missing == "evidence_unavailable"
+
+
+def test_coarse_tick_widens_the_paper_stop() -> None:
+    terms = _terms(bearish=False, quote="100", tick="1", min_stop_ticks=3)
+    assert not isinstance(terms, str)
+    assert terms.basis_policy.execution_price.value == Decimal("100")
+    # 3 ticks of 1.0 beat the 0.1 percent buffer, so the stop is 98 - 3.
+    assert terms.risk_and_exits.stop.value == Decimal("95")
+    assert terms.risk_and_exits.targets[0].price.value == Decimal("105")
+    entry = terms.basis_policy.execution_price.value
+    assert terms.risk_and_exits.targets[0].price.value - entry == (
+        entry - terms.risk_and_exits.stop.value
+    )
+    short = _terms(bearish=True, quote="100", tick="1", min_stop_ticks=3)
+    assert not isinstance(short, str)
+    assert short.risk_and_exits.stop.value == Decimal("105")
+    assert short.basis_policy.execution_price.value == Decimal("100")
+
+
+def test_sfp_execution_plan_stays_unauthorized_outside_internal_paper() -> None:
+    assert _terms(bearish=False, quote="100", internal_paper_sfp=False) == (
+        "sfp_execution_plan_not_authorized"
+    )
+    assert _terms(bearish=True, quote="100", internal_paper_sfp=False) == (
+        "sfp_execution_plan_not_authorized"
+    )
