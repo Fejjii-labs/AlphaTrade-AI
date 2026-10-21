@@ -183,6 +183,11 @@ class Settings(BaseSettings):
     # older environment value still boots.
     telegram_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
+    # Extra safety-alert codes added to the built-in Telegram set (add-only).
+    # Mandatory kill-switch and loss codes, heartbeats, and stop/tp hits are
+    # always included. ``degraded_repeat``, clock skew, and ``arming_refused``
+    # stay logs-only and cannot be listed here.
+    telegram_safety_alert_allowlist: Annotated[list[str], NoDecode] = Field(default_factory=list)
     email_alerts_enabled: bool = False
 
     # Interactive provider voice stays unavailable without a verified finite
@@ -523,6 +528,23 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("telegram_safety_alert_allowlist", mode="before")
+    @classmethod
+    def _split_telegram_safety_alert_allowlist(cls, value: object) -> object:
+        """Allow a comma-separated string for ``TELEGRAM_SAFETY_ALERT_ALLOWLIST``."""
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
+
+    @model_validator(mode="after")
+    def _validate_telegram_safety_alert_allowlist(self) -> Settings:
+        from app.services.safety_alerts import validate_telegram_safety_extra_allowlist
+
+        validate_telegram_safety_extra_allowlist(self.telegram_safety_alert_allowlist)
+        return self
 
     @field_validator("provider_mode", mode="before")
     @classmethod

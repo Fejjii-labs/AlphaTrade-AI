@@ -25,6 +25,8 @@ class AlertDeliveryPayload:
     timestamp: str | None = None
     telegram_chat_id: str | None = None
     is_test: bool = False
+    # When true, ``message`` is sent without the generic safety-alert wrapper.
+    use_message_verbatim: bool = False
 
 
 @dataclass(frozen=True)

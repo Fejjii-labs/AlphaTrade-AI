@@ -352,6 +352,30 @@ def test_dry_run_logs_the_close_without_writing() -> None:
     assert recorded["exit_actor"] == EXIT_ACTOR
 
 
+def test_dry_run_does_not_queue_sl_tp_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
+    queued: list[str] = []
+
+    def _queue(_session: object, _settings: object, alert: object) -> None:
+        queued.append(getattr(alert, "code", ""))
+
+    monkeypatch.setattr("app.services.safety_alerts.queue_safety_alert", _queue)
+
+    class Boom(PaperExitCloser):
+        def close(self, request: ClosePaperPlanRequest) -> SimpleNamespace:
+            raise AssertionError("dry-run wrote a close")
+
+    report, _ = _run(
+        _trade(entry_time=start),
+        (_bar(start, low="94", high="101"),),
+        dry_run=True,
+        closer=Boom(),
+    )
+    assert report.status == "dry_run"
+    assert report.would_close == 1
+    assert queued == []
+
+
 def test_historical_crossing_closes_at_the_first_bar_not_a_later_one() -> None:
     """Models trades that had already crossed on 6 Oct and stayed open.
 

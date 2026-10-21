@@ -106,8 +106,10 @@ class PaperWorkerHeartbeatResponse(BaseModel):
     """External liveness of the paper worker.
 
     ``status`` is ``fresh``, ``stale``, or ``missing``. ``alert_raised`` is
-    true only when this request sent a new Telegram alert. A repeated poll
-    inside the cooldown reports the same status and does not send again.
+    true only when this request successfully delivered a new Telegram alert.
+    A repeated poll inside the cooldown reports the same status and does not
+    send again. Use structured logs and these fields for health-poller
+    monitoring of conditions such as ``degraded_repeat``.
     ``kill_switch`` is the switch posture. It is not a P&L figure.
     """
 

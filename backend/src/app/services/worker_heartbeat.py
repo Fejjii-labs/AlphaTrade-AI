@@ -31,7 +31,11 @@ from app.persistence.runtime_status import (
 from app.schemas.health import WorkerComponentObservation
 from app.services.arming_gates import _positive_finite
 from app.services.paper_exit_monitor import ExitMonitorAlert
-from app.services.safety_alerts import deliver_safety_alert, telegram_safety_configured
+from app.services.safety_alerts import (
+    deliver_safety_alert,
+    safety_alert_telegram_allowed,
+    telegram_safety_configured,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -239,6 +243,9 @@ def raise_prepared_alert(
         logger.warning("safety_alert_telegram_unconfigured", code=alert.code)
         if remember_when_unconfigured:
             ledger.remember(token, now)
+        return False
+    if not safety_alert_telegram_allowed(settings, alert.code):
+        logger.info("safety_alert_telegram_suppressed", code=alert.code)
         return False
     sent = deliver_safety_alert(settings, alert, now=now)
     if sent:
