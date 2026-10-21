@@ -26,7 +26,9 @@ def demo_account_active(settings: Settings) -> bool:
 
     ``paper_exchange_demo`` stays open when the dedicated read-only flag is on,
     so snapshot sync, the manual mirror, and autonomous demo orders can share
-    one mode. Real trading and a non-allowlisted host stay closed.
+    one mode. ``paper_internal`` may show the snapshot from the main demo key
+    only when the internal snapshot read gates are open. That path does not
+    route orders. Real trading and a non-allowlisted host stay closed.
     """
     if settings.execution_mode is not ExecutionMode.PAPER or settings.enable_real_trading:
         return False
@@ -37,6 +39,8 @@ def demo_account_active(settings: Settings) -> bool:
     if settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO:
         dedicated = settings.blofin_readonly_sync_enabled and settings.blofin_readonly_configured
         return dedicated or settings.blofin_demo_configured
+    if settings.blofin_paper_internal_snapshot_read_ready:
+        return True
     if settings.blofin_readonly_sync_enabled:
         return (
             settings.exchange_mode is ExchangeMode.PAPER_INTERNAL

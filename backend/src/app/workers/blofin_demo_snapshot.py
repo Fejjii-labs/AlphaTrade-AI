@@ -1,7 +1,10 @@
 """Read-only BloFin demo snapshot cycle for the paper worker.
 
 Calls the existing ``BloFinSyncService.sync`` on a 30-60 second cadence.
-Demo gates and native identity checks stay inside that service. A closed gate
+Demo gates stay on this cycle. Native identity checks for a snapshot fetch
+stay inside that service. On the paper_internal main-key path the manual
+mirror repeats the #304 pin before its own reads, including when this cycle
+skips the fetch because the stored snapshot is fresh. A closed gate
 or a missing owner pin returns without opening a database or calling BloFin.
 Errors back off. A snapshot newer than the interval is left in place so the
 browser refresh and this cycle do not both hit the venue. A degraded snapshot
@@ -22,7 +25,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
-from app.core.config import Settings
+from app.core.config import ExchangeMode, ExecutionMode, Settings
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
 from app.services.dashboard.demo_account import demo_account_active
 
@@ -62,7 +65,8 @@ class BloFinDemoSnapshotCycle:
         if not demo_account_active(self.settings):
             self._failures = 0
             self._next_attempt = None
-            return CycleOutcome("skipped", error="demo_gates_closed")
+            reason = paper_internal_snapshot_skip_reason(self.settings) or "demo_gates_closed"
+            return CycleOutcome("skipped", error=reason)
         owner = snapshot_owner(self.settings)
         if owner is None:
             return CycleOutcome("skipped", error="demo_owner_unpinned")
@@ -77,6 +81,7 @@ class BloFinDemoSnapshotCycle:
                 readonly_sync_enabled=self.settings.blofin_readonly_sync_enabled,
                 readonly_credentials_present=self.settings.blofin_readonly_configured,
                 demo_read_fallback_ready=self.settings.blofin_demo_read_fallback_ready,
+                internal_snapshot_read_ready=self.settings.blofin_paper_internal_snapshot_read_ready,
             )
             return CycleOutcome("skipped", error="readonly_credentials_required")
         try:
@@ -174,7 +179,11 @@ class BloFinDemoSnapshotCycle:
         from app.core.blofin_readonly_access import get_readonly_client
         from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
 
-        client = get_readonly_client(self.settings, activity_history=True)
+        client = get_readonly_client(
+            self.settings,
+            activity_history=True,
+            paper_internal_snapshot=True,
+        )
         BloFinDemoManualMirror(client, now=self._clock()).apply(
             session,  # type: ignore[arg-type]
             organization_id=organization_id,
@@ -205,6 +214,48 @@ class BloFinDemoSnapshotCycle:
                 "blofin_demo_manual_mirror_status_unrecorded",
                 error_type=type(exc).__name__,
             )
+
+
+def paper_internal_snapshot_skip_reason(settings: Settings) -> str | None:
+    """Why a paper_internal demo-key snapshot must not run.
+
+    ``None`` keeps the caller's existing ``demo_gates_closed`` reason. That
+    covers ``paper_exchange_demo``, a complete dedicated read-only set, and a
+    paper_internal process that has neither the internal-read flag nor a
+    stored demo key. A non-demo host returns ``demo_host_refused`` and is also
+    rejected when settings load.
+    """
+    if settings.exchange_mode is not ExchangeMode.PAPER_INTERNAL:
+        return None
+    if settings.blofin_read_sync_uses_dedicated_credentials:
+        return None
+    attempting = settings.blofin_demo_snapshot_internal_read_enabled or (
+        settings.blofin_demo_snapshot_sync_enabled and settings.blofin_demo_configured
+    )
+    if not attempting:
+        return None
+    if (
+        settings.execution_mode is not ExecutionMode.PAPER
+        or settings.enable_real_trading
+        or settings.real_trading_enabled
+    ):
+        return "paper_execution_required"
+    if not settings.blofin_demo_snapshot_internal_read_enabled:
+        return "internal_snapshot_read_disabled"
+    if not settings.blofin_demo_snapshot_sync_enabled:
+        return "snapshot_sync_disabled"
+    if not settings.blofin_readonly_set_absent:
+        return "readonly_credentials_required"
+    if not settings.blofin_demo_configured:
+        return "demo_credentials_required"
+    url = settings.blofin_demo_rest_base_url.strip()
+    if not url:
+        return "demo_rest_url_required"
+    from app.core.exchange_safety import is_allowlisted_demo_host
+
+    if not is_allowlisted_demo_host(url):
+        return "demo_host_refused"
+    return None
 
 
 def snapshot_owner(settings: Settings) -> tuple[uuid.UUID, uuid.UUID] | None:

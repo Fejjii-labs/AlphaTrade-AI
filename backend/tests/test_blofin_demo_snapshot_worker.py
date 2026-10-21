@@ -9,21 +9,34 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 import structlog
+from pydantic import ValidationError
 
+from app.controlled_activation.profile import controlled_telegram_projection
 from app.core.blofin_identity import connection_binding
 from app.core.blofin_readonly_access import (
     BloFinReadOnlyClient,
     get_readonly_account_provider,
     get_readonly_client,
 )
-from app.core.config import Settings
+from app.core.config import ExchangeMode, Settings
+from app.core.deployment_safety import validate_deployment_settings
+from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
 from app.core.errors import ExchangeDemoInactiveError, NotFoundError
+from app.core.exchange_demo_access import get_demo_execution_provider
+from app.core.execution_credentials import (
+    CredentialAccessDeniedError,
+    blofin_execution_authorized,
+    load_blofin_execution_credentials,
+)
 from app.db.blofin_activity import BloFinActivityAccount
+from app.market_activation.profile import live_market_activation_violations
 from app.providers.exchange.base import AccountPermissions
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
+from app.providers.exchange.factory import resolve_exchange_provider
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
 from app.services.blofin_activity_config import BloFinActivitySettings
+from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror, MirrorReadError
 from app.services.blofin_sync_service import BloFinSyncService
 from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
@@ -1186,3 +1199,632 @@ def test_mirror_read_failure_does_not_back_off_the_snapshot(
     assert cycle._failures == 0
     assert cycle._next_attempt is None
     assert cycle().status == "ok"
+
+
+def _internal_key_settings(**updates: object) -> Settings:
+    org, user = uuid4(), uuid4()
+    values: dict[str, object] = {
+        "environment": "local",
+        "execution_mode": "paper",
+        "enable_real_trading": False,
+        "exchange_mode": "paper_internal",
+        "blofin_demo_enabled": False,
+        "provider_mode": "mock",
+        "blofin_demo_snapshot_sync_enabled": True,
+        "blofin_demo_snapshot_internal_read_enabled": True,
+        "blofin_readonly_sync_enabled": False,
+        "blofin_api_key": "fixture-trading-key",
+        "blofin_api_secret": "fixture-trading-secret",
+        "blofin_api_passphrase": "fixture-trading-pass",
+        "blofin_demo_rest_base_url": "https://demo-trading-openapi.blofin.com",
+        "governed_blofin_demo_organization_id": str(org),
+        "governed_blofin_demo_user_id": str(user),
+    }
+    values.update(updates)
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
+
+
+def _forbid_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden() -> None:
+        raise AssertionError("skipped snapshot opened a database")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
+
+
+def test_paper_exchange_demo_fallback_does_not_require_the_internal_flag() -> None:
+    settings = _trading_key_settings()
+    assert settings.blofin_demo_snapshot_internal_read_enabled is False
+    assert settings.blofin_demo_read_fallback_ready is True
+    assert settings.blofin_paper_internal_snapshot_read_ready is False
+    client = get_readonly_client(settings)
+    assert isinstance(client, BloFinReadOnlyClient)
+    assert client._api_key == "fixture-trading-key"
+
+
+def test_paper_internal_prefers_a_complete_readonly_set() -> None:
+    settings = _internal_key_settings(
+        blofin_readonly_sync_enabled=True,
+        blofin_readonly_api_key="fixture-reader",
+        blofin_readonly_api_secret="fixture-reader-secret",
+        blofin_readonly_api_passphrase="fixture-reader-pass",
+    )
+    assert settings.blofin_paper_internal_snapshot_read_ready is False
+    client = get_readonly_client(settings)
+    assert client._api_key == "fixture-reader"
+
+
+def test_paper_internal_cycle_syncs_when_every_gate_is_open() -> None:
+    settings = _internal_key_settings()
+    seen: list[tuple[UUID, UUID]] = []
+    cycle = BloFinDemoSnapshotCycle(settings)
+
+    def sync_once(organization_id: UUID, user_id: UUID) -> str:
+        seen.append((organization_id, user_id))
+        return "ok"
+
+    cycle._sync_once = sync_once  # type: ignore[method-assign]
+    outcome = cycle()
+    assert outcome.status == "ok"
+    assert outcome.error == ""
+    assert seen == [
+        (
+            UUID(settings.governed_blofin_demo_organization_id),
+            UUID(settings.governed_blofin_demo_user_id),
+        )
+    ]
+
+
+def test_paper_internal_snapshot_runs_when_every_gate_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _internal_key_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service = _fallback_sync_service(monkeypatch, settings, uid="pinned-demo-account")
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(
+            organization_id=organization_id,
+            user_id=UUID(settings.governed_blofin_demo_user_id),
+            sync_origin="worker",
+        )
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
+    assert result.snapshot.exchange_mode == "paper_internal"
+    assert result.snapshot.provenance["identity_status"] == "verified"
+    assert result.snapshot.provenance["order_mutations"] is False
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    rendered = repr(logs)
+    assert "pinned-demo-account" not in rendered
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert "fixture-trading-pass" not in rendered
+    assert demo_account_active(settings) is True
+    assert settings.exchange_demo_active is False
+
+
+def test_paper_internal_identity_mismatch_is_logged_without_the_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id = uuid4()
+    settings = _internal_key_settings(
+        governed_blofin_demo_organization_id=str(organization_id),
+    )
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service = _fallback_sync_service(monkeypatch, settings, uid="other-demo-account")
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(
+            organization_id=organization_id, user_id=uuid4(), sync_origin="worker"
+        )
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "mismatch"
+        for item in logs
+    )
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "native_account_mismatch"
+        for item in logs
+    )
+    rendered = repr(logs)
+    assert "pinned-demo-account" not in rendered
+    assert "other-demo-account" not in rendered
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert "fixture-trading-pass" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("update", "reason"),
+    [
+        ({"blofin_demo_snapshot_internal_read_enabled": False}, "internal_snapshot_read_disabled"),
+        ({"blofin_demo_snapshot_sync_enabled": False}, "snapshot_sync_disabled"),
+        ({"blofin_api_key": ""}, "demo_credentials_required"),
+        ({"blofin_api_secret": ""}, "demo_credentials_required"),
+        ({"blofin_api_passphrase": ""}, "demo_credentials_required"),
+        ({"blofin_demo_rest_base_url": ""}, "demo_rest_url_required"),
+        ({"governed_blofin_demo_organization_id": ""}, "demo_owner_unpinned"),
+        ({"governed_blofin_demo_user_id": "not-a-uuid"}, "demo_owner_unpinned"),
+        ({"blofin_readonly_api_key": "partial-only"}, "readonly_credentials_required"),
+    ],
+)
+def test_paper_internal_snapshot_skips_when_a_gate_is_missing(
+    monkeypatch: pytest.MonkeyPatch, update: dict[str, object], reason: str
+) -> None:
+    _forbid_database(monkeypatch)
+    outcome = BloFinDemoSnapshotCycle(_internal_key_settings(**update))()
+    assert outcome.status == "skipped"
+    assert outcome.error == reason
+
+
+def test_paper_internal_snapshot_skips_when_execution_is_not_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_database(monkeypatch)
+    settings = _internal_key_settings().model_copy(update={"execution_mode": "trade"})
+    outcome = BloFinDemoSnapshotCycle(settings)()
+    assert outcome.status == "skipped"
+    assert outcome.error == "paper_execution_required"
+
+
+def test_paper_internal_snapshot_skips_when_real_trading_is_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_database(monkeypatch)
+    settings = _internal_key_settings().model_copy(update={"enable_real_trading": True})
+    outcome = BloFinDemoSnapshotCycle(settings)()
+    assert outcome.status == "skipped"
+    assert outcome.error == "paper_execution_required"
+    assert settings.real_trading_enabled is False
+
+
+def test_non_demo_url_is_refused_for_the_internal_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValidationError, match="allowlisted BloFin demo host"):
+        _internal_key_settings(blofin_demo_rest_base_url="https://example.com")
+    with pytest.raises(ValidationError, match="allowlisted BloFin demo host"):
+        _internal_key_settings(blofin_demo_rest_base_url="http://demo-trading-openapi.blofin.com")
+    Settings(
+        _env_file=None,
+        environment="local",
+        exchange_mode="paper_internal",
+        blofin_demo_rest_base_url="https://example.com",
+    )
+    _forbid_database(monkeypatch)
+    refused = _internal_key_settings().model_copy(
+        update={"blofin_demo_rest_base_url": "https://example.com"}
+    )
+    outcome = BloFinDemoSnapshotCycle(refused)()
+    assert outcome.status == "skipped"
+    assert outcome.error == "demo_host_refused"
+    with pytest.raises(ValueError, match="allowlisted demo host"):
+        get_readonly_client(refused)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/v1/trade/order"),
+        ("POST", "/api/v1/trade/cancel-order"),
+        ("DELETE", "/api/v1/trade/order"),
+        ("PUT", "/api/v1/account/set-leverage"),
+        ("GET", "/api/v1/trade/order"),
+    ],
+)
+def test_paper_internal_snapshot_cannot_reach_a_write_or_order_call(method: str, path: str) -> None:
+    settings = _internal_key_settings()
+    assert settings.exchange_mode is ExchangeMode.PAPER_INTERNAL
+    assert settings.exchange_demo_active is False
+    assert blofin_execution_authorized(settings) is False
+    with pytest.raises(CredentialAccessDeniedError):
+        load_blofin_execution_credentials(settings)
+    resolved = resolve_exchange_provider(settings)
+    assert resolved.execution is None
+    assert resolved.is_demo is False
+    assert resolved.account is None
+    with pytest.raises(ExchangeDemoInactiveError):
+        get_demo_execution_provider(settings)
+    seen: list[httpx.Request] = []
+    client = get_readonly_client(
+        settings,
+        activity_history=True,
+        paper_internal_snapshot=True,
+        transport=httpx.MockTransport(lambda request: seen.append(request) or httpx.Response(500)),
+    )
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request(method, path, body={"instId": "BTC-USDT"}, signed=True)
+    assert seen == []
+
+
+def test_activity_still_requires_the_dedicated_readonly_key() -> None:
+    from app.services.blofin_activity_service import activity_provider
+
+    settings = _internal_key_settings()
+    with pytest.raises(ExchangeDemoInactiveError, match="Dedicated BloFin read-only"):
+        activity_provider(settings)
+    with pytest.raises(ExchangeDemoInactiveError, match="Dedicated BloFin read-only"):
+        get_readonly_client(settings, activity_history=True)
+
+
+def test_paper_internal_demo_enabled_does_not_open_demo_execution() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="local",
+        execution_mode="paper",
+        exchange_mode="paper_internal",
+        blofin_demo_enabled=True,
+    )
+    assert settings.exchange_demo_active is False
+    assert blofin_execution_authorized(settings) is False
+    resolved = resolve_exchange_provider(settings)
+    assert resolved.execution is None
+    assert resolved.is_demo is False
+    with pytest.raises(CredentialAccessDeniedError):
+        load_blofin_execution_credentials(settings)
+
+
+def test_telegram_projection_and_internal_snapshot_pass_deployment_safety() -> None:
+    org, user = str(uuid4()), str(uuid4())
+    settings = Settings(
+        _env_file=None,
+        environment="staging",
+        jwt_secret="x" * 32,
+        database_url="postgresql+psycopg://user:pass@db.example.com:5432/alphatrade",
+        redis_url="redis://redis.example.com:6379/0",
+        qdrant_url="https://qdrant.example.com",
+        openai_api_key="sk-test-not-a-real-key",
+        cors_origins="https://app.example.com",
+        auth_refresh_cookie_enabled=True,
+        auth_cookie_secure=True,
+        auth_cookie_samesite="none",
+        enable_real_trading=False,
+        execution_mode="paper",
+        exchange_mode="paper_internal",
+        provider_mode="fallback",
+        rate_limit_use_redis=True,
+        rate_limit_allow_in_memory_fallback=False,
+        trusted_proxy_hops=1,
+        debug=False,
+        perpetual_evidence_source="binance_usdm",
+        market_data_futures_base_url="https://fapi.binance.com",
+        watcher_orchestration_enabled=True,
+        watcher_paper_staging_activation=True,
+        telegram_interaction_enabled=True,
+        telegram_paper_activation_armed=True,
+        telegram_inbound_mode="polling",
+        telegram_bot_id="bot-100",
+        telegram_chat_id="tg-chat-1",
+        telegram_bot_token="123456789:AAHtestTokenValueForStagingPackage",
+        telegram_alerts_enabled=False,
+        automatic_telegram_delivery_enabled=False,
+        telegram_network_permitted=True,
+        blofin_demo_enabled=False,
+        blofin_demo_snapshot_sync_enabled=True,
+        blofin_demo_snapshot_internal_read_enabled=True,
+        blofin_api_key="fixture-trading-key",
+        blofin_api_secret="fixture-trading-secret",
+        blofin_api_passphrase="fixture-trading-pass",
+        blofin_demo_rest_base_url="https://demo-trading-openapi.blofin.com",
+        governed_blofin_demo_organization_id=org,
+        governed_blofin_demo_user_id=user,
+    )
+    assert controlled_telegram_projection(settings) is True
+    assert settings.exchange_mode is ExchangeMode.PAPER_INTERNAL
+    assert settings.blofin_paper_internal_snapshot_read_ready is True
+    assert settings.exchange_demo_active is False
+    assert blofin_execution_authorized(settings) is False
+    assert settings_are_disarmed_paper_worker(settings) is False
+    assert live_market_activation_violations(settings) == []
+    validate_deployment_settings(settings)
+    with pytest.raises(ValidationError, match="blofin_demo_enabled must be false"):
+        Settings.model_validate(settings.model_dump() | {"blofin_demo_enabled": True})
+
+
+_IDENTITY = "/api/v1/user/query-apikey"
+
+
+class _PinClient:
+    """Records mirror GETs. Account reads are refused until the test allows them."""
+
+    def __init__(self, *, uid: str | None, account_reads: bool) -> None:
+        self.paths: list[str] = []
+        self._uid = uid
+        self._account_reads = account_reads
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: object = None,
+        body: object = None,
+        signed: bool = False,
+        before_send: object = None,
+    ) -> object:
+        assert method == "GET"
+        self.paths.append(path)
+        if path == _IDENTITY:
+            assert self._uid is not None
+            return {"readOnly": 0, "uid": self._uid}
+        if not self._account_reads:
+            raise AssertionError(path)
+        if path in {"/api/v1/market/instruments", "/api/v1/account/positions"}:
+            return []
+        raise MirrorReadError("stopped after the pin")
+
+
+def _mirror_settings(**updates: object) -> Settings:
+    settings = _internal_key_settings(blofin_demo_manual_mirror_enabled=True, **updates)
+    assert settings.blofin_paper_internal_main_key_selected is True
+    return settings
+
+
+def _apply_mirror(client: _PinClient, settings: Settings, organization_id: UUID) -> None:
+    BloFinDemoManualMirror(client, now=datetime(2026, 10, 21, tzinfo=UTC)).apply(
+        MagicMock(),
+        organization_id=organization_id,
+        user_id=uuid4(),
+        settings=settings,
+    )
+
+
+def _assert_secrets_absent(logs: list[object], *extra: str) -> None:
+    rendered = repr(logs)
+    for secret in (
+        "fixture-trading-key",
+        "fixture-trading-secret",
+        "fixture-trading-pass",
+        "pinned-demo-account",
+        "other-demo-account",
+        *extra,
+    ):
+        assert secret not in rendered
+
+
+@pytest.mark.parametrize(
+    ("case", "reason", "match"),
+    [
+        ("unset_org", "activity_organization_unset", "BLOFIN_ACTIVITY_ORGANIZATION_ID"),
+        ("unset_uid", "activity_expected_uid_unset", "BLOFIN_ACTIVITY_EXPECTED_UID"),
+        ("mismatched_org", "activity_organization_mismatch", "does not match"),
+    ],
+)
+def test_internal_mirror_refuses_before_any_read_when_the_pin_is_missing(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str, match: str
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    if case == "unset_uid":
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=""
+        )
+    elif case == "unset_org":
+        config = BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    else:
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=uuid4(), expected_uid="pinned-demo-account"
+        )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    client = _PinClient(uid=None, account_reads=False)
+    with structlog.testing.capture_logs() as logs, pytest.raises(ValueError, match=match):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == []
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused" and item.get("reason") == reason
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_internal_mirror_refuses_a_uid_mismatch_after_the_identity_get_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(ValueError, match="does not match connection pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "mismatch"
+        for item in logs
+    )
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "native_account_mismatch"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_internal_mirror_refuses_an_unverified_uid_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="", account_reads=False)
+    with pytest.raises(ValueError, match="UID is unverified"):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+
+
+def test_internal_mirror_runs_the_pin_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(MirrorReadError, match="stopped after the pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [
+        _IDENTITY,
+        "/api/v1/market/instruments",
+        "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+    ]
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_disabled_internal_mirror_does_not_read_or_pin() -> None:
+    settings = _internal_key_settings(blofin_demo_manual_mirror_enabled=False)
+    client = _PinClient(uid=None, account_reads=False)
+    report = BloFinDemoManualMirror(client, now=datetime(2026, 10, 21, tzinfo=UTC)).apply(
+        MagicMock(),
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        settings=settings,
+    )
+    assert report.created == 0
+    assert client.paths == []
+
+
+@pytest.mark.parametrize("mode", ["paper_exchange_demo", "dedicated_readonly"])
+def test_other_mirror_paths_do_not_take_the_internal_pin(mode: str) -> None:
+    if mode == "paper_exchange_demo":
+        settings = _trading_key_settings().model_copy(
+            update={"blofin_demo_manual_mirror_enabled": True}
+        )
+    else:
+        settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    assert settings.blofin_paper_internal_main_key_selected is False
+    client = _PinClient(uid=None, account_reads=True)
+    with pytest.raises(MirrorReadError, match="stopped after the pin"):
+        _apply_mirror(client, settings, uuid4())
+    assert _IDENTITY not in client.paths
+    assert client.paths[0] == "/api/v1/market/instruments"
+
+
+def _fresh_internal_cycle(
+    monkeypatch: pytest.MonkeyPatch, client: _PinClient
+) -> tuple[BloFinDemoSnapshotCycle, list[str], list[str]]:
+    settings = _mirror_settings()
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    synced: list[str] = []
+    recorded: list[str] = []
+    session = SimpleNamespace(closed=False, rollback=lambda: None, commit=lambda: None)
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> SimpleNamespace:
+            assert organization_id and user_id
+            return SimpleNamespace(
+                health_status=BloFinSyncHealthStatus.OK,
+                synced_at=now - timedelta(seconds=10),
+            )
+
+        def sync(self, **_kwargs: object) -> None:
+            synced.append("sync")
+            raise AssertionError("fresh snapshot must not sync")
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: client,
+    )
+
+    def remember(*_args: object, **kwargs: object) -> None:
+        recorded.append(str(kwargs.get("outcome")))
+
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.record_mirror_cycle", remember)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: now)
+    return cycle, synced, recorded
+
+
+def test_fresh_internal_snapshot_refuses_the_mirror_before_any_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid=None, account_reads=False)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(_env_file=None),
+    )
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths == []
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "activity_organization_unset"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_fresh_internal_snapshot_refuses_a_uid_mismatch_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths == [_IDENTITY]
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "mismatch"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)
+
+
+def test_fresh_internal_snapshot_checks_the_uid_before_the_mirror_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
+    cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
+    organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    with structlog.testing.capture_logs() as logs:
+        outcome = cycle()
+    assert outcome.status == "ok"
+    assert synced == []
+    assert client.paths[0] == _IDENTITY
+    assert client.paths == [
+        _IDENTITY,
+        "/api/v1/market/instruments",
+        "/api/v1/account/positions",
+        "/api/v1/account/positions-history",
+    ]
+    assert recorded == ["failed"]
+    assert cycle._next_attempt is None
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    _assert_secrets_absent(logs)

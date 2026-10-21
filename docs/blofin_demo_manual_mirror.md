@@ -32,10 +32,29 @@ The mirror runs only inside the snapshot cycle. That cycle, and therefore
 the mirror, starts only when `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is true and
 the paper worker is armed. Credentials are either the complete
 `BLOFIN_READONLY_*` set or, when that set is absent, `BLOFIN_API_KEY`,
-`BLOFIN_API_SECRET`, and `BLOFIN_API_PASSPHRASE` in `paper_exchange_demo`.
+`BLOFIN_API_SECRET`, and `BLOFIN_API_PASSPHRASE` in `paper_exchange_demo`,
+or in `paper_internal` when `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED` is
+true. The activity worker still requires the dedicated read-only key.
 A partial read-only set skips with `readonly_credentials_required` before
 any database or venue call. The snapshot flag and the armed-worker check
 default closed. The client remains GET-only.
+
+On the `paper_internal` main-key path
+(`BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED`, property
+`blofin_paper_internal_main_key_selected`), the mirror runs the #304
+organization pin and UID check inside `apply` before instruments,
+positions, or history. A missing `BLOFIN_ACTIVITY_ORGANIZATION_ID`, an
+organization that does not match the mirror owner, or an empty
+`BLOFIN_ACTIVITY_EXPECTED_UID` raises before any venue call. The UID
+compare's only request is `GET /api/v1/user/query-apikey`. A mismatch or
+an unverified UID raises before the other reads. The check is in the
+mirror, not a startup refusal of `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED`,
+so it still runs when the stored snapshot is fresh and snapshot sync is
+skipped. A disabled mirror performs no venue read. `paper_exchange_demo`
+and the dedicated read-only key do not take this extra gate. The refusal
+log is `blofin_fallback_sync_refused` with a reason token, and the UID
+result is `blofin_snapshot_identity` (`verified` or `mismatch`). Neither
+log includes the UID or the key.
 
 While the flag is off, the demo card does not publish a hand-trade win rate.
 The activity-worker `fillPnl` figures stay withheld for the reason in

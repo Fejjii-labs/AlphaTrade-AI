@@ -288,6 +288,11 @@ class Settings(BaseSettings):
     blofin_sync_stale_after_seconds: int = Field(default=300, ge=30, le=86400)
     # Off until explicitly enabled. A disarmed worker never attaches the cycle.
     blofin_demo_snapshot_sync_enabled: bool = False
+    # Paper-internal GET snapshot using the stored demo key. This is not
+    # BLOFIN_DEMO_ENABLED: that flag is the execution axis and would fail the
+    # live USD-M evidence check the Telegram staging projection requires.
+    # Orders stay on the internal paper adapter. Default false.
+    blofin_demo_snapshot_internal_read_enabled: bool = False
     # Worker read-only snapshot cadence. The browser polls the same interval.
     blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
     # Read-only journal mirror for hand trades on the BloFin demo account.
@@ -760,7 +765,9 @@ class Settings(BaseSettings):
 
         Paper demo mode, demo trading disabled for real money, and the
         allowlisted host are still required by the client. This property does
-        not authorize orders.
+        not authorize orders. ``paper_internal`` uses
+        :attr:`blofin_paper_internal_snapshot_read_ready` instead, so this
+        property stays false there.
         """
         return (
             self.blofin_readonly_set_absent
@@ -771,15 +778,63 @@ class Settings(BaseSettings):
             and self.blofin_demo_configured
         )
 
+    def _paper_internal_demo_key_snapshot_gates(self) -> bool:
+        """Shared paper_internal snapshot gates, before the demo-host allowlist.
+
+        ``blofin_demo_enabled`` is intentionally not one of them. Turning that
+        flag on clears paper credential isolation and fails live USD-M evidence,
+        which the Telegram staging projection requires. This method does not
+        authorize orders.
+        """
+        return (
+            self.blofin_demo_snapshot_sync_enabled
+            and self.blofin_demo_snapshot_internal_read_enabled
+            and self.blofin_readonly_set_absent
+            and self.execution_mode is ExecutionMode.PAPER
+            and not self.enable_real_trading
+            and not self.real_trading_enabled
+            and self.exchange_mode is ExchangeMode.PAPER_INTERNAL
+            and self.blofin_demo_configured
+            and bool(self.blofin_demo_rest_base_url.strip())
+        )
+
+    @property
+    def blofin_paper_internal_main_key_selected(self) -> bool:
+        """True when the main ``BLOFIN_API_*`` key is the paper_internal GET credential.
+
+        This is the selector for that key. It is not a user-facing request
+        flag, and it is not proof that the host is allowlisted. A
+        non-allowlisted host still selects the key so the client can refuse
+        it. Readiness is :attr:`blofin_paper_internal_snapshot_read_ready`.
+        """
+        return self._paper_internal_demo_key_snapshot_gates()
+
+    @property
+    def blofin_paper_internal_snapshot_read_ready(self) -> bool:
+        """Paper-internal GET snapshot may use the main demo key.
+
+        Requires the snapshot flag, the internal-read flag, paper execution,
+        real trading off, a complete demo key, and an allowlisted demo origin.
+        A partial read-only set does not qualify. Orders stay internal.
+        """
+        from app.core.exchange_safety import is_allowlisted_demo_host
+
+        return self.blofin_paper_internal_main_key_selected and is_allowlisted_demo_host(
+            self.blofin_demo_rest_base_url
+        )
+
     @property
     def blofin_worker_readonly_ready(self) -> bool:
         """Unattended snapshot sync may read with the dedicated key or the demo key.
 
         The demo key is used only when the read-only set is absent, and only
-        through the GET-only client.
+        through the GET-only client. ``paper_internal`` additionally requires
+        the internal snapshot read gates.
         """
         return (
-            self.blofin_read_sync_uses_dedicated_credentials or self.blofin_demo_read_fallback_ready
+            self.blofin_read_sync_uses_dedicated_credentials
+            or self.blofin_demo_read_fallback_ready
+            or self.blofin_paper_internal_snapshot_read_ready
         )
 
     @property
