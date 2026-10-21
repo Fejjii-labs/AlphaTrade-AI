@@ -13,11 +13,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseStatus
+from tests.support.alembic_heads import single_alembic_head
 from tests.support.experiment_fixtures import World
 from tests.support.trendpulse_screening import after_close
 from tests.test_trendpulse_1r_domain import configure
 from tests.test_trendpulse_screening import request, service
-from tests.support.alembic_heads import single_alembic_head
 
 
 def test_one_additive_revision_follows_reserved_a11():

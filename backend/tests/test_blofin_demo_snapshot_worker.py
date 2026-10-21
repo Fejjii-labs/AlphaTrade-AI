@@ -23,8 +23,8 @@ from app.providers.exchange.base import AccountPermissions
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
-from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services import blofin_sync_service
+from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.blofin_sync_service import BloFinSyncService
 from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
