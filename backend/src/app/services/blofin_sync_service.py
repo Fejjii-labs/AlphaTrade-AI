@@ -47,6 +47,20 @@ from app.services.dashboard.demo_performance import configured_demo_account
 logger = structlog.get_logger(__name__)
 
 
+def _account_pin_applies(settings: Settings) -> bool:
+    """True when this sync key must match the pinned native demo account.
+
+    The dedicated read-only key and the main demo-key fallback both do.
+    The execution-provider path, used when a partial or unused read-only set
+    is present, keeps its previous gate.
+    """
+
+    return (
+        settings.blofin_read_sync_uses_dedicated_credentials
+        or settings.blofin_demo_read_fallback_ready
+    )
+
+
 class BloFinSyncService:
     """Read-only BloFin demo account/position reconciliation."""
 
@@ -130,7 +144,7 @@ class BloFinSyncService:
                 raise ValueError("BloFin sync native account UID is unverified.")
             config = get_activity_settings()
             if (
-                uses_dedicated
+                _account_pin_applies(self._settings)
                 and config.organization_id == organization_id
                 and config.expected_uid
                 and config.expected_uid != uid
@@ -305,7 +319,7 @@ class BloFinSyncService:
         except Exception:
             raise NotFoundError("Current BloFin connection is unverified.") from None
         uid = self._snapshots.verified_uid_for_binding(organization_id, binding)
-        if self._settings.blofin_read_sync_uses_dedicated_credentials:
+        if _account_pin_applies(self._settings):
             config = get_activity_settings()
             if config.organization_id == organization_id and config.expected_uid:
                 proof = self._session.get(

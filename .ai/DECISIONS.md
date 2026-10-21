@@ -2,6 +2,19 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-138 — Fallback demo key uses the same native account pin
+
+- Date: 2026-10-21
+- Decision: The main demo-key fallback is subject to the same native account
+  pin as the dedicated read-only key. When `BLOFIN_ACTIVITY_EXPECTED_UID` is
+  set for `BLOFIN_ACTIVITY_ORGANIZATION_ID`, sync refuses a key whose native
+  UID is a different demo account. `latest()` applies the same activity-account
+  snapshot proof. The connection binding stays the main demo key
+  (`readonly=False`). A dedicated key that can trade is still refused. The
+  fallback key is not refused only because `readOnly` is 0. The GET-only
+  client, `assert_demo_host`, and the partial-set fail-closed rule are unchanged.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-137.
+
 ## AT-ADR-137 — Demo snapshot and read sync may use the main demo key for GET only
 
 - Date: 2026-10-21

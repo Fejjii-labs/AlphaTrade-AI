@@ -29,9 +29,14 @@ are true:
 
 Otherwise the cycle is not attached, or its status is `skipped`, and it does
 not open the database or call BloFin. Identity and UID checks stay inside
-`BloFinSyncService.sync`. The worker records actor `system` and provenance
-`sync_origin=worker`. When the read-only set is absent, the dashboard refresh
-uses the same GET-only client and the main demo key. It does not place orders.
+`BloFinSyncService`. The dedicated key and the main demo-key fallback both
+refuse a native UID that differs from `BLOFIN_ACTIVITY_EXPECTED_UID` for
+`BLOFIN_ACTIVITY_ORGANIZATION_ID`, and both apply the activity-account
+snapshot proof on read. A dedicated key that can trade is still refused.
+The main demo key is not refused only because it can trade. The worker
+records actor `system` and provenance `sync_origin=worker`. When the
+read-only set is absent, the dashboard refresh uses the same GET-only client
+and the main demo key. It does not place orders.
 
 | Name | Role |
 | --- | --- |
