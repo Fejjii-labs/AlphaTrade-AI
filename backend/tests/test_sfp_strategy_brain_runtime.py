@@ -395,9 +395,14 @@ def padded_evidence(path=BULL, *, start=START):
 
 
 def assemble_prefix(session, policy, bars, *, now=None, replay=True):
+    from app.market_contracts.provider_contracts import default_contract_book
+
     source = ScriptedPerpetualSource(replay=replay, bars_15m=list(bars))
     assembler = FirstSliceEvidenceAssembler(
-        source, replay=replay, clock=lambda: now or bars[-1].interval_end
+        source,
+        replay=replay,
+        clock=lambda: now or bars[-1].interval_end,
+        contract_book=default_contract_book() if not replay else None,
     )
     return assemble_sfp(
         assembler, executable=policy, organization_id=policy.organization_id, session=session

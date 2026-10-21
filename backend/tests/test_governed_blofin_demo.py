@@ -702,3 +702,25 @@ def test_staging_settings_require_complete_scoped_demo_arm() -> None:
         Settings(**{**values, "governed_blofin_demo_enabled": False})
     with pytest.raises(ValueError):
         Settings(**{**values, "governed_blofin_demo_user_id": ""})
+
+
+def test_governed_demo_loop_refuses_sfp_before_planning() -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+    from tests.test_sfp_detector import spec as sfp_spec
+
+    loop = GovernedBloFinDemoLoop(None, None, SimpleNamespace(now=lambda: EVALUATED_AT))
+    proof = loop._bound(
+        None,
+        target=SimpleNamespace(organization_id=ORG, user_id=USER),
+        candidate=SimpleNamespace(candidate_id=uuid4(), correlation_id=None),
+        assessment=SimpleNamespace(),
+        window=SimpleNamespace(),
+        assembled=SimpleNamespace(),
+        policy=SimpleNamespace(authored_spec=sfp_spec()),
+        account=SimpleNamespace(id=uuid4()),
+    )
+    assert proof.stage == "skipped"
+    assert proof.reason_code == "sfp_execution_plan_not_authorized"

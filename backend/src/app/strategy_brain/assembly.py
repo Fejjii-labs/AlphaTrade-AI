@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.candidate_alerts.nested import NestedAlertSummary, required_evidence_fresh
 from app.evidence_pipeline.canonical import semantic_source_from_identity
 from app.evidence_pipeline.current_price import quote_current_price
+from app.evidence_pipeline.instrument_tick import resolve_bundle_tick_size
 from app.evidence_pipeline.types import (
     AssembledCanonicalEvidence,
     CompletenessReport,
@@ -27,10 +28,11 @@ from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.hashing import with_content_hash
 from app.market_contracts.identity import interval_timedelta
 from app.market_contracts.observation import observation_from_ohlcv
+from app.market_contracts.provider_contracts import default_contract_book
 from app.services.canonical_serialization import canonical_sha256
 from app.signal_fusion.adapters import AssessmentCommand, evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceAdapterKind, EvidenceRole
-from app.signal_fusion.first_slice_types import FIRST_SLICE_TICK_SIZE, FirstSliceEvidenceBundle
+from app.signal_fusion.first_slice_types import FirstSliceEvidenceBundle
 from app.signal_fusion.types import HalfOpenInterval, TriggerIdentity
 from app.strategy_brain.detector import NAMESPACE, NestedDetection, detect_nested
 from app.strategy_brain.records import attach_paper_result, record_detections, scoped_setup_id
@@ -73,6 +75,15 @@ def assemble_ohlcv_family(
     clock = assembler._default_clock
     now = clock()
     instrument = instrument_for_source(source, catalog, spec.symbol)
+    contract_book = getattr(assembler, "_contract_book", None)
+    if not replay and (contract_book is None or not contract_book.contracts):
+        contract_book = default_contract_book()
+    tick_size = resolve_bundle_tick_size(
+        symbol=spec.symbol,
+        venue=instrument.venue,
+        book=contract_book,
+        replay=replay,
+    )
     identity = first_slice_identity(
         timeframe=spec.trigger_timeframe, replay=replay, is_live=not replay, instrument=instrument
     )
@@ -136,9 +147,7 @@ def assemble_ohlcv_family(
             ordered = sorted(pairs.values(), key=lambda pair: pair[0].interval_start)
             bars = tuple(b for b, _ in ordered)
             observations = tuple(o for _, o in ordered)
-        scan = detect_sfp(
-            bars, observations, spec, evaluated_at=now, tick_size=FIRST_SLICE_TICK_SIZE
-        )
+        scan = detect_sfp(bars, observations, spec, evaluated_at=now, tick_size=tick_size)
         latest = select_detection(scan, bars)
         events = scan.events
     else:
@@ -262,7 +271,7 @@ def assemble_ohlcv_family(
             else spec.parameters.confirmation_window,
             setup_trigger_bar_hash=trigger.content_hash,
         ),
-        bundle=FirstSliceEvidenceBundle(bars_15m=bars, tick_size=FIRST_SLICE_TICK_SIZE),
+        bundle=FirstSliceEvidenceBundle(bars_15m=bars, tick_size=tick_size),
         assessment_command=command,
         evidence_window=window,
         evidence_window_hash=window.content_hash,

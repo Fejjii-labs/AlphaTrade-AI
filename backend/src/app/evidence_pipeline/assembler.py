@@ -14,6 +14,7 @@ from app.evidence_pipeline.canonical import (
     timeframe_identity,
 )
 from app.evidence_pipeline.current_price import quote_current_price
+from app.evidence_pipeline.instrument_tick import resolve_bundle_tick_size
 from app.evidence_pipeline.market_intelligence import (
     DERIVATIVE_ROLES,
     ORDER_FLOW_ROLES,
@@ -97,6 +98,7 @@ from app.market_contracts.observation import (
 )
 from app.market_contracts.ohlcv import ClosedOhlcvSeries, OhlcvBar, require_closed_series
 from app.market_contracts.order_flow import OrderFlowObservation, require_order_flow
+from app.market_contracts.provider_contracts import ContractBook
 from app.schemas.common import Timeframe
 from app.signal_fusion.adapters import evidence_window_from_assessment_command
 from app.signal_fusion.enums import EvidenceAdapterKind, EvidenceRole
@@ -124,12 +126,14 @@ class FirstSliceEvidenceAssembler:
         catalog: PerpetualInstrumentCatalog | None = None,
         lifetime: SetupLifetimePort | None = None,
         clock: Callable[[], datetime] | None = None,
+        contract_book: ContractBook | None = None,
     ) -> None:
         self._diagnostics: tuple[EvidenceComponentDiagnostic, ...] = ()
         self._source = source
         self._replay = replay
         self._catalog = catalog if catalog is not None else default_perpetual_catalog()
         self._clock = clock
+        self._contract_book = contract_book
         self._lifetime: SetupLifetimePort = (
             lifetime if lifetime is not None else SetupLifetimeStore()
         )
@@ -594,6 +598,12 @@ class FirstSliceEvidenceAssembler:
             resistances=resistances,
             market_intelligence=intelligence,
             order_flow=order_flow,
+            tick_size=resolve_bundle_tick_size(
+                symbol=symbol,
+                venue=instrument.venue,
+                book=self._contract_book,
+                replay=self._replay,
+            ),
         )
         completeness = CompletenessReport(
             ohlcv_15m=DataCompleteness.COMPLETE,
