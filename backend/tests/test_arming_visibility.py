@@ -294,10 +294,12 @@ def test_health_shows_the_refusal_and_pages_once(monkeypatch: pytest.MonkeyPatch
     assert body.real_trading_enabled is False
     report = _run_heartbeat(settings)
     assert report.arming_refusal.reason == COOLDOWN_INVALID
-    assert report.arming_alert_raised is True
+    assert report.arming_alert_raised is False
+    assert report.alert_raised is True
     assert report.exit_monitor_status == "disabled"
     again = _run_heartbeat(settings)
     assert again.arming_alert_raised is False
+    assert again.alert_raised is False
     blob = "\n".join(sent)
     assert _TOKEN not in blob
     assert "pnl" not in blob.lower()
@@ -329,7 +331,8 @@ def test_exit_monitor_thread_is_stale_while_the_watcher_heartbeat_is_fresh(
     assert report.alert_raised is False
     assert report.exit_monitor_status == "stale"
     assert report.exit_monitor_alert_raised is True
-    assert sent == []
+    assert "exit_monitor_heartbeat_stale" in sent[0]
+    assert _TOKEN not in sent[0]
     missing_rows = {
         PAPER_WORKER_COMPONENT: fresh,
         PAPER_ARMING_COMPONENT: armed,
@@ -379,7 +382,8 @@ def test_exit_monitor_heartbeat_is_not_the_watcher_row(monkeypatch: pytest.Monke
         )
         is True
     )
-    assert sent == []
+    assert "exit_monitor_heartbeat_missing" in sent[0]
+    assert _TOKEN not in sent[0]
 
 
 def test_observed_alert_is_sent_when_the_database_write_fails(
@@ -613,7 +617,11 @@ def test_attached_exit_monitor_stays_expected_when_the_autonomous_loop_refuses(
     assert report.arming_refusal.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
     assert report.exit_monitor_status == "stale"
     assert report.exit_monitor_alert_raised is True
-    assert sent == []
+    assert any("exit_monitor_heartbeat_stale" in message for message in sent)
+    blob = "\n".join(sent)
+    assert _TOKEN not in blob
+    assert _CHAT not in blob
+    assert "pnl" not in blob.lower()
     rendered = report.model_dump_json()
     assert _TOKEN not in rendered
     assert "pnl" not in rendered.lower()

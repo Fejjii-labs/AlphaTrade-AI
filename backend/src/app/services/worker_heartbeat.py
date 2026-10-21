@@ -33,8 +33,6 @@ from app.services.arming_gates import _positive_finite
 from app.services.paper_exit_monitor import ExitMonitorAlert
 from app.services.safety_alerts import (
     deliver_safety_alert,
-    record_safety_alert_observation,
-    safety_alert_observation_recently_recorded,
     safety_alert_telegram_allowed,
     telegram_safety_configured,
 )
@@ -239,8 +237,6 @@ def raise_prepared_alert(
     if alert is None:
         return False
     token = alert.fields.get("dedup_key") or alert.code
-    if safety_alert_observation_recently_recorded(token, alert.code, now):
-        return False
     if not ledger.should_send(token, now):
         return False
     if not telegram_safety_configured(settings):
@@ -248,13 +244,13 @@ def raise_prepared_alert(
         if remember_when_unconfigured:
             ledger.remember(token, now)
         return False
-    if safety_alert_telegram_allowed(settings, alert.code):
-        deliver_safety_alert(settings, alert, now=now)
-    else:
+    if not safety_alert_telegram_allowed(settings, alert.code):
         logger.info("safety_alert_telegram_suppressed", code=alert.code)
-    record_safety_alert_observation(token, now)
-    ledger.remember(token, now)
-    return True
+        return False
+    sent = deliver_safety_alert(settings, alert, now=now)
+    if sent:
+        ledger.remember(token, now)
+    return sent
 
 
 def publish_exit_monitor_heartbeat(

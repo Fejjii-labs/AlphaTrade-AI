@@ -261,19 +261,19 @@ this one does not.
 `source`, and `since`. The free-text reason is not included. No secret and
 no P&L amount are included. Telegram HTTP sends wait at most 5 seconds.
 
-Actionable safety alerts (kill-switch activation, backfill-loss, stale-loss,
-and paper stop/target exits from the monitor) use the same Telegram path when
-their code is on ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` (sane default in
-Settings). Monitor-health warnings such as ``degraded_repeat``, clock skew,
-and worker or exit-monitor heartbeat gaps stay in structured logs and in
-``GET /health/paper-worker``; they are not sent to Telegram. Setup
+Kill-switch activation, backfill-loss, stale-loss, worker and exit-monitor
+heartbeat gaps, and paper stop/target exits from the monitor use the same
+Telegram path (mandatory loss and kill-switch codes always; heartbeats and
+stop/tp on by default). ``TELEGRAM_SAFETY_ALERT_ALLOWLIST`` is add-only for
+optional extra codes. ``degraded_repeat``, clock skew, and ``arming_refused``
+stay in structured logs and ``GET /health/paper-worker`` only. Setup
 notifications and policy-controlled paper alerts use the separate outbox path.
 
 Telegram safety sends use the existing `telegram_bot_token` and
 `telegram_chat_id`. Kill-switch and loss-protection pages never include a
-secret or a P&L amount. Stop and target exit pages include symbol, direction,
-entry, exit, R, and net P&L in the same informational style as setup
-alerts. A repeated dedup key inside the alert cooldown does not send again.
+secret or a P&L amount. Stop and target exit pages include symbol, timeframe,
+direction, outcome (stop-out or take-profit), and R only. A repeated dedup key
+inside the alert cooldown does not send again.
 Telegram is attempted only after the database commit. If that commit rolls
 back, the dropped page is logged at error. A kill-switch page is not sent
 when its activation rolls back.

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.providers.alert_delivery.base import AlertDeliveryResult
@@ -27,22 +28,37 @@ _TOKEN = "123456789:AAFakeTokenForTests"
 _CHAT = "123456789"
 
 
-def test_default_allowlist_blocks_monitor_health_codes() -> None:
+def test_default_allowlist_blocks_logs_only_monitor_codes() -> None:
     settings = Settings(_env_file=None)
     assert safety_alert_telegram_allowed(settings, "kill_switch_activated") is True
     assert safety_alert_telegram_allowed(settings, "stop_hit") is True
+    assert safety_alert_telegram_allowed(settings, "worker_heartbeat_missing") is True
+    assert safety_alert_telegram_allowed(settings, "exit_monitor_heartbeat_stale") is True
     assert safety_alert_telegram_allowed(settings, "degraded_repeat") is False
-    assert safety_alert_telegram_allowed(settings, "worker_heartbeat_missing") is False
     assert safety_alert_telegram_allowed(settings, "clock_skew") is False
+    assert safety_alert_telegram_allowed(settings, "arming_refused") is False
 
 
-def test_custom_allowlist_from_env_string() -> None:
-    settings = Settings(
-        _env_file=None,
-        telegram_safety_alert_allowlist="kill_switch_activated,degraded_repeat",
-    )
-    assert safety_alert_telegram_allowed(settings, "degraded_repeat") is True
-    assert safety_alert_telegram_allowed(settings, "stop_hit") is False
+def test_mandatory_codes_stay_allowed_when_env_extra_is_empty() -> None:
+    settings = Settings(_env_file=None, telegram_safety_alert_allowlist=[])
+    assert safety_alert_telegram_allowed(settings, "backfill_loss") is True
+    assert safety_alert_telegram_allowed(settings, "stale_live_loss") is True
+
+
+def test_add_only_extra_allowlist_is_case_insensitive() -> None:
+    settings = Settings(_env_file=None, telegram_safety_alert_allowlist="PAPER_TRADE_OPENED")
+    assert safety_alert_telegram_allowed(settings, "paper_trade_opened") is True
+    assert safety_alert_telegram_allowed(settings, "stop_hit") is True
+
+
+def test_unknown_extra_code_fails_startup_validation() -> None:
+    with pytest.raises(ValidationError, match="Unknown telegram safety alert code"):
+        Settings(_env_file=None, telegram_safety_alert_allowlist="not_a_real_code")
+
+
+def test_logs_only_code_cannot_be_added_via_env() -> None:
+    with pytest.raises(ValidationError, match="logs-only"):
+        Settings(_env_file=None, telegram_safety_alert_allowlist="degraded_repeat")
 
 
 def test_degraded_repeat_is_not_delivered_to_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,7 +87,7 @@ def test_degraded_repeat_is_not_delivered_to_telegram(monkeypatch: pytest.Monkey
     assert calls == []
 
 
-def test_stop_hit_verbatim_body_includes_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_hit_verbatim_body_omits_prices_and_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_safety_alert_dedup()
     calls: list[str] = []
 
@@ -90,9 +106,6 @@ def test_stop_hit_verbatim_body_includes_pnl(monkeypatch: pytest.MonkeyPatch) ->
     body = format_paper_exit_close_telegram_text(
         symbol="BTCUSDT",
         direction=TradeDirection.SHORT,
-        entry_price=Decimal("100"),
-        exit_price=Decimal("95"),
-        net_pnl=Decimal("4.50"),
         r_multiple="1.00",
         timeframe="15m",
         exit_reason="target_hit",
@@ -106,9 +119,14 @@ def test_stop_hit_verbatim_body_includes_pnl(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert deliver_safety_alert(settings, alert, now=_NOW) is True
     assert len(calls) == 1
-    assert "AlphaTrade PAPER informational take-profit hit." in calls[0]
-    assert "P&L: 4.50" in calls[0]
-    assert "AlphaTrade alert (" not in calls[0]
+    text = calls[0]
+    assert "AlphaTrade PAPER informational take-profit hit." in text
+    assert "Outcome: take-profit" in text
+    assert "R: 1.00" in text
+    assert "Entry:" not in text
+    assert "Exit:" not in text
+    assert "P&L" not in text
+    assert "AlphaTrade alert (" not in text
 
 
 def test_r_multiple_uses_planned_risk_when_present() -> None:

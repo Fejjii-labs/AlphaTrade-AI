@@ -20,9 +20,6 @@ def format_paper_exit_close_telegram_text(
     *,
     symbol: str,
     direction: TradeDirection,
-    entry_price: Decimal,
-    exit_price: Decimal,
-    net_pnl: Decimal,
     r_multiple: str,
     timeframe: str,
     exit_reason: str,
@@ -30,16 +27,15 @@ def format_paper_exit_close_telegram_text(
     """Deterministic private-chat text aligned with setup informational alerts."""
 
     headline = _HEADLINE_TARGET if exit_reason == "target_hit" else _HEADLINE_STOP
+    outcome = "take-profit" if exit_reason == "target_hit" else "stop-out"
     return "\n".join(
         (
             headline,
             f"Symbol: {symbol}",
             f"Timeframe: {timeframe}",
             f"Direction: {direction.value}",
-            f"Entry: {format(entry_price, 'f')}",
-            f"Exit: {format(exit_price, 'f')}",
+            f"Outcome: {outcome}",
             f"R: {r_multiple}",
-            f"P&L: {format(net_pnl, 'f')}",
         )
     )
 
@@ -103,9 +99,6 @@ def queue_paper_exit_close_telegram(
     body = format_paper_exit_close_telegram_text(
         symbol=trade.symbol,
         direction=trade.direction,
-        entry_price=trade.entry_price,
-        exit_price=trade.exit_price,
-        net_pnl=trade.net_pnl,
         r_multiple=r_multiple,
         timeframe=trade.timeframe,
         exit_reason=exit_reason,

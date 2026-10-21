@@ -95,16 +95,42 @@ _COOLDOWN_SECONDS = {
     "exit_monitor_heartbeat_stale": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
-_DEFAULT_TELEGRAM_SAFETY_ALLOWLIST = frozenset(
+TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
     {
         "kill_switch_activated",
         "backfill_loss",
         "stale_live_loss",
+    }
+)
+TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
+    {
+        "worker_heartbeat_missing",
+        "worker_heartbeat_stale",
+        "exit_monitor_heartbeat_missing",
+        "exit_monitor_heartbeat_stale",
         "stop_hit",
         "tp_hit",
+    }
+)
+TELEGRAM_SAFETY_LOGS_ONLY_CODES: frozenset[str] = frozenset(
+    {
+        "degraded_repeat",
+        "clock_skew",
+        "clock_untrusted",
+        "arming_refused",
+    }
+)
+TELEGRAM_SAFETY_OPTIONAL_CODES: frozenset[str] = frozenset(
+    {
         "paper_trade_opened",
         "paper_trade_closed",
     }
+)
+TELEGRAM_SAFETY_KNOWN_CODES: frozenset[str] = (
+    TELEGRAM_SAFETY_MANDATORY_CODES
+    | TELEGRAM_SAFETY_DEFAULT_CODES
+    | TELEGRAM_SAFETY_LOGS_ONLY_CODES
+    | TELEGRAM_SAFETY_OPTIONAL_CODES
 )
 _AMOUNT = re.compile(
     r"(?i)\b(?:net[_\s-]?pnl|pnl|p&l|profit|loss amount)\b\s*[:=]?\s*-?\d+(?:\.\d+)?"
@@ -149,14 +175,33 @@ def telegram_safety_configured(settings: Settings) -> bool:
     return bool(settings.telegram_bot_token.strip() and settings.telegram_chat_id.strip())
 
 
+def effective_telegram_safety_allowlist(settings: Settings) -> frozenset[str]:
+    """Mandatory and default codes plus case-normalized env extras."""
+
+    extras = {item.lower() for item in settings.telegram_safety_alert_allowlist}
+    return TELEGRAM_SAFETY_MANDATORY_CODES | TELEGRAM_SAFETY_DEFAULT_CODES | extras
+
+
+def validate_telegram_safety_extra_allowlist(codes: list[str]) -> None:
+    """Reject unknown or logs-only codes in ``TELEGRAM_SAFETY_ALERT_ALLOWLIST``."""
+
+    for code in codes:
+        normalized = code.lower()
+        if normalized not in TELEGRAM_SAFETY_KNOWN_CODES:
+            raise ValueError(f"Unknown telegram safety alert code: {code}")
+        if normalized in TELEGRAM_SAFETY_LOGS_ONLY_CODES:
+            raise ValueError(
+                f"Telegram safety alert code {code} is logs-only and cannot be allowlisted"
+            )
+
+
 def safety_alert_telegram_allowed(settings: Settings, code: str) -> bool:
     """True when this safety-alert code may be sent to Telegram."""
 
-    configured = settings.telegram_safety_alert_allowlist
-    allowlist = (
-        frozenset(configured) if configured else _DEFAULT_TELEGRAM_SAFETY_ALLOWLIST
-    )
-    return code in allowlist
+    normalized = code.lower()
+    if normalized in TELEGRAM_SAFETY_LOGS_ONLY_CODES:
+        return False
+    return normalized in effective_telegram_safety_allowlist(settings)
 
 
 def deliver_safety_alert(
@@ -418,22 +463,6 @@ def kill_switch_page_recently_sent(key: str, now: datetime) -> bool:
     """True when this process already sent this kill-switch version."""
 
     return _recently_sent(key, now, _cooldown("kill_switch_activated"))
-
-
-def safety_alert_observation_recently_recorded(
-    dedup_key: str,
-    code: str,
-    now: datetime,
-) -> bool:
-    """True when this process already surfaced this alert inside the cooldown."""
-
-    return _recently_sent(dedup_key, now, _cooldown(code))
-
-
-def record_safety_alert_observation(dedup_key: str, now: datetime) -> None:
-    """Remember one surfaced alert for in-process health dedup."""
-
-    _remember(dedup_key, now)
 
 
 def _kill_switch_dedup_parts(alert: ExitMonitorAlert) -> tuple[str, int] | None:
