@@ -2,6 +2,57 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-141 — Fallback demo key fails closed without the activity pin
+
+- Date: 2026-10-21
+- Decision: The main demo-key fallback refuses to sync unless
+  `BLOFIN_ACTIVITY_ORGANIZATION_ID` is set and equals the sync organization,
+  and `BLOFIN_ACTIVITY_EXPECTED_UID` is set. A mismatch or a missing pin is
+  logged as `blofin_fallback_sync_refused` with a reason token and no
+  credential or UID value. The refusal happens before a venue call. The
+  dedicated read-only key keeps its previous pin: it compares the native UID
+  only when that pin is present for the same organization. Activity sync
+  still requires a venue read-only key. `BLOFIN_ACTIVITY_ENABLED` is not
+  required for this pin.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-140.
+
+## AT-ADR-140 — Fallback demo key uses the same native account pin
+
+- Date: 2026-10-21
+- Decision: The main demo-key fallback is subject to the same native account
+  pin as the dedicated read-only key. When `BLOFIN_ACTIVITY_EXPECTED_UID` is
+  set for `BLOFIN_ACTIVITY_ORGANIZATION_ID`, sync refuses a key whose native
+  UID is a different demo account. `latest()` applies the same activity-account
+  snapshot proof. The connection binding stays the main demo key
+  (`readonly=False`). A dedicated key that can trade is still refused. The
+  fallback key is not refused only because `readOnly` is 0. The GET-only
+  client, `assert_demo_host`, and the partial-set fail-closed rule are unchanged.
+- Reference: `docs/blofin_demo_snapshot_worker.md`. Supplements AT-ADR-139.
+
+## AT-ADR-139 — Demo snapshot and read sync may use the main demo key for GET only
+
+- Date: 2026-10-21
+- Decision: Staging keeps one Read+Trade demo key (`BLOFIN_API_KEY`,
+  `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`). Snapshot sync and read sync
+  use that key when the dedicated `BLOFIN_READONLY_*` set is absent. The
+  client stays `BloFinReadOnlyClient`: GET and the existing path allowlist
+  only. `assert_demo_host` and the demo-host allowlist stay in force. A
+  partial read-only set does not fall back. A complete read-only set is still
+  preferred, and a dedicated key that can trade is still refused.
+- `demo_account_active` accepts `paper_exchange_demo` as well as the existing
+  `paper_internal` read-only path, so snapshot sync, the manual mirror, and
+  autonomous demo orders can run in one mode. `paper_internal` without the
+  read-only set stays inactive.
+- Safety: `real_trading_enabled` stays false. Production refusals in
+  `deployment_safety.py` are unchanged, including `paper_exchange_demo` and
+  both autonomous flags. Setting both autonomous flags still resolves to
+  `autonomous_mode_ambiguous`. Activity identity still requires a venue
+  read-only key. This decision does not enable the snapshot flag, activity
+  sync, or real-money trading.
+- Supersedes the credential sentence of AT-ADR-115 only. The snapshot flag
+  still defaults false, and a disarmed worker still opens no client.
+- Reference: `docs/blofin_demo_snapshot_worker.md`.
+
 ## AT-ADR-138 — One exit-monitor candle series is one venue
 
 - Date: 2026-10-21

@@ -1,17 +1,31 @@
 """Snapshot cycle gates, fresh skip, and error backoff. No venue calls."""
 
+import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 import structlog
 
+from app.core.blofin_identity import connection_binding
+from app.core.blofin_readonly_access import (
+    BloFinReadOnlyClient,
+    get_readonly_account_provider,
+    get_readonly_client,
+)
 from app.core.config import Settings
-from app.core.errors import NotFoundError
+from app.core.errors import ExchangeDemoInactiveError, NotFoundError
+from app.db.blofin_activity import BloFinActivityAccount
+from app.providers.exchange.base import AccountPermissions
+from app.providers.exchange.blofin_account import BloFinAccountProvider
+from app.providers.exchange.blofin_client import BloFinClient
 from app.schemas.common import ActorType, BloFinSyncHealthStatus
+from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.blofin_sync_service import BloFinSyncService
+from app.services.dashboard.demo_account import demo_account_active
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -129,11 +143,11 @@ def test_disarmed_worker_does_not_construct_a_cycle_even_when_enabled(
         reset_disarmed_worker_boot()
 
 
-def test_trading_keys_skip_without_a_database_or_a_secret_log(
+def test_partial_readonly_set_skips_without_a_database_or_a_secret_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def forbidden() -> None:
-        raise AssertionError("trading-key cycle opened a database")
+        raise AssertionError("partial read-only set opened a database")
 
     monkeypatch.setattr("app.db.session.get_session_factory", forbidden)
     monkeypatch.setattr(
@@ -146,7 +160,7 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     )
 
     def forbidden_mirror(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("mirror ran on trading keys")
+        raise AssertionError("mirror ran on a partial read-only set")
 
     monkeypatch.setattr(
         "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
@@ -154,7 +168,10 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     )
     with structlog.testing.capture_logs() as logs:
         outcome = BloFinDemoSnapshotCycle(
-            _trading_key_settings(blofin_demo_manual_mirror_enabled=True)
+            _trading_key_settings(
+                blofin_demo_manual_mirror_enabled=True,
+                blofin_readonly_api_key="partial-only",
+            )
         )()
     assert outcome.status == "skipped"
     assert outcome.error == "readonly_credentials_required"
@@ -162,10 +179,40 @@ def test_trading_keys_skip_without_a_database_or_a_secret_log(
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
     assert "fixture-trading-pass" not in rendered
+    assert "partial-only" not in rendered
     assert any(item.get("event") == "blofin_demo_snapshot_readonly_required" for item in logs)
 
 
-def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _trading_key_settings(blofin_demo_manual_mirror_enabled=True)
+    now = datetime(2026, 10, 21, tzinfo=UTC)
+    captured: dict[str, object] = {}
+    session = SimpleNamespace(committed=False, closed=False, rollback=lambda: None)
+    session.commit = lambda: setattr(session, "committed", True)
+    session.close = lambda: setattr(session, "closed", True)
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, *, organization_id: object, user_id: object = None) -> None:
+            assert organization_id and user_id
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(self, client: object, now: object = None) -> None:
+            captured["client"] = client
+
+        def apply(self, *_args: object, **_kwargs: object) -> None:
+            captured["applied"] = True
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
     monkeypatch.setattr(
         "app.services.blofin_sync_service.get_demo_account_provider",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
@@ -174,31 +221,420 @@ def test_worker_sync_never_uses_trading_keys(monkeypatch: pytest.MonkeyPatch) ->
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
-    service = BloFinSyncService(MagicMock(), _trading_key_settings())
-    # The full suite calls configure_logging, which caches this module logger
-    # on first use. capture_logs then never sees that cached printer.
-    configuration = structlog.get_config()
-    try:
-        structlog.configure(cache_logger_on_first_use=False)
-        with (
-            structlog.testing.capture_logs() as logs,
-            pytest.raises(ValueError, match="read-only"),
-        ):
-            monkeypatch.setattr(
-                "app.services.blofin_sync_service.logger",
-                structlog.get_logger("app.services.blofin_sync_service"),
-            )
-            service.sync(
-                organization_id=uuid4(),
-                user_id=uuid4(),
-                sync_origin="worker",
-            )
-    finally:
-        structlog.configure(**configuration)
+    with structlog.testing.capture_logs() as logs:
+        outcome = BloFinDemoSnapshotCycle(settings, clock=lambda: now)()
+    assert outcome.status == "ok"
+    assert captured["applied"] is True
+    client = captured["client"]
+    assert isinstance(client, BloFinReadOnlyClient)
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request("POST", "/api/v1/trade/order", body={"instId": "BTC-USDT"})
     rendered = repr(logs)
     assert "fixture-trading-key" not in rendered
     assert "fixture-trading-secret" not in rendered
-    assert any(item.get("event") == "blofin_worker_sync_readonly_required" for item in logs)
+    assert "fixture-trading-pass" not in rendered
+
+
+def test_worker_sync_uses_get_only_demo_key_and_refuses_trade_permission_on_dedicated_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _trading_key_settings()
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "GET"
+        assert request.headers["ACCESS-KEY"] == "fixture-trading-key"
+        data = {
+            "/api/v1/user/query-apikey": {"readOnly": 0, "uid": "demo-read-fallback"},
+            "/api/v1/account/balance": {
+                "totalEquity": "10",
+                "details": [{"currency": "USDT", "balance": "10", "available": "10"}],
+            },
+            "/api/v1/account/positions": [],
+        }[request.url.path]
+        return httpx.Response(200, json={"code": "0", "data": data})
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_readonly_account_provider",
+        lambda cfg: get_readonly_account_provider(cfg, transport=httpx.MockTransport(handle)),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_demo_account_provider",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading provider")),
+    )
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.ensure_demo_exchange_access",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
+    )
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    organization_id = uuid4()
+    _pin_activity(monkeypatch, organization_id, "demo-read-fallback")
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(
+            organization_id=organization_id, user_id=uuid4(), sync_origin="worker"
+        )
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
+    assert [request.method for request in seen] == ["GET", "GET", "GET"]
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+
+    dedicated = _trading_key_settings(
+        blofin_readonly_sync_enabled=True,
+        blofin_readonly_api_key="fixture-reader",
+        blofin_readonly_api_secret="fixture-reader-secret",
+        blofin_readonly_api_passphrase="fixture-reader-pass",
+    )
+    trade_client = BloFinReadOnlyClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="fixture-reader",
+        api_secret="fixture-reader-secret",
+        api_passphrase="fixture-reader-pass",
+        transport=httpx.MockTransport(handle),
+    )
+
+    class TradingKeyProvider(BloFinAccountProvider):
+        def get_account_permissions(self) -> AccountPermissions:
+            self.native_account_uid = "demo-read-fallback"
+            return AccountPermissions(
+                can_read=True,
+                can_trade=True,
+                can_withdraw=False,
+                can_transfer=False,
+                raw_scopes=("read", "trade"),
+                response_keys=("readOnly",),
+            )
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_readonly_account_provider",
+        lambda _cfg: TradingKeyProvider(trade_client),
+    )
+    dedicated_service = BloFinSyncService(MagicMock(), dedicated)
+    monkeypatch.setattr(dedicated_service._snapshots, "add", keep)
+    monkeypatch.setattr(dedicated_service._audit, "record", lambda *_args, **_kwargs: None)
+    refused = dedicated_service.sync(organization_id=uuid4(), user_id=uuid4(), sync_origin="worker")
+    assert refused.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert refused.snapshot.provenance.get("error_type") == "ValueError"
+
+
+def _pin_activity(
+    monkeypatch: pytest.MonkeyPatch, organization_id: UUID, expected_uid: str
+) -> None:
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(
+            _env_file=None,
+            organization_id=organization_id,
+            expected_uid=expected_uid,
+        ),
+    )
+
+
+def _fallback_sync_service(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    *,
+    uid: str,
+) -> BloFinSyncService:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        data: dict[str, object] | list[object]
+        if request.url.path == "/api/v1/user/query-apikey":
+            data = {"readOnly": 0, "uid": uid}
+        elif request.url.path == "/api/v1/account/balance":
+            data = {
+                "totalEquity": "10",
+                "details": [{"currency": "USDT", "balance": "10", "available": "10"}],
+            }
+        else:
+            data = []
+        return httpx.Response(200, json={"code": "0", "data": data})
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_readonly_account_provider",
+        lambda cfg: get_readonly_account_provider(cfg, transport=httpx.MockTransport(handle)),
+    )
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    return service
+
+
+def test_fallback_key_refuses_a_different_demo_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    organization_id = uuid4()
+    settings = _trading_key_settings()
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service = _fallback_sync_service(monkeypatch, settings, uid="other-demo-account")
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="worker")
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("error_type") == "ValueError"
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert result.snapshot.balance_count == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("unset_uid", "activity_expected_uid_unset"),
+        ("unset_org", "activity_organization_unset"),
+        ("mismatched_org", "activity_organization_mismatch"),
+    ],
+)
+def test_fallback_refuses_without_a_matching_account_pin(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    organization_id = uuid4()
+    if case == "unset_uid":
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=""
+        )
+    elif case == "unset_org":
+        config = BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    else:
+        config = BloFinActivitySettings(
+            _env_file=None, organization_id=uuid4(), expected_uid="pinned-demo-account"
+        )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    calls: list[str] = []
+
+    def provider(_cfg: object) -> None:
+        calls.append("provider")
+        raise AssertionError("unpinned fallback opened a client")
+
+    monkeypatch.setattr("app.services.blofin_sync_service.get_readonly_account_provider", provider)
+    service = BloFinSyncService(MagicMock(), _trading_key_settings())
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    with structlog.testing.capture_logs() as logs:
+        result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    assert calls == []
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("error_type") == "ValueError"
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert result.snapshot.balance_count == 0
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused" and item.get("reason") == reason
+        for item in logs
+    )
+    rendered = repr(logs)
+    assert "fixture-trading-key" not in rendered
+    assert "fixture-trading-secret" not in rendered
+    assert "fixture-trading-pass" not in rendered
+    assert "pinned-demo-account" not in rendered
+
+
+def test_fallback_key_accepts_the_pinned_demo_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    organization_id = uuid4()
+    settings = _trading_key_settings()
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service = _fallback_sync_service(monkeypatch, settings, uid="pinned-demo-account")
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="worker")
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
+    assert result.snapshot.provenance["native_account_uid"] == "pinned-demo-account"
+    assert result.snapshot.provenance["identity_status"] == "verified"
+
+
+def _snapshot_row(organization_id: UUID, user_id: UUID) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        organization_id=organization_id,
+        user_id=user_id,
+        synced_at=datetime.now(UTC),
+        health_status="ok",
+        is_stale=False,
+        stale_reason=None,
+        provider="blofin_demo",
+        exchange_mode="paper_exchange_demo",
+        account_snapshot={},
+        positions_snapshot={"items": []},
+        market_context={"symbols": []},
+        provenance={"native_account_uid": "pinned-demo-account", "identity_status": "verified"},
+        error_summary=None,
+        position_count=0,
+        balance_count=0,
+    )
+
+
+def test_fallback_latest_applies_the_snapshot_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization_id = uuid4()
+    user_id = uuid4()
+    settings = _trading_key_settings()
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    binding = connection_binding(settings, readonly=False)
+    session = MagicMock()
+    proof = SimpleNamespace(
+        credential_binding=binding,
+        identity_verified_at=datetime(2026, 10, 21, tzinfo=UTC),
+        identity_error=None,
+    )
+    session.get.return_value = proof
+    service = BloFinSyncService(session, settings)
+    monkeypatch.setattr(service._snapshots, "verified_uid_for_binding", lambda *_a, **_k: None)
+    row = _snapshot_row(organization_id, user_id)
+    seen: dict[str, str] = {}
+
+    def latest_for_connection(
+        *_args: object, native_uid: str, **_kwargs: object
+    ) -> SimpleNamespace:
+        seen["uid"] = native_uid
+        return row
+
+    monkeypatch.setattr(service._snapshots, "latest_for_connection", latest_for_connection)
+    item = service.latest(organization_id=organization_id, user_id=user_id)
+    assert session.get.call_args.args[0] is BloFinActivityAccount
+    assert session.get.call_args.args[1] == (organization_id, "demo", "pinned-demo-account")
+    assert seen["uid"] == "pinned-demo-account"
+    assert item.provenance["native_account_uid"] == "pinned-demo-account"
+
+    session.get.return_value = SimpleNamespace(
+        credential_binding=binding,
+        identity_verified_at=datetime(2026, 10, 21, tzinfo=UTC),
+        identity_error="identity_unverified",
+    )
+    monkeypatch.setattr(
+        service._snapshots, "verified_uid_for_binding", lambda *_a, **_k: "pinned-demo-account"
+    )
+    with pytest.raises(NotFoundError, match="unverified"):
+        service.latest(organization_id=organization_id, user_id=user_id)
+
+    session.get.return_value = None
+    monkeypatch.setattr(
+        service._snapshots, "verified_uid_for_binding", lambda *_a, **_k: "other-demo-account"
+    )
+    with pytest.raises(NotFoundError, match="unverified"):
+        service.latest(organization_id=organization_id, user_id=user_id)
+
+
+def test_demo_account_active_accepts_paper_exchange_demo_for_sync_and_orders() -> None:
+    assert demo_account_active(_trading_key_settings()) is True
+    assert demo_account_active(_trading_key_settings(blofin_readonly_sync_enabled=True)) is True
+    dedicated = _trading_key_settings(
+        blofin_readonly_sync_enabled=True,
+        blofin_readonly_api_key="fixture-reader",
+        blofin_readonly_api_secret="fixture-reader-secret",
+        blofin_readonly_api_passphrase="fixture-reader-pass",
+    )
+    assert demo_account_active(dedicated) is True
+    assert demo_account_active(readonly_settings()) is True
+    closed_host = readonly_settings().model_copy(
+        update={"blofin_demo_rest_base_url": "https://example.com"}
+    )
+    assert demo_account_active(closed_host) is False
+    real = _trading_key_settings().model_copy(update={"enable_real_trading": True})
+    assert demo_account_active(real) is False
+    assert real.real_trading_enabled is False
+
+
+def test_demo_key_fallback_prefers_a_complete_readonly_set_and_keeps_the_host_guard() -> None:
+    fallback = get_readonly_client(_trading_key_settings())
+    assert isinstance(fallback, BloFinReadOnlyClient)
+    assert fallback._api_key == "fixture-trading-key"
+    preferred = get_readonly_client(
+        _trading_key_settings(
+            blofin_readonly_sync_enabled=True,
+            blofin_readonly_api_key="fixture-reader",
+            blofin_readonly_api_secret="fixture-reader-secret",
+            blofin_readonly_api_passphrase="fixture-reader-pass",
+        )
+    )
+    assert preferred._api_key == "fixture-reader"
+    with pytest.raises(ExchangeDemoInactiveError):
+        get_readonly_client(_trading_key_settings(blofin_readonly_api_secret="partial-only"))
+    production = _trading_key_settings().model_copy(
+        update={"blofin_demo_rest_base_url": "https://openapi.blofin.com"}
+    )
+    with pytest.raises(ValueError, match="production"):
+        get_readonly_client(production)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/v1/account/balance", None),
+        ("POST", "/api/v1/trade/order", {"instId": "BTC-USDT"}),
+        ("GET", "/api/v1/account/balance", {}),
+        ("GET", "/api/v1/user/query-apikey", {"note": "body"}),
+        ("GET", "/api/v1/trade/order", None),
+        ("GET", "/api/v1/asset/withdrawal", None),
+        ("GET", "/api/v1/account/balance?limit=1", None),
+        ("GET", "/api/v1/account/../trade/order", None),
+        ("GET", "/api/v1/account/balance/..", None),
+    ],
+)
+def test_fallback_client_refuses_writes_bodies_and_unlisted_paths(
+    method: str, path: str, body: dict[str, str] | None
+) -> None:
+    seen: list[httpx.Request] = []
+    client = get_readonly_client(
+        _trading_key_settings(),
+        transport=httpx.MockTransport(lambda request: seen.append(request) or httpx.Response(500)),
+    )
+    assert isinstance(client, BloFinReadOnlyClient)
+    assert client._api_key == "fixture-trading-key"
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request(method, path, body=body, signed=True)
+    assert seen == []
+
+
+def test_every_public_method_of_the_readonly_client_routes_through_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = get_readonly_client(
+        _trading_key_settings(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200, json={"code": "0", "data": {"readOnly": 0, "uid": "pinned-demo-account"}}
+            )
+        ),
+    )
+    parent: list[tuple[str, str]] = []
+    real = BloFinClient.request
+
+    def wrapped(
+        self: BloFinClient,
+        method: str,
+        path: str,
+        **kwargs: object,
+    ) -> object:
+        parent.append((method, path))
+        return real(self, method, path, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(BloFinClient, "request", wrapped)
+    public = sorted(
+        name
+        for name, member in inspect.getmembers(BloFinReadOnlyClient, inspect.isfunction)
+        if not name.startswith("_")
+    )
+    assert public == ["request"]
+    client.request("GET", "/api/v1/user/query-apikey", signed=True)
+    assert parent == [("GET", "/api/v1/user/query-apikey")]
+    parent.clear()
+    assert client.last_success_at is not None
+    assert client.last_error is None
+    assert parent == []
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request("POST", "/api/v1/trade/order", body={"instId": "BTC-USDT"})
+    assert parent == []
 
 
 def test_closed_gates_skip_without_a_database(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,11 +670,31 @@ def _idle_supervisor() -> PaperWorkerSupervisor:
 def test_supervisor_reports_snapshot_health_when_gates_are_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Closed demo gates skip the snapshot without a snapshot session.
+
+    A non-disarmed worker still publishes boot arming posture, and that
+    writer opens its own session. ``_closed_settings`` is ``environment=local``,
+    so ``settings_are_disarmed_paper_worker`` is false and the posture write
+    runs. ``publish_boot_arming_posture`` re-raises ``AssertionError``, which
+    is why a blanket ``get_session_factory`` ban fails here. Main's focused
+    selector does not collect this file unless a ``blofin_demo_snapshot`` path
+    changes, so the green main job never re-ran it after that posture write
+    landed. The same assertion failed the PR 304 backend job once the file
+    was selected. Arming persistence stays covered by ``test_arming_visibility``.
+    """
+
     monkeypatch.setenv("BLOFIN_ACTIVITY_ENABLED", "false")
     monkeypatch.setattr(
         "app.workers.paper_worker._build_armed_supervisor",
         lambda *_args: _idle_supervisor(),
     )
+    published: list[str] = []
+
+    def posture(*_args: object, **_kwargs: object) -> None:
+        published.append("posture")
+        return None
+
+    monkeypatch.setattr("app.services.arming_visibility.publish_boot_arming_posture", posture)
 
     def forbidden() -> None:
         raise AssertionError("skipped snapshot opened a database")
@@ -247,6 +703,7 @@ def test_supervisor_reports_snapshot_health_when_gates_are_closed(
     worker = build_paper_worker_supervisor(
         _closed_settings().model_copy(update={"blofin_demo_snapshot_sync_enabled": True})
     )
+    assert published == ["posture"]
     health = worker.run_round()
     assert health.demo_snapshot is not None
     assert health.demo_snapshot.status == "skipped"

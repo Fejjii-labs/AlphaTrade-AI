@@ -76,6 +76,7 @@ class BloFinDemoSnapshotCycle:
                 "blofin_demo_snapshot_readonly_required",
                 readonly_sync_enabled=self.settings.blofin_readonly_sync_enabled,
                 readonly_credentials_present=self.settings.blofin_readonly_configured,
+                demo_read_fallback_ready=self.settings.blofin_demo_read_fallback_ready,
             )
             return CycleOutcome("skipped", error="readonly_credentials_required")
         try:
