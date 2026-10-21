@@ -39,6 +39,8 @@ local may arm it. Removing `PAPER_EXIT_MONITOR_DRY_RUN` leaves dry-run on, so
 it cannot start internal-paper closes. Live closes require an explicit
 `PAPER_EXIT_MONITOR_DRY_RUN=false` in addition to the enabled flag. Dry-run
 logs `paper_exit_monitor_would_close` and does not call the close service.
+A closer passed into the cycle is not used while dry-run is on. The refusing
+closer is installed instead, so a dry-run branch cannot submit a close.
 
 The component is attached to the existing paper worker
 (`python -m app.workers.paper_worker`) and uses that worker's poll interval
@@ -59,7 +61,9 @@ from the trade, not from a separate monitor setting:
 
 - Live Binance evidence (`evidence_is_live` and venue `binance`, or source
   family `binance_usdm_futures_public`) reads Binance USD-M public candles,
-  including `BTCUSDT` `15m`. This is the source the live watcher uses.
+  including `BTCUSDT` `15m`. This is the source the live watcher uses. When
+  `perpetual_evidence_secondary_source` is Bybit, that read keeps the
+  failover pair instead of pinning Binance alone.
 - Live Bybit evidence reads the Bybit USDT perpetual adapter.
 - Replay or mock evidence stays on the replay fixture. Tests and backtests
   use that path.
@@ -73,7 +77,19 @@ range touches a level is the exit. A later page is evaluated 5 seconds after
 the oldest bar's start, past Binance's public REST settlement guard. Asking
 again at that exact close makes the guard reject every page size, so a short
 first page would never reach an older entry. Bybit's post-close grace is 0
-seconds, so the same 5-second clearance is used for every source.
+seconds, so the same 5-second clearance is used for every source. Bybit kline
+requests pass `end` equal to the evaluation time in milliseconds. Omitting
+`end` returns only the latest window, so the cursor cannot walk back to an
+older entry. A Binance regional, ban, or rate-limit failure on a paper trade
+discards any Binance pages already read and restarts the walk on the
+configured Bybit secondary. One series is one venue. A second switch, or a
+page whose bars are not that venue, returns no bars and the trade stays
+open. The venue that supplied the series is stored on the journal close
+payload as `exit_evidence.candle_venue`. The same fields are logged as
+`paper_exit_monitor_candle_venue_switch` with the journal trade id, the
+from venue, the to venue, and the timeframe. A close that uses Bybit
+fallback candles is still a paper close. `candle_series_block` thresholds
+are unchanged: a fetch that still returns no bars is `leading_gap`.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.

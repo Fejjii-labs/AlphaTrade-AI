@@ -1595,7 +1595,7 @@ def test_precheck_ignores_rows_older_than_the_current_activation() -> None:
         full: _pending_slot(full, epoch=4, error="sent"),
         truncated: _pending_slot(truncated, epoch=4),
     }
-    assert kill_switch_retry_should_schedule(same_version, now=started) is True
+    assert kill_switch_retry_should_schedule(same_version, now=started) is False
     cleared = {
         full: _pending_slot(full, epoch=0, error="", state="clear"),
         truncated: _pending_slot(truncated, epoch=3),
@@ -1604,6 +1604,90 @@ def test_precheck_ignores_rows_older_than_the_current_activation() -> None:
     only_old_key = {truncated: _pending_slot(truncated, epoch=4)}
     assert kill_switch_retry_should_schedule(only_old_key, now=started) is True
     reset_kill_switch_retry_window()
+
+
+def test_retry_marks_same_version_old_slot_sent_without_paging(
+    monkeypatch: pytest.MonkeyPatch,
+    _kill_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    reset_safety_alert_dedup()
+    reset_kill_switch_retry_window()
+
+    def _forbidden(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("telegram configuration was consulted")
+
+    monkeypatch.setattr("app.services.safety_alerts.telegram_safety_configured", _forbidden)
+    factory, settings = _kill_db
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
+    other = uuid.UUID("00000000-0000-0000-0000-0000000001d3")
+    now = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
+    with factory() as session, session.begin():
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="sent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(_ORG),
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=PAPER_KILL_SWITCH_COMPONENT,
+                worker_id=str(_ORG),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+        session.add(
+            ControlledRuntimeStatusRow(
+                component=paper_kill_switch_truncated_component(other),
+                worker_id=str(other),
+                heartbeat_at=now,
+                activation_state="active",
+                last_scan_reason="manual",
+                last_error_code="unsent",
+                lease_epoch=4,
+                market_source="kill_switch",
+            )
+        )
+    assert retry_unsent_kill_switch_alert(settings, now=now) is False
+    with factory() as session:
+        full = session.get(ControlledRuntimeStatusRow, paper_kill_switch_component(_ORG))
+        truncated = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(_ORG),
+        )
+        legacy = session.get(ControlledRuntimeStatusRow, PAPER_KILL_SWITCH_COMPONENT)
+        untouched = session.get(
+            ControlledRuntimeStatusRow,
+            paper_kill_switch_truncated_component(other),
+        )
+        assert full is not None and full.last_error_code == "sent"
+        assert truncated is not None and truncated.last_error_code == "sent"
+        assert truncated.last_delivery_at is not None
+        assert truncated.last_delivery_at.replace(tzinfo=UTC) == now
+        assert legacy is not None and legacy.last_error_code == "sent"
+        assert untouched is not None and untouched.last_error_code == "unsent"
 
 
 def test_first_full_hex_write_marks_older_slots_sent(

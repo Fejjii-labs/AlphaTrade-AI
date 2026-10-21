@@ -82,6 +82,7 @@ class ExitBar:
     close: Decimal
     source_event_id: str
     content_hash: str
+    venue: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,8 @@ class FetchedBars:
     bars: tuple[ExitBar, ...]
     covers_entry: bool
     source_name: str
+    candle_venue: str = ""
+    switched_from: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,6 +795,7 @@ def decide_exit(
     *,
     source_name: str,
     evaluated_at: datetime,
+    candle_venue: str = "",
 ) -> ExitDecision | None:
     """First closed bar after the entry that touches a level.
 
@@ -842,6 +846,8 @@ def decide_exit(
         evidence["calibration_sample"] = (
             CALIBRATION_EXCLUDED if origin == EXIT_ORIGIN_BACKFILL else CALIBRATION_ELIGIBLE
         )
+        if candle_venue:
+            evidence["candle_venue"] = candle_venue
         return ExitDecision(
             trade=trade,
             reason=reason,
@@ -941,6 +947,7 @@ def run_paper_exit_monitor(
             fetched.bars,
             source_name=fetched.source_name,
             evaluated_at=evaluated_at,
+            candle_venue=fetched.candle_venue,
         )
         if decision is None:
             continue
@@ -1131,6 +1138,7 @@ def _decision_log(decision: ExitDecision) -> dict[str, object]:
         "exit_origin": decision.evidence.get("exit_origin", ""),
         "exit_channel": EXIT_CHANNEL,
         "exit_actor": EXIT_ACTOR,
+        "candle_venue": decision.evidence.get("candle_venue", ""),
     }
 
 

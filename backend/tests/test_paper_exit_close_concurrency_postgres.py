@@ -1,7 +1,8 @@
 """Overlapping paper closes record one journal close.
 
 Two sessions can both observe an open fill. The row lock and the close
-idempotency key leave one CLOSED trade and one close event.
+idempotency key leave one CLOSED trade and one close event. A labelled
+monitor close stores ``exit_evidence.candle_venue`` on that journal event.
 """
 
 from __future__ import annotations
@@ -210,6 +211,7 @@ def _close_labeled(
             "calibration_sample": "excluded" if origin == "backfill" else "eligible",
             "level": "stop",
             "same_bar_assumption": "none",
+            "candle_venue": "bybit",
         },
     )
     session = factory()
@@ -242,6 +244,17 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         origin="backfill",
     )
     assert result.net_pnl < 0  # type: ignore[attr-defined]
+    with factory() as session:
+        event = session.scalar(
+            select(JournalLifecycleEvent).where(
+                JournalLifecycleEvent.execution_lifecycle_id == command_id,
+                JournalLifecycleEvent.event_type == JournalLifecycleEventType.CLOSE,
+            )
+        )
+        assert event is not None
+        evidence = event.payload.get("exit_evidence")
+        assert isinstance(evidence, dict)
+        assert evidence.get("candle_venue") == "bybit"
     with factory() as session:
         switch = session.scalar(
             select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
