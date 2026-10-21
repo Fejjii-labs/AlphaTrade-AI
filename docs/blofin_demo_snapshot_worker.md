@@ -22,10 +22,17 @@ are true:
   (`BLOFIN_READONLY_SYNC_ENABLED` plus `BLOFIN_READONLY_API_KEY`,
   `BLOFIN_READONLY_API_SECRET`, and `BLOFIN_READONLY_API_PASSPHRASE`), or that
   set is absent and the main demo key is present (`BLOFIN_API_KEY`,
-  `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`) with
-  `EXCHANGE_MODE=paper_exchange_demo`. A partial read-only set does not fall
-  back. The worker logs booleans only. Snapshot and read sync issue GET
-  requests through the allowlisted demo client. They do not place orders.
+  `BLOFIN_API_SECRET`, `BLOFIN_API_PASSPHRASE`). The shared demo key is
+  accepted in `EXCHANGE_MODE=paper_exchange_demo` with `BLOFIN_DEMO_ENABLED=true`,
+  or in `EXCHANGE_MODE=paper_internal` with
+  `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED=true`. The internal flag is
+  separate from `BLOFIN_DEMO_ENABLED` so the Telegram staging projection can
+  stay on `paper_internal` and live USD-M evidence. It does not route orders.
+  A partial read-only set does not fall back. The worker logs booleans and
+  the UID identity result (`verified` or `mismatch`) only. Snapshot and read
+  sync issue GET requests through the allowlisted demo client. They do not
+  place orders. The activity worker still requires the dedicated read-only
+  key.
 
 Otherwise the cycle is not attached, or its status is `skipped`, and it does
 not open the database or call BloFin. Identity and UID checks stay inside
@@ -45,6 +52,7 @@ and the main demo key. It does not place orders.
 | Name | Role |
 | --- | --- |
 | `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` | Default false. Required before the worker attaches the cycle. |
+| `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED` | Default false. Required in `paper_internal` before the main demo key may back the GET snapshot. Does not open orders or `BLOFIN_DEMO_ENABLED`. |
 | `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` | Cadence, 30–60. Default 45. Used only after the flag is on. |
 | `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` | Owner organization pin. |
 | `GOVERNED_BLOFIN_DEMO_USER_ID` | Owner user pin. |
@@ -57,7 +65,7 @@ and the main demo key. It does not place orders.
 | `BLOFIN_READONLY_API_PASSPHRASE` | Optional dedicated read-only passphrase. |
 | `BLOFIN_DEMO_REST_BASE_URL` | Allowlisted demo origin. |
 | `EXECUTION_MODE` | Must stay `paper`. |
-| `EXCHANGE_MODE` | `paper_exchange_demo` for the shared demo key. `paper_internal` still accepts a complete read-only set. |
+| `EXCHANGE_MODE` | `paper_exchange_demo` for the shared demo key with `BLOFIN_DEMO_ENABLED=true`. `paper_internal` accepts a complete read-only set, or the shared demo key when `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED=true`. |
 | `ENABLE_REAL_TRADING` | Must stay false. |
 
 A successful snapshot younger than the interval is reused and the cycle stays
@@ -174,6 +182,7 @@ Worker names for snapshot sync and autonomous demo orders:
 - `BLOFIN_API_PASSPHRASE`
 - `BLOFIN_DEMO_REST_BASE_URL`
 - `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED`
+- `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED`
 - `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`
 - `GOVERNED_BLOFIN_DEMO_USER_ID`
 - `GOVERNED_BLOFIN_DEMO_ACCOUNT_ID`

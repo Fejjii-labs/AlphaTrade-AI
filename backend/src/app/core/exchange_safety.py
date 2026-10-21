@@ -85,6 +85,7 @@ def validate_exchange_mode_settings(settings: Settings) -> None:
             )
 
     if mode is not ExchangeMode.PAPER_EXCHANGE_DEMO:
+        _refuse_non_demo_internal_snapshot_host(settings)
         return
 
     errors: list[str] = []
@@ -125,3 +126,22 @@ def validate_exchange_mode_settings(settings: Settings) -> None:
 
     if errors:
         raise ValueError("exchange safety check failed: " + "; ".join(errors))
+
+
+def _refuse_non_demo_internal_snapshot_host(settings: Settings) -> None:
+    """Refuse a non-demo REST host when the paper_internal snapshot read is on.
+
+    An empty URL is a missing runtime gate, not a startup error, so the
+    worker can keep its other components up and skip the snapshot. A set URL
+    that is not the allowlisted demo host is refused here. Production hosts
+    are already refused for every mode above.
+    """
+    if not settings.blofin_demo_snapshot_internal_read_enabled:
+        return
+    rest_url = settings.blofin_demo_rest_base_url.strip()
+    if not rest_url or is_allowlisted_demo_host(rest_url):
+        return
+    raise ValueError(
+        "exchange safety check failed: blofin_demo_rest_base_url must be an "
+        "allowlisted BloFin demo host over HTTPS"
+    )

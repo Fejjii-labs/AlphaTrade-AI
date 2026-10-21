@@ -2,6 +2,31 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-142 — Paper-internal demo snapshot is a GET opt-in, not demo execution
+
+- Date: 2026-10-21
+- Decision: The read-only BloFin demo snapshot may run while
+  `EXCHANGE_MODE=paper_internal`. The opt-in is
+  `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED`, default false, together with
+  `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED`. It is not `BLOFIN_DEMO_ENABLED`.
+  That flag is the execution axis: setting it clears paper credential
+  isolation and fails live USD-M evidence, which the Telegram staging
+  projection requires (`exchange_mode=paper_internal`). Reusing it would
+  crash-loop the armed worker or force `paper_exchange_demo`.
+- The internal path runs only when execution is paper, real trading is off,
+  the three `BLOFIN_API_*` values are set, `BLOFIN_DEMO_REST_BASE_URL` is the
+  allowlisted demo host, and the governed organization and user pins are
+  UUIDs. A non-demo host is refused. A missing gate skips the cycle. The
+  client stays GET-only. `blofin_execution_authorized` and the exchange
+  order adapter stay closed. Paper orders stay internal.
+- The activity worker still requires the dedicated `BLOFIN_READONLY_*` key.
+  The activity organization and expected UID pin still fail closed for the
+  demo-key read. The identity log is `blofin_snapshot_identity` with
+  `result=verified` or `result=mismatch` and does not include the UID or
+  key. Supersedes only the `paper_internal` inactivity sentence of
+  AT-ADR-139 for this opt-in. `paper_exchange_demo` behavior is unchanged.
+- Reference: `docs/blofin_demo_snapshot_worker.md`.
+
 ## AT-ADR-141 — Fallback demo key fails closed without the activity pin
 
 - Date: 2026-10-21

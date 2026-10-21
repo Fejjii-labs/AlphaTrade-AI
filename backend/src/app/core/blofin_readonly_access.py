@@ -110,13 +110,17 @@ def get_readonly_client(
     *,
     transport: httpx.BaseTransport | None = None,
     activity_history: bool = False,
+    paper_internal_snapshot: bool = False,
 ) -> BloFinReadOnlyClient:
     """Build a GET-only demo client.
 
     The dedicated read-only key is used when that set is complete. When the
     set is absent, paper demo mode may use the main demo key for reads only.
-    A partial read-only set does not fall back. ``assert_demo_host`` still
-    runs before any socket is opened. This client cannot place orders.
+    ``paper_internal`` may use that key only for the snapshot cycle, and only
+    when the internal snapshot gates are open. Activity history does not
+    receive it unless the snapshot cycle itself asks. A partial read-only set
+    does not fall back. ``assert_demo_host`` still runs before any socket is
+    opened. This client cannot place orders.
     """
     if (
         settings.execution_mode is not ExecutionMode.PAPER
@@ -139,7 +143,10 @@ def get_readonly_client(
                 "BloFin read-only access is not active in this paper mode."
             )
         credentials = dedicated
-    elif settings.blofin_demo_read_fallback_ready:
+    elif settings.blofin_demo_read_fallback_ready or (
+        settings.blofin_paper_internal_snapshot_read_requested
+        and (not activity_history or paper_internal_snapshot)
+    ):
         credentials = (
             settings.blofin_api_key.strip(),
             settings.blofin_api_secret.strip(),

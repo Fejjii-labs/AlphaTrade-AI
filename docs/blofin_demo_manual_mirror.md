@@ -32,7 +32,9 @@ The mirror runs only inside the snapshot cycle. That cycle, and therefore
 the mirror, starts only when `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` is true and
 the paper worker is armed. Credentials are either the complete
 `BLOFIN_READONLY_*` set or, when that set is absent, `BLOFIN_API_KEY`,
-`BLOFIN_API_SECRET`, and `BLOFIN_API_PASSPHRASE` in `paper_exchange_demo`.
+`BLOFIN_API_SECRET`, and `BLOFIN_API_PASSPHRASE` in `paper_exchange_demo`,
+or in `paper_internal` when `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED` is
+true. The activity worker still requires the dedicated read-only key.
 A partial read-only set skips with `readonly_credentials_required` before
 any database or venue call. The snapshot flag and the armed-worker check
 default closed. The client remains GET-only.
