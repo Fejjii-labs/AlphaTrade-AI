@@ -81,8 +81,15 @@ seconds, so the same 5-second clearance is used for every source. Bybit kline
 requests pass `end` equal to the evaluation time in milliseconds. Omitting
 `end` returns only the latest window, so the cursor cannot walk back to an
 older entry. A Binance regional, ban, or rate-limit failure on a paper trade
-rebinds the next read to the configured Bybit secondary. `candle_series_block`
-thresholds are unchanged: a fetch that still returns no bars is `leading_gap`.
+discards any Binance pages already read and restarts the walk on the
+configured Bybit secondary. One series is one venue. A second switch, or a
+page whose bars are not that venue, returns no bars and the trade stays
+open. The venue that supplied the series is stored on the journal close
+payload as `exit_evidence.candle_venue`. The same fields are logged as
+`paper_exit_monitor_candle_venue_switch` with the journal trade id, the
+from venue, the to venue, and the timeframe. A close that uses Bybit
+fallback candles is still a paper close. `candle_series_block` thresholds
+are unchanged: a fetch that still returns no bars is `leading_gap`.
 
 - Long: stop when low is at or below the stop; target when high is at or above
   the target.

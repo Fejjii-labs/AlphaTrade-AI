@@ -18,7 +18,12 @@ from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSourc
 from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
 from app.market_contracts.adapters.failover import FailoverPerpetualSource
 from app.market_contracts.adapters.replay import ReplayPerpetualSource
-from app.market_contracts.errors import FormingCandleError, RegionalProviderFailureError
+from app.market_contracts.enums import VenueId
+from app.market_contracts.errors import (
+    EvidenceSourceSwitchRequiredError,
+    FormingCandleError,
+    RegionalProviderFailureError,
+)
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
     EvidenceMarketIdentity,
@@ -26,7 +31,7 @@ from app.market_contracts.identity import (
     binance_usdm_btcusdt,
     bybit_usdt_perpetual_btcusdt,
 )
-from app.market_contracts.ohlcv import require_closed_series
+from app.market_contracts.ohlcv import OhlcvBar, require_closed_series
 from app.providers.base import ProviderKind
 from app.schemas.common import Timeframe, TradeDirection
 from app.schemas.execution_protocol import ClosePaperPlanHttpRequest, ClosePaperPlanRequest
@@ -168,6 +173,7 @@ def _bar(
     high: str,
     open_: str | None = None,
     close: str | None = None,
+    venue: str = "",
 ) -> ExitBar:
     low_d = Decimal(low)
     high_d = Decimal(high)
@@ -182,6 +188,7 @@ def _bar(
         close=close_d,
         source_event_id=f"bar-{start.isoformat()}",
         content_hash="a" * 64,
+        venue=venue,
     )
 
 
@@ -1026,6 +1033,162 @@ def test_binance_regional_failure_pages_bybit_back_to_the_entry() -> None:
     assert all(venue == "bybit" for _moment, venue in secondary.calls)
     assert secondary.calls[0][0] == far
     assert any(moment < far for moment, _venue in secondary.calls[1:])
+    assert fetched.candle_venue == "bybit"
+    assert fetched.switched_from == "binance"
+    assert {bar.venue for bar in fetched.bars} == {"bybit"}
+
+
+def test_switch_discards_binance_bars_and_restarts_on_bybit() -> None:
+    """A page of Binance bars must not survive into the Bybit series."""
+
+    first = datetime(2026, 10, 6, 6, 15, tzinfo=UTC)
+    far = datetime(2026, 10, 20, 23, 0, tzinfo=UTC)
+    delta = timedelta(minutes=15)
+    binance = binance_usdm_btcusdt()
+    bybit = bybit_usdt_perpetual_btcusdt()
+    binance_bars = [
+        closed_bar(
+            open_time=first + (delta * index),
+            index=index,
+            evaluated_at=far,
+            instrument=binance,
+        )
+        for index in range(5)
+    ]
+    bybit_bars = [
+        closed_bar(
+            open_time=first + (delta * index),
+            index=index,
+            evaluated_at=far,
+            instrument=bybit,
+        )
+        for index in range(5)
+    ]
+
+    class _Venue:
+        def __init__(
+            self,
+            name: str,
+            rows: list[OhlcvBar],
+            *,
+            fail_before: datetime | None,
+        ) -> None:
+            self.name = name
+            self.kind = ProviderKind.MARKET_DATA
+            self._rows = rows
+            self._fail_before = fail_before
+
+        def fetch_closed_ohlcv(
+            self,
+            *,
+            identity: EvidenceMarketIdentity,
+            instrument: InstrumentIdentity,
+            timeframe: Timeframe,
+            min_final_bars: int,
+            evaluated_at: datetime,
+        ) -> object:
+            del instrument
+            if self._fail_before is not None and evaluated_at < self._fail_before:
+                raise RegionalProviderFailureError("primary perpetual source rejected")
+            eligible = [bar for bar in self._rows if bar.interval_end <= evaluated_at]
+            if len(eligible) < min_final_bars:
+                raise FormingCandleError("short history")
+            selected = eligible[-min_final_bars:]
+            return require_closed_series(
+                selected,
+                identity=identity,
+                timeframe=timeframe,
+                evaluated_at=evaluated_at,
+                min_bars=min_final_bars,
+            )
+
+    source = FailoverPerpetualSource(
+        _Venue("binance-usdm-perpetual", binance_bars, fail_before=far),  # type: ignore[arg-type]
+        _Venue("bybit-usdt-perpetual", bybit_bars, fail_before=None),  # type: ignore[arg-type]
+        primary_instrument=binance,
+        secondary_instrument=bybit,
+    )
+    settings = Settings(
+        _env_file=None,
+        perpetual_evidence_source="binance_usdm",
+        perpetual_evidence_secondary_source="bybit_usdt_perpetual",
+    )
+    trade = _live_btc(COMMAND, entry_time=first)
+    loader = PaperExitCandleLoader(settings, sources={"binance_usdm": source})  # type: ignore[arg-type]
+    with capture_logs() as logs:
+        fetched = loader(trade, evaluated_at=far)
+    assert fetched.covers_entry is True
+    assert fetched.candle_venue == "bybit"
+    assert {bar.venue for bar in fetched.bars} == {"bybit"}
+    assert all(bybit.instrument_id in bar.source_event_id for bar in fetched.bars)
+    assert all(binance.instrument_id not in bar.source_event_id for bar in fetched.bars)
+    switches = [
+        entry for entry in logs if entry.get("event") == "paper_exit_monitor_candle_venue_switch"
+    ]
+    assert len(switches) == 1
+    assert switches[0]["journal_trade_id"] == str(trade.journal_trade_id)
+    assert switches[0]["from_venue"] == "binance"
+    assert switches[0]["to_venue"] == "bybit"
+    assert switches[0]["timeframe"] == "15m"
+
+
+def test_second_venue_switch_refuses_the_series() -> None:
+    binance = binance_usdm_btcusdt()
+    bybit = bybit_usdt_perpetual_btcusdt()
+    market = first_slice_identity(
+        timeframe=Timeframe.M15,
+        replay=False,
+        is_live=True,
+        instrument=binance,
+    )
+
+    class Twice:
+        name = "twice"
+
+        def fetch_closed_ohlcv(self, **kwargs: object) -> object:
+            identity = kwargs["identity"]
+            venue = getattr(identity, "venue", None)
+            rebound = bybit if venue is not VenueId.BYBIT else binance
+            raise EvidenceSourceSwitchRequiredError("switch", instrument=rebound)
+
+    fetched = fetch_closed_bars_since(
+        Twice(),  # type: ignore[arg-type]
+        identity=market,
+        instrument=binance,
+        timeframe=Timeframe.M15,
+        entry_time=datetime(2026, 10, 6, 6, 15, tzinfo=UTC),
+        evaluated_at=datetime(2026, 10, 20, 23, 0, tzinfo=UTC),
+    )
+    assert fetched.bars == ()
+    assert fetched.covers_entry is False
+
+
+def test_close_stores_the_candle_venue_on_the_journal_payload() -> None:
+    start = datetime(2026, 10, 2, 0, 0, tzinfo=UTC)
+    bar = _bar(start, low="94", high="101", venue="bybit")
+    moment = bar.interval_end + timedelta(seconds=30)
+    closer = RecordingCloser()
+    report = run_paper_exit_monitor(
+        enabled=True,
+        dry_run=False,
+        trades=(_trade(entry_time=start),),
+        candles=lambda _trade: FetchedBars(
+            bars=(bar,),
+            covers_entry=True,
+            source_name="bybit-usdt-perpetual",
+            candle_venue="bybit",
+        ),
+        closer=closer,
+        evaluated_at=moment,
+    )
+    assert report.closed == 1
+    evidence = closer.requests[0].exit_evidence
+    assert evidence is not None
+    assert evidence["candle_venue"] == "bybit"
+    stored = paper_exit_audit_fields(closer.requests[0])
+    journal_evidence = stored["exit_evidence"]
+    assert isinstance(journal_evidence, dict)
+    assert journal_evidence["candle_venue"] == "bybit"
 
 
 def test_live_binance_trade_keeps_configured_bybit_failover() -> None:

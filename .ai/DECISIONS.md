@@ -2,6 +2,24 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-138 — One exit-monitor candle series is one venue
+
+- Date: 2026-10-21
+- Decision: A paper exit candle walk never stitches two venues into one
+  series. When the primary source requires a switch, bars already collected
+  are discarded and the walk restarts on the secondary venue alone. A second
+  switch, or a page whose bars are not that venue, returns no bars and the
+  trade stays open. The switch is logged with the journal trade id, the from
+  venue, the to venue, and the timeframe. The venue that supplied the series
+  is stored on the journal close payload as `exit_evidence.candle_venue`.
+  That payload is the close record. No new column is required. Closes that
+  use Bybit fallback candles stay enabled. Staging remains dry-run unless an
+  operator sets the flag.
+- Safety: `PAPER_EXIT_MONITOR_ENABLED` stays default false.
+  `PAPER_EXIT_MONITOR_DRY_RUN` stays default true. Real-money trading stays
+  rejected. No Render, environment, or workflow change.
+- Reference: AT-ADR-137; Griller conditions on PR #303.
+
 ## AT-ADR-137 — Exit-monitor empty candles are a failed fetch, not a loose freshness check
 
 - Date: 2026-10-21

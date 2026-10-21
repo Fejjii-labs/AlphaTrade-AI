@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+import structlog
+
 from app.core.config import Environment, Settings
 from app.market_activation.profile import (
     LIVE_SOURCE,
@@ -48,6 +50,8 @@ _FALLBACK_PAGES = (200, 50, 1)
 # longer than 5 seconds and this clearance stays one value for every source.
 _PAGE_CURSOR_CLEARANCE = timedelta(seconds=5)
 
+logger = structlog.get_logger(__name__)
+
 CandleMode = Literal["replay", "binance_usdm", "bybit_usdt_perpetual"]
 CandleOrigin = Literal["trade", "process", "staging_live"]
 
@@ -57,6 +61,7 @@ class _CandleCache:
     earliest_requested: datetime
     bars: tuple[ExitBar, ...]
     source_name: str
+    candle_venue: str
 
 
 class PaperExitCandleLoader:
@@ -80,6 +85,7 @@ class PaperExitCandleLoader:
                 bars=cached.bars,
                 covers_entry=_covers(cached.bars, trade.entry_time),
                 source_name=cached.source_name,
+                candle_venue=cached.candle_venue,
             )
         source = self._source_for(mode, origin)
         identity, instrument = identity_for_trade(
@@ -96,10 +102,19 @@ class PaperExitCandleLoader:
             entry_time=trade.entry_time,
             evaluated_at=evaluated_at,
         )
+        if fetched.switched_from and fetched.candle_venue:
+            logger.info(
+                "paper_exit_monitor_candle_venue_switch",
+                journal_trade_id=str(trade.journal_trade_id),
+                from_venue=fetched.switched_from,
+                to_venue=fetched.candle_venue,
+                timeframe=trade.timeframe.value,
+            )
         self._cache[key] = _CandleCache(
             earliest_requested=trade.entry_time,
             bars=fetched.bars,
             source_name=fetched.source_name,
+            candle_venue=fetched.candle_venue,
         )
         return fetched
 
@@ -227,49 +242,57 @@ def fetch_closed_bars_since(
     The next page is evaluated just after the oldest bar's start, past the
     public REST settlement guard. The guard rejects a request whose time
     equals that close, which would stop the walk on a short first page.
+
+    A venue switch discards every bar already collected and starts the walk
+    again on the new venue. One series is one venue. A second switch, or a
+    page whose bars are not that venue, returns no bars.
     """
 
     interval = interval_timedelta(timeframe)
     if interval.total_seconds() <= 0 or evaluated_at <= entry_time:
         return FetchedBars(bars=(), covers_entry=False, source_name=_source_name(source))
-    span = evaluated_at - entry_time
-    needed = int(span / interval) + 3
-    collected: dict[str, OhlcvBar] = {}
-    cursor = evaluated_at
-    active_identity = identity
-    active_instrument = instrument
-    for _page in range(_MAX_PAGES):
-        page, active_identity, active_instrument = _fetch_page(
-            source,
-            identity=active_identity,
-            instrument=active_instrument,
-            timeframe=timeframe,
-            evaluated_at=cursor,
-            needed=needed,
-        )
-        if not page:
-            break
-        added = 0
-        for bar in page:
-            if bar.source_event_id not in collected:
-                collected[bar.source_event_id] = bar
-                added += 1
-        earliest = min(bar.interval_start for bar in collected.values())
-        if earliest <= entry_time or added == 0:
-            break
-        if earliest >= cursor:
-            break
-        cursor = earliest + _PAGE_CURSOR_CLEARANCE
-        if cursor >= evaluated_at:
-            break
-        needed = _MAX_PAGE_BARS
-    ordered = tuple(
-        _exit_bar(bar) for bar in sorted(collected.values(), key=lambda bar: bar.interval_start)
+    first = _walk_pages(
+        source,
+        identity=identity,
+        instrument=instrument,
+        timeframe=timeframe,
+        entry_time=entry_time,
+        evaluated_at=evaluated_at,
+        allow_switch=True,
     )
+    if first.switch_to is None:
+        return FetchedBars(
+            bars=first.bars,
+            covers_entry=first.covers_entry,
+            source_name=_source_name(source),
+            candle_venue=first.candle_venue,
+        )
+    rebound_identity, rebound_instrument = first.switch_to
+    if rebound_identity.venue is identity.venue:
+        return FetchedBars(bars=(), covers_entry=False, source_name=_source_name(source))
+    second = _walk_pages(
+        source,
+        identity=rebound_identity,
+        instrument=rebound_instrument,
+        timeframe=timeframe,
+        entry_time=entry_time,
+        evaluated_at=evaluated_at,
+        allow_switch=False,
+    )
+    if second.switch_to is not None or second.refused:
+        return FetchedBars(
+            bars=(),
+            covers_entry=False,
+            source_name=_source_name(source),
+            candle_venue=rebound_identity.venue.value,
+            switched_from=identity.venue.value,
+        )
     return FetchedBars(
-        bars=ordered,
-        covers_entry=_covers(ordered, entry_time),
+        bars=second.bars,
+        covers_entry=second.covers_entry,
         source_name=_source_name(source),
+        candle_venue=second.candle_venue or rebound_identity.venue.value,
+        switched_from=identity.venue.value,
     )
 
 
@@ -289,6 +312,103 @@ def _covers(bars: tuple[ExitBar, ...], entry_time: datetime) -> bool:
     return earliest <= entry_time
 
 
+@dataclass(frozen=True, slots=True)
+class _WalkResult:
+    bars: tuple[ExitBar, ...]
+    covers_entry: bool
+    candle_venue: str
+    switch_to: tuple[EvidenceMarketIdentity, InstrumentIdentity] | None = None
+    refused: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _PageRead:
+    bars: tuple[OhlcvBar, ...] | None
+    identity: EvidenceMarketIdentity
+    instrument: InstrumentIdentity
+    switch_to: tuple[EvidenceMarketIdentity, InstrumentIdentity] | None = None
+    refuse: bool = False
+
+
+def _walk_pages(
+    source: PerpetualMarketSource,
+    *,
+    identity: EvidenceMarketIdentity,
+    instrument: InstrumentIdentity,
+    timeframe: Timeframe,
+    entry_time: datetime,
+    evaluated_at: datetime,
+    allow_switch: bool,
+) -> _WalkResult:
+    """Page backward on one identity. A switch returns the new identity and no bars."""
+
+    interval = interval_timedelta(timeframe)
+    span = evaluated_at - entry_time
+    needed = int(span / interval) + 3
+    collected: dict[str, OhlcvBar] = {}
+    cursor = evaluated_at
+    active_identity = identity
+    active_instrument = instrument
+    for _page in range(_MAX_PAGES):
+        page = _fetch_page(
+            source,
+            identity=active_identity,
+            instrument=active_instrument,
+            timeframe=timeframe,
+            evaluated_at=cursor,
+            needed=needed,
+            allow_switch=allow_switch,
+        )
+        if page.switch_to is not None:
+            return _WalkResult(
+                bars=(),
+                covers_entry=False,
+                candle_venue="",
+                switch_to=page.switch_to,
+            )
+        if page.refuse:
+            return _WalkResult(bars=(), covers_entry=False, candle_venue="", refused=True)
+        active_identity = page.identity
+        active_instrument = page.instrument
+        if not page.bars:
+            break
+        if any(
+            not isinstance(bar, ExitBar) and bar.instrument.venue is not active_identity.venue
+            for bar in page.bars
+        ):
+            return _WalkResult(bars=(), covers_entry=False, candle_venue="", refused=True)
+        added = 0
+        for bar in page.bars:
+            if bar.source_event_id not in collected:
+                collected[bar.source_event_id] = bar
+                added += 1
+        earliest = min(bar.interval_start for bar in collected.values())
+        if earliest <= entry_time or added == 0:
+            break
+        if earliest >= cursor:
+            break
+        cursor = earliest + _PAGE_CURSOR_CLEARANCE
+        if cursor >= evaluated_at:
+            break
+        needed = _MAX_PAGE_BARS
+    if not collected:
+        return _WalkResult(bars=(), covers_entry=False, candle_venue="")
+    venues = {bar.instrument.venue for bar in collected.values() if not isinstance(bar, ExitBar)}
+    if len(venues) > 1:
+        return _WalkResult(bars=(), covers_entry=False, candle_venue="", refused=True)
+    ordered = tuple(
+        _exit_bar(bar) for bar in sorted(collected.values(), key=lambda bar: bar.interval_start)
+    )
+    venue = next(iter(venues)).value if venues else active_identity.venue.value
+    if any(bar.venue not in {"", venue} for bar in ordered):
+        return _WalkResult(bars=(), covers_entry=False, candle_venue="", refused=True)
+    return _WalkResult(
+        bars=ordered,
+        covers_entry=_covers(ordered, entry_time),
+        candle_venue=venue,
+    )
+
+
 def _fetch_page(
     source: PerpetualMarketSource,
     *,
@@ -297,19 +417,19 @@ def _fetch_page(
     timeframe: Timeframe,
     evaluated_at: datetime,
     needed: int,
-) -> tuple[tuple[OhlcvBar, ...] | None, EvidenceMarketIdentity, InstrumentIdentity]:
-    """Read one page, rebinding once when the primary venue requires a switch.
+    allow_switch: bool,
+) -> _PageRead:
+    """Read one page. A required switch is returned so the caller can restart.
 
     ``EvidenceSourceSwitchRequiredError`` means the next read must use the
-    secondary instrument. Retrying the same identity fails every page size
-    and the monitor then reports an empty leading gap. One rebind is kept
-    for the rest of this page and returned for later pages. A second failure
-    tries the next page size and still returns no bars when every size fails.
+    secondary instrument. The bars from the venue that failed are not
+    returned. A second switch in the same page, or a switch when this walk
+    already committed to one venue, refuses the page.
     """
 
     current_identity = identity
     current_instrument = instrument
-    rebound_used = False
+    switched = False
     for size in _page_sizes(needed):
         try:
             series = _read_closed_page(
@@ -321,9 +441,14 @@ def _fetch_page(
                 size=size,
             )
         except EvidenceSourceSwitchRequiredError as exc:
-            if rebound_used or not isinstance(exc.instrument, InstrumentIdentity):
-                continue
-            rebound_used = True
+            if switched or not allow_switch or not isinstance(exc.instrument, InstrumentIdentity):
+                return _PageRead(
+                    None,
+                    current_identity,
+                    current_instrument,
+                    refuse=True,
+                )
+            switched = True
             current_instrument = exc.instrument
             current_identity = first_slice_identity(
                 timeframe=timeframe,
@@ -331,8 +456,9 @@ def _fetch_page(
                 is_live=True,
                 instrument=current_instrument,
             )
+            switch_to = (current_identity, current_instrument)
             try:
-                series = _read_closed_page(
+                _read_closed_page(
                     source,
                     identity=current_identity,
                     instrument=current_instrument,
@@ -341,11 +467,22 @@ def _fetch_page(
                     size=size,
                 )
             except MarketContractError:
-                continue
+                return _PageRead(
+                    None,
+                    current_identity,
+                    current_instrument,
+                    switch_to=switch_to,
+                )
+            return _PageRead(
+                None,
+                current_identity,
+                current_instrument,
+                switch_to=switch_to,
+            )
         except MarketContractError:
             continue
-        return tuple(series.bars), current_identity, current_instrument
-    return None, current_identity, current_instrument
+        return _PageRead(tuple(series.bars), current_identity, current_instrument)
+    return _PageRead(None, current_identity, current_instrument)
 
 
 def _read_closed_page(
@@ -378,6 +515,8 @@ def _page_sizes(needed: int) -> tuple[int, ...]:
 
 
 def _exit_bar(bar: OhlcvBar) -> ExitBar:
+    if isinstance(bar, ExitBar):
+        return bar
     return ExitBar(
         interval_start=bar.interval_start,
         interval_end=bar.interval_end,
@@ -387,6 +526,7 @@ def _exit_bar(bar: OhlcvBar) -> ExitBar:
         close=bar.close,
         source_event_id=bar.source_event_id,
         content_hash=bar.content_hash,
+        venue=bar.instrument.venue.value,
     )
 
 
