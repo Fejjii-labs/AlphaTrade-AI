@@ -111,23 +111,41 @@ def get_readonly_client(
     transport: httpx.BaseTransport | None = None,
     activity_history: bool = False,
 ) -> BloFinReadOnlyClient:
-    """Release only the separate sync secrets after an explicit safe opt-in."""
-    allowed_modes = {ExchangeMode.PAPER_INTERNAL}
-    if activity_history:
-        allowed_modes.add(ExchangeMode.PAPER_EXCHANGE_DEMO)
+    """Build a GET-only demo client.
+
+    The dedicated read-only key is used when that set is complete. When the
+    set is absent, paper demo mode may use the main demo key for reads only.
+    A partial read-only set does not fall back. ``assert_demo_host`` still
+    runs before any socket is opened. This client cannot place orders.
+    """
     if (
-        (not activity_history and not settings.blofin_readonly_sync_enabled)
-        or settings.execution_mode is not ExecutionMode.PAPER
+        settings.execution_mode is not ExecutionMode.PAPER
         or settings.enable_real_trading
-        or settings.exchange_mode not in allowed_modes
+        or settings.real_trading_enabled
+        or settings.exchange_mode
+        not in {ExchangeMode.PAPER_INTERNAL, ExchangeMode.PAPER_EXCHANGE_DEMO}
     ):
         raise ExchangeDemoInactiveError("BloFin read-only access is not active in this paper mode.")
-    credentials = (
+    dedicated = (
         settings.blofin_readonly_api_key.strip(),
         settings.blofin_readonly_api_secret.strip(),
         settings.blofin_readonly_api_passphrase.strip(),
     )
-    if not all(credentials):
+    if any(dedicated) and not all(dedicated):
+        raise ExchangeDemoInactiveError("Dedicated BloFin read-only sync credentials are missing.")
+    if all(dedicated):
+        if not activity_history and not settings.blofin_readonly_sync_enabled:
+            raise ExchangeDemoInactiveError(
+                "BloFin read-only access is not active in this paper mode."
+            )
+        credentials = dedicated
+    elif settings.blofin_demo_read_fallback_ready:
+        credentials = (
+            settings.blofin_api_key.strip(),
+            settings.blofin_api_secret.strip(),
+            settings.blofin_api_passphrase.strip(),
+        )
+    else:
         raise ExchangeDemoInactiveError("Dedicated BloFin read-only sync credentials are missing.")
     assert_demo_host(settings.blofin_demo_rest_base_url)
     url = httpx.URL(settings.blofin_demo_rest_base_url)

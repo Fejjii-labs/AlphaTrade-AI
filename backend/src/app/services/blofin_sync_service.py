@@ -47,6 +47,48 @@ from app.services.dashboard.demo_performance import configured_demo_account
 logger = structlog.get_logger(__name__)
 
 
+def _account_pin_applies(settings: Settings) -> bool:
+    """True when this sync key must match the pinned native demo account.
+
+    The dedicated read-only key and the main demo-key fallback both do.
+    The execution-provider path, used when a partial or unused read-only set
+    is present, keeps its previous gate.
+    """
+
+    return (
+        settings.blofin_read_sync_uses_dedicated_credentials
+        or settings.blofin_demo_read_fallback_ready
+    )
+
+
+def _require_fallback_account_pin(settings: Settings, organization_id: uuid.UUID) -> None:
+    """Refuse the main demo key unless the activity org and UID pins match.
+
+    A missing pin, or a pin for a different organization, does not fall open.
+    The log carries a reason token only.
+    """
+
+    if not settings.blofin_demo_read_fallback_ready:
+        return
+    config = get_activity_settings()
+    pinned_org = config.organization_id
+    if pinned_org is None:
+        reason = "activity_organization_unset"
+        message = "BloFin fallback sync requires BLOFIN_ACTIVITY_ORGANIZATION_ID."
+    elif pinned_org != organization_id:
+        reason = "activity_organization_mismatch"
+        message = (
+            "BloFin fallback sync organization does not match BLOFIN_ACTIVITY_ORGANIZATION_ID."
+        )
+    elif not config.expected_uid.strip():
+        reason = "activity_expected_uid_unset"
+        message = "BloFin fallback sync requires BLOFIN_ACTIVITY_EXPECTED_UID."
+    else:
+        return
+    logger.warning("blofin_fallback_sync_refused", reason=reason)
+    raise ValueError(message)
+
+
 class BloFinSyncService:
     """Read-only BloFin demo account/position reconciliation."""
 
@@ -73,6 +115,7 @@ class BloFinSyncService:
                 "blofin_worker_sync_readonly_required",
                 readonly_sync_enabled=self._settings.blofin_readonly_sync_enabled,
                 readonly_credentials_present=self._settings.blofin_readonly_configured,
+                demo_read_fallback_ready=self._settings.blofin_demo_read_fallback_ready,
             )
             raise ValueError("BloFin worker sync requires dedicated read-only credentials.")
         now = datetime.now(UTC)
@@ -92,7 +135,7 @@ class BloFinSyncService:
             "synced_at": now.isoformat(),
             "credentials_configured": (
                 self._settings.blofin_readonly_configured
-                if self._settings.blofin_readonly_sync_enabled
+                if self._settings.blofin_read_sync_uses_dedicated_credentials
                 else self._settings.blofin_demo_configured
             ),
             "readonly_sync_enabled": self._settings.blofin_readonly_sync_enabled,
@@ -106,18 +149,22 @@ class BloFinSyncService:
             provenance["configured_execution_account_id"] = str(configured.id)
 
         try:
-            binding = connection_binding(
-                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
-            )
+            uses_dedicated = self._settings.blofin_read_sync_uses_dedicated_credentials
+            _require_fallback_account_pin(self._settings, organization_id)
+            binding = connection_binding(self._settings, readonly=uses_dedicated)
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
-            if origin == "worker" or self._settings.blofin_readonly_sync_enabled:
+            if (
+                origin == "worker"
+                or uses_dedicated
+                or self._settings.blofin_demo_read_fallback_ready
+            ):
                 provider = get_readonly_account_provider(self._settings)
             else:
                 ensure_demo_exchange_access(self._settings)
                 provider = get_demo_account_provider(self._settings)
             permissions = provider.get_account_permissions()
-            if self._settings.blofin_readonly_sync_enabled and permissions.can_trade:
+            if uses_dedicated and permissions.can_trade:
                 raise ValueError("Dedicated BloFin sync key must be read-only.")
             if permissions.can_withdraw or permissions.can_transfer or not permissions.can_read:
                 raise ValueError("BloFin sync requires read access without money-movement scopes.")
@@ -126,11 +173,13 @@ class BloFinSyncService:
                 raise ValueError("BloFin sync native account UID is unverified.")
             config = get_activity_settings()
             if (
-                self._settings.blofin_readonly_sync_enabled
+                _account_pin_applies(self._settings)
                 and config.organization_id == organization_id
-                and config.expected_uid
-                and config.expected_uid != uid
+                and config.expected_uid.strip()
+                and config.expected_uid.strip() != uid
             ):
+                if self._settings.blofin_demo_read_fallback_ready:
+                    logger.warning("blofin_fallback_sync_refused", reason="native_account_mismatch")
                 raise ValueError("BloFin sync native account UID does not match connection pin.")
             provenance.update(native_account_uid=uid, identity_status="verified")
             balances = provider.get_balances()
@@ -295,12 +344,13 @@ class BloFinSyncService:
     ) -> BloFinSyncSnapshotItem:
         try:
             binding = connection_binding(
-                self._settings, readonly=self._settings.blofin_readonly_sync_enabled
+                self._settings,
+                readonly=self._settings.blofin_read_sync_uses_dedicated_credentials,
             )
         except Exception:
             raise NotFoundError("Current BloFin connection is unverified.") from None
         uid = self._snapshots.verified_uid_for_binding(organization_id, binding)
-        if self._settings.blofin_readonly_sync_enabled:
+        if _account_pin_applies(self._settings):
             config = get_activity_settings()
             if config.organization_id == organization_id and config.expected_uid:
                 proof = self._session.get(
