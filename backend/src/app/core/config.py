@@ -179,8 +179,15 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_bot_id: str = Field(default="", max_length=64)
     telegram_chat_id: str = ""
+    # Send paths clamp this to 5 seconds. The stored maximum stays 30 so an
+    # older environment value still boots.
     telegram_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     telegram_max_retries: int = Field(default=2, ge=0, le=5)
+    # Extra safety-alert codes added to the built-in Telegram set (add-only).
+    # Mandatory kill-switch and loss codes, heartbeats, and stop/tp hits are
+    # always included. ``degraded_repeat``, clock skew, and ``arming_refused``
+    # stay logs-only and cannot be listed here.
+    telegram_safety_alert_allowlist: Annotated[list[str], NoDecode] = Field(default_factory=list)
     email_alerts_enabled: bool = False
 
     # Interactive provider voice stays unavailable without a verified finite
@@ -218,6 +225,29 @@ class Settings(BaseSettings):
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""
+    # Autonomous continuation (AT-ADR-106). Both default off. Neither flag
+    # authorizes real-money trading. Setting both fails closed.
+    autonomous_internal_paper_enabled: bool = False
+    autonomous_blofin_demo_enabled: bool = False
+    # Automatic stop/target exits for canonical internal paper only.
+    # The enabled flag defaults off. Production refuses it. Dry-run evaluates
+    # and logs without calling the paper close service. It defaults true so
+    # removing PAPER_EXIT_MONITOR_DRY_RUN cannot close a trade. Live internal
+    # paper closes require an explicit false. Neither flag is set in the
+    # deploy blueprint.
+    paper_exit_monitor_enabled: bool = False
+    paper_exit_monitor_dry_run: bool = True
+    # Repeated degraded or refused exit-monitor cycles raise a structured
+    # alert after this many seconds. Default 15 minutes, capped at 1 hour,
+    # so the wait stays well under the 24-hour backfill horizon. At least
+    # two cycles are required. This does not arm the monitor.
+    paper_exit_monitor_degraded_alert_after_seconds: int = Field(default=900, ge=60, le=3600)
+    # Worker wall clock versus database now(), and versus exchange server
+    # time when that source is supplied. A larger gap refuses the cycle.
+    # Default 15 seconds. This does not arm the monitor.
+    paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
+    risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits
     # between lease heartbeats. See paper_lease_ttl_seconds.
     watcher_lease_ttl_seconds: int = Field(default=30, ge=1, le=3600)
@@ -254,6 +284,13 @@ class Settings(BaseSettings):
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---
     blofin_sync_stale_after_seconds: int = Field(default=300, ge=30, le=86400)
+    # Off until explicitly enabled. A disarmed worker never attaches the cycle.
+    blofin_demo_snapshot_sync_enabled: bool = False
+    # Worker read-only snapshot cadence. The browser polls the same interval.
+    blofin_demo_snapshot_sync_seconds: int = Field(default=45, ge=30, le=60)
+    # Read-only journal mirror for hand trades on the BloFin demo account.
+    # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
+    blofin_demo_manual_mirror_enabled: bool = False
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)
 
@@ -415,6 +452,9 @@ class Settings(BaseSettings):
     # --- Rate limiting ---
     rate_limit_use_redis: bool = True
     rate_limit_allow_in_memory_fallback: bool = True
+    # Production registration stays at 10/hour/IP. The disposable e2e server raises
+    # this because one loopback worker legitimately registers for the whole smoke suite.
+    auth_register_rate_limit: int = Field(default=10, ge=1, le=10_000)
     redis_connect_timeout_seconds: float = 1.0
     jwt_secret_min_length: int = 32
 
@@ -488,6 +528,23 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("telegram_safety_alert_allowlist", mode="before")
+    @classmethod
+    def _split_telegram_safety_alert_allowlist(cls, value: object) -> object:
+        """Allow a comma-separated string for ``TELEGRAM_SAFETY_ALERT_ALLOWLIST``."""
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
+
+    @model_validator(mode="after")
+    def _validate_telegram_safety_alert_allowlist(self) -> Settings:
+        from app.services.safety_alerts import validate_telegram_safety_extra_allowlist
+
+        validate_telegram_safety_extra_allowlist(self.telegram_safety_alert_allowlist)
+        return self
 
     @field_validator("provider_mode", mode="before")
     @classmethod
@@ -680,6 +737,11 @@ class Settings(BaseSettings):
             and self.blofin_readonly_api_secret.strip()
             and self.blofin_readonly_api_passphrase.strip()
         )
+
+    @property
+    def blofin_worker_readonly_ready(self) -> bool:
+        """Unattended snapshot sync may use only the dedicated read-only credentials."""
+        return self.blofin_readonly_sync_enabled and self.blofin_readonly_configured
 
     @property
     def blofin_demo_configured(self) -> bool:

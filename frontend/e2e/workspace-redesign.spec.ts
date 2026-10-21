@@ -157,7 +157,8 @@ async function fixtures(page: Page) {
           version: 1,
         });
       if (path === "/providers/status") return send({ providers: [] });
-      if (path === "/dashboard/demo-account") return send(snapshot);
+      if (path === "/dashboard/demo-account" || path === "/dashboard/demo-account/refresh")
+        return send(snapshot);
       if (path === "/execution/manual-demo/commands")
         return send({ items: [], total: 0 });
       if (path === "/execution/accounts/paper")
@@ -462,7 +463,7 @@ for (const width of [1280, 390]) {
     await screenshot("knowledge");
     await noOverflow();
     await page.getByRole("link", { name: "Open", exact: true }).click();
-    await page.getByRole("link", { name: /Back to Journal/ }).click();
+    await page.getByRole("link", { name: "Back to Knowledge" }).click();
     await expect(page).toHaveURL(/category=rules&q=close/);
     await page.goto("/journal");
     await expect(
@@ -481,8 +482,8 @@ for (const width of [1280, 390]) {
     await screenshot("strategies");
     await noOverflow();
     await page
-      .getByText("SFP", { exact: true })
-      .locator("..")
+      .getByTestId("strategy-family")
+      .filter({ has: page.getByRole("heading", { name: "SFP", exact: true }) })
       .getByRole("link", { name: "Open", exact: true })
       .click();
     await expect(page.getByText("BTCUSDT · long · 1h")).toBeVisible();
@@ -499,6 +500,10 @@ for (const width of [1280, 390]) {
     await expect(page.getByRole("link", { name: "Diagnostics" })).toBeVisible();
     await screenshot("settings");
     await noOverflow();
-    expect(writes).toEqual(["/agent/turns"]);
+    const otherWrites = writes.filter(
+      (path) => path !== "/dashboard/demo-account/refresh",
+    );
+    expect(writes).toContain("/dashboard/demo-account/refresh");
+    expect(otherWrites).toEqual(["/agent/turns"]);
   });
 }

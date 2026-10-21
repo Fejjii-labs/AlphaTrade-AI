@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.routes.risk_policy import router as risk_policy_router
 from app.core.dependencies import (
     KillSwitchServiceDep,
     LossAcceptanceServiceDep,
@@ -31,6 +32,7 @@ from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep, TraderDep
 
 router = APIRouter(prefix="/risk", tags=["risk"])
+router.include_router(risk_policy_router)
 
 _RISK_SETTINGS_READ = Depends(
     tenant_rate_limit_dependency(
@@ -150,6 +152,7 @@ async def activate_kill_switch(
             organization_id=tenant.organization_id,
             actor_user_id=tenant.user_id,
             payload=payload,
+            source="manual",
         )
         session.commit()
         return result

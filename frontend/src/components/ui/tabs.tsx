@@ -147,7 +147,7 @@ export function Tabs({ items, onIntent, className, "aria-label": ariaLabel }: Ta
       data-tabs-prefix={prefix}
       onKeyDown={onKeyDown}
       className={cn(
-        "inline-flex flex-wrap gap-1 rounded-control border border-border-subtle bg-surface-0 p-1",
+        "inline-flex flex-wrap gap-1 rounded-control border border-border-subtle bg-surface-2 p-1",
         className,
       )}
     >
@@ -171,11 +171,11 @@ export function Tabs({ items, onIntent, className, "aria-label": ariaLabel }: Ta
               else tabRefs.current.delete(item.id);
             }}
             className={cn(
-              "rounded-[calc(var(--radius-control)-2px)] px-3 py-1.5 text-sm font-medium transition-colors",
+              "min-h-9 rounded-[calc(var(--radius-control)-2px)] px-3 py-1.5 text-[0.8125rem] font-medium transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
               "disabled:cursor-not-allowed disabled:opacity-50",
               selected
-                ? "bg-surface-2 text-text-primary"
+                ? "bg-surface-raised text-text-primary"
                 : "text-text-muted hover:text-text-secondary",
             )}
             onClick={() => {

@@ -10,7 +10,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from time import monotonic
+from time import monotonic, sleep
 
 import httpx
 from sqlalchemy.orm import Session
@@ -19,6 +19,10 @@ from app.core.config import Settings
 from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler
 from app.evidence_pipeline.setup_lifetime import SetupLifetimeStore
 from app.evidence_pipeline.watcher_port import AssemblingWatcherScanEvidence
+from app.market_contracts.adapters.binance_usdm import (
+    BINANCE_REST_SETTLEMENT_GRACE,
+    BinanceUsdmPerpetualSource,
+)
 from app.market_contracts.adapters.factory import (
     perpetual_source_is_replay,
     resolve_perpetual_evidence_source,
@@ -189,12 +193,62 @@ class _EligibleSource:
         return self.source.fetch_ordered_trades(**kwargs)
 
 
+def _active_rest_source(source: object) -> object:
+    """Return the adapter a probe will read, under the eligibility wrapper.
+
+    ``_EligibleSource.__getattr__`` raises for names the inner adapter lacks, so
+    ``getattr(source, "active_source", source)`` cannot see through it.
+    """
+
+    current = source
+    if isinstance(current, FailoverPerpetualSource):
+        current = current.active_source
+    if isinstance(current, _EligibleSource):
+        current = current.source
+    return current
+
+
+def _wait_for_binance_rest_settlement(
+    evaluated_at: datetime,
+    *,
+    now: Callable[[], datetime] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+) -> bool:
+    """Pause until Binance's post-close admission window has elapsed.
+
+    The adapter rejects a candle whose close is still inside that window.
+    A pause is useful only for that short interval. Any other forming-candle
+    failure returns immediately so the caller can record it. ``now`` and
+    ``sleeper`` default to the wall clock and ``time.sleep``.
+    """
+
+    clock = now or (lambda: datetime.now(UTC))
+    pause = sleeper or sleep
+    close = evaluated_at.replace(second=0, microsecond=0) - timedelta(
+        minutes=evaluated_at.minute % 15
+    )
+    remaining = (close + BINANCE_REST_SETTLEMENT_GRACE) - clock()
+    if remaining <= timedelta(0) or remaining > BINANCE_REST_SETTLEMENT_GRACE:
+        return False
+    pause(remaining.total_seconds())
+    return True
+
+
 class SymbolMarketFactory:
     """At most five independent sources/monitors; no tenant data is cached here."""
 
-    def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], datetime] | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> None:
         self.settings = settings
         self.transport = transport
+        self._clock = clock
+        self._sleeper = sleeper
         self.discovery = WatchlistContractDiscovery(settings, transport=transport)
         self._entries: OrderedDict[str, tuple] = OrderedDict()
         self._replay = perpetual_source_is_replay(settings)
@@ -288,7 +342,13 @@ class SymbolMarketFactory:
         source, catalog, _, _ = self.composition(symbol)
         # Two final M15 bars (provider request bounded to four rows). Never a
         # current-price quote, full trade/CVD window, strategy or candidate.
-        now = datetime.now(UTC)
+        now = self._clock() if self._clock is not None else datetime.now(UTC)
+        # Binance withholds the just-closed candle for a few seconds. Bybit and
+        # the other adapters admit that candle immediately, so they must not sleep.
+        if isinstance(_active_rest_source(source), BinanceUsdmPerpetualSource) and (
+            _wait_for_binance_rest_settlement(now, now=self._clock, sleeper=self._sleeper)
+        ):
+            now = self._clock() if self._clock is not None else datetime.now(UTC)
         for attempt in range(2):
             instrument = instrument_for_source(source, catalog, symbol)
             self.discovery.require(symbol, instrument.venue)

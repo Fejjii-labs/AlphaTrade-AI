@@ -124,6 +124,7 @@ _STAGING: dict[str, object] = {
     "market_data_futures_base_url": "https://fapi.binance.com",
     "watcher_orchestration_enabled": True,
     "watcher_paper_staging_activation": True,
+    "autonomous_internal_paper_enabled": True,
     "telegram_interaction_enabled": True,
     "telegram_paper_activation_armed": True,
     "telegram_inbound_mode": "polling",

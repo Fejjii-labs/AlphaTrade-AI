@@ -191,6 +191,44 @@ def test_activity_provider_retains_retry_and_request_timeout_caps(monkeypatch):
     assert settings.blofin_max_retries == 9 and settings.blofin_request_timeout_seconds == 99
 
 
+def test_unconfigured_activity_http_read_is_unverified() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.routes.blofin_activity import router
+    from app.core.auth import get_current_tenant
+    from app.core.config import get_settings
+    from app.core.errors import register_exception_handlers
+    from app.db.session import get_session
+    from app.schemas.common import MembershipRole
+    from app.security.tenant import TenantContext
+    from app.services.blofin_activity_config import get_activity_settings
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(router)
+    organization_id = uuid4()
+    app.dependency_overrides[get_current_tenant] = lambda: TenantContext(
+        uuid4(), organization_id, "reader@example.test", MembershipRole.VIEWER
+    )
+    app.dependency_overrides[get_settings] = lambda: readonly_settings()
+    app.dependency_overrides[get_activity_settings] = lambda: BloFinActivitySettings(_env_file=None)
+
+    def session_dependency():
+        yield None
+
+    app.dependency_overrides[get_session] = session_dependency
+    with TestClient(app) as client:
+        response = client.get("/exchange/blofin/activity")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["organization_id"] == str(organization_id)
+    assert body["identity_status"] == "unverified"
+    assert body["identity_error_code"] == "activity_not_configured"
+    assert body["items"] == []
+    assert body["freshness"] == "unverified"
+
+
 def test_missing_activity_pins_fail_only_the_activity_component(monkeypatch):
     activity_config = BloFinActivitySettings(_env_file=None, enabled=True)
     monkeypatch.setattr(

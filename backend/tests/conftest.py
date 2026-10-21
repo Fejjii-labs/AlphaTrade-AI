@@ -24,6 +24,21 @@ pytest_plugins = (
 )
 
 
+# pytest-socket allow-list. Loopback covers the CI Postgres service. Unix sockets
+# stay open for local sockets. Everything else fails the test with
+# SocketConnectBlockedError. This hook is reapplied on every test because
+# pytest-socket restores the real socket during teardown, and the full gate
+# clears addopts so a CLI flag would not stick.
+_LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1"]
+
+
+def _install_suite_network_block() -> None:
+    """Refuse outbound TCP/UDP connects for the test that is about to run."""
+    from pytest_socket import socket_allow_hosts
+
+    socket_allow_hosts(_LOOPBACK_HOSTS, allow_unix_socket=True)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Give each xdist worker a private fixture database before tests import URLs."""
     worker = os.environ.get("PYTEST_XDIST_WORKER")
@@ -32,6 +47,13 @@ def pytest_configure(config: pytest.Config) -> None:
     from tests.support.postgres_template import assign_worker_database
 
     assign_worker_database(worker)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Block non-loopback connects after pytest-socket's own setup hook."""
+    del item
+    _install_suite_network_block()
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

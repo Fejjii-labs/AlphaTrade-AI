@@ -35,9 +35,12 @@ const setup: BrainSetup = {
   stop: null,
   targets: [],
 };
+// The page expires stored setups against the wall clock (useBrainSetupClock).
+// Pin "now" inside the fixture's observed→expires window so the stored state is
+// rendered deterministically; only Date is faked so async UI timers still run.
+const INSIDE_WINDOW = new Date("2026-10-05T00:00:00Z");
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-10-02T00:00:00Z"));
+  vi.useFakeTimers({ toFake: ["Date"], now: INSIDE_WINDOW });
 });
 afterEach(() => {
   cleanup();
@@ -63,4 +66,23 @@ it("shows the SFP condition, bound timeframe and research scope in stored detail
   expect(
     screen.getByRole("link", { name: "← Back to detections" }),
   ).toHaveAttribute("href", "/strategies/detections?family=sfp");
+});
+
+it("shows a stored CONFIRMED setup as EXPIRED once its expiry has passed", async () => {
+  vi.setSystemTime(new Date("2026-10-10T00:00:01Z"));
+  mocks.setup.mockResolvedValue(setup);
+  render(<BrainSetupPage />);
+  expect(
+    await screen.findByRole("heading", { name: "SFP confirmed_sfp · EXPIRED" }),
+  ).toBeInTheDocument();
+});
+
+it("shows a stored CONFIRMED setup as EXPIRED at the exact expires_at instant", async () => {
+  // displayedBrainSetup uses now >= expires_at, so the boundary itself is expired.
+  vi.setSystemTime(new Date("2026-10-10T00:00:00Z"));
+  mocks.setup.mockResolvedValue(setup);
+  render(<BrainSetupPage />);
+  expect(
+    await screen.findByRole("heading", { name: "SFP confirmed_sfp · EXPIRED" }),
+  ).toBeInTheDocument();
 });

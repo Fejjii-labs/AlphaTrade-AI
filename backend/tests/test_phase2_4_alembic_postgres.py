@@ -12,6 +12,8 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from tests.support.alembic_heads import single_alembic_head
+
 POSTGRES_URL = os.environ.get(
     "PHASE1_POSTGRES_URL",
     os.environ.get(
@@ -41,7 +43,6 @@ WATCHER_TENANT_WATCHLIST = "b6f2d9a10e73"
 STRATEGY_BRAIN = "a1brain001"
 TELEGRAM_POLICY_V2 = "a2tgpolicy002"
 RELEASE_WAVE002 = "a3release002"
-CURRENT_HEAD = "a13voicemonitor001"
 
 _NEW_TABLES = (
     "watcher_worker_leases",
@@ -115,7 +116,7 @@ def test_pr77_alembic_upgrade_downgrade_reupgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         for table_name in _NEW_TABLES:
             present = conn.execute(
                 text(
@@ -176,7 +177,7 @@ def test_pr77_alembic_upgrade_downgrade_reupgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         count = conn.execute(text("SELECT COUNT(*) FROM user_strategy_versions")).scalar()
         assert int(count or 0) == 0
         backfill_ok = conn.execute(
@@ -192,10 +193,8 @@ def test_pr77_alembic_upgrade_downgrade_reupgrade() -> None:
 def test_alembic_single_head() -> None:
     config = _alembic_config()
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [CURRENT_HEAD]
-    head = script.get_revision(CURRENT_HEAD)
-    assert head is not None
-    assert head.down_revision == "a12trendpulsescreen001"
+    current_head = single_alembic_head(script)
+    assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
     assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
     assert script.get_revision("a10blofinactivity001").down_revision == "a9knowledgeoutbox001"
@@ -213,7 +212,7 @@ def test_alembic_single_head() -> None:
     assert script.get_revision(STRATEGY_BRAIN).down_revision == WATCHER_TENANT_WATCHLIST
     assert script.get_revision(WATCHER_TENANT_WATCHLIST).down_revision == WORKER_PROCESS_MEMORY
     assert script.get_revision(WORKER_PROCESS_MEMORY).down_revision == CONTROLLED_RUNTIME_STATUS
-    revisions = {rev.revision for rev in script.walk_revisions(base="base", head=CURRENT_HEAD)}
+    revisions = {rev.revision for rev in script.walk_revisions(base="base", head=current_head)}
     assert STRATEGY_BRAIN in revisions
     assert TELEGRAM_POLICY_V2 in revisions
     assert "a2sfp002" in revisions
@@ -237,7 +236,7 @@ def test_canonical_candidate_alembic_upgrade_downgrade() -> None:
     )
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         for table_name in candidate_tables:
             present = conn.execute(
                 text(
@@ -332,7 +331,7 @@ def test_canonical_trade_plan_alembic_upgrade_downgrade() -> None:
     )
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         for table_name in plan_tables:
             present = conn.execute(
                 text(
@@ -399,7 +398,7 @@ def test_canonical_trade_plan_alembic_upgrade_downgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         pvc_fk = conn.execute(
             text(
                 "SELECT 1 FROM information_schema.table_constraints "
@@ -422,7 +421,7 @@ def test_setup_lifetime_alembic_upgrade_downgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         present = conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
@@ -457,7 +456,7 @@ def test_setup_lifetime_alembic_upgrade_downgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         present = conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
@@ -484,7 +483,7 @@ def test_telegram_paper_agent_alembic_upgrade_downgrade() -> None:
     )
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         for table_name in tables:
             present = conn.execute(
                 text(
@@ -523,7 +522,7 @@ def test_telegram_paper_agent_alembic_upgrade_downgrade() -> None:
     command.upgrade(config, "head")
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == CURRENT_HEAD
+        assert version == single_alembic_head()
         present = conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "

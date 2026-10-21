@@ -10,26 +10,45 @@ is refused.
 
 from __future__ import annotations
 
+import contextlib
+import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from sqlalchemy import select, update
+import structlog
+from sqlalchemy import event, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, TradingPolicyError, ValidationAppError
 from app.db.models import KillSwitchState
+from app.db.runtime_status import ControlledRuntimeStatusRow
+from app.persistence.runtime_status import (
+    PAPER_KILL_SWITCH_COMPONENT,
+    paper_kill_switch_component,
+    paper_kill_switch_truncated_component,
+)
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
+from app.schemas.health import PaperWorkerKillSwitch
 from app.schemas.risk import KillSwitchMutationRequest, KillSwitchScope, KillSwitchStatus
 from app.services.audit_service import AuditService
 
 if TYPE_CHECKING:
     from app.services.safety_epoch import SafetyEpochService
+
+logger = structlog.get_logger(__name__)
+
+_ALERT_UNSENT = "unsent"
+_ALERT_SENT = "sent"
+_RETRY_MIN_INTERVAL_SECONDS = 60.0
+_RETRY_LOCK = threading.Lock()
+_RETRY_CLAIMED: dict[str, datetime] = {}
 
 
 class ExecutionKillSwitch(Protocol):
@@ -83,6 +102,8 @@ class KillSwitchService:
         organization_id: uuid.UUID,
         actor_user_id: uuid.UUID,
         payload: KillSwitchMutationRequest,
+        actor_type: ActorType = ActorType.USER,
+        source: str = "system",
     ) -> KillSwitchStatus:
         self._require_confirm(payload)
         row = self._get_or_create_row(organization_id=organization_id)
@@ -93,6 +114,9 @@ class KillSwitchService:
         now = datetime.now(UTC)
         reason = payload.reason.strip()
         current_version = int(row.version)
+        # A system arm, such as the exit monitor, must not be stored as the
+        # trade owner flipping the switch by hand.
+        stored_user_id = None if actor_type is ActorType.SYSTEM else actor_user_id
         result = cast(
             CursorResult[Any],
             self._session.execute(
@@ -105,7 +129,7 @@ class KillSwitchService:
                 .values(
                     active=True,
                     reason=reason,
-                    activated_by=actor_user_id,
+                    activated_by=stored_user_id,
                     activated_at=now,
                     deactivated_by=None,
                     deactivated_at=None,
@@ -134,9 +158,24 @@ class KillSwitchService:
         )
         self._audit_mutation(
             organization_id=organization_id,
-            actor_user_id=actor_user_id,
+            actor_user_id=stored_user_id,
             event_type=AuditEventType.KILL_SWITCH_ACTIVATED,
             row=row,
+            actor_type=actor_type,
+        )
+        self._record_kill_switch_posture(
+            organization_id=organization_id,
+            source=source,
+            active=True,
+            at=now,
+            version=int(row.version),
+        )
+        # Queue after the savepoint. A nested commit emits after_commit, and
+        # the page must stay attached to the outer commit.
+        self._queue_activation_alert(
+            organization_id=organization_id,
+            source=source,
+            version=int(row.version),
         )
         return self._to_status(row)
 
@@ -199,14 +238,27 @@ class KillSwitchService:
             event_type=AuditEventType.KILL_SWITCH_DEACTIVATED,
             row=row,
         )
+        self._record_kill_switch_posture(
+            organization_id=organization_id,
+            source="",
+            active=False,
+            at=now,
+            version=0,
+        )
         return self._to_status(row)
 
     def evaluate(self, *, organization_id: uuid.UUID) -> KillSwitchEvaluation:
-        """Read authoritative state; fail closed on storage errors."""
+        """Read authoritative state and fail closed on storage errors.
+
+        A global-setting or fail-closed page is not sent inside an open
+        transaction. It is sent after that transaction ends. A rollback
+        still pages, because the condition already happened.
+        """
         global_active = bool(self._settings.global_kill_switch_active)
         try:
             status = self.get_status(organization_id=organization_id)
         except Exception:
+            self._notify_activation(source="fail_closed", organization_id=organization_id)
             return KillSwitchEvaluation(
                 blocked=True,
                 reason_code="kill_switch_unavailable",
@@ -217,6 +269,7 @@ class KillSwitchService:
 
         org_active = bool(status.active)
         if global_active:
+            self._notify_activation(source="global_setting", organization_id=organization_id)
             return KillSwitchEvaluation(
                 blocked=True,
                 reason_code="global_kill_switch_active",
@@ -348,9 +401,10 @@ class KillSwitchService:
         self,
         *,
         organization_id: uuid.UUID,
-        actor_user_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
         event_type: AuditEventType,
         row: KillSwitchState,
+        actor_type: ActorType = ActorType.USER,
     ) -> None:
         self._audit.record(
             AuditRecordCreate(
@@ -361,7 +415,7 @@ class KillSwitchService:
                 resource_id=str(row.id),
                 organization_id=organization_id,
                 user_id=actor_user_id,
-                actor_type=ActorType.USER,
+                actor_type=actor_type,
                 result=AuditResult.SUCCESS,
                 severity=AuditSeverity.CRITICAL if row.active else AuditSeverity.HIGH,
                 metadata={
@@ -382,6 +436,124 @@ class KillSwitchService:
             self._settings,
             RiskSettingsService(self._session, self._audit),
         )
+
+    def _queue_activation_alert(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        source: str,
+        version: int,
+    ) -> None:
+        """Queue the page. The session hook sends it after commit."""
+
+        try:
+            from app.services.safety_alerts import queue_kill_switch_activation
+
+            queue_kill_switch_activation(
+                self._session,
+                self._settings,
+                source=source,
+                organization_id=str(organization_id),
+                version=version,
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source="activation")
+
+    def _notify_activation(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Page for a global setting or a fail-closed read. No database write.
+
+        When the caller still holds a transaction, the HTTP send waits until
+        that transaction ends so it does not hold the connection.
+        """
+
+        session = self._session
+        if isinstance(session, Session) and session.in_transaction():
+            self._defer_activation_page(source=source, organization_id=organization_id)
+            return
+        self._send_activation_page(source=source, organization_id=organization_id)
+
+    def _defer_activation_page(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Send after the outermost transaction ends, including on rollback."""
+
+        session = self._session
+        pending = session.info.get("_deferred_kill_pages")
+        if not isinstance(pending, list):
+            pending = []
+            session.info["_deferred_kill_pages"] = pending
+        pending.append((source, organization_id))
+        if session.info.get("_deferred_kill_pages_bound"):
+            return
+        session.info["_deferred_kill_pages_bound"] = True
+
+        def _after(sess: Session, transaction: object) -> None:
+            del transaction
+            if sess.in_transaction():
+                return
+            pages = sess.info.pop("_deferred_kill_pages", [])
+            if not isinstance(pages, list):
+                return
+            for item in pages:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                page_source, page_org = item
+                if not isinstance(page_source, str) or not isinstance(page_org, uuid.UUID):
+                    continue
+                self._send_activation_page(source=page_source, organization_id=page_org)
+
+        event.listen(session, "after_transaction_end", _after)
+
+    def _send_activation_page(self, *, source: str, organization_id: uuid.UUID) -> None:
+        """Send one page. A failure is logged and does not raise."""
+
+        try:
+            from app.services.safety_alerts import notify_kill_switch_activation
+
+            notify_kill_switch_activation(
+                self._settings,
+                source=source,
+                organization_id=str(organization_id),
+            )
+        except Exception:
+            logger.error("kill_switch_alert_failed", source=source)
+
+    def _record_kill_switch_posture(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        source: str,
+        active: bool,
+        at: datetime,
+        version: int,
+    ) -> None:
+        """Remember a safe source token on this session. The reason is not stored.
+
+        An activation marks its page ``unsent`` in the same transaction as
+        the kill-switch row, inside a savepoint. The slot is one row per
+        organization, written with an upsert so two first inserts of the
+        same key cannot roll the activation back. The version is the dedup
+        key. A later send marks that same version ``sent``.
+        """
+
+        try:
+            from app.services.safety_alerts import kill_switch_source
+
+            token = kill_switch_source(source) if active else ""
+            alert_state = _ALERT_UNSENT if active else ""
+            epoch = version if active else 0
+            with self._session.begin_nested():
+                _upsert_kill_switch_posture(
+                    self._session,
+                    organization_id=organization_id,
+                    token=token,
+                    active=active,
+                    at=at,
+                    epoch=epoch,
+                    alert_state=alert_state,
+                )
+        except AssertionError:
+            raise
+        except Exception:
+            logger.error("kill_switch_source_unrecorded")
 
     def _audit_trigger(
         self,
@@ -406,3 +578,570 @@ class KillSwitchService:
                 metadata={"reason": reason, "scope": KillSwitchScope.ORGANIZATION},
             )
         )
+
+
+def read_paper_worker_kill_switch(settings: Settings) -> PaperWorkerKillSwitch:
+    """Kill-switch posture for ``GET /health/paper-worker``.
+
+    The global setting wins. Otherwise one active organization row is
+    reported. An unreadable database fails closed. The free-text reason is
+    not copied.
+    """
+
+    if bool(settings.global_kill_switch_active):
+        return PaperWorkerKillSwitch(active=True, source="global_setting", since=None)
+    try:
+        from app.db.session import get_session_factory
+
+        with get_session_factory()() as session:
+            return _project_kill_switch(session, settings)
+    except Exception:
+        logger.error("paper_worker_kill_switch_unreadable")
+        return PaperWorkerKillSwitch(active=True, source="fail_closed", since=None)
+
+
+def _project_kill_switch(session: Session, settings: Settings) -> PaperWorkerKillSwitch:
+    statement = select(KillSwitchState).where(KillSwitchState.active.is_(True))
+    org_token = settings.watcher_paper_organization_id.strip()
+    if org_token:
+        statement = statement.where(KillSwitchState.organization_id == uuid.UUID(org_token))
+    rows = list(session.scalars(statement).all())
+    if not rows:
+        return PaperWorkerKillSwitch()
+    since_values = [row.activated_at for row in rows if row.activated_at is not None]
+    since = min(since_values) if since_values else None
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    source = "organization"
+    if len(rows) == 1:
+        source = _recorded_kill_switch_source(session, rows[0].organization_id)
+    return PaperWorkerKillSwitch(active=True, source=source, since=since)
+
+
+def _recorded_kill_switch_source(session: Session, organization_id: uuid.UUID) -> str:
+    from app.services.safety_alerts import kill_switch_source
+
+    row = _kill_switch_posture_row(session, organization_id)
+    if row is None or str(row.activation_state) != "active":
+        return "organization"
+    if str(row.worker_id) != str(organization_id):
+        return "organization"
+    token = str(row.last_scan_reason or "").strip().lower()
+    if token and kill_switch_source(token) == token:
+        return token
+    return "organization"
+
+
+def mark_kill_switch_alert_sent(
+    session: Session,
+    *,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> None:
+    """Record that this activation version reached Telegram.
+
+    A newer version on the row is left alone. The write uses a new session
+    on the same engine so the caller's committed transaction stays closed.
+    """
+
+    try:
+        bind = session.get_bind()
+        factory = sessionmaker(bind=bind, expire_on_commit=False)
+        with factory() as fresh, fresh.begin():
+            _apply_sent_marker(fresh, organization_id, version, now)
+    except Exception:
+        logger.error("kill_switch_alert_sent_unrecorded")
+
+
+def reset_kill_switch_retry_window() -> None:
+    """Forget the in-process retry limit. Tests call this between cases."""
+
+    with _RETRY_LOCK:
+        _RETRY_CLAIMED.clear()
+
+
+def kill_switch_retry_should_schedule(
+    rows: Mapping[str, object] | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether ``GET /health/paper-worker`` should start a retry thread.
+
+    ``None`` means the runtime rows could not be read. The thread is still
+    scheduled so a failed read is not treated as an empty queue. No thread
+    is scheduled when no unsent page is visible, when every visible page is
+    still inside the 60 second limit, or when the only unsent rows are older
+    than the current activation. A 31-hex or legacy row is older when the
+    full-hex row for that organization is active at a higher version, when
+    that full-hex row is already sent at the same version, or when that
+    full-hex row is no longer an active activation. This does not claim the
+    limit and does not send.
+    """
+
+    if rows is None:
+        return True
+    moment = now or datetime.now(UTC)
+    for row in rows.values():
+        identity = _visible_unsent_alert(row)
+        if identity is None or _unsent_row_is_stale(row, rows):
+            continue
+        organization_id, version = identity
+        if not _retry_claimed_recently(organization_id, version, moment):
+            return True
+    return False
+
+
+def retry_unsent_kill_switch_alert(settings: Settings, *, now: datetime | None = None) -> bool:
+    """Send committed kill-switch pages that never reached Telegram.
+
+    Each organization has its own unsent slot. A failed send or a crash
+    before the send leaves that marker. Worker boot calls this directly.
+    ``GET /health/paper-worker`` schedules it after the response. A version
+    is attempted at most once per 60 seconds, including a failed attempt.
+    A version already sent is not sent again.
+    """
+
+    moment = now or datetime.now(UTC)
+    try:
+        pending = _load_unsent_kill_switch_alerts(now=moment)
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed")
+        return False
+    if not pending:
+        return False
+    try:
+        from app.services.safety_alerts import telegram_safety_configured
+
+        if not telegram_safety_configured(settings):
+            return False
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed")
+        return False
+    sent_any = False
+    for source, organization_id, version in pending:
+        if _deliver_unsent_kill_switch_alert(
+            settings,
+            source=source,
+            organization_id=organization_id,
+            version=version,
+            now=moment,
+        ):
+            sent_any = True
+    return sent_any
+
+
+def _upsert_kill_switch_posture(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    token: str,
+    active: bool,
+    at: datetime,
+    epoch: int,
+    alert_state: str,
+) -> None:
+    """Insert or update one organization's slot. A concurrent first insert commits."""
+
+    component = paper_kill_switch_component(organization_id)
+    first_full_hex_write = session.get(ControlledRuntimeStatusRow, component) is None
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        dialect_insert = cast(Any, pg_insert)
+    else:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        dialect_insert = cast(Any, sqlite_insert)
+
+    values: dict[str, object] = {
+        "component": paper_kill_switch_component(organization_id),
+        "worker_id": str(organization_id),
+        "heartbeat_at": at,
+        "activation_state": "active" if active else "clear",
+        "lease_owner": "",
+        "lease_epoch": epoch,
+        "fence_held": False,
+        "last_scan_reason": token,
+        "market_source": "kill_switch",
+        "telegram_runtime_state": "absent",
+        "inbound_mode": "off",
+        "outbox_pending": 0,
+        "outbox_retryable": 0,
+        "outbox_dead_letter": 0,
+        "last_delivery_at": None,
+        "last_error_code": alert_state,
+        "kill_switch_active": False,
+        "request_count": 0,
+        "request_weight": 0,
+        "rate_limited_count": 0,
+        "cache_hits": 0,
+    }
+    statement = dialect_insert(ControlledRuntimeStatusRow).values(**values)
+    assignments = {
+        "worker_id": values["worker_id"],
+        "heartbeat_at": values["heartbeat_at"],
+        "activation_state": values["activation_state"],
+        "lease_epoch": values["lease_epoch"],
+        "last_scan_reason": values["last_scan_reason"],
+        "last_error_code": values["last_error_code"],
+        "market_source": values["market_source"],
+    }
+    if active:
+        assignments["last_delivery_at"] = None
+    session.execute(statement.on_conflict_do_update(index_elements=["component"], set_=assignments))
+    session.flush()
+    if first_full_hex_write:
+        _retire_previous_kill_switch_slots(session, organization_id, now=at)
+
+
+def _kill_switch_posture_row(
+    session: Session,
+    organization_id: uuid.UUID,
+) -> ControlledRuntimeStatusRow | None:
+    """Prefer the full-hex slot, then the 31-hex slot, then the legacy row."""
+
+    expected = str(organization_id)
+    for component in _kill_switch_slot_components(expected):
+        row = session.get(ControlledRuntimeStatusRow, component)
+        if row is not None and str(row.worker_id) == expected:
+            return row
+    return None
+
+
+def _aware(now: datetime) -> datetime:
+    return now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+
+
+def _within_retry_interval(previous: datetime, moment: datetime) -> bool:
+    return (moment - previous).total_seconds() < _RETRY_MIN_INTERVAL_SECONDS
+
+
+def _retry_claimed_recently(organization_id: str, version: int, now: datetime) -> bool:
+    key = f"{organization_id}:{version}"
+    moment = _aware(now)
+    with _RETRY_LOCK:
+        previous = _RETRY_CLAIMED.get(key)
+        if previous is None:
+            return False
+        return _within_retry_interval(previous, moment)
+
+
+def _claim_kill_switch_retry(organization_id: str, version: int, now: datetime) -> bool:
+    moment = _aware(now)
+    key = f"{organization_id}:{version}"
+    with _RETRY_LOCK:
+        previous = _RETRY_CLAIMED.get(key)
+        if previous is not None and _within_retry_interval(previous, moment):
+            return False
+        _RETRY_CLAIMED[key] = moment
+        return True
+
+
+def _deliver_unsent_kill_switch_alert(
+    settings: Settings,
+    *,
+    source: str,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> bool:
+    try:
+        from app.services.safety_alerts import (
+            build_kill_switch_alert,
+            deliver_safety_alert,
+            kill_switch_page_recently_sent,
+        )
+
+        key = f"kill_switch_activated:{source}:{organization_id}:{version}"
+        if kill_switch_page_recently_sent(key, now):
+            _mark_kill_switch_alert_sent(organization_id, version, now)
+            return False
+        if not _claim_kill_switch_retry(organization_id, version, now):
+            return False
+        alert = build_kill_switch_alert(
+            source=source,
+            organization_id=organization_id,
+            dedup_key=key,
+        )
+        sent = deliver_safety_alert(settings, alert, now=now, failure_log="error")
+    except Exception:
+        logger.error("kill_switch_alert_retry_failed", source=source)
+        return False
+    if sent:
+        _mark_kill_switch_alert_sent(organization_id, version, now)
+    return sent
+
+
+def _load_unsent_kill_switch_alerts(*, now: datetime) -> list[tuple[str, str, int]]:
+    from app.db.session import get_session_factory
+
+    factory = get_session_factory()
+    pending: list[tuple[str, str, int]] = []
+    with factory() as session:
+        if _mark_same_version_old_slots_sent(session, now=now):
+            session.commit()
+        rows = session.scalars(
+            select(ControlledRuntimeStatusRow).where(
+                ControlledRuntimeStatusRow.market_source == "kill_switch",
+                ControlledRuntimeStatusRow.activation_state == "active",
+                ControlledRuntimeStatusRow.last_error_code == _ALERT_UNSENT,
+            )
+        ).all()
+        for row in rows:
+            version = int(row.lease_epoch or 0)
+            organization_id = str(row.worker_id or "").strip()
+            source = str(row.last_scan_reason or "").strip()
+            if version < 1 or not organization_id or not source:
+                continue
+            try:
+                organization = uuid.UUID(organization_id)
+            except ValueError:
+                continue
+            state = session.scalar(
+                select(KillSwitchState).where(KillSwitchState.organization_id == organization)
+            )
+            if state is None or not bool(state.active) or int(state.version) != version:
+                continue
+            pending.append((source, organization_id, version))
+    return pending
+
+
+def _visible_unsent_alert(row: object) -> tuple[str, int] | None:
+    """Org id and version when this row looks like a page the retry would send."""
+
+    if str(getattr(row, "market_source", "")) != "kill_switch":
+        return None
+    if str(getattr(row, "activation_state", "")) != "active":
+        return None
+    if str(getattr(row, "last_error_code", "")) != _ALERT_UNSENT:
+        return None
+    try:
+        version = int(getattr(row, "lease_epoch", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    organization_id = str(getattr(row, "worker_id", "") or "").strip()
+    source = str(getattr(row, "last_scan_reason", "") or "").strip()
+    if version < 1 or not organization_id or not source:
+        return None
+    try:
+        uuid.UUID(organization_id)
+    except ValueError:
+        return None
+    return organization_id, version
+
+
+@dataclass(frozen=True, slots=True)
+class _PreferredSlot:
+    component: str
+    version: int
+    active: bool
+    sent: bool
+
+
+def _preferred_kill_switch_slot(
+    rows: Mapping[str, object],
+    organization_id: str,
+) -> _PreferredSlot | None:
+    """Full-hex slot, then the 31-hex slot, then the legacy row for this org."""
+
+    try:
+        parsed = uuid.UUID(organization_id)
+    except ValueError:
+        return None
+    order = (
+        paper_kill_switch_component(parsed),
+        paper_kill_switch_truncated_component(parsed),
+        PAPER_KILL_SWITCH_COMPONENT,
+    )
+    found: dict[str, object] = {}
+    for key, row in rows.items():
+        component = str(getattr(row, "component", "") or "")
+        if not component and isinstance(key, str):
+            component = key
+        if component not in order:
+            continue
+        if str(getattr(row, "worker_id", "") or "") != organization_id:
+            continue
+        if str(getattr(row, "market_source", "")) != "kill_switch":
+            continue
+        found[component] = row
+    for component in order:
+        row = found.get(component)
+        if row is None:
+            continue
+        try:
+            version = int(getattr(row, "lease_epoch", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        return _PreferredSlot(
+            component=component,
+            version=version,
+            active=str(getattr(row, "activation_state", "")) == "active",
+            sent=str(getattr(row, "last_error_code", "")) == _ALERT_SENT,
+        )
+    return None
+
+
+def _unsent_row_is_stale(row: object, rows: Mapping[str, object]) -> bool:
+    """True when this unsent row is not the current activation.
+
+    The current activation is the preferred slot. A lower-priority row is
+    stale when that slot is active at a newer version, when the full-hex
+    slot is already sent at the same version, or when that slot exists and
+    is no longer active. The preferred row itself is not stale. A
+    same-version unsent row is still retried when it is the only remaining
+    slot.
+    """
+
+    identity = _visible_unsent_alert(row)
+    if identity is None:
+        return False
+    organization_id, version = identity
+    preferred = _preferred_kill_switch_slot(rows, organization_id)
+    if preferred is None:
+        return False
+    component = str(getattr(row, "component", "") or "")
+    if component == preferred.component:
+        return False
+    if not preferred.active:
+        return True
+    if version < preferred.version:
+        return True
+    return _sent_full_hex_covers(preferred, organization_id, version)
+
+
+def _sent_full_hex_covers(preferred: _PreferredSlot, organization_id: str, version: int) -> bool:
+    """True when the sent full-hex slot already delivered this version."""
+
+    if not preferred.sent or version != preferred.version:
+        return False
+    try:
+        parsed = uuid.UUID(organization_id)
+    except ValueError:
+        return False
+    return preferred.component == paper_kill_switch_component(parsed)
+
+
+def _mark_same_version_old_slots_sent(session: Session, *, now: datetime) -> bool:
+    """Mark 31-hex and legacy rows sent when that version's full-hex row is sent.
+
+    The send marker already covers slots that exist at send time. A later
+    write can leave the old slot unsent at the same version. Health would
+    then schedule a retry, and a process restart clears the in-process page
+    dedup. Recording the old slot as sent stops that second page. A
+    same-version unsent row with no sent full-hex slot is left alone.
+    """
+
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.market_source == "kill_switch"
+        )
+    ).all()
+    sent_versions: set[tuple[str, int]] = set()
+    for row in rows:
+        organization_id = str(row.worker_id or "").strip()
+        if str(row.last_error_code) != _ALERT_SENT:
+            continue
+        try:
+            parsed = uuid.UUID(organization_id)
+        except ValueError:
+            continue
+        if str(row.component) != paper_kill_switch_component(parsed):
+            continue
+        sent_versions.add((organization_id, int(row.lease_epoch or 0)))
+    changed = False
+    for row in rows:
+        organization_id = str(row.worker_id or "").strip()
+        version = int(row.lease_epoch or 0)
+        if (organization_id, version) not in sent_versions:
+            continue
+        if str(row.last_error_code) == _ALERT_SENT:
+            continue
+        try:
+            parsed = uuid.UUID(organization_id)
+        except ValueError:
+            continue
+        old_slots = {
+            paper_kill_switch_truncated_component(parsed),
+            PAPER_KILL_SWITCH_COMPONENT,
+        }
+        if str(row.component) not in old_slots:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
+        changed = True
+    return changed
+
+
+def _retire_previous_kill_switch_slots(
+    session: Session,
+    organization_id: uuid.UUID,
+    *,
+    now: datetime,
+) -> None:
+    """Mark this org's 31-hex and legacy rows sent on the first full-hex write.
+
+    Those rows are not the new slot. Leaving them unsent makes every
+    ``GET /health/paper-worker`` poll schedule a retry that will not send.
+    """
+
+    org = str(organization_id)
+    components = (
+        paper_kill_switch_truncated_component(organization_id),
+        PAPER_KILL_SWITCH_COMPONENT,
+    )
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.component.in_(components)
+        )
+    ).all()
+    for row in rows:
+        if str(row.worker_id) != org or str(row.last_error_code) != _ALERT_UNSENT:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
+
+
+def _kill_switch_slot_components(organization_id: str) -> list[str]:
+    """Full-hex key, the old 31-hex key, and the single legacy row."""
+
+    components = [PAPER_KILL_SWITCH_COMPONENT]
+    with contextlib.suppress(ValueError):
+        parsed = uuid.UUID(organization_id)
+        components.insert(0, paper_kill_switch_truncated_component(parsed))
+        components.insert(0, paper_kill_switch_component(parsed))
+    return components
+
+
+def _apply_sent_marker(
+    session: Session,
+    organization_id: str,
+    version: int,
+    now: datetime,
+) -> None:
+    components = _kill_switch_slot_components(organization_id)
+    rows = session.scalars(
+        select(ControlledRuntimeStatusRow).where(
+            ControlledRuntimeStatusRow.component.in_(components)
+        )
+    ).all()
+    for row in rows:
+        if str(row.worker_id) != organization_id:
+            continue
+        if int(row.lease_epoch) != version or str(row.last_error_code) == _ALERT_SENT:
+            continue
+        row.last_error_code = _ALERT_SENT
+        row.last_delivery_at = now
+
+
+def _mark_kill_switch_alert_sent(organization_id: str, version: int, now: datetime) -> None:
+    from app.db.session import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        with factory() as session, session.begin():
+            _apply_sent_marker(session, organization_id, version, now)
+    except Exception:
+        logger.error("kill_switch_alert_sent_unrecorded")

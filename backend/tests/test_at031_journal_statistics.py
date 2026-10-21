@@ -698,6 +698,59 @@ def test_execution_actor_classification(
     assert system["losses"] == 3
 
 
+def test_manual_demo_test_is_a_human_channel(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    _closed_trade(
+        factory,
+        source=JournalTradeSource.MANUAL_DEMO_TEST,
+        result=TradeResult.WIN,
+        net_pnl="12",
+    )
+
+    grouped = _stats(test_client, headers, group_by="execution_actor")
+    counts = {b["key"]: b["metrics"]["trade_count"] for b in grouped["buckets"]}
+    assert counts == {"human": 1}
+    human = _stats(test_client, headers, execution_actor="human")["overall"]
+    assert human["trade_count"] == 1
+    assert Decimal(human["net_pnl_total"]) == Decimal("12")
+
+
+def test_unknown_source_is_excluded_from_compute(
+    client: tuple[TestClient, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import journal_statistics_service as stats_module
+
+    mapped = dict(stats_module._EXECUTION_ACTOR_BY_SOURCE)
+    del mapped[JournalTradeSource.MANUAL]
+    monkeypatch.setattr(stats_module, "_EXECUTION_ACTOR_BY_SOURCE", mapped)
+    warnings: list[tuple[object, ...]] = []
+
+    def _warning(event: str, **kwargs: object) -> None:
+        warnings.append((event, kwargs.get("source")))
+
+    monkeypatch.setattr(stats_module.logger, "warning", _warning)
+
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    _closed_trade(factory, source=JournalTradeSource.MANUAL, result=TradeResult.WIN, net_pnl="50")
+    _closed_trade(factory, source=JournalTradeSource.SYSTEM, result=TradeResult.LOSS, net_pnl="-4")
+
+    overall = _stats(test_client, headers)["overall"]
+    assert overall["trade_count"] == 1
+    assert Decimal(overall["net_pnl_total"]) == Decimal("-4")
+    grouped = _stats(test_client, headers, group_by="execution_actor")
+    counts = {b["key"]: b["metrics"]["trade_count"] for b in grouped["buckets"]}
+    assert counts == {"system": 1}
+    assert warnings == [
+        ("journal_statistics_unmapped_source", "manual"),
+        ("journal_statistics_unmapped_source", "manual"),
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # Tenant isolation & bounded results
 # --------------------------------------------------------------------------- #

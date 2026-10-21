@@ -16,6 +16,7 @@ import structlog
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.providers.exchange.base import (
     AccountLeverageInfo,
+    AccountMarginMode,
     AccountPermissions,
     AccountPositionMode,
     ExchangeBalance,
@@ -328,6 +329,9 @@ class BloFinAccountProvider:
                         row.get("unrealizedPnl", row.get("upl"))
                     ),
                     leverage=_optional_account_number(row.get("leverage")),
+                    liquidation_price=_optional_account_number(
+                        row.get("liquidationPrice", row.get("liqPx"))
+                    ),
                 )
             )
         return positions
@@ -337,6 +341,18 @@ class BloFinAccountProvider:
         data = self._client.request("GET", "/api/v1/account/position-mode", signed=True)
         row = data if isinstance(data, dict) else {}
         return AccountPositionMode(position_mode=str(row.get("positionMode", "")))
+
+    def get_account_margin_mode(self) -> AccountMarginMode:
+        """Read the account margin mode. This method does not set it."""
+
+        data = self._client.request("GET", "/api/v1/account/margin-mode", signed=True)
+        row = data if isinstance(data, dict) else {}
+        raw = row.get("marginMode")
+        supplied = raw not in (None, "")
+        return AccountMarginMode(
+            margin_mode=str(raw).lower() if supplied else "",
+            supplied=supplied,
+        )
 
     def get_leverage_info(self, *, inst_id: str, margin_mode: str) -> AccountLeverageInfo:
         """Return configured leverage for an instrument under a margin mode."""
@@ -348,11 +364,16 @@ class BloFinAccountProvider:
         )
         row = data if isinstance(data, dict) else {}
         position_side_raw = row.get("positionSide")
+        venue_mode = row.get("marginMode")
+        supplied = venue_mode not in (None, "")
+        # A missing marginMode is not filled in from the request. The caller
+        # cannot treat that echo as the account mode.
         return AccountLeverageInfo(
             inst_id=str(row.get("instId", inst_id)),
-            margin_mode=str(row.get("marginMode", margin_mode)),
+            margin_mode=str(venue_mode).lower() if supplied else "",
             leverage=_to_decimal(row.get("leverage", "0")),
             position_side=str(position_side_raw) if position_side_raw not in (None, "") else None,
+            margin_mode_supplied=supplied,
         )
 
     def get_account_permissions(self) -> AccountPermissions:

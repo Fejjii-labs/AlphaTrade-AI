@@ -30,6 +30,7 @@ PERSISTENCE_SCHEMA_MARKER = "alphatrade-fixture-template-persistence"
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 _WORKER = re.compile(r"^(master|gw\d+)$")
 _PROTECTED = frozenset({"postgres", "template0", "template1"})
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _LOCK = threading.Lock()
 _PREPARERS: dict[str, Callable[[Engine], None]] = {}
 _READY: set[tuple[tuple[object, ...], str]] = set()
@@ -92,13 +93,17 @@ def assign_worker_database(worker: str) -> None:
     """
     if worker == "master":
         return
-    renamed: set[str] = set()
+    selected: list[tuple[str, str]] = []
     for key, value in list(os.environ.items()):
         if "POSTGRES" not in key and not key.endswith("DATABASE_URL"):
             continue
         if not value.startswith("postgresql"):
             continue
-        updated = _retarget_url(value, worker)
+        _require_loopback(make_url(value))
+        selected.append((key, value))
+    pending = [(key, _retarget_url(value, worker)) for key, value in selected]
+    renamed: set[str] = set()
+    for key, updated in pending:
         os.environ[key] = updated
         renamed.add(updated)
     for url in renamed:
@@ -117,6 +122,7 @@ def refresh_database(url: str, *, kind: str) -> Engine:
     settings that still point at this URL see the fresh schema.
     """
     target = make_url(url)
+    _require_loopback(target)
     name = target.database
     if name is None or name in _PROTECTED or name.startswith(("template", "at_tpl_")):
         raise RuntimeError(f"refusing to replace PostgreSQL database {name!r}")
@@ -135,6 +141,7 @@ def clone_database(url: str, *, kind: str = "full", retain: bool = False) -> Eng
     ``retain`` keeps a module-scoped clone alive across per-test cleanup.
     """
     target = make_url(url)
+    _require_loopback(target)
     template = _ensure_template(target, kind)
     name = f"atclone_test_{current_worker()}_{uuid4().hex[:12]}"
     quote_ident(name)
@@ -209,6 +216,16 @@ def cloned_postgres_engine(url: str, *, kind: str = "full") -> Iterator[Engine]:
         yield engine
     finally:
         drop_clone(engine)
+
+
+def _require_loopback(url: URL) -> None:
+    """Refuse a remote host before this module drops, creates, or rewrites a URL.
+
+    A missing host is a local Unix-socket URL, not a remote server.
+    """
+    if url.host is None or url.host in _LOOPBACK_HOSTS:
+        return
+    raise RuntimeError(f"refusing PostgreSQL fixture mutation on non-loopback host {url.host!r}")
 
 
 def _retarget_url(url: str, worker: str) -> str:

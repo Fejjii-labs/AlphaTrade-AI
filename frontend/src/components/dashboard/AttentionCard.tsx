@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { SectionHeader } from "@/components/ui/section-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import type { AttentionQueue } from "@/lib/api/attention-types";
@@ -74,11 +75,23 @@ export function AttentionCard() {
     && Array.isArray(data.items) && Array.isArray(data.limitations);
   return (
     <Card data-testid="dashboard-attention">
-      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
-        <CardTitle>Attention</CardTitle>
-        <button type="button" onClick={() => void reload()} disabled={loading} className="text-sm underline">Refresh attention</button>
+      <CardHeader className="gap-2 pb-2">
+        <SectionHeader
+          eyebrow="Queue"
+          title="Attention"
+          actions={
+            <button
+              type="button"
+              onClick={() => void reload()}
+              disabled={loading}
+              className="text-[length:var(--text-label)] text-accent underline-offset-2 hover:underline"
+            >
+              Refresh attention
+            </button>
+          }
+        />
       </CardHeader>
-      <CardContent>
+      <CardContent className="card-inner pt-0">
         {loading ? <p role="status">Loading attention…</p> : error || !valid ? (
           <p role="alert">Attention unavailable. Refresh to retry.</p>
         ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} /> : null}

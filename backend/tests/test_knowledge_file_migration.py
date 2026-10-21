@@ -13,13 +13,15 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import JSON, Column, MetaData, String, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import make_url
 
+from tests.support.alembic_heads import single_alembic_head
+
 
 def test_knowledge_metadata_revision_precedes_the_single_migration_head():
     root = Path(__file__).resolve().parents[1]
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "src/app/db/migrations"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["a13voicemonitor001"]
+    single_alembic_head(script)
     assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
     assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
     assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"

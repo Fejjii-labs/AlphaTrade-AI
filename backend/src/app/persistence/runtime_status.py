@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -12,6 +13,36 @@ from app.db.runtime_status import ControlledRuntimeStatusRow
 
 WATCHER_COMPONENT = "watcher"
 TELEGRAM_COMPONENT = "telegram"
+PAPER_WORKER_COMPONENT = "paper_worker"
+PAPER_ARMING_COMPONENT = "paper_arming"
+PAPER_EXIT_MONITOR_COMPONENT = "paper_exit_monitor"
+PAPER_KILL_SWITCH_COMPONENT = "paper_kill_switch"
+
+
+def paper_kill_switch_component(organization_id: uuid.UUID) -> str:
+    """One pending-alert slot per organization.
+
+    The key is ``k`` plus the full ``organization_id.hex`` (33 characters).
+    The component column is 64 characters, so two organizations that differ
+    only in the last hex digit do not share a row.
+    """
+
+    return "k" + organization_id.hex
+
+
+def paper_kill_switch_truncated_component(organization_id: uuid.UUID) -> str:
+    """The 32-character key written while the column was 32 characters.
+
+    That key is ``k`` plus the first 31 hex digits. New writes use
+    :func:`paper_kill_switch_component`. Readers still load this row, and
+    the older single ``paper_kill_switch`` row, so an unsent page for the
+    current activation is retried. The first full-hex write marks those
+    older rows sent. Once the full-hex row of a version has been sent, the
+    same-version old slot is marked sent as well. A same-version unsent
+    row on the only remaining slot is still retried.
+    """
+
+    return ("k" + organization_id.hex)[:32]
 
 
 @dataclass(frozen=True, slots=True)

@@ -52,12 +52,28 @@ class WorkerComponentObservation(BaseModel):
     heartbeat_stale_after_seconds: int = 90
 
 
+class ArmingRefusalObservation(BaseModel):
+    """Boot refusal of the exit monitor or an autonomous loop.
+
+    ``refused`` is true only when the worker recorded an arming-gate reason
+    such as ``consecutive_loss_cooldown_invalid`` or
+    ``cycle_interval_exceeds_timeframe``. ``source`` names which loop refused.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refused: bool = False
+    reason: str = ""
+    source: str = ""
+
+
 class WorkerRuntimeObservation(BaseModel):
     """Observed worker rows.
 
     ``available`` is false when the status read fails. It does not mean either
     worker is fresh. Each component's ``health_state`` is the liveness claim.
-    These fields are not the API process configuration.
+    These fields are not the API process configuration. ``exit_monitor`` is
+    the exit-monitor thread, not the watcher heartbeat.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +81,52 @@ class WorkerRuntimeObservation(BaseModel):
     available: bool = False
     watcher: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     telegram: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    paper_worker: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+
+
+class PaperWorkerKillSwitch(BaseModel):
+    """Kill-switch posture for the external paper-worker poll.
+
+    ``active`` is true when the global setting is on, when the scoped
+    organization switch is on, or when that state cannot be read.
+    ``source`` is a fixed token such as ``manual`` or ``global_setting``.
+    ``since`` is the organization row's activation time when one exists.
+    The free-text reason is not included. No secret and no P&L amount.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool = False
+    source: str = ""
+    since: datetime | None = None
+
+
+class PaperWorkerHeartbeatResponse(BaseModel):
+    """External liveness of the paper worker.
+
+    ``status`` is ``fresh``, ``stale``, or ``missing``. ``alert_raised`` is
+    true only when this request successfully delivered a new Telegram alert.
+    A repeated poll inside the cooldown reports the same status and does not
+    send again. Use structured logs and these fields for health-poller
+    monitoring of conditions such as ``degraded_repeat``.
+    ``kill_switch`` is the switch posture. It is not a P&L figure.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["fresh", "stale", "missing"]
+    observation: WorkerComponentObservation
+    alert_raised: bool = False
+    arming_refusal: ArmingRefusalObservation = Field(
+        default_factory=lambda: ArmingRefusalObservation()
+    )
+    arming_alert_raised: bool = False
+    exit_monitor_status: Literal["fresh", "stale", "missing", "disabled"] = "disabled"
+    exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
+    exit_monitor_alert_raised: bool = False
+    kill_switch: PaperWorkerKillSwitch = Field(default_factory=PaperWorkerKillSwitch)
+    timestamp: datetime
 
 
 class HealthResponse(BaseModel):
@@ -108,6 +170,9 @@ class HealthResponse(BaseModel):
     first_perpetual_symbol: Literal["BTCUSDT"] = "BTCUSDT"
     git_sha: str | None = None
     worker_runtime: WorkerRuntimeObservation = Field(default_factory=WorkerRuntimeObservation)
+    arming_refusal: ArmingRefusalObservation = Field(
+        default_factory=lambda: ArmingRefusalObservation()
+    )
     timestamp: datetime
 
 

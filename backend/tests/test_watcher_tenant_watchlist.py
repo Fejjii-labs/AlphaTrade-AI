@@ -35,6 +35,23 @@ ORG = UUID(int=101)
 OTHER = UUID(int=102)
 
 
+class _InstantClock:
+    """Wall start time that jumps forward only when a test asks to sleep."""
+
+    def __init__(self) -> None:
+        self.current = datetime.now(UTC)
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def sleep(self, seconds: float) -> None:
+        self.current += timedelta(seconds=seconds)
+
+
+def _market_factory(cfg: Settings, transport, clock: _InstantClock) -> SymbolMarketFactory:
+    return SymbolMarketFactory(cfg, transport=transport, clock=clock, sleeper=clock.sleep)
+
+
 def settings(**kwargs):
     return Settings(
         _env_file=None,
@@ -69,10 +86,13 @@ def db(tmp_path):
 
 
 class PublicMarket:
-    def __init__(self, *, unsupported=(), fail=(), failover=(), stale=False, wrong=False):
+    def __init__(
+        self, *, unsupported=(), fail=(), failover=(), stale=False, wrong=False, clock=None
+    ):
         self.calls = []
         self.unsupported, self.fail, self.failover = unsupported, fail, failover
         self.stale, self.wrong = stale, wrong
+        self.clock = clock or _InstantClock()
         self.transport = httpx.MockTransport(self.handle)
 
     def handle(self, request):
@@ -122,7 +142,7 @@ class PublicMarket:
             if symbol in self.failover and path.startswith("/fapi"):
                 return httpx.Response(451)
             assert int(request.url.params["limit"]) == 4
-            now = datetime.now(UTC)
+            now = self.clock()
             end = now.replace(second=0, microsecond=0) - timedelta(minutes=now.minute % 15)
             if self.stale:
                 end -= timedelta(minutes=15)
@@ -179,7 +199,7 @@ def runtime(
         perpetual_evidence_secondary_source=secondary,
         watcher_paper_organization_id=organization_id,
     )
-    factory = SymbolMarketFactory(cfg, transport=market.transport)
+    factory = _market_factory(cfg, market.transport, market.clock)
     candidates = InMemoryCandidateRepository()
     worker = build_watcher_paper_runtime(
         cfg,
@@ -212,6 +232,7 @@ def test_invalid_configured_organization_scope_is_rejected():
 
 
 def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db, capsys):
+    import gc
     import json
 
     from app.observability.process_memory import read_process_memory, release_allocator_memory
@@ -229,6 +250,15 @@ def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db
         telegram_cycle=lambda: CycleOutcome(status="disarmed"),
         memory_diagnostics_enabled=True,
     )
+    # Every worker step calls release_allocator_memory(), i.e. a full gc.collect().
+    # Late in a full suite run the process heap holds millions of objects left by
+    # earlier tests, so 81 full collections took ~300 s and hit the timeout.
+    # Freeze that pre-existing heap so collection only walks this test's objects;
+    # everything allocated by the cycles below is still collected normally.
+    # Collect first so unreachable objects from earlier tests are reclaimed
+    # instead of being pinned for the duration of the freeze.
+    gc.collect()
+    gc.freeze()
     before = release_allocator_memory().rss_bytes
     rss = []
     try:
@@ -248,6 +278,7 @@ def test_repeated_worker_cycles_release_history_and_keep_compositions_bounded(db
             market.calls.clear()  # The test recorder is not a production retained structure.
     finally:
         factory.retain(())
+        gc.unfreeze()
     # Record measurements; assert logical bounds, never a platform-specific absolute RSS.
     with capsys.disabled():
         print(
@@ -405,7 +436,7 @@ def test_symbol_specific_failover_and_wrong_instrument(db):
 
 def test_stale_probe_cannot_report_success():
     market = PublicMarket(stale=True)
-    factory = SymbolMarketFactory(settings(), transport=market.transport)
+    factory = _market_factory(settings(), market.transport, market.clock)
     factory.discovery(ContractBook(()), ["ETHUSDT"])
     with pytest.raises(StaleEvidenceError):
         factory.probe("ETHUSDT")
@@ -419,7 +450,7 @@ def test_discovery_unreachable_is_not_unsupported_and_retries():
     def handler(request):
         return httpx.Response(503) if failed[0] else market.handle(request)
 
-    factory = SymbolMarketFactory(settings(), transport=httpx.MockTransport(handler))
+    factory = _market_factory(settings(), httpx.MockTransport(handler), market.clock)
     factory.discovery.clock = lambda: now[0]
     factory.discovery(ContractBook(()), ["ETHUSDT"])
     with pytest.raises(ContractUnavailableError, match="provider_unreachable"):
@@ -599,9 +630,10 @@ def test_unverified_secondary_never_reads_market():
             )
         return market.handle(request)
 
-    factory = SymbolMarketFactory(
+    factory = _market_factory(
         settings(perpetual_evidence_secondary_source="bybit_usdt_perpetual"),
-        transport=httpx.MockTransport(handle),
+        httpx.MockTransport(handle),
+        market.clock,
     )
     factory.discovery(ContractBook(()), ["ETHUSDT"])
     with pytest.raises(ContractUnavailableError, match="unsupported_contract"):
@@ -647,8 +679,8 @@ def test_mixed_strategy_and_probe_work_follow_configured_order(db, monkeypatch):
 @pytest.mark.parametrize("source", ["binance_usdm", "bybit_usdt_perpetual"])
 def test_all_five_canonical_evidence_ports_have_their_own_monitor(source):
     market = PublicMarket()
-    factory = SymbolMarketFactory(
-        settings(perpetual_evidence_source=source), transport=market.transport
+    factory = _market_factory(
+        settings(perpetual_evidence_source=source), market.transport, market.clock
     )
     factory.discovery(ContractBook(()), DEFAULT_WATCHLIST_SYMBOLS)
     monitors = []
@@ -744,7 +776,10 @@ def test_strategy_secondary_refusal_keeps_reason_without_market_acquisition(unre
         raise AssertionError("Ineligible secondary must never acquire market data")
 
     config = settings(perpetual_evidence_secondary_source="bybit_usdt_perpetual")
-    factory = SymbolMarketFactory(config, transport=httpx.MockTransport(handler))
+    clock = _InstantClock()
+    factory = SymbolMarketFactory(
+        config, transport=httpx.MockTransport(handler), clock=clock, sleeper=clock.sleep
+    )
     org = uuid4()
     target = PaperScanTarget(org, uuid4(), uuid4(), uuid4(), uuid4(), "a" * 64, "v1", "ETHUSDT")
     candidates = InMemoryCandidateRepository()

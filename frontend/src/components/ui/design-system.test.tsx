@@ -10,7 +10,10 @@ import {
   StaleState,
   UnavailableState,
 } from "@/components/states";
+import { FilterChips } from "@/components/ui/chip";
 import { Button } from "@/components/ui/button";
+import { ModePill } from "@/components/ui/mode-pill";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DataNumber } from "@/components/ui/data-number";
 import { FieldError, Input } from "@/components/ui/input";
 import { FreshnessPill } from "@/components/ui/freshness-pill";
@@ -517,5 +520,57 @@ describe("AT-040 Tabs roving focus robustness", () => {
     expect(remaining).toHaveLength(2);
     expect(tabStopCount(remaining)).toBe(1);
     expect(screen.getByRole("tab", { name: "One" }).tabIndex).toBe(0);
+  });
+});
+
+describe("AT-040 phase 2 primitives", () => {
+  it("keeps the mode pill unverified until paper is confirmed", () => {
+    render(<ModePill />);
+    expect(screen.getByTestId("mode-pill")).toHaveAttribute("data-kind", "unverified");
+    expect(screen.getByTestId("mode-pill")).not.toHaveTextContent("PAPER");
+  });
+
+  it("moves a segmented control with the arrow keys", () => {
+    function Harness(): ReactElement {
+      const [value, setValue] = useState("demo");
+      return (
+        <SegmentedControl
+          aria-label="Account scope"
+          value={value}
+          onChange={setValue}
+          options={[
+            { value: "demo", label: "Demo", tone: "demo" },
+            { value: "simulator", label: "Simulator", tone: "paper" },
+          ]}
+        />
+      );
+    }
+    render(<Harness />);
+    const group = screen.getByRole("radiogroup", { name: "Account scope" });
+    screen.getByRole("radio", { name: "Demo" }).focus();
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    expect(screen.getByRole("radio", { name: "Simulator" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("toggles a filter chip from the keyboard", () => {
+    function Harness(): ReactElement {
+      const [value, setValue] = useState<string[]>([]);
+      return (
+        <FilterChips
+          aria-label="Journal filters"
+          value={value}
+          onChange={setValue}
+          options={[
+            { id: "notes", label: "Needs notes", count: 3 },
+            { id: "winners", label: "Winners" },
+          ]}
+        />
+      );
+    }
+    render(<Harness />);
+    const toolbar = screen.getByRole("toolbar", { name: "Journal filters" });
+    screen.getByRole("button", { name: "Needs notes 3" }).focus();
+    fireEvent.keyDown(toolbar, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "Needs notes 3" })).toHaveAttribute("aria-pressed", "true");
   });
 });

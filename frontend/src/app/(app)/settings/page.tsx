@@ -9,6 +9,7 @@ import { NotificationSettingsPanel } from "@/components/NotificationSettingsPane
 import { PaperAccountSetup } from "@/components/settings/PaperAccountSetup";
 import { SettingsReadout } from "@/components/settings/SettingsReadout";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { useWatcherMonitoring } from "@/hooks/useWatcherMonitoring";
@@ -41,8 +42,12 @@ function SettingsWorkspace() {
     return () => window.removeEventListener("hashchange", openAnchor);
   }, []);
   return (
-    <div className="space-y-4 [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+    <div className="page-sections [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
+      <PageHeader
+        eyebrow="Workspace"
+        title="Settings"
+        description="Market monitoring, notifications, and account controls."
+      />
       <details
         className="rounded-card border border-border-subtle bg-surface-1 p-4"
         id="markets"

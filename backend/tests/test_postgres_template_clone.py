@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.db.models import Organization
@@ -19,6 +20,10 @@ from tests.support.postgres_persistence import (
 )
 from tests.support.postgres_template import (
     FULL_SCHEMA_MARKER,
+    _require_loopback,
+    assign_worker_database,
+    clone_database,
+    refresh_database,
     worker_database_name,
 )
 
@@ -35,6 +40,56 @@ MIGRATION_MODULES = (
     "test_blofin_activity_migration.py",
     "test_journal_trades_alembic_empty_tenant.py",
 )
+
+
+def test_template_helpers_refuse_a_remote_host_before_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote = "postgresql://user:secret@example.com:5432/alphatrade_test"
+    calls: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        calls.append("sql")
+        raise AssertionError("non-loopback host must not reach SQL or URL rewrite")
+
+    monkeypatch.setattr("tests.support.postgres_template._admin_engine", forbidden)
+    monkeypatch.setattr("tests.support.postgres_template._ensure_template", forbidden)
+    monkeypatch.setattr("tests.support.postgres_template._ensure_database_exists", forbidden)
+    monkeypatch.setattr("tests.support.postgres_template._terminate_and_drop", forbidden)
+    monkeypatch.setattr("tests.support.postgres_template._create_from_template", forbidden)
+    monkeypatch.setattr("tests.support.postgres_template._retarget_url", forbidden)
+
+    with pytest.raises(RuntimeError, match="non-loopback host") as refused:
+        refresh_database(remote, kind="full")
+    assert "example.com" in str(refused.value)
+    assert "secret" not in str(refused.value)
+    with pytest.raises(RuntimeError, match="non-loopback host") as refused:
+        clone_database(remote)
+    assert "example.com" in str(refused.value)
+
+    loopback = "postgresql://user:secret@127.0.0.1:5432/alphatrade_test"
+    monkeypatch.setenv("PHASE1_POSTGRES_URL", remote)
+    monkeypatch.setenv("AT028_POSTGRES_URL", loopback)
+    with pytest.raises(RuntimeError, match="non-loopback host") as refused:
+        assign_worker_database("gw0")
+    assert "example.com" in str(refused.value)
+    assert os.environ["PHASE1_POSTGRES_URL"] == remote
+    assert os.environ["AT028_POSTGRES_URL"] == loopback
+    assert calls == []
+
+
+def test_loopback_and_unix_socket_hosts_pass_the_fixture_guard() -> None:
+    for raw in (
+        "postgresql://user:secret@localhost:5432/alphatrade_test",
+        "postgresql://user:secret@127.0.0.1:5432/alphatrade_test",
+        "postgresql://user:secret@[::1]:5432/alphatrade_test",
+    ):
+        _require_loopback(make_url(raw))
+    _require_loopback(make_url("postgresql://user:secret@/alphatrade_test"))
+    with pytest.raises(RuntimeError, match="non-loopback host") as refused:
+        _require_loopback(make_url("postgresql://user:secret@10.0.0.8:5432/alphatrade_test"))
+    assert "10.0.0.8" in str(refused.value)
+    assert "secret" not in str(refused.value)
 
 
 def test_worker_database_name_is_per_xdist_worker() -> None:

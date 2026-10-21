@@ -151,6 +151,7 @@ test("Validation prefetch is narrow and completed widgets remain visible beside 
   release();
   await expect.poll(() => slowDone).toBe(true);
   await page.getByRole("tab", { name: "Behaviour", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Behaviour", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Validation", exact: true }).click();
   await expect(page.getByTestId("validation-outcome-chart")).toBeVisible();
   await expect(page.getByText("Fixture quality unavailable", { exact: true })).toBeVisible();

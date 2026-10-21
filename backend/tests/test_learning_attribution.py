@@ -7,6 +7,7 @@ record-only. REJECT/SKIP never create executed outcomes.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -609,3 +610,331 @@ def test_candidate_confirmed_is_not_an_executed_outcome(
         assert result.journal_trade_id is None
         assert result.record.facts.trader_behavior.actor is DecisionActor.SYSTEM_SETUP
         assert _count_trades(session) == 0
+
+
+def test_autonomous_approval_is_excluded_from_human_approval_counts(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.learning_attribution.adapters.analytics import rollup_organization
+    from app.paper_evaluation.metrics import _human_facts
+
+    lifecycle_id = uuid4()
+    store = InMemoryAttributionStore()
+    with attribution_sessions() as session:
+        service = learning_service(session, store)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="auto-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.actor is DecisionActor.AUTONOMOUS_APPROVAL
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.AUTONOMOUS_APPROVAL
+        assert plan.record.facts.human_vs_system.decision_actor is (
+            DecisionActor.AUTONOMOUS_APPROVAL
+        )
+        assert plan.record.facts.human_vs_system.trader_behavior_axis is (
+            TraderBehavior.AUTONOMOUS_APPROVAL
+        )
+        assert plan.record.facts.strategy_pattern.plan_approved is False
+        assert plan.record.facts.strategy_pattern.autonomous_approval is True
+        service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="auto-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(
+                        entry_price="64010",
+                        size="1",
+                        approval_channel="AUTONOMOUS",
+                    ),
+                ),
+                lineage,
+            )
+        )
+        close = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.CLOSE,
+                    source_event_id="auto-close",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(
+                        exit_price="63000",
+                        net_pnl="900",
+                        result=TradeResult.WIN.value,
+                        realized_vs_available_pct="80",
+                        approval_channel="AUTONOMOUS",
+                    ),
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        pattern = close.record.facts.strategy_pattern
+        assert pattern.plan_approved is False
+        assert pattern.filled is True
+        assert pattern.win is True
+        assert close.record.facts.outcome.eligible is True
+        assert close.record.facts.human_vs_system.decision_actor is not (
+            DecisionActor.HUMAN_APPROVAL
+        )
+        human = _human_facts((close.record,), SimpleNamespace(confirmed_setup_count=0))
+        assert human.human_approvals == 0
+        assert human.human_approved_executed_wins == 0
+        assert human.human_approved_executed_losses == 0
+        assert human.paper_system_executions == 1
+    snapshot = rollup_organization(store, organization_id=ORG_ID)
+    assert snapshot.human_vs_system.human_approvals == 0
+    assert snapshot.human_vs_system.human_approved_executed_wins == 0
+    assert snapshot.patterns[0].plan_approved_count == 0
+    assert snapshot.patterns[0].win_count == 1
+
+
+def test_missing_approval_channel_remains_a_human_approval(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    lifecycle_id = uuid4()
+    with attribution_sessions() as session:
+        service = learning_service(session)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="human-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.actor is DecisionActor.HUMAN_APPROVAL
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.APPROVED_PLAN
+        assert plan.record.facts.strategy_pattern.plan_approved is True
+        assert plan.record.facts.strategy_pattern.autonomous_approval is False
+        fill = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="human-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(entry_price="64010", size="1"),
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        assert fill.record.facts.strategy_pattern.plan_approved is True
+
+
+def test_unstamped_close_cannot_reclassify_an_autonomous_approval(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    """A later close that the test does not stamp must not become a human approval.
+
+    The production demo close now copies the authorization channel. This test
+    leaves the fill and close payloads without ``approval_channel`` so the
+    sticky fold, not a hand-set channel, is what keeps the counts at zero.
+    """
+
+    from app.learning_attribution.adapters.analytics import rollup_organization
+    from app.paper_evaluation.metrics import _human_facts
+
+    lifecycle_id = uuid4()
+    store = InMemoryAttributionStore()
+    with attribution_sessions() as session:
+        service = learning_service(session, store)
+        lineage = make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id)
+        plan = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="sticky-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                lineage,
+            )
+        )
+        assert plan.record.facts.trader_behavior.axis is TraderBehavior.AUTONOMOUS_APPROVAL
+        service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.FILL,
+                    source_event_id="sticky-fill",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(entry_price="64010", size="1"),
+                ),
+                lineage,
+            )
+        )
+        close_payload = instrument_payload(
+            exit_price="63000",
+            net_pnl="-900",
+            result=TradeResult.LOSS.value,
+            realized_vs_available_pct="80",
+        )
+        assert "approval_channel" not in close_payload
+        close = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.CLOSE,
+                    source_event_id="sticky-close",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=close_payload,
+                ),
+                lineage,
+            )
+        )
+        session.commit()
+        pattern = close.record.facts.strategy_pattern
+        assert pattern.autonomous_approval is True
+        assert pattern.plan_approved is False
+        assert pattern.closed is True
+        assert pattern.loss is True
+        human = _human_facts((close.record,), SimpleNamespace(confirmed_setup_count=0))
+        assert human.human_approvals == 0
+        assert human.human_approved_executed_wins == 0
+        assert human.human_approved_executed_losses == 0
+    snapshot = rollup_organization(store, organization_id=ORG_ID)
+    assert snapshot.human_vs_system.human_approvals == 0
+    assert snapshot.human_vs_system.human_approved_executed_wins == 0
+    assert snapshot.human_vs_system.human_approved_executed_losses == 0
+
+
+def _legacy_facts_hash(dump: dict[str, object]) -> str:
+    """Hash a facts dump the way main did, before autonomous_approval existed."""
+
+    from app.market_contracts.hashing import CONTENT_HASH_EXCLUDE, RECEIVE_AND_TRANSPORT_FIELDS
+    from app.services.canonical_serialization import canonical_sha256
+
+    exclude = RECEIVE_AND_TRANSPORT_FIELDS | CONTENT_HASH_EXCLUDE
+    pattern = dict(dump["strategy_pattern"])  # type: ignore[arg-type]
+    pattern.pop("autonomous_approval", None)
+    preimage = {
+        key: (pattern if key == "strategy_pattern" else item)
+        for key, item in dump.items()
+        if key not in exclude
+    }
+    return canonical_sha256(preimage)
+
+
+def test_legacy_facts_payload_loads_and_tamper_is_rejected(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.db.learning_attribution import LearningAttributionRecordRow
+    from app.learning_attribution.errors import LearningAttributionConflictError
+    from app.persistence.attribution_postgres import PostgresAttributionStore, _facts_from_payload
+    from app.services.canonical_serialization import canonical_sha256
+
+    with attribution_sessions() as session:
+        store = PostgresAttributionStore(session)
+        service = learning_service(session, store)
+        lifecycle_id = uuid4()
+        result = service.apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="legacy-plan",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(),
+                ),
+                make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id),
+            )
+        )
+        session.commit()
+        facts = result.record.facts
+        python_dump = facts.model_dump(mode="python")
+        legacy_hash = _legacy_facts_hash(python_dump)
+        included = dict(python_dump)
+        pattern = dict(included["strategy_pattern"])
+        pattern["autonomous_approval"] = False
+        included["strategy_pattern"] = pattern
+        included.pop("content_hash", None)
+        from app.market_contracts.hashing import CONTENT_HASH_EXCLUDE, RECEIVE_AND_TRANSPORT_FIELDS
+
+        broken_hash = canonical_sha256(
+            {
+                key: item
+                for key, item in included.items()
+                if key not in (RECEIVE_AND_TRANSPORT_FIELDS | CONTENT_HASH_EXCLUDE)
+            }
+        )
+        assert broken_hash != legacy_hash
+        assert facts.content_hash == legacy_hash
+        payload = facts.model_dump(mode="json")
+        assert payload["strategy_pattern"].pop("autonomous_approval") is False
+        payload["content_hash"] = legacy_hash
+        loaded = _facts_from_payload(payload, expected_hash=legacy_hash)
+        assert loaded.strategy_pattern.autonomous_approval is False
+        assert loaded.strategy_pattern.plan_approved is True
+        tampered = facts.model_dump(mode="json")
+        tampered["strategy_pattern"].pop("autonomous_approval", None)
+        tampered["content_hash"] = legacy_hash
+        tampered["strategy_pattern"]["plan_approved"] = False
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(tampered, expected_hash=legacy_hash)
+        injected = facts.model_dump(mode="json")
+        injected["content_hash"] = legacy_hash
+        injected["strategy_pattern"]["autonomous_approval"] = True
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(injected, expected_hash=legacy_hash)
+
+        row = session.scalars(select(LearningAttributionRecordRow)).one()
+        stored = dict(row.facts_payload)
+        stored_pattern = dict(stored["strategy_pattern"])
+        stored_pattern.pop("autonomous_approval", None)
+        stored["strategy_pattern"] = stored_pattern
+        row.facts_payload = stored
+        session.commit()
+        listed = store.list_for_organization(ORG_ID)
+        assert len(listed) == 1
+        assert listed[0].facts.content_hash == legacy_hash
+        assert listed[0].facts.strategy_pattern.autonomous_approval is False
+
+
+def test_autonomous_facts_round_trip_through_the_loader(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    from app.learning_attribution.errors import LearningAttributionConflictError
+    from app.persistence.attribution_postgres import _facts_from_payload
+
+    lifecycle_id = uuid4()
+    with attribution_sessions() as session:
+        result = learning_service(session).apply(
+            command_for(
+                lifecycle_event(
+                    JournalLifecycleEventType.APPROVED_PLAN,
+                    source_event_id="auto-round-trip",
+                    execution_lifecycle_id=lifecycle_id,
+                    payload=instrument_payload(approval_channel="AUTONOMOUS"),
+                ),
+                make_lineage(include_plan=True, execution_lifecycle_id=lifecycle_id),
+            )
+        )
+        session.commit()
+        facts = result.record.facts
+        assert facts.strategy_pattern.autonomous_approval is True
+        payload = facts.model_dump(mode="json")
+        assert payload["strategy_pattern"]["autonomous_approval"] is True
+        loaded = _facts_from_payload(payload, expected_hash=facts.content_hash)
+        assert loaded.content_hash == facts.content_hash
+        assert loaded.strategy_pattern.autonomous_approval is True
+        assert loaded.strategy_pattern.plan_approved is False
+        stripped = facts.model_dump(mode="json")
+        stripped["strategy_pattern"].pop("autonomous_approval")
+        with pytest.raises(
+            LearningAttributionConflictError, match="does not match canonical facts"
+        ):
+            _facts_from_payload(stripped, expected_hash=facts.content_hash)

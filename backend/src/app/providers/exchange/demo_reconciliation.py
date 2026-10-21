@@ -8,7 +8,12 @@ from typing import Any, cast
 
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.demo_preflight import failure_diagnostics
-from app.providers.exchange.governed_blofin import DemoFill, DemoOrderEvidence, _time
+from app.providers.exchange.governed_blofin import (
+    DemoFill,
+    DemoOrderEvidence,
+    _time,
+    demo_order_margin_mode,
+)
 from app.schemas.manual_demo import DemoReconciliationDiagnostic
 from app.schemas.trade_plan import EntrySide, TradePlanRevision
 
@@ -144,6 +149,7 @@ def reconcile_native(
     client_order_id: str,
     clock: Callable[[], datetime],
 ) -> DemoOrderEvidence | None:
+    expected_margin = demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id)
     with stage("order_lookup", ORDER):
         order_rows = rows(
             client.request(
@@ -170,7 +176,7 @@ def reconcile_native(
             order.get("side") == ("buy" if plan.side is EntrySide.BUY else "sell")
             and number(order.get("size"), field="size", positive=True) == plan.quantity.value
             and order.get("positionSide") == "net"
-            and order.get("marginMode") == "cross"
+            and order.get("marginMode") == expected_margin
             and order.get("orderType") == "market",
             "order_plan_mismatch",
         )
@@ -288,7 +294,7 @@ def reconcile_native(
                         and p.get("state") == "live"
                         and p.get("side") == ("sell" if plan.side is EntrySide.BUY else "buy")
                         and p.get("positionSide") == "net"
-                        and p.get("marginMode") == "cross",
+                        and p.get("marginMode") == expected_margin,
                         "protection_terms_mismatch",
                     )
                     require(

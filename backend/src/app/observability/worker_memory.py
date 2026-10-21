@@ -19,10 +19,9 @@ class WorkerMemoryDiagnostics:
     """One bounded post-cleanup series per component; process RSS is shared."""
 
     def __init__(self) -> None:
-        self._after: dict[str, deque[tuple[float, int]]] = {
-            name: deque(maxlen=32) for name in ("watcher", "telegram")
-        }
-        self._cycles = dict.fromkeys(self._after, 0)
+        # Components (watcher, telegram, indexing, activity, ...) register lazily.
+        self._after: dict[str, deque[tuple[float, int]]] = {}
+        self._cycles: dict[str, int] = {}
         memory = read_process_memory()
         logger.info(
             "paper_worker_memory_startup",
@@ -33,9 +32,9 @@ class WorkerMemoryDiagnostics:
         )
 
     def finish(self, component: str, sampler: CycleMemorySampler, after: ProcessMemory) -> None:
-        history = self._after[component]
+        history = self._after.setdefault(component, deque(maxlen=32))
         history.append((monotonic(), after.rss_bytes))
-        self._cycles[component] += 1
+        self._cycles[component] = self._cycles.get(component, 0) + 1
         elapsed = history[-1][0] - history[0][0]
         growth = history[-1][1] - history[0][1]
         logger.info(
@@ -97,7 +96,18 @@ class CycleMemorySampler:
 
     def _sample(self) -> None:
         while not self._stop.wait(0.25):
-            self.sampled_peak = max(self.sampled_peak, self._read().rss_bytes)
+            try:
+                reading = self._read()
+            except Exception as exc:
+                # Stay on this thread. An uncaught sample error must not surface
+                # as a thread crash, and the component loop joins us from stop().
+                logger.warning(
+                    "paper_worker_memory_diagnostics_failed",
+                    component="sampler",
+                    error=f"{type(exc).__name__}: {exc}"[:120],
+                )
+                return
+            self.sampled_peak = max(self.sampled_peak, reading.rss_bytes)
 
     def stop(self) -> None:
         self._stop.set()

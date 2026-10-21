@@ -12,6 +12,7 @@ const e2eBackendEnv = {
   JOURNAL_RAG_SYNC_ENABLED: "true",
   EMAIL_AUTO_VERIFY_LOCAL: "true",
   ACCESS_TOKEN_DENYLIST_ENABLED: "false",
+  AUTH_REGISTER_RATE_LIMIT: "200",
   JWT_SECRET: "e2e-test-secret-at-least-32-characters-long",
   DATABASE_URL: "sqlite+pysqlite:///./.e2e-alphatrade.db",
   LOG_JSON: "false",
@@ -94,7 +95,10 @@ export default defineConfig({
           command: process.env.PLAYWRIGHT_PRODUCTION === "true"
             ? "npm run start -- --port 3000 --hostname localhost"
             : "npm run dev -- --port 3000 --hostname localhost",
-          env: { NEXT_PUBLIC_API_URL: apiURL },
+          env: {
+            NEXT_PUBLIC_API_URL: apiURL,
+            E2E_DISABLE_REACT_STRICT_MODE: "1",
+          },
           url: baseURL,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

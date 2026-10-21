@@ -65,7 +65,7 @@ export function DesktopSidebar({ onOpenCommandMenu }: DesktopSidebarProps) {
         )}
       >
         <div className={cn("min-w-0 flex-1", collapsed && "sr-only")}>
-          <p className="text-caption uppercase tracking-[0.16em] text-accent">
+          <p className="text-eyebrow">
             {appConfig.appName}
           </p>
           <p className="mt-1 text-sm font-semibold text-text-primary">
@@ -110,8 +110,8 @@ export function DesktopSidebar({ onOpenCommandMenu }: DesktopSidebarProps) {
                 "min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
                 collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
                 active
-                  ? "bg-surface-2 text-text-primary"
-                  : "text-text-secondary hover:bg-surface-1 hover:text-text-primary",
+                  ? "border-l-2 border-accent bg-accent-muted text-accent"
+                  : "border-l-2 border-transparent text-text-secondary hover:bg-surface-1 hover:text-text-primary",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />

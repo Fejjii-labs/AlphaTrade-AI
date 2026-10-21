@@ -9,13 +9,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
+# Wide enough for ``k`` plus a full organization UUID hex (33 characters).
+CONTROLLED_RUNTIME_COMPONENT_LENGTH = 64
+
 
 class ControlledRuntimeStatusRow(Base):
     """One row per process role. The API reads it; it does not arm anything."""
 
     __tablename__ = "controlled_runtime_status"
 
-    component: Mapped[str] = mapped_column(String(32), primary_key=True)
+    component: Mapped[str] = mapped_column(
+        String(CONTROLLED_RUNTIME_COMPONENT_LENGTH), primary_key=True
+    )
     worker_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     activation_state: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")

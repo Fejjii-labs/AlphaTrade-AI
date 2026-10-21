@@ -490,7 +490,7 @@ def test_structural_buffer_exact_boundary_is_intact_then_breach_invalidates():
         {"minimum_level_significance": True},
         {"minimum_sweep_depth": 0.02},
         {"maximum_sweep_depth": "NaN"},
-        {"version": "sfp-research/v2"},
+        {"version": "sfp-research/v9"},
         {"breakout_confirmation_closes": 0},
     ],
 )

@@ -5,6 +5,51 @@ Validation, Recommended model. Gap-analysis items (Phase 7) are **not implemente
 
 Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DONE / BLOCKED.
 
+## AT-134 — Full-hex kill-switch alert keys
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: main `d8db9aee` (merged PR #298). Griller comment 6297076089, C3
+  required and C4 optional.
+- Scope: Key pending kill-switch alerts on the full organization UUID hex.
+  Widen `controlled_runtime_status.component` with a reversible migration.
+  Keep reading the legacy `paper_kill_switch` row and the 31-hex rows.
+  Skip the health-check retry thread when nothing is pending or the 60
+  second limit is still open.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+  One push. No force push. No `workflow_dispatch`.
+- Reference: AT-ADR-134; `docs/paper_exit_monitor.md`.
+
+## AT-133 — Isolate kill-switch bookkeeping and health retries
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: `a0f761c8` on `cursor/exit-monitor-kill-switch-followup-d9f3`
+  (PR #297, not merged). Griller comment 6295811355. New branch only.
+- Scope: A failed `paper_kill_switch` bookkeeping write, including two
+  concurrent first inserts, must not roll back the activation. Pending
+  alerts are keyed per organization. `GET /health/paper-worker` retries an
+  unsent page after the response, at most once per 60 seconds per version.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+  Do not push PR #297. Do not merge.
+- Reference: AT-ADR-133; `docs/paper_exit_monitor.md`.
+
+## AT-131 — Exit-monitor liveness when the autonomous loop refuses
+
+- Priority: P1 · Status: DONE (implementation; review pending).
+- Base: main `6c425158` (merged PR #296). Griller comment 6294327165.
+- Scope: An attached exit monitor stays expected when the autonomous loop
+  refuses at boot. A disarmed reboot deletes leftover `paper_arming` and
+  `paper_exit_monitor` rows. Telegram HTTP sends clamp to 5 seconds.
+  Global-setting and fail-closed pages leave the open transaction. A
+  committed kill-switch page that did not reach Telegram is marked unsent
+  and retried on the next health check or boot, once per row version.
+  `GET /health/paper-worker` includes `kill_switch` (`active`, `source`,
+  `since`) with no secret and no P&L.
+- Limits: Flags stay default false. Production refusal unchanged. No
+  environment, Render, or workflow change. Real trading stays blocked.
+- Reference: AT-ADR-131; AT-ADR-132; `docs/paper_exit_monitor.md`.
+
 ## AT-117 — BloFin reconciliation and presentation repair
 
 - Priority: P0 · Status: DONE (implementation; review/live acceptance pending).
@@ -2607,3 +2652,13 @@ PR251 correction: original focused run 38249795179 at 03be2d3 failed case 840
 Alembic CLI logging pollution from the activity migration fixture; repair and exact
 collection evidence are in docs/pr251_focused_ci_repair.md. Shared CI/duration
 changes belong to the PR249 release owner; automated research grants no trades.
+
+## AT-123 — Mirror BloFin demo hand trades into the journal
+
+Status: in progress on `cursor/blofin-demo-manual-journal-c6b5`, draft against
+`cursor/blofin-snapshot-worker-pnl-a220`. Read-only positions history, funding,
+fills, and orders. Flag `BLOFIN_DEMO_MANUAL_MIRROR_ENABLED` defaults off and
+is not set here. `fillPnl` stays unused. No migration, no env or Render edit,
+no live trading. Contract: `docs/blofin_demo_manual_mirror.md`. Decision:
+AT-ADR-112. PR 279 uses AT-ADR-110 and AT-ADR-111. PR 280's snapshot
+decisions are AT-ADR-113, AT-ADR-114, and AT-ADR-115.

@@ -15,6 +15,20 @@ export interface DashboardDemoAccount {
     manual_test_trades: number;
     strategy_closed_trades: number | null;
     coverage: string;
+    activity_sync_status?: "disabled" | "unavailable" | "partial" | "ready";
+    pnl_method?: string;
+    win_rate?: string | null;
+    trade_count?: number | null;
+    wins?: number | null;
+    losses?: number | null;
+    realized_pnl?: string | null;
+    window_start?: string | null;
+    window_end?: string | null;
+    unresolved_round_trips?: number | null;
+    activity_coverage?: string;
+    manual_mirror_status?: "disabled" | "withheld" | "ready";
+    manual_mirror_reason?: string;
+    average_r?: string | null;
   };
   read_only: true;
   status:
@@ -42,6 +56,7 @@ export interface DashboardDemoAccount {
   balances_truncated: boolean;
   positions_truncated: boolean;
   position_count: number | null;
+  refresh_interval_seconds?: number;
   message: string;
 }
 

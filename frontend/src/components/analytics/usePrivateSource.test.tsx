@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PrivateQueryProvider } from "@/components/query/PrivateQueryProvider";
 import { usePrivateSource } from "./usePrivateSource";
@@ -97,6 +97,27 @@ describe("private source Query pilot", () => {
     rerender({ filters: "first" });
     expect(result.current.source?.data).toEqual({ evidence: "exact-filter" });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("refetches a failed source when its observer remounts and keeps fresh data cached", async () => {
+    const failed = vi.fn().mockRejectedValue(new ApiError("Fixture quality unavailable", 422, null));
+    const fresh = vi.fn().mockResolvedValue({ generated_at: "2026-01-01T00:00:00Z" });
+    function Child() {
+      const failedSlot = usePrivateSource(true, "/strategy-quality/summary", "k", failed);
+      const freshSlot = usePrivateSource<{ generated_at: string }>(true, "/learning-analytics/summary", "k", fresh);
+      return <span>{failedSlot.source?.error ?? "pending"}:{freshSlot.source?.data?.generated_at ?? "pending"}</span>;
+    }
+    function Harness({ show }: { show: boolean }) {
+      return show ? <Child /> : null;
+    }
+    const view = render(<Harness show />, { wrapper });
+    await waitFor(() => expect(view.getByText("Fixture quality unavailable:2026-01-01T00:00:00Z")).toBeInTheDocument());
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(fresh).toHaveBeenCalledTimes(1);
+    view.rerender(<Harness show={false} />);
+    view.rerender(<Harness show />);
+    await waitFor(() => expect(failed).toHaveBeenCalledTimes(2));
+    expect(fresh).toHaveBeenCalledTimes(1);
+    view.unmount();
   });
   it("retains cached evidence and exposes a failed refresh without changing its timestamp", async () => {
     const fetcher = vi.fn().mockResolvedValue({ generated_at: "2026-01-01T00:00:00Z" });

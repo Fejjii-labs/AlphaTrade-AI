@@ -1,6 +1,7 @@
 "use client";
 
 import { BloFinSyncPanel } from "@/components/BloFinSyncPanel";
+import { ExchangeDemoAccountSync } from "@/components/exchange/ExchangeDemoAccountSync";
 import { ExchangeDiagnosticsCard } from "@/components/ExchangeDiagnosticsCard";
 import { ErrorState, LoadingState } from "@/components/states";
 import { useAsyncData } from "@/hooks/useAsyncData";
@@ -29,6 +30,7 @@ export default function ExchangeDiagnosticsPage() {
         </p>
       </div>
       <ExchangeDiagnosticsCard diagnostics={data} />
+      <ExchangeDemoAccountSync />
       <BloFinSyncPanel />
     </div>
   );

@@ -1,9 +1,7 @@
 # Workflow: RELEASE / DEPLOY validation
 
-> Authoritative rules: `.ai/MASTER_WORKFLOW.md`. Current task and standing grants persist
-> within their scope: authorized routine commits, batched pushes and integration need no
-> repeated approval. Deployment/main merge/activation retain separate authority and gates.
-> Missing access pauses the affected operation while independent qualification continues.
+> Authoritative rules: `.ai/MASTER_WORKFLOW.md`. Only commit/push/deploy when the task explicitly
+> authorizes it; otherwise stop at `REVIEW_REQUIRED` before the protected action.
 
 ## Development checks
 ```
@@ -13,105 +11,129 @@ uv run ruff format --check .
 # Run tests relevant to the changed behavior (not the complete suite each iteration).
 uv run pytest tests/<affected-test>.py
 # frontend/
-npm run lint && npm run typecheck
-npx vitest run <affected-test-files>
-# Full frontend unit/build/browser validation requires an explicit combined request.
+npm run lint && npm run typecheck && npm run test && npm run build
 ```
 - Inspect `git status` and full diff; confirm every changed file is intentional.
 - Secret scan the diff; confirm no secrets, keys, or private URLs.
-- Confirm `render.yaml` preserves paper-safe defaults: `PROVIDER_MODE=fallback`,
+- Confirm `render.yaml` preserves paper-safe values: `PROVIDER_MODE=fallback`,
   `EXECUTION_MODE=paper`, `ENABLE_REAL_TRADING=false`, `EXCHANGE_MODE=paper_internal`,
-  Watcher/Telegram flags `false`. Defaults are not an instruction to reset existing operator
-  settings: preserve watcher, Telegram, kill switch, account and provider configuration.
+  Watcher/Telegram flags `false`.
 
-Ordinary push/PR CI keeps the six existing job names and required development quality
-checks. PR runs for the same PR cancel superseded runs; main/master pushes and manual
-runs have separate concurrency groups and are not cancelled by PR updates. Read-only
-workflow permissions and job timeouts bound routine execution.
-Backend pytest runs `scripts/run_backend_focused.py`: a small config/deployment/
-workflow baseline, changed backend test files, the exact `tests/test_<module>.py`
-file when it exists, and explicit source mappings (safety modules, the
-SFP/receipt/logging group, reviewer boundaries, and native-activity boundaries).
-Filename prefixes such as `test_agent*.py` are not used.
+Ordinary push and pull_request CI keeps six jobs and no job-level `if`:
+`backend`, `frontend`, `deployment-safety`, `evaluation`, `docker-build`, and
+`e2e-smoke`. `evaluation` needs `backend`. `e2e-smoke` needs `backend` and
+`frontend`. The workflow file has no `permissions` block and no `schedule`.
+Pull requests share one concurrency group per pull request number, and
+`cancel-in-progress` is true only for `pull_request`, so a newer event cancels
+the older run of that pull request. Push and `workflow_dispatch` each use
+`github.run_id`, so a push or a manual `full_backend` run cannot cancel another
+run or replace one that is still pending. A pull request title or body edit
+uses that same unique group and still runs the heavy jobs. Retargeting the
+base, including to `main`, joins the pull request group and classifies the new
+diff. The only `workflow_dispatch` input is `full_backend`,
+and its default is `true`. There is no `combined_validation` input.
 
-Development CI partitions that exact selection into three whole-file batches, each on its
-own PostgreSQL service. The required `backend` check keeps Ruff and requires all batches
-to succeed. Existing diagnostics retain each selection, test identity/phase, log, JUnit and
-exit receipt. Each batch has a 16-minute inner budget, 17-minute launcher budget and
-18-minute step within the existing 20-minute job limit. Full release execution retains
-its separate unfiltered command, deadlines and checkpoint uploads. Unchanged fixture
-profiling remains available by explicit workflow dispatch and is skipped on ordinary PRs.
+Heavy steps in `backend`, `evaluation`, `docker-build`, and `e2e-smoke` do not
+run on a draft `opened` or `synchronize`. They run for a non-draft `opened` or
+`synchronize`, for every `reopened` and `ready_for_review` of a code change
+even if the draft flag is still set, for a base retarget even while draft, and
+when the pull request already has the `run-ci` label on an `opened` or
+`synchronize`. The workflow subscribes to `edited` so a base change is
+reclassified. An edit that does not change the base does not cancel the pull
+request run, and it does not skip. The workflow does not subscribe to
+`labeled`, so adding any label, including `run-ci`, does not start CI or cancel
+a run. `run-ci` counts only as a whole label already present on `opened` or
+`synchronize`. A missing head commit, including a fork pull request, fails
+open and runs the work. `deployment-safety` still runs on drafts, and it runs
+`ci-scope.sh --self-test` in a clean environment that ignores the job's
+`CI_SCOPE_*` and `GITHUB_*` values. `frontend` still runs for draft changes
+that are not docs-only. A rename is
+classified with `git diff --name-only --no-renames`, so a move into `docs/` or
+`.ai/` does not count as docs-only.
 
-This is a development selection, not exhaustive dependency analysis. For other cross-module changes,
-include their focused tests explicitly in the PR; the complete gate below remains
-required. A successful focused run is **not complete backend acceptance**.
-Native activity/schema/client changes include scoped provider, account and migration
-regressions. `BLOFIN_ACTIVITY_TEST_POSTGRES_URL` uses the existing disposable CI
-PostgreSQL service so the activity durability/migration cases actually execute.
+On a pull request, `docs/**`, `.ai/**`, and root-level markdown-only changes
+skip backend, frontend, Docker, evaluation, and browser work. Those jobs still
+finish successfully, so a required check is not left pending. A push to `main`
+or `master` always runs the heavy jobs, including when that push is docs-only.
+`workflow_dispatch` ignores that path filter and the draft filter. The
+`full_backend` input still selects only the complete backend pytest step, and
+only a manual dispatch can select it. Pull requests and pushes never run that
+step. There is no cron.
 
-The frontend keeps generated drift, lint and type checks, then runs
-`scripts/run_frontend_focused.py`: contract/cache baselines, changed tests and
-module/domain neighbors, including Agent/API/account boundaries. This heuristic is
-not exhaustive dependency analysis; owners must record focused local checks for their
-actual changes. Preserve backend, frontend and deployment-safety merge checks and
-failure propagation. No branch-protection settings are changed by this policy.
+The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
+150-minute job timeout. On an ordinary push or pull request, and on a manual
+dispatch with `full_backend` false, it runs `scripts/run_backend_focused.py` as
+one pytest process. That selector always includes `tests/test_config.py`,
+`tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`. It also
+includes a changed `backend/tests/test_*.py` file, every
+`tests/test_<module stem>*.py` match when a `backend/src/app/**/*.py` file
+changes (that is a filename-prefix glob), and the SFP/receipt/logging group
+when a changed path is in the script's SFP path list. The diff is
+`git diff --name-only` from the pull request base SHA, or `github.event.before`
+on a push. This is a development selection, not exhaustive dependency analysis.
+A successful focused run is **not complete backend acceptance**. Include focused
+tests for other cross-module changes in the PR. The CI database URL is bound to
+`AT028_POSTGRES_URL`, `EXPERIMENT_TEST_POSTGRES_URL`,
+`BLOFIN_ACTIVITY_TEST_POSTGRES_URL`, and `PR237_ROLLBACK_POSTGRES_URL` so those
+disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
 
-Expensive combined validation is manual only: full frontend unit/build, deterministic
-evaluations, Docker build and production-browser smoke. Their jobs/steps are skipped
-on routine events, and those skips do **not** establish acceptance. Both manual
-booleans default to false; `full_backend=true` also enables combined validation.
-Only when explicitly requested, run development combined validation with:
-
-```sh
-gh workflow run ci.yml --ref <reviewed-ref> -f combined_validation=true -f full_backend=false
-```
-
-This still uses the focused backend selection and is not the full release gate.
-Manual development selection compares the branch to its `origin/main` merge base,
-so a final evidence-only commit cannot omit the accumulated feature changes.
-Do not repeat green runs merely to show progress. Record the exact tested SHA,
-selected tests, failures and skips; batch related fixes before pushing. Cancel older
-active PR runs where authorized access permits. Never cancel the current release
-acceptance run as a development cost measure.
+The frontend job runs `npm ci`, `npm run lint`, `npm run typecheck`,
+`npm run test`, and `npm run build` on every push, and on a pull request whose
+change is not docs-only or `.ai`-only. It does not run
+`scripts/run_frontend_focused.py`. The evaluation,
+Docker build, and Playwright smoke jobs run for the same non-draft code events
+as the heavy backend steps. They are not gated by a second manual flag.
+No branch-protection settings are changed by this policy. A green required
+check on a draft or a docs-only pull request means that heavy work was
+skipped, not that the suite passed. A docs-only push still runs the heavy
+jobs. Complete acceptance is one manual `full_backend=true`
+dispatch on the integration batch SHA, not a nightly run.
 
 ## Final consolidated release acceptance
 
-Freeze the exact consolidated candidate after supervising review, coordinated staging
-deployment and fresh SFP diagnostics/evaluations. Only with the explicit full-acceptance
-request and these prerequisites satisfied, dispatch **one** complete CI run on that ref:
+Pull requests get the quick focused checks only. The complete backend suite does
+not run on pull request pushes, on pushes to `main`, or on a schedule.
+
+When a batch of pull requests is ready, stack them on an integration branch
+named like `integration/<date>`. Dispatch `full_backend` **once** on that
+branch. Merge the batch to `main` in order only after that single run passes.
+Do not dispatch the full suite after each fix or feature.
+
+After supervising review, consolidated staging deployment and fresh SFP diagnostics/
+evaluations, dispatch **one** complete CI run on the exact reviewed release ref:
 
 ```sh
 gh workflow run ci.yml --ref <reviewed-release-ref> -f full_backend=true
 ```
 
-The Actions UI exposes the same `full_backend` boolean, defaulting to false for
-manual dispatch. Ordinary push/PR events always use development mode. A manual false
-value without `combined_validation=true` requests development checks only. Do not dispatch a full run during routine
-implementation or call a focused green check the complete release gate.
+The Actions UI exposes the same `full_backend` boolean, defaulting to true for
+manual dispatch. Ordinary push and pull_request events always use focused mode.
+A manual false value requests development checks only. Do not dispatch a full
+run during routine implementation or call a focused green check the complete
+release gate.
 
-The full dispatch runs unfiltered `uv run pytest` with PostgreSQL and all existing
-Ruff, frontend lint/type/unit/build, deployment-safety, Docker build, deterministic
-Agent/RAG/guardrail evaluation and Playwright browser smoke checks. Record the run
-URL, exact `head_sha`, full backend counts/skips and successful results for all
+The full step runs one pytest process:
+
+```sh
+uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+```
+
+The shell is `bash -eo pipefail`. The step timeout is 140 minutes, inside the
+150-minute backend job. JUnit and the pytest log are uploaded as the
+`full-backend-pytest` artifact. The same run still executes Ruff, the frontend
+lint/type/unit/build steps, deployment-safety, the Docker build, the
+deterministic Agent/RAG/guardrail evaluation, and the Playwright browser smoke
+job. Nothing in this workflow runs the full suite on a schedule. Record
+the run URL, exact `head_sha`, full backend counts/skips and successful results for all
 six jobs. Failed, skipped or cancelled evaluation/browser jobs do not establish
 acceptance. Investigate skips and do not attribute counts from another commit.
 If the reviewed commit changes, its earlier full result is not final acceptance.
-If the run fails, diagnose and repair the specific failures with focused verification. Rerun
-failed jobs where valid; broaden only for concrete new risk. Do not repeat already green
-jobs merely for progress or attribute an earlier revision's acceptance to repaired code.
 
 No branch protection configuration, credentials, deployment or activation settings
 change through this workflow. Demo stays disarmed and real trading stays disabled.
 Live acceptance remains supervised; local/mock checks do not prove it.
 
 ## Deploy validation (staging, paper-only)
-- Perform one focused prerequisite pass for the actual API, worker, frontend and database
-  targets. Reuse valid receipts for unchanged inputs; verify exact-commit deployment access,
-  authenticated synthetic smoke access, migration order and exercised rollback compatibility.
-  No merge, deployment or new infrastructure is implied by this document.
-- Coordinate API/worker/frontend revisions and ingestion consumers; preserve immutable
-  migration ancestry and existing operator settings. Record deployment receipts and exact
-  installed revisions; a merge or hosting read check does not prove deployment.
 - `ENV_FILE=.env.staging ./scripts/check-env.sh`
 - `BASE_URL=<api> ./scripts/post-deploy-smoke-gate.sh` (AT-005 mandatory gate; exit 0)
 - Canonical path: `INCLUDE_CANONICAL=true BASE_URL=<api> ./scripts/post-deploy-smoke-gate.sh`
@@ -119,9 +141,8 @@ Live acceptance remains supervised; local/mock checks do not prove it.
 - On gate exit 1 → follow `docs/deploy_rollback_runbook.md` before further work
 - `BASE_URL=<api> ./scripts/verify-safety.sh` (included in the gate; may run alone)
 - `BACKEND_URL=<api> ./scripts/validate-exchange-demo-staging.sh`
-- Confirm `/health` paper posture and `real_trading_enabled=false`; verify watcher, Telegram,
-  kill switch and account settings against their recorded existing values without changing them.
-- Preserve configured providers and activation boundaries; do not activate a new paid model.
+- Confirm `/health` paper posture, `real_trading_enabled=false`, Watcher/Telegram false.
+- Confirm providers remain mock until an operator manually configures keys.
 - Never enable real trading during deploy or rollback.
 
 ## Handoff (mandatory end of task)
@@ -129,15 +150,6 @@ Live acceptance remains supervised; local/mock checks do not prove it.
    status (`READY`, or `REVIEW_REQUIRED`/`BLOCKED`/`FAILED` as applicable — never `DRAFT`).
 2. Recompute the normalized `Source File SHA256` (hash of each doc with its own
    `Source File SHA256:` line removed) and write it back.
-3. Record named accepted/total criteria, implemented/integrated/deployed/live-accepted states,
-   exact candidate and installed revisions, focused/full evidence, unexplained skips and the
-   exercised rollback reference. Keep the checkpoint compact and reuse existing templates.
-4. Run `~/.local/bin/sync-alphatrade-ai-handoff.sh` when the Mac worktree is available and
-   verify destination bytes via SHA256 and `cmp`/`diff`, exit 0. For cloud publication, batch
-   authorized handoff pushes and verify the published source equality per the master workflow.
-   Record unavailable Mac/iCloud access explicitly; do not claim downstream sync or require
-   repeated extra pushes at every edit.
-5. Bundle genuinely missing release access in one packet: blocked operation, exact service/
-   target, executor, missing permission or identity reference, verified configuration destination,
-   completed preparation and next executable action. Keep secrets out of the packet and
-   continue independent qualification work. Do not substitute a generic access roadmap.
+3. Run `~/.local/bin/sync-alphatrade-ai-handoff.sh`.
+4. Verify the iCloud destination matches source via SHA256 **and** `cmp`/`diff`; confirm exit
+   status 0. Sync immediately on any blocker/review/failure — never wait for task end.

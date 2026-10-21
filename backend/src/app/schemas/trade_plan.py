@@ -106,6 +106,7 @@ class AuthorizationChannel(StrEnum):
     WEB = "WEB"
     API = "API"
     TELEGRAM = "TELEGRAM"
+    AUTONOMOUS = "AUTONOMOUS"
 
 
 class AuthorizationState(StrEnum):

@@ -443,6 +443,9 @@ class AgentPaperExecutionService:
                 current_risk = proposed.risk_result
             if approval.authorization is None:
                 raise TradingPolicyError("Exact plan authorization is missing.")
+            from app.services.approval_service import assert_human_may_execute
+
+            assert_human_may_execute(approval.authorization)
             with operation_scope(
                 _decision(
                     Intent.EXECUTE_PAPER_PLAN,

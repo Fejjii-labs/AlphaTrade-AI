@@ -7,11 +7,12 @@ principal pins never grant real execution. SFP keeps its existing refusal.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import String, select
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, ExecutionMode, Settings
@@ -21,11 +22,13 @@ from app.core.execution_credentials import (
     governed_demo_worker_access_requested,
 )
 from app.db.models import (
+    AuditLog,
     ExecutionAccount,
     ExecutionCommand,
     ExecutionProjection,
     GovernedDemoLifecycleResolution,
     JournalTrade,
+    Membership,
     TradePlanRevision,
     VenueSubmitEffect,
 )
@@ -37,14 +40,32 @@ from app.providers.exchange.blofin_activity import BloFinActivityProvider
 from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
 from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBloFinDemoProvider
+from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
-from app.schemas.common import ApprovalAction, TradeDirection
+from app.schemas.common import (
+    ApprovalAction,
+    MembershipRole,
+    PaperAlertSeverity,
+    PaperAlertType,
+    TradeDirection,
+)
 from app.schemas.execution_protocol import ExecutionCommandOutcome, VenueSubmitEffectState
 from app.schemas.risk import KillSwitchMutationRequest
-from app.schemas.trade_plan import AuthorizationChannel, EntrySide, TradePlanRevisionCreate
+from app.schemas.trade_plan import (
+    AuthorizationChannel,
+    AuthorizationState,
+    EntrySide,
+    TradePlanRevisionCreate,
+)
 from app.security.tenant import TenantContext
-from app.services.approval_service import ApprovalService
+from app.services.approval_service import (
+    CHANNEL_MISMATCH_REASON,
+    ApprovalService,
+    human_execution_refused,
+    revoke_leftover_autonomous_authorizations,
+    stored_issuance_matches,
+)
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import (
     AutomatedPaperLoop,
@@ -52,14 +73,18 @@ from app.services.automated_paper_loop import (
     _eligibility_command,
     _execute_request,
     _fill_id,
+    _missing_stored_plan_proof,
     _plan_terms,
     _proof,
+    _stored_plan_execution_refusal,
 )
+from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
+from app.services.paper_alert_service import PaperAlertService
 from app.services.planned_reward_risk import PlannedRewardRiskError, planned_reward_risk
 from app.services.risk.kill_switch import KillSwitchService
 from app.services.risk.settings_service import RiskSettingsService
@@ -77,8 +102,97 @@ from app.signal_fusion.ports import Clock
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
 from app.workers.watcher_paper_targets import PaperScanTarget
 
+logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
+
+
+def _demo_risk_snapshot(
+    session: Session,
+    target: PaperScanTarget,
+    plan: object,
+    intent: object,
+) -> RiskLimitSnapshot | None:
+    """Build the account limit snapshot, or None when it cannot be verified."""
+
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from app.db.models import AccountRiskAccountingState
+    from app.services.audit_service import AuditService
+    from app.services.risk.settings_service import RiskSettingsService
+
+    account_id = getattr(plan, "account_id", None)
+    organization_id = getattr(target, "organization_id", None)
+    user_id = getattr(target, "user_id", None)
+    if account_id is None or organization_id is None or user_id is None:
+        return None
+    row = session.scalar(
+        select(AccountRiskAccountingState).where(
+            AccountRiskAccountingState.organization_id == organization_id,
+            AccountRiskAccountingState.account_id == account_id,
+        )
+    )
+    if row is None:
+        settings = RiskSettingsService(session, AuditService(session)).get(
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+        if settings.daily_loss_limit is None:
+            return None
+        max_notional = settings.default_account_balance
+        max_daily_loss = settings.daily_loss_limit
+        max_slots = int(settings.max_trades_per_day)
+        reserved_notional = Decimal("0")
+        reserved_daily_loss = Decimal("0")
+        reserved_slots = 0
+        actual_notional = Decimal("0")
+        actual_daily_loss = Decimal("0")
+        actual_trades = 0
+        symbol_reserved: dict[str, str] = {}
+        symbol_actual: dict[str, str] = {}
+        daily_locked = False
+        max_symbol = max_notional
+    else:
+        max_notional = row.max_notional
+        max_daily_loss = row.max_daily_loss
+        max_symbol = row.max_symbol_notional
+        if max_daily_loss >= max_notional or max_symbol >= max_notional:
+            return None
+        max_slots = int(row.max_trade_slots)
+        reserved_notional = row.reserved_notional
+        reserved_daily_loss = row.reserved_daily_loss
+        reserved_slots = int(row.reserved_trade_slots)
+        actual_notional = row.actual_notional
+        actual_daily_loss = row.actual_daily_loss
+        actual_trades = int(row.actual_trade_count)
+        symbol_reserved = {
+            str(key): str(value) for key, value in dict(row.symbol_reserved or {}).items()
+        }
+        symbol_actual = {
+            str(key): str(value) for key, value in dict(row.symbol_actual or {}).items()
+        }
+        daily_locked = bool(row.daily_locked)
+    return RiskLimitSnapshot(
+        max_notional=max_notional,
+        max_daily_loss=max_daily_loss,
+        max_symbol_notional=max_symbol,
+        max_trade_slots=max_slots,
+        pending_notional=intent.pending_notional,  # type: ignore[attr-defined]
+        proposed_loss=intent.daily_loss,  # type: ignore[attr-defined]
+        instrument=str(intent.instrument),  # type: ignore[attr-defined]
+        reserved_notional=reserved_notional,
+        reserved_daily_loss=reserved_daily_loss,
+        reserved_trade_slots=reserved_slots,
+        actual_notional=actual_notional,
+        actual_daily_loss=actual_daily_loss,
+        actual_trade_count=actual_trades,
+        symbol_reserved=symbol_reserved,
+        symbol_actual=symbol_actual,
+        daily_locked=daily_locked,
+        trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
+    )
 
 
 def demo_posture_refusal(settings: Settings) -> str | None:
@@ -87,6 +201,28 @@ def demo_posture_refusal(settings: Settings) -> str | None:
     if not blofin_execution_authorized(settings):
         return "governed_demo_credential_gate_closed"
     return None
+
+
+def governed_demo_autonomous_gate(settings: object) -> tuple[bool, str | None]:
+    """Split the existing governed approval from autonomous auto-approval.
+
+    A clean OFF resolution keeps the pre-existing API-channel approval. That
+    path is not an AUTONOMOUS approval and does not use the unverified-ledger
+    guard. A verified BloFin-demo mode uses the autonomous approval, which
+    still fails closed when risk limits are unverified. Any other resolution
+    refuses before either path.
+    """
+
+    from app.services.autonomous_trading import AutonomousMode, resolve_autonomous_mode
+
+    resolution = resolve_autonomous_mode(settings)
+    if resolution.refusal is not None:
+        return False, resolution.refusal
+    if resolution.mode is AutonomousMode.BLOFIN_DEMO:
+        return True, None
+    if resolution.mode is AutonomousMode.OFF:
+        return False, None
+    return False, "autonomous_mode_mismatch"
 
 
 def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | None:
@@ -104,6 +240,133 @@ def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | No
     if canonical_sha256(resolved.evidence_payload) != resolved.content_hash:
         return "demo_lifecycle_integrity_operator_hold"
     return "demo_closed_reconciled"
+
+
+def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Decimal) -> str | None:
+    """Compare the open position's liquidation price with the stop. No order write.
+
+    A flat account has nothing to compare. An open position without a price,
+    or a price through the stop, returns a reason and does not close the trade.
+    """
+
+    from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
+    from app.schemas.trade_plan import EntrySide
+    from app.schemas.trade_plan import TradePlanRevision as PlanSchema
+    from app.services.risk_policy.decision import post_fill_recheck
+    from app.services.risk_policy.plan_sizing import PAPER_CONSERVATIVE_MAINTENANCE_TIERS
+
+    if not isinstance(provider, GovernedBloFinDemoProvider) or not isinstance(plan, PlanSchema):
+        return "demo_post_fill_liquidation_unreadable"
+    try:
+        liquidation = provider.read_open_liquidation(inst_id=plan.execution_instrument)
+    except Exception:
+        return "demo_post_fill_liquidation_unreadable"
+    if liquidation is None:
+        return None
+    direction = "long" if plan.side is EntrySide.BUY else "short"
+    outcome = post_fill_recheck(
+        fill_price=fill_price,
+        stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
+        atr=None,
+        leverage=plan.risk_and_exits.leverage,
+        notional=fill_price,
+        margin_mode="isolated",
+        tiers=PAPER_CONSERVATIVE_MAINTENANCE_TIERS,
+        direction=direction,
+        stop_price=plan.risk_and_exits.stop.value,
+        observed_liquidation_price=liquidation,
+    )
+    if outcome.exchange_write_attempted or outcome.accepted:
+        return None
+    return "demo_post_fill_liquidation_inside_stop"
+
+
+def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
+    """Verified funding print, or None so the sizer uses the documented floor.
+
+    A missing method or a failed GET is not a live rate. The mock fallback
+    inside the public market-data provider is not called from here.
+    """
+
+    reader = getattr(provider, "read_funding_rate", None)
+    if reader is None:
+        return None
+    try:
+        rate = reader(symbol=symbol)
+    except Exception:
+        return None
+    if isinstance(rate, Decimal) and rate.is_finite():
+        return rate
+    return None
+
+
+def _alert_liquidation_through_stop(session: Session, command: ExecutionCommand) -> None:
+    """Loud alert on the existing notification path. Does not close or reduce.
+
+    Telegram stays off unless it was already enabled. This records a critical
+    alert and would deliver only through that existing, default-off path.
+    """
+
+    PaperAlertService(session, audit_service=AuditService(session)).create(
+        organization_id=command.organization_id,
+        user_id=command.user_id,
+        alert_type=PaperAlertType.DEMO_LIQUIDATION_THROUGH_STOP,
+        severity=PaperAlertSeverity.CRITICAL,
+        message=(
+            "LIQUIDATION THROUGH STOP: BloFin demo liquidation price is through "
+            "the stop after a fill. The kill switch is armed. No automatic close "
+            "or reduction. Operator action required."
+        ),
+        dedup_key=(f"demo_liquidation_through_stop:{command.organization_id}:{command.id}"),
+        metadata={"command_id": str(command.id), "auto_close": False},
+    )
+
+
+def _demo_calculation_inputs(
+    *,
+    raw: Decimal,
+    quantity: Decimal,
+    grade: object,
+    grade_cap: Decimal | None,
+) -> list[dict[str, object]]:
+    """Lot rounding plus the grade that sized a profile plan."""
+
+    from app.services.risk_policy.plan_sizing import profile_sizing_grade_payload
+    from app.services.risk_policy.profile import Grade
+
+    inputs: list[dict[str, object]] = [
+        {
+            "name": "rounded_contract_quantity",
+            "input_value": raw,
+            "result_value": quantity,
+            "unit": "CONTRACTS",
+            "formula_id": "floor-to-venue-lot",
+            "formula_version": "1",
+            "precision": 12,
+            "rounding_mode": "ROUND_FLOOR",
+            "conservative_remainder": raw - quantity,
+        }
+    ]
+    if isinstance(grade, Grade) and isinstance(grade_cap, Decimal):
+        inputs.append(profile_sizing_grade_payload(grade, grade_cap))
+    return inputs
+
+
+def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
+    """Disposition, and whether the existing kill switch must run.
+
+    An unreadable liquidation read is not labeled as a price through the stop,
+    and it arms only when protection is missing. A price through the stop arms
+    even when protection is reported attached: that stop cannot fill first.
+    The returned flag does not close the position and does not write leverage
+    or margin mode.
+    """
+
+    if liquidation_reason == "demo_post_fill_liquidation_unreadable":
+        return "DEMO_LIQUIDATION_UNREADABLE", not protected
+    if liquidation_reason == "demo_post_fill_liquidation_inside_stop":
+        return "DEMO_LIQUIDATION_INSIDE_STOP", True
+    raise ValueError("Unknown demo liquidation hold.")
 
 
 class GovernedBloFinDemoLoop(AutomatedPaperLoop):
@@ -124,6 +387,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._snapshot: DemoVenueSnapshot | None = None
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
+        self._scan_funding_rate: Decimal | None = None
+
+    def _verified_funding_rate(self) -> Decimal | None:
+        rate = self._scan_funding_rate
+        if isinstance(rate, Decimal) and rate.is_finite():
+            return rate
+        return None
 
     def continue_experiment_setup(
         self,
@@ -170,10 +440,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         )
 
     def _posture_refusal(self) -> str | None:
-        return demo_posture_refusal(self._settings)
+        refusal = demo_posture_refusal(self._settings)
+        if refusal is not None:
+            return refusal
+        _use_autonomous, block = governed_demo_autonomous_gate(self._settings)
+        return block
 
     def _policy_version(self) -> str:
         return DEMO_POLICY
+
+    def _risk_policy_kind(self) -> str:
+        return "demo"
 
     def _get_provider(self) -> GovernedBloFinDemoProvider:
         if self._provider is None:
@@ -243,6 +520,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
         session.commit()  # Persist Candidate; no DB transaction held over venue reads.
+        from app.services.automated_paper_loop import _load_active_profile
+
+        active = _load_active_profile(
+            session, target.organization_id, self._risk_policy_kind(), self._clock.now()
+        )
+        # A profile sizes leverage later and is compared to the isolated read.
+        # Do not require 1x before that comparison, and do not send a leverage write.
+        # No profile keeps the existing cross 1x read.
+        required_leverage = None if active is not None else Decimal("1")
+        read_margin_mode = "isolated" if active is not None else "cross"
         try:
             self._snapshot = self._get_provider().snapshot(
                 symbol=target.symbol,
@@ -250,10 +537,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 side=EntrySide.BUY
                 if candidate.direction is TradeDirection.LONG
                 else EntrySide.SELL,
+                required_leverage=required_leverage,
+                margin_mode=read_margin_mode,
             )
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
+        self._scan_funding_rate = _read_demo_funding(self._get_provider(), target.symbol)
         return super()._bound(
             session,
             target=target,
@@ -329,9 +619,21 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         now: datetime,
         eligibility_valid_until: datetime,
         eligibility_id: UUID,
+        active_profile: object | None = None,
+        open_exposure: Decimal = Decimal("0"),
+        open_risk_percent: Decimal = Decimal("0"),
+        open_positions: int | None = None,
+        remaining_daily_budget_percent: Decimal | None = None,
+        breaker_refusing: bool = False,
+        risk_records: list[object] | None = None,
+        fixed_risk_percent: Decimal | None = None,
     ) -> TradePlanRevisionCreate | str:
         snapshot = self._require_snapshot()
         equity = min(equity, snapshot.equity, snapshot.available)
+        # Stops and targets stay on the existing path. The unprofiled 1%
+        # minimum is not a gate once a profile is active: that plan is sized
+        # below with size_for_profile. Leverage and margin-mode reads still
+        # refuse, and this method does not write the venue.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -341,6 +643,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
+            accept_unprofiled_minimum=active_profile is not None,
         )
         if isinstance(terms, str):
             return terms
@@ -359,15 +662,96 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
         # Reserve fees+slippage conservatively; sizing uses base value per contract.
-        cost_per_base = entry * Decimal("0.002")
-        raw = (
-            min(
-                equity * Decimal("0.01") / (abs(entry - stop) + cost_per_base),
-                equity * Decimal("0.10") / entry,
+        risk_cap = equity * Decimal("0.01")
+        notional_cap = equity * Decimal("0.10")
+        margin_assumption = "verified-demo-existing-1x"
+        profile_leverage: Decimal | None = None
+        profile_cash_ceiling: Decimal | None = None
+        profile_funding_rate: Decimal | None = None
+        profile_funding_periods: Decimal | None = None
+        profile_grade = None
+        profile_grade_cap: Decimal | None = None
+        if active_profile is None:
+            cost_per_base = entry * Decimal("0.002")
+            raw = (
+                min(
+                    risk_cap / (abs(entry - stop) + cost_per_base),
+                    notional_cap / entry,
+                )
+                / snapshot.multiplier
             )
-            / snapshot.multiplier
-        )
-        raw = min(raw, snapshot.maximum)
+            raw = min(raw, snapshot.maximum)
+        else:
+            from app.services.automated_paper_loop import _grade_for_plan
+            from app.services.risk_policy.plan_sizing import (
+                ActiveProfile,
+                demo_leverage_block,
+                demo_margin_mode_block,
+                size_for_profile,
+            )
+
+            if not isinstance(active_profile, ActiveProfile):
+                return "risk_profile_unavailable"
+            if open_positions is None or remaining_daily_budget_percent is None:
+                return "open_book_uncomputed"
+            grade, atr = _grade_for_plan(candidate, assembled)
+            from app.services.risk_policy.liquidation import MaintenanceTier
+
+            live_funding = self._verified_funding_rate()
+            sized = size_for_profile(
+                active=active_profile,
+                grade=grade,
+                equity=equity,
+                entry=entry,
+                stop=stop,
+                target=target,
+                direction="long" if is_long else "short",
+                atr=atr,
+                lot_step=snapshot.lot * snapshot.multiplier,
+                min_quantity=snapshot.minimum * snapshot.multiplier,
+                open_risk_percent=open_risk_percent,
+                open_notional=open_exposure,
+                open_positions=open_positions,
+                remaining_daily_budget_percent=remaining_daily_budget_percent,
+                breaker_refusing=breaker_refusing,
+                include_book_buffer=True,
+                funding_rate=live_funding,
+                funding_rate_verified=live_funding is not None,
+                maintenance_tiers=tuple(
+                    MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
+                    for floor, rate in snapshot.maintenance_tiers
+                ),
+                execution_channel="demo",
+                fixed_risk_percent=fixed_risk_percent,
+            )
+            if isinstance(sized, str):
+                return sized
+            mismatch = demo_leverage_block(snapshot.account_leverage, sized.leverage)
+            if mismatch is not None:
+                return mismatch
+            margin_block = demo_margin_mode_block(snapshot.margin_mode)
+            if margin_block is not None:
+                return margin_block
+            if risk_records is not None:
+                risk_records.append(sized.record)
+            raw = sized.quantity / snapshot.multiplier
+            if raw > snapshot.maximum:
+                return "demo_size_above_market_maximum"
+            risk_cap = equity * sized.risk_percent / Decimal("100")
+            notional_cap = (
+                equity * active_profile.profile.max_notional_per_trade_percent / Decimal("100")
+            )
+            margin_assumption = "verified-demo-read-leverage"
+            profile_leverage = sized.leverage
+            profile_cash_ceiling = sized.risk_cash_ceiling
+            profile_funding_rate = sized.funding_rate
+            profile_funding_periods = sized.funding_periods
+            profile_grade = sized.grade
+            profile_grade_cap = (
+                fixed_risk_percent
+                if fixed_risk_percent is not None
+                else active_profile.profile.risk_percent(sized.grade)
+            )
         quantity = (raw / snapshot.lot).to_integral_value(rounding=ROUND_FLOOR) * snapshot.lot
         if quantity < snapshot.minimum or quantity * snapshot.multiplier * entry < Decimal("5"):
             return "demo_size_below_minimum"
@@ -380,11 +764,26 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         base = quantity * snapshot.multiplier
         lower, upper = min(entry, worst_entry), max(entry, worst_entry)
         adverse_entry = upper if is_long else lower
-        cost_per_base = upper * Decimal("0.002")
-        maximum_loss = base * (abs(adverse_entry - stop) + cost_per_base)
-        if base * upper > equity * Decimal("0.10"):
+        from app.services.risk_policy.plan_sizing import reserved_maximum_loss
+
+        # Profile plans store the same unit costs the sizer reserved. Non-profile
+        # plans keep the previous 0.2% of the worse price. The shared ledger is
+        # not rewritten.
+        maximum_loss = reserved_maximum_loss(
+            size=base,
+            adverse_entry=adverse_entry,
+            stop=stop,
+            worse_price=upper,
+            profile_costs=profile_leverage is not None,
+            funding_rate=profile_funding_rate,
+            funding_periods=profile_funding_periods,
+        )
+        if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
-        if maximum_loss > equity * Decimal("0.01"):
+        if profile_leverage is not None:
+            if profile_cash_ceiling is None or maximum_loss > profile_cash_ceiling:
+                return "demo_depth_exceeds_risk_limit"
+        elif maximum_loss > risk_cap:
             return "demo_depth_exceeds_risk_limit"
         values = terms.model_dump(mode="python")
         values.update(
@@ -429,19 +828,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "freshness_seconds": 10,
                 },
                 "valid_until": min(terms.valid_until, snapshot.observed_at + timedelta(seconds=10)),
-                "calculation_inputs": [
-                    {
-                        "name": "rounded_contract_quantity",
-                        "input_value": raw,
-                        "result_value": quantity,
-                        "unit": "CONTRACTS",
-                        "formula_id": "floor-to-venue-lot",
-                        "formula_version": "1",
-                        "precision": 12,
-                        "rounding_mode": "ROUND_FLOOR",
-                        "conservative_remainder": raw - quantity,
-                    }
-                ],
+                "calculation_inputs": _demo_calculation_inputs(
+                    raw=raw,
+                    quantity=quantity,
+                    grade=profile_grade,
+                    grade_cap=profile_grade_cap,
+                ),
             }
         )
         values["risk_and_exits"].update(
@@ -454,10 +846,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 "fee_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
                 "slippage_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
                 "stop": {"value": stop, "unit": "USDT"},
-                "margin_assumption_id": "verified-demo-existing-1x",
+                "margin_assumption_id": margin_assumption,
                 "margin_assumption_version": "1",
             }
         )
+        if profile_leverage is not None:
+            values["margin_mode"] = "ISOLATED"
+            values["risk_and_exits"]["leverage"] = format(profile_leverage, "f")
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
         revised = TradePlanRevisionCreate.model_validate(values)
         try:
@@ -472,6 +867,62 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             raise ValueError("Demo preflight evidence missing.")
         return self._snapshot
 
+    def _demo_auto_approval_refusal(
+        self,
+        session: Session,
+        target: PaperScanTarget,
+        plan: object,
+    ) -> tuple[str | None, RiskLimitSnapshot | None]:
+        """Refuse demo auto-approval unless mode, kill switch, and limits verify.
+
+        The snapshot is returned only when every check passed, so the approval
+        audit can record the limits that were actually used.
+        """
+
+        from app.experiments.execution_risk import experiment_reservation_refusal
+        from app.services.autonomous_trading import (
+            AutonomousMode,
+            configured_risk_refusal,
+            continuation_refusal,
+            kill_switch_refusal,
+        )
+        from app.services.execution_claim import conservative_reservation
+
+        refusal = continuation_refusal(self._settings, expected=AutonomousMode.BLOFIN_DEMO)
+        if refusal is not None:
+            return refusal, None
+        observed = getattr(self, "_observed_kill_switch", None)
+        if observed is not None and not isinstance(observed, bool):
+            return "kill_switch_unverified", None
+        kill = kill_switch_refusal(
+            self._settings,
+            session,
+            getattr(target, "organization_id", None),
+            observed=observed if isinstance(observed, bool) else None,
+        )
+        if kill is not None:
+            return kill, None
+        try:
+            intent = conservative_reservation(plan)  # type: ignore[arg-type]
+            snapshot = _demo_risk_snapshot(session, target, plan, intent)
+        except Exception:
+            return "risk_limits_unverified", None
+        risk = configured_risk_refusal(snapshot)
+        if risk is not None:
+            return risk, None
+        try:
+            experiment = experiment_reservation_refusal(
+                session,
+                plan,  # type: ignore[arg-type]
+                intent,
+                self._clock.now(),
+            )
+        except Exception:
+            return "risk_limits_unverified", None
+        if experiment is not None:
+            return experiment, None
+        return None, snapshot
+
     def _execute_existing(
         self,
         session: Session,
@@ -482,18 +933,41 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         account_id: UUID,
         eligibility_id: UUID | None = None,
         eligibility_state: str | None = None,
+        entry_occurred_at: datetime | None = None,
     ) -> AutomatedPaperLoopProof:
+        # The parent passes the signal-bar end for internal-paper journal time.
+        # Demo venue fills keep the venue event time and do not read this value.
+        del entry_occurred_at
         plans = self._plan_service()
         envelope = plans.get_scoped(
             revision_id, organization_id=target.organization_id, user_id=target.user_id
         )
-        if (
-            envelope.plan.execution_venue != "BLOFIN_DEMO"
-            or envelope.plan.execution_policy_version != DEMO_POLICY
-        ):
+        plan = getattr(envelope, "plan", None)
+        missing = _missing_stored_plan_proof(
+            self,
+            session,
+            target,
+            candidate,
+            revision_id,
+            plan=plan,
+        )
+        if missing is not None:
+            return missing
+        if plan.execution_venue != "BLOFIN_DEMO" or plan.execution_policy_version != DEMO_POLICY:
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id
             )
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
+        if blocked is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason=blocked,
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         context = self._experiment_context
         producer: BloFinNativeOutcomeProducer | None = None
         if context is not None:
@@ -502,9 +976,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 target.user_id,
             ):
                 raise ValueError("Experiment target must belong to its authenticated tenant.")
-            context.require_active(
+            version = context.require_active(
                 session, self._settings, self._clock.now(), revision_id=revision_id
             )
+            native_uid = version.configuration.account.native_uid
+            if native_uid is None:
+                raise ValueError("Native experiment requires an exact account UID.")
+            self._get_provider().require_account_identity(native_uid)
             producer = BloFinNativeOutcomeProducer(
                 session, self._settings, context.tenant, clock=self._clock.now
             )
@@ -531,6 +1009,30 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             is not None
         ):
             return _proof(candidate, "closed", "demo_closed_reconciled", revision_id=revision_id)
+        use_autonomous, autonomous_block = governed_demo_autonomous_gate(self._settings)
+        if autonomous_block is not None:
+            revoke_leftover_autonomous_authorizations(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                revision_id=revision_id,
+                reason="autonomous_precheck_blocked",
+                clock=self._clock.now,
+            )
+            return _proof(candidate, "blocked", autonomous_block, revision_id=revision_id)
+        limits = None
+        if use_autonomous:
+            blocked, limits = self._demo_auto_approval_refusal(session, target, envelope.plan)
+            if blocked is not None:
+                revoke_leftover_autonomous_authorizations(
+                    session,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    revision_id=revision_id,
+                    reason="autonomous_precheck_blocked",
+                    clock=self._clock.now,
+                )
+                return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         approval = ApprovalService(
             session, AuditService(session), clock=self._clock.now, plans=plans
         )
@@ -540,15 +1042,85 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             user_id=target.user_id,
             approval_reason="Explicit automatic demo capability; exact immutable hash binding",
         )
-        decided = approval.decide(
-            pending.id,
-            ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
-            principal_organization_id=target.organization_id,
-            principal_user_id=target.user_id,
-            channel=AuthorizationChannel.API,
-        )
+        if use_autonomous:
+            from app.services.autonomous_trading import (
+                AUTONOMOUS_ACTOR_TYPE,
+                AutonomousMode,
+                autonomous_decision_metadata,
+            )
+
+            decided = approval.decide(
+                pending.id,
+                ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+                principal_organization_id=target.organization_id,
+                principal_user_id=target.user_id,
+                channel=AuthorizationChannel.AUTONOMOUS,
+                actor_type=AUTONOMOUS_ACTOR_TYPE,
+                audit_metadata=autonomous_decision_metadata(
+                    mode=AutonomousMode.BLOFIN_DEMO,
+                    settings=self._settings,
+                    limits=limits,
+                    limits_note=(
+                        "account ledger snapshot accepted at auto-approval; "
+                        "the claim predicate remains the execution authority"
+                    ),
+                ),
+            )
+        else:
+            decided = approval.decide(
+                pending.id,
+                ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+                principal_organization_id=target.organization_id,
+                principal_user_id=target.user_id,
+                channel=AuthorizationChannel.API,
+            )
         if decided.authorization is None:
             return _proof(candidate, "blocked", "authorization_missing", revision_id=revision_id)
+        if use_autonomous:
+            blocked, _limits_again = self._demo_auto_approval_refusal(
+                session, target, envelope.plan
+            )
+            if blocked is not None:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason="post_approval_recheck",
+                )
+                return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        if use_autonomous:
+            from app.services.autonomous_trading import AUTONOMOUS_ACTOR_TYPE
+
+            channel_refused = not stored_issuance_matches(
+                decided.authorization,
+                channel=AuthorizationChannel.AUTONOMOUS,
+                actor_type=AUTONOMOUS_ACTOR_TYPE,
+            )
+        else:
+            channel_refused = human_execution_refused(decided.authorization)
+        if channel_refused:
+            if getattr(decided.authorization, "state", None) is AuthorizationState.AVAILABLE:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason=CHANNEL_MISMATCH_REASON,
+                )
+            return _proof(
+                candidate,
+                "blocked",
+                CHANNEL_MISMATCH_REASON,
+                revision_id=revision_id,
+            )
+        blocked = _stored_plan_execution_refusal(self, session, target, plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(
@@ -558,10 +1130,28 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 revision_id=revision_id,
                 authorization_id=decided.authorization.authorization_id,
                 candidate_id=candidate.candidate_id,
+                autonomous=use_autonomous,
             ),
             clock=self._clock.now,
         )
+        if result.outcome is ExecutionCommandOutcome.ALLOW and result.command_id is not None:
+            from app.services.automated_paper_loop import _commit_risk_record
+
+            _commit_risk_record(
+                self,
+                session,
+                organization_id=target.organization_id,
+                trade_id=str(candidate.candidate_id),
+                now=self._clock.now(),
+            )
         if result.outcome is not ExecutionCommandOutcome.ALLOW:
+            if use_autonomous:
+                approval.revoke_authorization(
+                    decided.authorization.authorization_id,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    reason="claim_blocked",
+                )
             return _proof(
                 candidate,
                 "blocked",
@@ -641,6 +1231,52 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session, self._settings, RiskSettingsService(session, AuditService(session))
         )
 
+    def _hold_profile_liquidation(
+        self,
+        session: Session,
+        *,
+        command: ExecutionCommand,
+        effect: VenueSubmitEffect,
+        liquidation_reason: str,
+        protected: bool,
+    ) -> None:
+        """Arm the existing kill switch, then label the read.
+
+        A missing protection hold and a liquidation price through the stop use
+        the same switch as the later unprotected fill. An unreadable price is
+        not stored as a price through the stop. This does not close the
+        position and does not write leverage or margin mode.
+        """
+
+        disposition, arm_kill_switch = profile_liquidation_hold(
+            liquidation_reason=liquidation_reason,
+            protected=protected,
+        )
+        if liquidation_reason == "demo_post_fill_liquidation_unreadable":
+            logger.warning(
+                "BloFin demo liquidation price is unreadable after fill; "
+                "command_id=%s protected=%s disposition=%s",
+                command.id,
+                protected,
+                disposition,
+            )
+        if arm_kill_switch:
+            through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
+            reason = (
+                "BloFin demo liquidation is through the stop; operator action required"
+                if through_stop
+                else "BloFin demo protection missing; operator action required"
+            )
+            KillSwitchService(session, AuditService(session), self._settings).activate(
+                organization_id=command.organization_id,
+                actor_user_id=command.user_id,
+                payload=KillSwitchMutationRequest(confirm=True, reason=reason),
+                source="demo_protection",
+            )
+            if through_stop:
+                _alert_liquidation_through_stop(session, command)
+        effect.reconciliation_disposition = disposition
+
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:
         """Read-only venue recovery runs despite the kill switch. Never resubmits."""
         with self._runtime.bind_session(session):
@@ -664,7 +1300,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 return "demo_plan_required"
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
-                return completed
+                session.commit()
+                return self._finish_closed(session, command, completed)
             effect = session.scalar(
                 select(VenueSubmitEffect).where(VenueSubmitEffect.command_id == command_id)
             )
@@ -692,7 +1329,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
                 session.commit()
-                return completed
+                return self._finish_closed(session, command, completed)
             if evidence.status in {"rejected"} and not evidence.fills:
                 self._dispatcher(session).record_demo_order(command_id=command_id, rejected=True)
                 session.commit()
@@ -757,10 +1394,46 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
+                profile_fill = (
+                    envelope.plan.risk_and_exits.margin_assumption_id
+                    == "verified-demo-read-leverage"
+                )
+                if profile_fill:
+                    liquidation_reason = _demo_post_fill_liquidation(
+                        self._get_provider(),
+                        envelope.plan,
+                        evidence.fills[-1].price,
+                    )
+                    if liquidation_reason is not None:
+                        self._safety(session).lock_epoch(
+                            organization_id=command.organization_id,
+                            account_id=command.account_id,
+                        )
+                        self._hold_profile_liquidation(
+                            session,
+                            command=command,
+                            effect=effect,
+                            liquidation_reason=liquidation_reason,
+                            protected=evidence.protected,
+                        )
+                        session.commit()
+                        return liquidation_reason
                 try:
                     exit_evidence = self._get_provider().reconcile_exit(
                         plan=envelope.plan, entry=evidence
                     )
+                except DemoPositionLineageError:
+                    KillSwitchService(session, AuditService(session), self._settings).activate(
+                        organization_id=command.organization_id,
+                        actor_user_id=command.user_id,
+                        payload=KillSwitchMutationRequest(
+                            confirm=True,
+                            reason="BloFin demo position differs from owned fills; operator hold",
+                        ),
+                        source="demo_protection",
+                    )
+                    session.commit()
+                    return "demo_position_lineage_operator_hold"
                 except Exception:
                     exit_evidence = None
                     exit_unavailable = True
@@ -777,7 +1450,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 evidence=exit_evidence,
                             )
                         session.commit()
-                        return "demo_closed_reconciled"
+                        return self._finish_closed(session, command, "demo_closed_reconciled")
                     except Exception:
                         KillSwitchService(session, AuditService(session), self._settings).activate(
                             organization_id=command.organization_id,
@@ -786,6 +1459,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                                 confirm=True,
                                 reason="BloFin demo exit projection requires operator review",
                             ),
+                            source="demo_protection",
                         )
                         session.commit()  # Preserve previously committed entry facts.
                         return "demo_exit_projection_operator_hold"
@@ -795,7 +1469,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             completed = _resolved_lifecycle(session, command)
             if completed is not None:
                 session.commit()
-                return completed
+                return self._finish_closed(session, command, completed)
             if evidence.fills and not evidence.protected:
                 KillSwitchService(session, AuditService(session), self._settings).activate(
                     organization_id=command.organization_id,
@@ -804,6 +1478,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         confirm=True,
                         reason="BloFin demo protection missing; operator action required",
                     ),
+                    source="demo_protection",
                 )
                 reason = "demo_protection_failed_operator_hold"
                 effect.reconciliation_disposition = (
@@ -825,7 +1500,61 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session.commit()
             return reason
 
+    def _finish_closed(self, session: Session, command: ExecutionCommand, reason: str) -> str:
+        """Retry stored admission after a durable close, including worker restart."""
+        from app.experiments.native_producer import ORIGIN
+
+        if reason != "demo_closed_reconciled":
+            return reason
+        origin = session.scalar(
+            select(AuditLog.id).where(
+                AuditLog.organization_id == command.organization_id,
+                AuditLog.user_id == command.user_id,
+                AuditLog.resource_type == "experiment_execution",
+                AuditLog.resource_id == str(command.revision_id),
+                AuditLog.redacted_metadata["operation"].as_string() == ORIGIN,
+            )
+        )
+        if origin is None:
+            session.commit()
+            return reason
+        membership = session.scalar(
+            select(Membership).where(
+                Membership.organization_id == command.organization_id,
+                Membership.user_id == command.user_id,
+            )
+        )
+        if membership is None or membership.role not in {
+            MembershipRole.OWNER,
+            MembershipRole.TRADER,
+        }:
+            session.commit()
+            return "demo_closed_reconciled_sample_ownership_hold"
+        tenant = TenantContext(
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            email="",
+            membership_role=membership.role,
+        )
+        try:
+            with session.begin_nested():
+                outcome = BloFinNativeOutcomeProducer(
+                    session, self._settings, tenant, clock=self._clock.now
+                ).reconcile(command.id)
+            session.commit()
+        except (ConflictError, ValueError):
+            session.rollback()
+            return "demo_closed_reconciled_sample_unavailable"
+        return (
+            "demo_closed_reconciled_sample_admitted"
+            if outcome.closure_verified
+            else "demo_closed_reconciled_sample_unavailable"
+        )
+
     def reconcile_pending(self, session: Session) -> tuple[str, ...]:
+        from app.experiments.models import ExperimentSampleRow
+        from app.experiments.native_producer import ORIGIN
+
         if demo_posture_refusal(self._settings) is not None:
             return ()
         ids = list(
@@ -845,9 +1574,33 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     ExecutionCommand.outcome == ExecutionCommandOutcome.ALLOW,
                     TradePlanRevision.execution_venue == "BLOFIN_DEMO",
                     TradePlanRevision.execution_policy_version == DEMO_POLICY,
-                    GovernedDemoLifecycleResolution.id.is_(None),
+                    (
+                        GovernedDemoLifecycleResolution.id.is_(None)
+                        | (
+                            select(AuditLog.id)
+                            .where(
+                                AuditLog.organization_id == ExecutionCommand.organization_id,
+                                AuditLog.user_id == ExecutionCommand.user_id,
+                                AuditLog.resource_type == "experiment_execution",
+                                AuditLog.resource_id == ExecutionCommand.revision_id.cast(String),
+                                AuditLog.redacted_metadata["operation"].as_string() == ORIGIN,
+                            )
+                            .exists()
+                            & ~select(ExperimentSampleRow.id)
+                            .where(
+                                ExperimentSampleRow.organization_id
+                                == ExecutionCommand.organization_id,
+                                ExperimentSampleRow.source == "blofin_demo",
+                                ExperimentSampleRow.source_record_id
+                                == ExecutionCommand.id.cast(String),
+                            )
+                            .exists()
+                        )
+                    ),
                 )
-                .order_by(ExecutionCommand.created_at)
+                .order_by(
+                    GovernedDemoLifecycleResolution.id.is_not(None), ExecutionCommand.created_at
+                )
                 .limit(20)
             )
         )

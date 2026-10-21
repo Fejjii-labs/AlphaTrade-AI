@@ -22,6 +22,7 @@ import { VoiceConversationControls } from "./VoiceConversationControls";
 import { RealtimeVoiceControls } from "./RealtimeVoiceControls";
 import { useConversationViewport } from "./useConversationViewport";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
@@ -651,10 +652,16 @@ export function AgentWorkspace() {
 
   return (
     <div
-      className="space-y-4 [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm"
+      className="page-sections [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm"
       data-testid="agent-workspace"
     >
-      <h1 className="sr-only">Agent</h1>
+      <PageHeader
+        className="hidden lg:flex"
+        eyebrow="Copilot"
+        title="Agent"
+        description="Conversation, capture, and voice. Execution can stay paused."
+      />
+      <PageHeader className="lg:hidden" compact title="Agent" />
       {strategyContext || strategyError || (strategyId && !conversationId) ? <div className="flex flex-wrap gap-3 text-sm" data-testid="agent-strategy-context">
         {strategyContext ? <><span>Strategy: {strategyContext.name}</span>
           <Link href={`/strategy-lab/${encodeURIComponent(strategyContext.id)}`} className="underline">Back to strategy</Link></> :
@@ -707,15 +714,15 @@ export function AgentWorkspace() {
               aria-modal={mobile ? true : undefined}
               aria-label="Conversation history"
               data-testid="agent-history"
-              className="fixed inset-y-0 left-0 z-[60] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-none bg-surface-0 lg:relative lg:inset-auto lg:z-auto lg:w-auto lg:self-start lg:overflow-visible lg:rounded-card"
+              className="fixed inset-y-0 left-0 z-[60] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-none border border-border-subtle bg-surface-0 lg:relative lg:inset-auto lg:z-auto lg:w-auto lg:self-start lg:overflow-visible lg:rounded-card"
             >
-              <CardHeader>
-                <CardTitle>History</CardTitle>
+              <CardHeader className="border-b border-border-subtle pb-2">
+                <CardTitle className="text-section">History</CardTitle>
                 <Button variant="ghost" onClick={() => setHistoryOpen(false)}>
                   Close history
                 </Button>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="card-inner max-h-[min(70vh,32rem)] overflow-y-auto p-2 lg:max-h-none">
                 {conversations.loading ? (
                   <p className="text-caption text-text-muted">Loading…</p>
                 ) : null}
@@ -777,8 +784,8 @@ export function AgentWorkspace() {
         )}
 
         <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
-          <Card className="order-1 border-border">
-            <CardContent className="space-y-4 pt-4 lg:pt-6">
+          <Card className="order-1 border-border-subtle">
+            <CardContent className="card-inner pt-3 lg:pt-4">
               {messagesError ? (
                 <div
                   role="alert"
@@ -1018,7 +1025,7 @@ export function AgentWorkspace() {
                     </Select> : null}
                   </div>
                 </details>
-                <details className="text-sm text-text-muted">
+                <details open className="text-sm text-text-muted">
                   <summary className="min-h-11 cursor-pointer content-center">Browser dictation fallback</summary>
                   <VoiceConversationControls
                   conversationId={conversationId}

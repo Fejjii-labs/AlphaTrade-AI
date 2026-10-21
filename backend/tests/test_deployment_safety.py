@@ -126,6 +126,54 @@ def test_normalizes_render_postgres_database_url() -> None:
     assert settings.database_url.startswith("postgresql+psycopg://")
 
 
+def test_production_rejects_either_autonomous_flag() -> None:
+    with pytest.raises(ValidationError, match="autonomous_internal_paper_enabled"):
+        Settings(**{**_PRODUCTION_BASE, "autonomous_internal_paper_enabled": True})
+    with pytest.raises(ValidationError, match="autonomous_blofin_demo_enabled"):
+        Settings(**{**_PRODUCTION_BASE, "autonomous_blofin_demo_enabled": True})
+
+
+def test_production_rejects_paper_exit_monitor() -> None:
+    with pytest.raises(ValidationError, match="paper_exit_monitor_enabled"):
+        Settings(**{**_PRODUCTION_BASE, "paper_exit_monitor_enabled": True})
+    with pytest.raises(ValidationError, match="paper_exit_monitor_enabled"):
+        Settings(
+            **{
+                **_PRODUCTION_BASE,
+                "paper_exit_monitor_enabled": True,
+                "paper_exit_monitor_dry_run": False,
+            }
+        )
+
+
+def test_staging_accepts_paper_exit_monitor_flag() -> None:
+    settings = Settings(**{**_STAGING_BASE, "paper_exit_monitor_enabled": True})
+    assert settings.paper_exit_monitor_enabled is True
+    assert settings.paper_exit_monitor_dry_run is True
+    validate_deployment_settings(settings)
+
+
+def test_live_paper_exit_closes_require_explicit_dry_run_false() -> None:
+    armed = Settings(**{**_STAGING_BASE, "paper_exit_monitor_enabled": True})
+    assert armed.paper_exit_monitor_dry_run is True
+    live = Settings(
+        **{
+            **_STAGING_BASE,
+            "paper_exit_monitor_enabled": True,
+            "paper_exit_monitor_dry_run": False,
+        }
+    )
+    assert live.paper_exit_monitor_dry_run is False
+    validate_deployment_settings(live)
+
+
+def test_staging_accepts_an_autonomous_internal_paper_flag() -> None:
+    settings = Settings(**{**_STAGING_BASE, "autonomous_internal_paper_enabled": True})
+    assert settings.autonomous_internal_paper_enabled is True
+    assert settings.autonomous_blofin_demo_enabled is False
+    validate_deployment_settings(settings)
+
+
 def test_production_rejects_debug_mode() -> None:
     with pytest.raises(ValidationError, match="debug"):
         Settings(**{**_STAGING_BASE, "environment": "production", "debug": True})
@@ -159,6 +207,11 @@ def test_staging_rejects_provider_mode_mock() -> None:
 def test_staging_rejects_in_memory_rate_limit_fallback() -> None:
     with pytest.raises(ValidationError, match="rate_limit_allow_in_memory_fallback"):
         Settings(**{**_STAGING_BASE, "rate_limit_allow_in_memory_fallback": True})
+
+
+def test_staging_rejects_raised_register_rate_limit() -> None:
+    with pytest.raises(ValidationError, match="auth_register_rate_limit"):
+        Settings(**{**_STAGING_BASE, "auth_register_rate_limit": 200})
 
 
 def test_production_rejects_in_memory_rate_limit_fallback() -> None:
@@ -209,6 +262,12 @@ def test_deployment_posture_reports_at018_hardening() -> None:
     assert posture["market_watcher_bridge_enabled"] is False
     assert posture["watcher_orchestration_enabled"] is False
     assert posture["real_trading_enabled"] is False
+    assert posture["autonomous_internal_paper_enabled"] is False
+    assert posture["autonomous_blofin_demo_enabled"] is False
+    assert posture["paper_exit_monitor_enabled"] is False
+    assert posture["paper_exit_monitor_dry_run"] is True
+    assert posture["paper_exit_monitor_degraded_alert_after_seconds"] == 900
+    assert posture["paper_exit_monitor_max_clock_skew_seconds"] == 15
 
 
 def test_staging_rejects_market_watcher_enabled() -> None:

@@ -62,6 +62,9 @@ class NativeOutcome(CanonicalModel):
     fee_cost: CanonicalDecimal | None = None
     realized_pnl_after_fees_excluding_funding: CanonicalDecimal | None = None
     funding: None = None
+    closure_verified: bool = False
+    price_pnl_excluding_fees_and_funding: CanonicalDecimal | None = None
+    price_pnl_methodology: Literal["verified-linear-fill-prices/v1"] | None = None
     rounding: Literal["18_decimal_places_half_even"] = "18_decimal_places_half_even"
     limitations: tuple[str, ...] = (
         "funding_not_collected",
@@ -71,6 +74,12 @@ class NativeOutcome(CanonicalModel):
 
     @model_validator(mode="after")
     def availability_is_complete(self) -> "NativeOutcome":
+        if self.closure_verified and (
+            self.proof is None
+            or self.price_pnl_excluding_fees_and_funding is None
+            or self.price_pnl_methodology is None
+        ):
+            raise ValueError("Verified closure requires complete lineage and a price calculation.")
         if self.status == "unavailable" and self.reason is None:
             raise ValueError("Unavailable outcomes require an explicit reason.")
         if self.status == "available" and (
@@ -119,6 +128,11 @@ class ExperimentPerformance(CanonicalModel):
     fee_cost: CanonicalDecimal | None = None
     realized_pnl_after_fees_excluding_funding: CanonicalDecimal | None = None
     win_rate: CanonicalDecimal | None = None
+    price_pnl_excluding_fees_and_funding: CanonicalDecimal | None = None
+    price_pnl_win_rate: CanonicalDecimal | None = None
+    price_pnl_sample_count: int = Field(default=0, ge=0)
+    price_pnl_currency: str | None = None
+    price_pnl_methodology: Literal["verified-linear-fill-prices/v1"] | None = None
     outcomes: tuple[NativeOutcome, ...] = ()
     funding: None = None
     account_history_complete: Literal[False] = False
@@ -129,6 +143,21 @@ class ExperimentPerformance(CanonicalModel):
 
     @model_validator(mode="after")
     def performance_requires_samples(self) -> "ExperimentPerformance":
+        price_values = (self.price_pnl_excluding_fees_and_funding, self.price_pnl_win_rate)
+        if self.price_pnl_sample_count and (
+            self.price_pnl_sample_count != self.sample_count
+            or self.price_pnl_sample_count < self.required_sample_count
+            or any(v is None for v in price_values)
+            or not self.price_pnl_currency
+            or not self.price_pnl_methodology
+            or self.price_pnl_win_rate is None
+            or not 0 <= self.price_pnl_win_rate <= 1
+            or len(self.outcomes) != self.price_pnl_sample_count
+            or any(not outcome.closure_verified for outcome in self.outcomes)
+        ):
+            raise ValueError("Price statistics require sufficient independently verified closures.")
+        if not self.price_pnl_sample_count and any(v is not None for v in price_values):
+            raise ValueError("Price statistics cannot appear without verified samples.")
         if self.status == "unavailable" and self.reason is None:
             raise ValueError("Unavailable performance requires an explicit reason.")
         money = (

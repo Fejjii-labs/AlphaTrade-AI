@@ -106,7 +106,7 @@ async function installNotificationFixture(page: Page, supported = true) {
   // a real 401 would correctly clear the session and redirect to /login.
   await page.route(
     (url) =>
-      /\/(health|providers\/status|risk\/|market-watcher\/|strategies\/|watcher\/watchlist(?:\/status)?$)/.test(
+      /\/(health|providers\/status|risk\/|market-watcher\/|strategies\/|watcher\/watchlist(?:\/status)?$|watcher\/assignments$)/.test(
         url.pathname,
       ),
     (route) =>

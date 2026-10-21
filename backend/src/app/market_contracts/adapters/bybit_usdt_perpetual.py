@@ -379,12 +379,16 @@ class BybitUsdtPerpetualSource:
                 f"Timeframe {timeframe.value} is not contracted for Bybit USDT perpetual evidence."
             )
         limit = min(max(min_final_bars + 2, min_final_bars), 1000)
+        # Omitting ``end`` returns only the latest window. The exit monitor
+        # walks backward by passing an earlier ``evaluated_at``, so the
+        # request must close at that time or a later page repeats the same bars.
         result = self._public_result(
             "/v5/market/kline",
             {
                 "category": BYBIT_CATEGORY,
                 "symbol": self._symbol,
                 "interval": interval,
+                "end": int(evaluated_at.astimezone(UTC).timestamp() * 1000),
                 "limit": limit,
             },
         )

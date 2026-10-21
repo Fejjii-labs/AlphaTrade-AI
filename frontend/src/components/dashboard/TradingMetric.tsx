@@ -28,16 +28,16 @@ export function TradingMetric({
   return (
     <div
       data-testid={testId}
-      className="min-w-0 rounded-control border border-border-subtle bg-surface-0/40 p-3 sm:p-4"
+      className="min-w-0 rounded-card border border-border-subtle bg-surface-1 p-4"
     >
-      <p className="text-sm text-text-secondary">{label}</p>
+      <p className="text-[0.8125rem] font-medium uppercase tracking-wide text-text-muted">{label}</p>
       <DataNumber
         value={value}
         tone={tone}
-        className="mt-2 block break-words text-xl font-semibold tracking-tight sm:text-2xl"
+        className="mt-2 block break-words text-[length:var(--text-title)] font-bold leading-[1.25] tracking-[-0.015em]"
       />
       {note ? (
-        <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+        <p className="mt-2 text-[length:var(--text-caption)] leading-[1.4] text-text-muted">
           {note}
         </p>
       ) : null}

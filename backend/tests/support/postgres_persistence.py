@@ -158,8 +158,8 @@ class ReusablePhase7Database:
 
     The first use clones the session template into the fixture database. Later
     uses TRUNCATE when the catalog still matches, so object identity stays stable.
-    Migration fixtures do not use this class. Any external reset or DDL change
-    clones the template again. No process-global schema cache.
+    A divergent catalog is recreated in place, which assigns new object identity.
+    Migration fixtures do not use this class. No process-global schema cache.
     """
 
     def __init__(self) -> None:
@@ -167,8 +167,13 @@ class ReusablePhase7Database:
         self._schema_state: str | None = None
 
     def session_factory(self) -> sessionmaker[Session]:
-        if self._schema_state is None or self._schema_state != self._read_schema_state():
+        current = self._read_schema_state()
+        if self._schema_state is None or current is None:
             self._rebuild_from_template()
+        elif self._schema_state != current:
+            # Template clones keep the template's object OIDs, so a divergent
+            # catalog is recreated in place. The reuse guard requires new identity.
+            self._rebuild_fresh_objects()
         else:
             self._truncate()
         # TRUNCATE changes data/sequence values, not the checked DDL. Keep the
@@ -185,6 +190,16 @@ class ReusablePhase7Database:
     def _rebuild_from_template(self) -> None:
         self.engine.dispose()
         self.engine = refresh_database(POSTGRES_URL, kind="full")
+        self._schema_state = _plan_schema_state(self.engine)
+
+    def _rebuild_fresh_objects(self) -> None:
+        try:
+            reset_public_schema(self.engine)
+        except Exception:
+            self.engine.dispose()
+            self.engine = create_engine(POSTGRES_URL, poolclass=NullPool, future=True)
+            reset_public_schema(self.engine)
+        Base.metadata.create_all(self.engine)
         self._schema_state = _plan_schema_state(self.engine)
 
     def _truncate(self) -> None:

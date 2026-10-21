@@ -466,6 +466,9 @@ class ManualDemoService:
                 "authorization_id": str(authorization.authorization_id),
             },
         )
+        from app.services.approval_service import assert_human_may_execute
+
+        assert_human_may_execute(authorization)
         result = PaperPlanClaimService(
             self.session,
             self.settings,
@@ -855,6 +858,7 @@ class ManualDemoService:
                                 "Manual demo protection is not verified; operator action required"
                             ),
                         ),
+                        source="demo_protection",
                     )
                 status = "protection_failed_operator_hold"
             elif evidence.fills and evidence.protected:
@@ -885,6 +889,7 @@ class ManualDemoService:
                             confirm=True,
                             reason="Manual demo fill exceeded the entry range; operator review",
                         ),
+                        source="breaker",
                     )
                 status = "actual_fill_outside_plan_operator_hold"
             self.session.commit()
