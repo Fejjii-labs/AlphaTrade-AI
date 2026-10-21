@@ -97,7 +97,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       OPENAI_API_KEY: ""
       OPENAI_BASE_URL: https://api.openai.com/v1
-      LLM_MODEL: gpt-4o-mini
+      LLM_MODEL: gpt-6-luna
       EMBEDDINGS_MODEL: text-embedding-3-small
       LANGSMITH_API_KEY: ""
       JWT_SECRET: change-me-in-production-use-long-random-value

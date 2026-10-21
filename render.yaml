@@ -24,7 +24,7 @@ services:
       - key: EXCHANGE_MODE
         value: paper_internal
       - key: LLM_MODEL
-        value: gpt-4o-mini
+        value: gpt-6-luna
       - key: EMBEDDINGS_MODEL
         value: text-embedding-3-small
       - key: BILLING_ENABLED

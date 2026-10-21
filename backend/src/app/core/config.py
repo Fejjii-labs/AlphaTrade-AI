@@ -7,6 +7,7 @@ silently running with unsafe defaults.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal
@@ -337,13 +338,18 @@ class Settings(BaseSettings):
     provider_mode: str = "mock"  # mock | fallback | live
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-6-luna"
     # Phase 2 model router — callers never supply free-form model names.
     agent_reasoning_model: str = Field(default="gpt-6-astra", min_length=1, max_length=80)
     agent_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     agent_max_output_tokens: int = Field(default=25000, ge=1024, le=65536)
-    llm_tier_a_model: str = "gpt-4o"
-    llm_tier_b_model: str = "gpt-4o-mini"
+    llm_tier_a_model: str = "gpt-6.1-sol"
+    llm_tier_b_model: str = "gpt-6-luna"
+    llm_tier_a_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "low"
+    llm_tier_b_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "none"
+    llm_tier_a_timeout_seconds: float = Field(default=60.0, ge=5.0, le=300.0)
+    llm_max_completion_tokens: int = Field(default=4096, ge=64, le=65536)
+    llm_daily_spend_warning_usd: Decimal = Field(default=Decimal("50.00"), ge=Decimal("0"))
     model_router_policy_version: str = "model-router/v1"
     model_router_fail_closed: bool = False
     embeddings_model: str = "text-embedding-3-small"
