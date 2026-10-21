@@ -56,9 +56,7 @@ def test_cached_input_tokens_billed_at_cached_rate() -> None:
     )
     assert full_price is not None and half_cached is not None
     assert half_cached < full_price
-    expected_delta = (Decimal(500_000) / Decimal(1_000_000)) * (
-        Decimal("2.00") - Decimal("0.10")
-    )
+    expected_delta = (Decimal(500_000) / Decimal(1_000_000)) * (Decimal("2.00") - Decimal("0.10"))
     assert (full_price - half_cached).quantize(Decimal("0.00000001")) == expected_delta.quantize(
         Decimal("0.00000001")
     )

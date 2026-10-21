@@ -104,7 +104,9 @@ def estimate_model_cost(
     input_cost = (Decimal(billable_input) / Decimal(1_000_000)) * rates.input_usd_per_million
     cached_cost = (Decimal(cached) / Decimal(1_000_000)) * rates.cached_input_usd_per_million
     del reasoning_tokens  # telemetry only; output_tokens already include reasoning
-    output_cost = (Decimal(max(output_tokens, 0)) / Decimal(1_000_000)) * rates.output_usd_per_million
+    output_cost = (
+        Decimal(max(output_tokens, 0)) / Decimal(1_000_000)
+    ) * rates.output_usd_per_million
     return (input_cost + cached_cost + output_cost).quantize(Decimal("0.00000001"))
 
 

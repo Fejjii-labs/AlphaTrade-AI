@@ -13,9 +13,7 @@ logger = structlog.get_logger(__name__)
 
 def missing_cost_table_models(settings: Settings) -> tuple[str, ...]:
     return tuple(
-        model
-        for model in configured_llm_models(settings)
-        if not model_has_cost_entry(model)
+        model for model in configured_llm_models(settings) if not model_has_cost_entry(model)
     )
 
 

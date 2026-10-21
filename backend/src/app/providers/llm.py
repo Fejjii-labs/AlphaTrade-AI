@@ -651,7 +651,9 @@ class OpenAILLMProvider:
                     timeout_seconds=_GENERATION_PROBE_TIMEOUT_SECONDS,
                     max_retries=_GENERATION_PROBE_MAX_RETRIES,
                 )
-                content, _, _, _, _, _ = self._parse_responses_payload(payload, fallback_model=model)
+                content, _, _, _, _, _ = self._parse_responses_payload(
+                    payload, fallback_model=model
+                )
             else:
                 payload = self._post_chat_completions(
                     request,

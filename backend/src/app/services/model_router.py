@@ -17,6 +17,7 @@ import structlog
 
 from app.core.errors import ForbiddenError, ServiceUnavailableError, ValidationAppError
 from app.core.provider_policy import provider_fail_closed
+from app.observability.metrics import MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL
 from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMMessage, LLMProvider
 from app.schemas.common import CostSource, UsageStatus
 from app.schemas.model_routing import (
@@ -34,7 +35,6 @@ from app.schemas.model_routing import (
     ModelTaskRequest,
     ModelTaskResult,
 )
-from app.observability.metrics import MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL
 from app.services.llm_spend_guard import record_llm_spend
 from app.services.model_call_telemetry import (
     ModelCallTelemetryService,
@@ -384,9 +384,7 @@ class ModelRouter:
         output_tokens = llm_result.output_tokens if llm_result is not None else 0
         latency = llm_result.latency_ms if llm_result is not None else _elapsed_ms(started_at)
         reasoning_tokens = llm_result.reasoning_tokens if llm_result is not None else 0
-        cached_input_tokens = (
-            llm_result.cached_input_tokens if llm_result is not None else 0
-        )
+        cached_input_tokens = llm_result.cached_input_tokens if llm_result is not None else 0
         if success:
             cost = resolve_model_call_cost(
                 model=resolved_model,
