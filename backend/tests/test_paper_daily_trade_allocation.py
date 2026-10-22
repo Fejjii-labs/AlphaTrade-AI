@@ -1,7 +1,9 @@
 """Internal paper trade slots reset at the user's local trading day.
 
-Completed trades from an earlier day stop blocking a claim. Reservations that
-are still open keep their slots. Demo claims do not start the roll.
+Completed trades from an earlier day stop blocking a claim. A reservation that
+is still in flight, or that already filled, keeps its slot. A terminal command
+or a stale unfilled paper reservation is released on the roll. Demo claims do
+not start the roll.
 """
 
 from __future__ import annotations
@@ -15,14 +17,24 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
+import structlog
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
+from structlog.testing import capture_logs
 
-from app.db.models import AccountRiskAccountingState, RiskReservation, UserRiskSettings
+from app.db.models import (
+    AccountRiskAccountingState,
+    AuditLog,
+    ExecutionProjection,
+    RiskReservation,
+    UserRiskSettings,
+)
+from app.schemas.common import AuditEventType
 from app.schemas.execution_protocol import (
     ExecutionCommandOutcome,
+    ExecutionReceiptState,
     RiskReservationReleaseReason,
     RiskReservationReleaseState,
 )
@@ -30,7 +42,11 @@ from app.services.audit_service import AuditService
 from app.services.execution_claim import ReservationIntent, evaluate_claim_predicate
 from app.services.execution_fills import convert_reservation_for_fill
 from app.services.risk.settings_service import RiskSettingsService
-from app.services.safety_epoch import SafetyEpochService
+from app.services.safety_epoch import (
+    PAPER_UNFILLED_RESERVATION_MAX_AGE,
+    SafetyEpochService,
+    paper_trading_day,
+)
 from tests.support.phase1_plan_fixtures import (
     approve_plan,
     execute_request,
@@ -137,6 +153,10 @@ def test_open_reservation_survives_the_day_roll(session: Session) -> None:
     open_reservation = session.scalar(select(RiskReservation))
     assert open_reservation is not None
     assert open_reservation.release_state is RiskReservationReleaseState.CHARGED
+    # The row is from the previous local day, but it is still inside the age
+    # bound, so the roll must keep the slot.
+    open_reservation.created_at = NEXT_DAY - timedelta(hours=1)
+    session.commit()
 
     second_plan = persist_plan(
         session,
@@ -167,6 +187,249 @@ def test_open_reservation_survives_the_day_roll(session: Session) -> None:
     assert survived is not None
     assert survived.release_state is RiskReservationReleaseState.CHARGED
     assert survived.daily_trade_allocation == 1
+
+
+def test_aged_unfilled_paper_reservation_is_released_on_the_roll(session: Session) -> None:
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=1,
+        configured_max=1,
+        actual=0,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    opened = _claim(session, ids, plan, authorization, when=DAY, key="stale-open")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+    stale = _only_reservation(session)
+    stale.created_at = NEXT_DAY - PAPER_UNFILLED_RESERVATION_MAX_AGE - timedelta(minutes=1)
+    session.commit()
+
+    next_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "3", "unit": "CONTRACTS"},
+            **_window(NEXT_DAY),
+        ),
+    )
+    next_authorization = approve_plan(
+        session, ids, next_plan, clock=NEXT_DAY - timedelta(minutes=1)
+    )
+    session.commit()
+    with capture_logs() as logs:
+        allowed = _claim(
+            session, ids, next_plan, next_authorization, when=NEXT_DAY, key="stale-next"
+        )
+
+    assert allowed.outcome is ExecutionCommandOutcome.ALLOW
+    released = session.get(RiskReservation, stale.id)
+    assert released is not None
+    assert released.release_state is RiskReservationReleaseState.RELEASED
+    assert released.release_reason is RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_EXPIRY
+    assert released.remaining_reserved_notional == Decimal("0")
+    audits = _release_audits(session)
+    assert len(audits) == 1
+    assert audits[0].redacted_metadata["cause"] == "aged_unfilled"
+    assert audits[0].redacted_metadata["slots_released"] == 1
+    assert any(entry.get("event") == "paper_orphaned_reservation_released" for entry in logs)
+    row = _ledger_row(session)
+    assert row.reserved_trade_slots == 1
+    assert row.actual_trade_count == 0
+    assert row.actual_daily_loss == Decimal("12.50")
+
+    again = SafetyEpochService(
+        session,
+        paper_settings(database_url="sqlite+pysqlite:///:memory:"),
+        RiskSettingsService(session, AuditService(session)),
+    ).lock_risk_accounting(
+        organization_id=ids["organization"].id,  # type: ignore[attr-defined]
+        account_id=plan.account_id,  # type: ignore[attr-defined]
+        user_id=ids["user"].id,  # type: ignore[attr-defined]
+        exposure_unit="USDT",
+        now=NEXT_DAY,
+        roll_daily_trade_slots=True,
+    )
+    session.commit()
+    assert again.reserved_trade_slots == 1
+    assert len(_release_audits(session)) == 1
+    assert session.get(RiskReservation, stale.id).release_state is (  # type: ignore[union-attr]
+        RiskReservationReleaseState.RELEASED
+    )
+
+
+def test_terminal_paper_reservation_is_released_inside_the_age_bound(session: Session) -> None:
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=1,
+        configured_max=1,
+        actual=0,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    opened = _claim(session, ids, plan, authorization, when=DAY, key="terminal-open")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+    reservation = _only_reservation(session)
+    reservation.created_at = NEXT_DAY - timedelta(minutes=20)
+    projection = session.scalar(
+        select(ExecutionProjection).where(ExecutionProjection.receipt_id == reservation.receipt_id)
+    )
+    assert projection is not None
+    projection.state = ExecutionReceiptState.REJECTED
+    session.commit()
+
+    next_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "4", "unit": "CONTRACTS"},
+            **_window(NEXT_DAY),
+        ),
+    )
+    next_authorization = approve_plan(
+        session, ids, next_plan, clock=NEXT_DAY - timedelta(minutes=1)
+    )
+    session.commit()
+    allowed = _claim(
+        session, ids, next_plan, next_authorization, when=NEXT_DAY, key="terminal-next"
+    )
+
+    assert allowed.outcome is ExecutionCommandOutcome.ALLOW
+    released = session.get(RiskReservation, reservation.id)
+    assert released is not None
+    assert released.release_state is RiskReservationReleaseState.RELEASED
+    assert released.release_reason is RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_REJECTION
+    assert _release_audits(session)[0].redacted_metadata["cause"] == "terminal_receipt:REJECTED"
+    assert _ledger_row(session).reserved_trade_slots == 1
+
+
+def test_filled_reservation_is_not_released_on_the_roll(session: Session) -> None:
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=1,
+        configured_max=1,
+        actual=0,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    opened = _claim(session, ids, plan, authorization, when=DAY, key="filled-open")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+    reservation = _only_reservation(session)
+    reservation.created_at = NEXT_DAY - timedelta(days=2)
+    reservation.converted_trade_slots = 1
+    reservation.release_state = RiskReservationReleaseState.PARTIALLY_RELEASED
+    reservation.release_reason = RiskReservationReleaseReason.FILL_CONVERSION
+    session.commit()
+
+    next_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "5", "unit": "CONTRACTS"},
+            **_window(NEXT_DAY),
+        ),
+    )
+    next_authorization = approve_plan(
+        session, ids, next_plan, clock=NEXT_DAY - timedelta(minutes=1)
+    )
+    session.commit()
+    blocked = _claim(session, ids, next_plan, next_authorization, when=NEXT_DAY, key="filled-next")
+
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"
+    kept = session.get(RiskReservation, reservation.id)
+    assert kept is not None
+    assert kept.release_state is RiskReservationReleaseState.PARTIALLY_RELEASED
+    assert kept.remaining_reserved_notional > 0
+    assert _release_audits(session) == []
+    assert _ledger_row(session).reserved_trade_slots == 1
+
+
+def test_paper_roll_does_not_release_a_demo_reservation(session: Session) -> None:
+    ids, demo_plan, demo_authorization = _prepare(session, venue="BLOFIN_DEMO", when=DAY)
+    _ledger(
+        session,
+        ids,
+        demo_plan,
+        business_day=DAY.date() - timedelta(days=1),
+        max_slots=1,
+        configured_max=1,
+        actual=0,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    opened = _claim(session, ids, demo_plan, demo_authorization, when=DAY, key="demo-open")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+    demo_reservation = _only_reservation(session)
+    demo_reservation.created_at = NEXT_DAY - timedelta(days=3)
+    session.commit()
+
+    paper_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "6", "unit": "CONTRACTS"},
+            **_window(NEXT_DAY),
+        ),
+    )
+    paper_authorization = approve_plan(
+        session, ids, paper_plan, clock=NEXT_DAY - timedelta(minutes=1)
+    )
+    session.commit()
+    blocked = _claim(
+        session, ids, paper_plan, paper_authorization, when=NEXT_DAY, key="paper-after-demo"
+    )
+
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"
+    kept = session.get(RiskReservation, demo_reservation.id)
+    assert kept is not None
+    assert kept.release_state is RiskReservationReleaseState.CHARGED
+    assert _release_audits(session) == []
+    assert _ledger_row(session).reserved_trade_slots == 1
+
+
+def test_invalid_timezone_falls_back_to_utc_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import safety_epoch as safety_epoch_module
+
+    monkeypatch.setattr(safety_epoch_module, "logger", structlog.get_logger("safety_epoch_test"))
+    safety_epoch_module._warned_timezones.clear()
+    instant = BERLIN_BOUNDARY
+    with capture_logs() as logs:
+        resolved = paper_trading_day(instant, "Not/AZone")
+        paper_trading_day(instant, "Not/AZone")
+        utc_day = paper_trading_day(instant, "UTC")
+        berlin_day = paper_trading_day(instant, "Europe/Berlin")
+    warnings = [entry for entry in logs if entry.get("event") == "paper_trading_timezone_fallback"]
+    assert resolved == instant.astimezone(UTC).date()
+    assert utc_day == instant.astimezone(UTC).date()
+    assert berlin_day == date(2026, 10, 23)
+    assert len(warnings) == 1
+    assert warnings[0]["fallback"] == "UTC"
+    assert warnings[0]["log_level"] == "warning"
 
 
 def test_new_max_trades_per_day_applies_on_the_next_day(session: Session) -> None:
@@ -483,6 +746,83 @@ def test_two_claims_at_the_boundary_roll_once() -> None:
     engine.dispose()
 
 
+def test_two_rolls_release_an_aged_reservation_once() -> None:
+    url = _postgres_url()
+    if url is None:
+        pytest.skip("Set EXPERIMENT_TEST_POSTGRES_URL to disposable loopback PostgreSQL.")
+    engine = refresh_database(url, kind="full")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as setup:
+        ids, plan, authorization = _prepare(setup, venue="PAPER_INTERNAL", when=DAY)
+        _ledger(
+            setup,
+            ids,
+            plan,
+            business_day=DAY.date(),
+            max_slots=1,
+            configured_max=1,
+            actual=0,
+            reserved=0,
+            timezone_name="UTC",
+        )
+        setup.commit()
+        opened = _claim(setup, ids, plan, authorization, when=DAY, key="stale-race")
+        assert opened.outcome is ExecutionCommandOutcome.ALLOW
+        stale = _only_reservation(setup)
+        stale_id = stale.id
+        stale.created_at = DAY - PAPER_UNFILLED_RESERVATION_MAX_AGE - timedelta(minutes=5)
+        setup.flush()
+        ledger = setup.scalar(select(AccountRiskAccountingState))
+        assert ledger is not None
+        ledger.trade_slot_business_date = DAY.date() - timedelta(days=1)
+        setup.commit()
+        organization_id = ids["organization"].id  # type: ignore[attr-defined]
+        account_id = plan.account_id  # type: ignore[attr-defined]
+        user_id = ids["user"].id  # type: ignore[attr-defined]
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        with factory() as session:
+            try:
+                barrier.wait(timeout=20)
+                SafetyEpochService(
+                    session,
+                    paper_settings(database_url=url),
+                    RiskSettingsService(session, AuditService(session)),
+                ).lock_risk_accounting(
+                    organization_id=organization_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                    exposure_unit="USDT",
+                    now=DAY,
+                    roll_daily_trade_slots=True,
+                )
+                session.commit()
+            except BaseException as exc:
+                session.rollback()
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    with factory() as check:
+        row = check.scalar(select(AccountRiskAccountingState))
+        reservation = check.get(RiskReservation, stale_id)
+        assert row is not None and reservation is not None
+        assert reservation.release_state is RiskReservationReleaseState.RELEASED
+        assert row.reserved_trade_slots == 0
+        assert row.actual_trade_count == 0
+        assert _stored_day(row) == DAY.date()
+        assert len(_release_audits(check)) == 1
+    engine.dispose()
+
+
 def _window(when: datetime) -> dict[str, object]:
     """Keep evidence and basis inside the plan's freshness window."""
 
@@ -584,6 +924,22 @@ def _claim(
     return result
 
 
+def _only_reservation(session: Session) -> RiskReservation:
+    session.expire_all()
+    row = session.scalar(select(RiskReservation))
+    assert row is not None
+    return row
+
+
+def _release_audits(session: Session) -> list[AuditLog]:
+    session.expire_all()
+    return list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.action == AuditEventType.PAPER_RESERVATION_RELEASED)
+        ).all()
+    )
+
+
 def _ledger_row(session: Session) -> AccountRiskAccountingState:
     session.expire_all()
     row = session.scalar(select(AccountRiskAccountingState))
@@ -655,14 +1011,20 @@ def _postgres_url() -> str | None:
     return raw
 
 
-def test_trade_slot_day_revision_is_the_only_head() -> None:
-    from tests.support.alembic_heads import alembic_script_directory, single_alembic_head
+def test_trade_slot_day_revises_kill_switch_on_a_single_head() -> None:
+    from tests.support.alembic_heads import (
+        alembic_ancestry,
+        alembic_script_directory,
+        single_alembic_head,
+    )
 
     script = alembic_script_directory()
     revision = script.get_revision("a22papertradeday001")
     assert revision is not None
     assert revision.down_revision == "a21killswitchkey001"
-    assert single_alembic_head(script) == "a22papertradeday001"
+    head = single_alembic_head(script)
+    assert script.get_heads() == [head]
+    assert "a22papertradeday001" in alembic_ancestry(head)
 
 
 def test_trade_slot_day_column_upgrades_downgrades_and_upgrades() -> None:

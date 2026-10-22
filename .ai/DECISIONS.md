@@ -2,6 +2,22 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-147 — Paper day roll releases terminal and stale unfilled reservations
+
+- Date: 2026-10-22
+- Decision: On the internal-paper trade-slot roll only, a reservation is
+  released when its execution command is terminal, or when it is older than
+  six hours and has no fill. The release writes one audit row
+  (`paper_reservation_released`) and a warning log. Open in-flight reservations
+  and reservations that already have a fill keep their slots. Demo reservations
+  on the shared paper account are not released. The release runs while the
+  accounting row lock is held. On PostgreSQL, reservations locked by another
+  transaction are skipped so a fill cannot deadlock against the roll. A second
+  locker that already sees today's date does not release again. An unrecognized
+  risk-settings timezone logs one warning per process and the day is resolved
+  in UTC. Real trading stays off.
+- Reference: `app/services/safety_epoch.py`. Extends AT-ADR-146.
+
 ## AT-ADR-146 — Internal paper trade slots roll at the user's local day
 
 - Date: 2026-10-22

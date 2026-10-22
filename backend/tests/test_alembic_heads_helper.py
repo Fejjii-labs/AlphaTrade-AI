@@ -12,6 +12,13 @@ from tests.support.alembic_heads import (
 )
 
 
+def test_alembic_has_exactly_one_head() -> None:
+    script = alembic_script_directory()
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert heads == [single_alembic_head(script)]
+
+
 def test_single_head_matches_the_script_directory() -> None:
     script = alembic_script_directory()
     assert script.get_heads() == [single_alembic_head(script)]

@@ -8,10 +8,11 @@ Lock order (architecture §24):
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,12 +22,30 @@ from app.db.models import (
     AccountRiskAccountingState,
     AccountSafetyEpoch,
     ExecutionAccount,
+    ExecutionCommand,
+    ExecutionFillFact,
+    ExecutionProjection,
     KillSwitchState,
+    RiskReservation,
+    TradePlanRevision,
+    VenueSubmitEffect,
 )
 from app.repositories.execution_protocol import (
     AccountRiskAccountingRepository,
     AccountSafetyEpochRepository,
 )
+from app.schemas.audit import AuditRecordCreate
+from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
+from app.schemas.execution_protocol import (
+    ExecutionCommandOutcome,
+    ExecutionReceiptState,
+    RiskReservationReleaseReason,
+    RiskReservationReleaseState,
+    VenueSendDisposition,
+    VenueSubmitEffectState,
+)
+from app.services.audit_service import AuditService
+from app.services.execution_fills import adjust_symbol_map
 from app.services.execution_integrity import (
     ensure_db_transaction,
     is_risk_accounting_unique_violation,
@@ -34,7 +53,25 @@ from app.services.execution_integrity import (
 )
 from app.services.risk.settings_service import RiskSettingsService, normalize_timezone
 
+logger = structlog.get_logger(__name__)
+
 INTERNAL_PAPER_VENUE = "PAPER_INTERNAL"
+# Longer than the 15-minute authorization TTL and a same-process paper fill,
+# shorter than a trading day. A reservation opened late in the local day still
+# counts after midnight. A crash that never fills is released on the next roll.
+PAPER_UNFILLED_RESERVATION_MAX_AGE = timedelta(hours=6)
+_TERMINAL_RECEIPT_STATES = frozenset(
+    {
+        ExecutionReceiptState.BLOCKED,
+        ExecutionReceiptState.BLOCKED_BEFORE_DISPATCH,
+        ExecutionReceiptState.REJECTED,
+        ExecutionReceiptState.EXPIRED,
+        ExecutionReceiptState.CANCELLED,
+        ExecutionReceiptState.PARTIALLY_FILLED_CANCELLED,
+        ExecutionReceiptState.ABSENCE_PROVEN,
+    }
+)
+_warned_timezones: set[str] = set()
 
 
 class SafetyEpochService:
@@ -214,10 +251,13 @@ class SafetyEpochService:
         user_id: uuid.UUID,
         now: datetime,
     ) -> None:
-        """Drop completed trades from earlier days. Keep open reservations.
+        """Drop completed trades from earlier days. Keep live paper reservations.
 
-        ``actual_trade_count`` is the completed daily count. ``reserved_trade_slots``
-        is live unreleased allocation and is not cleared. ``max_trade_slots`` is
+        ``actual_trade_count`` is the completed daily count. A reservation that
+        is still in flight, or that already has a fill, keeps its slot.
+        A paper reservation whose command is terminal, or that is older than
+        ``PAPER_UNFILLED_RESERVATION_MAX_AGE`` and has no fill, is released
+        here so a crash cannot hold the slot forever. ``max_trade_slots`` is
         copied from the user's current ``max_trades_per_day`` only when the
         business day changes. A row already stamped with that day is a no-op,
         including a second claim that waited on this lock.
@@ -227,10 +267,153 @@ class SafetyEpochService:
         today = paper_trading_day(now, settings.timezone)
         if _as_date(accounting.trade_slot_business_date) == today:
             return
+        self._release_orphaned_paper_reservations(
+            accounting,
+            organization_id=organization_id,
+            user_id=user_id,
+            now=now,
+        )
         accounting.actual_trade_count = 0
         accounting.max_trade_slots = int(settings.max_trades_per_day)
         accounting.trade_slot_business_date = today
         accounting.version = int(accounting.version) + 1
+
+    def _release_orphaned_paper_reservations(
+        self,
+        accounting: AccountRiskAccountingState,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        now: datetime,
+    ) -> None:
+        """Release crashed paper reservations while the ledger row is locked.
+
+        Demo reservations on the shared account are left alone. Rows locked by
+        another transaction are skipped on PostgreSQL so a fill that already
+        holds the reservation cannot deadlock against this roll.
+        """
+
+        for reservation in self._paper_reservations_for_roll(
+            organization_id=organization_id, account_id=accounting.account_id
+        ):
+            cause = self._orphan_cause(reservation, now)
+            if cause is None:
+                continue
+            slots = _release_reservation_remainder(accounting, reservation, now, cause)
+            self._audit_orphan_release(
+                reservation,
+                organization_id=organization_id,
+                user_id=user_id,
+                now=now,
+                cause=cause,
+                slots_released=slots,
+            )
+            logger.warning(
+                "paper_orphaned_reservation_released",
+                reservation_id=str(reservation.id),
+                command_id=str(reservation.command_id),
+                organization_id=str(organization_id),
+                cause=cause,
+                slots_released=slots,
+            )
+
+    def _paper_reservations_for_roll(
+        self, *, organization_id: uuid.UUID, account_id: uuid.UUID
+    ) -> list[RiskReservation]:
+        stmt = (
+            select(RiskReservation)
+            .where(
+                RiskReservation.organization_id == organization_id,
+                RiskReservation.account_id == account_id,
+                RiskReservation.release_state != RiskReservationReleaseState.RELEASED,
+            )
+            .order_by(RiskReservation.id.asc())
+        )
+        bind = self._session.get_bind()
+        if bind.dialect.name == "postgresql":
+            stmt = stmt.with_for_update(skip_locked=True)
+        return list(self._session.scalars(stmt).all())
+
+    def _orphan_cause(self, reservation: RiskReservation, now: datetime) -> str | None:
+        plan = self._session.get(TradePlanRevision, reservation.plan_revision_id)
+        if plan is None or plan.execution_venue != INTERNAL_PAPER_VENUE:
+            return None
+        terminal = self._terminal_cause(reservation)
+        if terminal is not None:
+            return terminal
+        if self._has_fill(reservation):
+            return None
+        if now - _aware(reservation.created_at) > PAPER_UNFILLED_RESERVATION_MAX_AGE:
+            return "aged_unfilled"
+        return None
+
+    def _terminal_cause(self, reservation: RiskReservation) -> str | None:
+        command = self._session.get(ExecutionCommand, reservation.command_id)
+        if command is not None and command.outcome is ExecutionCommandOutcome.BLOCKED:
+            return "blocked_command"
+        projection = self._session.scalar(
+            select(ExecutionProjection).where(
+                ExecutionProjection.receipt_id == reservation.receipt_id
+            )
+        )
+        if projection is not None and projection.state in _TERMINAL_RECEIPT_STATES:
+            return f"terminal_receipt:{projection.state.value}"
+        effect = self._session.scalar(
+            select(VenueSubmitEffect).where(VenueSubmitEffect.command_id == reservation.command_id)
+        )
+        if effect is None:
+            return None
+        if effect.state is VenueSubmitEffectState.PROVEN_UNSENT:
+            return "proven_unsent"
+        if effect.reconciliation_disposition == VenueSendDisposition.REJECTED.value:
+            return "venue_rejected"
+        return None
+
+    def _has_fill(self, reservation: RiskReservation) -> bool:
+        if int(reservation.converted_trade_slots) > 0:
+            return True
+        found = self._session.scalar(
+            select(ExecutionFillFact.id)
+            .where(ExecutionFillFact.command_id == reservation.command_id)
+            .limit(1)
+        )
+        return found is not None
+
+    def _audit_orphan_release(
+        self,
+        reservation: RiskReservation,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        now: datetime,
+        cause: str,
+        slots_released: int,
+    ) -> None:
+        AuditService(self._session).record(
+            AuditRecordCreate(
+                request_id=f"paper-slot-roll:{reservation.id}",
+                trace_id=f"paper-slot-roll:{reservation.command_id}",
+                event_type=AuditEventType.PAPER_RESERVATION_RELEASED,
+                resource_type="risk_reservation",
+                resource_id=str(reservation.id),
+                actor_type=ActorType.SYSTEM,
+                action="paper_reservation_released",
+                result=AuditResult.WARNING,
+                severity=AuditSeverity.MEDIUM,
+                user_id=user_id,
+                organization_id=organization_id,
+                metadata={
+                    "cause": cause,
+                    "command_id": str(reservation.command_id),
+                    "release_reason": (
+                        reservation.release_reason.value if reservation.release_reason else None
+                    ),
+                    "slots_released": slots_released,
+                    "execution_venue": INTERNAL_PAPER_VENUE,
+                },
+                timestamp=now,
+            )
+        )
 
     def _business_day(
         self,
@@ -265,12 +448,74 @@ def paper_daily_trade_roll(execution_venue: str | None) -> bool:
 def paper_trading_day(now: datetime, timezone_name: str) -> date:
     """Calendar date of ``now`` in the user's risk-settings timezone."""
 
-    tz_name, _fallback = normalize_timezone(timezone_name)
+    tz_name, fell_back = normalize_timezone(timezone_name)
     aware = _aware(now)
+    if fell_back:
+        _warn_timezone_fallback(timezone_name)
+        return aware.astimezone(UTC).date()
     try:
         return aware.astimezone(ZoneInfo(tz_name)).date()
     except Exception:
+        _warn_timezone_fallback(timezone_name)
         return aware.astimezone(UTC).date()
+
+
+def _warn_timezone_fallback(timezone_name: str | None) -> None:
+    key = (timezone_name or "")[:64]
+    if key in _warned_timezones:
+        return
+    _warned_timezones.add(key)
+    logger.warning(
+        "paper_trading_timezone_fallback",
+        timezone_name=key,
+        fallback="UTC",
+    )
+
+
+def _release_reason_for(cause: str) -> RiskReservationReleaseReason:
+    if "CANCELLED" in cause:
+        return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_CANCELLATION
+    if cause in {"aged_unfilled", "terminal_receipt:EXPIRED"}:
+        return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_EXPIRY
+    if "ABSENCE" in cause:
+        return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_ABSENCE
+    if cause == "proven_unsent":
+        return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_PROVEN_UNSENT
+    return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_REJECTION
+
+
+def _release_reservation_remainder(
+    accounting: AccountRiskAccountingState,
+    reservation: RiskReservation,
+    now: datetime,
+    cause: str,
+) -> int:
+    """Free unconverted slots and unused notional. Filled exposure stays."""
+
+    unused = reservation.remaining_reserved_notional
+    unconverted = max(
+        0, int(reservation.daily_trade_allocation) - int(reservation.converted_trade_slots)
+    )
+    accounting.reserved_notional -= unused
+    if accounting.reserved_notional < 0:
+        accounting.reserved_notional = Decimal("0")
+    if not reservation.converted_trade_slots:
+        accounting.reserved_daily_loss -= reservation.daily_loss_allocation
+        if accounting.reserved_daily_loss < 0:
+            accounting.reserved_daily_loss = Decimal("0")
+    accounting.reserved_trade_slots -= unconverted
+    if accounting.reserved_trade_slots < 0:
+        accounting.reserved_trade_slots = 0
+    accounting.symbol_reserved = adjust_symbol_map(
+        accounting.symbol_reserved, reservation.instrument, -unused
+    )
+    reservation.remaining_reserved_notional = Decimal("0")
+    reservation.release_state = RiskReservationReleaseState.RELEASED
+    reservation.release_reason = _release_reason_for(cause)
+    reservation.updated_at = now
+    if unused > 0 or unconverted > 0:
+        accounting.version = int(accounting.version) + 1
+    return unconverted
 
 
 def _aware(now: datetime | None) -> datetime:

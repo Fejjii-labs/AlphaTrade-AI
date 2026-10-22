@@ -314,6 +314,7 @@ class AuditEventType(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
     APPROVAL_DECISION = "approval_decision"
     PAPER_ORDER_CREATED = "paper_order_created"
+    PAPER_RESERVATION_RELEASED = "paper_reservation_released"
     EXECUTION_ACCOUNT_REGISTERED = "execution_account_registered"
     MANUAL_DEMO_CANCEL_REQUESTED = "manual_demo_cancel_requested"
     DEMO_LIFECYCLE_RECONCILED = "demo_lifecycle_reconciled"
