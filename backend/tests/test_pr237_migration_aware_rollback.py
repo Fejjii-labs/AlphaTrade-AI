@@ -29,25 +29,28 @@ from app.db.voice_realtime import VoiceSessionReservation
 from app.db.watcher_assignments import WatcherAssignmentReceiptRow, WatcherStrategyAssignmentRow
 from app.schemas.usage import OrganizationQuotaUpdate
 from app.services.quota_service import QuotaService
-from tests.support.alembic_heads import single_alembic_head
+from tests.support.alembic_heads import (
+    assert_down_revision_chain,
+    migrations_from_head_through,
+    single_alembic_head,
+)
 
 BASELINE = "b165b92276346f0e0fe3ccdbd2bec3443dc75d40"
 ROLLBACK_BASE = "bda597c2fffbf1a49beadc64d757100808094ca2"
 REVIEWED_BASE = "a7a843f7c27e8bdcea5f89c802c808472477a969"
-MIGRATIONS = (
-    "src/app/db/migrations/versions/a10blofinactivity001_account_scoped_native_blofin_activity.py",
-    "src/app/db/migrations/versions/a11experiments001_generic_experiment_domain.py",
-    "src/app/db/migrations/versions/a12trendpulsescreen001_bounded_trendpulse_research_screening.py",
-    "src/app/db/migrations/versions/a13voicemonitor001_bounded_voice_and_strategy_assignments.py",
-    "src/app/db/migrations/versions/a14autonomouschannel001_autonomous_authorization_channel.py",
-    "src/app/db/migrations/versions/a15reissueauth001_reissue_authorization_after_revoke.py",
-    "src/app/db/migrations/versions/a16riskpolicy001_grade_based_risk_policy.py",
-    "src/app/db/migrations/versions/a17riskpolicy002_risk_policy_review_guards.py",
-    "src/app/db/migrations/versions/a18riskpolicy003_breaker_intervals.py",
-    "src/app/db/migrations/versions/a19riskpolicy004_paper_demo_risk_ceiling.py",
-    "src/app/db/migrations/versions/a20autonomoussettings001_autonomous_trading_settings.py",
-    "src/app/db/migrations/versions/a21killswitchkey001_widen_runtime_component.py",
-    "src/app/db/migrations/versions/a22workerruntime001_worker_runtime_and_paper_switch.py",
+_CHAIN_THROUGH_ACTIVITY = (
+    "a21killswitchkey001",
+    "a20autonomoussettings001",
+    "a19riskpolicy004",
+    "a18riskpolicy003",
+    "a17riskpolicy002",
+    "a16riskpolicy001",
+    "a15reissueauth001",
+    "a14autonomouschannel001",
+    "a13voicemonitor001",
+    "a12trendpulsescreen001",
+    "a11experiments001",
+    "a10blofinactivity001",
 )
 QUOTA_COMPATIBILITY = (
     "src/app/db/voice_realtime.py",
@@ -424,7 +427,7 @@ print(json.dumps({
 """
 
 
-def test_rollback_overlay_can_locate_the_single_alembic_head() -> None:
+def test_rollback_overlay_follows_the_down_revision_chain() -> None:
     """The reviewed tree must receive the current head file or upgrade cannot see it."""
 
     backend = Path(__file__).resolve().parents[1]
@@ -433,8 +436,10 @@ def test_rollback_overlay_can_locate_the_single_alembic_head() -> None:
     script = ScriptDirectory.from_config(config)
     head = single_alembic_head(script)
     assert head == script.get_current_head()
-    overlay = {Path(item).name for item in MIGRATIONS}
+    assert_down_revision_chain(script, _CHAIN_THROUGH_ACTIVITY)
+    overlay = {path.name for path in migrations_from_head_through(script, "a10blofinactivity001")}
     assert any(name.startswith(head) for name in overlay)
+    assert any(name.startswith("a10blofinactivity001") for name in overlay)
 
 
 def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_path, monkeypatch):
@@ -455,7 +460,8 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
     engine = create_engine(scoped)
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "src/app/db/migrations"))
-    head = single_alembic_head(ScriptDirectory.from_config(config))
+    script = ScriptDirectory.from_config(config)
+    head = single_alembic_head(script)
     try:
         command.upgrade(config, "head")
         _seed(engine)
@@ -510,8 +516,11 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
         ):
             target = _archive(backend.parent, revision, tmp_path / label)
             if label == "rollback":
-                for migration in MIGRATIONS:
-                    (target / migration).write_bytes((backend / migration).read_bytes())
+                for migration in migrations_from_head_through(script, "a10blofinactivity001"):
+                    relative = migration.relative_to(backend)
+                    destination = target / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(migration.read_bytes())
                 for compatibility in QUOTA_COMPATIBILITY:
                     (target / compatibility).write_bytes((backend / compatibility).read_bytes())
             env["PYTHONPATH"] = str(target / "src")

@@ -13,7 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.strategy_brain.trendpulse_1r.contracts import TrendPulseStatus
-from tests.support.alembic_heads import single_alembic_head
+from tests.support.alembic_heads import assert_down_revision_chain, single_alembic_head
 from tests.support.experiment_fixtures import World
 from tests.support.trendpulse_screening import after_close
 from tests.test_trendpulse_1r_domain import configure
@@ -25,19 +25,26 @@ def test_one_additive_revision_follows_reserved_a11():
     scripts = ScriptDirectory.from_config(cfg)
     head = single_alembic_head(scripts)
     assert scripts.get_heads() == [head]
-    assert scripts.get_revision("a22workerruntime001").down_revision == "a21killswitchkey001"
-    assert scripts.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
-    assert scripts.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
-    assert scripts.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
-    assert scripts.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
-    assert scripts.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
-    assert scripts.get_revision("a16riskpolicy001").down_revision == "a15reissueauth001"
-    assert scripts.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
-    assert scripts.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"
-    assert scripts.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
+    assert_down_revision_chain(
+        scripts,
+        (
+            "a21killswitchkey001",
+            "a20autonomoussettings001",
+            "a19riskpolicy004",
+            "a18riskpolicy003",
+            "a17riskpolicy002",
+            "a16riskpolicy001",
+            "a15reissueauth001",
+            "a14autonomouschannel001",
+            "a13voicemonitor001",
+            "a12trendpulsescreen001",
+            "a11experiments001",
+            "a10blofinactivity001",
+        ),
+    )
     assert len(scripts.get_bases()) == 1
-    assert [r.revision for r in scripts.iterate_revisions("heads", "a11experiments001")] == [
-        head,
+    walked = [revision.revision for revision in scripts.iterate_revisions("heads", "base")]
+    chain = (
         "a21killswitchkey001",
         "a20autonomoussettings001",
         "a19riskpolicy004",
@@ -48,8 +55,10 @@ def test_one_additive_revision_follows_reserved_a11():
         "a14autonomouschannel001",
         "a13voicemonitor001",
         "a12trendpulsescreen001",
-    ]
-    assert scripts.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
+    )
+    positions = [walked.index(item) for item in chain]
+    assert positions == sorted(positions)
+    assert walked[0] == head
 
 
 def test_actual_migration_supports_screening_and_roundtrip_preserves_prior_domain_and_native_data(

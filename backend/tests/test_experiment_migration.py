@@ -11,7 +11,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
-from tests.support.alembic_heads import single_alembic_head
+from tests.support.alembic_heads import assert_down_revision_chain, single_alembic_head
 
 ADDED = {"experiments", "experiment_versions", "experiment_events", "experiment_samples"}
 
@@ -21,21 +21,26 @@ def test_single_additive_migration_chain():
     script = ScriptDirectory.from_config(cfg)
     head = single_alembic_head(script)
     assert script.get_heads() == [head]
-    assert script.get_revision("a22workerruntime001").down_revision == "a21killswitchkey001"
-    assert script.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
-    assert script.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
-    assert script.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
-    assert script.get_revision("a18riskpolicy003").down_revision == "a17riskpolicy002"
-    assert script.get_revision("a17riskpolicy002").down_revision == "a16riskpolicy001"
-    assert script.get_revision("a16riskpolicy001").down_revision == "a15reissueauth001"
-    assert script.get_revision("a15reissueauth001").down_revision == "a14autonomouschannel001"
-    assert script.get_revision("a14autonomouschannel001").down_revision == "a13voicemonitor001"
-    assert script.get_revision("a13voicemonitor001").down_revision == "a12trendpulsescreen001"
-    assert script.get_revision("a12trendpulsescreen001").down_revision == "a11experiments001"
-    assert script.get_revision("a11experiments001").down_revision == "a10blofinactivity001"
+    assert_down_revision_chain(
+        script,
+        (
+            "a21killswitchkey001",
+            "a20autonomoussettings001",
+            "a19riskpolicy004",
+            "a18riskpolicy003",
+            "a17riskpolicy002",
+            "a16riskpolicy001",
+            "a15reissueauth001",
+            "a14autonomouschannel001",
+            "a13voicemonitor001",
+            "a12trendpulsescreen001",
+            "a11experiments001",
+            "a10blofinactivity001",
+        ),
+    )
     assert len(script.get_bases()) == 1
-    assert [r.revision for r in script.iterate_revisions("heads", "a10blofinactivity001")] == [
-        head,
+    walked = [revision.revision for revision in script.iterate_revisions("heads", "base")]
+    chain = (
         "a21killswitchkey001",
         "a20autonomoussettings001",
         "a19riskpolicy004",
@@ -47,7 +52,10 @@ def test_single_additive_migration_chain():
         "a13voicemonitor001",
         "a12trendpulsescreen001",
         "a11experiments001",
-    ]
+    )
+    positions = [walked.index(item) for item in chain]
+    assert positions == sorted(positions)
+    assert walked[0] == head
 
 
 def test_upgrade_downgrade_reupgrade_preserves_native_history(monkeypatch):

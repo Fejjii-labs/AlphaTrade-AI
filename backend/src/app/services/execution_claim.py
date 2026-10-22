@@ -83,7 +83,7 @@ from app.services.execution_integrity import (
 from app.services.execution_transitions import append_transition
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
 from app.services.planned_reward_risk import PlannedRewardRiskError, execution_reward_risk
-from app.services.safety_epoch import SafetyEpochService
+from app.services.safety_epoch import SafetyEpochService, paper_daily_trade_roll
 
 
 @dataclass(frozen=True)
@@ -254,6 +254,8 @@ class PaperPlanClaimService:
             account_id=request.account_id,
             user_id=request.user_id,
             exposure_unit=intent.exposure_unit,
+            now=now,
+            roll_daily_trade_slots=paper_daily_trade_roll(plan.execution_venue),
         )
         if blocked_reason is None and plan.execution_venue == "BLOFIN_DEMO":
             from app.experiments.execution_risk import experiment_reservation_refusal

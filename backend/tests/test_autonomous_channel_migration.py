@@ -30,7 +30,7 @@ from sqlalchemy.pool import NullPool
 
 from app.db.base import Base
 from app.db.models import ApprovalAuthorization
-from tests.support.alembic_heads import single_alembic_head
+from tests.support.alembic_heads import assert_down_revision_chain, single_alembic_head
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 _REVISION = "a14autonomouschannel001"
@@ -41,7 +41,6 @@ _A18 = "a18riskpolicy003"
 _A19 = "a19riskpolicy004"
 _A20 = "a20autonomoussettings001"
 _A21 = "a21killswitchkey001"
-_A22 = "a22workerruntime001"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -91,12 +90,8 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     a20 = script.get_revision(_A20)
     assert a20 is not None
     assert a20.down_revision == _A19
-    a21 = script.get_revision(_A21)
-    assert a21 is not None
-    assert a21.down_revision == _A20
-    a22 = script.get_revision(_A22)
-    assert a22 is not None
-    assert a22.down_revision == _A21
+    assert_down_revision_chain(script, (_A21, _A20))
+    single_alembic_head(script)
 
 
 @requires_postgres

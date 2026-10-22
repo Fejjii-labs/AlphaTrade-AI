@@ -71,7 +71,7 @@ from app.services.execution_fills import (
 from app.services.execution_integrity import ensure_db_transaction, is_fill_fact_unique_violation
 from app.services.execution_transitions import append_transition, apply_projection_transition
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
-from app.services.safety_epoch import SafetyEpochService
+from app.services.safety_epoch import SafetyEpochService, paper_daily_trade_roll
 
 _LEASE_SECONDS = 30
 logger = structlog.get_logger(__name__)
@@ -610,11 +610,16 @@ class VenueSubmitDispatcher:
                 weighted_price=projection.weighted_price,
             )
 
+        plan_row = self._session.get(PlanRow, command.revision_id)
         accounting = self._epochs.lock_risk_accounting(
             organization_id=command.organization_id,
             account_id=command.account_id,
             user_id=command.user_id,
             exposure_unit=reservation.exposure_unit,
+            now=now,
+            roll_daily_trade_slots=paper_daily_trade_roll(
+                plan_row.execution_venue if plan_row is not None else None
+            ),
         )
         convert_reservation_for_fill(
             reservation=reservation,
@@ -868,6 +873,10 @@ class VenueSubmitDispatcher:
             account_id=command.account_id,
             user_id=command.user_id,
             exposure_unit=reservation.exposure_unit,
+            now=now,
+            roll_daily_trade_slots=paper_daily_trade_roll(
+                plan_row.execution_venue if plan_row is not None else None
+            ),
         )
         accounting.reserved_notional -= unused
         if accounting.reserved_notional < 0:

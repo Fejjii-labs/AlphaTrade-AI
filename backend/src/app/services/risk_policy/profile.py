@@ -292,7 +292,7 @@ def validate_profile(profile: RiskPolicyProfile) -> None:
     ):
         raise RiskPolicyRejected("consecutive_loss_cooldown_invalid")
     # Risk profiles cannot arm autonomy. The owner paper switch is the DB toggle
-    # (AT-ADR-146). Env false remains the ceiling and real money stays blocked.
+    # (AT-ADR-149). Env false remains the ceiling and real money stays blocked.
     if profile.autonomous_internal_paper_enabled or profile.autonomous_blofin_demo_enabled:
         raise RiskPolicyRejected("autonomous_flags_must_stay_off")
     _profile_name(profile.profile_name)

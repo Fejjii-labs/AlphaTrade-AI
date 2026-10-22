@@ -14,10 +14,14 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import NullPool
 
-from tests.support.alembic_heads import alembic_script_directory
+from tests.support.alembic_heads import (
+    alembic_ancestry,
+    alembic_script_directory,
+    assert_down_revision_chain,
+    single_alembic_head,
+)
 
 _REVISION = "a21killswitchkey001"
-_NEXT = "a22workerruntime001"
 _PARENT = "a20autonomoussettings001"
 _MIGRATION = "a21killswitchkey001_widen_runtime_component.py"
 _FULL_KEY = "k" + "ab" * 16
@@ -32,14 +36,10 @@ def _load():
     return module
 
 
-def test_component_widen_links_to_the_worker_runtime_revision() -> None:
+def test_component_widen_revises_autonomous_settings() -> None:
     script = alembic_script_directory()
-    revision = script.get_revision(_REVISION)
-    assert revision is not None
-    assert revision.down_revision == _PARENT
-    nxt = script.get_revision(_NEXT)
-    assert nxt is not None
-    assert nxt.down_revision == _REVISION
+    assert_down_revision_chain(script, (_REVISION, _PARENT))
+    assert _REVISION in alembic_ancestry(single_alembic_head(script))
     source = (
         Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions" / _MIGRATION
     ).read_text(encoding="utf-8")

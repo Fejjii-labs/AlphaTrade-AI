@@ -1,7 +1,7 @@
 """Worker runtime flags and the owner paper switch.
 
 Revision ID: a22workerruntime001
-Revises: a21killswitchkey001
+Revises: a22papertradeday001
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a22workerruntime001"
-down_revision: str | None = "a21killswitchkey001"
+down_revision: str | None = "a22papertradeday001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
