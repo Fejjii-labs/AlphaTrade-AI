@@ -197,6 +197,9 @@ class Settings(BaseSettings):
     # budget/pricing receipt. These defaults never activate an operator's provider.
     agent_realtime_enabled: bool = False
     agent_realtime_limits_file: str = ""
+    # GPT Live is a separate disabled transport. It does not enable realtime.
+    agent_live_enabled: bool = False
+    agent_live_limits_file: str = ""
 
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False
@@ -351,6 +354,9 @@ class Settings(BaseSettings):
     # Phase 2 model router — callers never supply free-form model names.
     agent_reasoning_model: str = Field(default="gpt-6-astra", min_length=1, max_length=80)
     agent_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # Voice delegation only. The text agent keeps agent_reasoning_model / effort.
+    agent_voice_reasoning_model: str = Field(default="gpt-6.1-sol", min_length=1, max_length=80)
+    agent_voice_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     agent_max_output_tokens: int = Field(default=25000, ge=1024, le=65536)
     llm_tier_a_model: str = "gpt-6.1-sol"
     llm_tier_b_model: str = "gpt-6-luna"

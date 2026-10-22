@@ -2,6 +2,21 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-144 — GPT Live reasoning is voice-scoped
+
+- Date: 2026-10-22
+- Decision: The disabled GPT Live voice path delegates backend reasoning to
+  `AGENT_VOICE_REASONING_MODEL` (default `gpt-6.1-sol`) at
+  `AGENT_VOICE_REASONING_EFFORT` (default `low`). The text agent keeps
+  `AGENT_REASONING_MODEL` and `AGENT_REASONING_EFFORT`. Voice budget receipts
+  compare `limits.reasoning.model` to the voice model, not the text model.
+- Admission reserves gpt-live-1 at USD 0.05 per minute, billed per second,
+  plus the reasoning and embedding holds. The sum must fit the $1 session
+  ceiling or the session is refused. Realtime and GPT Live stay disabled.
+  No Render environment change.
+- Reference: `docs/gpt_live_integration.md`,
+  `docs/gpt_live_limits.example.json`.
+
 ## AT-ADR-143 — Internal-read mirror runs the #304 pin before account reads
 
 - Date: 2026-10-21

@@ -5,6 +5,18 @@ Validation, Recommended model. Gap-analysis items (Phase 7) are **not implemente
 
 Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DONE / BLOCKED.
 
+## AT-145 — Disabled GPT Live 1 voice prototype
+
+- Priority: P2 · Status: DONE (implementation; review pending).
+- Base: current `main`. Salvaged from PR 257 without modifying that pull request.
+- Scope: `/agent/voice/live` stays off unless `AGENT_LIVE_ENABLED` and a verified
+  limits file are set. Delegated reasoning uses `AGENT_VOICE_REASONING_MODEL`
+  (`gpt-6.1-sol`) and `AGENT_VOICE_REASONING_EFFORT` (`low`). The text agent
+  model is unchanged. Admission reserves $0.05/min plus reasoning and embedding
+  and refuses when that exceeds the $1 ceiling.
+- Limits: No Render env change. Realtime stays disabled. No live orders.
+- Reference: AT-ADR-144; `docs/gpt_live_integration.md`.
+
 ## AT-134 — Full-hex kill-switch alert keys
 
 - Priority: P1 · Status: DONE (implementation; review pending).

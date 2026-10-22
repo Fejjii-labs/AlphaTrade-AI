@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -111,6 +112,21 @@ class VoiceLimits(StrictModel):
             + embedding
         ) / Decimal(1000000)
 
+    @property
+    def voice_model(self) -> str:
+        return self.realtime.model
+
+    def reserved_tokens(self, settings: Settings) -> int:
+        return math.ceil(
+            self.maximum_responses
+            * (self.realtime.maximum_input_tokens + self.maximum_output_tokens)
+            + self.maximum_audio_seconds * self.realtime.maximum_audio_input_tokens_per_second
+            + self.maximum_turns
+            * 4
+            * (self.reasoning.maximum_input_tokens + settings.agent_max_output_tokens)
+            + (self.maximum_turns * self.embedding.maximum_input_tokens if self.embedding else 0)
+        )
+
     def receipt_deadline(self) -> datetime:
         return min(
             self.valid_until,
@@ -137,7 +153,7 @@ def load_limits(settings: Settings) -> VoiceLimits:
     now = datetime.now(UTC)
     if limits.budget_as_of > now or limits.receipt_deadline() <= now:
         raise VoiceUnavailableError("verified_realtime_limits_expired")
-    if limits.reasoning.model != settings.agent_reasoning_model:
+    if limits.reasoning.model != settings.agent_voice_reasoning_model:
         raise VoiceUnavailableError("verified_reasoning_route_mismatch")
     if limits.reservation(settings) > min(limits.session_ceiling_usd, limits.remaining_budget_usd):
         raise VoiceUnavailableError("verified_cap_cannot_cover_session")

@@ -55,7 +55,7 @@ def voice_limits():
             "audio_output_usd_per_million": "4",
             "maximum_audio_input_tokens_per_second": "100",
         },
-        reasoning=price | {"model": Settings(_env_file=None).agent_reasoning_model},
+        reasoning=price | {"model": Settings(_env_file=None).agent_voice_reasoning_model},
     )
 
 
@@ -135,6 +135,30 @@ def test_full_context_orphan_audio_and_shared_router_retries_are_reserved(voice_
 def test_missing_bindings_fail_closed_before_provider(tmp_path, change, reason):
     with pytest.raises(VoiceUnavailableError, match=reason):
         load_limits(Settings(_env_file=None).model_copy(update=change))
+
+
+def test_realtime_receipt_matches_the_voice_reasoning_model(tmp_path, voice_limits):
+    settings = Settings(
+        _env_file=None,
+        agent_realtime_enabled=True,
+        openai_api_key="fixture",
+        provider_mode="live",
+    )
+    path = tmp_path / "realtime-limits.json"
+    path.write_text(voice_limits.model_dump_json())
+    loaded = load_limits(settings.model_copy(update={"agent_realtime_limits_file": str(path)}))
+    assert loaded.reasoning.model == settings.agent_voice_reasoning_model
+    path.write_text(
+        voice_limits.model_copy(
+            update={
+                "reasoning": voice_limits.reasoning.model_copy(
+                    update={"model": settings.agent_reasoning_model}
+                )
+            }
+        ).model_dump_json()
+    )
+    with pytest.raises(VoiceUnavailableError, match="verified_reasoning_route_mismatch"):
+        load_limits(settings.model_copy(update={"agent_realtime_limits_file": str(path)}))
 
 
 @pytest.mark.parametrize(

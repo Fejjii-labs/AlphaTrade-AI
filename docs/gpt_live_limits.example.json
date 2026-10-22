@@ -1,0 +1,32 @@
+{
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "budget_reference": "example-voice-budget",
+  "budget_as_of": "2026-10-22T00:00:00Z",
+  "valid_until": "2027-01-01T00:00:00Z",
+  "remaining_budget_usd": "1",
+  "session_ceiling_usd": "1",
+  "maximum_seconds": 300,
+  "maximum_audio_seconds": 300,
+  "maximum_turns": 2,
+  "live": {
+    "model": "gpt-live-1",
+    "source": "https://developers.openai.com/api/docs/models/gpt-live-1",
+    "valid_until": "2027-01-01T00:00:00Z",
+    "usd_per_minute": "0.05"
+  },
+  "reasoning": {
+    "model": "gpt-6.1-sol",
+    "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "valid_until": "2027-01-01T00:00:00Z",
+    "maximum_input_tokens": 20000,
+    "input_usd_per_million": "2",
+    "output_usd_per_million": "10"
+  },
+  "embedding": {
+    "model": "text-embedding-3-small",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "valid_until": "2027-01-01T00:00:00Z",
+    "maximum_input_tokens": 2000,
+    "input_usd_per_million": "0.02"
+  }
+}
