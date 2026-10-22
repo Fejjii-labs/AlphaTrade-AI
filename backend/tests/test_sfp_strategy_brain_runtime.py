@@ -617,9 +617,11 @@ def runtime_world(
 
 
 # The shared BULL/BEAR swing sits inside the unchanged 1R floor. These copies
-# move only that opposing swing so the nearest level clears the floor.
+# move only that opposing swing so the nearest level still clears 1R after the
+# 0.5 ATR stop, BTC's 0.10 tick, and the 1bp last-trade haircut. A bearish low
+# of 88 ceils the short stop to 104, and the haircut then falls short of 1R.
 BULL_TRADABLE = [*BULL[:3], (103, 112, 102, 104), *BULL[4:]]
-BEAR_TRADABLE = [*BEAR[:3], (97, 98, 88, 96), *BEAR[4:]]
+BEAR_TRADABLE = [*BEAR[:3], (97, 98, 87, 96), *BEAR[4:]]
 
 
 @pytest.mark.parametrize("bearish", [False, True])
