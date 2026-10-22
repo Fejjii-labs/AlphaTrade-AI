@@ -800,8 +800,21 @@ class AutomatedPaperLoop:
             fixed_risk_percent=fixed_risk_percent,
             internal_paper_sfp=True,
             side_aware_fill=True,
-            spread_haircut=self._settings.paper_fill_spread_haircut,
+            spread_haircut=self._fill_spread_haircut(assembled),
             min_stop_atr_floor=self._settings.sfp_min_stop_atr_multiple,
+        )
+
+    def _fill_spread_haircut(self, assembled: AssembledCanonicalEvidence) -> Decimal:
+        """Per-asset mid haircut. A supplied bid/ask still bypasses it."""
+
+        from app.services.paper_fill import paper_fill_spread_haircut_for_symbol
+
+        quote = getattr(assembled, "current_price", None)
+        symbol = getattr(quote, "provider_symbol", None) if quote is not None else None
+        return paper_fill_spread_haircut_for_symbol(
+            symbol if isinstance(symbol, str) else None,
+            major_haircut=self._settings.paper_fill_major_spread_haircut,
+            default_haircut=self._settings.paper_fill_spread_haircut,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:

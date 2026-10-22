@@ -6,7 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import ExecutionMode, Settings
-from app.services.paper_fill import DEFAULT_PAPER_FILL_SPREAD_HAIRCUT
+from app.services.paper_fill import (
+    DEFAULT_PAPER_FILL_MAJOR_SPREAD_HAIRCUT,
+    DEFAULT_PAPER_FILL_SPREAD_HAIRCUT,
+)
 from app.strategy_brain.sfp.contracts import SFP_MIN_STOP_ATR_FLOOR
 
 
@@ -32,12 +35,16 @@ def test_paper_fill_and_sfp_stop_floor_defaults_are_nonzero() -> None:
 
     settings = Settings()
     assert settings.paper_fill_spread_haircut == DEFAULT_PAPER_FILL_SPREAD_HAIRCUT
-    assert settings.paper_fill_spread_haircut == Decimal("0.0001")
+    assert settings.paper_fill_spread_haircut == Decimal("0.0005")
+    assert settings.paper_fill_major_spread_haircut == DEFAULT_PAPER_FILL_MAJOR_SPREAD_HAIRCUT
+    assert settings.paper_fill_major_spread_haircut == Decimal("0.0001")
     assert settings.sfp_min_stop_atr_multiple == SFP_MIN_STOP_ATR_FLOOR
     assert settings.sfp_min_stop_atr_multiple == Decimal("0.5")
     assert settings.enable_real_trading is False
     with pytest.raises(ValidationError):
         Settings(paper_fill_spread_haircut=Decimal("-0.0001"))
+    with pytest.raises(ValidationError):
+        Settings(paper_fill_major_spread_haircut=Decimal("0.06"))
     with pytest.raises(ValidationError):
         Settings(sfp_min_stop_atr_multiple=Decimal("100"))
 

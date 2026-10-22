@@ -111,7 +111,8 @@ def _emit(
     ):
         # Entry is this confirmation close. Later intact bars keep this plan.
         # The stop is the larger of the percent buffer, N ticks, and k*ATR.
-        # The floor widens k for internal paper. It is not part of setup_id.
+        # The floor widens k for the paper plan and the stored alert plan.
+        # It is not part of setup_id.
         authored = spec.parameters.min_stop_atr_multiple
         multiple = max(authored, atr_multiple_floor) if atr_multiple_floor > 0 else authored
         atr = wilder_atr(bars[: index + 1], period=SFP_STOP_ATR_PERIOD) if multiple > 0 else None
@@ -259,8 +260,8 @@ def detect_sfp(
     One current revision per candle is required. Exact duplicates converge;
     conflicting revisions fail closed. Only one terminal forming candle is
     allowed. Context levels must carry their closed canonical proofs.
-    ``atr_multiple_floor`` widens the paper stop only. It is not hashed into
-    ``setup_id``.
+    ``atr_multiple_floor`` widens the paper and alert stop. It is not hashed
+    into ``setup_id``.
     """
     if evaluated_at.tzinfo is None:
         raise ValueError("evaluated_at must be timezone-aware")

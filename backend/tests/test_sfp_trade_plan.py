@@ -7,7 +7,12 @@ from uuid import uuid4
 
 from app.schemas.common import TradeDirection
 from app.services.automated_paper_loop import AutomatedPaperLoop, _plan_terms, _quantity
-from app.services.paper_fill import DEFAULT_PAPER_FILL_SPREAD_HAIRCUT, paper_fill_price
+from app.services.paper_fill import (
+    DEFAULT_PAPER_FILL_MAJOR_SPREAD_HAIRCUT,
+    DEFAULT_PAPER_FILL_SPREAD_HAIRCUT,
+    paper_fill_price,
+    paper_fill_spread_haircut_for_symbol,
+)
 from app.signal_fusion.enums import EvidenceRole
 from app.strategy_brain.sfp.trade_plan import derive_sfp_trade_plan
 from tests.support.phase7_trade_plan import make_world
@@ -352,6 +357,19 @@ def test_side_aware_fill_uses_ask_for_long_and_bid_for_short() -> None:
     assert one_sided.basis_policy.execution_price.value == Decimal("100.2")
 
 
+def test_mid_haircut_is_wider_for_non_major_bases() -> None:
+    major = DEFAULT_PAPER_FILL_MAJOR_SPREAD_HAIRCUT
+    wider = DEFAULT_PAPER_FILL_SPREAD_HAIRCUT
+    assert paper_fill_spread_haircut_for_symbol("BTCUSDT") == major
+    assert paper_fill_spread_haircut_for_symbol("ETH-USDT") == Decimal("0.0001")
+    assert paper_fill_spread_haircut_for_symbol("eth/usdc") == Decimal("0.0001")
+    assert paper_fill_spread_haircut_for_symbol("BTCUSDT.PERP") == Decimal("0.0001")
+    assert paper_fill_spread_haircut_for_symbol("ETHFIUSDT") == wider
+    assert paper_fill_spread_haircut_for_symbol("SOLUSDT") == Decimal("0.0005")
+    assert paper_fill_spread_haircut_for_symbol(None) == Decimal("0.0005")
+    assert paper_fill_spread_haircut_for_symbol("  ") == Decimal("0.0005")
+
+
 def test_mid_only_quote_applies_the_spread_haircut_and_fails_closed() -> None:
     haircut = DEFAULT_PAPER_FILL_SPREAD_HAIRCUT
     long = _terms(bearish=False, quote="100", book=False, spread_haircut=haircut)
@@ -462,7 +480,21 @@ def test_internal_paper_loop_forwards_side_aware_fill_and_atr_floor(monkeypatch)
     assert seen["side_aware_fill"] is True
     assert seen["internal_paper_sfp"] is True
     assert seen["spread_haircut"] == settings.paper_fill_spread_haircut
+    assert seen["spread_haircut"] == Decimal("0.0005")
     assert seen["min_stop_atr_floor"] == settings.sfp_min_stop_atr_multiple
+    btc = SimpleNamespace(current_price=SimpleNamespace(provider_symbol="BTCUSDT"))
+    loop._plan_terms(
+        candidate=SimpleNamespace(),  # type: ignore[arg-type]
+        assembled=btc,  # type: ignore[arg-type]
+        policy=SimpleNamespace(),  # type: ignore[arg-type]
+        account_id=uuid4(),
+        equity=Decimal("1"),
+        now=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_valid_until=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_id=uuid4(),
+    )
+    assert seen["spread_haircut"] == settings.paper_fill_major_spread_haircut
+    assert seen["spread_haircut"] == Decimal("0.0001")
     assert settings.enable_real_trading is False
 
 
