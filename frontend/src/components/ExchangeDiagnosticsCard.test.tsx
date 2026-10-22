@@ -81,4 +81,34 @@ describe("ExchangeDiagnosticsCard", () => {
     expect(screen.getByText(/Code 51008/)).toBeInTheDocument();
     expect(screen.getByText(/Leverage probe failed/)).toBeInTheDocument();
   });
+
+  it("shows worker-flag freshness without changing a disabled Telegram badge", () => {
+    render(
+      <ExchangeDiagnosticsCard
+        diagnostics={{
+          ...readySummary,
+          worker_effective: {
+            source: "worker",
+            health_state: "STALE",
+            stale: true,
+            autonomy_mode: "off",
+            autonomous_internal_paper_env_ceiling: true,
+            autonomous_internal_paper_db_enabled: false,
+            autonomous_internal_paper_effective: false,
+            watcher_orchestration_enabled: true,
+            watcher_paper_staging_activation: true,
+            telegram_paper_activation_armed: false,
+            telegram_interaction_enabled: false,
+            telegram_alerts_enabled: false,
+            automatic_telegram_delivery_enabled: false,
+            watchlist: [],
+            real_trading_enabled: false,
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("Telegram disabled")).toBeInTheDocument();
+    expect(screen.getByTestId("exchange-worker-flags")).toHaveTextContent("Stale");
+    expect(screen.getByTestId("exchange-worker-flags")).toHaveTextContent("Real money stays blocked");
+  });
 });

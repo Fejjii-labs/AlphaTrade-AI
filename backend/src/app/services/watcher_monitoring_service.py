@@ -122,6 +122,16 @@ class WatcherMonitoringService:
             now = now.replace(tzinfo=UTC)
 
         settings = self._settings
+        from app.persistence.worker_runtime_state import (
+            load_worker_runtime_from_session,
+            project_worker_effective,
+        )
+
+        worker_effective = project_worker_effective(
+            load_worker_runtime_from_session(self._session),
+            now=now,
+            stale_after_seconds=settings.watcher_heartbeat_stale_after_seconds,
+        )
         config = runtime_config_from_settings(settings)
         # The API is deliberately disarmed when a separate paper worker owns scans.
         # Observe its tenant-bound lease instead of interpreting API flags as a stop.
@@ -227,6 +237,56 @@ class WatcherMonitoringService:
             watcher_config_enabled=_config_enabled(settings) or remote_worker,
             runtime_evidence=decision.runtime_evidence,
         )
+        config_flags = WatcherConfigFlags(
+            market_watcher_enabled=settings.market_watcher_enabled,
+            watcher_orchestration_enabled=settings.watcher_orchestration_enabled,
+            worker_enabled=settings.worker_enabled,
+            market_watcher_bridge_enabled=settings.market_watcher_bridge_enabled,
+            market_watcher_bridge_auto_tick=settings.market_watcher_bridge_auto_tick,
+            telegram_alerts_enabled=settings.telegram_alerts_enabled,
+            telegram_interaction_enabled=settings.telegram_interaction_enabled,
+            automatic_telegram_delivery_enabled=settings.automatic_telegram_delivery_enabled,
+            telegram_paper_activation_armed=settings.telegram_paper_activation_armed,
+            telegram_inbound_mode=settings.telegram_inbound_mode.value,
+            telegram_network_permitted=settings.telegram_network_permitted,
+            watcher_paper_staging_activation=settings.watcher_paper_staging_activation,
+        )
+        if worker_effective.source == "worker":
+            config_flags = config_flags.model_copy(
+                update={
+                    "watcher_orchestration_enabled": worker_effective.watcher_orchestration_enabled,
+                    "watcher_paper_staging_activation": (
+                        worker_effective.watcher_paper_staging_activation
+                    ),
+                    "telegram_alerts_enabled": worker_effective.telegram_alerts_enabled,
+                    "telegram_interaction_enabled": worker_effective.telegram_interaction_enabled,
+                    "automatic_telegram_delivery_enabled": (
+                        worker_effective.automatic_telegram_delivery_enabled
+                    ),
+                    "telegram_paper_activation_armed": (
+                        worker_effective.telegram_paper_activation_armed
+                    ),
+                }
+            )
+            paper_posture = paper_posture.model_copy(
+                update={
+                    "telegram_enabled": any(
+                        (
+                            worker_effective.telegram_alerts_enabled,
+                            worker_effective.telegram_interaction_enabled,
+                            worker_effective.automatic_telegram_delivery_enabled,
+                            worker_effective.telegram_paper_activation_armed,
+                        )
+                    ),
+                    "watcher_config_enabled": (
+                        worker_effective.watcher_orchestration_enabled
+                        or worker_effective.watcher_paper_staging_activation
+                        or paper_posture.watcher_config_enabled
+                    ),
+                }
+            )
+            if worker_effective.stale:
+                warnings.append("worker_runtime_flags_stale")
         return WatcherMonitoringSnapshot(
             watcher_status=decision.state,
             paper_monitoring_status=decision.state,
@@ -234,19 +294,7 @@ class WatcherMonitoringService:
             block_reasons=list(decision.block_reasons),
             warnings=list(dict.fromkeys(warnings)),
             paper_posture=paper_posture,
-            config_flags=WatcherConfigFlags(
-                market_watcher_enabled=settings.market_watcher_enabled,
-                watcher_orchestration_enabled=settings.watcher_orchestration_enabled,
-                worker_enabled=settings.worker_enabled,
-                market_watcher_bridge_enabled=settings.market_watcher_bridge_enabled,
-                market_watcher_bridge_auto_tick=settings.market_watcher_bridge_auto_tick,
-                telegram_alerts_enabled=settings.telegram_alerts_enabled,
-                telegram_interaction_enabled=settings.telegram_interaction_enabled,
-                automatic_telegram_delivery_enabled=settings.automatic_telegram_delivery_enabled,
-                telegram_paper_activation_armed=settings.telegram_paper_activation_armed,
-                telegram_inbound_mode=settings.telegram_inbound_mode.value,
-                telegram_network_permitted=settings.telegram_network_permitted,
-            ),
+            config_flags=config_flags,
             symbols_monitored=_symbols_monitored(
                 settings=settings,
                 watched=list(watcher_status.watched_symbols),
@@ -271,6 +319,7 @@ class WatcherMonitoringService:
             worker=_worker_health_projection(worker, paper_status),
             recent_errors=recent_errors,
             limitations=limitations,
+            worker_effective=worker_effective,
             generated_at=now,
         )
 

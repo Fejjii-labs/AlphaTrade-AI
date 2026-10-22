@@ -246,4 +246,41 @@ describe("WatcherMonitoringCard", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("link", { name: /watcher scanner/i })).toHaveAttribute("href", "/watcher");
   });
+
+  it("shows worker-reported flags and does not invent them when the worker is silent", () => {
+    const { rerender } = render(
+      <WatcherMonitoringCard snapshot={makeWatcherMonitoringSnapshot()} />,
+    );
+    expect(screen.getByTestId("worker-runtime-readout")).toHaveTextContent("Not reported");
+    expect(screen.getByTestId("worker-runtime-readout")).not.toHaveTextContent("On");
+
+    rerender(
+      <WatcherMonitoringCard
+        snapshot={makeWatcherMonitoringSnapshot({
+          worker_effective: {
+            source: "worker",
+            health_state: "RUNNING",
+            stale: false,
+            autonomy_mode: "internal_paper",
+            autonomous_internal_paper_env_ceiling: true,
+            autonomous_internal_paper_db_enabled: false,
+            autonomous_internal_paper_effective: false,
+            watcher_orchestration_enabled: true,
+            watcher_paper_staging_activation: true,
+            telegram_paper_activation_armed: true,
+            telegram_interaction_enabled: false,
+            telegram_alerts_enabled: true,
+            automatic_telegram_delivery_enabled: false,
+            watchlist: ["BTCUSDT"],
+            real_trading_enabled: false,
+          },
+        })}
+      />,
+    );
+    const readout = screen.getByTestId("worker-runtime-readout");
+    expect(readout).toHaveTextContent("Fresh");
+    expect(readout).toHaveTextContent("BTCUSDT");
+    expect(readout).toHaveTextContent("internal_paper");
+    expect(readout).toHaveTextContent("On");
+  });
 });

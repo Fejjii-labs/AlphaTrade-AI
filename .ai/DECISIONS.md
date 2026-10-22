@@ -2,6 +2,39 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-144 — Worker runtime flags and the owner paper switch
+
+- Date: 2026-10-22
+- Decision: The API process and the paper worker do not share an environment.
+  Status screens must read a worker-published `worker_runtime_state` row
+  (component `paper_worker_effective`), not the API process env. The row
+  stores the worker's effective flags: autonomy mode, the env paper ceiling,
+  the organization switch bit the worker consulted, watcher orchestration and
+  staging activation, Telegram armed / interaction / alerts / automatic
+  delivery, the watchlist, and the last cycle time. A heartbeat refresh keeps
+  the last cycle's mode, watchlist, and switch bit. `/health`, watcher
+  monitoring, and exchange diagnostics overlay those flags when a row exists
+  and mark the report stale when the heartbeat is older than
+  `watcher_heartbeat_stale_after_seconds`. A missing row stays on the API
+  process flags and is labeled unavailable, so a silent worker is not shown
+  as worker-off. `real_trading_enabled` on this record is fixed false.
+- The autonomous internal-paper switch is an organization row in
+  `autonomous_paper_switches`, default off, written only by an owner through
+  `PATCH /autonomous/settings`. Effective internal paper is
+  `AUTONOMOUS_INTERNAL_PAPER_ENABLED` AND that row. Env false is resolved
+  before the row is read, so it always wins. The switch cannot enable BloFin
+  demo or real money. The worker re-reads it on each cycle and again before
+  an internal-paper approval. A missing row is off. An unreadable row is
+  `autonomous_paper_toggle_unverified`. Changes are audit-logged on
+  `AUTONOMOUS_TRADING_SETTINGS_UPDATED`. A toggle-only patch does not upsert
+  the per-user limit row.
+- Risk profiles still reject `autonomous_internal_paper_enabled=true` and
+  `autonomous_blofin_demo_enabled=true` (`autonomous_flags_must_stay_off`).
+  The profile validator is not the on/off switch. Real trading, execution
+  mode, and exchange mode stay on the API process and are unchanged.
+- Reference: `backend/src/app/persistence/worker_runtime_state.py`,
+  `backend/src/app/services/autonomous_paper_switch.py`.
+
 ## AT-ADR-143 — Internal-read mirror runs the #304 pin before account reads
 
 - Date: 2026-10-21

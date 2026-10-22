@@ -148,13 +148,36 @@ async def exchange_diagnostics_summary(
     audit_service: AuditServiceDep,
 ) -> ExchangeDiagnosticsSummaryResponse:
     """Read-only operator summary of demo exchange readiness and mirror health."""
+    from app.persistence.worker_runtime_state import (
+        load_worker_runtime_row,
+        project_worker_effective,
+    )
+
     snapshot = build_exchange_diagnostics_summary(
         settings=settings,
         registry=registry,
         audit_service=audit_service,
         organization_id=tenant.organization_id,
     )
-    return _map_diagnostics_response(snapshot)
+    response = _map_diagnostics_response(snapshot)
+    effective = project_worker_effective(
+        load_worker_runtime_row(),
+        now=datetime.now(UTC),
+        stale_after_seconds=settings.watcher_heartbeat_stale_after_seconds,
+    )
+    telegram_enabled = response.telegram_enabled
+    if effective.source == "worker":
+        telegram_enabled = any(
+            (
+                effective.telegram_alerts_enabled,
+                effective.telegram_interaction_enabled,
+                effective.automatic_telegram_delivery_enabled,
+                effective.telegram_paper_activation_armed,
+            )
+        )
+    return response.model_copy(
+        update={"worker_effective": effective, "telegram_enabled": telegram_enabled}
+    )
 
 
 @router.get("/status", response_model=ExchangeStatusResponse, summary="Exchange status")

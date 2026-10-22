@@ -18,6 +18,11 @@ const settings = {
   max_risk_per_trade_percent_ceiling: "5",
 };
 
+const auth = {
+  user: { id: "user", role: "trader" },
+  organization: { id: "org" },
+};
+
 const appContext = {
   killSwitchStatus: null as { execution_blocked: boolean; reason: string | null } | null,
   killSwitchError: null as string | null,
@@ -39,7 +44,7 @@ vi.mock("@/contexts/AppContext", () => ({
 }));
 
 vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({ user: { id: "user" }, organization: { id: "org" } }),
+  useAuth: () => auth,
 }));
 
 vi.mock("@/hooks/useAsyncData", () => ({
@@ -71,6 +76,7 @@ describe("Autonomous trading settings form", () => {
   });
 
   beforeEach(() => {
+    auth.user = { id: "user", role: "trader" };
     appContext.killSwitchStatus = { execution_blocked: false, reason: null };
     useAsyncDataMock.mockReturnValue({
       data: settings,
@@ -87,6 +93,36 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-risk-per-trade")).toHaveValue("");
     expect(screen.getByTestId("autonomous-strategy")).toHaveValue("strategy-1");
     expect(screen.getByTestId("autonomous-symbol")).toHaveValue("BTCUSDT");
+    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent(
+      "Not reported",
+    );
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+  });
+
+  it("lets an owner persist the paper switch without changing limits", async () => {
+    auth.user = { id: "user", role: "owner" };
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({
+      ...settings,
+      internal_paper_enabled: true,
+      internal_paper_env_ceiling: true,
+      internal_paper_effective: false,
+      worker_runtime_health: "STALE",
+      worker_flags_stale: true,
+      autonomy_mode: "off",
+    });
+    render(<AutonomousTradingSettingsPage />);
+    const toggle = screen.getByTestId("autonomous-paper-switch-input");
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({
+        internal_paper_enabled: true,
+      });
+    });
+    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeChecked();
+    expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent("Stale");
   });
 
   it("shows a ceiling validation message from the API", async () => {

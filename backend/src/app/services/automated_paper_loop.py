@@ -135,10 +135,15 @@ class AutomatedPaperLoop:
         runtime: ProductionCanonicalRuntime,
         settings: Settings,
         clock: Clock,
+        *,
+        internal_paper_db_enabled: bool | None = None,
     ) -> None:
         self._runtime = runtime
         self._settings = settings
         self._clock = clock
+        # None keeps env-only checks for direct callers. The worker passes a
+        # bool so approval re-reads the owner switch.
+        self._paper_switch_enforced = internal_paper_db_enabled is not None
 
     def continue_confirmed_setup(
         self,
@@ -704,6 +709,14 @@ class AutomatedPaperLoop:
         refusal = continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
         if refusal is not None:
             return refusal
+        if self._paper_switch_enforced:
+            from app.services.autonomous_paper_switch import read_internal_paper_switch
+
+            enabled = read_internal_paper_switch(session, organization_id)
+            if enabled is None:
+                return "autonomous_paper_toggle_unverified"
+            if not enabled:
+                return "autonomous_paper_disarmed"
         observed = getattr(self, "_observed_kill_switch", None)
         if observed is not None and not isinstance(observed, bool):
             return "kill_switch_unverified"
