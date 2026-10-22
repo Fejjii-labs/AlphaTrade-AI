@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { RiskSettingsSummary } from "@/components/settings/RiskSettingsSummary";
 import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { savedEntries } from "@/lib/api/saved-entries";
 import { formatDateTime } from "@/lib/format";
 import { strategyStatusFor } from "@/lib/strategy-status";
+import { cn } from "@/lib/utils";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 const families = [
@@ -75,7 +76,10 @@ function StrategiesWorkspace() {
         actions={
           <Link
             href="/agent?discuss=strategy"
-            className="inline-flex min-h-10 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-[length:var(--text-label)] font-medium text-accent"
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              "h-11 border-accent-border bg-accent-muted text-accent hover:bg-accent-muted",
+            )}
           >
             Discuss a strategy
           </Link>
@@ -156,9 +160,9 @@ function StrategiesWorkspace() {
                         ? "Configurations unavailable"
                         : `${configs.length} configurations`}
                   </p>
-                  <div className="flex gap-4 text-sm text-accent">
-                    <Link href={`/strategies?family=${f.id}`}>Open</Link>
-                    <Link href={`/agent?discuss=${f.id}`}>Ask Agent</Link>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <Link className="inline-flex h-10 items-center text-sm text-accent" href={`/strategies?family=${f.id}`}>Open</Link>
+                    <Link className="inline-flex h-10 items-center text-sm text-accent" href={`/agent?discuss=${f.id}`}>Ask Agent</Link>
                   </div>
                   <details className="border-t border-border-subtle pt-2">
                     <summary className="min-h-11 cursor-pointer content-center text-sm">
@@ -268,7 +272,7 @@ function StrategiesWorkspace() {
             )}
             <Button
               variant="outline"
-              size="sm"
+              className="h-11"
               disabled={loading}
               onClick={() => void reload()}
             >

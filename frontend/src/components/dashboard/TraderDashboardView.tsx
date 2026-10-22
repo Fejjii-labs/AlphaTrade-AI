@@ -23,7 +23,7 @@ import {
 import { TradingMetric } from "@/components/dashboard/TradingMetric";
 import { EmptyState, UnavailableState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataNumber } from "@/components/ui/data-number";
 import { PageHeader } from "@/components/ui/page-header";
@@ -36,6 +36,7 @@ import {
   formatMonetary,
   humanizeToken,
 } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
@@ -121,11 +122,14 @@ export function TraderDashboardView({
           <>
             <Link
               href="/agent"
-              className="inline-flex min-h-11 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-sm font-medium text-accent"
+              className={cn(
+                buttonVariants({ variant: "outline" }),
+                "h-11 border-accent-border bg-accent-muted text-accent hover:bg-accent-muted",
+              )}
             >
               Open Agent
             </Link>
-            <Button variant="outline" onClick={onRetry} disabled={refreshing}>
+            <Button variant="outline" className="h-11" onClick={onRetry} disabled={refreshing}>
               {refreshing ? "Refreshing…" : "Refresh"}
             </Button>
           </>
@@ -160,7 +164,7 @@ export function TraderDashboardView({
           aria-label="Dashboard account"
           value={accountScope}
           onChange={(event) => setAccountScope(event.target.value)}
-          className="min-h-11 rounded-control border border-border-subtle bg-surface-1 px-3"
+          className="h-11 rounded-control border border-border-subtle bg-surface-1 px-3"
         >
           <option value="blofin">BloFin demo · configured account</option>
           <option value="simulator">Internal simulator · history</option>

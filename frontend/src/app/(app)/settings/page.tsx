@@ -79,6 +79,7 @@ function SettingsWorkspace() {
           />
           <Button
             variant="outline"
+            className="h-11"
             disabled={monitoring.loading}
             onClick={() => void monitoring.reload()}
           >
@@ -116,12 +117,12 @@ function SettingsWorkspace() {
           />
           <EmailVerificationNotice />
           <PaperAccountSetup key={`${organization?.id}:${user?.id}`} />
-          <div className="flex flex-wrap gap-4 text-sm text-accent">
-            <Link href="/settings/exchange">Exchange connections</Link>
-            <Link href="/settings/team">Team</Link>
-            <Link href="/settings/billing">Billing &amp; Usage</Link>
-            <Link href="/settings/advanced">Diagnostics</Link>
-            <Link href="/settings/help">Help &amp; Guide</Link>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+            <Link className="inline-flex h-10 items-center text-accent" href="/settings/exchange">Exchange connections</Link>
+            <Link className="inline-flex h-10 items-center text-accent" href="/settings/team">Team</Link>
+            <Link className="inline-flex h-10 items-center text-accent" href="/settings/billing">Billing &amp; Usage</Link>
+            <Link className="inline-flex h-10 items-center text-accent" href="/settings/advanced">Diagnostics</Link>
+            <Link className="inline-flex h-10 items-center text-accent" href="/settings/help">Help &amp; Guide</Link>
           </div>
           <details>
             <summary className="min-h-11 cursor-pointer text-sm">
@@ -137,6 +138,7 @@ function SettingsWorkspace() {
           </details>
           <Button
             variant="outline"
+            className="h-11"
             disabled={loading}
             onClick={() => {
               void refreshStatus();

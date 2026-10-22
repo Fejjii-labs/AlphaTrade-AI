@@ -162,7 +162,7 @@ describe("AT-040 Phase B AppShell", () => {
         <div>Page</div>
       </AppShell>,
     );
-    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Search pages and destinations" }),
     );
@@ -268,9 +268,11 @@ describe("AT-040 Phase B AppShell", () => {
       .filter((name) => /menu/i.test(name));
     expect(names.length).toBeGreaterThan(0);
     expect(new Set(names).size).toBe(names.length);
+    expect(screen.getByRole("button", { name: "Status" })).toBeInTheDocument();
     expect(
-      screen.getByText("Status", { selector: "summary" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Search pages and destinations" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
     expect(
       screen.getByRole("button", { name: "Search pages and destinations" }),
     ).toBeInTheDocument();

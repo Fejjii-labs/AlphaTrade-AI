@@ -83,7 +83,7 @@ test.describe("AT-017 edge auth boundary", () => {
     await page.goto("/portfolio");
     await expect(page).toHaveURL(/\/portfolio/);
 
-    await page.getByTestId("header-status-menu").locator("summary").click();
+    await page.getByRole("button", { name: "Status", exact: true }).click();
     await page.getByRole("button", { name: /log out/i }).click();
     await expect(page).toHaveURL(/\/login/);
 

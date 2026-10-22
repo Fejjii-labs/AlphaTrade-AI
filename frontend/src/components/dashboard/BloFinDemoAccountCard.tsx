@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 
+import { EmptyState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
+import { cn } from "@/lib/utils";
 import { useDemoAccountSnapshot } from "./useDemoAccountSnapshot";
 import { TradingMetric } from "./TradingMetric";
 import {
@@ -56,13 +58,41 @@ export function BloFinDemoAccountCard({
   const showWinRate =
     winRate != null &&
     (mirrorReady || (activityStatus === "ready" && mirrorStatus !== "withheld"));
+  const quietEmpty = status === "inactive" || status === "not_synced";
+  const configureLink = (
+    <Link
+      href="/settings/exchange"
+      className={cn(buttonVariants({ variant: "outline" }), "h-11")}
+    >
+      Exchange settings
+    </Link>
+  );
+  const refreshControl = account?.can_refresh ? (
+    <Button
+      variant="outline"
+      className="h-11"
+      disabled={busy}
+      onClick={() => void load(true)}
+    >
+      {busy ? "Refreshing…" : "Refresh demo account"}
+    </Button>
+  ) : error ? (
+    <Button
+      variant="outline"
+      className="h-11"
+      disabled={busy}
+      onClick={() => void load()}
+    >
+      Retry account
+    </Button>
+  ) : null;
 
   return (
     <Card data-testid="dashboard-demo-account">
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <div className="card-inner min-w-0 flex-1">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
           <SectionHeader eyebrow="Account" title="BloFin demo account" />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="info">BLOFIN_DEMO</Badge>
             <Badge variant={status === "ok" ? "success" : "warning"}>
               {status
@@ -73,43 +103,58 @@ export function BloFinDemoAccountCard({
             </Badge>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link href="/settings/exchange" className="text-sm text-accent">
-            Exchange settings
-          </Link>
-          {account?.can_refresh ? (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => void load(true)}
-            >
-              {busy ? "Refreshing…" : "Refresh demo account"}
-            </Button>
-          ) : error ? (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => void load()}
-            >
-              Retry account
-            </Button>
-          ) : null}
-        </div>
+        {!quietEmpty ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {configureLink}
+            {refreshControl}
+          </div>
+        ) : null}
       </CardHeader>
-      <CardContent className="card-inner">
+      <CardContent className="flex flex-col gap-3">
+        {error ? (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        ) : null}
+        {quietEmpty ? (
+          <EmptyState
+            className="py-8"
+            title={
+              status === "inactive"
+                ? "Demo account not connected"
+                : "No snapshot yet"
+            }
+            description={
+              account?.message ??
+              "Configure BloFin demo sync to see equity, balances, and positions."
+            }
+            action={refreshControl ?? configureLink}
+          />
+        ) : (
+        <>
         <details>
-          <summary className="min-h-11 cursor-pointer text-sm">
+          <summary className="flex h-11 cursor-pointer items-center text-sm">
             Snapshot scope &amp; refresh
           </summary>
-          <p className="text-xs text-text-secondary">
-            Configured demo venue account · balances and native open positions.
-            {account?.can_refresh
-              ? ` Native data refreshes when this page opens, then every ${intervalSeconds} seconds while it is visible.`
-              : ` Saved snapshots reload every ${intervalSeconds} seconds while it is visible.`}
-            All balances and positions below use this configured account.
-          </p>
+          <div className="space-y-2 pt-2 text-xs text-text-secondary">
+            <p>
+              Configured demo venue account · balances and native open positions.
+              {account?.can_refresh
+                ? ` Native data refreshes when this page opens, then every ${intervalSeconds} seconds while it is visible.`
+                : ` Saved snapshots reload every ${intervalSeconds} seconds while it is visible.`}
+              All balances and positions below use this configured account.
+            </p>
+            <p>
+              USD equity and USDT balances use different valuation units. Conversion
+              differences are not trading PnL.
+            </p>
+            <p>
+              Account refresh reads balances and positions. Order fills, SL/TP
+              verification and Journal evidence are reviewed separately.
+            </p>
+          </div>
         </details>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+        <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-5">
           <TradingMetric
             label="Account equity"
             value={`${formatMoney(hasData ? account?.total_equity_usd : null)} USD`}
@@ -141,7 +186,7 @@ export function BloFinDemoAccountCard({
                 : mirrorStatus === "withheld"
                   ? "Withheld until positions-history price, fee, and funding match"
                   : activityDisabled
-                    ? "Activity sync disabled"
+                    ? "Not available yet"
                     : activityStatus === "ready"
                       ? "Closed round-trips from stored fills"
                       : "Withheld until fee basis and a flat start are verified"
@@ -157,7 +202,7 @@ export function BloFinDemoAccountCard({
                 : mirrorStatus === "withheld"
                   ? "Withheld. A mirrored trade does not match the price formula"
                   : activityDisabled
-                    ? "Withheld until activity sync is enabled"
+                    ? "Not available yet"
                     : performance?.realized_pnl == null
                       ? "Withheld. fillPnl fee basis and fee sign are not verified"
                       : "Stored fillPnl. Fees are not added"
@@ -165,10 +210,6 @@ export function BloFinDemoAccountCard({
             testId="dashboard-pnl"
           />
         </div>
-        <p className="text-xs text-text-secondary">
-          USD equity and USDT balances use different valuation units. Conversion
-          differences are not trading PnL.
-        </p>
         <details
           aria-label="Verified account performance"
           className="space-y-2 rounded-control border border-border-subtle p-3"
@@ -223,11 +264,6 @@ export function BloFinDemoAccountCard({
           <p role="status" className="text-sm text-text-secondary">
             Loading demo account snapshot…
             {account ? " Showing the previous saved snapshot." : ""}
-          </p>
-        ) : null}
-        {error ? (
-          <p role="alert" className="text-sm text-danger">
-            {error}
           </p>
         ) : null}
         {account ? (
@@ -391,12 +427,10 @@ export function BloFinDemoAccountCard({
                 </div>
               </>
             ) : null}
-            <p className="text-xs text-text-secondary">
-              Account refresh reads balances and positions. Order fills, SL/TP
-              verification and Journal evidence are reviewed separately.
-            </p>
           </>
         ) : null}
+        </>
+        )}
       </CardContent>
     </Card>
   );

@@ -1,6 +1,24 @@
 import Link from "next/link";
 import type { ConversationMessageRecord } from "@/lib/api/types";
 
+const DOCUMENT_GUIDANCE =
+  "Document guidance is reference data; these passages do not establish approved settings.";
+
+/** The backend appends this limitation to visible prose. Keep it with stored evidence. */
+function withoutDocumentGuidance(text: string): { text: string; guidance: boolean } {
+  if (!text.includes(DOCUMENT_GUIDANCE)) return { text, guidance: false };
+  return {
+    guidance: true,
+    text: text
+      .split(DOCUMENT_GUIDANCE)
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim(),
+  };
+}
+
 export function AgentMessageContent({
   message,
 }: {
@@ -67,11 +85,22 @@ export function AgentMessageContent({
       typeof source.record_id === "string",
   );
   const action = journalAction ?? manualAction;
+  const rawVisible =
+    boundary >= 0 ? message.content.slice(0, boundary) : message.content;
+  const peeled =
+    message.role === "assistant"
+      ? withoutDocumentGuidance(rawVisible)
+      : { text: rawVisible, guidance: false };
+  const showGuidance =
+    peeled.guidance &&
+    !(typeof evidence === "string" && evidence.includes("Document guidance is reference data"));
   return (
     <>
-      <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-        {boundary >= 0 ? message.content.slice(0, boundary) : message.content}
-      </p>
+      {peeled.text ? (
+        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          {peeled.text}
+        </p>
+      ) : null}
       {sources.some(
         (source) =>
           source &&
@@ -128,11 +157,15 @@ export function AgentMessageContent({
       {evidence !== null ||
       explanation !== null ||
       sources.length > 0 ||
-      usage.length > 0 ? (
+      usage.length > 0 ||
+      showGuidance ? (
         <details className="mt-3 border-t border-border-subtle pt-2">
           <summary className="cursor-pointer rounded-control text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             Stored evidence
           </summary>
+          {showGuidance ? (
+            <p className="mt-2 text-xs text-text-secondary">{DOCUMENT_GUIDANCE}</p>
+          ) : null}
           {explanation ? (
             <p className="mt-2 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
               Full explanation (not execution authority):{"\n"}

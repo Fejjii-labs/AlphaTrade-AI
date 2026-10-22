@@ -162,8 +162,8 @@ test("fresh API process preserves owned summaries and compact category navigatio
   await expect(page.getByTestId("captured-strategy-notes")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const menu = page.getByTestId("header-status-menu");
-  await menu.locator("summary").click();
-  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await menu.getByRole("button", { name: "Status", exact: true }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page).toHaveURL(/\/login/);
   await login(page, base, auth.other);
   await page.goto("/strategies");
@@ -192,8 +192,8 @@ test("compact screenshots wait for owned records and account changes finish load
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.resolve("../docs/screenshots/experiments/delivery-strategies-mobile.png"), fullPage: true });
   const menu = page.getByTestId("header-status-menu");
-  await menu.locator("summary").click();
-  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await menu.getByRole("button", { name: "Status", exact: true }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page).toHaveURL(/\/login/);
   await login(page, base, auth.other);
   await page.goto("/strategies");

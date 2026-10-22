@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { KnowledgeDocumentCard } from "@/components/knowledge/KnowledgeDocumentCard";
 import { KnowledgeDetailPanel } from "@/components/knowledge/KnowledgeDetailPanel";
 import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -336,7 +336,10 @@ function JournalWorkspaceContent() {
         actions={
           <Link
             href="/agent"
-            className="inline-flex min-h-10 items-center rounded-control border border-accent-border bg-accent-muted px-4 text-[length:var(--text-label)] font-medium text-accent"
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              "h-11 border-accent-border bg-accent-muted text-accent hover:bg-accent-muted",
+            )}
           >
             Add with Agent
           </Link>
@@ -377,7 +380,7 @@ function JournalWorkspaceContent() {
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
       <div
         data-testid="knowledge-filters"
-        className="card-inner rounded-card border border-border-subtle bg-surface-1 p-3 sm:flex sm:flex-wrap sm:items-center"
+        className="flex flex-col gap-2 rounded-card border border-border-subtle bg-surface-1 p-3 sm:flex-row sm:flex-wrap sm:items-center"
       >
         <Input
           aria-label="Search entries"
@@ -404,7 +407,7 @@ function JournalWorkspaceContent() {
         <Button
           disabled={loading}
           variant="outline"
-          size="sm"
+          className="h-10"
           onClick={() => { readinessDeadline.current = 0; void reload(); }}
         >
           Refresh
