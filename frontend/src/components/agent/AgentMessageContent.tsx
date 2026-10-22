@@ -4,7 +4,7 @@ import type { ConversationMessageRecord } from "@/lib/api/types";
 const DOCUMENT_GUIDANCE =
   "Document guidance is reference data; these passages do not establish approved settings.";
 
-/** The backend appends this limitation to visible prose. Keep it with stored evidence. */
+/** The backend appends this limitation to visible prose. Show it under the reply. */
 function withoutDocumentGuidance(text: string): { text: string; guidance: boolean } {
   if (!text.includes(DOCUMENT_GUIDANCE)) return { text, guidance: false };
   return {
@@ -91,15 +91,15 @@ export function AgentMessageContent({
     message.role === "assistant"
       ? withoutDocumentGuidance(rawVisible)
       : { text: rawVisible, guidance: false };
-  const showGuidance =
-    peeled.guidance &&
-    !(typeof evidence === "string" && evidence.includes("Document guidance is reference data"));
   return (
     <>
       {peeled.text ? (
         <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
           {peeled.text}
         </p>
+      ) : null}
+      {peeled.guidance ? (
+        <p className="mt-2 text-xs text-text-muted">{DOCUMENT_GUIDANCE}</p>
       ) : null}
       {sources.some(
         (source) =>
@@ -157,15 +157,11 @@ export function AgentMessageContent({
       {evidence !== null ||
       explanation !== null ||
       sources.length > 0 ||
-      usage.length > 0 ||
-      showGuidance ? (
+      usage.length > 0 ? (
         <details className="mt-3 border-t border-border-subtle pt-2">
           <summary className="cursor-pointer rounded-control text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             Stored evidence
           </summary>
-          {showGuidance ? (
-            <p className="mt-2 text-xs text-text-secondary">{DOCUMENT_GUIDANCE}</p>
-          ) : null}
           {explanation ? (
             <p className="mt-2 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
               Full explanation (not execution authority):{"\n"}
