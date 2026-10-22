@@ -2,6 +2,51 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-148 — A fill after a paper slot release does not free the slot again
+
+- Date: 2026-10-22
+- Decision: `convert_reservation_for_fill` leaves a reservation whose
+  `release_state` is already `RELEASED` in that state, including its release
+  reason. The fill still adds the unconverted slots to `actual_trade_count`
+  once and sets `converted_trade_slots`, so a second conversion does not count
+  them again. It does not decrement `reserved_trade_slots`, because the paper
+  day roll already returned those slots. A charged or partially released
+  reservation still moves its slots from reserved to actual. The caller holds
+  the reservation row and the accounting row lock. Real trading stays off.
+- Reference: `app/services/execution_fills.py`. Extends AT-ADR-147.
+
+## AT-ADR-147 — Paper day roll releases terminal and stale unfilled reservations
+
+- Date: 2026-10-22
+- Decision: On the internal-paper trade-slot roll only, a reservation is
+  released when its execution command is terminal, or when it is older than
+  six hours and has no fill. The release writes one audit row
+  (`paper_reservation_released`) and a warning log. Open in-flight reservations
+  and reservations that already have a fill keep their slots. Demo reservations
+  on the shared paper account are not released. The release runs while the
+  accounting row lock is held. On PostgreSQL, reservations locked by another
+  transaction are skipped so a fill cannot deadlock against the roll. A second
+  locker that already sees today's date does not release again. An unrecognized
+  risk-settings timezone logs one warning per process and the day is resolved
+  in UTC. Real trading stays off.
+- Reference: `app/services/safety_epoch.py`. Extends AT-ADR-146.
+
+## AT-ADR-146 — Internal paper trade slots roll at the user's local day
+
+- Date: 2026-10-22
+- Decision: `account_risk_accounting_states.actual_trade_count` and
+  `max_trade_slots` are a daily paper allocation, not a lifetime count.
+  On the first row-locked access of a new trading day for venue
+  `PAPER_INTERNAL` only, completed trades drop out of `actual_trade_count`,
+  `max_trade_slots` is copied from `user_risk_settings.max_trades_per_day`,
+  and `trade_slot_business_date` becomes that local date. `reserved_trade_slots`
+  is left unchanged so an unreleased reservation from an earlier day still
+  consumes a slot. A second locker that already sees today's date does
+  nothing. Demo claim, fill, and release do not start the roll. Daily loss,
+  notional, and real trading are unchanged. A NULL date is a pre-alignment
+  row and rolls once on the next paper access.
+- Reference: `app/services/safety_epoch.py`, `app/services/execution_claim.py`.
+
 ## AT-ADR-145 — Last-trade paper fills use a per-asset haircut, and the alert stop uses the ATR floor
 
 - Date: 2026-10-22

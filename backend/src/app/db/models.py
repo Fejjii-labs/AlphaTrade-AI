@@ -2209,6 +2209,9 @@ class AccountRiskAccountingState(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     max_notional: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_daily_loss: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_trade_slots: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Local trading day the trade-slot counters were last aligned to.
+    # NULL means the row predates daily alignment and still holds a lifetime count.
+    trade_slot_business_date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
     max_symbol_notional: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     daily_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     exposure_unit: Mapped[str] = mapped_column(String(32), nullable=False, default="USDT")
