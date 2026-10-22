@@ -1,0 +1,4 @@
+# Used when Ruff is started at the repository root. Runs from backend/ keep
+# using backend/pyproject.toml. The salvage tree is reference-only.
+extend = "backend/pyproject.toml"
+extend-exclude = ["archive"]
