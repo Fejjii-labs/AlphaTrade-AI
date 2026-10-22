@@ -47,6 +47,7 @@ MIGRATIONS = (
     "src/app/db/migrations/versions/a19riskpolicy004_paper_demo_risk_ceiling.py",
     "src/app/db/migrations/versions/a20autonomoussettings001_autonomous_trading_settings.py",
     "src/app/db/migrations/versions/a21killswitchkey001_widen_runtime_component.py",
+    "src/app/db/migrations/versions/a22workerruntime001_worker_runtime_and_paper_switch.py",
 )
 QUOTA_COMPATIBILITY = (
     "src/app/db/voice_realtime.py",

@@ -97,12 +97,10 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     trigger = workflow["on"]
     assert "pull_request" in trigger and "push" in trigger
     full = trigger["workflow_dispatch"]["inputs"]["full_backend"]
-    assert full == {
-        "description": "Run the complete backend suite for final release acceptance",
-        "type": "boolean",
-        "required": "true",
-        "default": "true",
-    }
+    assert full["type"] == "boolean"
+    assert full["required"] == "true"
+    assert full["default"] == "true"
+    assert "does not select a subset" in full["description"]
     jobs = workflow["jobs"]
     assert set(jobs) == {
         "backend",
@@ -157,32 +155,30 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert "github.event.action != 'edited'" in group
     assert "github.event.changes.base.ref.from" in group
     assert "format('{0}-{1}', github.workflow, github.ref)" not in group
-    full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
+    assert "Focused backend development tests" not in steps
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py"
     )
     acceptance = steps["Complete backend release acceptance"]
-    assert acceptance["if"] == full_gate
+    assert acceptance["if"] == "steps.scope.outputs.heavy != 'false'"
     assert acceptance["timeout-minutes"] == "140"
     assert acceptance["shell"] == "bash -eo pipefail {0}"
-    assert acceptance["run"] == (
+    assert "run_backend_focused.py" not in acceptance["run"]
+    assert "full pytest suite including Postgres tests" in acceptance["run"]
+    assert (
         "uv run pytest -o addopts= --timeout=300 --timeout-method=thread "
         "-rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log"
-    )
+    ) in acceptance["run"]
     for job in jobs.values():
         for step in job["steps"]:
             script = step.get("run") or ""
             if "| tee" not in script:
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
-    assert steps["Focused backend development tests"]["if"] == (
-        "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
-    )
-    assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
     upload = steps["Upload full backend pytest artifacts"]
-    assert upload["if"] == f"always() && ({full_gate})"
+    assert upload["if"] == "always() && steps.scope.outputs.heavy != 'false'"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == "full-backend-pytest"
     assert "backend/full-backend-junit.xml" in upload["with"]["path"]

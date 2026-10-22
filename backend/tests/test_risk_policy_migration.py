@@ -16,7 +16,7 @@ from sqlalchemy.exc import DatabaseError, OperationalError, ProgrammingError
 from sqlalchemy.pool import NullPool
 
 from app.db.risk_policy import VERSION_CHECKS
-from tests.support.alembic_heads import alembic_script_directory, single_alembic_head
+from tests.support.alembic_heads import alembic_script_directory
 
 _A16 = "a16riskpolicy001"
 _A17 = "a17riskpolicy002"
@@ -24,6 +24,7 @@ _A18 = "a18riskpolicy003"
 _A19 = "a19riskpolicy004"
 _A20 = "a20autonomoussettings001"
 _A21 = "a21killswitchkey001"
+_A22 = "a22workerruntime001"
 _PARENT = "a15reissueauth001"
 _A16_MIGRATION = "a16riskpolicy001_grade_based_risk_policy.py"
 _A17_MIGRATION = "a17riskpolicy002_risk_policy_review_guards.py"
@@ -50,7 +51,7 @@ def _module():
     return _load(_A16_MIGRATION)
 
 
-def test_risk_policy_revision_is_the_only_head() -> None:
+def test_risk_policy_revision_links_to_the_worker_runtime_revision() -> None:
     script = alembic_script_directory()
     a16 = script.get_revision(_A16)
     a17 = script.get_revision(_A17)
@@ -66,7 +67,9 @@ def test_risk_policy_revision_is_the_only_head() -> None:
     assert a20 is not None and a21 is not None
     assert a20.down_revision == _A19
     assert a21.down_revision == _A20
-    assert single_alembic_head(script) == _A21
+    a22 = script.get_revision(_A22)
+    assert a22 is not None
+    assert a22.down_revision == _A21
     versions = Path(__file__).resolve().parents[1] / "src/app/db/migrations/versions"
     source = (versions / _A16_MIGRATION).read_text(encoding="utf-8")
     for check in _A16_RISK_CHECKS:

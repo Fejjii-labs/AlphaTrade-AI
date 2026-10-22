@@ -19,7 +19,10 @@ from app.persistence.worker_runtime_state import (
     project_worker_effective,
     publish_worker_runtime_state,
 )
-from app.services.autonomous_paper_switch import resolve_worker_autonomous_mode
+from app.services.autonomous_paper_switch import (
+    read_internal_paper_switch,
+    resolve_worker_autonomous_mode,
+)
 from app.services.autonomous_trading import AutonomousMode, resolve_autonomous_mode
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.profile import PolicyKind, profile_with
@@ -214,6 +217,29 @@ def test_database_false_disarms_internal_paper_for_the_worker_cycle() -> None:
     )
     assert continued.paper_loop_stage == "blocked"
     assert continued.paper_loop_reason == "autonomous_mode_disarmed"
+
+
+def test_unreadable_switch_rolls_back_and_is_unverified() -> None:
+    class Broken:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def get(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("db down")
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    session = Broken()
+    assert read_internal_paper_switch(session, uuid4()) is None  # type: ignore[arg-type]
+    assert session.rolled_back is True
+
+    resolution = resolve_worker_autonomous_mode(
+        _armed_settings(),
+        session,  # type: ignore[arg-type]
+        uuid4(),
+    )
+    assert resolution.refusal == "autonomous_paper_toggle_unverified"
 
 
 def test_unreadable_switch_is_unverified() -> None:

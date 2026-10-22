@@ -94,6 +94,12 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-strategy")).toHaveValue("strategy-1");
     expect(screen.getByTestId("autonomous-symbol")).toHaveValue("BTCUSDT");
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-paper-switch-note")).toHaveTextContent(
+      /stops new entries/i,
+    );
+    expect(screen.getByTestId("autonomous-paper-switch-note")).toHaveTextContent(
+      /does not close open positions/i,
+    );
     expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent(
       "Not reported",
     );

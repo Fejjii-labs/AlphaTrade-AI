@@ -21,6 +21,7 @@ def test_single_additive_migration_chain():
     script = ScriptDirectory.from_config(cfg)
     head = single_alembic_head(script)
     assert script.get_heads() == [head]
+    assert script.get_revision("a22workerruntime001").down_revision == "a21killswitchkey001"
     assert script.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
     assert script.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
     assert script.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
@@ -35,6 +36,7 @@ def test_single_additive_migration_chain():
     assert len(script.get_bases()) == 1
     assert [r.revision for r in script.iterate_revisions("heads", "a10blofinactivity001")] == [
         head,
+        "a21killswitchkey001",
         "a20autonomoussettings001",
         "a19riskpolicy004",
         "a18riskpolicy003",

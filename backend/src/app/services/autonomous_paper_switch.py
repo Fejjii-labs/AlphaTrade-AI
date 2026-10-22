@@ -7,6 +7,7 @@ on real-money trading. Demo mode does not consult this switch.
 from __future__ import annotations
 
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -31,6 +32,10 @@ def read_internal_paper_switch(
     try:
         row = session.get(AutonomousPaperSwitchRow, organization_id)
     except Exception:
+        # A failed statement aborts the Postgres transaction. Roll it back so a
+        # later read on this session is not stuck in that aborted state.
+        with suppress(Exception):
+            session.rollback()
         return None
     if row is None:
         return False

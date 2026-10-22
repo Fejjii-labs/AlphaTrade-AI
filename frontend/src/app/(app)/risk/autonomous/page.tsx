@@ -196,7 +196,8 @@ function AutonomousSettingsWorkspace() {
           </label>
           <p className="text-text-muted" data-testid="autonomous-paper-switch-note">
             The environment ceiling wins when it is off. This switch cannot enable real money.
-            Only an owner can change it.
+            Only an owner can change it. Turning it off stops new entries and does not close
+            open positions.
           </p>
           <dl className="grid gap-2 sm:grid-cols-2" data-testid="autonomous-paper-switch-status">
             <div>

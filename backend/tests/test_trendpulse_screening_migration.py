@@ -25,6 +25,7 @@ def test_one_additive_revision_follows_reserved_a11():
     scripts = ScriptDirectory.from_config(cfg)
     head = single_alembic_head(scripts)
     assert scripts.get_heads() == [head]
+    assert scripts.get_revision("a22workerruntime001").down_revision == "a21killswitchkey001"
     assert scripts.get_revision("a21killswitchkey001").down_revision == "a20autonomoussettings001"
     assert scripts.get_revision("a20autonomoussettings001").down_revision == "a19riskpolicy004"
     assert scripts.get_revision("a19riskpolicy004").down_revision == "a18riskpolicy003"
@@ -37,6 +38,7 @@ def test_one_additive_revision_follows_reserved_a11():
     assert len(scripts.get_bases()) == 1
     assert [r.revision for r in scripts.iterate_revisions("heads", "a11experiments001")] == [
         head,
+        "a21killswitchkey001",
         "a20autonomoussettings001",
         "a19riskpolicy004",
         "a18riskpolicy003",

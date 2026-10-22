@@ -40,7 +40,8 @@ _A17 = "a17riskpolicy002"
 _A18 = "a18riskpolicy003"
 _A19 = "a19riskpolicy004"
 _A20 = "a20autonomoussettings001"
-_HEAD = "a21killswitchkey001"
+_A21 = "a21killswitchkey001"
+_A22 = "a22workerruntime001"
 _PARENT = "a13voicemonitor001"
 _CHANNEL_PREDICATE = "channel IN ('WEB', 'API', 'TELEGRAM', 'AUTONOMOUS')"
 
@@ -90,10 +91,12 @@ def test_autonomous_channel_revision_follows_the_previous_head() -> None:
     a20 = script.get_revision(_A20)
     assert a20 is not None
     assert a20.down_revision == _A19
-    head = script.get_revision(_HEAD)
-    assert head is not None
-    assert head.down_revision == _A20
-    assert single_alembic_head(script) == _HEAD
+    a21 = script.get_revision(_A21)
+    assert a21 is not None
+    assert a21.down_revision == _A20
+    a22 = script.get_revision(_A22)
+    assert a22 is not None
+    assert a22.down_revision == _A21
 
 
 @requires_postgres

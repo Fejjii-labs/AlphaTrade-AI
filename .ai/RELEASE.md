@@ -56,23 +56,19 @@ skip backend, frontend, Docker, evaluation, and browser work. Those jobs still
 finish successfully, so a required check is not left pending. A push to `main`
 or `master` always runs the heavy jobs, including when that push is docs-only.
 `workflow_dispatch` ignores that path filter and the draft filter. The
-`full_backend` input still selects only the complete backend pytest step, and
-only a manual dispatch can select it. Pull requests and pushes never run that
-step. There is no cron.
+`full_backend` input is retained and does not select a subset. There is no cron.
 
 The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
-150-minute job timeout. On an ordinary push or pull request, and on a manual
-dispatch with `full_backend` false, it runs `scripts/run_backend_focused.py` as
-one pytest process. That selector always includes `tests/test_config.py`,
-`tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`. It also
-includes a changed `backend/tests/test_*.py` file, every
-`tests/test_<module stem>*.py` match when a `backend/src/app/**/*.py` file
-changes (that is a filename-prefix glob), and the SFP/receipt/logging group
-when a changed path is in the script's SFP path list. The diff is
-`git diff --name-only` from the pull request base SHA, or `github.event.before`
-on a push. This is a development selection, not exhaustive dependency analysis.
-A successful focused run is **not complete backend acceptance**. Include focused
-tests for other cross-module changes in the PR. The CI database URL is bound to
+150-minute job timeout. Whenever heavy scope is on — pull request, push to
+`main` or `master`, and `workflow_dispatch` — it runs one complete pytest
+process, not `scripts/run_backend_focused.py`. That script remains a local
+development selector: it always includes `tests/test_config.py`,
+`tests/test_deployment_safety.py`, and `tests/test_backend_ci_scope.py`, plus
+a changed `backend/tests/test_*.py` file, every `tests/test_<module stem>*.py`
+match when a `backend/src/app/**/*.py` file changes, and the SFP group when a
+changed path is in its SFP path list. CI does not use that selector, because
+a stem glob silently omitted modules such as
+`tests/test_autonomous_channel_migration.py`. The CI database URL is bound to
 `AT028_POSTGRES_URL`, `EXPERIMENT_TEST_POSTGRES_URL`,
 `BLOFIN_ACTIVITY_TEST_POSTGRES_URL`, and `PR237_ROLLBACK_POSTGRES_URL` so those
 disposable-database fixtures execute. `PHASE1_POSTGRES_URL` is left unset.
@@ -86,31 +82,18 @@ as the heavy backend steps. They are not gated by a second manual flag.
 No branch-protection settings are changed by this policy. A green required
 check on a draft or a docs-only pull request means that heavy work was
 skipped, not that the suite passed. A docs-only push still runs the heavy
-jobs. Complete acceptance is one manual `full_backend=true`
-dispatch on the integration batch SHA, not a nightly run.
+jobs. The complete backend pytest process is that job's test step. It is not
+a separate manual dispatch.
 
 ## Final consolidated release acceptance
 
-Pull requests get the quick focused checks only. The complete backend suite does
-not run on pull request pushes, on pushes to `main`, or on a schedule.
+Pull requests, pushes to `main` or `master`, and manual dispatch run the same
+complete backend pytest command when heavy scope is on. Docs-only and skipped
+draft jobs do not. There is no schedule.
 
-When a batch of pull requests is ready, stack them on an integration branch
-named like `integration/<date>`. Dispatch `full_backend` **once** on that
-branch. Merge the batch to `main` in order only after that single run passes.
-Do not dispatch the full suite after each fix or feature.
-
-After supervising review, consolidated staging deployment and fresh SFP diagnostics/
-evaluations, dispatch **one** complete CI run on the exact reviewed release ref:
-
-```sh
-gh workflow run ci.yml --ref <reviewed-release-ref> -f full_backend=true
-```
-
-The Actions UI exposes the same `full_backend` boolean, defaulting to true for
-manual dispatch. Ordinary push and pull_request events always use focused mode.
-A manual false value requests development checks only. Do not dispatch a full
-run during routine implementation or call a focused green check the complete
-release gate.
+The Actions UI still exposes `full_backend`, defaulting to true. It does not
+switch the job back to `scripts/run_backend_focused.py`. Quote the pytest
+summary from the backend job log when recording acceptance for a SHA.
 
 The full step runs one pytest process:
 
