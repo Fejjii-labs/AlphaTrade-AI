@@ -1,6 +1,24 @@
 import Link from "next/link";
 import type { ConversationMessageRecord } from "@/lib/api/types";
 
+const DOCUMENT_GUIDANCE =
+  "Document guidance is reference data; these passages do not establish approved settings.";
+
+/** The backend appends this limitation to visible prose. Show it under the reply. */
+function withoutDocumentGuidance(text: string): { text: string; guidance: boolean } {
+  if (!text.includes(DOCUMENT_GUIDANCE)) return { text, guidance: false };
+  return {
+    guidance: true,
+    text: text
+      .split(DOCUMENT_GUIDANCE)
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim(),
+  };
+}
+
 export function AgentMessageContent({
   message,
 }: {
@@ -67,11 +85,22 @@ export function AgentMessageContent({
       typeof source.record_id === "string",
   );
   const action = journalAction ?? manualAction;
+  const rawVisible =
+    boundary >= 0 ? message.content.slice(0, boundary) : message.content;
+  const peeled =
+    message.role === "assistant"
+      ? withoutDocumentGuidance(rawVisible)
+      : { text: rawVisible, guidance: false };
   return (
     <>
-      <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-        {boundary >= 0 ? message.content.slice(0, boundary) : message.content}
-      </p>
+      {peeled.text ? (
+        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          {peeled.text}
+        </p>
+      ) : null}
+      {peeled.guidance ? (
+        <p className="mt-2 text-xs text-text-muted">{DOCUMENT_GUIDANCE}</p>
+      ) : null}
       {sources.some(
         (source) =>
           source &&

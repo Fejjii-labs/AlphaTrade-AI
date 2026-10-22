@@ -70,9 +70,9 @@ async function logoutAwayFromPanels(page: Page, base: string) {
   await expect(page.getByTestId("screenings")).toHaveCount(0);
   expect((await recoveryKeys(page)).length).toBeGreaterThan(0);
   const menu = page.getByTestId("header-status-menu");
-  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: "Status", exact: true }).click();
   const response = page.waitForResponse(result => result.url() === `${base}/auth/logout` && result.request().method() === "POST");
-  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
   expect((await response).ok()).toBe(true);
   await expect(page).toHaveURL(/\/login(?:\?|$)/);
   await expect.poll(() => recoveryKeys(page)).toEqual([]);
@@ -230,8 +230,8 @@ test("real logout off the panels removes unresolved drafts and screenings before
   // state; account switching uses the actual login form, never injected tokens.
   await page.goto("/journal");
   const menu = page.getByTestId("header-status-menu");
-  await menu.locator("summary").click();
-  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await menu.getByRole("button", { name: "Status", exact: true }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page).toHaveURL(/\/login(?:\?|$)/);
   const otherHeaders = await login(page, base, fixture.other);
   await page.goto("/strategies");

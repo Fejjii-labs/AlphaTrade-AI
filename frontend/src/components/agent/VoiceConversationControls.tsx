@@ -190,13 +190,29 @@ export function VoiceConversationControls({
       )}
       {showReply && snapshot?.reply && <p className="break-words text-sm text-text-secondary" aria-label="Spoken Agent reply">{snapshot.reply}</p>}
       {creationError && <p role="alert" className="text-sm text-danger">{creationError}</p>}
-      {snapshot?.error && <p role="alert" className="text-sm text-danger">{snapshot.error.message}</p>}
+      {snapshot?.error && (
+        <p
+          role="alert"
+          className={
+            snapshot.error.diagnostic?.code === "no-speech"
+              ? "text-sm text-text-secondary"
+              : "text-sm text-danger"
+          }
+        >
+          {snapshot.error.message}
+        </p>
+      )}
       {snapshot && !snapshot.capabilities.input && <p className="text-xs text-text-secondary">Voice input unavailable. Type your message.</p>}
       {snapshot && !snapshot.capabilities.output && <p className="text-xs text-text-secondary">Read replies as text.</p>}
       <details className="text-xs text-text-secondary">
-        <summary className="min-h-11 cursor-pointer content-center">Voice details</summary>
+        <summary className="flex h-10 cursor-pointer items-center">Voice</summary>
         <p>Conversation mode sends completed utterances when the typed draft is empty. Browser speech may use a browser-managed service. Use Stop speaking to interrupt.</p>
-        {snapshot?.error?.diagnostic && <p className="break-words">{snapshot.error.diagnostic.message}{snapshot.error.diagnostic.sourceCode ? ` (${snapshot.error.diagnostic.sourceCode})` : ""}</p>}
+        {snapshot?.error?.diagnostic && snapshot.error.diagnostic.code !== "no-speech" ? (
+          <p className="break-words text-text-muted">
+            {snapshot.error.diagnostic.message}
+            {snapshot.error.diagnostic.sourceCode ? ` (${snapshot.error.diagnostic.sourceCode})` : ""}
+          </p>
+        ) : null}
       </details>
     </section>
   );
