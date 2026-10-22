@@ -454,6 +454,53 @@ def test_incremental_scan_survives_restart(store):
     engine.dispose()
 
 
+def test_assembly_stores_the_atr_floor_on_the_alert_plan(store, monkeypatch):
+    from decimal import Decimal
+
+    from app.core.config import Settings
+
+    floor = Decimal("2")
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: Settings(sfp_min_stop_atr_multiple=floor),
+    )
+    session, org, user, _ = store
+    policy = approve(session, org, user, spec(bearish=False))
+    bars, _ = padded_evidence()
+    assemble_prefix(session, policy, bars[:260])
+    session.commit()
+    assemble_prefix(session, policy, bars[:261])
+    session.commit()
+    assembled = assemble_prefix(session, policy, bars)
+    session.commit()
+    observations = assembled.assessment_command.public_observations[1:]
+    scanned = assembled.bundle.bars_15m
+    common = {
+        "evaluated_at": assembled.evaluated_at,
+        "tick_size": assembled.bundle.tick_size,
+    }
+    floored = select_detection(
+        detect_sfp(
+            scanned,
+            observations,
+            policy.authored_spec,
+            atr_multiple_floor=floor,
+            **common,
+        ),
+        scanned,
+    )
+    authored = select_detection(
+        detect_sfp(scanned, observations, policy.authored_spec, **common),
+        scanned,
+    )
+    assert floored is not None and floored.trade_plan is not None
+    assert authored is not None and authored.trade_plan is not None
+    assert floored.setup_id == authored.setup_id
+    assert floored.trade_plan.stop != authored.trade_plan.stop
+    row = session.scalars(select(BrainSetupRow).where(BrainSetupRow.state == "CONFIRMED")).one()
+    assert Decimal(row.payload["trade_plan"]["stop"]) == floored.trade_plan.stop
+
+
 @pytest.fixture
 def postgres_store():
     from tests.support.postgres_persistence import phase7_plan_session_factory, postgres_available
@@ -573,9 +620,11 @@ def runtime_world(
 
 
 # The shared BULL/BEAR swing sits inside the unchanged 1R floor. These copies
-# move only that opposing swing so the nearest level clears the floor.
+# move only that opposing swing so the nearest level still clears 1R after the
+# 0.5 ATR stop, BTC's 0.10 tick, and the 1bp last-trade haircut. A bearish low
+# of 88 ceils the short stop to 104, and the haircut then falls short of 1R.
 BULL_TRADABLE = [*BULL[:3], (103, 112, 102, 104), *BULL[4:]]
-BEAR_TRADABLE = [*BEAR[:3], (97, 98, 88, 96), *BEAR[4:]]
+BEAR_TRADABLE = [*BEAR[:3], (97, 98, 87, 96), *BEAR[4:]]
 
 
 @pytest.mark.parametrize("bearish", [False, True])
@@ -586,6 +635,7 @@ def test_governed_candidate_restart_replay_opens_one_internal_paper_trade(
 
     from app.core.config import ExchangeMode
     from app.db.strategy_brain import BrainSetupRow
+    from app.services.paper_fill import paper_fill_spread_haircut_for_symbol
     from app.signal_fusion.lifecycle import CandidateLifecycleService
 
     calls = []
@@ -637,7 +687,10 @@ def test_governed_candidate_restart_replay_opens_one_internal_paper_trade(
     setup = session.get(BrainSetupRow, UUID(linked[0]["setup_id"]))
     plan = setup.payload["trade_plan"]
     entry = Decimal(plan["entry"])
-    assert journal.planned_entry_price == journal.entry_price == entry
+    haircut = paper_fill_spread_haircut_for_symbol("BTCUSDT")
+    factor = (Decimal(1) - haircut) if bearish else (Decimal(1) + haircut)
+    # The alert entry stays the confirmation close. BTC paper pays the 1bp haircut.
+    assert journal.planned_entry_price == journal.entry_price == entry * factor
     raw_stop = Decimal(plan["stop"])
     if bearish:
         assert entry < raw_stop <= journal.planned_stop_price

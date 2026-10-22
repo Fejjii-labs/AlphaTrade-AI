@@ -70,9 +70,16 @@ class EvidenceClockReport(CanonicalModel):
 
 
 class CurrentPriceQuote(CanonicalModel):
-    """Last contracted perpetual trade. Never a mock hash or demo seed."""
+    """Last contracted perpetual trade. Never a mock hash or demo seed.
+
+    ``price`` is that trade, used as the mid when the book is absent. Optional
+    ``bid`` and ``ask`` are present only when the caller already has a live
+    book. They are not invented from the last trade.
+    """
 
     price: PositiveCanonicalDecimal
+    bid: PositiveCanonicalDecimal | None = None
+    ask: PositiveCanonicalDecimal | None = None
     source_time: datetime
     venue_trade_id: str = Field(min_length=1, max_length=120)
     freshness: FreshnessEvaluation
