@@ -123,7 +123,15 @@ def evidence(
     return tuple(bars), tuple(observations)
 
 
-def scan(prices=BULL, *, bearish=False, config=None, tick_size=None, **kwargs):
+def scan(
+    prices=BULL,
+    *,
+    bearish=False,
+    config=None,
+    tick_size=None,
+    atr_multiple_floor=Decimal("0"),
+    **kwargs,
+):
     bars, observations = evidence(prices, **kwargs)
     return detect_sfp(
         bars,
@@ -131,6 +139,7 @@ def scan(prices=BULL, *, bearish=False, config=None, tick_size=None, **kwargs):
         config or spec(bearish=bearish),
         evaluated_at=observations[-1].observed_at,
         tick_size=tick_size,
+        atr_multiple_floor=atr_multiple_floor,
     )
 
 
@@ -878,6 +887,31 @@ def test_atr_multiple_uses_the_larger_distance_and_refuses_when_atr_is_missing(m
     missing = at_level(scan(config=spec(min_stop_atr_multiple="1")))[-1]
     assert missing.state is BrainSetupState.CONFIRMED
     assert missing.trade_plan is None
+
+
+def test_atr_floor_widens_the_stop_and_keeps_setup_id(monkeypatch):
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: Decimal("3"),
+    )
+    baseline = at_level(scan())[-1]
+    floored = at_level(scan(atr_multiple_floor=Decimal("0.5")))[-1]
+    assert baseline.setup_id == floored.setup_id
+    assert baseline.trade_plan is not None and floored.trade_plan is not None
+    assert baseline.trade_plan.stop == Decimal("98") - Decimal("100") * Decimal("0.001")
+    assert floored.trade_plan.stop == Decimal("96.5")
+    authored = at_level(
+        scan(config=spec(min_stop_atr_multiple="1"), atr_multiple_floor=Decimal("0.5"))
+    )[-1]
+    assert authored.trade_plan is not None and authored.trade_plan.stop == Decimal("95")
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: None,
+    )
+    refused = at_level(scan(atr_multiple_floor=Decimal("0.5")))[-1]
+    assert refused.state is BrainSetupState.CONFIRMED
+    assert refused.trade_plan is None
+    assert refused.setup_id == baseline.setup_id
 
 
 def test_confirmed_sfp_without_opposing_structure_or_positive_stop_has_no_plan():

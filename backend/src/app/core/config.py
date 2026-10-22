@@ -249,6 +249,23 @@ class Settings(BaseSettings):
     # time when that source is supplied. A larger gap refuses the cycle.
     # Default 15 seconds. This does not arm the monitor.
     paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # Half of a 2bp spread, applied only when a paper quote has no bid and ask.
+    # Longs pay mid * (1 + haircut). Shorts receive mid * (1 - haircut).
+    # Zero restores a mid fill. This does not arm the watcher or real trading.
+    paper_fill_spread_haircut: Decimal = Field(
+        default=Decimal("0.0001"),
+        ge=Decimal("0"),
+        le=Decimal("0.05"),
+    )
+    # Floor under the authored SFP min_stop_atr_multiple on the internal paper
+    # path. 0.5 ATR keeps the 0.1% buffer from being the whole stop on a
+    # volatile name. Zero leaves the authored multiple, including the v1/v2
+    # default of zero. This does not arm the watcher or real trading.
+    sfp_min_stop_atr_multiple: Decimal = Field(
+        default=Decimal("0.5"),
+        ge=Decimal("0"),
+        lt=Decimal("100"),
+    )
     # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
     risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits

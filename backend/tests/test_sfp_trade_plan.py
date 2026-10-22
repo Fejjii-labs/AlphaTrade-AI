@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.schemas.common import TradeDirection
-from app.services.automated_paper_loop import _plan_terms, _quantity
+from app.services.automated_paper_loop import AutomatedPaperLoop, _plan_terms, _quantity
+from app.services.paper_fill import DEFAULT_PAPER_FILL_SPREAD_HAIRCUT, paper_fill_price
 from app.signal_fusion.enums import EvidenceRole
 from app.strategy_brain.sfp.trade_plan import derive_sfp_trade_plan
 from tests.support.phase7_trade_plan import make_world
@@ -51,12 +52,23 @@ def test_plan_refuses_wrong_side_and_zero_distance(monkeypatch) -> None:
     assert wrong_stop is None
 
 
-def _assembled(prices, *, quote: str, tick: str = "0.1"):
+def _assembled(
+    prices,
+    *,
+    quote: str,
+    tick: str = "0.1",
+    bid: str | None = None,
+    ask: str | None = None,
+    book: bool = True,
+):
     bars, observations = evidence(prices)
     observed = observations[-1].observed_at
+    price = Decimal(quote)
     return bars, SimpleNamespace(
         current_price=SimpleNamespace(
-            price=Decimal(quote),
+            price=price,
+            bid=Decimal(bid) if bid is not None else (price if book else None),
+            ask=Decimal(ask) if ask is not None else (price if book else None),
             source_time=observed,
             provider_symbol="BTCUSDT",
         ),
@@ -75,10 +87,16 @@ def _terms(
     quote: str,
     tick: str = "0.1",
     internal_paper_sfp: bool = True,
+    bid: str | None = None,
+    ask: str | None = None,
+    book: bool = True,
+    side_aware_fill: bool = True,
+    spread_haircut: Decimal = Decimal("0"),
+    min_stop_atr_floor: Decimal = Decimal("0"),
     **changes: object,
 ):
     prices = BEAR if bearish else BULL
-    _bars, assembled = _assembled(prices, quote=quote, tick=tick)
+    _bars, assembled = _assembled(prices, quote=quote, tick=tick, bid=bid, ask=ask, book=book)
     now = assembled.evaluated_at + timedelta(seconds=1)
     world = make_world()
     candidate = world.candidate.model_copy(
@@ -104,6 +122,9 @@ def _terms(
         eligibility_valid_until=candidate.valid_until,
         eligibility_id=uuid4(),
         internal_paper_sfp=internal_paper_sfp,
+        side_aware_fill=side_aware_fill,
+        spread_haircut=spread_haircut,
+        min_stop_atr_floor=min_stop_atr_floor,
     )
 
 
@@ -317,3 +338,164 @@ def test_sfp_execution_plan_stays_unauthorized_outside_internal_paper() -> None:
     assert _terms(bearish=True, quote="100", internal_paper_sfp=False) == (
         "sfp_execution_plan_not_authorized"
     )
+
+
+def test_side_aware_fill_uses_ask_for_long_and_bid_for_short() -> None:
+    long = _terms(bearish=False, quote="100", bid="99.5", ask="100.4")
+    assert not isinstance(long, str)
+    assert long.basis_policy.execution_price.value == Decimal("100.4")
+    short = _terms(bearish=True, quote="100", bid="99.6", ask="100.4")
+    assert not isinstance(short, str)
+    assert short.basis_policy.execution_price.value == Decimal("99.6")
+    one_sided = _terms(bearish=False, quote="100", ask="100.2", book=False)
+    assert not isinstance(one_sided, str)
+    assert one_sided.basis_policy.execution_price.value == Decimal("100.2")
+
+
+def test_mid_only_quote_applies_the_spread_haircut_and_fails_closed() -> None:
+    haircut = DEFAULT_PAPER_FILL_SPREAD_HAIRCUT
+    long = _terms(bearish=False, quote="100", book=False, spread_haircut=haircut)
+    assert not isinstance(long, str)
+    assert long.basis_policy.execution_price.value == Decimal("100") * (Decimal(1) + haircut)
+    short = _terms(bearish=True, quote="100", book=False, spread_haircut=haircut)
+    assert not isinstance(short, str)
+    assert short.basis_policy.execution_price.value == Decimal("100") * (Decimal(1) - haircut)
+    # Exact 1R at the mid is worse than 1R after the long pays the haircut.
+    assert _terms(bearish=False, quote="101.45", book=False, spread_haircut=haircut) == (
+        "sfp_quote_reward_risk_below_minimum"
+    )
+    _bars, assembled = _assembled(BULL, quote="100", book=False)
+    assembled.current_price.bid = Decimal("101")
+    assembled.current_price.ask = Decimal("100")
+    world = make_world()
+    now = assembled.evaluated_at + timedelta(seconds=1)
+    crossed = _plan_terms(
+        candidate=world.candidate.model_copy(
+            update={
+                "direction": TradeDirection.LONG,
+                "created_at": now - timedelta(minutes=1),
+                "valid_until": now + timedelta(hours=1),
+            }
+        ),
+        assembled=assembled,  # type: ignore[arg-type]
+        policy=SimpleNamespace(  # type: ignore[arg-type]
+            authored_spec=spec(),
+            strategy_id=uuid4(),
+            organization_id=world.candidate.organization_id,
+            strategy_version_id=world.candidate.strategy_version_id,
+        ),
+        account_id=uuid4(),
+        equity=Decimal("10000"),
+        now=now,
+        eligibility_valid_until=now + timedelta(hours=1),
+        eligibility_id=uuid4(),
+        internal_paper_sfp=True,
+        side_aware_fill=True,
+        spread_haircut=haircut,
+        min_stop_atr_floor=Decimal("0"),
+    )
+    assert crossed == "evidence_unavailable"
+    assert paper_fill_price(None, is_long=True, spread_haircut=haircut) is None
+    assert (
+        paper_fill_price(
+            SimpleNamespace(price=None, bid=None, ask=None),
+            is_long=False,
+            spread_haircut=haircut,
+        )
+        is None
+    )
+    assert paper_fill_price(
+        SimpleNamespace(price=Decimal("100"), bid=None, ask=None),
+        is_long=True,
+        spread_haircut=Decimal("0"),
+    ) == Decimal("100")
+
+
+def test_paper_atr_floor_widens_the_stop_and_refuses_without_atr(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: Decimal("3"),
+    )
+    widened = _terms(bearish=False, quote="100", min_stop_atr_floor=Decimal("0.5"))
+    assert not isinstance(widened, str)
+    assert widened.risk_and_exits.stop.value == Decimal("96.5")
+    authored = _terms(
+        bearish=False,
+        quote="100",
+        min_stop_atr_floor=Decimal("0.5"),
+        min_stop_atr_multiple="1",
+    )
+    assert not isinstance(authored, str)
+    assert authored.risk_and_exits.stop.value == Decimal("95")
+    monkeypatch.setattr(
+        "app.strategy_brain.sfp.detector.wilder_atr",
+        lambda *_args, **_kwargs: None,
+    )
+    assert _terms(bearish=False, quote="100", min_stop_atr_floor=Decimal("0.5")) == (
+        "sfp_trade_plan_invalid"
+    )
+
+
+def test_internal_paper_loop_forwards_side_aware_fill_and_atr_floor(monkeypatch) -> None:
+    from app.core.config import Settings
+
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> str:
+        seen.update(kwargs)
+        return "evidence_unavailable"
+
+    monkeypatch.setattr("app.services.automated_paper_loop._plan_terms", capture)
+    settings = Settings()
+    loop = AutomatedPaperLoop(None, settings, SimpleNamespace())  # type: ignore[arg-type]
+    result = loop._plan_terms(
+        candidate=SimpleNamespace(),  # type: ignore[arg-type]
+        assembled=SimpleNamespace(),  # type: ignore[arg-type]
+        policy=SimpleNamespace(),  # type: ignore[arg-type]
+        account_id=uuid4(),
+        equity=Decimal("1"),
+        now=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_valid_until=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_id=uuid4(),
+    )
+    assert result == "evidence_unavailable"
+    assert seen["side_aware_fill"] is True
+    assert seen["internal_paper_sfp"] is True
+    assert seen["spread_haircut"] == settings.paper_fill_spread_haircut
+    assert seen["min_stop_atr_floor"] == settings.sfp_min_stop_atr_multiple
+    assert settings.enable_real_trading is False
+
+
+def test_demo_loop_does_not_opt_into_side_aware_fill(monkeypatch) -> None:
+    from app.core.config import Settings
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> str:
+        seen.update(kwargs)
+        return "evidence_unavailable"
+
+    monkeypatch.setattr("app.services.governed_blofin_demo._plan_terms", capture)
+    settings = Settings()
+    loop = GovernedBloFinDemoLoop(None, settings, SimpleNamespace())  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        loop,
+        "_require_snapshot",
+        lambda: SimpleNamespace(equity=Decimal("10"), available=Decimal("10")),
+    )
+    result = loop._plan_terms(
+        candidate=SimpleNamespace(),  # type: ignore[arg-type]
+        assembled=SimpleNamespace(),  # type: ignore[arg-type]
+        policy=SimpleNamespace(),  # type: ignore[arg-type]
+        account_id=uuid4(),
+        equity=Decimal("20"),
+        now=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_valid_until=SimpleNamespace(),  # type: ignore[arg-type]
+        eligibility_id=uuid4(),
+    )
+    assert result == "evidence_unavailable"
+    assert "side_aware_fill" not in seen
+    assert "spread_haircut" not in seen
+    assert "min_stop_atr_floor" not in seen
+    assert "internal_paper_sfp" not in seen

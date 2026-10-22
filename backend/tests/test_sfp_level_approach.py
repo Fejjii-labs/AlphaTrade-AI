@@ -14,7 +14,11 @@ from app.strategy_brain.sfp.approach import (
     approach_hits,
     approach_preparation,
 )
-from app.strategy_brain.sfp.contracts import sfp_research_v2_parameters
+from app.strategy_brain.sfp.contracts import (
+    SFP_MIN_STOP_ATR_FLOOR,
+    sfp_research_v2_parameters,
+    sfp_research_v3_parameters,
+)
 from app.strategy_brain.sfp.levels import derive_levels
 from tests.test_sfp_detector import evidence, parameters, spec
 
@@ -34,6 +38,17 @@ def test_v2_defaults_are_a_new_version_and_v1_does_not_approach() -> None:
     assert parameters().min_stop_atr_multiple == Decimal("0")
     assert parameters().approach_proximity is None
     assert parameters().version == "sfp-research/v1"
+
+
+def test_v3_adds_a_nonzero_atr_floor_without_rewriting_v2() -> None:
+    current = sfp_research_v3_parameters()
+    assert current.version == "sfp-research/v3"
+    assert current.min_stop_atr_multiple == SFP_MIN_STOP_ATR_FLOOR == Decimal("0.5")
+    assert current.level_lookback == 72
+    assert current.minimum_sweep_depth == Decimal("0.002")
+    assert current.approach_proximity == Decimal("0.001")
+    assert sfp_research_v2_parameters().min_stop_atr_multiple == Decimal("0")
+    assert sfp_research_v2_parameters().version == "sfp-research/v2"
 
 
 def test_approach_fires_at_one_tenth_percent_once_and_before_a_sweep() -> None:

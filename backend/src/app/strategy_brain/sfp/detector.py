@@ -78,6 +78,7 @@ def _emit(
     spec: SfpSpec,
     reasons: tuple[str, ...],
     tick_size: Decimal | None = None,
+    atr_multiple_floor: Decimal = Decimal("0"),
     observed_at: datetime | None = None,
     event_time: datetime | None = None,
 ) -> SfpDetection:
@@ -110,7 +111,9 @@ def _emit(
     ):
         # Entry is this confirmation close. Later intact bars keep this plan.
         # The stop is the larger of the percent buffer, N ticks, and k*ATR.
-        multiple = spec.parameters.min_stop_atr_multiple
+        # The floor widens k for internal paper. It is not part of setup_id.
+        authored = spec.parameters.min_stop_atr_multiple
+        multiple = max(authored, atr_multiple_floor) if atr_multiple_floor > 0 else authored
         atr = wilder_atr(bars[: index + 1], period=SFP_STOP_ATR_PERIOD) if multiple > 0 else None
         episode.trade_plan = derive_sfp_trade_plan(
             direction=spec.direction,
@@ -249,12 +252,15 @@ def detect_sfp(
     evaluated_at: datetime,
     context_levels: tuple[StructuralLevel, ...] = (),
     tick_size: Decimal | None = None,
+    atr_multiple_floor: Decimal = Decimal("0"),
 ) -> SfpScan:
     """Replay causal detections from canonical evidence; no I/O or trading side effects.
 
     One current revision per candle is required. Exact duplicates converge;
     conflicting revisions fail closed. Only one terminal forming candle is
     allowed. Context levels must carry their closed canonical proofs.
+    ``atr_multiple_floor`` widens the paper stop only. It is not hashed into
+    ``setup_id``.
     """
     if evaluated_at.tzinfo is None:
         raise ValueError("evaluated_at must be timezone-aware")
@@ -446,6 +452,7 @@ def detect_sfp(
                     spec=spec,
                     reasons=reasons,
                     tick_size=tick_size,
+                    atr_multiple_floor=atr_multiple_floor,
                 )
             )
     # A clock can expire a setup between closes without inventing another market candle.
@@ -469,6 +476,7 @@ def detect_sfp(
                     spec=spec,
                     reasons=("setup_expired",),
                     tick_size=tick_size,
+                    atr_multiple_floor=atr_multiple_floor,
                     event_time=episode.expires_at,
                     observed_at=evaluated_at,
                 )

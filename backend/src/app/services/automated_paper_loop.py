@@ -799,6 +799,9 @@ class AutomatedPaperLoop:
             risk_records=risk_records,
             fixed_risk_percent=fixed_risk_percent,
             internal_paper_sfp=True,
+            side_aware_fill=True,
+            spread_haircut=self._settings.paper_fill_spread_haircut,
+            min_stop_atr_floor=self._settings.sfp_min_stop_atr_multiple,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -1347,6 +1350,8 @@ def _eligibility_command(
 def _sfp_structural_plan(
     assembled: AssembledCanonicalEvidence,
     spec: object,
+    *,
+    atr_multiple_floor: Decimal = Decimal("0"),
 ) -> tuple[Decimal, Decimal, Decimal, UUID] | str:
     """Read the confirmed SFP plan. Sizing and tick rounding stay with the caller."""
 
@@ -1373,6 +1378,7 @@ def _sfp_structural_plan(
         spec,
         evaluated_at=assembled.evaluated_at,
         tick_size=assembled.bundle.tick_size,
+        atr_multiple_floor=atr_multiple_floor,
     )
     detection = select_detection(scan, assembled.bundle.bars_15m)
     if detection is None or detection.state is not BrainSetupState.CONFIRMED:
@@ -1393,8 +1399,8 @@ def _sfp_quote_refusal(
     """Refuse a live quote that is already through the plan, or a rebased sub-1R.
 
     The structural entry stays the confirmation close. The paper fill is this
-    quote, with the same stop and target. A quote on the stop or the target has
-    no remaining distance. Exactly 1R is still allowed.
+    side-aware price, with the same stop and target. A fill on the stop or the
+    target has no remaining distance. Exactly 1R is still allowed.
     """
 
     beyond = (quote <= stop or quote >= target) if is_long else (quote >= stop or quote <= target)
@@ -1427,6 +1433,9 @@ def _plan_terms(
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
     internal_paper_sfp: bool = False,
+    side_aware_fill: bool = False,
+    spread_haircut: Decimal = Decimal("0"),
+    min_stop_atr_floor: Decimal = Decimal("0"),
 ) -> TradePlanRevisionCreate | str:
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.strategy_brain.detector import detect_nested
@@ -1441,6 +1450,17 @@ def _plan_terms(
     quote = assembled.current_price
     if quote is None:
         return "evidence_unavailable"
+    is_long = candidate.direction is TradeDirection.LONG
+    # Demo keeps the raw quote and replaces the entry from its own book.
+    # Internal paper fills a long at the ask and a short at the bid.
+    fill_quote = quote.price
+    if side_aware_fill:
+        from app.services.paper_fill import paper_fill_price
+
+        filled = paper_fill_price(quote, is_long=is_long, spread_haircut=spread_haircut)
+        if filled is None:
+            return "evidence_unavailable"
+        fill_quote = filled
     sfp = isinstance(spec, SfpSpec)
     nested = isinstance(spec, NestedContinuationSpec)
     structural_setup_id: UUID | None = None
@@ -1449,7 +1469,7 @@ def _plan_terms(
     entry: Decimal
     stop: Decimal | None
     if sfp:
-        resolved = _sfp_structural_plan(assembled, spec)
+        resolved = _sfp_structural_plan(assembled, spec, atr_multiple_floor=min_stop_atr_floor)
         if isinstance(resolved, str):
             return resolved
         entry, stop, sfp_target, structural_setup_id = resolved
@@ -1457,14 +1477,14 @@ def _plan_terms(
         events = detect_nested(assembled.bundle.bars_15m, spec, evaluated_at=assembled.evaluated_at)
         if not events or events[-1].state.value != "CONFIRMED":
             return "setup_not_confirmed"
-        entry = quote.price
+        entry = fill_quote
         stop = events[-1].stop
         nested_target = events[-1].targets[0] if events[-1].targets else None
         structural_setup_id = events[-1].setup_id
     else:
         from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
 
-        entry = quote.price
+        entry = fill_quote
         if not isinstance(policy.evaluation_params, FirstSliceEvaluationParams):
             return "execution_policy_unsupported"
         stop = first_slice_short_invalidation_price(
@@ -1475,7 +1495,6 @@ def _plan_terms(
         )
     if stop is None:
         return "invalidation_unavailable"
-    is_long = candidate.direction is TradeDirection.LONG
     stop = (
         _floor_to_lot(stop, assembled.bundle.tick_size)
         if is_long
@@ -1485,12 +1504,12 @@ def _plan_terms(
         if sfp_target is None:
             return "sfp_trade_plan_invalid"
         refusal = _sfp_quote_refusal(
-            quote=quote.price, stop=stop, target=sfp_target, is_long=is_long
+            quote=fill_quote, stop=stop, target=sfp_target, is_long=is_long
         )
         if refusal is not None:
             return refusal
-        # Fill at the live quote. Stop and target stay on the structural plan.
-        entry = quote.price
+        # Fill at the side-aware live quote. Stop and target stay structural.
+        entry = fill_quote
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)
