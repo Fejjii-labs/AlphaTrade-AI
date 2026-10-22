@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -23,7 +22,15 @@ from app.agent_voice.contracts import (
     VoiceTruncate,
 )
 from app.agent_voice.grounding import read_grounding
-from app.agent_voice.protocol import TOOL_NAME, checked_audio, create_response, session_update
+from app.agent_voice.protocol import (
+    TOOL_NAME,
+    checked_audio,
+    confirm_provider_session,
+    create_response,
+    provider_event_optional,
+    reject_unsupported_client_event,
+    session_update,
+)
 from app.agent_voice.retrieval import (
     VoiceEmbeddingsProvider,
     VoiceEmbeddingUsage,
@@ -130,7 +137,11 @@ class RealtimeSession:
         self.response_grounded = False
         self.audio_item: str | None = None
         self.audio_bytes = 0
-        self.context_bytes = len(json.dumps(session_update(ledger.limits)).encode())
+        self.context_bytes = len(
+            json.dumps(
+                session_update(ledger.limits, provider=ledger.settings.agent_realtime_provider)
+            ).encode()
+        )
         self.tool_task: asyncio.Task[None] | None = None
         self.accepts: dict[str, asyncio.Event] = {}
         self.response_finished = asyncio.Event()
@@ -143,9 +154,14 @@ class RealtimeSession:
         self.response_statuses: dict[str, str] = {}
 
     async def start_session(self) -> None:
-        await self._provider_send(session_update(self.ledger.limits))
+        await self._provider_send(
+            session_update(
+                self.ledger.limits, provider=self.ledger.settings.agent_realtime_provider
+            )
+        )
 
     async def _provider_send(self, event: dict[str, Any]) -> None:
+        reject_unsupported_client_event(event)
         async with self.send_lock:
             if self.closed:
                 raise VoiceUnavailableError("voice_session_closed")
@@ -182,15 +198,9 @@ class RealtimeSession:
             body = VoiceAudio.model_validate(event)
             audio = checked_audio(body.audio, 16384)
             await asyncio.to_thread(self.ledger.audio, len(audio))
-            # Verified audio-token rate, not user supplied usage.
-            self.context_bytes += (
-                int(
-                    Decimal(len(audio))
-                    / Decimal(48000)
-                    * self.ledger.limits.realtime.maximum_audio_input_tokens_per_second
-                )
-                + 1
-            )
+            # Verified audio-token rate, not user supplied usage. Per-minute
+            # sessions add nothing here; the clock meter covers the audio.
+            self.context_bytes += self.ledger.limits.audio_context_tokens(len(audio))
             self._context_limit()
             await self._provider_send({"type": "input_audio_buffer.append", "audio": body.audio})
         elif kind == "audio.commit":
@@ -211,7 +221,8 @@ class RealtimeSession:
         return True
 
     def _context_limit(self) -> None:
-        if self.context_bytes > self.ledger.limits.realtime.maximum_input_tokens:
+        cap = self.ledger.limits.context_token_limit()
+        if cap is not None and self.context_bytes > cap:
             raise VoiceUnavailableError("voice_realtime_context_cap")
 
     async def interrupt(self, item_id: str | None = None, audio_end_ms: int = 0) -> None:
@@ -236,25 +247,19 @@ class RealtimeSession:
 
     async def provider(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
+        # xAI omits rate_limits.updated and conversation.item.retrieve.
+        # OpenAI may send the rate-limit event. Neither gates readiness.
+        if provider_event_optional(kind):
+            return
         if kind == "session.updated":
             effective = event.get("session", {})
-            if effective.get("model") != self.ledger.limits.realtime.model:
+            if not isinstance(effective, dict):
                 raise VoiceUnavailableError("provider_session_route_mismatch")
-            if effective.get("max_output_tokens") != self.ledger.limits.maximum_output_tokens:
-                raise VoiceUnavailableError("provider_output_limit_not_confirmed")
-            audio = effective.get("audio", {})
-            incoming, outgoing = audio.get("input", {}), audio.get("output", {})
-            detection = incoming.get("turn_detection", {})
-            if (
-                detection.get("type") != "server_vad"
-                or detection.get("create_response") is not False
-                or detection.get("interrupt_response") is not False
-                or incoming.get("transcription") is not None
-                or incoming.get("format") != {"type": "audio/pcm", "rate": 24000}
-                or outgoing.get("format") != {"type": "audio/pcm", "rate": 24000}
-                or effective.get("truncation") != "disabled"
-            ):
-                raise VoiceUnavailableError("provider_audio_limits_not_confirmed")
+            confirm_provider_session(
+                self.ledger.limits,
+                effective,
+                provider=self.ledger.settings.agent_realtime_provider,
+            )
             await asyncio.to_thread(self.ledger.activate)
             self.ready = True
             await self.send({"type": "session.ready", "session_id": str(self.ledger.id)})
@@ -349,16 +354,13 @@ class RealtimeSession:
             self.context_bytes += len(request.message.encode()) + len(serialized.encode())
             self._context_limit()
             await asyncio.wait_for(self.response_finished.wait(), timeout=10)
-            await self._provider_send(
-                {
-                    "type": "conversation.item.create",
-                    "item": {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": serialized,
-                    },
-                }
-            )
+            item = {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": serialized,
+            }
+            await asyncio.to_thread(self.ledger.note_outbound_item, item)
+            await self._provider_send({"type": "conversation.item.create", "item": item})
             if self.queued_speech:
                 self.queued_speech = False
                 await self._respond()

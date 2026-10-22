@@ -185,6 +185,9 @@ class FakeLedger:
     def tool_done(self, call_id, result):
         self.events.append(("committed", call_id, result))
 
+    def note_outbound_item(self, item):
+        return None
+
 
 def session_for(limits, turn=None):
     ledger = FakeLedger(limits)
