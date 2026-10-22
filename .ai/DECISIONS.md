@@ -2,6 +2,19 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-148 — A fill after a paper slot release does not free the slot again
+
+- Date: 2026-10-22
+- Decision: `convert_reservation_for_fill` leaves a reservation whose
+  `release_state` is already `RELEASED` in that state, including its release
+  reason. The fill still adds the unconverted slots to `actual_trade_count`
+  once and sets `converted_trade_slots`, so a second conversion does not count
+  them again. It does not decrement `reserved_trade_slots`, because the paper
+  day roll already returned those slots. A charged or partially released
+  reservation still moves its slots from reserved to actual. The caller holds
+  the reservation row and the accounting row lock. Real trading stays off.
+- Reference: `app/services/execution_fills.py`. Extends AT-ADR-147.
+
 ## AT-ADR-147 — Paper day roll releases terminal and stale unfilled reservations
 
 - Date: 2026-10-22

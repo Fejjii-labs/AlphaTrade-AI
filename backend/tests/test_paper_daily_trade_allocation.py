@@ -47,6 +47,7 @@ from app.services.safety_epoch import (
     SafetyEpochService,
     paper_trading_day,
 )
+from app.services.venue_submit_dispatcher import VenueSubmitDispatcher
 from tests.support.phase1_plan_fixtures import (
     approve_plan,
     execute_request,
@@ -262,6 +263,166 @@ def test_aged_unfilled_paper_reservation_is_released_on_the_roll(session: Sessio
     assert session.get(RiskReservation, stale.id).release_state is (  # type: ignore[union-attr]
         RiskReservationReleaseState.RELEASED
     )
+
+
+def test_late_fill_after_age_release_does_not_open_a_slot_past_the_cap(
+    session: Session,
+) -> None:
+    """A fill after the roll already returned the slot must not return it again.
+
+    Two slots are in use. The aged reservation is released on the next local
+    day and the younger one stays charged. The late fill counts as a completed
+    trade. The younger slot stays reserved, so a third claim is blocked.
+    """
+
+    ids, first_plan, first_authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        first_plan,
+        business_day=DAY.date(),
+        max_slots=2,
+        configured_max=2,
+        actual=0,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    first = _claim(session, ids, first_plan, first_authorization, when=DAY, key="late-fill-a")
+    assert first.outcome is ExecutionCommandOutcome.ALLOW  # type: ignore[attr-defined]
+    second_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "3", "unit": "CONTRACTS"},
+            **_window(DAY),
+        ),
+    )
+    second_authorization = approve_plan(session, ids, second_plan, clock=DAY - timedelta(minutes=1))
+    session.commit()
+    second = _claim(session, ids, second_plan, second_authorization, when=DAY, key="late-fill-b")
+    assert second.outcome is ExecutionCommandOutcome.ALLOW  # type: ignore[attr-defined]
+
+    aged = session.scalar(
+        select(RiskReservation).where(
+            RiskReservation.command_id == first.command_id  # type: ignore[attr-defined]
+        )
+    )
+    live = session.scalar(
+        select(RiskReservation).where(
+            RiskReservation.command_id == second.command_id  # type: ignore[attr-defined]
+        )
+    )
+    assert aged is not None and live is not None
+    aged.created_at = NEXT_DAY - PAPER_UNFILLED_RESERVATION_MAX_AGE - timedelta(minutes=1)
+    live.created_at = NEXT_DAY - timedelta(hours=1)
+    session.commit()
+
+    rolled = SafetyEpochService(
+        session,
+        paper_settings(database_url="sqlite+pysqlite:///:memory:"),
+        RiskSettingsService(session, AuditService(session)),
+    ).lock_risk_accounting(
+        organization_id=ids["organization"].id,  # type: ignore[attr-defined]
+        account_id=first_plan.account_id,  # type: ignore[attr-defined]
+        user_id=ids["user"].id,  # type: ignore[attr-defined]
+        exposure_unit="USDT",
+        now=NEXT_DAY,
+        roll_daily_trade_slots=True,
+    )
+    session.commit()
+    assert rolled.reserved_trade_slots == 1
+    assert rolled.actual_trade_count == 0
+    assert session.get(RiskReservation, aged.id).release_state is (  # type: ignore[union-attr]
+        RiskReservationReleaseState.RELEASED
+    )
+
+    settings = paper_settings(database_url="sqlite+pysqlite:///:memory:")
+    dispatcher = VenueSubmitDispatcher(
+        session,
+        SafetyEpochService(session, settings, RiskSettingsService(session, AuditService(session))),
+        clock=lambda: NEXT_DAY,
+    )
+    dispatcher.apply_unique_fill(
+        command_id=first.command_id,  # type: ignore[attr-defined]
+        fill_quantity=Decimal("1"),
+        fill_price=Decimal("100"),
+        source_identity="late-fill-1",
+        occurred_at=NEXT_DAY,
+    )
+    session.commit()
+
+    row = _ledger_row(session)
+    released = session.get(RiskReservation, aged.id)
+    assert released is not None
+    assert row.reserved_trade_slots == 1
+    assert row.actual_trade_count == 1
+    assert row.max_trade_slots == 2
+    assert released.release_state is RiskReservationReleaseState.RELEASED
+    assert released.release_reason is RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_EXPIRY
+    assert released.converted_trade_slots == 1
+    kept = session.get(RiskReservation, live.id)
+    assert kept is not None
+    assert kept.release_state is RiskReservationReleaseState.CHARGED
+
+    replay = dispatcher.apply_unique_fill(
+        command_id=first.command_id,  # type: ignore[attr-defined]
+        fill_quantity=Decimal("1"),
+        fill_price=Decimal("100"),
+        source_identity="late-fill-1",
+        occurred_at=NEXT_DAY,
+    )
+    session.commit()
+    assert replay.replayed is True
+    replayed = _ledger_row(session)
+    assert replayed.reserved_trade_slots == 1
+    assert replayed.actual_trade_count == 1
+
+    third_plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "4", "unit": "CONTRACTS"},
+            **_window(NEXT_DAY),
+        ),
+    )
+    third_authorization = approve_plan(
+        session, ids, third_plan, clock=NEXT_DAY - timedelta(minutes=1)
+    )
+    session.commit()
+    blocked = _claim(
+        session, ids, third_plan, third_authorization, when=NEXT_DAY, key="late-fill-c"
+    )
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED  # type: ignore[attr-defined]
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"  # type: ignore[attr-defined]
+    capped = _ledger_row(session)
+    assert capped.reserved_trade_slots == 1
+    assert capped.actual_trade_count == 1
+    remaining_slots = (
+        int(capped.max_trade_slots)
+        - int(capped.reserved_trade_slots)
+        - int(capped.actual_trade_count)
+    )
+    assert remaining_slots < 1
+
+    again = session.get(RiskReservation, aged.id)
+    assert again is not None
+    convert_reservation_for_fill(
+        reservation=again,
+        accounting=capped,
+        fill_quantity=Decimal("1"),
+        fill_price=Decimal("100"),
+        now=NEXT_DAY,
+    )
+    assert capped.reserved_trade_slots == 1
+    assert capped.actual_trade_count == 1
+    assert again.converted_trade_slots == 1
+    assert again.release_state is RiskReservationReleaseState.RELEASED
+    assert again.release_reason is RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_EXPIRY
 
 
 def test_terminal_paper_reservation_is_released_inside_the_age_bound(session: Session) -> None:
