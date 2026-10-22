@@ -75,8 +75,9 @@ class VoiceLimits(StrictModel):
     realtime: RealtimePrice | MinuteRealtimePrice
     reasoning: RoutePrice
     embedding: EmbeddingPrice | None = None
-    # Twelve minutes at $0.08/min is $0.96 and fits the $1 session ceiling.
-    # The browser timer still stops at five minutes; this bound is the server hold.
+    # The clock bound. Twelve minutes at $0.08 is $0.96 before reasoning and
+    # embedding, so it does not by itself fit the $1 ceiling. The browser timer
+    # still stops at five minutes.
     maximum_seconds: int = Field(default=180, ge=10, le=900)
     maximum_audio_seconds: int = Field(default=90, ge=1, le=180)
     maximum_turns: int = Field(default=6, ge=1, le=12)
@@ -113,17 +114,39 @@ class VoiceLimits(StrictModel):
             int(Decimal(nbytes) / Decimal(48000) * price.maximum_audio_input_tokens_per_second) + 1
         )
 
+    def tool_reservation(self, settings: Settings) -> Decimal:
+        """Worst-case shared-agent reasoning and embedding dollars.
+
+        Reply plus auto capture, at most two router attempts each, for every
+        turn. Embedding is one input per turn. Prices are USD per million tokens.
+        """
+        reasoning = (
+            self.reasoning.maximum_input_tokens * self.reasoning.input_usd_per_million
+            + settings.agent_max_output_tokens * self.reasoning.output_usd_per_million
+        )
+        embedding = (
+            self.maximum_turns
+            * self.embedding.maximum_input_tokens
+            * self.embedding.input_usd_per_million
+            if self.embedding is not None
+            else Decimal(0)
+        )
+        return (self.maximum_turns * 4 * reasoning + embedding) / Decimal(1000000)
+
     def reservation(self, settings: Settings) -> Decimal:
         """Reserve full repeated context, audio without replies and two retries/routes.
 
         Cached input is priced at the full input rate. No cached-price assumptions,
         tokenizer estimates, successful-call refund or unknown-usage refund is used.
-        A per-minute receipt reserves the whole configured session, rounded up to
-        the next minute, plus no text inputs (tool results are not text inputs).
+        A per-minute receipt reserves billed session minutes, billable text inputs,
+        and the same reasoning and embedding terms. Tool results and audio are not
+        text inputs, so admission reserves zero of them. ``load_limits`` refuses
+        the session when this total exceeds the ceiling.
         """
+        tool = self.tool_reservation(settings)
         realtime = self.realtime
         if isinstance(realtime, MinuteRealtimePrice):
-            return minute_session_cost(realtime, self.maximum_seconds, 0)
+            return minute_session_cost(realtime, self.maximum_seconds, 0) + tool
         response = realtime.maximum_input_tokens * max(
             realtime.input_usd_per_million, realtime.audio_input_usd_per_million
         ) + self.maximum_output_tokens * max(
@@ -134,24 +157,7 @@ class VoiceLimits(StrictModel):
             * realtime.maximum_audio_input_tokens_per_second
             * realtime.audio_input_usd_per_million
         )
-        reasoning = (
-            self.reasoning.maximum_input_tokens * self.reasoning.input_usd_per_million
-            + settings.agent_max_output_tokens * self.reasoning.output_usd_per_million
-        )
-        # Reply + auto capture, at most two router attempts each, for every turn.
-        embedding = (
-            self.maximum_turns
-            * self.embedding.maximum_input_tokens
-            * self.embedding.input_usd_per_million
-            if self.embedding
-            else Decimal(0)
-        )
-        return (
-            self.maximum_responses * response
-            + orphan_audio
-            + self.maximum_turns * 4 * reasoning
-            + embedding
-        ) / Decimal(1000000)
+        return (self.maximum_responses * response + orphan_audio) / Decimal(1000000) + tool
 
     def receipt_deadline(self) -> datetime:
         return min(

@@ -258,7 +258,11 @@ class VoiceLedger:
             price = self.limits.realtime
             if not isinstance(price, MinuteRealtimePrice):
                 return
-            cost = minute_session_cost(price, self.limits.maximum_seconds, data["text_inputs"])
+            # Minutes, this text item, and the same reasoning and embedding
+            # terms the opening hold reserved. Text must not spend the tool hold.
+            cost = minute_session_cost(
+                price, self.limits.maximum_seconds, data["text_inputs"]
+            ) + self.limits.tool_reservation(self.settings)
             if cost > row.reserved_cost:
                 raise VoiceUnavailableError("voice_text_input_exceeds_reservation")
 

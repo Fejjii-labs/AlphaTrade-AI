@@ -124,19 +124,57 @@ def minute_limits(*, seconds: int) -> VoiceLimits:
     )
 
 
-def test_one_dollar_cap_allows_twelve_minutes_at_eight_cents_and_not_thirteen():
-    settings = Settings(_env_file=None)
+def test_minute_meter_rounds_partial_minutes_up_and_prices_text_inputs():
     twelve = minute_limits(seconds=12 * 60)
-    thirteen = minute_limits(seconds=13 * 60)
-    assert twelve.reservation(settings) == Decimal("0.96")
-    assert twelve.reservation(settings) <= twelve.session_ceiling_usd
-    assert thirteen.reservation(settings) == Decimal("1.04")
-    assert thirteen.reservation(settings) > thirteen.session_ceiling_usd
-    # 12 minutes + 1 second rounds up to 13 billable minutes.
     price = twelve.realtime
     assert isinstance(price, MinuteRealtimePrice)
+    assert minute_session_cost(price, 12 * 60, 0) == Decimal("0.96")
+    assert minute_session_cost(price, 13 * 60, 0) == Decimal("1.04")
+    # 12 minutes + 1 second rounds up to 13 billable minutes.
     assert minute_session_cost(price, 12 * 60 + 1, 0) == Decimal("1.04")
     assert minute_session_cost(price, 12 * 60, 2) == Decimal("0.968")
+
+
+def test_twelve_minute_xai_session_reserves_tool_cost_and_exceeds_one_dollar():
+    """Default reasoning limits make 12 minutes refuse the $1 ceiling.
+
+    The receipt prices 20,000 input tokens at $1/M and output at $2/M, with two
+    turns and four attempts each. ``agent_max_output_tokens`` defaults to 25000,
+    so the tool hold is $0.56 and 12 minutes ($0.96) total $1.52.
+
+    With ``AGENT_MAX_OUTPUT_TOKENS=4000`` the tool hold is $0.224. Nine minutes
+    cost $0.72 and the total is $0.944. The next second bills a tenth minute
+    ($1.024). The largest ``maximum_seconds`` that fits $1 is 540.
+    Twelve minutes at 4000 output tokens is still $1.184 and stays refused.
+    """
+    settings = Settings(_env_file=None)
+    assert settings.agent_max_output_tokens == 25000
+    twelve = minute_limits(seconds=12 * 60)
+    assert twelve.reservation(settings) == Decimal("1.52")
+    assert twelve.reservation(settings) > twelve.session_ceiling_usd
+    # Lowering the clock admits. 300s is five minutes ($0.40) plus the $0.56 tool hold.
+    admitted = minute_limits(seconds=300)
+    assert admitted.reservation(settings) == Decimal("0.96")
+    assert admitted.reservation(settings) <= admitted.session_ceiling_usd
+    assert minute_limits(seconds=301).reservation(settings) > Decimal("1")
+
+    capped = settings.model_copy(update={"agent_max_output_tokens": 4000})
+    assert twelve.reservation(capped) == Decimal("1.184")
+    assert twelve.reservation(capped) > twelve.session_ceiling_usd
+    fitted = minute_limits(seconds=540)
+    assert fitted.reservation(capped) == Decimal("0.944")
+    assert fitted.reservation(capped) <= fitted.session_ceiling_usd
+    assert minute_limits(seconds=541).reservation(capped) == Decimal("1.024")
+    payload = admitted.model_dump(mode="json")
+    payload["embedding"] = {
+        "model": "text-embedding-3-small",
+        "source": "https://example.invalid/fixture-only",
+        "valid_until": payload["valid_until"],
+        "maximum_input_tokens": 1000,
+        "input_usd_per_million": "1",
+    }
+    # Two turns times 1,000 tokens at $1/M is $0.002 on top of the $0.96 hold.
+    assert VoiceLimits.model_validate(payload).reservation(settings) == Decimal("0.962")
 
 
 def test_unknown_minute_hold_stays_reserved_and_settled_minutes_do_not(experiment_engine):

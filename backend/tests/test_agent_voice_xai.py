@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.agent_voice.config import (
     GROK_VOICE_MODEL,
     XAI_REALTIME_ORIGIN,
+    VoiceLimits,
     VoiceUnavailableError,
     load_limits,
     realtime_endpoint,
@@ -64,11 +65,12 @@ def test_openai_stays_the_default_and_both_origins_are_exact():
             realtime_endpoint(settings.model_copy(update=update))
 
 
-def test_xai_limits_accept_twelve_minutes_and_refuse_a_bad_origin_or_model(tmp_path):
-    twelve = minute_limits(seconds=12 * 60)
-    thirteen = minute_limits(seconds=13 * 60)
+def test_xai_limits_accept_a_fitting_hold_and_refuse_a_bad_origin_or_model(tmp_path):
+    # 300s is five minutes ($0.40) plus the default $0.56 reasoning hold.
+    fitting = minute_limits(seconds=300)
+    over = minute_limits(seconds=12 * 60)
     path = tmp_path / "limits.json"
-    path.write_text(twelve.model_dump_json())
+    path.write_text(fitting.model_dump_json())
     settings = Settings(_env_file=None).model_copy(
         update={
             "agent_realtime_enabled": True,
@@ -82,15 +84,15 @@ def test_xai_limits_accept_twelve_minutes_and_refuse_a_bad_origin_or_model(tmp_p
     loaded = load_limits(settings)
     assert loaded.realtime.model == GROK_VOICE_MODEL
     assert loaded.reservation(settings) == Decimal("0.96")
-    path.write_text(thirteen.model_dump_json())
+    path.write_text(over.model_dump_json())
     with pytest.raises(VoiceUnavailableError, match="verified_cap_cannot_cover_session"):
         load_limits(settings)
-    path.write_text(twelve.model_dump_json())
+    path.write_text(fitting.model_dump_json())
     with pytest.raises(VoiceUnavailableError, match="approved_xai_origin"):
         load_limits(
             settings.model_copy(update={"xai_realtime_base_url": "https://realtime.x.ai/v1"})
         )
-    token = json.loads(twelve.model_dump_json())
+    token = json.loads(fitting.model_dump_json())
     token["realtime"] = {
         "model": "gpt-realtime-2.1",
         "source": "https://example.invalid/fixture-only",
@@ -107,6 +109,43 @@ def test_xai_limits_accept_twelve_minutes_and_refuse_a_bad_origin_or_model(tmp_p
         load_limits(settings)
     with pytest.raises(VoiceUnavailableError, match="provider_credential_unbound"):
         load_limits(settings.model_copy(update={"xai_api_key": ""}))
+
+
+def test_twelve_minute_xai_admission_refuses_until_seconds_or_output_tokens_drop(tmp_path):
+    """A 12-minute session with default reasoning limits is over the $1 ceiling.
+
+    Admission uses the minute hold plus reasoning and embedding. Lowering
+    ``maximum_seconds`` to 300 admits at the default 25000 output tokens.
+    ``AGENT_MAX_OUTPUT_TOKENS=4000`` still refuses 12 minutes ($1.184). The
+    largest ``maximum_seconds`` that fits $1 at that output cap is 540
+    (nine minutes, $0.944). 541 seconds bills ten minutes ($1.024) and is refused.
+    """
+    path = tmp_path / "limits.json"
+
+    def admit(limits: VoiceLimits, *, output_tokens: int) -> None:
+        path.write_text(limits.model_dump_json())
+        load_limits(
+            Settings(_env_file=None).model_copy(
+                update={
+                    "agent_realtime_enabled": True,
+                    "agent_realtime_provider": "xai",
+                    "xai_api_key": "fixture-xai-key",
+                    "xai_realtime_base_url": XAI_REALTIME_ORIGIN,
+                    "provider_mode": "live",
+                    "agent_realtime_limits_file": str(path),
+                    "agent_max_output_tokens": output_tokens,
+                }
+            )
+        )
+
+    with pytest.raises(VoiceUnavailableError, match="verified_cap_cannot_cover_session"):
+        admit(minute_limits(seconds=12 * 60), output_tokens=25000)
+    admit(minute_limits(seconds=300), output_tokens=25000)
+    with pytest.raises(VoiceUnavailableError, match="verified_cap_cannot_cover_session"):
+        admit(minute_limits(seconds=12 * 60), output_tokens=4000)
+    admit(minute_limits(seconds=540), output_tokens=4000)
+    with pytest.raises(VoiceUnavailableError, match="verified_cap_cannot_cover_session"):
+        admit(minute_limits(seconds=541), output_tokens=4000)
 
 
 def test_openai_session_update_is_unchanged_and_xai_omits_unsupported_events():
@@ -157,7 +196,8 @@ async def test_xai_session_becomes_ready_without_rate_limits_or_item_retrieve():
 
 
 def test_known_minutes_settle_and_unknown_text_is_not_refunded(voice_database):
-    voice_database.limits = minute_limits(seconds=12 * 60).model_copy(
+    # 300s is the longest default-token session that still fits $1 ($0.40 + $0.56).
+    voice_database.limits = minute_limits(seconds=300).model_copy(
         update={"organization_id": str(voice_database.organization_id)}
     )
     voice_database.settings = voice_database.settings.model_copy(
@@ -205,7 +245,8 @@ def test_known_minutes_settle_and_unknown_text_is_not_refunded(voice_database):
         update={
             "budget_reference": "synthetic-unknown-minute-budget",
             # The known session's usage event is an organization debit. This
-            # separate receipt still has room for its own twelve-minute hold.
+            # separate receipt still has room for a twelve-minute hold plus the
+            # default reasoning terms ($1.52).
             "remaining_budget_usd": Decimal("2"),
         }
     )
@@ -223,7 +264,7 @@ def test_known_minutes_settle_and_unknown_text_is_not_refunded(voice_database):
         assert row is not None
         assert row.status == "uncertain"
         assert row.accounted_cost is None
-        assert row.reserved_cost == Decimal("0.96")
+        assert row.reserved_cost == Decimal("1.52")
         events = session.scalars(
             select(UsageEvent).where(UsageEvent.request_id == str(unknown.id))
         ).all()
