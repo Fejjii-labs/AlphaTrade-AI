@@ -2,6 +2,22 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-146 — Internal paper trade slots roll at the user's local day
+
+- Date: 2026-10-22
+- Decision: `account_risk_accounting_states.actual_trade_count` and
+  `max_trade_slots` are a daily paper allocation, not a lifetime count.
+  On the first row-locked access of a new trading day for venue
+  `PAPER_INTERNAL` only, completed trades drop out of `actual_trade_count`,
+  `max_trade_slots` is copied from `user_risk_settings.max_trades_per_day`,
+  and `trade_slot_business_date` becomes that local date. `reserved_trade_slots`
+  is left unchanged so an unreleased reservation from an earlier day still
+  consumes a slot. A second locker that already sees today's date does
+  nothing. Demo claim, fill, and release do not start the roll. Daily loss,
+  notional, and real trading are unchanged. A NULL date is a pre-alignment
+  row and rolls once on the next paper access.
+- Reference: `app/services/safety_epoch.py`, `app/services/execution_claim.py`.
+
 ## AT-ADR-145 — Last-trade paper fills use a per-asset haircut, and the alert stop uses the ATR floor
 
 - Date: 2026-10-22

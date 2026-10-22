@@ -8,8 +8,9 @@ Lock order (architecture §24):
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -31,7 +32,9 @@ from app.services.execution_integrity import (
     is_risk_accounting_unique_violation,
     is_safety_epoch_unique_violation,
 )
-from app.services.risk.settings_service import RiskSettingsService
+from app.services.risk.settings_service import RiskSettingsService, normalize_timezone
+
+INTERNAL_PAPER_VENUE = "PAPER_INTERNAL"
 
 
 class SafetyEpochService:
@@ -84,14 +87,37 @@ class SafetyEpochService:
         account_id: uuid.UUID,
         user_id: uuid.UUID,
         exposure_unit: str,
+        now: datetime | None = None,
+        roll_daily_trade_slots: bool = False,
     ) -> AccountRiskAccountingState:
+        """Lock the account ledger. Paper callers may roll the trade-slot day.
+
+        ``roll_daily_trade_slots`` is for the internal paper venue only. Demo
+        and every other caller leave the lifetime counters untouched. The roll
+        runs while this row lock is held, so two claims at a day boundary
+        apply it once.
+        """
+
         ensure_db_transaction(self._session)
+        observed_at = _aware(now)
         existing = self._accounting.get_for_update(
             organization_id=organization_id, account_id=account_id
         )
         if existing is not None:
+            if roll_daily_trade_slots:
+                self._roll_daily_trade_slots(
+                    existing,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    now=observed_at,
+                )
             return existing
         limits = self._default_limits(organization_id=organization_id, user_id=user_id)
+        business_day = (
+            self._business_day(organization_id=organization_id, user_id=user_id, now=observed_at)
+            if roll_daily_trade_slots
+            else None
+        )
         row = AccountRiskAccountingState(
             organization_id=organization_id,
             account_id=account_id,
@@ -109,6 +135,7 @@ class SafetyEpochService:
             max_symbol_notional=limits["max_symbol_notional"],
             daily_locked=False,
             exposure_unit=exposure_unit,
+            trade_slot_business_date=business_day,
             version=1,
         )
         try:
@@ -122,6 +149,13 @@ class SafetyEpochService:
         )
         if locked is None:
             raise RuntimeError("Risk accounting row missing after insert-or-lock.")
+        if roll_daily_trade_slots:
+            self._roll_daily_trade_slots(
+                locked,
+                organization_id=organization_id,
+                user_id=user_id,
+                now=observed_at,
+            )
         return locked
 
     def advance_for_kill_activation(
@@ -172,6 +206,42 @@ class SafetyEpochService:
         for account_id in account_ids:
             self.lock_epoch(organization_id=organization_id, account_id=account_id)
 
+    def _roll_daily_trade_slots(
+        self,
+        accounting: AccountRiskAccountingState,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        now: datetime,
+    ) -> None:
+        """Drop completed trades from earlier days. Keep open reservations.
+
+        ``actual_trade_count`` is the completed daily count. ``reserved_trade_slots``
+        is live unreleased allocation and is not cleared. ``max_trade_slots`` is
+        copied from the user's current ``max_trades_per_day`` only when the
+        business day changes. A row already stamped with that day is a no-op,
+        including a second claim that waited on this lock.
+        """
+
+        settings = self._risk_settings.get(organization_id=organization_id, user_id=user_id)
+        today = paper_trading_day(now, settings.timezone)
+        if _as_date(accounting.trade_slot_business_date) == today:
+            return
+        accounting.actual_trade_count = 0
+        accounting.max_trade_slots = int(settings.max_trades_per_day)
+        accounting.trade_slot_business_date = today
+        accounting.version = int(accounting.version) + 1
+
+    def _business_day(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        now: datetime,
+    ) -> date:
+        settings = self._risk_settings.get(organization_id=organization_id, user_id=user_id)
+        return paper_trading_day(now, settings.timezone)
+
     def _default_limits(
         self, *, organization_id: uuid.UUID, user_id: uuid.UUID
     ) -> dict[str, Decimal | int]:
@@ -184,3 +254,40 @@ class SafetyEpochService:
             "max_trade_slots": int(settings.max_trades_per_day),
             "max_symbol_notional": max_notional,
         }
+
+
+def paper_daily_trade_roll(execution_venue: str | None) -> bool:
+    """Trade-slot days roll on the internal paper venue only."""
+
+    return execution_venue == INTERNAL_PAPER_VENUE
+
+
+def paper_trading_day(now: datetime, timezone_name: str) -> date:
+    """Calendar date of ``now`` in the user's risk-settings timezone."""
+
+    tz_name, _fallback = normalize_timezone(timezone_name)
+    aware = _aware(now)
+    try:
+        return aware.astimezone(ZoneInfo(tz_name)).date()
+    except Exception:
+        return aware.astimezone(UTC).date()
+
+
+def _aware(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(UTC)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=UTC)
+    return now.astimezone(UTC)
+
+
+def _as_date(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return date.fromisoformat(value[:10])
+    return None
