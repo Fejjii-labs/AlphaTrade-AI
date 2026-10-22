@@ -102,7 +102,11 @@ def test_activation_is_disabled_and_live_uses_existing_budget_routes(live_limits
     with pytest.raises(VoiceUnavailableError, match="gpt_live_not_enabled"):
         load_live_limits(settings)
     config = voice_config(SimpleNamespace(organization_id=ORG_ID), settings)
-    assert config.available is False and config.provider == "realtime"
+    assert (
+        config.available is False
+        and config.reason == "voice_not_enabled"
+        and config.provider == "realtime"
+    )
     config = voice_config(
         SimpleNamespace(organization_id=ORG_ID),
         settings.model_copy(update={"agent_live_enabled": True}),
@@ -648,6 +652,7 @@ async def test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_e
     monkeypatch.setattr(live_socket, "CLOSE_SECONDS", 0.08)
     settings = Settings(
         _env_file=None,
+        agent_live_enabled=True,
         cors_origins=["https://fixture.invalid"],
         openai_api_key="fixture",
         provider_mode="mock",
@@ -767,3 +772,31 @@ async def test_socket_drains_final_usage_after_end_disconnect_auth_or_provider_e
     assert upstream_sent[-1]["type"] == "transport.closed"
     assert "NEVER EXPOSE" not in json.dumps(browser.sent)
     assert next(e for e in browser.sent if e["type"] == "session.closed")["finalized"] is finalized
+
+
+@pytest.mark.asyncio
+async def test_live_socket_closes_before_accept_when_disabled(monkeypatch):
+    from app.agent_voice import live_socket
+
+    settings = Settings(
+        _env_file=None,
+        agent_live_enabled=False,
+        cors_origins=["https://fixture.invalid"],
+    )
+    monkeypatch.setattr(live_socket, "get_settings", lambda: settings)
+
+    class Browser:
+        def __init__(self) -> None:
+            self.headers = {"origin": "https://fixture.invalid"}
+            self.accepted = False
+            self.code: int | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int = 1000) -> None:
+            self.code = code
+
+    browser = Browser()
+    await live_socket.live_voice(browser)
+    assert browser.accepted is False and browser.code == 1008

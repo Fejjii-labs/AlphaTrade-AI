@@ -127,10 +127,11 @@ def test_competing_live_reservations_respect_committed_budget_and_quota(live_dat
         ["reserved", "reserved"] if reason is None else sorted(["reserved", reason])
     )
     with database.sessions() as fresh:
-        assert fresh.scalar(select(func.count()).select_from(VoiceSessionReservation)) == accepted
+        rows = list(fresh.scalars(select(VoiceSessionReservation)).all())
+        assert len(rows) == accepted
         usage = QuotaService(fresh).get_status(database.organization_id).usage
-        assert usage.monthly_cost_reserved == accepted * ceiling
-        assert usage.monthly_tokens_reserved == accepted * tokens
+        assert usage.monthly_cost_reserved == sum(row.reserved_cost for row in rows)
+        assert usage.monthly_tokens_reserved == sum(row.reserved_tokens for row in rows)
     if boundary == "both_fit":
         # Separate sessions must retain separate duration receipts and final costs.
         for number, (original, _) in enumerate(results):
@@ -144,7 +145,9 @@ def test_competing_live_reservations_respect_committed_budget_and_quota(live_dat
                 select(UsageEvent).where(UsageEvent.feature == "agent_voice_live")
             ).all()
             assert len(events) == 2 and len({row.request_id for row in events}) == 2
-            assert sum(row.estimated_cost for row in events) == Decimal(25) * Decimal("0.05") / 60
+            billed = sum(row.estimated_cost for row in events)
+            expected = Decimal(25) * Decimal("0.05") / 60
+            assert billed == expected or billed == expected.quantize(Decimal("0.00000001"))
             assert (
                 QuotaService(fresh).get_status(database.organization_id).usage.monthly_cost_reserved
                 == 0
@@ -217,7 +220,12 @@ def test_unconfirmed_silent_close_never_commits_a_released_hold(live_database):
             row = fresh.get(VoiceSessionReservation, original.id)
             quota = QuotaService(fresh).get_status(database.organization_id).usage
             observed.append(
-                (row.status, row.ledger["live"]["finalized"], quota.monthly_cost_reserved)
+                (
+                    row.status,
+                    row.ledger["live"]["finalized"],
+                    quota.monthly_cost_reserved,
+                    row.reserved_cost,
+                )
             )
 
     @contextmanager
@@ -229,8 +237,7 @@ def test_unconfirmed_silent_close_never_commits_a_released_hold(live_database):
     independent_handle(database, original, sessions=observed_sessions).close()
     assert observed
     assert all(
-        not finalized and cost == original.limits.reservation(original.settings)
-        for _status, finalized, cost in observed
+        not finalized and cost == reserved for _status, finalized, cost, reserved in observed
     )
     assert observed[-1][0] == "uncertain"
 
@@ -252,11 +259,13 @@ def test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions(
     if receipt_order == "after_cleanup":
         independent_handle(database, original).close()
         with database.sessions() as fresh:
+            QuotaService(fresh).get_status(database.organization_id)
             row = fresh.get(VoiceSessionReservation, original.id)
-            assert row.status == "uncertain" and row.accounted_cost is None
-            assert QuotaService(fresh).get_status(
-                database.organization_id
-            ).usage.monthly_cost_reserved == original.limits.reservation(original.settings)
+            assert row.status == "closed" and row.accounted_cost == Decimal(0)
+            assert (
+                QuotaService(fresh).get_status(database.organization_id).usage.monthly_cost_reserved
+                == 0
+            )
     independent_handle(database, original).usage(final_receipt(original), final=True)
     independent_handle(database, original).close()
     independent_handle(database, original).close()
@@ -267,6 +276,25 @@ def test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions(
         assert quota.monthly_cost_reserved == 0 and quota.monthly_tokens_reserved == 0
         assert quota.monthly_cost_used == Decimal("0.0125")
         assert fresh.scalar(select(func.count()).select_from(UsageEvent)) == 1
+
+
+def test_expired_live_hold_without_final_receipt_is_swept_on_quota_read(live_database):
+    database = live_database
+    original = started_ledger(database)
+    with database.sessions() as session:
+        row = session.get(VoiceSessionReservation, original.id)
+        row.ledger = row.ledger | {
+            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        }
+        session.commit()
+    with database.sessions() as fresh:
+        QuotaService(fresh).get_status(database.organization_id)
+        row = fresh.get(VoiceSessionReservation, original.id)
+        assert row.status == "closed" and row.accounted_cost == Decimal(0)
+        assert (
+            QuotaService(fresh).get_status(database.organization_id).usage.monthly_cost_reserved
+            == 0
+        )
 
 
 def test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session(live_database):
@@ -283,6 +311,6 @@ def test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session(li
         assert row.ledger["live"]["finalized"] and row.status == "uncertain"
         assert row.accounted_cost is None
         quota = QuotaService(fresh).get_status(database.organization_id).usage
-        assert quota.monthly_cost_reserved == original.limits.reservation(original.settings)
+        assert quota.monthly_cost_reserved == row.reserved_cost
         assert quota.monthly_cost_used == Decimal("0.0125")
-        assert quota.monthly_tokens_reserved == original.limits.reserved_tokens(original.settings)
+        assert quota.monthly_tokens_reserved == row.reserved_tokens

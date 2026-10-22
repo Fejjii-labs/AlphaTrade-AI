@@ -27,6 +27,9 @@ async def live_voice(websocket: WebSocket) -> None:
     if websocket.headers.get("origin") not in settings.cors_origins:
         await websocket.close(code=1008)
         return
+    if not settings.agent_live_enabled:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     ledger: LiveLedger | None = None
     session: LiveSession | None = None

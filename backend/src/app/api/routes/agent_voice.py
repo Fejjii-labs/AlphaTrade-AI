@@ -27,6 +27,9 @@ router = APIRouter(prefix="/agent/voice", tags=["agent-voice"])
 
 @router.get("/config", response_model=VoiceConfig)
 def voice_config(tenant: TraderDep, settings: SettingsDep) -> VoiceConfig:
+    provider = "gpt_live" if settings.agent_live_enabled else "realtime"
+    if not settings.agent_live_enabled and not settings.agent_realtime_enabled:
+        return VoiceConfig(available=False, reason="voice_not_enabled", provider=provider)
     try:
         limits = (
             load_live_limits(settings) if settings.agent_live_enabled else load_limits(settings)
@@ -37,7 +40,7 @@ def voice_config(tenant: TraderDep, settings: SettingsDep) -> VoiceConfig:
         return VoiceConfig(
             available=False,
             reason=str(exc),
-            provider="gpt_live" if settings.agent_live_enabled else "realtime",
+            provider=provider,
         )
     return VoiceConfig(
         available=True,

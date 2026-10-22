@@ -11,6 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.agent_voice.reservations_sweep import release_expired_voice_holds
 from app.db.models import OrganizationQuota as OrganizationQuotaModel
 from app.db.voice_realtime import VoiceSessionReservation
 from app.repositories.quota import QuotaRepository
@@ -388,6 +389,7 @@ class QuotaService:
         # A socket/restart failure cannot release a promise of potentially billed
         # work. Outstanding holds span a month boundary until server evidence
         # closes them. Keep actual usage separate from these conservative holds.
+        release_expired_voice_holds(self._session)
         reservations = list(
             self._session.scalars(
                 select(VoiceSessionReservation).where(

@@ -1,10 +1,12 @@
 """Unresolved voice reservations fence ordinary model quotas after restart."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.voice_realtime import VoiceSessionReservation
@@ -87,6 +89,70 @@ def test_partial_accounting_cannot_release_an_active_reservation(experiment_engi
     with Session(experiment_engine) as fresh:
         usage = QuotaService(fresh).get_status(org).usage
         assert usage.monthly_cost_reserved == 1 and usage.monthly_tokens_reserved == 100
+
+
+def test_two_open_holds_on_one_organization_sum_reserved_quota(experiment_engine):
+    with Session(experiment_engine) as session:
+        world = World(session)
+        org = world.tenant.organization_id
+        QuotaService(session).update_quota(
+            org,
+            OrganizationQuotaUpdate(
+                monthly_token_limit=1000,
+                monthly_cost_limit=Decimal("10"),
+            ),
+        )
+        reserve(world, status="pending")
+        reserve(world, status="active")
+        session.commit()
+    with Session(experiment_engine) as fresh:
+        usage = QuotaService(fresh).get_status(org).usage
+        assert usage.monthly_cost_reserved == Decimal("2")
+        assert usage.monthly_tokens_reserved == 200
+
+
+def test_expired_hold_without_final_receipt_releases_on_quota_status(experiment_engine):
+    with Session(experiment_engine) as session:
+        world = World(session)
+        org = world.tenant.organization_id
+        row = reserve(world, status="uncertain")
+        row.ledger = {
+            **row.ledger,
+            "live": {"finalized": False},
+            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        }
+        session.commit()
+    with Session(experiment_engine) as fresh:
+        QuotaService(fresh).get_status(org)
+        row = fresh.scalar(
+            select(VoiceSessionReservation).where(VoiceSessionReservation.organization_id == org)
+        )
+        assert row is not None
+        assert row.status == "closed" and row.accounted_cost == Decimal(0)
+        usage = QuotaService(fresh).get_status(org).usage
+        assert usage.monthly_cost_reserved == 0 and usage.monthly_tokens_reserved == 0
+
+
+def test_concurrent_quota_reads_sweep_expired_holds_once(experiment_engine):
+    with Session(experiment_engine) as session:
+        world = World(session)
+        org = world.tenant.organization_id
+        row = reserve(world, status="pending")
+        row.ledger = {
+            **row.ledger,
+            "live": {"finalized": False},
+            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        }
+        session.commit()
+
+    def read_quota() -> Decimal:
+        with Session(experiment_engine) as fresh:
+            return QuotaService(fresh).get_status(org).usage.monthly_cost_reserved
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(read_quota) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+    assert results == [Decimal(0), Decimal(0)]
 
 
 def test_verified_closed_reservation_releases_hold_without_claiming_measured_usage(

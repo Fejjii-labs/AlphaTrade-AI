@@ -23,6 +23,7 @@ from app.agent_voice.config import VoiceLimits, VoiceUnavailableError, load_limi
 from app.agent_voice.contracts import VoiceStart
 from app.agent_voice.protocol import checked_audio, create_response, session_update
 from app.agent_voice.service import RealtimeSession
+from app.api.routes.agent_voice import voice_config
 from app.core.config import Settings
 
 
@@ -135,6 +136,30 @@ def test_full_context_orphan_audio_and_shared_router_retries_are_reserved(voice_
 def test_missing_bindings_fail_closed_before_provider(tmp_path, change, reason):
     with pytest.raises(VoiceUnavailableError, match=reason):
         load_limits(Settings(_env_file=None).model_copy(update=change))
+
+
+def test_astra_realtime_limits_file_is_not_read_when_realtime_disabled(tmp_path, voice_limits):
+    settings = Settings(
+        _env_file=None,
+        agent_realtime_enabled=False,
+        agent_realtime_limits_file=str(tmp_path / "unused.json"),
+    )
+    path = tmp_path / "realtime-limits.json"
+    path.write_text(
+        voice_limits.model_copy(
+            update={
+                "reasoning": voice_limits.reasoning.model_copy(
+                    update={"model": settings.agent_reasoning_model}
+                )
+            }
+        ).model_dump_json()
+    )
+    config_settings = settings.model_copy(update={"agent_realtime_limits_file": str(path)})
+    config = voice_config(
+        SimpleNamespace(organization_id=voice_limits.organization_id),
+        config_settings,
+    )
+    assert config.available is False and config.reason == "voice_not_enabled"
 
 
 def test_realtime_receipt_matches_the_voice_reasoning_model(tmp_path, voice_limits):

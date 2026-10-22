@@ -21,6 +21,12 @@ The text agent still uses `AGENT_REASONING_MODEL` (default `gpt-6-astra`) and
 voice reasoning model. A receipt that names the text model is refused with
 `verified_reasoning_route_mismatch`.
 
+When `AGENT_REALTIME_ENABLED` is false, `/agent/voice/config` does not read or
+validate a realtime limits file. An older receipt that still names
+`gpt-6-astra` for `reasoning.model` therefore does not break disabled
+deployments. If realtime is enabled, the verified realtime limits file must name
+`AGENT_VOICE_REASONING_MODEL` (default `gpt-6.1-sol`), not the text agent model.
+
 ## Budget
 
 A session is admitted only when all of the following fit the $1 session ceiling
@@ -58,10 +64,27 @@ For the example receipt in `docs/gpt_live_limits.example.json`
 - configured `maximum_seconds` that fit = `431 - 14` = **417**
 
 418 configured seconds would bill 432 seconds and the total would exceed $1, so
-admission is refused. The schema still caps `maximum_seconds` at 300, which is
-inside this budget. The repository default `AGENT_MAX_OUTPUT_TOKENS` is 25000.
-That default does **not** fit this example; the $1 ceiling then refuses
-admission. The 417-second figure is only for `AGENT_MAX_OUTPUT_TOKENS=4000`.
+admission is refused. The **417** figure is the largest configured
+`maximum_seconds` whose full hold fits the $1 ceiling at
+`AGENT_MAX_OUTPUT_TOKENS=4000`; it is not the runtime session length operators
+should expect. The schema caps `maximum_seconds` at **300**, so the effective
+maximum for this example receipt is **300 seconds** unless that cap is
+deliberately raised in code and the receipt is updated to match. The repository
+default `AGENT_MAX_OUTPUT_TOKENS` is 25000. That default does **not** fit this
+example; the $1 ceiling then refuses admission.
+
+## Expired holds without a final receipt
+
+Voice reservations store `expires_at` in the ledger. While a hold is open,
+quota treats `reserved_cost` / `reserved_tokens` as outstanding. If a socket
+ends without a provider final receipt (for example a crash before
+`live.finalized`), the row can remain `uncertain` and keep blocking quota.
+
+`QuotaService` runs `release_expired_voice_holds` before each usage snapshot.
+That sweep closes expired rows that never recorded a finalized Live duration
+receipt and sets `accounted_cost` to zero so the monthly hold drops. Rows with a
+finalized Live receipt but unresolved secondary delegation are left unchanged so
+conservative tool holds remain until server evidence settles them.
 
 The example file contains no secrets. Dates are placeholders. A real receipt
 must be unexpired, tenant-scoped, and cover the whole session plus the

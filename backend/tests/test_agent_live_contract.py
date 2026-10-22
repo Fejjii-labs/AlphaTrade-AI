@@ -242,6 +242,7 @@ def test_example_limits_fit_417_seconds_at_4000_output_tokens():
     assert limits.embedding is not None
     assert limits.embedding.input_usd_per_million == Decimal("0.02")
     assert limits.maximum_session_seconds(settings) == 417
+    assert min(limits.maximum_seconds, limits.maximum_session_seconds(settings)) == 300
     # The repository default output cap does not fit this example under $1.
     assert limits.maximum_session_seconds(Settings(_env_file=None)) == 0
     assert settings.agent_reasoning_model == "gpt-6-astra"
