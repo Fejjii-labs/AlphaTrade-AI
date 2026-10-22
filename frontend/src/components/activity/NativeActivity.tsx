@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/states";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import type { NativeActivityItem, NativeActivityKind } from "@/lib/api/blofin-activity";
 import { nativeIdentity, nativeMoney, nativeTime } from "@/lib/native-activity";
 import { formatDateTime } from "@/lib/format";
@@ -51,16 +53,35 @@ export function NativeActivity({ statistics = false, refreshKey = 0 }: { statist
   const [kind, setKind] = useState<NativeActivityKind>("fill");
   const { page, busy, error, refresh, more } = useNativeActivity(kind, refreshKey);
   const items = page?.identity_status === "verified" ? page.items.filter(item => item.kind === kind) : [];
+  const withheld = page != null && page.identity_status !== "verified";
   const lastSync = page?.coverage.find(stream => stream.kind === kind)?.last_successful_sync;
   return <Card data-testid="native-activity">
-    <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+    <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
       <CardTitle>BloFin activity</CardTitle>
-      <Button className="min-h-11" variant="outline" disabled={busy} onClick={refresh}>{busy ? "Loading…" : "Refresh activity"}</Button>
+      {withheld ? null : (
+        <Button className="h-11" variant="outline" disabled={busy} onClick={refresh}>{busy ? "Loading…" : "Refresh activity"}</Button>
+      )}
     </CardHeader>
-    <CardContent className="space-y-3">
+    <CardContent className="flex flex-col gap-3">
+      {withheld ? (
+        <EmptyState
+          className="py-8"
+          title="Activity is withheld"
+          description="Account identity unverified. History is withheld until this demo account is confirmed."
+          action={(
+            <Link
+              href="/settings/exchange"
+              className={cn(buttonVariants({ variant: "outline" }), "h-11")}
+            >
+              Exchange settings
+            </Link>
+          )}
+        />
+      ) : (
+      <>
       <div className="flex flex-wrap items-center gap-2">
-        <Button className="min-h-11" variant={kind === "fill" ? "default" : "outline"} aria-pressed={kind === "fill"} onClick={() => setKind("fill")}>Fills</Button>
-        <Button className="min-h-11" variant={kind === "order" ? "default" : "outline"} aria-pressed={kind === "order"} onClick={() => setKind("order")}>Completed orders</Button>
+        <Button className="h-11" variant={kind === "fill" ? "default" : "outline"} aria-pressed={kind === "fill"} onClick={() => setKind("fill")}>Fills</Button>
+        <Button className="h-11" variant={kind === "order" ? "default" : "outline"} aria-pressed={kind === "order"} onClick={() => setKind("order")}>Completed orders</Button>
         {page ? <Badge variant={page.freshness === "fresh" && !error ? "success" : "warning"}>{error ? "Refresh failed" : freshness[page.freshness]}</Badge> : null}
       </div>
       <p className="text-xs text-text-secondary">Stored native BloFin demo history · incomplete coverage. Each fill counts once; matched commands are links.</p>
@@ -73,13 +94,15 @@ export function NativeActivity({ statistics = false, refreshKey = 0 }: { statist
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       {page ? <>
         {page.identity_status !== "verified" ? <p role="status">Account identity unverified. History is withheld.</p> : items.length ? <ul className="space-y-2">{items.map(item => <li key={nativeIdentity(page, item)}><ActivityRow item={item} /></li>)}</ul> : <p className="text-sm">No stored {kind === "fill" ? "fills" : "completed orders"} in this window. Coverage remains incomplete.</p>}
-        {page.identity_status === "verified" && page.next_cursor ? <Button className="min-h-11" variant="outline" disabled={busy} onClick={more}>Load older activity</Button> : null}
-        <details className="text-xs text-text-secondary"><summary className="min-h-11 cursor-pointer py-3">History coverage &amp; age</summary>
+        {page.identity_status === "verified" && page.next_cursor ? <Button className="h-11" variant="outline" disabled={busy} onClick={more}>Load older activity</Button> : null}
+        <details className="text-xs text-text-secondary"><summary className="flex h-11 cursor-pointer items-center">History coverage &amp; age</summary>
           <p>Read at {formatDateTime(page.generated_at)}. This read does not synchronize the exchange.</p>
           {page.coverage.map(stream => <p key={stream.kind}>{stream.kind === "fill" ? "Fills" : "Orders"}: last successful sync {stream.last_successful_sync ? formatDateTime(stream.last_successful_sync) : "unknown"}; {stream.selection === "cursor_sweep" ? "completed-order cursor sweep; time coverage unknown" : <>window {nativeTime(stream.window_begin_ms)} – {nativeTime(stream.window_end_ms)}</>}. {stream.gap_detected ? "A history gap was detected." : "Earlier history is not established."}{stream.last_error_code ? " Synchronization reported an error." : ""}</p>)}
           {page.limitations.map(limit => <p key={limit}>{limit}</p>)}
         </details>
       </> : !busy && !error ? <p className="text-sm">Sign in to read stored activity.</p> : null}
+      </>
+      )}
     </CardContent>
   </Card>;
 }

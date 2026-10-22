@@ -211,8 +211,8 @@ test("pending earlier history stays private across conversation navigation and a
     await expect.poll(() => releases.length).toBe(2);
     await page.goto("/journal");
     const menu = page.getByTestId("header-status-menu");
-    await menu.locator("summary").click();
-    await menu.getByRole("button", { name: "Log out", exact: true }).click();
+    await menu.getByRole("button", { name: "Status", exact: true }).click();
+    await page.getByRole("button", { name: "Log out", exact: true }).click();
     await expect(page).toHaveURL(/\/login/);
     const other = await login(page, true);
     releases[1]();

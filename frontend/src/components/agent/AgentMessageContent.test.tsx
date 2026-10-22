@@ -12,6 +12,26 @@ it("renders one concise response and keeps raw evidence collapsed without a dupl
   expect(screen.queryByText(/Recorded facts/)).not.toBeInTheDocument();
   expect(screen.queryByText(/currently open/i)).not.toBeInTheDocument();
 });
+it("shows document guidance as a muted caption under the reply", () => {
+  const guidance =
+    "Document guidance is reference data; these passages do not establish approved settings.";
+  render(
+    <AgentMessageContent
+      message={{
+        role: "assistant",
+        content: `Yep, your message came through.\n\n${guidance}\n\nRecorded facts (not a confirmation):\nchunk=1`,
+      }}
+    />,
+  );
+  expect(screen.getByText("Yep, your message came through.")).toBeVisible();
+  const caption = screen.getByText(guidance);
+  expect(caption).toBeVisible();
+  expect(caption).toHaveClass("text-xs", "text-text-muted");
+  expect(caption.closest("details")).toBeNull();
+  const details = screen.getByText("Stored evidence").closest("details");
+  expect(details).not.toHaveAttribute("open");
+  expect(details).not.toHaveTextContent(guidance);
+});
 it("moves historical appended facts into the collapsed evidence panel", () => {
   render(<AgentMessageContent message={{ role: "assistant", content: "Entry verified.\n\nRecorded facts (not a confirmation):\nRaw identity evidence" }} />);
   expect(screen.getByText("Entry verified.")).toBeVisible();

@@ -976,7 +976,7 @@ export function AgentWorkspace() {
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder="Ask about a paper trade, a rule, or a journal note."
                 />
-                <div className="flex flex-wrap items-start gap-2 [&_button]:min-h-11">
+                <div className="flex flex-wrap items-center gap-2 [&_button]:h-11">
                   <Button
                     type="submit"
                     disabled={
@@ -1025,9 +1025,7 @@ export function AgentWorkspace() {
                     </Select> : null}
                   </div>
                 </details>
-                <details open className="text-sm text-text-muted">
-                  <summary className="min-h-11 cursor-pointer content-center">Browser dictation fallback</summary>
-                  <VoiceConversationControls
+                <VoiceConversationControls
                   conversationId={conversationId}
                   sessionKey={recoveryScope}
                   authenticated={Boolean(recoveryScope) && sessionLive}
@@ -1042,7 +1040,6 @@ export function AgentWorkspace() {
                   ensureConversation={ensureConversation}
                   showReply={false}
                 />
-                </details>
                 {sendError ? (
                   <p
                     role="alert"
