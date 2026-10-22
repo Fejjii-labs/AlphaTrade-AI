@@ -90,6 +90,16 @@ def _require_journal_trade_owner(trade: JournalTradeRead, tenant: TenantDep) -> 
         raise NotFoundError("Journal trade not found.")
 
 
+def _load_owned_journal_trade(
+    journal_trade_id: uuid.UUID,
+    tenant: TenantDep,
+    service: JournalTradeServiceDep,
+) -> JournalTradeRead:
+    trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
+    _require_journal_trade_owner(trade, tenant)
+    return trade
+
+
 @router.post("/entries", response_model=JournalEntry, summary="Create journal entry")
 async def create_journal_entry(
     body: JournalEntryCreate,
@@ -538,11 +548,13 @@ async def upload_journal_trade_attachment(
     journal_trade_id: uuid.UUID,
     file: UploadFile,
     tenant: TraderDep,
+    trade_service: JournalTradeServiceDep,
     service: JournalAttachmentServiceDep,
     session: SessionDep,
     caption: str | None = Form(default=None, max_length=4000),
 ) -> JournalTradeAttachmentRead:
     """Size, MIME, and per-trade quota limits are enforced fail-closed."""
+    _load_owned_journal_trade(journal_trade_id, tenant, trade_service)
     content = await file.read()
     result = service.add_attachment(
         journal_trade_id,
@@ -565,8 +577,10 @@ async def upload_journal_trade_attachment(
 async def list_journal_trade_attachments(
     journal_trade_id: uuid.UUID,
     tenant: ReaderDep,
+    trade_service: JournalTradeServiceDep,
     service: JournalAttachmentServiceDep,
 ) -> JournalTradeAttachmentList:
+    _load_owned_journal_trade(journal_trade_id, tenant, trade_service)
     return service.list_attachments(
         journal_trade_id,
         organization_id=tenant.organization_id,
@@ -581,12 +595,14 @@ async def list_journal_trade_attachments(
 async def download_journal_trade_attachment(
     attachment_id: uuid.UUID,
     tenant: ReaderDep,
+    trade_service: JournalTradeServiceDep,
     service: JournalAttachmentServiceDep,
 ) -> Response:
     meta, content = service.get_content(
         attachment_id,
         organization_id=tenant.organization_id,
     )
+    _load_owned_journal_trade(meta.journal_trade_id, tenant, trade_service)
     safe_name = meta.filename.replace('"', "")
     return Response(
         content=content,
@@ -629,8 +645,8 @@ async def get_journal_trade(
     session: SessionDep,
 ) -> JournalTradeDetail:
     detail = service.get_detail(journal_trade_id, organization_id=tenant.organization_id)
+    _require_journal_trade_owner(detail.trade, tenant)
     if detail.trade.source == JournalTradeSource.MANUAL_DEMO_TEST:
-        _require_journal_trade_owner(detail.trade, tenant)
         ref = detail.trade.external_ref or ""
         if ref.startswith("blofin-demo-history:"):
             return detail
@@ -696,6 +712,7 @@ async def add_journal_trade_evidence(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> JournalTradeEvidenceRead:
+    _load_owned_journal_trade(journal_trade_id, tenant, service)
     result = service.add_evidence(
         journal_trade_id,
         body,
@@ -719,6 +736,7 @@ async def add_journal_trade_rule_check(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> JournalTradeRuleCheckRead:
+    _load_owned_journal_trade(journal_trade_id, tenant, service)
     result = service.add_rule_check(
         journal_trade_id,
         body,
@@ -765,9 +783,7 @@ async def add_journal_trade_observation(
     service: JournalTradeServiceDep,
     session: SessionDep,
 ) -> JournalTradeObservationRead:
-    trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
-    if trade.source == JournalTradeSource.MANUAL_DEMO_TEST and trade.user_id != tenant.user_id:
-        raise NotFoundError("Journal trade not found.")
+    _load_owned_journal_trade(journal_trade_id, tenant, service)
     result = service.add_observation(
         journal_trade_id,
         body,
