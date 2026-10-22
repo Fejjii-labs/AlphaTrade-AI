@@ -62,6 +62,7 @@ def assemble_ohlcv_family(
     organization_id: object,
     session: Session | None,
 ) -> AssembledCanonicalEvidence:
+    from app.core.config import get_settings
     from app.strategy_brain.sfp.contracts import SfpSpec
     from app.strategy_brain.sfp.detector import detect_sfp
     from app.strategy_brain.sfp_runtime.assembly import sfp_observations
@@ -147,7 +148,17 @@ def assemble_ohlcv_family(
             ordered = sorted(pairs.values(), key=lambda pair: pair[0].interval_start)
             bars = tuple(b for b, _ in ordered)
             observations = tuple(o for _, o in ordered)
-        scan = detect_sfp(bars, observations, spec, evaluated_at=now, tick_size=tick_size)
+        # Same floor the internal paper stop uses. Telegram copies this plan.
+        # The research replay adapter does not come through here. Zero leaves
+        # the authored multiple.
+        scan = detect_sfp(
+            bars,
+            observations,
+            spec,
+            evaluated_at=now,
+            tick_size=tick_size,
+            atr_multiple_floor=get_settings().sfp_min_stop_atr_multiple,
+        )
         latest = select_detection(scan, bars)
         events = scan.events
     else:

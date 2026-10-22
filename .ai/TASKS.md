@@ -15,7 +15,7 @@ Legend — Priority: P0 (critical) … P3 (low). Status: TODO / IN_PROGRESS / DO
   model is unchanged. Admission reserves $0.05/min plus reasoning and embedding
   and refuses when that exceeds the $1 ceiling.
 - Limits: No Render env change. Realtime stays disabled. No live orders.
-- Reference: AT-ADR-144; `docs/gpt_live_integration.md`.
+- Reference: AT-ADR-146; `docs/gpt_live_integration.md`.
 
 ## AT-134 — Full-hex kill-switch alert keys
 

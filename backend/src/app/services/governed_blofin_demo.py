@@ -635,7 +635,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # below with size_for_profile. Leverage and margin-mode reads still
         # refuse, and this method does not write the venue.
         # SFP execution stays unauthorized on this path. Shared _plan_terms
-        # refuses it unless the internal paper loop opts in.
+        # refuses it unless the internal paper loop opts in. This call also
+        # leaves side-aware fill and the ATR floor off: the demo book below
+        # replaces the entry, and a haircut here would move the evidence price.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,

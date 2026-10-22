@@ -252,6 +252,32 @@ class Settings(BaseSettings):
     # time when that source is supplied. A larger gap refuses the cycle.
     # Default 15 seconds. This does not arm the monitor.
     paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # Adverse fraction applied when a paper quote has no bid and ask.
+    # This is the non-major default (5bp). BTC and ETH use the major haircut.
+    # Longs pay mid * (1 + haircut). Shorts receive mid * (1 - haircut).
+    # Zero restores a mid fill. This does not arm the watcher or real trading.
+    paper_fill_spread_haircut: Decimal = Field(
+        default=Decimal("0.0005"),
+        ge=Decimal("0"),
+        le=Decimal("0.05"),
+    )
+    # BTC and ETH last-trade haircut. Lower than the non-major default.
+    # This does not arm the watcher or real trading.
+    paper_fill_major_spread_haircut: Decimal = Field(
+        default=Decimal("0.0001"),
+        ge=Decimal("0"),
+        le=Decimal("0.05"),
+    )
+    # Floor under the authored SFP min_stop_atr_multiple. Internal paper and
+    # the stored alert plan both apply it, so Telegram shows the same stop.
+    # 0.5 ATR keeps the 0.1% buffer from being the whole stop on a volatile
+    # name. Zero leaves the authored multiple, including the v1/v2 default of
+    # zero. This does not arm the watcher or real trading.
+    sfp_min_stop_atr_multiple: Decimal = Field(
+        default=Decimal("0.5"),
+        ge=Decimal("0"),
+        lt=Decimal("100"),
+    )
     # Apply is bound to this user id. Empty fails closed. An owner role is not enough.
     risk_policy_owner_user_id: str = ""
     # Paper live evidence raises this floor so one timeout plus backoff fits
