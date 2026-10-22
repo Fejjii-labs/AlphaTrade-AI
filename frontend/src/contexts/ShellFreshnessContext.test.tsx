@@ -223,6 +223,7 @@ describe("ShellFreshnessContext", () => {
         <TopBar />
       </ShellFreshnessProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
     const freshnessRegion = screen.getByTestId("topbar-freshness");
     expect(within(freshnessRegion).queryByText(/^Live/)).not.toBeInTheDocument();
     expect(
