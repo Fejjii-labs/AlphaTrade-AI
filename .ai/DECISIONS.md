@@ -2,6 +2,53 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-145 — Last-trade paper fills use a per-asset haircut, and the alert stop uses the ATR floor
+
+- Date: 2026-10-22
+- Decision: Both live quote producers (`quote_current_price` and
+  `quote_from_terminal_trade`) publish the last contracted trade and do not
+  set bid or ask. The book is a separate optional observation and is not on
+  `PerpetualMarketSource`, so it is not attached to that quote and is not
+  invented from the last trade. When a caller already supplies a usable book,
+  the fill still lifts the ask or hits the bid. Otherwise the mid moves
+  against the trader by a per-asset haircut. BTC and ETH use
+  `PAPER_FILL_MAJOR_SPREAD_HAIRCUT` (default `0.0001`, 1bp). Every other
+  base, including names that merely start with those letters such as ETHFI,
+  uses `PAPER_FILL_SPREAD_HAIRCUT` (default `0.0005`, 5bp). A missing symbol
+  uses the 5bp default. Supersedes only the single `0.0001` haircut sentence
+  of AT-ADR-144.
+- The SFP ATR floor is applied when the brain scan records the setup, which
+  is the plan Telegram copies. It is the same `SFP_MIN_STOP_ATR_MULTIPLE`
+  the internal paper loop already applies (default `0.5`). The floor is still
+  not hashed into `setup_id`. The research replay adapter does not apply it.
+  BloFin demo still does not opt into the haircut or the floor.
+- Side-aware exit fills with slippage are not part of this decision.
+- Neither setting arms the watcher, demo execution, or real trading.
+- Reference: PR #311 Griller conditions. `app/services/paper_fill.py`,
+  `app/strategy_brain/assembly.py`.
+
+## AT-ADR-144 — Paper fills are side-aware and the SFP stop has an ATR floor
+
+- Date: 2026-10-22
+- Decision: Internal paper fills a long at the live ask and a short at the
+  live bid. When the quote only has a mid (`CurrentPriceQuote.price`, the
+  last trade), the fill moves against the trader by
+  `PAPER_FILL_SPREAD_HAIRCUT` (default `0.0001`, half of a 2bp spread).
+  A missing quote, a crossed book, or a non-positive result refuses the
+  plan with `evidence_unavailable`, the same fail-closed code as a missing
+  quote. BloFin demo does not opt in: it still replaces the entry from its
+  own book.
+- The SFP paper stop stays `max(0.1% of the swept reference, N ticks, k*ATR)`.
+  `k` defaults to `0` on stored `sfp-research/v1` and `sfp-research/v2` so
+  those rows and their setup ids do not change. `sfp-research/v3` sets `k`
+  to `0.5`. Internal paper applies `max(authored k, SFP_MIN_STOP_ATR_MULTIPLE)`
+  with that setting defaulting to `0.5`. The floor is not hashed into
+  `setup_id`. A positive `k` with no Wilder ATR still refuses the plan.
+  Setting the multiple to `0` restores the authored multiple, including zero.
+- Neither setting arms the watcher, demo execution, or real trading.
+- Reference: PR #309 Griller follow-ups. `app/services/paper_fill.py`,
+  `app/strategy_brain/sfp/contracts.py`.
+
 ## AT-ADR-143 — Internal-read mirror runs the #304 pin before account reads
 
 - Date: 2026-10-21

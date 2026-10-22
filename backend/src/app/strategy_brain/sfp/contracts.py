@@ -32,14 +32,20 @@ DEFAULT_SFP_STOP_BUFFER = Decimal("0.001")
 # One tick, applied only when a tick size is known. Zero would leave a coarse
 # tick inside the percent buffer. This is not a sweep or invalidation threshold.
 DEFAULT_SFP_MIN_STOP_TICKS = 1
-# Zero keeps a short history from refusing a plan before Wilder ATR can print.
+# Zero keeps a stored v1/v2 spec that omits this key from changing identity,
+# and keeps a short research history from refusing a plan before Wilder ATR
+# can print. Internal paper applies SFP_MIN_STOP_ATR_FLOOR unless settings
+# lower it. That floor is not part of the setup id.
 DEFAULT_SFP_MIN_STOP_ATR_MULTIPLE = Decimal("0")
+# Half an ATR. Wide enough that a volatile name is not stopped on the 0.1%
+# buffer alone, and still small enough for a nearby opposing level to clear 1R.
+SFP_MIN_STOP_ATR_FLOOR = Decimal("0.5")
 
 
 class SfpParameters(CanonicalModel):
     """Explicit research inputs. Ratios are relative to reference price, never win odds."""
 
-    version: Literal["sfp-research/v1", "sfp-research/v2"] = "sfp-research/v1"
+    version: Literal["sfp-research/v1", "sfp-research/v2", "sfp-research/v3"] = "sfp-research/v1"
     provisional: Literal[True] = True
     level_lookback: int = Field(ge=3, le=1000)
     pivot_width: int = Field(ge=1, le=20)
@@ -112,6 +118,22 @@ def sfp_research_v2_parameters() -> SfpParameters:
         min_stop_atr_multiple=DEFAULT_SFP_MIN_STOP_ATR_MULTIPLE,
         approach_proximity=Decimal("0.001"),
         approach_cooldown_seconds=900,
+    )
+
+
+def sfp_research_v3_parameters() -> SfpParameters:
+    """Next research version. Adds the non-zero ATR stop floor.
+
+    Stored v1 and v2 rows keep a zero ATR multiple. This factory does not
+    rewrite them. Internal paper also applies ``Settings.sfp_min_stop_atr_multiple``,
+    which defaults to the same 0.5 floor.
+    """
+
+    return sfp_research_v2_parameters().model_copy(
+        update={
+            "version": "sfp-research/v3",
+            "min_stop_atr_multiple": SFP_MIN_STOP_ATR_FLOOR,
+        }
     )
 
 
