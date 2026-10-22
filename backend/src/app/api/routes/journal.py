@@ -79,10 +79,12 @@ from app.schemas.journal_trades import (
 )
 from app.schemas.lesson import LessonCandidate
 from app.security.rbac import ReaderDep, TraderDep
-from app.security.tenant import ensure_same_organization
 from app.services.manual_demo_history import ManualDemoHistoryService
 
 router = APIRouter(prefix="/journal", tags=["journal"])
+
+_ATTACHMENT_NOT_FOUND_MSG = "Attachment not found."
+_JOURNAL_ENTRY_NOT_FOUND_MSG = "Journal entry not found."
 
 
 def _require_journal_trade_owner(trade: JournalTradeRead, tenant: TenantDep) -> None:
@@ -98,6 +100,36 @@ def _load_owned_journal_trade(
     trade = service.get(journal_trade_id, organization_id=tenant.organization_id)
     _require_journal_trade_owner(trade, tenant)
     return trade
+
+
+def _load_owned_journal_entry(
+    journal_entry_id: uuid.UUID,
+    tenant: TenantDep,
+    journal_service: JournalServiceDep,
+) -> JournalEntry:
+    entry = journal_service.get(journal_entry_id)
+    if entry.organization_id != tenant.organization_id or entry.user_id != tenant.user_id:
+        raise NotFoundError(_JOURNAL_ENTRY_NOT_FOUND_MSG)
+    return entry
+
+
+def _load_owned_attachment(
+    attachment_id: uuid.UUID,
+    tenant: TenantDep,
+    attachment_service: JournalAttachmentServiceDep,
+    trade_service: JournalTradeServiceDep,
+) -> JournalTradeAttachmentRead:
+    try:
+        meta = attachment_service.get_attachment(
+            attachment_id, organization_id=tenant.organization_id
+        )
+    except NotFoundError:
+        raise NotFoundError(_ATTACHMENT_NOT_FOUND_MSG) from None
+    try:
+        _load_owned_journal_trade(meta.journal_trade_id, tenant, trade_service)
+    except NotFoundError:
+        raise NotFoundError(_ATTACHMENT_NOT_FOUND_MSG) from None
+    return meta
 
 
 @router.post("/entries", response_model=JournalEntry, summary="Create journal entry")
@@ -160,9 +192,7 @@ async def get_journal_entry(
     tenant: TenantDep,
     journal_service: JournalServiceDep,
 ) -> JournalEntry:
-    entry = journal_service.get(journal_entry_id)
-    ensure_same_organization(entry.organization_id, tenant)
-    return entry
+    return _load_owned_journal_entry(journal_entry_id, tenant, journal_service)
 
 
 @router.patch("/entries/{journal_entry_id}", response_model=JournalEntry)
@@ -173,8 +203,7 @@ async def update_journal_entry(
     journal_service: JournalServiceDep,
     session: SessionDep,
 ) -> JournalEntry:
-    entry = journal_service.get(journal_entry_id)
-    ensure_same_organization(entry.organization_id, tenant)
+    _load_owned_journal_entry(journal_entry_id, tenant, journal_service)
     result = journal_service.update(journal_entry_id, body)
     session.commit()
     return result
@@ -187,8 +216,7 @@ async def delete_journal_entry(
     journal_service: JournalServiceDep,
     session: SessionDep,
 ) -> None:
-    entry = journal_service.get(journal_entry_id)
-    ensure_same_organization(entry.organization_id, tenant)
+    _load_owned_journal_entry(journal_entry_id, tenant, journal_service)
     journal_service.delete(journal_entry_id)
     session.commit()
 
@@ -204,8 +232,7 @@ async def journal_discipline_analysis(
     journal_service: JournalServiceDep,
     hvs_service: HumanVsSystemServiceDep,
 ) -> DisciplineAnalysis:
-    entry = journal_service.get(journal_entry_id)
-    ensure_same_organization(entry.organization_id, tenant)
+    _load_owned_journal_entry(journal_entry_id, tenant, journal_service)
     return hvs_service.analyze_discipline(
         journal_entry_id,
         organization_id=tenant.organization_id,
@@ -598,11 +625,8 @@ async def download_journal_trade_attachment(
     trade_service: JournalTradeServiceDep,
     service: JournalAttachmentServiceDep,
 ) -> Response:
-    meta, content = service.get_content(
-        attachment_id,
-        organization_id=tenant.organization_id,
-    )
-    _load_owned_journal_trade(meta.journal_trade_id, tenant, trade_service)
+    meta = _load_owned_attachment(attachment_id, tenant, service, trade_service)
+    content = service.read_content(attachment_id, organization_id=tenant.organization_id)
     safe_name = meta.filename.replace('"', "")
     return Response(
         content=content,
@@ -622,9 +646,11 @@ async def download_journal_trade_attachment(
 async def delete_journal_trade_attachment(
     attachment_id: uuid.UUID,
     tenant: TraderDep,
+    trade_service: JournalTradeServiceDep,
     service: JournalAttachmentServiceDep,
     session: SessionDep,
 ) -> None:
+    _load_owned_attachment(attachment_id, tenant, service, trade_service)
     service.delete_attachment(
         attachment_id,
         organization_id=tenant.organization_id,
@@ -808,8 +834,7 @@ async def create_discipline_lesson_candidate(
     session: SessionDep,
     category: str = Query(..., description="Suggestion category, e.g. early_exit"),
 ) -> LessonCandidate:
-    entry = journal_service.get(journal_entry_id)
-    ensure_same_organization(entry.organization_id, tenant)
+    _load_owned_journal_entry(journal_entry_id, tenant, journal_service)
     candidate_id = hvs_service.create_discipline_candidate(
         journal_entry_id,
         organization_id=tenant.organization_id,

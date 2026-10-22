@@ -37,6 +37,7 @@ from app.services.journal_attachment_storage import AttachmentStorage
 
 _REQUEST_TAG = "journal-attachments-api"
 _ATTACHMENT_REF_PREFIX = "attachment:"
+_ATTACHMENT_NOT_FOUND_MSG = "Attachment not found."
 
 
 class JournalAttachmentService:
@@ -150,6 +151,26 @@ class JournalAttachmentService:
             total=len(rows),
         )
 
+    def get_attachment(
+        self,
+        attachment_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+    ) -> JournalTradeAttachmentRead:
+        """Attachment metadata only (no blob read)."""
+        attachment = self._get_attachment(attachment_id, organization_id=organization_id)
+        return JournalTradeAttachmentRead.model_validate(attachment)
+
+    def read_content(
+        self,
+        attachment_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+    ) -> bytes:
+        """Load attachment bytes after caller has authorized access."""
+        attachment = self._get_attachment(attachment_id, organization_id=organization_id)
+        return self._storage.retrieve(attachment)
+
     def get_content(
         self,
         attachment_id: uuid.UUID,
@@ -177,7 +198,7 @@ class JournalAttachmentService:
     ) -> JournalTradeAttachment:
         attachment = self._attachments.get_scoped(attachment_id, organization_id=organization_id)
         if attachment is None:
-            raise NotFoundError("Attachment not found")
+            raise NotFoundError(_ATTACHMENT_NOT_FOUND_MSG)
         return attachment
 
     def _validate_upload(
