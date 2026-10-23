@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from app.agent_voice.accounting import VoiceLedger
-from app.agent_voice.config import VoiceUnavailableError, load_limits
+from app.agent_voice.config import VoiceUnavailableError, load_limits, realtime_endpoint
 from app.agent_voice.contracts import VoiceConfig, VoiceStart
 from app.agent_voice.service import RealtimeSession
 from app.core.config import get_settings
@@ -52,8 +52,9 @@ async def realtime_voice(websocket: WebSocket) -> None:
             raise VoiceUnavailableError("voice_start_too_large")
         start = VoiceStart.model_validate(json.loads(raw))
         limits = load_limits(settings)
-        if settings.openai_base_url.rstrip("/") != "https://api.openai.com/v1":
-            raise VoiceUnavailableError("approved_openai_origin_unavailable")
+        # OpenAI https://api.openai.com/v1 and xAI https://api.x.ai/v1 only.
+        # The SDK maps that HTTPS origin to wss://<host>/v1/realtime?model=...
+        _provider, api_key, base_url = realtime_endpoint(settings)
         ledger = VoiceLedger(
             get_session_factory(), settings, limits, start.access_token, start.conversation_id
         )
@@ -62,8 +63,8 @@ async def realtime_voice(websocket: WebSocket) -> None:
         async with contextlib.AsyncExitStack() as stack:
             client = await stack.enter_async_context(
                 AsyncOpenAI(
-                    api_key=settings.openai_api_key,
-                    base_url=settings.openai_base_url,
+                    api_key=api_key,
+                    base_url=base_url,
                     max_retries=0,
                     timeout=10,
                 )
@@ -77,6 +78,7 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 ),
                 timeout=10,
             )
+            await asyncio.to_thread(ledger.mark_upstream_open)
             session = RealtimeSession(ledger, start, upstream, websocket.send_json)
             await session.start_session()
 

@@ -14,7 +14,14 @@ from uuid import UUID, uuid4, uuid5
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agent_voice.config import VoiceLimits, VoiceUnavailableError
+from app.agent_voice.config import (
+    MinuteRealtimePrice,
+    VoiceLimits,
+    VoiceUnavailableError,
+    billed_session_minutes,
+    minute_session_cost,
+)
+from app.agent_voice.protocol import billable_text_input
 from app.core.config import Settings
 from app.db.models import Organization, OrganizationQuota, UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
@@ -65,20 +72,29 @@ class VoiceLedger:
     def reserve(self) -> None:
         now = datetime.now(UTC)
         maximum = self.limits.reservation(self.settings)
-        tokens = math.ceil(
-            self.limits.maximum_responses
-            * (self.limits.realtime.maximum_input_tokens + self.limits.maximum_output_tokens)
-            + self.limits.maximum_audio_seconds
-            * self.limits.realtime.maximum_audio_input_tokens_per_second
-            + self.limits.maximum_turns
-            * 4
-            * (self.limits.reasoning.maximum_input_tokens + self.settings.agent_max_output_tokens)
-            + (
-                self.limits.maximum_turns * self.limits.embedding.maximum_input_tokens
-                if self.limits.embedding
-                else 0
+        price = self.limits.realtime
+        if isinstance(price, MinuteRealtimePrice):
+            # The minute meter is not a token count. Cost quota holds the dollars.
+            per_minute = True
+            tokens = 0
+        else:
+            per_minute = False
+            tokens = math.ceil(
+                self.limits.maximum_responses
+                * (price.maximum_input_tokens + self.limits.maximum_output_tokens)
+                + self.limits.maximum_audio_seconds * price.maximum_audio_input_tokens_per_second
+                + self.limits.maximum_turns
+                * 4
+                * (
+                    self.limits.reasoning.maximum_input_tokens
+                    + self.settings.agent_max_output_tokens
+                )
+                + (
+                    self.limits.maximum_turns * self.limits.embedding.maximum_input_tokens
+                    if self.limits.embedding
+                    else 0
+                )
             )
-        )
         with self.sessions() as session:
             tenant = self.principal(session)
             session.scalar(
@@ -172,6 +188,15 @@ class VoiceLedger:
                         "tools": {},
                         "reasoning_attempts": [],
                         "embedding_attempts": {},
+                        **(
+                            {
+                                "pricing": "per_minute",
+                                "upstream_opened": False,
+                                "text_inputs": 0,
+                            }
+                            if per_minute
+                            else {}
+                        ),
                     },
                     created_at=now,
                     updated_at=now,
@@ -202,6 +227,46 @@ class VoiceLedger:
 
     def activate(self) -> None:
         self.update(lambda row, _: setattr(row, "status", "active"))
+
+    def mark_upstream_open(self) -> None:
+        """Record that the provider socket opened. Token sessions have no minute clock."""
+        if not isinstance(self.limits.realtime, MinuteRealtimePrice):
+            return
+
+        def admit(_row: VoiceSessionReservation, data: dict[str, Any]) -> None:
+            if data.get("upstream_opened"):
+                return
+            data["upstream_opened"] = True
+            data["upstream_started_at"] = datetime.now(UTC).isoformat()
+
+        self.update(admit)
+
+    def note_outbound_item(self, item: dict[str, Any]) -> None:
+        """Count billable text inputs. Unknown items freeze the minute settlement."""
+        if not isinstance(self.limits.realtime, MinuteRealtimePrice):
+            return
+        billable = billable_text_input(item)
+
+        def admit(row: VoiceSessionReservation, data: dict[str, Any]) -> None:
+            current = data.get("text_inputs", 0)
+            if billable is None or not isinstance(current, int) or isinstance(current, bool):
+                data["text_inputs"] = None
+                return
+            if not billable:
+                return
+            data["text_inputs"] = current + 1
+            price = self.limits.realtime
+            if not isinstance(price, MinuteRealtimePrice):
+                return
+            # Minutes, this text item, and the same reasoning and embedding
+            # terms the opening hold reserved. Text must not spend the tool hold.
+            cost = minute_session_cost(
+                price, self.limits.maximum_seconds, data["text_inputs"]
+            ) + self.limits.tool_reservation(self.settings)
+            if cost > row.reserved_cost:
+                raise VoiceUnavailableError("voice_text_input_exceeds_reservation")
+
+        self.update(admit)
 
     def audio(self, length: int) -> None:
         def admit(_row: VoiceSessionReservation, data: dict[str, Any]) -> None:
@@ -234,6 +299,9 @@ class VoiceLedger:
 
     def response_done(self, response: dict[str, Any]) -> None:
         # Never called with a client event. Only the authenticated upstream WS is trusted.
+        if isinstance(self.limits.realtime, MinuteRealtimePrice):
+            self._mark_minute_response(response)
+            return
         response_id = str(response.get("id", ""))
         usage = response.get("usage")
         cost: Decimal | None = None
@@ -463,6 +531,132 @@ class VoiceLedger:
                 )
             session.commit()
 
+    def _mark_minute_response(self, response: dict[str, Any]) -> None:
+        """A minute-priced response is not a separate token charge."""
+        response_id = str(response.get("id", ""))
+        with self.sessions() as session:
+            row = session.scalar(
+                select(VoiceSessionReservation)
+                .where(VoiceSessionReservation.id == self.id)
+                .with_for_update()
+            )
+            if row is None:
+                raise VoiceUnavailableError("voice_session_missing")
+            data = copy.deepcopy(row.ledger)
+            item = next((r for r in data["responses"] if r.get("response_id") == response_id), None)
+            if item is None:
+                raise VoiceUnavailableError("unadmitted_provider_response")
+            if item.get("state") == "done":
+                return
+            item.update(
+                state="done",
+                usage=response.get("usage"),
+                estimated_cost=None,
+                priced_by="session_minutes",
+            )
+            row.ledger, row.updated_at = data, datetime.now(UTC)
+            session.commit()
+
+    def _per_minute_side_effects_unknown(self, data: dict[str, Any]) -> bool:
+        """Tool, reasoning, and embedding meters stay held when their result is unknown."""
+        if any(tool.get("state") != "acknowledged" for tool in data["tools"].values()):
+            return True
+        if any(attempt.get("state") != "received" for attempt in data["reasoning_attempts"]):
+            return True
+        return any(
+            attempt.get("state") != "received"
+            for attempt in data.get("embedding_attempts", {}).values()
+        )
+
+    def _close_per_minute(self, session: Session, row: VoiceSessionReservation) -> None:
+        """Settle known session minutes. Unknown duration or text usage is not refunded."""
+        if row.status in {"closed", "uncertain"}:
+            return
+        price = self.limits.realtime
+        if not isinstance(price, MinuteRealtimePrice):
+            return
+        now = datetime.now(UTC)
+        data = copy.deepcopy(row.ledger)
+        opened = bool(data.get("upstream_opened"))
+        started = data.get("upstream_started_at")
+        text_value = data.get("text_inputs", 0)
+        text_inputs = (
+            text_value
+            if isinstance(text_value, int) and not isinstance(text_value, bool) and text_value >= 0
+            else None
+        )
+        started_at: datetime | None = None
+        if isinstance(started, str):
+            try:
+                parsed = datetime.fromisoformat(started)
+            except ValueError:
+                parsed = None
+            if parsed is not None and parsed.tzinfo is not None:
+                started_at = parsed
+        side_effects_unknown = self._per_minute_side_effects_unknown(data)
+        nothing_sent = (
+            not data["audio_bytes"]
+            and not data["responses"]
+            and not data["tools"]
+            and not data["reasoning_attempts"]
+            and not data.get("embedding_attempts")
+        )
+        cost: Decimal | None = None
+        if not opened and not side_effects_unknown and nothing_sent:
+            cost = Decimal(0)
+        elif (
+            opened
+            and started_at is not None
+            and text_inputs is not None
+            and not side_effects_unknown
+        ):
+            elapsed = (now - started_at).total_seconds()
+            if 0 <= elapsed <= self.limits.maximum_seconds + 5:
+                seconds = int(elapsed)
+                candidate = minute_session_cost(price, seconds, text_inputs, minimum_minutes=1)
+                if candidate <= row.reserved_cost:
+                    cost = candidate
+                    data["settled_minutes"] = billed_session_minutes(seconds, minimum=1)
+                    data["settled_text_inputs"] = text_inputs
+        if cost is None:
+            # Full reserved dollars stay on the row. Do not write a smaller charge.
+            row.status = "uncertain"
+            row.accounted_cost = None
+            row.ledger, row.updated_at = data, now
+            session.commit()
+            return
+        # The voice-budget sum adds reserved_cost for every row. Known minutes are
+        # charged once, on the usage event, so the opening hold is released here.
+        # Unknown rows return above and keep the full reserved_cost.
+        data.setdefault("opening_reserved_cost", str(row.reserved_cost))
+        row.reserved_cost = Decimal(0)
+        if cost > 0:
+            event_id = uuid5(self.id, "session-minutes")
+            if session.get(UsageEvent, event_id) is None:
+                session.add(
+                    UsageEvent(
+                        id=event_id,
+                        organization_id=self.organization_id,
+                        user_id=self.user_id,
+                        request_id=str(self.id),
+                        feature="agent_voice_realtime",
+                        provider=self.settings.agent_realtime_provider,
+                        model=price.model,
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        estimated_cost=cost,
+                        cost_source=CostSource.STATIC_ESTIMATED,
+                        cost_is_placeholder=False,
+                        status=UsageStatus.SUCCESS,
+                        event_at=now,
+                    )
+                )
+        row.status = "closed"
+        row.accounted_cost = cost
+        row.ledger, row.updated_at = data, now
+        session.commit()
+
     def close(self) -> None:
         # Closing is cleanup, not a refund, and must work after expiry/logout.
         with self.sessions() as session:
@@ -472,6 +666,9 @@ class VoiceLedger:
                 .with_for_update()
             )
             if row is None:
+                return
+            if isinstance(self.limits.realtime, MinuteRealtimePrice):
+                self._close_per_minute(session, row)
                 return
             data = row.ledger
             ambiguous = any(

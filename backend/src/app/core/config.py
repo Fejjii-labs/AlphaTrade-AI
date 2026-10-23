@@ -195,8 +195,15 @@ class Settings(BaseSettings):
 
     # Interactive provider voice stays unavailable without a verified finite
     # budget/pricing receipt. These defaults never activate an operator's provider.
+    # ``openai`` remains the realtime provider until an operator selects ``xai``.
     agent_realtime_enabled: bool = False
     agent_realtime_limits_file: str = ""
+    agent_realtime_provider: Literal["openai", "xai"] = "openai"
+    # Server-side xAI key only. Empty stays fail-closed. Never log the value.
+    xai_api_key: str = Field(default="", repr=False)
+    # HTTPS origin the OpenAI SDK turns into wss://api.x.ai/v1/realtime.
+    # Any other value is rejected before a socket opens.
+    xai_realtime_base_url: str = "https://api.x.ai/v1"
 
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False
