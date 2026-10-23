@@ -10,6 +10,10 @@ not stored.
 Internal paper SFP fills and the eligibility receipt that records the fill
 price do not use this cache. They take a fresh aggTrades read at fill time
 and do not write the result back. See ``load_paper_sfp_fill_quote``.
+
+Instrument probes also bypass the kline cache
+(``use_public_kline_cache=False``). A previous good payload must not hide a
+later wrong-instrument response. Scan, chat, and status reads still use it.
 """
 
 from __future__ import annotations

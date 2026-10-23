@@ -114,8 +114,13 @@ class FailoverPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._require_active_identity(identity, instrument)
+        # Omit the flag when True so doubles that predate the cache still match.
+        extra: dict[str, bool] = {}
+        if not use_public_kline_cache:
+            extra["use_public_kline_cache"] = False
         try:
             return self.active_source.fetch_closed_ohlcv(
                 identity=identity,
@@ -123,6 +128,7 @@ class FailoverPerpetualSource:
                 timeframe=timeframe,
                 min_final_bars=min_final_bars,
                 evaluated_at=evaluated_at,
+                **extra,
             )
         except _SWITCH_ERRORS as exc:
             self._switch(exc)

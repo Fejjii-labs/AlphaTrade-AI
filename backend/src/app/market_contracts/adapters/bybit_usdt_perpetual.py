@@ -383,6 +383,7 @@ class BybitUsdtPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._assert_request(identity, instrument)
         interval = _BYBIT_INTERVAL.get(timeframe)
@@ -415,7 +416,11 @@ class BybitUsdtPerpetualSource:
                 raise WrongMarketError("Bybit kline payload is not a list.")
             return loaded
 
-        rows = self._kline_cache.get_or_load(key, load_rows)
+        # Probes skip the cache. ``_assert_linear`` runs only inside ``load_rows``,
+        # so a cached payload would hide a later wrong-instrument response.
+        rows = (
+            self._kline_cache.get_or_load(key, load_rows) if use_public_kline_cache else load_rows()
+        )
         grace = timedelta(seconds=first_slice_freshness_policy().ohlcv_post_close_grace_seconds)
         bars = [
             self._parse_kline(

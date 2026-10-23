@@ -245,12 +245,15 @@ class ReadOnlyHttpGetClient:
                     retry_after_seconds=last_retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
-                self._pause.note("rate_limit", _pause_seconds(last_retry_after, delay))
                 if attempt + 1 >= attempts:
+                    # A finished 429 belongs to the caller. Parking this process
+                    # for Retry-After would block the next attempt after the
+                    # in-call sleep already honored that header.
                     raise RateLimitedError(
                         f"{self._failure_label} source rate-limited the read-only client.",
                         retry_after_seconds=last_retry_after,
                     )
+                self._pause.note("rate_limit", _pause_seconds(last_retry_after, delay))
                 sleep_with_progress(delay, sleeper=self._sleep)
                 continue
             if response.status_code == UPSTREAM_BAN_STATUS:
@@ -314,7 +317,7 @@ class ReadOnlyHttpGetClient:
         )
 
     def _reject_if_paused(self) -> None:
-        """Refuse another request while a 418 ban or 429 pause is still open."""
+        """Refuse another request during a 418 ban or an in-call 429 retry."""
 
         paused = self._pause.remaining()
         if paused is None:

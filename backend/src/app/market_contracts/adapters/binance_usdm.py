@@ -358,6 +358,7 @@ class BinanceUsdmPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._assert_request(identity, instrument, timeframe)
         interval = _BINANCE_INTERVAL.get(timeframe)
@@ -375,9 +376,9 @@ class BinanceUsdmPerpetualSource:
             str(limit),
             str(end_ms // ttl_ms),
         )
-        payload = self._kline_cache.get_or_load(
-            key,
-            lambda: self._confirmed_klines(
+
+        def load_payload() -> list[Any]:
+            return self._confirmed_klines(
                 instrument=instrument,
                 timeframe=timeframe,
                 evaluated_at=evaluated_at,
@@ -385,7 +386,13 @@ class BinanceUsdmPerpetualSource:
                 limit=limit,
                 end_ms=end_ms,
                 min_final_bars=min_final_bars,
-            ),
+            )
+
+        # Probes skip the cache so a changed symbol is not served from a prior read.
+        payload = (
+            self._kline_cache.get_or_load(key, load_payload)
+            if use_public_kline_cache
+            else load_payload()
         )
         final_bars = self._settled_bars(
             payload, instrument=instrument, timeframe=timeframe, evaluated_at=evaluated_at

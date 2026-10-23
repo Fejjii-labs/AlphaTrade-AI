@@ -49,6 +49,7 @@ class PerpetualMarketSource(Protocol):
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries: ...
 
     def fetch_ordered_trades(

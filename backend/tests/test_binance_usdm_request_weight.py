@@ -86,28 +86,58 @@ def test_default_retry_budget_is_one_attempt_past_the_first_read() -> None:
     assert status.using_fallback is False
 
 
-def test_429_pause_blocks_the_next_request_until_retry_after() -> None:
+def test_finished_429_does_not_block_the_next_request() -> None:
+    """A raised 429 must not park the process. An in-call retry still sleeps."""
+
     calls = {"n": 0}
+    sleeps: list[float] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        return httpx.Response(
-            429,
-            headers={"Retry-After": "30", "X-Api-Key": "headersecret"},
-            json={"msg": "slow"},
-        )
+        if calls["n"] < 3:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "2", "X-Api-Key": "headersecret"},
+                json={"msg": "slow"},
+            )
+        return httpx.Response(200, json={"ok": True})
 
     client = _client(handler, max_retries=0)
     with pytest.raises(RateLimitedError) as first:
         client.get_json("/fapi/v1/ping")
     with pytest.raises(RateLimitedError) as second:
         client.get_json("/fapi/v1/time")
+    body = client.get_json("/fapi/v1/time")
     client.close()
-    assert calls["n"] == 1
-    assert first.value.retry_after_seconds == 30.0
-    assert second.value.retry_after_seconds is not None
-    assert second.value.retry_after_seconds <= 30.0
+    assert calls["n"] == 3
+    assert body == {"ok": True}
+    assert first.value.retry_after_seconds == 2.0
+    assert second.value.retry_after_seconds == 2.0
+    assert type(first.value) is RateLimitedError
     assert type(second.value) is RateLimitedError
+
+    retried = {"n": 0}
+
+    def retry_once(_request: httpx.Request) -> httpx.Response:
+        retried["n"] += 1
+        if retried["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"}, json={"msg": "slow"})
+        return httpx.Response(200, json={"ok": True})
+
+    retrying = ReadOnlyHttpGetClient(
+        base_url="https://fapi.binance.com",
+        timeout_seconds=2.0,
+        transport=httpx.MockTransport(retry_once),
+        max_retries=1,
+        max_backoff_seconds=30.0,
+        sleeper=sleeps.append,
+    )
+    assert retrying.get_json("/fapi/v1/ping") == {"ok": True}
+    # The successful retry clears the in-call pause, so the next read is not parked.
+    assert retrying.get_json("/fapi/v1/time") == {"ok": True}
+    retrying.close()
+    assert retried["n"] == 3
+    assert sleeps == [2.0]
 
 
 def test_regional_timeout_and_5xx_log_status_type_and_snippet_without_headers() -> None:

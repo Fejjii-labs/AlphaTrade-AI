@@ -165,10 +165,9 @@ class AutomatedPaperLoop:
 
         self._observed_kill_switch = kill_switch_active
         self._autonomous_settings = None
-        fresh = self._fresh_sfp_fill_evidence(assembled, policy)
-        if fresh is None:
+        assembled, fresh_failed = self._fresh_sfp_fill_evidence(assembled, policy)
+        if fresh_failed:
             return _proof(candidate, "skipped", "stale_evidence")
-        assembled = fresh
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -260,29 +259,35 @@ class AutomatedPaperLoop:
         self,
         assembled: AssembledCanonicalEvidence,
         policy: ExecutableStrategyPolicy,
-    ) -> AssembledCanonicalEvidence | None:
+    ) -> tuple[AssembledCanonicalEvidence, bool]:
         """SFP fills and their action receipts ignore the 10s quote cache.
 
-        Returns the original assembly when this is not an SFP fill or no
-        market source was supplied. Returns None when the fresh aggTrades
-        read fails closed.
+        Returns the original assembly when this is not an SFP fill, no market
+        source was supplied, or the caller has not built a policy yet. The
+        second value is True only when the fresh aggTrades read fails closed.
+        A missing policy must not look like that failure: kill-switch and
+        disarmed-coordinator gates still run.
         """
 
         from app.market_contracts.errors import MarketContractError
         from app.strategy_brain.sfp.contracts import SfpSpec
 
-        if not isinstance(policy.authored_spec, SfpSpec) or self._market_source is None:
-            return assembled
+        authored = getattr(policy, "authored_spec", None)
+        if self._market_source is None or not isinstance(authored, SfpSpec):
+            return assembled, False
         try:
             from app.evidence_pipeline.current_price import bind_paper_sfp_fill_quote
 
-            return bind_paper_sfp_fill_quote(
-                assembled,
-                self._market_source,  # type: ignore[arg-type]
-                evaluated_at=self._clock.now(),
+            return (
+                bind_paper_sfp_fill_quote(
+                    assembled,
+                    self._market_source,  # type: ignore[arg-type]
+                    evaluated_at=self._clock.now(),
+                ),
+                False,
             )
         except MarketContractError:
-            return None
+            return assembled, True
 
     def _bound(
         self,
