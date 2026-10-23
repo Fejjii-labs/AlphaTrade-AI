@@ -3120,6 +3120,29 @@
         "title": "ApprovalWorkflowView",
         "type": "object"
       },
+      "ArmingRefusalObservation": {
+        "additionalProperties": false,
+        "description": "Boot refusal of the exit monitor or an autonomous loop.\n\n``refused`` is true only when the worker recorded an arming-gate reason\nsuch as ``consecutive_loss_cooldown_invalid`` or\n``cycle_interval_exceeds_timeframe``. ``source`` names which loop refused.",
+        "properties": {
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "refused": {
+            "default": false,
+            "title": "Refused",
+            "type": "boolean"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "ArmingRefusalObservation",
+        "type": "object"
+      },
       "ArtifactKind": {
         "description": "Explicit record types. Free-form text does not collapse these together.",
         "enum": [
@@ -16580,6 +16603,9 @@
           "app": {
             "title": "App",
             "type": "string"
+          },
+          "arming_refusal": {
+            "$ref": "#/components/schemas/ArmingRefusalObservation"
           },
           "automatic_telegram_delivery_enabled": {
             "default": false,
@@ -37829,6 +37855,101 @@
         "title": "PaperValidationSummary",
         "type": "object"
       },
+      "PaperWorkerHeartbeatResponse": {
+        "additionalProperties": false,
+        "description": "External liveness of the paper worker.\n\n``status`` is ``fresh``, ``stale``, or ``missing``. ``alert_raised`` is\ntrue only when this request successfully delivered a new Telegram alert.\nA repeated poll inside the cooldown reports the same status and does not\nsend again. Use structured logs and these fields for health-poller\nmonitoring of conditions such as ``degraded_repeat``.\n``kill_switch`` is the switch posture. It is not a P&L figure.",
+        "properties": {
+          "alert_raised": {
+            "default": false,
+            "title": "Alert Raised",
+            "type": "boolean"
+          },
+          "arming_alert_raised": {
+            "default": false,
+            "title": "Arming Alert Raised",
+            "type": "boolean"
+          },
+          "arming_refusal": {
+            "$ref": "#/components/schemas/ArmingRefusalObservation"
+          },
+          "exit_monitor": {
+            "$ref": "#/components/schemas/WorkerComponentObservation"
+          },
+          "exit_monitor_alert_raised": {
+            "default": false,
+            "title": "Exit Monitor Alert Raised",
+            "type": "boolean"
+          },
+          "exit_monitor_status": {
+            "default": "disabled",
+            "enum": [
+              "fresh",
+              "stale",
+              "missing",
+              "disabled"
+            ],
+            "title": "Exit Monitor Status",
+            "type": "string"
+          },
+          "kill_switch": {
+            "$ref": "#/components/schemas/PaperWorkerKillSwitch"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/WorkerComponentObservation"
+          },
+          "status": {
+            "enum": [
+              "fresh",
+              "stale",
+              "missing"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "observation",
+          "timestamp"
+        ],
+        "title": "PaperWorkerHeartbeatResponse",
+        "type": "object"
+      },
+      "PaperWorkerKillSwitch": {
+        "additionalProperties": false,
+        "description": "Kill-switch posture for the external paper-worker poll.\n\n``active`` is true when the global setting is on, when the scoped\norganization switch is on, or when that state cannot be read.\n``source`` is a fixed token such as ``manual`` or ``global_setting``.\n``since`` is the organization row's activation time when one exists.\nThe free-text reason is not included. No secret and no P&L amount.",
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "PaperWorkerKillSwitch",
+        "type": "object"
+      },
       "PasswordResetConfirmRequest": {
         "additionalProperties": false,
         "properties": {
@@ -45305,6 +45426,28 @@
             ],
             "title": "Maximum Sweep Depth"
           },
+          "min_stop_atr_multiple": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 100.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "ge": 0,
+            "title": "Min Stop Atr Multiple"
+          },
+          "min_stop_ticks": {
+            "default": 1,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Min Stop Ticks",
+            "type": "integer"
+          },
           "minimum_level_significance": {
             "anyOf": [
               {
@@ -45361,6 +45504,21 @@
             "minimum": 1.0,
             "title": "Required Evidence Max Age Bars",
             "type": "integer"
+          },
+          "stop_buffer": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0.001",
+            "ge": 0,
+            "title": "Stop Buffer"
           },
           "structural_invalidation_buffer": {
             "anyOf": [
@@ -45485,6 +45643,20 @@
             ],
             "title": "Maximum Sweep Depth"
           },
+          "min_stop_atr_multiple": {
+            "default": "0",
+            "ge": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Min Stop Atr Multiple",
+            "type": "string"
+          },
+          "min_stop_ticks": {
+            "default": 1,
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Min Stop Ticks",
+            "type": "integer"
+          },
           "minimum_level_significance": {
             "ge": 0,
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
@@ -45526,6 +45698,13 @@
             "minimum": 1.0,
             "title": "Required Evidence Max Age Bars",
             "type": "integer"
+          },
+          "stop_buffer": {
+            "default": "0.001",
+            "ge": 0,
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop Buffer",
+            "type": "string"
           },
           "structural_invalidation_buffer": {
             "ge": 0,
@@ -54594,6 +54773,15 @@
             ],
             "title": "Maximum Turns"
           },
+          "provider": {
+            "default": "realtime",
+            "enum": [
+              "realtime",
+              "gpt_live"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
           "reason": {
             "anyOf": [
               {
@@ -56941,12 +57129,18 @@
       },
       "WorkerRuntimeObservation": {
         "additionalProperties": false,
-        "description": "Observed worker rows.\n\n``available`` is false when the status read fails. It does not mean either\nworker is fresh. Each component's ``health_state`` is the liveness claim.\nThese fields are not the API process configuration.",
+        "description": "Observed worker rows.\n\n``available`` is false when the status read fails. It does not mean either\nworker is fresh. Each component's ``health_state`` is the liveness claim.\nThese fields are not the API process configuration. ``exit_monitor`` is\nthe exit-monitor thread, not the watcher heartbeat.",
         "properties": {
           "available": {
             "default": false,
             "title": "Available",
             "type": "boolean"
+          },
+          "exit_monitor": {
+            "$ref": "#/components/schemas/WorkerComponentObservation"
+          },
+          "paper_worker": {
+            "$ref": "#/components/schemas/WorkerComponentObservation"
           },
           "telegram": {
             "$ref": "#/components/schemas/WorkerComponentObservation"
@@ -65150,6 +65344,28 @@
           }
         },
         "summary": "Liveness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/paper-worker": {
+      "get": {
+        "description": "Report the worker heartbeat and alert when it is stale or missing.\n\nThis route does not arm the worker, the exit monitor, or real trading.\nA Telegram send uses the existing bot token and chat id. The response\ndoes not include those values. An unsent kill-switch page is retried\nafter the response, in a worker thread, at most once per 60 seconds\nper activation version. No thread is started when no unsent page is\nvisible, or when every visible page is still inside that limit.",
+        "operationId": "paper_worker_heartbeat_health_paper_worker_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperWorkerHeartbeatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Paper worker heartbeat",
         "tags": [
           "health"
         ]

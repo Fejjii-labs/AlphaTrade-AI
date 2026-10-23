@@ -29,6 +29,21 @@ from app.services.usage_service import day_start, month_start
 logger = structlog.get_logger(__name__)
 _ORGANIZATION_QUOTA_CONSTRAINT = "uq_organization_quotas_organization_id"
 
+
+def _release_expired_voice_holds(session: Session, organization_id: uuid.UUID) -> None:
+    """Sweep expired Live holds without importing voice code at module import.
+
+    Rollback overlays copy this module into a tree that has no ``app.agent_voice``.
+    A missing package leaves the existing reservation in place.
+    """
+
+    try:
+        from app.agent_voice.reservations_sweep import release_expired_voice_holds
+    except ModuleNotFoundError:
+        return
+    release_expired_voice_holds(session, organization_id)
+
+
 FEATURE_LIMIT_FIELDS: dict[str, str] = {
     "agent_chat": "limit_agent_chat",
     "rag_ingest": "limit_rag_ingest",
@@ -373,6 +388,7 @@ class QuotaService:
     ) -> QuotaUsageSnapshot:
         month = month_start()
         today = day_start()
+        _release_expired_voice_holds(self._session, organization_id)
         monthly = self._usage.summarize(organization_id=organization_id, since=month)
         daily_count = self._usage.count_requests_since(organization_id=organization_id, since=today)
 
@@ -385,9 +401,9 @@ class QuotaService:
             )
 
         monthly_cost = monthly.total_cost
-        # A socket/restart failure cannot release a promise of potentially billed
-        # work. Outstanding holds span a month boundary until server evidence
-        # closes them. Keep actual usage separate from these conservative holds.
+        # The sweep above already charged expired Live holds at their full
+        # reservation, so this summary includes that spend. Open holds still
+        # count until server evidence or that charge closes them.
         reservations = list(
             self._session.scalars(
                 select(VoiceSessionReservation).where(
