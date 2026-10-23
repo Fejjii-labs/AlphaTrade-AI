@@ -39,12 +39,22 @@ def migration_tests(backend: Path) -> list[str]:
 
 
 def _schema_change(path: str) -> bool:
-    """True for the ORM model or any file in the Alembic migrations tree."""
+    """True for the ORM, Alembic tree, Alembic config, or the heads helper."""
     normalized = path.replace("\\", "/")
-    return normalized.startswith("backend/") and (
+    if not normalized.startswith("backend/"):
+        return False
+    if (
         "/db/migrations/" in normalized
         or normalized.endswith("/db/migrations")
         or normalized.endswith("/db/models.py")
+    ):
+        return True
+    return normalized.endswith(
+        (
+            "/alembic.ini",
+            "/db/migrations/env.py",
+            "/tests/support/alembic_heads.py",
+        )
     )
 
 

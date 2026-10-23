@@ -53,6 +53,20 @@ def test_schema_changes_select_migration_and_alembic_tests():
     assert "tests/test_alembic_heads_helper.py" not in unrelated
 
 
+def test_alembic_config_and_heads_helper_select_migration_tests():
+    backend = ROOT / "backend"
+    expected = scope.migration_tests(backend)
+    assert "tests/test_alembic_heads_helper.py" in expected
+    for changed in (
+        ["backend/alembic.ini"],
+        ["backend/src/app/db/migrations/env.py"],
+        ["backend/tests/support/alembic_heads.py"],
+    ):
+        selected = scope.select_tests(changed, backend)
+        assert set(expected).issubset(selected)
+        assert set(scope.BASE_TESTS).issubset(selected)
+
+
 def test_missing_tests_and_paths_outside_tests_cannot_expand_selection():
     selected = scope.select_tests(
         ["backend/tests/test_deleted.py", "backend/tests/../../test_escape.py", "docs/README.md"],
@@ -173,8 +187,14 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert "github.event.action != 'edited'" in group
     assert "github.event.changes.base.ref.from" in group
     assert "format('{0}-{1}', github.workflow, github.ref)" not in group
-    full_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
+    dispatch_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
+    trailer_gate = "steps.scope.outputs.full_backend == 'true'"
+    full_gate = f"({dispatch_gate}) || {trailer_gate}"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
+    scope_step = steps["Decide CI scope"]["run"]
+    assert "bash .github/workflows/ci-scope.sh" in scope_step
+    assert "Full-Backend" in scope_step
+    assert "full_backend=%s" in scope_step
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py"
@@ -194,8 +214,13 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
     assert steps["Focused backend development tests"]["if"] == (
-        "github.event_name != 'workflow_dispatch' || !inputs.full_backend"
+        "(github.event_name != 'workflow_dispatch' || !inputs.full_backend) "
+        "&& steps.scope.outputs.full_backend != 'true'"
     )
+    for name in ("Install dependencies", "Ruff check", "Ruff format"):
+        assert steps[name]["if"] == (
+            "steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'"
+        )
     assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
     upload = steps["Upload full backend pytest artifacts"]
     assert upload["if"] == f"always() && ({full_gate})"

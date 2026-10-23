@@ -12,9 +12,10 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.main import create_app
 from app.security.rate_limit import reset_rate_limiter
+from tests.support.inherited_venue_env import clear_inherited_venue_env
 
 pytest_plugins = (
     "tests.test_workflows",
@@ -84,6 +85,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         cleanup_owned_databases()
     except Exception:
         return
+
+
+@pytest.fixture(autouse=True)
+def _clear_inherited_venue_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep tests off inherited BloFin read-only credentials and staging DSNs."""
+    clear_inherited_venue_env(monkeypatch)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

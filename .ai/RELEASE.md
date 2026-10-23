@@ -56,9 +56,9 @@ skip backend, frontend, Docker, evaluation, and browser work. Those jobs still
 finish successfully, so a required check is not left pending. A push to `main`
 or `master` always runs the heavy jobs, including when that push is docs-only.
 `workflow_dispatch` ignores that path filter and the draft filter. The
-`full_backend` input still selects only the complete backend pytest step, and
-only a manual dispatch can select it. Pull requests and pushes never run that
-step. There is no cron.
+`full_backend` input selects the complete backend pytest step. A git trailer
+`Full-Backend: true` on the head commit selects that same step for a pull
+request or push, and skips the focused selection. There is no cron.
 
 The backend job uses one PostgreSQL 16 service (`alphatrade_test`) and a
 150-minute job timeout. On an ordinary push or pull request, and on a manual
@@ -91,8 +91,10 @@ dispatch on the integration batch SHA, not a nightly run.
 
 ## Final consolidated release acceptance
 
-Pull requests get the quick focused checks only. The complete backend suite does
-not run on pull request pushes, on pushes to `main`, or on a schedule.
+Pull requests get the quick focused checks unless the head commit carries
+`Full-Backend: true`. That trailer runs the complete backend suite once. The
+suite does not run on a schedule, and an ordinary push without the trailer
+stays focused.
 
 When a batch of pull requests is ready, stack them on an integration branch
 named like `integration/<date>`. Dispatch `full_backend` **once** on that
