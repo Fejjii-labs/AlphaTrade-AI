@@ -165,6 +165,10 @@ class AutomatedPaperLoop:
 
         self._observed_kill_switch = kill_switch_active
         self._autonomous_settings = None
+        # A killed loop must not spend a fresh aggTrades read.
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
         assembled, fresh_failed = self._fresh_sfp_fill_evidence(assembled, policy)
         if fresh_failed:
             return _proof(candidate, "skipped", "stale_evidence")
@@ -224,10 +228,9 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
-        if kill_switch_active or _global_kill_switch_active(self._settings):
-            return _proof(candidate, "blocked", "kill_switch_active")
-        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
-            return _proof(candidate, "blocked", "kill_switch_unverified")
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
@@ -265,8 +268,8 @@ class AutomatedPaperLoop:
         Returns the original assembly when this is not an SFP fill, no market
         source was supplied, or the caller has not built a policy yet. The
         second value is True only when the fresh aggTrades read fails closed.
-        A missing policy must not look like that failure: kill-switch and
-        disarmed-coordinator gates still run.
+        A missing policy must not look like that failure. The caller runs this
+        only after the kill switch has already refused.
         """
 
         from app.market_contracts.errors import MarketContractError
@@ -288,6 +291,20 @@ class AutomatedPaperLoop:
             )
         except MarketContractError:
             return assembled, True
+
+    def _kill_switch_refusal(
+        self,
+        candidate: Candidate,
+        *,
+        kill_switch_active: bool,
+    ) -> AutomatedPaperLoopProof | None:
+        """Refuse before any fill read when the switch is on or unreadable."""
+
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
+        return None
 
     def _bound(
         self,

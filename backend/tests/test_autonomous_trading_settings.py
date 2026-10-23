@@ -973,3 +973,59 @@ def test_kill_switch_still_refuses_when_settings_allow(settings_db) -> None:
         kill_switch_active=True,
     )
     assert proof.reason_code == "kill_switch_active"
+
+
+def test_kill_switch_on_with_no_policy_refuses_without_a_market_read(settings_db) -> None:
+    """A killed loop with policy=None is a kill-switch refusal and reads no market."""
+
+    _factory, settings = settings_db
+    calls = {"n": 0}
+
+    class _Source:
+        def fetch_ordered_trades(self, **_kwargs: object) -> object:
+            calls["n"] += 1
+            raise AssertionError("killed system must not read the market")
+
+    loop = AutomatedPaperLoop(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        settings,
+        FrozenClock(datetime(2026, 10, 20, tzinfo=UTC)),
+        market_source=_Source(),
+    )
+    proof = loop.continue_confirmed_setup(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=_target(),
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=None,  # type: ignore[arg-type]
+        kill_switch_active=True,
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "kill_switch_active"
+    assert calls["n"] == 0
+
+    from app.schemas.common import Timeframe, TradeDirection
+    from app.strategy_brain.sfp.contracts import SfpSpec, sfp_research_v3_parameters
+
+    sfp_policy = SimpleNamespace(
+        authored_spec=SfpSpec(
+            symbol="BTCUSDT",
+            trigger_timeframe=Timeframe.M15,
+            direction=TradeDirection.LONG,
+            parameters=sfp_research_v3_parameters(),
+        )
+    )
+    still_killed = loop.continue_confirmed_setup(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=_target(),
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=sfp_policy,  # type: ignore[arg-type]
+        kill_switch_active=True,
+    )
+    assert still_killed.reason_code == "kill_switch_active"
+    assert calls["n"] == 0
