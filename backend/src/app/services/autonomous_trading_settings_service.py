@@ -12,6 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.models import UserStrategy
+from app.persistence.worker_runtime_state import (
+    load_worker_runtime_from_session,
+    org_paper_effective,
+    project_worker_effective,
+)
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
 from app.schemas.audit import AuditRecordCreate
 from app.schemas.autonomous_trading_settings import (
@@ -21,6 +26,10 @@ from app.schemas.autonomous_trading_settings import (
 )
 from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
 from app.services.audit_service import AuditService
+from app.services.autonomous_paper_switch import (
+    read_internal_paper_switch,
+    write_internal_paper_switch,
+)
 from app.services.risk_policy.ceilings import (
     HARD_MAX_DAILY_LOSS_PERCENT,
     PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
@@ -125,6 +134,7 @@ class AutonomousTradingSettingsService:
     ) -> AutonomousTradingSettingsView:
         row = self._load_row(organization_id=organization_id, user_id=user_id)
         options = self._options(organization_id=organization_id, user_id=user_id)
+        switch = self._switch_view(organization_id)
         if row is None:
             defaults = SYSTEM_AUTONOMOUS_DEFAULTS
             return AutonomousTradingSettingsView(
@@ -137,6 +147,7 @@ class AutonomousTradingSettingsService:
                 symbol=None,
                 using_defaults=True,
                 **options,
+                **switch,
             )
         return AutonomousTradingSettingsView(
             organization_id=organization_id,
@@ -148,6 +159,7 @@ class AutonomousTradingSettingsService:
             symbol=row.symbol,
             using_defaults=False,
             **options,
+            **switch,
         )
 
     def resolve(
@@ -208,15 +220,41 @@ class AutonomousTradingSettingsService:
             if symbol:
                 self._assert_symbol(organization_id=organization_id, symbol=symbol)
             changes["symbol"] = symbol or "null"
+        if "internal_paper_enabled" in data:
+            requested = data["internal_paper_enabled"]
+            if not isinstance(requested, bool):
+                raise AutonomousSettingsValidationError(
+                    "internal_paper_switch_invalid",
+                    "The paper switch must be true or false.",
+                )
+            current_switch = read_internal_paper_switch(self._session, organization_id)
+            if current_switch is None:
+                raise AutonomousSettingsValidationError(
+                    "internal_paper_switch_unverified",
+                    "The paper switch could not be read.",
+                )
+            if current_switch is not requested:
+                write_internal_paper_switch(
+                    self._session,
+                    organization_id=organization_id,
+                    enabled=requested,
+                    user_id=user_id,
+                )
+                changes["internal_paper_enabled"] = "true" if requested else "false"
 
-        row = self._upsert(
-            organization_id=organization_id,
-            user_id=user_id,
-            daily_loss_limit_percent=daily,
-            max_trades_per_day=max_trades,
-            risk_per_trade_percent=risk,
-            strategy_id=strategy_id,
-            symbol=symbol,
+        switch_only = set(data) <= {"internal_paper_enabled"} and "internal_paper_enabled" in data
+        row = (
+            None
+            if switch_only
+            else self._upsert(
+                organization_id=organization_id,
+                user_id=user_id,
+                daily_loss_limit_percent=daily,
+                max_trades_per_day=max_trades,
+                risk_per_trade_percent=risk,
+                strategy_id=strategy_id,
+                symbol=symbol,
+            )
         )
         if changes:
             self._audit.record(
@@ -228,13 +266,40 @@ class AutonomousTradingSettingsService:
                     user_id=user_id,
                     actor_type=ActorType.USER,
                     resource_type="autonomous_trading_settings",
-                    resource_id=str(row.id),
+                    resource_id=str(organization_id if row is None else row.id),
                     result=AuditResult.SUCCESS,
                     severity=AuditSeverity.INFO,
                     metadata={"changes": changes},
                 )
             )
         return self.get(organization_id=organization_id, user_id=user_id)
+
+    def _switch_view(self, organization_id: uuid.UUID) -> dict[str, object]:
+        """Owner switch plus the worker ceiling. A missing heartbeat is not effective."""
+
+        from app.core.config import get_settings
+
+        enabled = read_internal_paper_switch(self._session, organization_id)
+        org_enabled = enabled is True
+        observation = project_worker_effective(
+            load_worker_runtime_from_session(self._session),
+            now=datetime.now(UTC),
+            stale_after_seconds=get_settings().watcher_heartbeat_stale_after_seconds,
+        )
+        ceiling = (
+            observation.autonomous_internal_paper_env_ceiling
+            if observation.source == "worker"
+            else None
+        )
+        return {
+            "internal_paper_enabled": org_enabled,
+            "internal_paper_env_ceiling": ceiling,
+            "internal_paper_effective": org_paper_effective(observation, org_enabled),
+            "worker_runtime_health": observation.health_state,
+            "worker_heartbeat_age_seconds": observation.heartbeat_age_seconds,
+            "worker_flags_stale": observation.source != "worker" or observation.stale,
+            "autonomy_mode": observation.autonomy_mode if observation.source == "worker" else "",
+        }
 
     def _upsert(
         self,

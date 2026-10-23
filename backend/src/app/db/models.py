@@ -52,6 +52,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.db.autonomous_paper_switch import AutonomousPaperSwitchRow  # noqa: F401
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow  # noqa: F401
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.blofin_activity import (  # noqa: F401
@@ -150,6 +151,7 @@ from app.db.watcher_orchestration import (  # noqa: F401
     WatcherWorkerLeaseRow,
 )
 from app.db.watcher_watchlist import WatcherSymbolStatusRow, WatcherWatchlistRow  # noqa: F401
+from app.db.worker_runtime_state import WorkerRuntimeStateRow  # noqa: F401
 from app.experiments import guards as _experiment_guards  # noqa: F401
 from app.experiments.models import (  # noqa: F401
     ExperimentEventRow,

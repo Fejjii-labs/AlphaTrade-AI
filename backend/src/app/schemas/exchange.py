@@ -9,6 +9,7 @@ from pydantic import Field
 
 from app.providers.base import ProviderStatus
 from app.schemas.common import StrictModel
+from app.schemas.health import WorkerEffectiveObservation
 
 
 class ExchangeStatusResponse(StrictModel):
@@ -154,4 +155,5 @@ class ExchangeDiagnosticsSummaryResponse(StrictModel):
     last_cancel_status: str | None = None
     readiness: str
     warnings: list[str] = Field(default_factory=list)
+    worker_effective: WorkerEffectiveObservation = Field(default_factory=WorkerEffectiveObservation)
     generated_at: datetime

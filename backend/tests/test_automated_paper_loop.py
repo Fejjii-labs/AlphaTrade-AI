@@ -115,6 +115,9 @@ def _seed(session: Session) -> None:
     )
     session.flush()
     session.add(Membership(organization_id=ORG, user_id=USER, role=MembershipRole.OWNER))
+    from app.services.autonomous_paper_switch import write_internal_paper_switch
+
+    write_internal_paper_switch(session, organization_id=ORG, enabled=True, user_id=USER)
     session.add(
         ExecutionAccount(
             id=uuid4(),
