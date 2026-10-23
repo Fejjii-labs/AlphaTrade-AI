@@ -37,6 +37,22 @@ def test_changed_tests_and_direct_module_regressions_are_selected():
     assert "tests/test_config.py" in selected
 
 
+def test_schema_changes_select_migration_and_alembic_tests():
+    backend = ROOT / "backend"
+    expected = scope.migration_tests(backend)
+    assert "tests/test_alembic_heads_helper.py" in expected
+    assert any("migration" in Path(name).name for name in expected)
+    for changed in (
+        ["backend/src/app/db/models.py"],
+        ["backend/src/app/db/migrations/versions/a22papertradeday001_paper_trade_slot_day.py"],
+    ):
+        selected = scope.select_tests(changed, backend)
+        assert set(expected).issubset(selected)
+        assert set(scope.BASE_TESTS).issubset(selected)
+    unrelated = scope.select_tests(["backend/src/app/core/config.py"], backend)
+    assert "tests/test_alembic_heads_helper.py" not in unrelated
+
+
 def test_missing_tests_and_paths_outside_tests_cannot_expand_selection():
     selected = scope.select_tests(
         ["backend/tests/test_deleted.py", "backend/tests/../../test_escape.py", "docs/README.md"],
