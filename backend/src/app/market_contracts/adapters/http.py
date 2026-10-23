@@ -72,6 +72,8 @@ _SECRET_MARKERS = (
     "password",
     "token",
     "signature",
+    "x-mbx-apikey",
+    "key=",
 )
 
 logger = structlog.get_logger(__name__)

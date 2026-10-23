@@ -90,6 +90,9 @@ p = json.loads(sys.argv[1])
 allow = sys.argv[2].lower() in ("1", "true", "yes")
 if p.get("ready") is True:
     print("  OK: ready")
+    names = p.get("degraded_providers") or []
+    if names:
+        print("  degraded_providers=" + ",".join(str(name) for name in names))
 elif allow:
     print(f"  WARN: degraded — {p.get('providers_unavailable', '?')} providers unavailable")
 else:

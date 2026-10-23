@@ -32,6 +32,9 @@ import sys
 
 payload = json.loads(sys.argv[1])
 assert payload.get("ready") is True, payload
+names = payload.get("degraded_providers") or []
+if names:
+    print("  degraded_providers=" + ",".join(str(name) for name in names))
 print("  ready=true")
 PY
 

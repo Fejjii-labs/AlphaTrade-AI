@@ -306,6 +306,102 @@ def test_quote_cache_reuses_one_fetch_until_the_ttl() -> None:
     assert source.calls == 2
 
 
+def test_paper_sfp_fill_does_not_use_a_cached_quote() -> None:
+    """A fill-time aggTrades read ignores the 10s scan cache and does not refresh it."""
+
+    from decimal import Decimal
+
+    from app.evidence_pipeline.current_price import load_paper_sfp_fill_quote
+    from app.services.paper_fill import paper_fill_price
+
+    clock = {"t": 0.0}
+    cached_trade = trade(
+        sequence=7,
+        price="100000",
+        quantity="0.01",
+        buyer_is_maker=False,
+        event_time=EVALUATED_AT - timedelta(seconds=1),
+    )
+    fill_trade = trade(
+        sequence=8,
+        price="101000",
+        quantity="0.01",
+        buyer_is_maker=False,
+        event_time=EVALUATED_AT - timedelta(seconds=1),
+    )
+
+    class _Quotes:
+        kind = ProviderKind.MARKET_DATA
+        name = "binance-usdm-perpetual"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.public_quote_cache = ShortTtlSingleflight(
+                ttl_seconds=10.0,
+                max_entries=4,
+                clock=lambda: clock["t"],
+            )
+
+        def fetch_ordered_trades(self, **_kwargs: object) -> SimpleNamespace:
+            self.calls += 1
+            price = fill_trade if self.calls > 1 else cached_trade
+            return SimpleNamespace(trades=[price])
+
+    source = _Quotes()
+    identity = first_slice_identity(
+        timeframe=Timeframe.M15, replay=False, is_live=True, instrument=binance_usdm_btcusdt()
+    )
+    instrument = binance_usdm_btcusdt()
+    cached = quote_current_price(
+        source,  # type: ignore[arg-type]
+        identity=identity,
+        instrument=instrument,
+        evaluated_at=EVALUATED_AT,
+        connection_id=CONNECTION,
+        replay=False,
+    )
+    fill_quote = load_paper_sfp_fill_quote(
+        source,  # type: ignore[arg-type]
+        identity=identity,
+        instrument=instrument,
+        evaluated_at=EVALUATED_AT,
+        connection_id=CONNECTION,
+        replay=False,
+    )
+    fill = paper_fill_price(fill_quote, is_long=True, spread_haircut=Decimal("0.0001"))
+    cached_fill = paper_fill_price(cached, is_long=True, spread_haircut=Decimal("0.0001"))
+    scanned_again = quote_current_price(
+        source,  # type: ignore[arg-type]
+        identity=identity,
+        instrument=instrument,
+        evaluated_at=EVALUATED_AT,
+        connection_id=CONNECTION,
+        replay=False,
+    )
+    assert source.calls == 2
+    assert fill_quote.price == Decimal("101000")
+    assert fill == Decimal("101000") * Decimal("1.0001")
+    assert fill != cached_fill
+    assert scanned_again.price == cached.price
+
+
+def test_binance_key_markers_are_redacted_from_failure_snippets() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="blocked x-mbx-apikey=abc key=zzz")
+
+    with capture_logs() as logs:
+        client = _client(handler)
+        with pytest.raises(RegionalProviderFailureError):
+            client.get_json("/fapi/v1/ping")
+        client.close()
+    event = next(item for item in logs if item["event"] == "perpetual_http_failure")
+    assert event["http_status"] == 403
+    assert event["body_snippet"] == "[redacted]"
+    rendered = str(logs)
+    assert "x-mbx-apikey=abc" not in rendered
+    assert "key=zzz" not in rendered
+
+
 def test_primary_ban_status_does_not_probe_binance_again_or_bybit() -> None:
     seen = {"binance": 0, "bybit": 0}
 
@@ -398,10 +494,11 @@ def test_readiness_names_a_degraded_primary_without_counting_it_unavailable() ->
             is_mock=True,
         ),
     ]
-    ready, label, unavailable = readiness_projection(statuses, fail_closed=False)
+    ready, label, unavailable, degraded = readiness_projection(statuses, fail_closed=False)
     assert ready is True
     assert label == "degraded"
     assert unavailable == 0
+    assert degraded == ("binance-usdm-perpetual",)
 
 
 def test_singleflight_loader_runs_once() -> None:

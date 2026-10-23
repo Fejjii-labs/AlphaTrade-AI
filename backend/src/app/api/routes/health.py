@@ -361,12 +361,14 @@ def readiness_projection(
     statuses: list[ProviderStatus],
     *,
     fail_closed: bool,
-) -> tuple[bool, str, int]:
-    """Return ``(ready, status, unavailable)``.
+) -> tuple[bool, str, int, tuple[str, ...]]:
+    """Return ``(ready, status, unavailable, degraded_providers)``.
 
-    ``ready`` stays true while every provider is reachable. A non-mock market
-    data provider that is degraded without a fallback still sets ``status`` to
-    ``degraded`` so a banned Binance primary is visible without a new probe.
+    ``ready`` stays true while every provider is reachable. Nothing in the
+    staging checks reads ``status``. ``degraded_providers`` names each
+    non-mock market-data provider that is degraded without a fallback, so a
+    banned Binance primary is visible without failing the probe or restarting
+    Render.
     """
 
     unavailable = sum(1 for item in statuses if item.health is ProviderHealth.UNAVAILABLE)
@@ -380,16 +382,17 @@ def readiness_projection(
             if item.kind.value in critical
             and (item.is_mock or (item.health is ProviderHealth.DEGRADED and item.using_fallback))
         )
-    market_degraded = any(
-        item.kind is ProviderKind.MARKET_DATA
+    degraded = tuple(
+        item.name
+        for item in statuses
+        if item.kind is ProviderKind.MARKET_DATA
         and item.health is ProviderHealth.DEGRADED
         and not item.is_mock
         and not item.using_fallback
-        for item in statuses
     )
     ready = unavailable == 0
-    label = "ready" if ready and not market_degraded else "degraded"
-    return ready, label, unavailable
+    label = "ready" if ready and not degraded else "degraded"
+    return ready, label, unavailable, degraded
 
 
 @router.get("/health/ready", response_model=ReadinessResponse, summary="Readiness probe")
@@ -397,7 +400,7 @@ async def readiness(registry: ProviderRegistryDep, settings: SettingsDep) -> Rea
     from app.core.provider_policy import provider_fail_closed
 
     statuses = registry.statuses()
-    ready, label, unavailable = readiness_projection(
+    ready, label, unavailable, degraded = readiness_projection(
         statuses, fail_closed=provider_fail_closed(settings)
     )
     return ReadinessResponse(
@@ -405,5 +408,6 @@ async def readiness(registry: ProviderRegistryDep, settings: SettingsDep) -> Rea
         ready=ready,
         providers_total=len(statuses),
         providers_unavailable=unavailable,
+        degraded_providers=list(degraded),
         timestamp=datetime.now(UTC),
     )

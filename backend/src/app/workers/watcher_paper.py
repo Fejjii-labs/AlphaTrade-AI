@@ -1321,11 +1321,14 @@ class WatcherPaperRuntime:
                         kill_switch_active=report.kill_switch_active,
                     )
             elif resolution.mode is AutonomousMode.INTERNAL_PAPER:
+                read_source = getattr(evidence, "market_source", None)
+                market_source = read_source() if callable(read_source) else None
                 proof = AutomatedPaperLoop(
                     runtime,  # type: ignore[arg-type]
                     self._settings,
                     self._eval_clock,
                     internal_paper_db_enabled=True,
+                    market_source=market_source,
                 ).continue_confirmed_setup(
                     session,
                     target=target,

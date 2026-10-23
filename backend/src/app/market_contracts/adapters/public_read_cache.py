@@ -1,8 +1,15 @@
 """Short TTL cache for public USD-M quotes and klines.
 
-One in-flight loader per key. A miss does not stampede Binance when several
-callers ask for the same symbol and timeframe together. Failures are shared
-with waiters and are not stored, so a later call can try again.
+``PUBLIC_READ_TTL_SECONDS`` is 10 seconds. That is inside the 5-15 second
+window and matches live-quote freshness. The cache covers repeated scan, chat,
+and status reads of confirmed klines (per symbol, interval, limit, and
+end-time bucket) and current-price quotes (per instrument). Concurrent
+identical misses share one loader. Failures are shared with waiters and are
+not stored.
+
+Internal paper SFP fills and the eligibility receipt that records the fill
+price do not use this cache. They take a fresh aggTrades read at fill time
+and do not write the result back. See ``load_paper_sfp_fill_quote``.
 """
 
 from __future__ import annotations

@@ -137,6 +137,7 @@ class AutomatedPaperLoop:
         clock: Clock,
         *,
         internal_paper_db_enabled: bool | None = None,
+        market_source: object | None = None,
     ) -> None:
         self._runtime = runtime
         self._settings = settings
@@ -144,6 +145,9 @@ class AutomatedPaperLoop:
         # None keeps env-only checks for direct callers. The worker passes a
         # bool so approval re-reads the owner switch.
         self._paper_switch_enforced = internal_paper_db_enabled is not None
+        # When set, an SFP fill replaces the scan quote with a fresh aggTrades
+        # read. Tests that already supply a fixture quote leave this empty.
+        self._market_source = market_source
 
     def continue_confirmed_setup(
         self,
@@ -161,6 +165,10 @@ class AutomatedPaperLoop:
 
         self._observed_kill_switch = kill_switch_active
         self._autonomous_settings = None
+        fresh = self._fresh_sfp_fill_evidence(assembled, policy)
+        if fresh is None:
+            return _proof(candidate, "skipped", "stale_evidence")
+        assembled = fresh
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -247,6 +255,34 @@ class AutomatedPaperLoop:
         ):
             return _proof(candidate, "skipped", "direction_not_paper_executable")
         return None
+
+    def _fresh_sfp_fill_evidence(
+        self,
+        assembled: AssembledCanonicalEvidence,
+        policy: ExecutableStrategyPolicy,
+    ) -> AssembledCanonicalEvidence | None:
+        """SFP fills and their action receipts ignore the 10s quote cache.
+
+        Returns the original assembly when this is not an SFP fill or no
+        market source was supplied. Returns None when the fresh aggTrades
+        read fails closed.
+        """
+
+        from app.market_contracts.errors import MarketContractError
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        if not isinstance(policy.authored_spec, SfpSpec) or self._market_source is None:
+            return assembled
+        try:
+            from app.evidence_pipeline.current_price import bind_paper_sfp_fill_quote
+
+            return bind_paper_sfp_fill_quote(
+                assembled,
+                self._market_source,  # type: ignore[arg-type]
+                evaluated_at=self._clock.now(),
+            )
+        except MarketContractError:
+            return None
 
     def _bound(
         self,
