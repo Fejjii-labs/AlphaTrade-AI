@@ -348,10 +348,15 @@ def test_runner_keeps_real_attempt_accounting_and_never_labels_fixtures_as_quali
                     event.user_id == attempt.user_id and event.input_tokens == attempt.input_tokens
                 )
                 assert event.output_tokens == attempt.output_tokens
-                assert (
-                    attempt.cost_source.value == "unavailable"
-                    and event.provider_reported_cost is None
-                )
+                # A priced model with token counts is a static estimate, never a
+                # provider charge. Failed attempts have no tokens and stay unavailable.
+                assert event.provider_reported_cost is None
+                assert event.cost_is_placeholder is True
+                assert event.cost_source == attempt.cost_source
+                if attempt.input_tokens > 0 or attempt.output_tokens > 0:
+                    assert attempt.cost_source.value == "static_estimated"
+                else:
+                    assert attempt.cost_source.value == "unavailable"
             assert session.scalar(select(func.count()).select_from(Order)) == 0
             assert session.scalar(select(func.count()).select_from(KillSwitchState)) == 0
         with pytest.raises(EvaluationBlockedError, match="existing_run_receipt"):
