@@ -181,7 +181,7 @@ def build_default_registry(settings: Settings) -> ProviderRegistry:
     registry.register(_BillingProviderAdapter(resolve_billing_provider(settings)))
     market_data = resolve_market_data_provider(settings)
     registry.register(_MarketDataProviderAdapter(market_data))
-    perpetual_evidence = resolve_perpetual_evidence_source(settings)
+    perpetual_evidence = resolve_perpetual_evidence_source(settings, shared=True)
     registry.register(_PerpetualEvidenceAdapter(perpetual_evidence))
 
     # Exchange: mock by default; BloFin demo (read-only) when explicitly enabled.

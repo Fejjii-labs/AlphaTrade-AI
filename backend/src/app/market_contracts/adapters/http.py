@@ -10,10 +10,12 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+import structlog
 
 from app.market_contracts.adapters.request_budget import (
     SlidingWeightBudget,
@@ -60,6 +62,58 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE", "CONNECT", "TRAC
 REGIONAL_STATUS_CODES = frozenset({401, 403, 451})
 UPSTREAM_BAN_STATUS = 418
 _PROGRESS_INTERVAL_SECONDS = 5.0
+_SNIPPET_LIMIT = 200
+_SECRET_MARKERS = (
+    "api_key",
+    "api-key",
+    "secret",
+    "authorization",
+    "bearer ",
+    "password",
+    "token",
+    "signature",
+)
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class UpstreamPause:
+    """Process-shared 418/429 quiet period. The next call waits without a request."""
+
+    _until: float | None = None
+    _kind: str | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _clock: Callable[[], float] = time.monotonic
+
+    def remaining(self) -> tuple[str, float] | None:
+        """Return ``(ban|rate_limit, seconds_left)`` while the pause is active."""
+
+        with self._lock:
+            if self._until is None or self._kind is None:
+                return None
+            left = self._until - self._clock()
+            if left <= 0:
+                self._until = None
+                self._kind = None
+                return None
+            return self._kind, left
+
+    def note(self, kind: str, seconds: float) -> None:
+        """Extend the pause. A shorter new pause does not shorten an open one."""
+
+        if seconds < 0:
+            return
+        until = self._clock() + seconds
+        with self._lock:
+            if self._until is None or until >= self._until:
+                self._until = until
+                self._kind = kind
+
+    def clear(self) -> None:
+        with self._lock:
+            self._until = None
+            self._kind = None
 
 
 class ReadOnlyHttpGetClient:
@@ -81,6 +135,7 @@ class ReadOnlyHttpGetClient:
         sleeper: Callable[[float], None] | None = None,
         budget: SlidingWeightBudget | None = None,
         progress_interval_seconds: float = _PROGRESS_INTERVAL_SECONDS,
+        pause: UpstreamPause | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._allowed_hosts = allowed_hosts or APPROVED_BINANCE_USDM_REST_HOSTS
@@ -96,6 +151,7 @@ class ReadOnlyHttpGetClient:
             limit=weight_per_minute,
             max_wait_seconds=max(max_backoff_seconds, 60.0),
         )
+        self._pause = pause or UpstreamPause()
         self._client = client or httpx.Client(
             base_url=self._base_url,
             timeout=timeout_seconds,
@@ -107,6 +163,17 @@ class ReadOnlyHttpGetClient:
     @property
     def budget(self) -> SlidingWeightBudget:
         return self._budget
+
+    def ban_remaining_seconds(self) -> float | None:
+        """Seconds left on an HTTP 418 pause. Rate-limit pauses are not bans."""
+
+        paused = self._pause.remaining()
+        if paused is None or paused[0] != "ban":
+            return None
+        return paused[1]
+
+    def pause_remaining(self) -> tuple[str, float] | None:
+        return self._pause.remaining()
 
     def close(self) -> None:
         if self._owns_client:
@@ -133,6 +200,7 @@ class ReadOnlyHttpGetClient:
             )
         url = urljoin(self._base_url + "/", normalized_path.lstrip("/"))
         self._assert_url(url)
+        self._reject_if_paused()
         weight = request_weight(normalized_path, params)
         attempts = self._max_retries + 1
         last_retry_after: float | None = None
@@ -142,6 +210,13 @@ class ReadOnlyHttpGetClient:
                 response = self._exchange_get(url, params)
             except httpx.TransportError as exc:
                 record_request(weight=weight, retry=attempt > 0)
+                self._log_http_failure(
+                    status=None,
+                    exception_type=type(exc).__name__,
+                    response=None,
+                    exc=exc,
+                    path=normalized_path,
+                )
                 if attempt + 1 >= attempts:
                     raise RegionalProviderFailureError(
                         f"{self._failure_label} perpetual source is unreachable."
@@ -155,35 +230,60 @@ class ReadOnlyHttpGetClient:
                 continue
             if response.status_code == 429:
                 last_retry_after = _retry_after_seconds(response)
+                self._log_http_failure(
+                    status=response.status_code,
+                    exception_type="HTTPStatusError",
+                    response=response,
+                    exc=None,
+                    path=normalized_path,
+                )
                 record_request(weight=weight, rate_limited=True, retry=attempt > 0)
-                if attempt + 1 >= attempts:
-                    raise RateLimitedError(
-                        f"{self._failure_label} source rate-limited the read-only client.",
-                        retry_after_seconds=last_retry_after,
-                    )
                 delay = bounded_backoff_seconds(
                     attempt=attempt,
                     retry_after_seconds=last_retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
+                self._pause.note("rate_limit", _pause_seconds(last_retry_after, delay))
+                if attempt + 1 >= attempts:
+                    raise RateLimitedError(
+                        f"{self._failure_label} source rate-limited the read-only client.",
+                        retry_after_seconds=last_retry_after,
+                    )
                 sleep_with_progress(delay, sleeper=self._sleep)
                 continue
             if response.status_code == UPSTREAM_BAN_STATUS:
                 retry_after = _retry_after_seconds(response)
+                self._log_http_failure(
+                    status=response.status_code,
+                    exception_type="HTTPStatusError",
+                    response=response,
+                    exc=None,
+                    path=normalized_path,
+                )
                 record_request(weight=weight, rate_limited=True, retry=attempt > 0)
-                if not self._upstream_ban_retry_allowed(attempt, retry_after):
-                    raise UpstreamBanError(
-                        f"{self._failure_label} source temporarily banned this client (HTTP 418).",
-                        retry_after_seconds=retry_after,
-                    )
                 delay = bounded_backoff_seconds(
                     attempt=attempt,
                     retry_after_seconds=retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
+                # Hold the full Retry-After, not only the capped in-call sleep,
+                # so the next call does not extend the ban.
+                self._pause.note("ban", _pause_seconds(retry_after, delay))
+                if not self._upstream_ban_retry_allowed(attempt, retry_after):
+                    raise UpstreamBanError(
+                        f"{self._failure_label} source temporarily banned this client (HTTP 418).",
+                        retry_after_seconds=retry_after,
+                    )
                 sleep_with_progress(delay, sleeper=self._sleep)
                 continue
             if response.status_code in REGIONAL_STATUS_CODES:
+                self._log_http_failure(
+                    status=response.status_code,
+                    exception_type="HTTPStatusError",
+                    response=response,
+                    exc=None,
+                    path=normalized_path,
+                )
                 record_request(weight=weight)
                 raise RegionalProviderFailureError(
                     f"{self._failure_label} source rejected the runtime region "
@@ -192,15 +292,63 @@ class ReadOnlyHttpGetClient:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
+                self._log_http_failure(
+                    status=response.status_code,
+                    exception_type=type(exc).__name__,
+                    response=response,
+                    exc=exc,
+                    path=normalized_path,
+                )
                 record_request(weight=weight)
                 raise RegionalProviderFailureError(
                     f"{self._failure_label} source returned HTTP {response.status_code}."
                 ) from exc
             record_request(weight=weight, retry=attempt > 0)
+            self._pause.clear()
             return response.json()
         raise RateLimitedError(
             f"{self._failure_label} source rate-limited the read-only client.",
             retry_after_seconds=last_retry_after,
+        )
+
+    def _reject_if_paused(self) -> None:
+        """Refuse another request while a 418 ban or 429 pause is still open."""
+
+        paused = self._pause.remaining()
+        if paused is None:
+            return
+        kind, left = paused
+        if kind == "ban":
+            raise UpstreamBanError(
+                f"{self._failure_label} source temporarily banned this client (HTTP 418).",
+                retry_after_seconds=left,
+            )
+        raise RateLimitedError(
+            f"{self._failure_label} source rate-limited the read-only client.",
+            retry_after_seconds=left,
+        )
+
+    def _log_http_failure(
+        self,
+        *,
+        status: int | None,
+        exception_type: str,
+        response: httpx.Response | None,
+        exc: BaseException | None,
+        path: str,
+    ) -> None:
+        """Log status, exception type, and a short body. Never headers or secrets."""
+
+        if response is not None:
+            snippet = _body_snippet(response)
+        else:
+            snippet = _sanitize_snippet("" if exc is None else str(exc))
+        logger.warning(
+            "perpetual_http_failure",
+            http_status=status,
+            exception_type=exception_type,
+            body_snippet=snippet,
+            path=path,
         )
 
     def _upstream_ban_retry_allowed(self, attempt: int, retry_after: float | None) -> bool:
@@ -294,6 +442,30 @@ class ReadOnlyHttpGetClient:
             raise UnapprovedEvidenceHostError(
                 f"Host {host} is not an approved Binance USD-M HTTPS evidence identity."
             )
+
+
+def _pause_seconds(retry_after: float | None, slept: float) -> float:
+    """Hold the exchange Retry-After when it is present, otherwise the sleep we used."""
+
+    if retry_after is not None and retry_after >= 0:
+        return retry_after
+    return max(slept, 0.0)
+
+
+def _body_snippet(response: httpx.Response) -> str:
+    try:
+        raw = bytes(response.content[: _SNIPPET_LIMIT * 2])
+    except Exception:
+        return ""
+    return _sanitize_snippet(raw.decode("utf-8", errors="replace"))
+
+
+def _sanitize_snippet(text: str) -> str:
+    collapsed = " ".join(text.replace("\x00", " ").split())
+    lowered = collapsed.lower()
+    if any(marker in lowered for marker in _SECRET_MARKERS):
+        return "[redacted]"
+    return collapsed[:_SNIPPET_LIMIT]
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

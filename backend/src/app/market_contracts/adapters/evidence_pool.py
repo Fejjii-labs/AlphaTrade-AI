@@ -11,7 +11,12 @@ from dataclasses import dataclass
 
 from app.core.config import Settings
 from app.market_contracts.adapters.aggtrade_cache import ClosedAggTradeCache, TtlValueCache
+from app.market_contracts.adapters.http import UpstreamPause
 from app.market_contracts.adapters.observation_cache import CausalObservationCache
+from app.market_contracts.adapters.public_read_cache import (
+    PUBLIC_READ_TTL_SECONDS,
+    ShortTtlSingleflight,
+)
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget
 
 
@@ -42,6 +47,15 @@ class BinanceEvidencePool:
         self.reduced = TtlValueCache(
             max_entries=key.cache_entries,
             ttl_seconds=key.cache_ttl_seconds,
+        )
+        self.ban_gate = UpstreamPause()
+        self.kline_cache = ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=64,
+        )
+        self.quote_cache = ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=32,
         )
 
 

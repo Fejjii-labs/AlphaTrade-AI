@@ -415,7 +415,9 @@ class Settings(BaseSettings):
     perpetual_evidence_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
     # Public USD-M request-weight budget. 2400/min is the exchange IP cap.
     binance_request_weight_per_minute: int = Field(default=1800, ge=20, le=2400)
-    binance_request_max_retries: int = Field(default=3, ge=0, le=8)
+    # One retry. Extra retries during HTTP 418/429 multiply request weight.
+    # Retry-After is still honored inside that single retry.
+    binance_request_max_retries: int = Field(default=1, ge=0, le=8)
     binance_request_max_backoff_seconds: float = Field(default=30.0, ge=0.0, le=120.0)
     binance_evidence_cache_entries: int = Field(default=8, ge=1, le=64)
     # Closed aggTrade windows are reused only until this TTL. A later payload
