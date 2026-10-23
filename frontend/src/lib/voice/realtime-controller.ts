@@ -250,8 +250,20 @@ export class RealtimeVoiceController {
         }
       } catch { this.closeSocket(socket); }
     };
-    socket.onerror = () => this.closeSocket(socket);
-    socket.onclose = () => this.closeSocket(socket);
+    socket.onerror = () => {
+      this.usageUnconfirmed(generation);
+      this.closeSocket(socket);
+    };
+    socket.onclose = () => {
+      const timer = this.closingSockets.get(socket);
+      if (timer) clearTimeout(timer);
+      this.closingSockets.delete(socket);
+      this.usageUnconfirmed(generation);
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+    };
     this.closingSockets.set(socket, setTimeout(() => {
       this.usageUnconfirmed(generation);
       this.closeSocket(socket);

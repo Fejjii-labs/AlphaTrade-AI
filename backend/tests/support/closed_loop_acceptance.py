@@ -312,6 +312,9 @@ def build_world(*, failure: str | None = None) -> ClosedLoopWorld:
                 Membership(organization_id=ORG_B, user_id=USER_B, role=MembershipRole.OWNER),
             ]
         )
+        from app.services.autonomous_paper_switch import write_internal_paper_switch
+
+        write_internal_paper_switch(session, organization_id=ORG, enabled=True, user_id=USER)
         session.commit()
         _seed_approved_compiled(session)
         _persist_resistance(session)

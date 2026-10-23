@@ -8,6 +8,7 @@ import { WatcherAssignmentsSection } from "@/components/WatcherAssignmentsSectio
 import { NotificationSettingsPanel } from "@/components/NotificationSettingsPanel";
 import { PaperAccountSetup } from "@/components/settings/PaperAccountSetup";
 import { SettingsReadout } from "@/components/settings/SettingsReadout";
+import { WorkerRuntimeReadout } from "@/components/WorkerRuntimeReadout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/contexts/AuthContext";
@@ -76,6 +77,11 @@ function SettingsWorkspace() {
                   : "Unavailable",
               ],
             ]}
+          />
+          <WorkerRuntimeReadout
+            observation={
+              health?.worker_flags_source === "worker" ? health.worker_effective : null
+            }
           />
           <Button
             variant="outline"

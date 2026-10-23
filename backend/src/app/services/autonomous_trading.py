@@ -70,12 +70,22 @@ class RiskLimitSnapshot:
     trade_slots: int = 1
 
 
-def resolve_autonomous_mode(settings: object) -> AutonomousModeResolution:
+def resolve_autonomous_mode(
+    settings: object,
+    *,
+    internal_paper_db_enabled: bool | None = None,
+) -> AutonomousModeResolution:
     """Return the only autonomous mode these settings prove, or a refusal.
 
     Real-money configuration is refused even when a flag is set. Both flags,
     a flag that disagrees with the exchange mode, or unreadable settings fail
     closed. Neither flag means the process is disarmed, which is not an error.
+
+    ``internal_paper_db_enabled`` is the owner switch. False disarms internal
+    paper after the env checks pass. True leaves the env paper ceiling in
+    place. None keeps env-only resolution for callers that are not the worker.
+    Env false never becomes paper, and this argument cannot enable real money
+    or BloFin demo.
     """
 
     if settings is None:
@@ -108,6 +118,8 @@ def resolve_autonomous_mode(settings: object) -> AutonomousModeResolution:
         refusal = _arming_refusal(settings)
         if refusal is not None:
             return AutonomousModeResolution(AutonomousMode.OFF, refusal)
+        if internal_paper_db_enabled is False:
+            return AutonomousModeResolution(AutonomousMode.OFF, None)
         return AutonomousModeResolution(AutonomousMode.INTERNAL_PAPER, None)
     if demo_flag:
         if execution_mode != "paper" or exchange_mode != "paper_exchange_demo":

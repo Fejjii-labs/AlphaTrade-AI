@@ -8,7 +8,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from pydantic import Field
+from openai.types.live.client_event_param import ClientEventParam
+from pydantic import Field, TypeAdapter
 
 from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.contracts import VoiceAudio, VoiceEnd, VoiceStart
@@ -18,6 +19,8 @@ from app.agent_voice.protocol import checked_audio
 from app.agent_voice.service import shared_turn
 from app.interactive_agent.contracts import AgentTurnRequest
 from app.schemas.common import StrictModel
+
+_LIVE_CLIENT_EVENT = TypeAdapter(ClientEventParam)
 
 
 class TranscriptFragment(StrictModel):
@@ -318,7 +321,9 @@ class LiveSession:
         self.closing = True
         self.close_requested = True
         self.close_started = asyncio.get_running_loop().time()
-        await self._provider_send({"type": "session.close"})
+        payload = {"type": "session.close"}
+        _LIVE_CLIENT_EVENT.validate_python(payload)
+        await self._provider_send(payload)
 
     async def stop(self) -> None:
         self.closing = True

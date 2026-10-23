@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent_voice.live_config import CLEANUP_SECONDS, CLOSE_SECONDS
 from app.db.voice_realtime import VoiceSessionReservation
 from app.schemas.usage import OrganizationQuotaUpdate
 from app.services.quota_service import QuotaService
@@ -119,7 +120,9 @@ def test_expired_hold_without_final_receipt_releases_on_quota_status(experiment_
         row.ledger = {
             **row.ledger,
             "live": {"finalized": False},
-            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            "expires_at": (
+                datetime.now(UTC) - timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS + 5)
+            ).isoformat(),
         }
         session.commit()
     with Session(experiment_engine) as fresh:
@@ -141,7 +144,9 @@ def test_concurrent_quota_reads_sweep_expired_holds_once(experiment_engine):
         row.ledger = {
             **row.ledger,
             "live": {"finalized": False},
-            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            "expires_at": (
+                datetime.now(UTC) - timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS + 5)
+            ).isoformat(),
         }
         session.commit()
 
@@ -153,6 +158,28 @@ def test_concurrent_quota_reads_sweep_expired_holds_once(experiment_engine):
         futures = [workers.submit(read_quota) for _ in range(2)]
         results = [future.result(timeout=10) for future in futures]
     assert results == [Decimal(0), Decimal(0)]
+
+
+def test_expired_realtime_uncertain_audio_keeps_quota_hold(experiment_engine):
+    with Session(experiment_engine) as session:
+        world = World(session)
+        org = world.tenant.organization_id
+        row = reserve(world, status="uncertain")
+        row.ledger = {
+            **row.ledger,
+            "audio_bytes": 48000,
+            "expires_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        }
+        session.commit()
+    with Session(experiment_engine) as fresh:
+        QuotaService(fresh).get_status(org)
+        row = fresh.scalar(
+            select(VoiceSessionReservation).where(
+                VoiceSessionReservation.organization_id == org
+            )
+        )
+        assert row is not None and row.status == "uncertain"
+        assert QuotaService(fresh).get_status(org).usage.monthly_cost_reserved == Decimal("1")
 
 
 def test_verified_closed_reservation_releases_hold_without_claiming_measured_usage(

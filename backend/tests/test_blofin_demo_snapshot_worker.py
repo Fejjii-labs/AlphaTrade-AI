@@ -1,6 +1,8 @@
 """Snapshot cycle gates, fresh skip, and error backoff. No venue calls."""
 
 import inspect
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -40,6 +42,7 @@ from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror, MirrorReadError
 from app.services.blofin_sync_service import BloFinSyncService
 from app.services.dashboard.demo_account import demo_account_active
+from app.workers import blofin_demo_snapshot as blofin_snapshot_worker
 from app.workers.blofin_demo_snapshot import BloFinDemoSnapshotCycle
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -47,6 +50,33 @@ from app.workers.paper_worker import (
     build_paper_worker_supervisor,
 )
 from tests.test_blofin_activity_provider import readonly_settings
+
+
+@contextmanager
+def _capture_blofin_logs() -> Iterator[list[dict[str, object]]]:
+    """Capture BloFin logs after structlog has cached a module logger.
+
+    Application logging sets ``cache_logger_on_first_use``. A logger bound to an
+    older processor list keeps printing to stdout, so ``capture_logs`` alone
+    misses identity and refusal events in the full suite. A fresh proxy bound
+    inside the capture uses the active processor list. The safety gates stay as they are.
+    """
+
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.MonkeyPatch.context() as patch,
+    ):
+        patch.setattr(
+            blofin_sync_service,
+            "logger",
+            structlog.get_logger("app.services.blofin_sync_service"),
+        )
+        patch.setattr(
+            blofin_snapshot_worker,
+            "logger",
+            structlog.get_logger("workers.blofin_demo_snapshot"),
+        )
+        yield logs
 
 
 def _closed_settings() -> Settings:
@@ -180,7 +210,7 @@ def test_partial_readonly_set_skips_without_a_database_or_a_secret_log(
         "app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror",
         forbidden_mirror,
     )
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         outcome = BloFinDemoSnapshotCycle(
             _trading_key_settings(
                 blofin_demo_manual_mirror_enabled=True,
@@ -235,7 +265,7 @@ def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPa
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         outcome = BloFinDemoSnapshotCycle(settings, clock=lambda: now)()
     assert outcome.status == "ok"
     assert captured["applied"] is True
@@ -291,7 +321,7 @@ def test_worker_sync_uses_get_only_demo_key_and_refuses_trade_permission_on_dedi
     monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
     organization_id = uuid4()
     _pin_activity(monkeypatch, organization_id, "demo-read-fallback")
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         result = service.sync(
             organization_id=organization_id, user_id=uuid4(), sync_origin="worker"
         )
@@ -1222,6 +1252,9 @@ def _internal_key_settings(**updates: object) -> Settings:
         "blofin_demo_snapshot_sync_enabled": True,
         "blofin_demo_snapshot_internal_read_enabled": True,
         "blofin_readonly_sync_enabled": False,
+        "blofin_readonly_api_key": "",
+        "blofin_readonly_api_secret": "",
+        "blofin_readonly_api_passphrase": "",
         "blofin_api_key": "fixture-trading-key",
         "blofin_api_secret": "fixture-trading-secret",
         "blofin_api_passphrase": "fixture-trading-pass",
@@ -1298,7 +1331,7 @@ def test_paper_internal_snapshot_runs_when_every_gate_is_open(
         "app.services.blofin_sync_service.ensure_demo_exchange_access",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("trading access")),
     )
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         result = service.sync(
             organization_id=organization_id,
             user_id=UUID(settings.governed_blofin_demo_user_id),
@@ -1330,7 +1363,7 @@ def test_paper_internal_identity_mismatch_is_logged_without_the_uid(
     )
     _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
     service = _fallback_sync_service(monkeypatch, settings, uid="other-demo-account")
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         result = service.sync(
             organization_id=organization_id, user_id=uuid4(), sync_origin="worker"
         )
@@ -1626,7 +1659,7 @@ def test_internal_mirror_refuses_before_any_read_when_the_pin_is_missing(
         )
     monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
     client = _PinClient(uid=None, account_reads=False)
-    with structlog.testing.capture_logs() as logs, pytest.raises(ValueError, match=match):
+    with _capture_blofin_logs() as logs, pytest.raises(ValueError, match=match):
         _apply_mirror(client, settings, organization_id)
     assert client.paths == []
     assert any(
@@ -1644,7 +1677,7 @@ def test_internal_mirror_refuses_a_uid_mismatch_after_the_identity_get_only(
     _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
     client = _PinClient(uid="other-demo-account", account_reads=False)
     with (
-        structlog.testing.capture_logs() as logs,
+        _capture_blofin_logs() as logs,
         pytest.raises(ValueError, match="does not match connection pin"),
     ):
         _apply_mirror(client, settings, organization_id)
@@ -1681,7 +1714,7 @@ def test_internal_mirror_runs_the_pin_before_account_reads(
     _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
     client = _PinClient(uid="pinned-demo-account", account_reads=True)
     with (
-        structlog.testing.capture_logs() as logs,
+        _capture_blofin_logs() as logs,
         pytest.raises(MirrorReadError, match="stopped after the pin"),
     ):
         _apply_mirror(client, settings, organization_id)
@@ -1776,7 +1809,7 @@ def test_fresh_internal_snapshot_refuses_the_mirror_before_any_read(
         "app.services.blofin_sync_service.get_activity_settings",
         lambda: BloFinActivitySettings(_env_file=None),
     )
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         outcome = cycle()
     assert outcome.status == "ok"
     assert synced == []
@@ -1798,7 +1831,7 @@ def test_fresh_internal_snapshot_refuses_a_uid_mismatch_before_account_reads(
     cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
     organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
     _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         outcome = cycle()
     assert outcome.status == "ok"
     assert synced == []
@@ -1819,7 +1852,7 @@ def test_fresh_internal_snapshot_checks_the_uid_before_the_mirror_reads(
     cycle, synced, recorded = _fresh_internal_cycle(monkeypatch, client)
     organization_id = UUID(cycle.settings.governed_blofin_demo_organization_id)
     _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
-    with structlog.testing.capture_logs() as logs:
+    with _capture_blofin_logs() as logs:
         outcome = cycle()
     assert outcome.status == "ok"
     assert synced == []
@@ -1837,3 +1870,25 @@ def test_fresh_internal_snapshot_checks_the_uid_before_the_mirror_reads(
         for item in logs
     )
     _assert_secrets_absent(logs)
+
+
+def test_sync_identity_log_is_captured_after_structlog_reconfiguration() -> None:
+    configuration = structlog.get_config()
+    original_logger = blofin_sync_service.logger
+    try:
+        structlog.configure(
+            processors=[structlog.dev.ConsoleRenderer()],
+            cache_logger_on_first_use=True,
+        )
+        blofin_sync_service.logger = structlog.get_logger("app.services.blofin_sync_service")
+        blofin_sync_service.logger.info("prime_cached_logger")
+        structlog.configure(processors=[structlog.dev.ConsoleRenderer(colors=False)])
+        with _capture_blofin_logs() as logs:
+            blofin_sync_service.logger.info("blofin_snapshot_identity", result="verified")
+        assert any(
+            item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+            for item in logs
+        )
+    finally:
+        blofin_sync_service.logger = original_logger
+        structlog.configure(**configuration)

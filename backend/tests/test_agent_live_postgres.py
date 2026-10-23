@@ -16,6 +16,8 @@ from sqlalchemy import event, func, select, text
 
 from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.live_accounting import LiveLedger
+from app.agent_voice.live_config import CLEANUP_SECONDS, CLOSE_SECONDS
+from app.agent_voice.reservations_sweep import release_expired_voice_holds
 from app.db.models import Membership, OrganizationQuota, UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
 from app.schemas.common import CostSource, MembershipRole, UsageStatus
@@ -251,9 +253,8 @@ def test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions(
     original.usage({"usage": {"seconds": 12}})
     with database.sessions() as session:
         row = session.get(VoiceSessionReservation, original.id)
-        row.ledger = row.ledger | {
-            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-        }
+        margin = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS + 5)
+        row.ledger = row.ledger | {"expires_at": (datetime.now(UTC) - margin).isoformat()}
         session.scalar(select(Membership)).role = MembershipRole.VIEWER
         session.commit()
     if receipt_order == "after_cleanup":
@@ -283,8 +284,9 @@ def test_expired_live_hold_without_final_receipt_is_swept_on_quota_read(live_dat
     original = started_ledger(database)
     with database.sessions() as session:
         row = session.get(VoiceSessionReservation, original.id)
+        margin = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS + 5)
         row.ledger = row.ledger | {
-            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+            "expires_at": (datetime.now(UTC) - margin).isoformat()
         }
         session.commit()
     with database.sessions() as fresh:
@@ -314,3 +316,61 @@ def test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session(li
         assert quota.monthly_cost_reserved == row.reserved_cost
         assert quota.monthly_cost_used == Decimal("0.0125")
         assert quota.monthly_tokens_reserved == row.reserved_tokens
+
+
+_SWEEP_MARGIN = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS)
+
+
+def test_active_live_hold_inside_close_margin_is_not_swept(live_database):
+    database = live_database
+    ledger = ledger_for(database)
+    ledger.reserve()
+    ledger.started("live_margin_fixture")
+    with database.sessions() as session:
+        row = session.get(VoiceSessionReservation, ledger.id)
+        row.ledger = row.ledger | {
+            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        }
+        session.commit()
+    with database.sessions() as session:
+        assert release_expired_voice_holds(session, database.organization_id) == 0
+        session.commit()
+        row = session.get(VoiceSessionReservation, ledger.id)
+        assert row.status == "active"
+        usage = QuotaService(session).get_status(database.organization_id).usage
+        assert usage.monthly_cost_reserved > 0
+
+
+def test_expired_live_without_final_receipt_releases_after_margin(live_database):
+    database = live_database
+    ledger = ledger_for(database)
+    ledger.reserve()
+    ledger.started("live_sweep_fixture")
+    past = datetime.now(UTC) - _SWEEP_MARGIN - timedelta(seconds=5)
+    with database.sessions() as session:
+        row = session.get(VoiceSessionReservation, ledger.id)
+        row.ledger = row.ledger | {"expires_at": past.isoformat()}
+        session.commit()
+    with database.sessions() as session:
+        assert release_expired_voice_holds(session, database.organization_id) == 1
+        session.commit()
+        row = session.get(VoiceSessionReservation, ledger.id)
+        assert row.status == "closed" and row.accounted_cost == Decimal(0)
+
+
+def test_release_expired_voice_holds_flushes_without_committing(live_database):
+    database = live_database
+    ledger = ledger_for(database)
+    ledger.reserve()
+    ledger.started("live_flush_fixture")
+    past = datetime.now(UTC) - _SWEEP_MARGIN - timedelta(seconds=5)
+    with database.sessions() as session:
+        row = session.get(VoiceSessionReservation, ledger.id)
+        row.ledger = row.ledger | {"expires_at": past.isoformat()}
+        session.commit()
+    with database.sessions() as session:
+        assert release_expired_voice_holds(session, database.organization_id) == 1
+        session.rollback()
+    with database.sessions() as session:
+        row = session.get(VoiceSessionReservation, ledger.id)
+        assert row.status == "active"

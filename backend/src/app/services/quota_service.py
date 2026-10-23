@@ -389,7 +389,7 @@ class QuotaService:
         # A socket/restart failure cannot release a promise of potentially billed
         # work. Outstanding holds span a month boundary until server evidence
         # closes them. Keep actual usage separate from these conservative holds.
-        release_expired_voice_holds(self._session)
+        release_expired_voice_holds(self._session, organization_id)
         reservations = list(
             self._session.scalars(
                 select(VoiceSessionReservation).where(

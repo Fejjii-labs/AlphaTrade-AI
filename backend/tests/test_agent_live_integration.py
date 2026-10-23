@@ -168,6 +168,26 @@ def test_voice_receipt_uses_voice_reasoning_model_not_the_text_agent(tmp_path, l
         load_live_limits(bound)
 
 
+def test_live_limits_require_verified_embedding_model(tmp_path, live_limits):
+    path = tmp_path / "live-limits.json"
+    path.write_text(
+        live_limits.model_copy(
+            update={
+                "embedding": live_limits.embedding.model_copy(update={"model": "wrong-embedding"})
+            }
+        ).model_dump_json()
+    )
+    bound = Settings(
+        _env_file=None,
+        openai_api_key="fixture",
+        provider_mode="live",
+        agent_live_enabled=True,
+        agent_live_limits_file=str(path),
+    )
+    with pytest.raises(VoiceUnavailableError, match="verified_embedding_route_mismatch"):
+        load_live_limits(bound)
+
+
 def test_live_reasoning_and_embedding_must_fit_the_session_ceiling(tmp_path, live_limits):
     """Official Sol rates plus the voice minute rate refuse a hold above $1."""
     settings = Settings(

@@ -159,6 +159,8 @@ def load_live_limits(settings: Settings) -> LiveLimits:
         raise VoiceUnavailableError("verified_live_receipt_cannot_cover_session")
     if limits.reasoning.model != settings.agent_voice_reasoning_model:
         raise VoiceUnavailableError("verified_reasoning_route_mismatch")
+    if limits.embedding and limits.embedding.model != settings.embeddings_model:
+        raise VoiceUnavailableError("verified_embedding_route_mismatch")
     if limits.reservation(settings) > min(limits.session_ceiling_usd, limits.remaining_budget_usd):
         raise VoiceUnavailableError("verified_cap_cannot_cover_session")
     return limits

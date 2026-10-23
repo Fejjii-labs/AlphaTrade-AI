@@ -15,6 +15,7 @@ import { useAsyncData } from "@/hooks/useAsyncData";
 import { api, ApiError } from "@/lib/api";
 import type { AutonomousTradingSettingsView } from "@/lib/api/types";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
+import { describedWorkerHealth } from "@/lib/worker-runtime";
 
 type FormState = {
   daily_loss_limit_percent: string;
@@ -65,12 +66,16 @@ export default function AutonomousTradingSettingsPage() {
 }
 
 function AutonomousSettingsWorkspace() {
+  const { user } = useAuth();
   const loader = useCallback(() => api.autonomous.settings(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [form, setForm] = useState<FormState | null>(null);
+  const [view, setView] = useState<AutonomousTradingSettingsView | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
   const { executionMode, realTradingEnabled } = useSafetyPosture();
   const { killSwitchStatus, killSwitchError, loading: appLoading } = useAppContext();
   const posture = describeSafetyPosture(executionMode, realTradingEnabled);
@@ -81,12 +86,15 @@ function AutonomousSettingsWorkspace() {
   });
 
   useEffect(() => {
-    if (data) setForm(toFormState(data));
+    if (data) {
+      setForm(toFormState(data));
+      setView(data);
+    }
   }, [data]);
 
   if (loading) return <LoadingState label="Loading autonomous trading settings…" />;
   if (error) return <ErrorState message={error} onRetry={() => void reload()} />;
-  if (!form || !data)
+  if (!form || !data || !view)
     return (
       <ErrorState
         message="Autonomous trading settings unavailable."
@@ -99,6 +107,7 @@ function AutonomousSettingsWorkspace() {
     setSaving(true);
     setSaveError(null);
     setSavedMessage(null);
+    setSwitchError(null);
     const riskText = form!.risk_per_trade_percent.trim();
     const payload: Record<string, unknown> = {
       daily_loss_limit_percent: form!.daily_loss_limit_percent.trim(),
@@ -114,6 +123,7 @@ function AutonomousSettingsWorkspace() {
     try {
       const updated = await api.autonomous.updateSettings(payload);
       setForm(toFormState(updated));
+      setView(updated);
       setSavedMessage("Autonomous trading settings saved.");
     } catch (err) {
       if (err instanceof ApiError && typeof err.message === "string" && data) {
@@ -125,6 +135,31 @@ function AutonomousSettingsWorkspace() {
       }
     } finally {
       setSaving(false);
+    }
+  }
+
+  const owner = user?.role === "owner";
+  const ceiling =
+    view.internal_paper_env_ceiling == null
+      ? "Not reported"
+      : view.internal_paper_env_ceiling
+        ? "On"
+        : "Off";
+
+  async function handlePaperSwitch(enabled: boolean) {
+    setSwitching(true);
+    setSwitchError(null);
+    setSavedMessage(null);
+    try {
+      const updated = await api.autonomous.updateSettings({ internal_paper_enabled: enabled });
+      setView(updated);
+      setSavedMessage(
+        enabled ? "Internal paper switch turned on." : "Internal paper switch turned off.",
+      );
+    } catch (err) {
+      setSwitchError(err instanceof Error ? err.message : "Unable to change the paper switch.");
+    } finally {
+      setSwitching(false);
     }
   }
 
@@ -144,6 +179,53 @@ function AutonomousSettingsWorkspace() {
           ← Back to Strategies
         </Link>
       </p>
+      <Card data-testid="autonomous-paper-switch">
+        <CardHeader>
+          <CardTitle>Internal paper switch</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <label className="flex min-h-11 items-center gap-2">
+            <input
+              type="checkbox"
+              data-testid="autonomous-paper-switch-input"
+              checked={view.internal_paper_enabled === true}
+              disabled={!owner || switching}
+              onChange={(event) => void handlePaperSwitch(event.target.checked)}
+            />
+            <span>Autonomous internal paper</span>
+          </label>
+          <p className="text-text-muted" data-testid="autonomous-paper-switch-note">
+            The environment ceiling wins when it is off. This switch cannot enable real money.
+            Only an owner can change it. Turning it off stops new entries and does not close
+            open positions.
+          </p>
+          <dl className="grid gap-2 sm:grid-cols-2" data-testid="autonomous-paper-switch-status">
+            <div>
+              <dt className="text-xs text-text-muted">Environment ceiling</dt>
+              <dd>{ceiling}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-muted">Effective for this workspace</dt>
+              <dd>{view.internal_paper_effective ? "On" : "Off"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-muted">Worker report</dt>
+              <dd>
+                {describedWorkerHealth(view.worker_runtime_health, view.worker_flags_stale)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-text-muted">Last worker mode</dt>
+              <dd>{view.autonomy_mode ? view.autonomy_mode : "Not reported"}</dd>
+            </div>
+          </dl>
+          {switchError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {switchError}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
       <Card data-testid="autonomous-settings-form-card">
         <CardHeader>
           <CardTitle>Limits and selection</CardTitle>

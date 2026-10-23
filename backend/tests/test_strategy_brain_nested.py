@@ -291,6 +291,9 @@ def nested_runtime_world(tenant_store, monkeypatch, *, forming=False, risk_block
     session, org, user = tenant_store
     template = approved(session, org, user)
     session.add(Membership(organization_id=org, user_id=user, role=MembershipRole.OWNER))
+    from app.services.autonomous_paper_switch import write_internal_paper_switch
+
+    write_internal_paper_switch(session, organization_id=org, enabled=True, user_id=user)
     session.add(
         ExecutionAccount(
             id=uuid4(),

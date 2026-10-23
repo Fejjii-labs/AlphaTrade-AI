@@ -34,6 +34,8 @@ class LiveLedger(VoiceLedger):
             history: list[dict[str, Any]] = []
             size = 0
             for message in reversed(messages):
+                if len(history) >= 128:
+                    break
                 size += len(message.content.encode())
                 if size > 8000:
                     break
@@ -153,7 +155,7 @@ class LiveLedger(VoiceLedger):
             usage.estimated_cost = seconds * self.limits.live.usd_per_second
             usage.cost_source = CostSource.STATIC_ESTIMATED
             usage.cost_is_placeholder = False
-            usage.status = UsageStatus.SUCCESS if final else UsageStatus.FAILURE
+            usage.status = UsageStatus.SUCCESS if final else UsageStatus.PARTIAL
             usage.event_at = datetime.now(UTC)
             session.commit()
         if not live["within_reservation"]:

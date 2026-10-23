@@ -102,6 +102,37 @@ class PaperWorkerKillSwitch(BaseModel):
     since: datetime | None = None
 
 
+class WorkerEffectiveObservation(BaseModel):
+    """Effective flags published by the worker, with heartbeat freshness.
+
+    ``source`` is ``worker`` only when a row was read. ``stale`` is true unless
+    ``health_state`` is ``RUNNING``. These booleans are not the API process env.
+    ``real_trading_enabled`` is fixed false: this record cannot arm real money.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["worker", "unavailable"] = "unavailable"
+    health_state: WorkerHealthState = "UNAVAILABLE"
+    stale: bool = True
+    heartbeat_at: datetime | None = None
+    heartbeat_age_seconds: float | None = None
+    heartbeat_stale_after_seconds: int = 90
+    last_cycle_at: datetime | None = None
+    autonomy_mode: str = "off"
+    autonomous_internal_paper_env_ceiling: bool = False
+    autonomous_internal_paper_db_enabled: bool = False
+    autonomous_internal_paper_effective: bool = False
+    watcher_orchestration_enabled: bool = False
+    watcher_paper_staging_activation: bool = False
+    telegram_paper_activation_armed: bool = False
+    telegram_interaction_enabled: bool = False
+    telegram_alerts_enabled: bool = False
+    automatic_telegram_delivery_enabled: bool = False
+    watchlist: list[str] = Field(default_factory=list)
+    real_trading_enabled: Literal[False] = False
+
+
 class PaperWorkerHeartbeatResponse(BaseModel):
     """External liveness of the paper worker.
 
@@ -126,6 +157,7 @@ class PaperWorkerHeartbeatResponse(BaseModel):
     exit_monitor: WorkerComponentObservation = Field(default_factory=WorkerComponentObservation)
     exit_monitor_alert_raised: bool = False
     kill_switch: PaperWorkerKillSwitch = Field(default_factory=PaperWorkerKillSwitch)
+    worker_effective: WorkerEffectiveObservation = Field(default_factory=WorkerEffectiveObservation)
     timestamp: datetime
 
 
@@ -170,6 +202,9 @@ class HealthResponse(BaseModel):
     first_perpetual_symbol: Literal["BTCUSDT"] = "BTCUSDT"
     git_sha: str | None = None
     worker_runtime: WorkerRuntimeObservation = Field(default_factory=WorkerRuntimeObservation)
+    worker_effective: WorkerEffectiveObservation = Field(default_factory=WorkerEffectiveObservation)
+    worker_flags_source: Literal["worker", "api_process"] = "api_process"
+    worker_flags_stale: bool = False
     arming_refusal: ArmingRefusalObservation = Field(
         default_factory=lambda: ArmingRefusalObservation()
     )

@@ -80,11 +80,14 @@ quota treats `reserved_cost` / `reserved_tokens` as outstanding. If a socket
 ends without a provider final receipt (for example a crash before
 `live.finalized`), the row can remain `uncertain` and keep blocking quota.
 
-`QuotaService` runs `release_expired_voice_holds` before each usage snapshot.
-That sweep closes expired rows that never recorded a finalized Live duration
-receipt and sets `accounted_cost` to zero so the monthly hold drops. Rows with a
-finalized Live receipt but unresolved secondary delegation are left unchanged so
-conservative tool holds remain until server evidence settles them.
+`QuotaService` runs `release_expired_voice_holds` for the requesting organization
+before each usage snapshot. The sweep is row-locked, flushes only (it does not
+commit unrelated work on the quota session), and applies only to GPT Live rows
+after `expires_at` plus the 14-second close/cleanup margin. It closes rows that
+never recorded a finalized Live duration receipt and sets `accounted_cost` to
+zero when it was still unset. Realtime rows, in-flight active sockets inside
+that margin, rows with a non-null `accounted_cost`, and finalized Live receipts
+with unresolved secondary delegation are left unchanged.
 
 The example file contains no secrets. Dates are placeholders. A real receipt
 must be unexpired, tenant-scoped, and cover the whole session plus the

@@ -52,6 +52,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.db.autonomous_paper_switch import AutonomousPaperSwitchRow  # noqa: F401
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow  # noqa: F401
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.blofin_activity import (  # noqa: F401
@@ -150,6 +151,7 @@ from app.db.watcher_orchestration import (  # noqa: F401
     WatcherWorkerLeaseRow,
 )
 from app.db.watcher_watchlist import WatcherSymbolStatusRow, WatcherWatchlistRow  # noqa: F401
+from app.db.worker_runtime_state import WorkerRuntimeStateRow  # noqa: F401
 from app.experiments import guards as _experiment_guards  # noqa: F401
 from app.experiments.models import (  # noqa: F401
     ExperimentEventRow,
@@ -2209,6 +2211,9 @@ class AccountRiskAccountingState(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     max_notional: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_daily_loss: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_trade_slots: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Local trading day the trade-slot counters were last aligned to.
+    # NULL means the row predates daily alignment and still holds a lifetime count.
+    trade_slot_business_date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
     max_symbol_notional: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     daily_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     exposure_unit: Mapped[str] = mapped_column(String(32), nullable=False, default="USDT")
