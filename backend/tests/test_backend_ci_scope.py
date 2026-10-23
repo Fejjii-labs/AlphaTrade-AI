@@ -37,6 +37,36 @@ def test_changed_tests_and_direct_module_regressions_are_selected():
     assert "tests/test_config.py" in selected
 
 
+def test_schema_changes_select_migration_and_alembic_tests():
+    backend = ROOT / "backend"
+    expected = scope.migration_tests(backend)
+    assert "tests/test_alembic_heads_helper.py" in expected
+    assert any("migration" in Path(name).name for name in expected)
+    for changed in (
+        ["backend/src/app/db/models.py"],
+        ["backend/src/app/db/migrations/versions/a22papertradeday001_paper_trade_slot_day.py"],
+    ):
+        selected = scope.select_tests(changed, backend)
+        assert set(expected).issubset(selected)
+        assert set(scope.BASE_TESTS).issubset(selected)
+    unrelated = scope.select_tests(["backend/src/app/core/config.py"], backend)
+    assert "tests/test_alembic_heads_helper.py" not in unrelated
+
+
+def test_alembic_config_and_heads_helper_select_migration_tests():
+    backend = ROOT / "backend"
+    expected = scope.migration_tests(backend)
+    assert "tests/test_alembic_heads_helper.py" in expected
+    for changed in (
+        ["backend/alembic.ini"],
+        ["backend/src/app/db/migrations/env.py"],
+        ["backend/tests/support/alembic_heads.py"],
+    ):
+        selected = scope.select_tests(changed, backend)
+        assert set(expected).issubset(selected)
+        assert set(scope.BASE_TESTS).issubset(selected)
+
+
 def test_missing_tests_and_paths_outside_tests_cannot_expand_selection():
     selected = scope.select_tests(
         ["backend/tests/test_deleted.py", "backend/tests/../../test_escape.py", "docs/README.md"],
@@ -97,10 +127,12 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     trigger = workflow["on"]
     assert "pull_request" in trigger and "push" in trigger
     full = trigger["workflow_dispatch"]["inputs"]["full_backend"]
-    assert full["type"] == "boolean"
-    assert full["required"] == "true"
-    assert full["default"] == "true"
-    assert "does not select a subset" in full["description"]
+    assert full == {
+        "description": "Run the complete backend suite for final release acceptance",
+        "type": "boolean",
+        "required": "true",
+        "default": "true",
+    }
     jobs = workflow["jobs"]
     assert set(jobs) == {
         "backend",
@@ -155,30 +187,43 @@ def test_workflow_keeps_quality_evaluation_browser_and_explicit_full_release_gat
     assert "github.event.action != 'edited'" in group
     assert "github.event.changes.base.ref.from" in group
     assert "format('{0}-{1}', github.workflow, github.ref)" not in group
+    dispatch_gate = "github.event_name == 'workflow_dispatch' && inputs.full_backend"
+    trailer_gate = "steps.scope.outputs.full_backend == 'true'"
+    full_gate = f"({dispatch_gate}) || {trailer_gate}"
     steps = {step.get("name"): step for step in jobs["backend"]["steps"]}
-    assert "Focused backend development tests" not in steps
+    scope_step = steps["Decide CI scope"]["run"]
+    assert "bash .github/workflows/ci-scope.sh" in scope_step
+    assert "Full-Backend" in scope_step
+    assert "full_backend=%s" in scope_step
     assert steps["Ruff check"]["run"] == "uv run ruff check . ../scripts/run_backend_focused.py"
     assert steps["Ruff format"]["run"] == (
         "uv run ruff format --check . ../scripts/run_backend_focused.py"
     )
     acceptance = steps["Complete backend release acceptance"]
-    assert acceptance["if"] == "steps.scope.outputs.heavy != 'false'"
+    assert acceptance["if"] == full_gate
     assert acceptance["timeout-minutes"] == "140"
     assert acceptance["shell"] == "bash -eo pipefail {0}"
-    assert "run_backend_focused.py" not in acceptance["run"]
-    assert "full pytest suite including Postgres tests" in acceptance["run"]
-    assert (
+    assert acceptance["run"] == (
         "uv run pytest -o addopts= --timeout=300 --timeout-method=thread "
         "-rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log"
-    ) in acceptance["run"]
+    )
     for job in jobs.values():
         for step in job["steps"]:
             script = step.get("run") or ""
             if "| tee" not in script:
                 continue
             assert "pipefail" in (step.get("shell") or ""), step.get("name")
+    assert steps["Focused backend development tests"]["if"] == (
+        "(github.event_name != 'workflow_dispatch' || !inputs.full_backend) "
+        "&& steps.scope.outputs.full_backend != 'true'"
+    )
+    for name in ("Install dependencies", "Ruff check", "Ruff format"):
+        assert steps[name]["if"] == (
+            "steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'"
+        )
+    assert "run_backend_focused.py" in steps["Focused backend development tests"]["run"]
     upload = steps["Upload full backend pytest artifacts"]
-    assert upload["if"] == "always() && steps.scope.outputs.heavy != 'false'"
+    assert upload["if"] == f"always() && ({full_gate})"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == "full-backend-pytest"
     assert "backend/full-backend-junit.xml" in upload["with"]["path"]

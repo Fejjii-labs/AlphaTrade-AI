@@ -8,9 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       full_backend:
-        description: >-
-          Retained for compatibility. The backend job always runs the complete
-          suite, including Postgres tests. This input does not select a subset.
+        description: Run the complete backend suite for final release acceptance
         type: boolean
         required: true
         default: true
@@ -71,30 +69,60 @@ jobs:
       - name: Decide CI scope
         id: scope
         working-directory: ${{ github.workspace }}
-        run: bash .github/workflows/ci-scope.sh
+        run: |
+          bash .github/workflows/ci-scope.sh
+          # A Full-Backend: true trailer on the head commit selects the complete
+          # pytest step. workflow_dispatch remains the release path. Draft jobs
+          # still install dependencies when the trailer is set.
+          full=false
+          head="${CI_SCOPE_HEAD_SHA:-}"
+          if [[ "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            git cat-file -e "${head}^{commit}" >/dev/null 2>&1 || git fetch --no-tags origin "$head" >/dev/null 2>&1 || true
+            if git cat-file -e "${head}^{commit}" >/dev/null 2>&1; then
+              trailer="$(git log -1 --format='%(trailers:key=Full-Backend,valueonly)' "$head" | tr -d '[:space:]')"
+              # Also accept the trailer line when a later co-author line splits
+              # the git trailer block.
+              if [[ "$trailer" == "true" ]] || git log -1 --format=%B "$head" | grep -qx 'Full-Backend: true'; then
+                full=true
+              fi
+            fi
+          fi
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            printf 'full_backend=%s\n' "$full" >>"$GITHUB_OUTPUT"
+          fi
+          printf 'ci-scope full_backend=%s\n' "$full"
       - uses: astral-sh/setup-uv@v5
-        if: steps.scope.outputs.heavy != 'false'
+        if: steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'
         with:
           enable-cache: true
       - name: Install dependencies
-        if: steps.scope.outputs.heavy != 'false'
+        if: steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'
         run: uv sync --extra dev
       - name: Ruff check
-        if: steps.scope.outputs.heavy != 'false'
+        if: steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'
         run: uv run ruff check . ../scripts/run_backend_focused.py
       - name: Ruff format
-        if: steps.scope.outputs.heavy != 'false'
+        if: steps.scope.outputs.heavy != 'false' || steps.scope.outputs.full_backend == 'true'
         run: uv run ruff format --check . ../scripts/run_backend_focused.py
+      - name: Focused backend development tests
+        if: (github.event_name != 'workflow_dispatch' || !inputs.full_backend) && steps.scope.outputs.full_backend != 'true'
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "${{ steps.scope.outputs.heavy }}" == "false" ]]; then
+            echo "Skipping focused backend tests (${{ steps.scope.outputs.reason }})."
+            exit 0
+          fi
+          uv run python ../scripts/run_backend_focused.py --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA"
       - name: Complete backend release acceptance
-        if: steps.scope.outputs.heavy != 'false'
+        if: (github.event_name == 'workflow_dispatch' && inputs.full_backend) || steps.scope.outputs.full_backend == 'true'
         timeout-minutes: 140
         # bash -e does not fail a pipeline when pytest fails and tee succeeds.
         shell: bash -eo pipefail {0}
-        run: |
-          echo "Complete backend release acceptance: full pytest suite including Postgres tests."
-          uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
+        run: uv run pytest -o addopts= --timeout=300 --timeout-method=thread -rfE --durations=50 --junitxml=full-backend-junit.xml | tee full-backend-pytest.log
       - name: Upload full backend pytest artifacts
-        if: always() && steps.scope.outputs.heavy != 'false'
+        if: always() && ((github.event_name == 'workflow_dispatch' && inputs.full_backend) || steps.scope.outputs.full_backend == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: full-backend-pytest

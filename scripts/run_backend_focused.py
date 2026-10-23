@@ -28,11 +28,42 @@ SFP_PATHS = (
     "backend/src/app/persistence/public_market_observations.py",
     "backend/tests/test_sfp",
 )
+MIGRATION_TEST_GLOBS = ("test_*migration*.py", "test_*alembic*.py")
+
+
+def migration_tests(backend: Path) -> list[str]:
+    """Every migration and Alembic test module under ``backend/tests``."""
+    tests = backend / "tests"
+    found = {path for pattern in MIGRATION_TEST_GLOBS for path in tests.rglob(pattern)}
+    return sorted(path.relative_to(backend).as_posix() for path in found)
+
+
+def _schema_change(path: str) -> bool:
+    """True for the ORM, Alembic tree, Alembic config, or the heads helper."""
+    normalized = path.replace("\\", "/")
+    if not normalized.startswith("backend/"):
+        return False
+    if (
+        "/db/migrations/" in normalized
+        or normalized.endswith("/db/migrations")
+        or normalized.endswith("/db/models.py")
+    ):
+        return True
+    return normalized.endswith(
+        (
+            "/alembic.ini",
+            "/db/migrations/env.py",
+            "/tests/support/alembic_heads.py",
+        )
+    )
 
 
 def select_tests(changed: list[str], backend: Path) -> list[str]:
     selected = set(BASE_TESTS)
+    schema_changed = False
     for path in changed:
+        if _schema_change(path):
+            schema_changed = True
         if path.startswith(SFP_PATHS):
             selected.update(SFP_TESTS)
         candidate = Path(path.removeprefix("backend/"))
@@ -43,6 +74,8 @@ def select_tests(changed: list[str], backend: Path) -> list[str]:
                 item.relative_to(backend).as_posix()
                 for item in (backend / "tests").glob(f"test_{candidate.stem}*.py")
             )
+    if schema_changed:
+        selected.update(migration_tests(backend))
     tests = (backend / "tests").resolve()
     return sorted(
         node

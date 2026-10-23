@@ -18,7 +18,14 @@ from app.market_contracts.errors import MarketContractError
 from app.signal_fusion.enums import EvidenceRole
 from tests.support.phase6_fusion import ORG_ID
 from tests.test_market_intelligence_oi_funding import identity
-from tests.test_required_derivative_acquisition import EVENT, SCAN, AdvancingClock, _policy, _source
+from tests.test_required_derivative_acquisition import (
+    EVENT,
+    SCAN,
+    AdvancingClock,
+    _live_assembler,
+    _policy,
+    _source,
+)
 
 
 def test_published_v1_serialization_schema_matches_typed_contract():
@@ -35,7 +42,7 @@ def test_published_v1_serialization_schema_matches_typed_contract():
 def test_experiment_example_preserves_canonical_clocks_units_and_unavailable_metrics(venue):
     clock = AdvancingClock()
     source, counts = _source(venue, clock)
-    assembled = FirstSliceEvidenceAssembler(source, replay=False, clock=clock).assemble(
+    assembled = _live_assembler(source, clock=clock, venue=venue).assemble(
         organization_id=ORG_ID, policy=_policy()
     )
     before = counts.copy()
