@@ -177,7 +177,7 @@ def test_actual_voice_config_requires_auth_and_reports_unbound_provider(voice_cl
     )
     assert response.status_code == 200
     assert response.json()["available"] is False
-    assert response.json()["reason"] == "realtime_not_enabled"
+    assert response.json()["reason"] == "voice_not_enabled"
     assert voice_client.creations == []
 
 

@@ -262,11 +262,10 @@ def test_finalization_after_expiry_and_revocation_reconciles_fresh_sessions(
         with database.sessions() as fresh:
             QuotaService(fresh).get_status(database.organization_id)
             row = fresh.get(VoiceSessionReservation, original.id)
-            assert row.status == "closed" and row.accounted_cost == Decimal(0)
-            assert (
-                QuotaService(fresh).get_status(database.organization_id).usage.monthly_cost_reserved
-                == 0
-            )
+            assert row.status == "closed" and row.accounted_cost == row.reserved_cost
+            charged = QuotaService(fresh).get_status(database.organization_id).usage
+            assert charged.monthly_cost_reserved == 0
+            assert charged.monthly_cost_used >= row.reserved_cost
     independent_handle(database, original).usage(final_receipt(original), final=True)
     independent_handle(database, original).close()
     independent_handle(database, original).close()
@@ -285,18 +284,15 @@ def test_expired_live_hold_without_final_receipt_is_swept_on_quota_read(live_dat
     with database.sessions() as session:
         row = session.get(VoiceSessionReservation, original.id)
         margin = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS + 5)
-        row.ledger = row.ledger | {
-            "expires_at": (datetime.now(UTC) - margin).isoformat()
-        }
+        row.ledger = row.ledger | {"expires_at": (datetime.now(UTC) - margin).isoformat()}
         session.commit()
     with database.sessions() as fresh:
         QuotaService(fresh).get_status(database.organization_id)
         row = fresh.get(VoiceSessionReservation, original.id)
-        assert row.status == "closed" and row.accounted_cost == Decimal(0)
-        assert (
-            QuotaService(fresh).get_status(database.organization_id).usage.monthly_cost_reserved
-            == 0
-        )
+        assert row.status == "closed" and row.accounted_cost == row.reserved_cost
+        usage = QuotaService(fresh).get_status(database.organization_id).usage
+        assert usage.monthly_cost_reserved == 0
+        assert usage.monthly_cost_used == row.reserved_cost
 
 
 def test_final_voice_receipt_keeps_unresolved_secondary_hold_in_fresh_session(live_database):
@@ -355,7 +351,7 @@ def test_expired_live_without_final_receipt_releases_after_margin(live_database)
         assert release_expired_voice_holds(session, database.organization_id) == 1
         session.commit()
         row = session.get(VoiceSessionReservation, ledger.id)
-        assert row.status == "closed" and row.accounted_cost == Decimal(0)
+        assert row.status == "closed" and row.accounted_cost == row.reserved_cost
 
 
 def test_release_expired_voice_holds_flushes_without_committing(live_database):

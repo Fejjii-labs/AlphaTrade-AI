@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
+from uuid import uuid5
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.agent_voice.live_config import CLEANUP_SECONDS, CLOSE_SECONDS
+from app.db.models import UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
+from app.schemas.common import CostSource, UsageStatus
 
 _CLOSE_MARGIN = timedelta(seconds=CLOSE_SECONDS + CLEANUP_SECONDS)
+_EXPIRED_HOLD_CHARGE = "expired-voice-hold"
+
+
+def expired_hold_charge_id(reservation_id: uuid.UUID) -> uuid.UUID:
+    """Stable usage-event id for the conservative charge of one swept hold."""
+
+    return uuid5(reservation_id, _EXPIRED_HOLD_CHARGE)
 
 
 def _parse_expires_at(ledger: dict[str, Any]) -> datetime | None:
@@ -47,17 +56,61 @@ def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> 
     return moment >= expires_at + _CLOSE_MARGIN
 
 
+def _charge_full_reservation(
+    session: Session,
+    row: VoiceSessionReservation,
+    moment: datetime,
+) -> None:
+    """Count the whole reservation as spend. A missing receipt is never $0.
+
+    A crash before the provider duration receipt must not free the $1 org
+    ceiling. The charge is one usage event for ``reserved_cost``. A later final
+    duration receipt deletes that event and records the measured seconds instead.
+    """
+
+    charge = row.reserved_cost
+    event_id = expired_hold_charge_id(row.id)
+    usage = session.get(UsageEvent, event_id)
+    if usage is None:
+        session.add(
+            UsageEvent(
+                id=event_id,
+                organization_id=row.organization_id,
+                user_id=row.user_id,
+                request_id=str(row.id),
+                feature="agent_voice_expired_hold",
+                provider="openai",
+                model=row.model,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                estimated_cost=charge,
+                cost_source=CostSource.STATIC_ESTIMATED,
+                cost_is_placeholder=False,
+                status=UsageStatus.SUCCESS,
+                event_at=moment,
+            )
+        )
+    elif usage.estimated_cost < charge:
+        usage.estimated_cost = charge
+        usage.event_at = moment
+    row.status = "closed"
+    row.accounted_cost = charge
+    row.updated_at = moment
+
+
 def release_expired_voice_holds(
     session: Session,
     organization_id: uuid.UUID,
     *,
     now: datetime | None = None,
 ) -> int:
-    """Drop quota holds for expired GPT Live rows without a final duration receipt.
+    """Charge expired GPT Live rows that never received a final duration receipt.
 
     Scoped to one organization, row-locked, and flushed only so quota reads do
-    not commit unrelated work on the caller session. Realtime rows and finalized
-    Live receipts with unresolved secondary delegation are never changed here.
+    not commit unrelated work on the caller session. Each released row is charged
+    its full ``reserved_cost`` (never zero). Realtime rows and finalized Live
+    receipts with unresolved secondary delegation are never changed here.
     """
     moment = now or datetime.now(UTC)
     candidate_ids = session.scalars(
@@ -88,9 +141,7 @@ def release_expired_voice_holds(
         live = row.ledger.get("live", {})
         if live.get("finalized"):
             continue
-        row.status = "closed"
-        row.accounted_cost = Decimal(0)
-        row.updated_at = moment
+        _charge_full_reservation(session, row, moment)
         released += 1
     if released:
         session.flush()

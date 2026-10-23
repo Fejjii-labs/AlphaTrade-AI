@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.live_config import CLEANUP_SECONDS, CLOSE_SECONDS, LiveLimits
+from app.agent_voice.reservations_sweep import expired_hold_charge_id
 from app.db.models import UsageEvent
 from app.db.voice_realtime import VoiceSessionReservation
 from app.schemas.common import CostSource, UsageStatus
@@ -157,6 +158,11 @@ class LiveLedger(VoiceLedger):
             usage.cost_is_placeholder = False
             usage.status = UsageStatus.SUCCESS if final else UsageStatus.PARTIAL
             usage.event_at = datetime.now(UTC)
+            if final:
+                # Measured seconds replace the conservative full-reservation charge.
+                charged = session.get(UsageEvent, expired_hold_charge_id(self.id))
+                if charged is not None:
+                    session.delete(charged)
             session.commit()
         if not live["within_reservation"]:
             raise VoiceUnavailableError("live_duration_outside_reservation")
