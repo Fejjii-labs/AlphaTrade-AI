@@ -7,6 +7,7 @@ import contextlib
 import json
 
 import anyio
+import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -15,13 +16,15 @@ from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import VoiceUnavailableError, load_limits
 from app.agent_voice.contracts import VoiceConfig, VoiceStart
 from app.agent_voice.live_config import load_live_limits
-from app.agent_voice.live_socket import live_voice
+from app.agent_voice.live_socket import SHIELDED_CLOSE_SECONDS, live_voice
 from app.agent_voice.service import RealtimeSession
 from app.core.config import get_settings
 from app.core.dependencies import SettingsDep
 from app.core.errors import AppError
 from app.db.session import get_session_factory
 from app.security.rbac import TraderDep
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/agent/voice", tags=["agent-voice"])
 
@@ -157,7 +160,8 @@ async def realtime_voice(websocket: WebSocket) -> None:
             )
     finally:
         # Finish the ledger close if the browser is already gone.
-        with anyio.CancelScope(shield=True):
+        # Bounded: a DB stall must not hang shutdown (Griller N6, #320).
+        with anyio.move_on_after(SHIELDED_CLOSE_SECONDS, shield=True) as scope:
             for task in tasks:
                 task.cancel()
             if tasks:
@@ -168,3 +172,5 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 await asyncio.to_thread(ledger.close)
             with contextlib.suppress(RuntimeError):
                 await websocket.close()
+        if scope.cancelled_caught:
+            logger.warning("voice_shielded_close_timeout", seconds=SHIELDED_CLOSE_SECONDS)

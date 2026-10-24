@@ -7,6 +7,8 @@ import contextlib
 import json
 from typing import Any, cast
 
+import anyio
+import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 from openai.types.websocket_connection_options import WebSocketConnectionOptions
@@ -20,6 +22,11 @@ from app.agent_voice.live_service import LiveSession
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.session import get_session_factory
+
+logger = structlog.get_logger(__name__)
+
+# Upper bound on the shielded cleanup (Griller N6 on #320).
+SHIELDED_CLOSE_SECONDS = 30
 
 
 async def live_voice(websocket: WebSocket) -> None:
@@ -129,10 +136,14 @@ async def live_voice(websocket: WebSocket) -> None:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             failure: BaseException | None = session.failure
             for task in done:
-                try:
-                    task.result()
-                except BaseException as exc:
-                    failure = exc
+                # A cancelled child is not a session failure. Re-raising its
+                # CancelledError would escape the handlers below and cancel the
+                # ASGI portal future (same fix as the realtime route, #320).
+                if task.cancelled():
+                    continue
+                error = task.exception()
+                if error is not None and not isinstance(error, asyncio.CancelledError):
+                    failure = error
             browser.cancel()
             guard.cancel()
             await asyncio.gather(browser, guard, return_exceptions=True)
@@ -166,13 +177,19 @@ async def live_voice(websocket: WebSocket) -> None:
                 {"type": "session.error", "reason": "voice_provider_unavailable"}
             )
     finally:
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if session:
-            await session.stop()
-        elif ledger:
-            await asyncio.to_thread(ledger.close)
-        with contextlib.suppress(RuntimeError):
-            await websocket.close()
+        # Shielded so an outer cancellation cannot skip the ledger close, but
+        # bounded so a DB stall cannot hang shutdown. A missed close is charged
+        # conservatively by the stale Live hold sweep.
+        with anyio.move_on_after(SHIELDED_CLOSE_SECONDS, shield=True) as scope:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if session:
+                await session.stop()
+            elif ledger:
+                await asyncio.to_thread(ledger.close)
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
+        if scope.cancelled_caught:
+            logger.warning("live_voice_shielded_close_timeout", seconds=SHIELDED_CLOSE_SECONDS)
