@@ -181,6 +181,44 @@ def test_existing_disabled_or_exhausted_quota_blocks_before_provider(voice_datab
         ledger_for(voice_database).reserve()
 
 
+def test_new_organization_without_quota_row_gets_default_capped_quota(voice_database):
+    with voice_database.sessions() as session:
+        session.query(OrganizationQuota).delete()
+        session.commit()
+    ledger = ledger_for(voice_database)
+    ledger.reserve()
+    with voice_database.sessions() as session:
+        quota = session.scalar(select(OrganizationQuota))
+        assert quota is not None
+        assert quota.organization_id == voice_database.organization_id
+        assert quota.monthly_cost_limit > 0
+        row = session.get(VoiceSessionReservation, ledger.id)
+        assert row.reserved_cost == ledger.limits.reservation(ledger.settings)
+        assert session.scalar(select(func.count()).select_from(OrganizationQuota)) == 1
+
+
+def test_lazily_created_quota_still_enforces_caps(voice_database, monkeypatch):
+    from app.services.quota_service import QuotaService
+
+    original = QuotaService.get_or_create_quota
+
+    def exhausted(self, organization_id):
+        config = original(self, organization_id)
+        self._session.flush()
+        row = self._session.scalar(select(OrganizationQuota))
+        row.daily_request_limit = 0
+        return config
+
+    monkeypatch.setattr(QuotaService, "get_or_create_quota", exhausted)
+    with voice_database.sessions() as session:
+        session.query(OrganizationQuota).delete()
+        session.commit()
+    with pytest.raises(VoiceUnavailableError, match="daily_request"):
+        ledger_for(voice_database).reserve()
+    with voice_database.sessions() as session:
+        assert session.scalar(select(func.count()).select_from(VoiceSessionReservation)) == 0
+
+
 def test_provider_reported_cost_debits_approved_balance(voice_database):
     with voice_database.sessions() as session:
         session.add(
