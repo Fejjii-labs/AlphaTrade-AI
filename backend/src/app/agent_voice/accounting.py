@@ -95,6 +95,17 @@ class VoiceLedger:
                 )
             )
             if quota is None:
+                # New organizations have no quota row until first metered use. Create
+                # the model defaults (never unlimited) under the organization lock,
+                # then enforce them exactly like an existing row.
+                QuotaService(session).get_or_create_quota(tenant.organization_id)
+                session.flush()
+                quota = session.scalar(
+                    select(OrganizationQuota).where(
+                        OrganizationQuota.organization_id == tenant.organization_id
+                    )
+                )
+            if quota is None:
                 raise VoiceUnavailableError("voice_organization_quota_uninitialized")
             month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             summary = usage.summarize(organization_id=tenant.organization_id, since=month)
