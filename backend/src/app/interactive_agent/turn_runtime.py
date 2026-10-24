@@ -15,8 +15,7 @@ from app.agent_capture.service import CaptureService, CaptureSnapshot, uploaded_
 from app.core.config import Settings
 from app.core.errors import NotFoundError
 from app.db.models import ConversationMessage
-from app.evidence_pipeline.service import CanonicalEvidenceService
-from app.interactive_agent.canonical_market import CanonicalPerpetualQuoteReader
+from app.interactive_agent.chat_market import ChatMarketQuoteReader
 from app.interactive_agent.contracts import (
     PAYLOAD_KEY,
     AgentTurnRequest,
@@ -68,7 +67,7 @@ class PreparedVectorHits:
 
 
 class PreparedQuote:
-    def __init__(self, reader: CanonicalPerpetualQuoteReader, symbol: str) -> None:
+    def __init__(self, reader: ChatMarketQuoteReader, symbol: str) -> None:
         self.error: Exception | None = None
         self.value = None
         try:
@@ -245,9 +244,7 @@ def run_interactive(
     )
     quote = (
         PreparedQuote(
-            CanonicalPerpetualQuoteReader(
-                CanonicalEvidenceService(settings), reservation.organization_id
-            ),
+            ChatMarketQuoteReader(settings, reservation.organization_id),
             symbol,
         )
         if symbol

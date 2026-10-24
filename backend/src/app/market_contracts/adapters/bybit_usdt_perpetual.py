@@ -147,6 +147,8 @@ class BybitUsdtPerpetualSource:
         client: ReadOnlyHttpGetClient | None = None,
         max_retries: int = 1,
         max_backoff_seconds: float = 30.0,
+        fail_fast_rate_limits: bool = False,
+        deadline_monotonic: float | None = None,
         instrument: InstrumentIdentity | None = None,
         observation_cache: CausalObservationCache | None = None,
         observation_clock: Callable[[], datetime] | None = None,
@@ -171,6 +173,8 @@ class BybitUsdtPerpetualSource:
             failure_label="Bybit USDT perpetual",
             max_retries=max_retries,
             max_backoff_seconds=max_backoff_seconds,
+            fail_fast_rate_limits=fail_fast_rate_limits,
+            deadline_monotonic=deadline_monotonic,
             weight_per_minute=240,
         )
         self._last_success_at: datetime | None = None

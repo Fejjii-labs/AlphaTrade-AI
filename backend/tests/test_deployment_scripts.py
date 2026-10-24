@@ -31,6 +31,7 @@ SCRIPTS = (
     "scripts/telegram-paper-activation-smoke.sh",
     "scripts/telegram-paper-activation-rollback.sh",
     "scripts/controlled-paper-activation-rollback.sh",
+    "scripts/lib/ready_health.py",
     "scripts/recreate-rag-collection.sh",
     "scripts/reingest-knowledge-base.sh",
 )

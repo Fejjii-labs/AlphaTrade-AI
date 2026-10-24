@@ -215,10 +215,12 @@ class ReadinessResponse(BaseModel):
     """Readiness payload: ``ready`` only when no provider is unavailable.
 
     Staging smoke, live smoke, docker validate, and the demo and Telegram
-    checks read ``ready`` and sometimes ``providers_unavailable``. They do not
-    read ``status``. Render's health check is ``/health``, so a degraded
-    market-data provider must not set ``ready`` false. ``degraded_providers``
-    names those providers. The checks print the list and still pass.
+    checks read ``status`` and ``degraded_providers``. They exit non-zero when
+    ``status`` is not ``ready`` or that list is non-empty.
+    ``ALLOW_DEGRADED_READY`` still waives only a false ``ready`` flag with an
+    empty degraded list (provider-unavailable readiness). Render's health
+    check is ``/health``, so a degraded market-data provider must not set
+    ``ready`` false. ``degraded_providers`` names those providers.
     """
 
     model_config = ConfigDict(extra="forbid")

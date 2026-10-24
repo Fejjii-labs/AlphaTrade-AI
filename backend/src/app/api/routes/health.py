@@ -364,11 +364,11 @@ def readiness_projection(
 ) -> tuple[bool, str, int, tuple[str, ...]]:
     """Return ``(ready, status, unavailable, degraded_providers)``.
 
-    ``ready`` stays true while every provider is reachable. Nothing in the
-    staging checks reads ``status``. ``degraded_providers`` names each
-    non-mock market-data provider that is degraded without a fallback, so a
-    banned Binance primary is visible without failing the probe or restarting
-    Render.
+    ``ready`` stays true while every provider is reachable. ``status`` is
+    ``degraded`` when a non-mock market-data provider is degraded without a
+    fallback, and ``degraded_providers`` names it. Staging checks alert on
+    that pair. The probe itself stays successful so Render, whose health
+    check is ``/health``, does not restart.
     """
 
     unavailable = sum(1 for item in statuses if item.health is ProviderHealth.UNAVAILABLE)

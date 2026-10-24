@@ -28,6 +28,7 @@ from app.market_contracts.errors import (
     NetworkMutationForbiddenError,
     RateLimitedError,
     RegionalProviderFailureError,
+    RetrievalBudgetExceededError,
     SpotFallbackRejectedError,
     UnapprovedEvidenceHostError,
     UpstreamBanError,
@@ -138,6 +139,8 @@ class ReadOnlyHttpGetClient:
         budget: SlidingWeightBudget | None = None,
         progress_interval_seconds: float = _PROGRESS_INTERVAL_SECONDS,
         pause: UpstreamPause | None = None,
+        fail_fast_rate_limits: bool = False,
+        deadline_monotonic: float | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._allowed_hosts = allowed_hosts or APPROVED_BINANCE_USDM_REST_HOSTS
@@ -147,6 +150,9 @@ class ReadOnlyHttpGetClient:
         self._owns_client = client is None
         self._max_retries = max_retries
         self._max_backoff_seconds = max_backoff_seconds
+        self._timeout_seconds = timeout_seconds
+        self._fail_fast_rate_limits = fail_fast_rate_limits
+        self._deadline_monotonic = deadline_monotonic
         self._sleep = sleeper if sleeper is not None else time.sleep
         self._progress_interval_seconds = max(progress_interval_seconds, 0.01)
         self._budget = budget or SlidingWeightBudget(
@@ -207,7 +213,8 @@ class ReadOnlyHttpGetClient:
         attempts = self._max_retries + 1
         last_retry_after: float | None = None
         for attempt in range(attempts):
-            self._budget.acquire(weight, sleeper=self._sleep)
+            self._raise_if_past_deadline()
+            self._budget.acquire(weight, sleeper=self._weight_sleeper())
             try:
                 response = self._exchange_get(url, params)
             except httpx.TransportError as exc:
@@ -245,10 +252,11 @@ class ReadOnlyHttpGetClient:
                     retry_after_seconds=last_retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
-                if attempt + 1 >= attempts:
+                if self._fail_fast_rate_limits or attempt + 1 >= attempts:
                     # A finished 429 belongs to the caller. Parking this process
                     # for Retry-After would block the next attempt after the
-                    # in-call sleep already honored that header.
+                    # in-call sleep already honored that header. Chat retrieval
+                    # sets fail_fast so the first 429 does not sleep at all.
                     raise RateLimitedError(
                         f"{self._failure_label} source rate-limited the read-only client.",
                         retry_after_seconds=last_retry_after,
@@ -274,7 +282,9 @@ class ReadOnlyHttpGetClient:
                 # Hold the full Retry-After, not only the capped in-call sleep,
                 # so the next call does not extend the ban.
                 self._pause.note("ban", _pause_seconds(retry_after, delay))
-                if not self._upstream_ban_retry_allowed(attempt, retry_after):
+                if self._fail_fast_rate_limits or not self._upstream_ban_retry_allowed(
+                    attempt, retry_after
+                ):
                     raise UpstreamBanError(
                         f"{self._failure_label} source temporarily banned this client (HTTP 418).",
                         retry_after_seconds=retry_after,
@@ -356,6 +366,46 @@ class ReadOnlyHttpGetClient:
             path=path,
         )
 
+    def _weight_sleeper(self) -> Callable[[float], None]:
+        """Worker scans sleep inside the weight window. Chat does not."""
+
+        if self._fail_fast_rate_limits or self._deadline_monotonic is not None:
+            return self._refuse_weight_wait
+        return self._sleep
+
+    def _refuse_weight_wait(self, seconds: float) -> None:
+        self._raise_if_past_deadline()
+        if seconds <= 0:
+            return
+        if self._fail_fast_rate_limits:
+            raise RateLimitedError(
+                f"{self._failure_label} source rate-limited the read-only client.",
+                retry_after_seconds=seconds,
+            )
+        remaining = self._seconds_left()
+        if remaining is not None and seconds > remaining:
+            raise RetrievalBudgetExceededError("market data unavailable")
+        self._sleep(seconds)
+
+    def _seconds_left(self) -> float | None:
+        if self._deadline_monotonic is None:
+            return None
+        return self._deadline_monotonic - time.monotonic()
+
+    def _raise_if_past_deadline(self) -> None:
+        remaining = self._seconds_left()
+        if remaining is not None and remaining <= 0:
+            raise RetrievalBudgetExceededError("market data unavailable")
+
+    def _request_timeout(self) -> float:
+        """Cap one GET by the time still left in a chat retrieval budget."""
+
+        self._raise_if_past_deadline()
+        remaining = self._seconds_left()
+        if remaining is None:
+            return self._timeout_seconds
+        return max(min(self._timeout_seconds, remaining), 0.001)
+
     def _upstream_ban_retry_allowed(self, attempt: int, retry_after: float | None) -> bool:
         """Retry a 418 only inside the existing attempt budget and ban window.
 
@@ -376,8 +426,9 @@ class ReadOnlyHttpGetClient:
 
         hook = current_progress_hook()
         query = dict(params or {})
+        timeout = self._request_timeout()
         if hook is None:
-            return self._client.get(url, params=query)
+            return self._client.get(url, params=query, timeout=timeout)
         stop = threading.Event()
 
         def _pulse() -> None:
@@ -390,7 +441,7 @@ class ReadOnlyHttpGetClient:
         thread = threading.Thread(target=_pulse, name="binance-read-heartbeat", daemon=True)
         thread.start()
         try:
-            return self._client.get(url, params=query)
+            return self._client.get(url, params=query, timeout=timeout)
         finally:
             stop.set()
             thread.join(timeout=self._progress_interval_seconds)
