@@ -2155,12 +2155,14 @@ export interface TokenPair {
 export interface AuthResponse {
   user: User;
   organization: Organization;
+  membership_role?: MembershipRole | null;
   tokens: TokenPair;
 }
 
 export interface MeResponse {
   user: User;
   organization: Organization;
+  membership_role?: MembershipRole | null;
 }
 
 export interface PaperExecutionAccount {
