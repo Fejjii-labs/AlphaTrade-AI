@@ -163,7 +163,11 @@ async def logout(
 @router.get("/me", response_model=MeResponse)
 async def me(tenant: TenantDep, auth_service: AuthServiceDep) -> MeResponse:
     response = auth_service.get_me(tenant)
-    return MeResponse(user=response.user, organization=response.organization)
+    return MeResponse(
+        user=response.user,
+        organization=response.organization,
+        membership_role=response.membership_role,
+    )
 
 
 @router.post(

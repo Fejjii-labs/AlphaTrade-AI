@@ -69,6 +69,7 @@ class LogoutRequest(StrictModel):
 class MeResponse(ORMModel):
     user: User
     organization: Organization
+    membership_role: MembershipRole | None = None
 
 
 class TokenPair(ORMModel):
@@ -83,4 +84,5 @@ class TokenPair(ORMModel):
 class AuthResponse(ORMModel):
     user: User
     organization: Organization
+    membership_role: MembershipRole | None = None
     tokens: TokenPair

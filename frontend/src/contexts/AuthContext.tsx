@@ -14,7 +14,7 @@ import { PrivateQueryProvider } from "@/components/query/PrivateQueryProvider";
 import { sessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { bindRecoverySession, recoverySession } from "@/lib/auth/recovery-session";
 import { api, ApiError } from "@/lib/api";
-import type { AuthResponse, MeResponse } from "@/lib/api/types";
+import type { AuthResponse, MembershipRole, MeResponse } from "@/lib/api/types";
 import { sanitizeNextPath } from "@/lib/auth/boundary";
 import { clearTokens, getRefreshToken, isAuthenticated, setTokens } from "@/lib/auth/session";
 import { useAppContext } from "@/contexts/AppContext";
@@ -22,6 +22,8 @@ import { useAppContext } from "@/contexts/AppContext";
 interface AuthContextValue {
   user: MeResponse["user"] | null;
   organization: MeResponse["organization"] | null;
+  /** Role in the current organization (owner/trader/viewer); null when unknown. */
+  membershipRole: MembershipRole | null;
   loading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string, nextPath?: string) => Promise<void>;
@@ -41,12 +43,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const mustVerifyEmail = health?.must_verify_email ?? true;
   const [user, setUser] = useState<MeResponse["user"] | null>(null);
   const [organization, setOrganization] = useState<MeResponse["organization"] | null>(null);
+  const [membershipRole, setMembershipRole] = useState<MembershipRole | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refreshProfile = useCallback(async () => {
     if (!isAuthenticated()) {
       setUser(null);
       setOrganization(null);
+      setMembershipRole(null);
       return;
     }
     const generation = sessionGeneration();
@@ -57,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     bindRecoverySession(me.organization.id, me.user.id);
     setUser(me.user);
     setOrganization(me.organization);
+    setMembershipRole(me.membership_role ?? null);
   }, []);
 
   useEffect(() => {
@@ -70,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearTokens();
         setUser(null);
         setOrganization(null);
+      setMembershipRole(null);
       } finally {
         if (active) setLoading(false);
       }
@@ -83,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     bindRecoverySession(response.organization.id, response.user.id);
     setUser(response.user);
     setOrganization(response.organization);
+    setMembershipRole(response.membership_role ?? null);
   }, []);
 
   const login = useCallback(
@@ -118,6 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const generation = sessionGeneration();
     setUser(null);
     setOrganization(null);
+    setMembershipRole(null);
     try {
       await logoutRequest;
     } catch {
@@ -126,6 +134,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (generation === sessionGeneration()) {
         setUser(null);
         setOrganization(null);
+      setMembershipRole(null);
         router.replace("/login");
       }
     }
@@ -135,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       organization,
+      membershipRole,
       loading,
       isAuthenticated: Boolean(user) && isAuthenticated(),
       login,
@@ -142,7 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout,
       refreshProfile,
     }),
-    [user, organization, loading, login, register, logout, refreshProfile],
+    [user, organization, membershipRole, loading, login, register, logout, refreshProfile],
   );
 
   return <AuthContext.Provider value={value}>

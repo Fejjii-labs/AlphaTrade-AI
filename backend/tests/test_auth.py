@@ -175,6 +175,10 @@ def test_me_endpoint(auth_client: TestClient) -> None:
     body = response.json()
     assert body["user"]["email"] == "me@example.com"
     assert body["organization"]["name"] == "Alpha Org"
+    # The org owner switch keys on the membership role, not the user-level role.
+    assert body["membership_role"] == "owner"
+    assert body["user"]["role"] != "owner"
+    assert registered["membership_role"] == "owner"
 
 
 def test_tenant_isolation_on_watchlist(auth_client: TestClient) -> None:

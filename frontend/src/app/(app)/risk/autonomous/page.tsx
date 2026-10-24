@@ -66,7 +66,7 @@ export default function AutonomousTradingSettingsPage() {
 }
 
 function AutonomousSettingsWorkspace() {
-  const { user } = useAuth();
+  const { membershipRole } = useAuth();
   const loader = useCallback(() => api.autonomous.settings(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [form, setForm] = useState<FormState | null>(null);
@@ -138,7 +138,7 @@ function AutonomousSettingsWorkspace() {
     }
   }
 
-  const owner = user?.role === "owner";
+  const owner = membershipRole === "owner";
   const ceiling =
     view.internal_paper_env_ceiling == null
       ? "Not reported"

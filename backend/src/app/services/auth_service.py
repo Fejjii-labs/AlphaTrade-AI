@@ -79,7 +79,7 @@ class AuthService:
             user.email_verified = True
         tokens = self._issue_tokens(user=user, organization_id=org.id)
         logger.info("user_registered", user_id=str(user.id), organization_id=str(org.id))
-        return self._build_auth_response(user, org, tokens)
+        return self._build_auth_response(user, org, tokens, MembershipRole.OWNER)
 
     def login(self, data: LoginRequest) -> AuthResponse:
         user = self._users.get_by_email(str(data.email).lower())
@@ -97,7 +97,7 @@ class AuthService:
             raise AuthError("Organization not found.")
         tokens = self._issue_tokens(user=user, organization_id=org.id)
         logger.info("user_login", user_id=str(user.id), organization_id=str(org.id))
-        return self._build_auth_response(user, org, tokens)
+        return self._build_auth_response(user, org, tokens, membership.role)
 
     def refresh(self, refresh_token: str) -> TokenPair:
         token_hash = _hash_refresh_token(refresh_token)
@@ -214,6 +214,7 @@ class AuthService:
             user,
             org,
             TokenPair(access_token="", refresh_token="", expires_in=1),
+            tenant.membership_role,
         )
 
     def sanitize_token_response(self, tokens: TokenPair) -> TokenPair:
@@ -295,10 +296,12 @@ class AuthService:
         user: UserModel,
         org: OrganizationModel,
         tokens: TokenPair,
+        membership_role: MembershipRole | None = None,
     ) -> AuthResponse:
         from app.schemas.auth import Organization, User
 
         return AuthResponse(
+            membership_role=membership_role,
             user=User(
                 id=user.id,
                 email=user.email,
