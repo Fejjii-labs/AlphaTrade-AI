@@ -20,7 +20,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import (
+    JOURNAL_ENTRY_NOT_FOUND_MSG,
+    JOURNAL_TRADE_NOT_FOUND_MSG,
+    NotFoundError,
+    ValidationAppError,
+)
 from app.db.models import (
     BacktestRun,
     BacktestTrade,
@@ -752,7 +757,7 @@ class JournalTradeService:
     def _get_row(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> JournalTrade:
         row = self._trades.get_scoped(trade_id, organization_id=organization_id)
         if row is None:
-            raise NotFoundError("Journal trade not found")
+            raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
         return row
 
     def _validate_strategy_links(
@@ -814,7 +819,7 @@ class JournalTradeService:
             TradeJournal,
             links.linked_journal_entry_id,
             organization_id,
-            "Journal entry not found",
+            JOURNAL_ENTRY_NOT_FOUND_MSG,
         )
         self._require_scoped(
             PaperValidationRun,

@@ -15,7 +15,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import JOURNAL_TRADE_NOT_FOUND_MSG, NotFoundError, ValidationAppError
 from app.db.models import HistoricalCandle, JournalTrade
 from app.providers.market_data import TIMEFRAME_SECONDS, normalize_symbol
 from app.repositories.historical_candles import HistoricalCandleRepository
@@ -83,7 +83,7 @@ class JournalExcursionReplayService:
     ) -> JournalExcursionReplayResult:
         row = self._trades.get_scoped(trade_id, organization_id=organization_id)
         if row is None or row.user_id != user_id:
-            raise NotFoundError("Journal trade not found.")
+            raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
         return self._replay_row(row, request)
 
     def replay_batch(

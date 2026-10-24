@@ -825,6 +825,10 @@ def test_reconciled_mirror_annotation_scopes_organization_and_owner(
         demo_id = str(demo_test.id)
 
     assert (
+        test_client.get(f"/journal/trades/{manual_id}", headers=headers_other_user).status_code
+        == 404
+    )
+    assert (
         test_client.get(f"/journal/trades/{demo_id}", headers=headers_other_user).status_code == 404
     )
 
@@ -878,3 +882,90 @@ def test_children_cross_org_fails_closed(
         headers=headers_b,
     )
     assert denied.status_code == 404
+
+
+def test_journal_trade_child_routes_require_owner(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "journal-a@test.example")
+    headers_other_org = _auth(test_client, "journal-b@test.example")
+    headers_other_user = _auth(test_client, "journal-other-trader-a@test.example")
+    trade_id = test_client.post(
+        "/journal/trades", json=_manual_trade_body(), headers=headers_owner
+    ).json()["id"]
+
+    assert test_client.get(f"/journal/trades/{trade_id}", headers=headers_owner).status_code == 200
+    assert (
+        test_client.get(f"/journal/trades/{trade_id}", headers=headers_other_org).status_code == 404
+    )
+    assert (
+        test_client.get(f"/journal/trades/{trade_id}", headers=headers_other_user).status_code
+        == 404
+    )
+
+    write_cases = (
+        (
+            "evidence",
+            f"/journal/trades/{trade_id}/evidence",
+            {"kind": "note", "caption": "intruder"},
+        ),
+        (
+            "rule_check",
+            f"/journal/trades/{trade_id}/rule-checks",
+            {
+                "rule_key": "stop_loss_placed_before_entry",
+                "rule_source": "strategy_version",
+                "status": "followed",
+            },
+        ),
+        (
+            "observation",
+            f"/journal/trades/{trade_id}/observations",
+            {"category": "behavioral", "observation": "intruder"},
+        ),
+    )
+    for _label, path, payload in write_cases:
+        assert test_client.post(path, json=payload, headers=headers_owner).status_code == 201
+        denied_org = test_client.post(path, json=payload, headers=headers_other_org)
+        assert denied_org.status_code == 404
+        denied_user = test_client.post(path, json=payload, headers=headers_other_user)
+        assert denied_user.status_code == 404
+
+    with factory() as session:
+        assert len(session.scalars(select(JournalTradeEvidence)).all()) == 1
+        assert len(session.scalars(select(JournalTradeRuleCheck)).all()) == 1
+        assert len(session.scalars(select(JournalTradeObservation)).all()) == 1
+
+
+def test_journal_trade_missing_and_not_owned_404_bodies_are_identical(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "journal-a@test.example")
+    headers_other_org = _auth(test_client, "journal-b@test.example")
+    headers_other_user = _auth(test_client, "journal-other-trader-a@test.example")
+    trade_id = test_client.post(
+        "/journal/trades", json=_manual_trade_body(), headers=headers_owner
+    ).json()["id"]
+
+    missing = test_client.get(f"/journal/trades/{uuid.uuid4()}", headers=headers_other_user)
+    not_owned = test_client.get(f"/journal/trades/{trade_id}", headers=headers_other_user)
+    other_org = test_client.get(f"/journal/trades/{trade_id}", headers=headers_other_org)
+    assert missing.status_code == not_owned.status_code == other_org.status_code == 404
+    assert (
+        _stable_error_body(missing)
+        == _stable_error_body(not_owned)
+        == _stable_error_body(other_org)
+    )
+    assert set(missing.json()) == {"error"}
+
+
+def _stable_error_body(response: object) -> dict[str, object]:
+    """Error body without per-request correlation ids, for byte-identity checks."""
+    error = dict(response.json()["error"])  # type: ignore[attr-defined]
+    for key in ("request_id", "trace_id"):
+        error.pop(key, None)
+    return error

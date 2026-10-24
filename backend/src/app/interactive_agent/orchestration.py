@@ -11,7 +11,13 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError, NotFoundError, TradingPolicyError, ValidationAppError
+from app.core.errors import (
+    JOURNAL_ENTRY_NOT_FOUND_MSG,
+    ConflictError,
+    NotFoundError,
+    TradingPolicyError,
+    ValidationAppError,
+)
 from app.db.models import Conversation, Document, TradeJournal
 from app.interactive_agent.action_registry import Tool, resolve_action
 from app.interactive_agent.actions import (
@@ -359,7 +365,7 @@ def require_journal(
         stmt = stmt.with_for_update()
     row = session.scalar(stmt)
     if row is None:
-        raise NotFoundError("Journal entry not found.")
+        raise NotFoundError(JOURNAL_ENTRY_NOT_FOUND_MSG)
     return row
 
 

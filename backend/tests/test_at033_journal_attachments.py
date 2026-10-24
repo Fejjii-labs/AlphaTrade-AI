@@ -34,6 +34,7 @@ ORG_B = uuid.UUID("00000000-0000-0000-0000-000000033202")
 USER_A = uuid.UUID("00000000-0000-0000-0000-000000033211")
 USER_B = uuid.UUID("00000000-0000-0000-0000-000000033212")
 VIEWER_A = uuid.UUID("00000000-0000-0000-0000-000000033213")
+OTHER_TRADER_A = uuid.UUID("00000000-0000-0000-0000-000000033214")
 
 _BASE = {
     "environment": "local",
@@ -121,6 +122,30 @@ def _build_client(
 def client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     with _build_client() as pair:
         yield pair
+
+
+def _seed_other_trader_in_org_a(factory: sessionmaker[Session]) -> None:
+    with factory() as session:
+        if session.get(User, OTHER_TRADER_A) is not None:
+            return
+        settings = Settings(**_BASE)
+        session.add(
+            User(
+                id=OTHER_TRADER_A,
+                email="attach-other-trader-a@test.example",
+                hashed_password=hash_password("SecurePass123!", settings),
+                email_verified=True,
+            )
+        )
+        session.flush()
+        session.add(
+            Membership(
+                user_id=OTHER_TRADER_A,
+                organization_id=ORG_A,
+                role=MembershipRole.TRADER,
+            )
+        )
+        session.commit()
 
 
 def _auth(client: TestClient, email: str, password: str = "SecurePass123!") -> dict[str, str]:
@@ -281,26 +306,29 @@ def test_filename_is_sanitized_to_basename(
 # --------------------------------------------------------------------------- #
 
 
-def test_viewer_can_read_but_not_mutate(
+def test_viewer_cannot_access_other_users_attachments(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, _ = client
     trader = _auth(test_client, "attach-a@test.example")
     viewer = _auth(test_client, "attach-viewer@test.example")
-    trade_id = _create_trade(test_client, trader)
-    meta = _upload(test_client, trader, trade_id).json()
+    owner_trade_id = _create_trade(test_client, trader)
+    owner_meta = _upload(test_client, trader, owner_trade_id).json()
 
-    assert _upload(test_client, viewer, trade_id).status_code == 403
+    assert _upload(test_client, viewer, owner_trade_id).status_code == 403
     assert (
-        test_client.delete(f"/journal/attachments/{meta['id']}", headers=viewer).status_code == 403
+        test_client.delete(f"/journal/attachments/{owner_meta['id']}", headers=viewer).status_code
+        == 403
     )
     assert (
-        test_client.get(f"/journal/trades/{trade_id}/attachments", headers=viewer).status_code
-        == 200
+        test_client.get(f"/journal/trades/{owner_trade_id}/attachments", headers=viewer).status_code
+        == 404
     )
     assert (
-        test_client.get(f"/journal/attachments/{meta['id']}/content", headers=viewer).status_code
-        == 200
+        test_client.get(
+            f"/journal/attachments/{owner_meta['id']}/content", headers=viewer
+        ).status_code
+        == 404
     )
 
 
@@ -326,6 +354,107 @@ def test_cross_org_access_fails_closed(
         test_client.delete(f"/journal/attachments/{meta['id']}", headers=headers_b).status_code
         == 404
     )
+
+
+def test_attachment_routes_require_trade_owner(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "attach-a@test.example")
+    headers_other_org = _auth(test_client, "attach-b@test.example")
+    headers_other_user = _auth(test_client, "attach-other-trader-a@test.example")
+    trade_id = _create_trade(test_client, headers_owner)
+    meta = _upload(test_client, headers_owner, trade_id).json()
+
+    list_owner = test_client.get(f"/journal/trades/{trade_id}/attachments", headers=headers_owner)
+    assert list_owner.status_code == 200
+    download_owner = test_client.get(
+        f"/journal/attachments/{meta['id']}/content", headers=headers_owner
+    )
+    assert download_owner.status_code == 200
+    assert _upload(test_client, headers_other_org, trade_id).status_code == 404
+    assert _upload(test_client, headers_other_user, trade_id).status_code == 404
+    list_other_org = test_client.get(
+        f"/journal/trades/{trade_id}/attachments", headers=headers_other_org
+    )
+    assert list_other_org.status_code == 404
+    list_other_user = test_client.get(
+        f"/journal/trades/{trade_id}/attachments", headers=headers_other_user
+    )
+    assert list_other_user.status_code == 404
+    assert (
+        test_client.get(
+            f"/journal/attachments/{meta['id']}/content", headers=headers_other_org
+        ).status_code
+        == 404
+    )
+    assert (
+        test_client.get(
+            f"/journal/attachments/{meta['id']}/content", headers=headers_other_user
+        ).status_code
+        == 404
+    )
+
+    with factory() as session:
+        assert len(session.scalars(select(JournalTradeAttachment)).all()) == 1
+        assert len(session.scalars(select(JournalTradeEvidence)).all()) == 1
+
+
+def test_same_org_trader_cannot_delete_others_attachment(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "attach-a@test.example")
+    headers_other_trader = _auth(test_client, "attach-other-trader-a@test.example")
+    trade_id = _create_trade(test_client, headers_owner)
+    meta = _upload(test_client, headers_owner, trade_id).json()
+
+    denied = test_client.delete(f"/journal/attachments/{meta['id']}", headers=headers_other_trader)
+    assert denied.status_code == 404
+    assert denied.json()["error"]["message"] == "Attachment not found."
+
+    with factory() as session:
+        attachment = session.get(JournalTradeAttachment, uuid.UUID(meta["id"]))
+        assert attachment is not None
+        evidence = session.scalars(select(JournalTradeEvidence)).all()
+        assert len(evidence) == 1
+
+
+def test_swapped_attachment_ids_between_owners_return_same_not_found(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "attach-a@test.example")
+    headers_other_trader = _auth(test_client, "attach-other-trader-a@test.example")
+    owner_trade_id = _create_trade(test_client, headers_owner)
+    other_trade_id = _create_trade(test_client, headers_other_trader)
+    owner_meta = _upload(test_client, headers_owner, owner_trade_id).json()
+    other_meta = _upload(test_client, headers_other_trader, other_trade_id).json()
+
+    missing = test_client.get(f"/journal/attachments/{uuid.uuid4()}/content", headers=headers_owner)
+    assert missing.status_code == 404
+    assert missing.json()["error"]["message"] == "Attachment not found."
+
+    cross_download = test_client.get(
+        f"/journal/attachments/{other_meta['id']}/content", headers=headers_owner
+    )
+    assert cross_download.status_code == 404
+    assert cross_download.json()["error"]["message"] == "Attachment not found."
+
+    swapped_download = test_client.get(
+        f"/journal/attachments/{owner_meta['id']}/content", headers=headers_other_trader
+    )
+    assert swapped_download.status_code == 404
+    assert swapped_download.json()["error"]["message"] == "Attachment not found."
+
+    cross_delete = test_client.delete(
+        f"/journal/attachments/{owner_meta['id']}", headers=headers_other_trader
+    )
+    assert cross_delete.status_code == 404
+    assert cross_delete.json()["error"]["message"] == "Attachment not found."
 
 
 def test_upload_to_missing_trade_404(

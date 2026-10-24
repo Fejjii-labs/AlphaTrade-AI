@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import JOURNAL_TRADE_NOT_FOUND_MSG, NotFoundError, ValidationAppError
 from app.db.models import JournalTrade, JournalTradeAttachment, JournalTradeEvidence
 from app.repositories.journal_trades import (
     JournalTradeAttachmentRepository,
@@ -37,6 +37,7 @@ from app.services.journal_attachment_storage import AttachmentStorage
 
 _REQUEST_TAG = "journal-attachments-api"
 _ATTACHMENT_REF_PREFIX = "attachment:"
+_ATTACHMENT_NOT_FOUND_MSG = "Attachment not found."
 
 
 class JournalAttachmentService:
@@ -150,17 +151,25 @@ class JournalAttachmentService:
             total=len(rows),
         )
 
-    def get_content(
+    def get_attachment(
         self,
         attachment_id: uuid.UUID,
         *,
         organization_id: uuid.UUID,
-    ) -> tuple[JournalTradeAttachmentRead, bytes]:
+    ) -> JournalTradeAttachmentRead:
+        """Attachment metadata only (no blob read)."""
         attachment = self._get_attachment(attachment_id, organization_id=organization_id)
-        return (
-            JournalTradeAttachmentRead.model_validate(attachment),
-            self._storage.retrieve(attachment),
-        )
+        return JournalTradeAttachmentRead.model_validate(attachment)
+
+    def read_content(
+        self,
+        attachment_id: uuid.UUID,
+        *,
+        organization_id: uuid.UUID,
+    ) -> bytes:
+        """Load attachment bytes after caller has authorized access."""
+        attachment = self._get_attachment(attachment_id, organization_id=organization_id)
+        return self._storage.retrieve(attachment)
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -169,7 +178,7 @@ class JournalAttachmentService:
     def _get_trade(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> JournalTrade:
         trade = self._trades.get_scoped(trade_id, organization_id=organization_id)
         if trade is None:
-            raise NotFoundError("Journal trade not found")
+            raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
         return trade
 
     def _get_attachment(
@@ -177,7 +186,7 @@ class JournalAttachmentService:
     ) -> JournalTradeAttachment:
         attachment = self._attachments.get_scoped(attachment_id, organization_id=organization_id)
         if attachment is None:
-            raise NotFoundError("Attachment not found")
+            raise NotFoundError(_ATTACHMENT_NOT_FOUND_MSG)
         return attachment
 
     def _validate_upload(
