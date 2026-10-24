@@ -157,7 +157,7 @@ describe("ResearchValidationPage AT-035", () => {
     fireEvent.click(screen.getByTestId(`research-validation-promote-submit-${RUN_ID}`));
 
     await waitFor(() => {
-      expect(screen.getByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+      expect(await screen.findByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
         /already exists in the paper validation queue/i,
       );
     });
@@ -187,7 +187,7 @@ describe("ResearchValidationPage AT-035", () => {
         backtest_run_id: RUN_ID,
       });
     });
-    expect(screen.getByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+    expect(await screen.findByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
       /promoted to the paper validation queue/i,
     );
   });
