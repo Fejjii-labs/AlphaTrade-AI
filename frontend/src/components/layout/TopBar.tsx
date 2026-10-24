@@ -1,12 +1,14 @@
 "use client";
 
-import { Search, RefreshCw } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { FreshnessPill } from "@/components/ui/freshness-pill";
+import { RefreshCw, Search } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
 import { KillSwitchButton } from "@/components/KillSwitchButton";
 import { resolveExecutionDisplay } from "@/components/layout/status-strip-state";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { FreshnessPill } from "@/components/ui/freshness-pill";
 import { useAppContext, useSafetyPosture } from "@/contexts/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useShellFreshness } from "@/contexts/ShellFreshnessContext";
@@ -16,15 +18,12 @@ export function TopBar({
 }: {
   onOpenCommandMenu?: () => void;
 }) {
-  const menu = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    const dismiss = (event: PointerEvent) => {
-      if (menu.current?.open && !menu.current.contains(event.target as Node))
-        menu.current.open = false;
-    };
-    document.addEventListener("pointerdown", dismiss);
-    return () => document.removeEventListener("pointerdown", dismiss);
-  }, []);
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [position, setPosition] = useState({ top: 0, right: 8 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
   const {
     refreshStatus,
     loading,
@@ -32,8 +31,7 @@ export function TopBar({
     killSwitchStatus,
     killSwitchError,
   } = useAppContext();
-  const { executionMode, realTradingEnabled, postureKnown } =
-    useSafetyPosture();
+  const { executionMode, realTradingEnabled, postureKnown } = useSafetyPosture();
   const { user, organization, logout } = useAuth();
   const { freshness } = useShellFreshness();
   const mode = resolveExecutionDisplay(
@@ -43,17 +41,142 @@ export function TopBar({
   );
   const known = killSwitchStatus != null && !killSwitchError;
   const paused = known && killSwitchStatus.execution_blocked;
+
+  const place = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPosition({
+      top: rect.bottom + 8,
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  }, []);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
+  const closeAnd = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  const panel =
+    mounted && open
+      ? createPortal(
+          <div
+            ref={panelRef}
+            id={panelId}
+            role="dialog"
+            aria-label="Status"
+            style={{ top: position.top, right: position.right }}
+            className="fixed z-[55] flex w-[min(22rem,calc(100vw-1rem))] max-h-[min(32rem,calc(100dvh-5rem))] flex-col gap-3 overflow-y-auto rounded-card border border-border bg-surface-1 p-4 text-text-primary shadow-elevation2"
+          >
+            <Button
+              type="button"
+              aria-label="Search pages and destinations"
+              variant="outline"
+              className="h-11 w-full justify-start"
+              onClick={() => closeAnd(() => onOpenCommandMenu?.())}
+            >
+              <Search className="h-4 w-4" aria-hidden="true" />
+              Search pages
+            </Button>
+            <div className="space-y-1">
+              <p className="text-sm font-medium">
+                {realTradingEnabled == null
+                  ? "Real trading unknown"
+                  : realTradingEnabled
+                    ? "Real trading ON"
+                    : "Real trading OFF"}
+              </p>
+              <div data-testid="topbar-freshness">
+                <FreshnessPill
+                  state={freshness.state ?? "unavailable"}
+                  ageLabel={freshness.ageLabel}
+                />
+              </div>
+              <p className="text-caption text-text-muted">
+                {providers
+                  ? `${providers.providers.filter((provider) => provider.is_mock).length} simulated providers`
+                  : "Providers unknown"}
+              </p>
+              <p className="text-caption text-text-muted">
+                Strategy and account gates still apply.
+              </p>
+            </div>
+            {killSwitchError ? (
+              <p role="alert" className="text-sm text-danger">
+                Pause status could not be refreshed.
+              </p>
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-11 w-full justify-start"
+              disabled={loading}
+              onClick={() => void refreshStatus()}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Refresh status
+            </Button>
+            <div className="space-y-2 border-t border-border-subtle pt-3">
+              <div>
+                <p className="break-words text-sm">{user?.email ?? "Signed in"}</p>
+                <p className="text-caption text-text-muted">
+                  {organization?.name ?? "Workspace"}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 w-full justify-start"
+                onClick={() => void logout()}
+              >
+                Log out
+              </Button>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
-    <header className="sticky top-0 z-30 border-b border-border-subtle bg-surface-0/90 backdrop-blur-md">
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-gutter py-2 sm:flex lg:px-gutter-lg">
+    <header className="sticky top-0 z-40 border-b border-border-subtle bg-surface-0/90 backdrop-blur-md">
+      <div className="flex h-14 min-w-0 items-center gap-2 overflow-x-auto px-gutter lg:px-gutter-lg">
         <p
           data-testid="topbar-page-identity"
-          className="order-1 min-w-0 flex-1 truncate text-base font-semibold"
+          className="min-w-0 flex-1 truncate text-base font-semibold"
         >
           AlphaTrade
         </p>
         <div
-          className="order-3 flex min-w-0 flex-wrap items-center gap-2 sm:order-2"
+          className="flex shrink-0 items-center gap-2"
           role="status"
           aria-label="Execution status"
           aria-live="polite"
@@ -65,97 +188,34 @@ export function TopBar({
             className="px-3 py-1 text-[length:var(--text-label)] font-semibold shadow-[0_0_0_1px_rgba(255,255,255,0.06)]"
           />
           <StatusBadge
-            label={
-              !known ? "Pause unknown" : paused ? "Paused" : "No global pause"
-            }
+            label={!known ? "Pause unknown" : paused ? "Paused" : "No global pause"}
             tone={!known ? "warn" : paused ? "blocked" : "muted"}
             className="px-3 py-1 text-[length:var(--text-label)] font-semibold"
           />
         </div>
-        <div className="order-4 justify-self-end sm:order-3 [&_button]:text-[length:var(--text-label)] [&_button]:font-semibold">
+        <div className="flex shrink-0 items-center gap-2">
           <KillSwitchButton compact />
-        </div>
-        <details
-          ref={menu}
-          className="relative order-2 justify-self-end sm:order-4"
-          data-testid="header-status-menu"
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && menu.current?.open) {
-              menu.current.open = false;
-              menu.current.querySelector("summary")?.focus();
-            }
-          }}
-        >
-          <summary className="min-h-11 cursor-pointer rounded-control border border-border-subtle px-3 py-2.5 text-sm">
-            Status
-          </summary>
-          <div className="absolute right-0 z-40 mt-2 max-h-[calc(100dvh-5rem)] w-[min(22rem,calc(100vw-2rem))] space-y-3 overflow-y-auto rounded-card border border-border-subtle bg-surface-0/95 p-4 shadow-elevation2 backdrop-blur-md">
+          <div data-testid="header-status-menu" data-open={open ? "true" : "false"}>
             <Button
-              aria-label="Search pages and destinations"
+              ref={triggerRef}
+              type="button"
               variant="outline"
-              className="w-full justify-start"
+              size="sm"
+              className="h-11 px-3"
+              aria-expanded={open}
+              aria-haspopup="dialog"
+              aria-controls={panelId}
               onClick={() => {
-                if (menu.current) menu.current.open = false;
-                onOpenCommandMenu?.();
+                place();
+                setOpen((value) => !value);
               }}
             >
-              <Search className="h-4 w-4" aria-hidden="true" />
-              Search pages
+              Status
             </Button>
-            <p className="text-sm">
-              {realTradingEnabled == null
-                ? "Real trading unknown"
-                : realTradingEnabled
-                  ? "Real trading ON"
-                  : "Real trading OFF"}
-            </p>
-            <div data-testid="topbar-freshness">
-              <FreshnessPill
-                state={freshness.state ?? "unavailable"}
-                ageLabel={freshness.ageLabel}
-              />
-            </div>
-            <p className="text-caption text-text-muted">
-              {providers
-                ? `${providers.providers.filter((p) => p.is_mock).length} simulated providers`
-                : "Providers unknown"}
-            </p>
-            <p className="text-caption text-text-muted">
-              Strategy and account gates still apply.
-            </p>
-            {killSwitchError && (
-              <p role="alert" className="text-sm text-danger">
-                Pause status could not be refreshed.
-              </p>
-            )}
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={loading}
-              onClick={() => void refreshStatus()}
-            >
-              <RefreshCw className="h-4 w-4" />
-              Refresh status
-            </Button>
-            <div className="border-t border-border-subtle pt-3">
-              <p className="break-words text-sm">
-                {user?.email ?? "Signed in"}
-              </p>
-              <p className="text-caption text-text-muted">
-                {organization?.name ?? "Workspace"}
-              </p>
-              <Button
-                className="mt-2"
-                variant="outline"
-                size="sm"
-                onClick={() => void logout()}
-              >
-                Log out
-              </Button>
-            </div>
           </div>
-        </details>
+        </div>
       </div>
+      {panel}
     </header>
   );
 }

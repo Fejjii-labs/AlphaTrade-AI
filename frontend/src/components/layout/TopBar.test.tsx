@@ -99,8 +99,13 @@ describe("Compact truthful header", () => {
     ).toHaveTextContent("No global pause");
     expect(screen.queryByTestId("status-strip")).not.toBeInTheDocument();
     expect(screen.queryByText("Execution ready")).not.toBeInTheDocument();
-    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute(
-      "open",
+    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+      "data-open",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Status" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
     );
   });
   it("shows unknown when mode cannot be verified", () => {
@@ -122,8 +127,11 @@ describe("Compact truthful header", () => {
   it("keeps secondary diagnostics and account controls in the dropdown", () => {
     appState.providers = null;
     renderTopBar();
-    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
+    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+      "data-open",
+      "true",
+    );
     expect(screen.getByText("Providers unknown")).toBeVisible();
     expect(
       screen.getByText("Strategy and account gates still apply."),
@@ -134,30 +142,39 @@ describe("Compact truthful header", () => {
   });
   it("closes on Escape and restores keyboard focus", () => {
     renderTopBar();
-    const summary = screen.getByText("Status", { selector: "summary" });
-    fireEvent.click(summary);
+    const status = screen.getByRole("button", { name: "Status" });
+    fireEvent.click(status);
     fireEvent.keyDown(screen.getByRole("button", { name: "Log out" }), {
       key: "Escape",
     });
-    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute(
-      "open",
+    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+      "data-open",
+      "false",
     );
-    expect(summary).toHaveFocus();
+    expect(status).toHaveFocus();
   });
   it("opens search from the secondary menu and dismisses it", () => {
     const openSearch = vi.fn();
     renderTopBar(openSearch);
-    expect(screen.getByRole("button", { name: "Search pages and destinations" })).not.toBeVisible();
-    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
+    expect(
+      screen.queryByRole("button", { name: "Search pages and destinations" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
     fireEvent.click(screen.getByRole("button", { name: "Search pages and destinations" }));
     expect(openSearch).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+      "data-open",
+      "false",
+    );
   });
   it("dismisses the secondary menu on an outside pointer press", () => {
     renderTopBar();
-    fireEvent.click(screen.getByText("Status", { selector: "summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Status" }));
     fireEvent.pointerDown(document.body);
-    expect(screen.getByTestId("header-status-menu")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+      "data-open",
+      "false",
+    );
   });
   it("keeps the global identity separate from the page heading", () => {
     navigationState.pathname = "/knowledge";

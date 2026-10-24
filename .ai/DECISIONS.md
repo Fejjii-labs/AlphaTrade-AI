@@ -2,6 +2,146 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-150 — GPT Live reasoning is voice-scoped
+
+- Date: 2026-10-22
+- Decision: The disabled GPT Live voice path delegates backend reasoning to
+  `AGENT_VOICE_REASONING_MODEL` (default `gpt-6.1-sol`) at
+  `AGENT_VOICE_REASONING_EFFORT` (default `low`). The text agent keeps
+  `AGENT_REASONING_MODEL` and `AGENT_REASONING_EFFORT`. Voice budget receipts
+  compare `limits.reasoning.model` to the voice model, not the text model.
+- Admission reserves gpt-live-1 at USD 0.05 per minute, billed per second,
+  plus the reasoning and embedding holds. The sum must fit the $1 session
+  ceiling or the session is refused. Realtime and GPT Live stay disabled.
+  No Render environment change.
+- Reference: `docs/gpt_live_integration.md`,
+  `docs/gpt_live_limits.example.json`.
+
+## AT-ADR-149 — Worker runtime flags and the owner paper switch
+
+- Date: 2026-10-22
+- Decision: The API process and the paper worker do not share an environment.
+  Status screens must read a worker-published `worker_runtime_state` row
+  (component `paper_worker_effective`), not the API process env. The row
+  stores the worker's effective flags: autonomy mode, the env paper ceiling,
+  the organization switch bit the worker consulted, watcher orchestration and
+  staging activation, Telegram armed / interaction / alerts / automatic
+  delivery, the watchlist, and the last cycle time. A heartbeat refresh keeps
+  the last cycle's mode, watchlist, and switch bit. `/health`, watcher
+  monitoring, and exchange diagnostics overlay those flags when a row exists
+  and mark the report stale when the heartbeat is older than
+  `watcher_heartbeat_stale_after_seconds`. A missing row stays on the API
+  process flags and is labeled unavailable, so a silent worker is not shown
+  as worker-off. `real_trading_enabled` on this record is fixed false.
+- The autonomous internal-paper switch is an organization row in
+  `autonomous_paper_switches`, default off, written only by an owner through
+  `PATCH /autonomous/settings`. Effective internal paper is
+  `AUTONOMOUS_INTERNAL_PAPER_ENABLED` AND that row. Env false is resolved
+  before the row is read, so it always wins. The switch cannot enable BloFin
+  demo or real money. The worker re-reads it on each cycle and again before
+  an internal-paper approval. A missing row is off. An unreadable row is
+  `autonomous_paper_toggle_unverified`. Changes are audit-logged on
+  `AUTONOMOUS_TRADING_SETTINGS_UPDATED`. A toggle-only patch does not upsert
+  the per-user limit row.
+- Risk profiles still reject `autonomous_internal_paper_enabled=true` and
+  `autonomous_blofin_demo_enabled=true` (`autonomous_flags_must_stay_off`).
+  The profile validator is not the on/off switch. Real trading, execution
+  mode, and exchange mode stay on the API process and are unchanged.
+- Reference: `backend/src/app/persistence/worker_runtime_state.py`,
+  `backend/src/app/services/autonomous_paper_switch.py`.
+
+## AT-ADR-148 — A fill after a paper slot release does not free the slot again
+
+- Date: 2026-10-22
+- Decision: `convert_reservation_for_fill` leaves a reservation whose
+  `release_state` is already `RELEASED` in that state, including its release
+  reason. The fill still adds the unconverted slots to `actual_trade_count`
+  once and sets `converted_trade_slots`, so a second conversion does not count
+  them again. It does not decrement `reserved_trade_slots`, because the paper
+  day roll already returned those slots. A charged or partially released
+  reservation still moves its slots from reserved to actual. The caller holds
+  the reservation row and the accounting row lock. Real trading stays off.
+- Reference: `app/services/execution_fills.py`. Extends AT-ADR-147.
+
+## AT-ADR-147 — Paper day roll releases terminal and stale unfilled reservations
+
+- Date: 2026-10-22
+- Decision: On the internal-paper trade-slot roll only, a reservation is
+  released when its execution command is terminal, or when it is older than
+  six hours and has no fill. The release writes one audit row
+  (`paper_reservation_released`) and a warning log. Open in-flight reservations
+  and reservations that already have a fill keep their slots. Demo reservations
+  on the shared paper account are not released. The release runs while the
+  accounting row lock is held. On PostgreSQL, reservations locked by another
+  transaction are skipped so a fill cannot deadlock against the roll. A second
+  locker that already sees today's date does not release again. An unrecognized
+  risk-settings timezone logs one warning per process and the day is resolved
+  in UTC. Real trading stays off.
+- Reference: `app/services/safety_epoch.py`. Extends AT-ADR-146.
+
+## AT-ADR-146 — Internal paper trade slots roll at the user's local day
+
+- Date: 2026-10-22
+- Decision: `account_risk_accounting_states.actual_trade_count` and
+  `max_trade_slots` are a daily paper allocation, not a lifetime count.
+  On the first row-locked access of a new trading day for venue
+  `PAPER_INTERNAL` only, completed trades drop out of `actual_trade_count`,
+  `max_trade_slots` is copied from `user_risk_settings.max_trades_per_day`,
+  and `trade_slot_business_date` becomes that local date. `reserved_trade_slots`
+  is left unchanged so an unreleased reservation from an earlier day still
+  consumes a slot. A second locker that already sees today's date does
+  nothing. Demo claim, fill, and release do not start the roll. Daily loss,
+  notional, and real trading are unchanged. A NULL date is a pre-alignment
+  row and rolls once on the next paper access.
+- Reference: `app/services/safety_epoch.py`, `app/services/execution_claim.py`.
+
+## AT-ADR-145 — Last-trade paper fills use a per-asset haircut, and the alert stop uses the ATR floor
+
+- Date: 2026-10-22
+- Decision: Both live quote producers (`quote_current_price` and
+  `quote_from_terminal_trade`) publish the last contracted trade and do not
+  set bid or ask. The book is a separate optional observation and is not on
+  `PerpetualMarketSource`, so it is not attached to that quote and is not
+  invented from the last trade. When a caller already supplies a usable book,
+  the fill still lifts the ask or hits the bid. Otherwise the mid moves
+  against the trader by a per-asset haircut. BTC and ETH use
+  `PAPER_FILL_MAJOR_SPREAD_HAIRCUT` (default `0.0001`, 1bp). Every other
+  base, including names that merely start with those letters such as ETHFI,
+  uses `PAPER_FILL_SPREAD_HAIRCUT` (default `0.0005`, 5bp). A missing symbol
+  uses the 5bp default. Supersedes only the single `0.0001` haircut sentence
+  of AT-ADR-144.
+- The SFP ATR floor is applied when the brain scan records the setup, which
+  is the plan Telegram copies. It is the same `SFP_MIN_STOP_ATR_MULTIPLE`
+  the internal paper loop already applies (default `0.5`). The floor is still
+  not hashed into `setup_id`. The research replay adapter does not apply it.
+  BloFin demo still does not opt into the haircut or the floor.
+- Side-aware exit fills with slippage are not part of this decision.
+- Neither setting arms the watcher, demo execution, or real trading.
+- Reference: PR #311 Griller conditions. `app/services/paper_fill.py`,
+  `app/strategy_brain/assembly.py`.
+
+## AT-ADR-144 — Paper fills are side-aware and the SFP stop has an ATR floor
+
+- Date: 2026-10-22
+- Decision: Internal paper fills a long at the live ask and a short at the
+  live bid. When the quote only has a mid (`CurrentPriceQuote.price`, the
+  last trade), the fill moves against the trader by
+  `PAPER_FILL_SPREAD_HAIRCUT` (default `0.0001`, half of a 2bp spread).
+  A missing quote, a crossed book, or a non-positive result refuses the
+  plan with `evidence_unavailable`, the same fail-closed code as a missing
+  quote. BloFin demo does not opt in: it still replaces the entry from its
+  own book.
+- The SFP paper stop stays `max(0.1% of the swept reference, N ticks, k*ATR)`.
+  `k` defaults to `0` on stored `sfp-research/v1` and `sfp-research/v2` so
+  those rows and their setup ids do not change. `sfp-research/v3` sets `k`
+  to `0.5`. Internal paper applies `max(authored k, SFP_MIN_STOP_ATR_MULTIPLE)`
+  with that setting defaulting to `0.5`. The floor is not hashed into
+  `setup_id`. A positive `k` with no Wilder ATR still refuses the plan.
+  Setting the multiple to `0` restores the authored multiple, including zero.
+- Neither setting arms the watcher, demo execution, or real trading.
+- Reference: PR #309 Griller follow-ups. `app/services/paper_fill.py`,
+  `app/strategy_brain/sfp/contracts.py`.
+
 ## AT-ADR-143 — Internal-read mirror runs the #304 pin before account reads
 
 - Date: 2026-10-21

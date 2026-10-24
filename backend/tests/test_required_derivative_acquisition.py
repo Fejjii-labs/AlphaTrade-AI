@@ -18,6 +18,11 @@ from app.market_contracts.derivatives import DerivativeMetric, derivative_freshn
 from app.market_contracts.enums import VenueId
 from app.market_contracts.errors import MarketContractError
 from app.market_contracts.evidence_diagnostics import DiagnosticStatus, EvidenceComponent
+from app.market_contracts.provider_contracts import (
+    BYBIT_LINEAR_SOURCE,
+    ContractBook,
+    LinearPerpetualContract,
+)
 from app.market_contracts.replay_fixtures import build_closed_bars, build_window_trades
 from app.market_contracts.trade_reduction import build_released_trade_snapshot
 from app.market_contracts.trades import build_trade_event
@@ -53,6 +58,42 @@ def _policy(metrics=METRICS):
         update={
             "required_roles": (*policy.required_roles, *(EvidenceRole(x.value) for x in metrics))
         }
+    )
+
+
+def _live_contract_book(venue: VenueId) -> ContractBook | None:
+    """Supply a fixture tick when the default Bybit listing has none.
+
+    Live assembly fails closed without a positive tick. The default Bybit
+    BTCUSDT row has no tick because instruments-info returned HTTP 403, so it
+    was not stored as a verified schedule. This value is test data for the
+    assembler, not a venue price increment.
+    """
+
+    if venue is not VenueId.BYBIT:
+        return None
+    return ContractBook(
+        contracts=(
+            LinearPerpetualContract(
+                venue=VenueId.BYBIT,
+                symbol="BTCUSDT",
+                source=BYBIT_LINEAR_SOURCE,
+                contract_type="LinearPerpetual",
+                quote_asset="USDT",
+                status="Trading",
+                base_asset="BTC",
+                tick_size="0.10",
+            ),
+        )
+    )
+
+
+def _live_assembler(source, *, clock, venue: VenueId) -> FirstSliceEvidenceAssembler:
+    return FirstSliceEvidenceAssembler(
+        source,
+        replay=False,
+        clock=clock,
+        contract_book=_live_contract_book(venue),
     )
 
 
@@ -231,7 +272,7 @@ class RecordedClosedHistory:
 def test_actual_assembler_accepts_delayed_receipts_and_cache_hits(venue):
     clock = AdvancingClock()
     source, counts = _source(venue, clock)
-    assembler = FirstSliceEvidenceAssembler(source, replay=False, clock=clock)
+    assembler = _live_assembler(source, clock=clock, venue=venue)
     first = assembler.assemble(organization_id=ORG_ID, policy=_policy())
     assert first.evaluated_at == SCAN + timedelta(seconds=2)
     assert first.clocks.evidence_cutoff_at == SCAN
@@ -285,7 +326,7 @@ def test_actual_assembler_accepts_delayed_receipts_and_cache_hits(venue):
 def test_single_required_metric_delayed_receipt(venue, metric):
     clock = AdvancingClock()
     source, counts = _source(venue, clock)
-    assembled = FirstSliceEvidenceAssembler(source, replay=False, clock=clock).assemble(
+    assembled = _live_assembler(source, clock=clock, venue=venue).assemble(
         organization_id=ORG_ID, evaluated_at=SCAN, policy=_policy((metric,))
     )
     fact = assembled.bundle.market_intelligence[0]
@@ -324,8 +365,10 @@ def test_actual_assembler_rejects_invalid_timing(venue, metric, case):
     source, counts = _source(
         venue, clock, event=event, receipt_skew=1 if case == "future_receipt" else 0
     )
-    assembler = FirstSliceEvidenceAssembler(
-        source, replay=False, clock=None if case == "strict_historical_receipt" else clock
+    assembler = _live_assembler(
+        source,
+        clock=None if case == "strict_historical_receipt" else clock,
+        venue=venue,
     )
     with pytest.raises(MarketContractError, match=f"required_{metric.value}"):
         assembler.assemble(organization_id=ORG_ID, evaluated_at=SCAN, policy=_policy((metric,)))
@@ -339,12 +382,12 @@ def test_actual_assembler_rejects_invalid_timing(venue, metric, case):
 def test_cached_receipt_cannot_leak_into_earlier_historical_assembly(venue):
     clock = AdvancingClock()
     source, counts = _source(venue, clock)
-    current = FirstSliceEvidenceAssembler(source, replay=False, clock=clock).assemble(
+    current = _live_assembler(source, clock=clock, venue=venue).assemble(
         organization_id=ORG_ID, policy=_policy()
     )
     original = current.bundle.market_intelligence[0].collected_at
     with pytest.raises(MarketContractError, match="required_open_interest"):
-        FirstSliceEvidenceAssembler(source, replay=False).assemble(
+        _live_assembler(source, clock=None, venue=venue).assemble(
             organization_id=ORG_ID, evaluated_at=SCAN, policy=_policy()
         )
     assert (
@@ -369,7 +412,7 @@ def test_final_scan_age_rechecks_an_earlier_required_fact(venue):
         ),
     )
     with pytest.raises(MarketContractError, match="open_interest"):
-        FirstSliceEvidenceAssembler(source, replay=False, clock=clock).assemble(
+        _live_assembler(source, clock=clock, venue=venue).assemble(
             organization_id=ORG_ID, policy=_policy()
         )
     assert clock() == SCAN + timedelta(seconds=2)

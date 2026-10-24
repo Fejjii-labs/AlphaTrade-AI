@@ -218,6 +218,43 @@ def test_ohlcv_volume_and_provenance_exclude_forming_candles() -> None:
     assert "binance" not in series.identity.instrument.instrument_id
 
 
+def test_repeated_bybit_klines_share_one_request() -> None:
+    calls = {"n": 0}
+    closed = T0 - timedelta(minutes=30)
+    instrument = bybit_usdt_perpetual_btcusdt()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return _ok(
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "list": [_kline(T0), _kline(closed)],
+            }
+        )
+
+    source = _source(handler)
+    try:
+        first = source.fetch_closed_ohlcv(
+            identity=_identity(instrument),
+            instrument=instrument,
+            timeframe=Timeframe.M15,
+            min_final_bars=1,
+            evaluated_at=T0,
+        )
+        second = source.fetch_closed_ohlcv(
+            identity=_identity(instrument),
+            instrument=instrument,
+            timeframe=Timeframe.M15,
+            min_final_bars=1,
+            evaluated_at=T0,
+        )
+    finally:
+        source.close()
+    assert calls["n"] == 1
+    assert first.bars[0].content_hash == second.bars[0].content_hash
+
+
 def test_cvd_uses_taker_side_and_base_coin_size() -> None:
     start = T0 - timedelta(seconds=5)
     instrument = bybit_usdt_perpetual_btcusdt()

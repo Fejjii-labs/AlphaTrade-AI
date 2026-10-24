@@ -46,19 +46,36 @@ export function RealtimeVoiceControls(props: Props) {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();
   }, [props.authenticated, props.conversationId]);
-  return <div aria-label="Interactive voice" className="space-y-2">
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="secondary"
+  return (
+    <>
+      <Button type="button" variant="secondary" className="h-11"
         disabled={!state.active && (props.disabled || !props.authenticated)}
         onClick={() => state.active ? controller.current?.end() : void controller.current?.start()}>
         {state.active ? "End voice" : "Talk to Agent"}
       </Button>
-      {state.active && <Button type="button" variant="secondary" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
+      {state.active && <Button type="button" variant="secondary" className="h-11" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
+      {state.active && state.outputMuted && <Button type="button" variant="secondary" className="h-11" onClick={() => controller.current?.resume()}>Resume audio</Button>}
       {state.active && <span role="status" className="text-sm text-text-muted">
+        {state.provider === "gpt_live" && "GPT Live · "}
+        {state.outputMuted && "Audio muted · "}
         {state.state === "connecting" ? "Connecting…" : state.state === "thinking" ? "Thinking…" : state.state === "speaking" ? "Speaking" : "Listening"}
       </span>}
-    </div>
-    {state.transcript && <details className="text-sm text-text-muted"><summary className="min-h-11 cursor-pointer content-center">Heard request</summary><p className="mt-1 whitespace-pre-wrap">{state.transcript}</p></details>}
-    {state.error && <p role="alert" className="text-sm text-danger">{state.error}</p>}
-  </div>;
+      {state.transcript ? (
+        <details className="basis-full text-sm text-text-muted">
+          <summary className="flex h-10 cursor-pointer items-center">Heard request</summary>
+          <p className="mt-1 whitespace-pre-wrap">{state.transcript}</p>
+        </details>
+      ) : null}
+      {(state.inputCaption || state.replyCaption) ? (
+        <details className="basis-full text-sm text-text-muted">
+          <summary className="flex h-10 cursor-pointer items-center">Live captions</summary>
+          {state.inputCaption ? <p aria-label="Your speech caption" className="mt-1 whitespace-pre-wrap">{state.inputCaption}</p> : null}
+          {state.replyCaption ? <p aria-label="Agent speech caption" className="mt-1 whitespace-pre-wrap">{state.replyCaption}</p> : null}
+        </details>
+      ) : null}
+      {state.error ? (
+        <p role="alert" className="basis-full text-sm text-text-secondary">{state.error}</p>
+      ) : null}
+    </>
+  );
 }

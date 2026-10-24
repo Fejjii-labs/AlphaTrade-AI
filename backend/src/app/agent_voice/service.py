@@ -23,6 +23,7 @@ from app.agent_voice.contracts import (
     VoiceTruncate,
 )
 from app.agent_voice.grounding import read_grounding
+from app.agent_voice.live_config import LiveLimits
 from app.agent_voice.protocol import TOOL_NAME, checked_audio, create_response, session_update
 from app.agent_voice.retrieval import (
     VoiceEmbeddingsProvider,
@@ -77,6 +78,21 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
         facts = read_grounding(
             session, ledger.settings, tenant.organization_id, tenant.user_id, request.message
         )
+        if isinstance(ledger.limits, LiveLimits):
+            facts += (
+                "\nThis request comes from observed GPT Live transcript fragments at a delegation "
+                "boundary. No provider event proves utterance completeness. Preserve uncertainty "
+                "and corrections; ask for clarification before inferring missing intent. "
+                "Speech is not an explicit confirmation or execution authorization."
+            )
+    # Voice delegation uses its own model and effort. The text agent keeps
+    # agent_reasoning_model / agent_reasoning_effort on the original settings.
+    reasoning_settings = ledger.settings.model_copy(
+        update={
+            "agent_reasoning_model": ledger.settings.agent_voice_reasoning_model,
+            "agent_reasoning_effort": ledger.settings.agent_voice_reasoning_effort,
+        }
+    )
     coordinator = TurnCoordinator(ledger.sessions)
     providers = resolve_providers(ledger.settings)
     provider = VoiceReasoningProvider(providers.llm, ledger)
@@ -94,7 +110,7 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
         strategy_id=request.strategy_id,
         work=lambda reservation: run_interactive(
             coordinator,
-            ledger.settings,
+            reasoning_settings,
             reservation,
             request,
             llm_provider=provider,

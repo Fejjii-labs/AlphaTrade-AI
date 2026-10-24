@@ -24,6 +24,7 @@ class VoiceStart(StrictModel):
 
 class VoiceConfig(StrictModel):
     available: bool
+    provider: Literal["realtime", "gpt_live"] = "realtime"
     reason: str | None = None
     transport: Literal["websocket_pcm24"] = "websocket_pcm24"
     sample_rate: Literal[24000] = 24000

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import Field
@@ -28,6 +29,13 @@ class AutonomousTradingSettingsView(StrictModel):
     symbol_options: list[str] = Field(default_factory=list)
     max_daily_loss_percent_ceiling: Decimal = Field(default=Decimal("6"))
     max_risk_per_trade_percent_ceiling: Decimal = Field(default=Decimal("5"))
+    internal_paper_enabled: bool = False
+    internal_paper_env_ceiling: bool | None = None
+    internal_paper_effective: bool = False
+    worker_runtime_health: Literal["RUNNING", "STALE", "UNAVAILABLE"] = "UNAVAILABLE"
+    worker_heartbeat_age_seconds: float | None = None
+    worker_flags_stale: bool = True
+    autonomy_mode: str = ""
 
 
 class AutonomousTradingSettingsUpdate(StrictModel):
@@ -37,3 +45,4 @@ class AutonomousTradingSettingsUpdate(StrictModel):
     clear_risk_per_trade_percent: bool = False
     strategy_id: UUID | None = None
     symbol: str | None = Field(default=None, min_length=3, max_length=32)
+    internal_paper_enabled: bool | None = None

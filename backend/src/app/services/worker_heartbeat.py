@@ -113,10 +113,41 @@ def publish_paper_worker_heartbeat(
                 market_source="paper_worker",
             ),
         )
+        _publish_effective_flags(factory, settings, now=now)
     except Exception as exc:
         if type(exc) is AssertionError:
             raise
         logger.warning("paper_worker_heartbeat_unpublished")
+
+
+def _publish_effective_flags(
+    factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    now: datetime,
+) -> None:
+    """Refresh process flags without erasing the last cycle's watchlist or mode."""
+
+    from app.persistence.worker_runtime_state import (
+        WorkerRuntimeWrite,
+        publish_worker_runtime_state,
+    )
+
+    publish_worker_runtime_state(
+        factory,
+        WorkerRuntimeWrite(
+            worker_id=settings.watcher_paper_worker_id,
+            heartbeat_at=now,
+            autonomous_internal_paper_env_ceiling=bool(settings.autonomous_internal_paper_enabled),
+            watcher_orchestration_enabled=bool(settings.watcher_orchestration_enabled),
+            watcher_paper_staging_activation=bool(settings.watcher_paper_staging_activation),
+            telegram_paper_activation_armed=bool(settings.telegram_paper_activation_armed),
+            telegram_interaction_enabled=bool(settings.telegram_interaction_enabled),
+            telegram_alerts_enabled=bool(settings.telegram_alerts_enabled),
+            automatic_telegram_delivery_enabled=bool(settings.automatic_telegram_delivery_enabled),
+            preserve_cycle=True,
+        ),
+    )
 
 
 def watch_cycle_with_heartbeat[CycleT](

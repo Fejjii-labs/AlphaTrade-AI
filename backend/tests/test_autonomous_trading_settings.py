@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.core.dependencies import get_session
+from app.db.autonomous_paper_switch import AutonomousPaperSwitchRow
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.base import Base
 from app.db.models import AuditLog, Membership, Organization, User, UserStrategy
@@ -239,6 +240,50 @@ def test_patch_rejects_ceiling_and_bad_symbol(client: TestClient) -> None:
     )
     assert bad_symbol.status_code == 422
     assert bad_symbol.json()["detail"] == "symbol_not_watched"
+
+
+def test_owner_paper_switch_is_audited_and_trader_forbidden(
+    client: TestClient, settings_db
+) -> None:
+    trader_headers = _token(client, "trader-284@test.example")
+    denied = client.patch(
+        "/autonomous/settings",
+        headers=trader_headers,
+        json={"internal_paper_enabled": True},
+    )
+    assert denied.status_code == 403
+
+    owner_headers = _token(client, "owner-284@test.example")
+    before = client.get("/autonomous/settings", headers=owner_headers)
+    assert before.status_code == 200
+    assert before.json()["internal_paper_enabled"] is False
+    assert before.json()["using_defaults"] is True
+
+    saved = client.patch(
+        "/autonomous/settings",
+        headers=owner_headers,
+        json={"internal_paper_enabled": True},
+    )
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["internal_paper_enabled"] is True
+    assert body["using_defaults"] is True
+    assert body["internal_paper_effective"] is False
+
+    factory, _settings = settings_db
+    with factory() as session:
+        switch = session.get(AutonomousPaperSwitchRow, ORG)
+        assert switch is not None
+        assert switch.enabled is True
+        assert switch.updated_by_user_id == OWNER
+        assert session.scalar(select(AutonomousTradingSettingsRow)) is None
+        audit = session.scalar(
+            select(AuditLog).where(
+                AuditLog.action == AuditEventType.AUTONOMOUS_TRADING_SETTINGS_UPDATED
+            )
+        )
+        assert audit is not None
+        assert audit.redacted_metadata["changes"]["internal_paper_enabled"] == "true"
 
 
 def test_owner_scope_for_writes(client: TestClient, settings_db) -> None:
@@ -928,3 +973,59 @@ def test_kill_switch_still_refuses_when_settings_allow(settings_db) -> None:
         kill_switch_active=True,
     )
     assert proof.reason_code == "kill_switch_active"
+
+
+def test_kill_switch_on_with_no_policy_refuses_without_a_market_read(settings_db) -> None:
+    """A killed loop with policy=None is a kill-switch refusal and reads no market."""
+
+    _factory, settings = settings_db
+    calls = {"n": 0}
+
+    class _Source:
+        def fetch_ordered_trades(self, **_kwargs: object) -> object:
+            calls["n"] += 1
+            raise AssertionError("killed system must not read the market")
+
+    loop = AutomatedPaperLoop(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        settings,
+        FrozenClock(datetime(2026, 10, 20, tzinfo=UTC)),
+        market_source=_Source(),
+    )
+    proof = loop.continue_confirmed_setup(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=_target(),
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=None,  # type: ignore[arg-type]
+        kill_switch_active=True,
+    )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "kill_switch_active"
+    assert calls["n"] == 0
+
+    from app.schemas.common import Timeframe, TradeDirection
+    from app.strategy_brain.sfp.contracts import SfpSpec, sfp_research_v3_parameters
+
+    sfp_policy = SimpleNamespace(
+        authored_spec=SfpSpec(
+            symbol="BTCUSDT",
+            trigger_timeframe=Timeframe.M15,
+            direction=TradeDirection.LONG,
+            parameters=sfp_research_v3_parameters(),
+        )
+    )
+    still_killed = loop.continue_confirmed_setup(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        target=_target(),
+        candidate=SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=sfp_policy,  # type: ignore[arg-type]
+        kill_switch_active=True,
+    )
+    assert still_killed.reason_code == "kill_switch_active"
+    assert calls["n"] == 0

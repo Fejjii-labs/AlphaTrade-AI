@@ -386,7 +386,8 @@ def test_both_sfp_scopes_resume_with_actual_post_confirmation_receipt_clocks(
         after = snapshot(session)
         assert len(after) == 257
         assert all(after[key] == value for key, value in before.items())
-        assert len(calls) == 8
+        # Four identical 15m windows share one confirmation pair inside the 10s cache.
+        assert len(calls) == 2
     finally:
         source.close()
         engine.dispose()

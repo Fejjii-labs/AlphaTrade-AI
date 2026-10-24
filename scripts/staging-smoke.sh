@@ -78,6 +78,9 @@ payload = json.loads(sys.argv[1])
 allow_degraded = sys.argv[2].lower() in ("1", "true", "yes")
 if payload.get("ready") is True:
     print("  OK: ready")
+    names = payload.get("degraded_providers") or []
+    if names:
+        print("  degraded_providers=" + ",".join(str(name) for name in names))
 elif allow_degraded:
     print(f"  WARN: degraded readiness — {payload.get('providers_unavailable', '?')} providers unavailable")
 else:

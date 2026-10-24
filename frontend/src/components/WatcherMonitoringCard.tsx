@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { StatusBadge } from "@/components/StatusBadge";
+import { WorkerRuntimeReadout } from "@/components/WorkerRuntimeReadout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime, UNAVAILABLE } from "@/lib/format";
@@ -207,6 +208,17 @@ export function WatcherMonitoringCard({
             ))}
           </ul>
         ) : null}
+
+        <div data-testid="watcher-monitoring-worker-flags">
+          <p className="mb-1 text-xs text-text-muted">
+            Flags below come from the worker report. A missing report is not the API process.
+          </p>
+          <WorkerRuntimeReadout
+            observation={
+              snapshot.worker_effective?.source === "worker" ? snapshot.worker_effective : null
+            }
+          />
+        </div>
 
         <p className="text-xs text-text-muted" data-testid="watcher-monitoring-lease">
           Lease/worker:{" "}

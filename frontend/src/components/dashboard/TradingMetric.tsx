@@ -28,7 +28,7 @@ export function TradingMetric({
   return (
     <div
       data-testid={testId}
-      className="min-w-0 rounded-card border border-border-subtle bg-surface-1 p-4"
+      className="flex h-full min-w-0 flex-col rounded-card border border-border-subtle bg-surface-1 p-4"
     >
       <p className="text-[0.8125rem] font-medium uppercase tracking-wide text-text-muted">{label}</p>
       <DataNumber
@@ -37,7 +37,7 @@ export function TradingMetric({
         className="mt-2 block break-words text-[length:var(--text-title)] font-bold leading-[1.25] tracking-[-0.015em]"
       />
       {note ? (
-        <p className="mt-2 text-[length:var(--text-caption)] leading-[1.4] text-text-muted">
+        <p className="mt-auto pt-2 text-[length:var(--text-caption)] leading-[1.4] text-text-muted">
           {note}
         </p>
       ) : null}

@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -9,13 +10,14 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.agent_voice.config import load_limits
 from app.api.routes import agent_voice
 from app.core.config import get_settings
 from app.db.models import Chunk, ConversationMessage, Document, Organization, User
 from app.db.session import get_session
+from app.db.voice_realtime import VoiceSessionReservation
 from app.main import create_app
 from app.providers.base import ProviderKind
 from app.providers.llm import LLMCompletionResult
@@ -177,7 +179,7 @@ def test_actual_voice_config_requires_auth_and_reports_unbound_provider(voice_cl
     )
     assert response.status_code == 200
     assert response.json()["available"] is False
-    assert response.json()["reason"] == "realtime_not_enabled"
+    assert response.json()["reason"] == "voice_not_enabled"
     assert voice_client.creations == []
 
 
@@ -369,3 +371,44 @@ def test_authenticated_ws_uses_owned_knowledge_and_reports_unfunded_vector_limit
     prompt = "\n".join(message.content for message in narrative[0].messages)
     assert "OWNED_REFERENCE" in prompt and "SHARED_REFERENCE" in prompt
     assert "PEER_PRIVATE_SECRET" not in prompt and "FOREIGN_TENANT_SECRET" not in prompt
+
+
+def test_cancelled_browser_reader_does_not_cancel_the_websocket_portal(voice_client, monkeypatch):
+    """A child CancelledError must not fail websocket_connect on the way out.
+
+    Raising CancelledError inside the browser reader marks that task cancelled.
+    Calling result() on it re-raises CancelledError into the ASGI handler. anyio
+    then cancels the TestClient portal, and the context exit raises
+    concurrent.futures.CancelledError. This forces that reader outcome.
+    """
+    fixture = voice_client
+    original = WebSocket.receive_text
+    reads = 0
+
+    async def receive_text(self):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return await original(self)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(WebSocket, "receive_text", receive_text)
+    with fixture.client.websocket_connect(
+        "/agent/voice/realtime", headers={"origin": fixture.db.settings.cors_origins[0]}
+    ) as websocket:
+        websocket.send_json(
+            {
+                "type": "session.start",
+                "access_token": fixture.db.token,
+                "conversation_id": str(fixture.db.conversation_id),
+            }
+        )
+        # The reader is already cancelled, so the server may close before ready.
+        # The failure under test is the portal error on the way out, not this read.
+        with contextlib.suppress(WebSocketDisconnect):
+            receive_type(websocket, "session.ready")
+    assert reads >= 2
+    with fixture.db.sessions() as session:
+        reservation = session.scalar(select(VoiceSessionReservation))
+    assert reservation is not None
+    assert reservation.status in {"closed", "uncertain"}

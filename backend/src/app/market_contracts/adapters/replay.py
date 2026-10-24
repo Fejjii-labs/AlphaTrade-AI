@@ -96,7 +96,9 @@ class ReplayPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
+        del use_public_kline_cache  # Replay reads the fixture, not the public cache.
         self._assert_identity(identity, instrument)
         bars = self._bars_for(timeframe)
         if not bars:

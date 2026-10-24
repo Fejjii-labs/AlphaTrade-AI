@@ -135,6 +135,11 @@ class AssemblingWatcherScanEvidence:
 
         return self._last_assembly
 
+    def market_source(self) -> object:
+        """Live read-only source. Paper SFP fills use it for a fresh quote."""
+
+        return self._assembler._source
+
     def candidate_episode(self):
         """Lock the durable Brain episode under the existing Candidate fence."""
         if self._last_assembly is None:

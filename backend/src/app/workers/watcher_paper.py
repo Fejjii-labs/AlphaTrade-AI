@@ -1255,13 +1255,18 @@ class WatcherPaperRuntime:
             return report
         assembled, policy = loaded
         from app.services.automated_paper_loop import AutomatedPaperLoop, _proof
-        from app.services.autonomous_trading import AutonomousMode, resolve_autonomous_mode
+        from app.services.autonomous_paper_switch import resolve_worker_autonomous_mode
+        from app.services.autonomous_trading import AutonomousMode
 
         candidate = discussion.candidate
         if report.kill_switch_active or self._settings.global_kill_switch_active:
             proof = _proof(candidate, "blocked", "kill_switch_active")
         else:
-            resolution = resolve_autonomous_mode(self._settings)
+            resolution = resolve_worker_autonomous_mode(
+                self._settings,
+                session,
+                target.organization_id,
+            )
             if resolution.refusal is not None:
                 proof = _proof(candidate, "blocked", resolution.refusal)
             elif resolution.mode is AutonomousMode.OFF:
@@ -1316,10 +1321,14 @@ class WatcherPaperRuntime:
                         kill_switch_active=report.kill_switch_active,
                     )
             elif resolution.mode is AutonomousMode.INTERNAL_PAPER:
+                read_source = getattr(evidence, "market_source", None)
+                market_source = read_source() if callable(read_source) else None
                 proof = AutomatedPaperLoop(
                     runtime,  # type: ignore[arg-type]
                     self._settings,
                     self._eval_clock,
+                    internal_paper_db_enabled=True,
+                    market_source=market_source,
                 ).continue_confirmed_setup(
                     session,
                     target=target,
@@ -1691,6 +1700,78 @@ class WatcherPaperRuntime:
         except Exception:
             logger.warning(
                 "watcher_runtime_status_unpublished",
+                worker_id=self._worker_id,
+            )
+        self._publish_effective_cycle()
+
+    def _publish_effective_cycle(self) -> None:
+        """Publish this cycle's mode, switch, and watchlist for the API to read."""
+
+        if self._session_factory is None or self._settings is None:
+            return
+        from app.persistence.worker_runtime_state import (
+            WorkerRuntimeWrite,
+            publish_worker_runtime_state,
+            sanitize_watchlist,
+        )
+        from app.services.autonomous_paper_switch import (
+            autonomy_mode_token,
+            read_internal_paper_switch,
+            resolve_worker_autonomous_mode,
+        )
+
+        db_session = self._session_factory()
+        try:
+            resolution = resolve_worker_autonomous_mode(
+                self._settings,
+                db_session,
+                self._organization_id,
+            )
+            loaded = (
+                None
+                if self._organization_id is None
+                else read_internal_paper_switch(db_session, self._organization_id)
+            )
+            db_enabled = loaded is True
+        except Exception:
+            logger.warning("watcher_effective_state_unresolved", worker_id=self._worker_id)
+            return
+        finally:
+            db_session.close()
+        try:
+            publish_worker_runtime_state(
+                self._session_factory,
+                WorkerRuntimeWrite(
+                    worker_id=self._worker_id,
+                    heartbeat_at=self._clock.now(),
+                    autonomous_internal_paper_env_ceiling=bool(
+                        self._settings.autonomous_internal_paper_enabled
+                    ),
+                    watcher_orchestration_enabled=bool(
+                        self._settings.watcher_orchestration_enabled
+                    ),
+                    watcher_paper_staging_activation=bool(
+                        self._settings.watcher_paper_staging_activation
+                    ),
+                    telegram_paper_activation_armed=bool(
+                        self._settings.telegram_paper_activation_armed
+                    ),
+                    telegram_interaction_enabled=bool(self._settings.telegram_interaction_enabled),
+                    telegram_alerts_enabled=bool(self._settings.telegram_alerts_enabled),
+                    automatic_telegram_delivery_enabled=bool(
+                        self._settings.automatic_telegram_delivery_enabled
+                    ),
+                    preserve_cycle=False,
+                    autonomy_mode=autonomy_mode_token(resolution),
+                    autonomous_internal_paper_db_enabled=db_enabled,
+                    last_cycle_at=self._clock.now(),
+                    watchlist=sanitize_watchlist(self._symbols),
+                    organization_id=self._organization_id,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "watcher_effective_state_unpublished",
                 worker_id=self._worker_id,
             )
 

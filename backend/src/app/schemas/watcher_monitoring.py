@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import StrictModel
+from app.schemas.health import WorkerEffectiveObservation
 from app.signal_fusion.enums import SetupAssessmentState
 
 
@@ -41,6 +42,7 @@ class WatcherConfigFlags(StrictModel):
     telegram_paper_activation_armed: bool = False
     telegram_inbound_mode: str = "off"
     telegram_network_permitted: bool = False
+    watcher_paper_staging_activation: bool = False
 
 
 class PaperMonitoringPosture(StrictModel):
@@ -195,5 +197,6 @@ class WatcherMonitoringSnapshot(StrictModel):
     worker: WatcherWorkerHealth
     recent_errors: list[WatcherRecentError] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    worker_effective: WorkerEffectiveObservation = Field(default_factory=WorkerEffectiveObservation)
     generated_at: datetime
     paper_only: Literal[True] = True

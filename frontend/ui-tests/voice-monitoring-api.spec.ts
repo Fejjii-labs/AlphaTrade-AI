@@ -139,8 +139,8 @@ test("off-panel real logout clears ambiguous assignment recovery before foreign-
   await expect(panel).toHaveCount(0);
   expect(await recoveryKeys(page)).toHaveLength(1);
   const menu = page.getByTestId("header-status-menu");
-  await menu.locator("summary").click();
-  await menu.getByRole("button", { name: "Log out", exact: true }).click();
+  await menu.getByRole("button", { name: "Status", exact: true }).click();
+  await page.getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page).toHaveURL(/\/login/);
   expect(await recoveryKeys(page)).toEqual([]);
   const headers = await login(page, api, auth.other);

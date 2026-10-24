@@ -9,6 +9,7 @@ import pytest
 from app.core.config import Environment, Settings
 from app.core.errors import ValidationAppError
 from app.services.cost_estimator import (
+    MODEL_COST_TABLE,
     configured_llm_models,
     estimate_model_cost,
     model_has_cost_entry,
@@ -60,6 +61,21 @@ def test_cached_input_tokens_billed_at_cached_rate() -> None:
     assert (full_price - half_cached).quantize(Decimal("0.00000001")) == expected_delta.quantize(
         Decimal("0.00000001")
     )
+
+
+def test_gpt_6_astra_matches_openai_pricing_checked_on_2026_10_23() -> None:
+    rates = MODEL_COST_TABLE["gpt-6-astra"]
+    assert rates.input_usd_per_million == Decimal("10.00")
+    assert rates.cached_input_usd_per_million == Decimal("1.00")
+    assert rates.output_usd_per_million == Decimal("50.00")
+    assert rates.checked_date == "2026-10-23"
+    cost = estimate_model_cost(
+        model="gpt-6-astra",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        cached_input_tokens=1_000_000,
+    )
+    assert cost == Decimal("51.00000000")
 
 
 def test_staging_startup_fails_when_configured_model_missing_cost_table() -> None:

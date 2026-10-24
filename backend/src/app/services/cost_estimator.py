@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from app.core.config import Settings
 
 _PRICING_SOURCE = "OpenAI pricing"
-_PRICING_CHECKED = "2026-10-19"
+_PRICING_CHECKED = "2026-10-23"
 
 
 @dataclass(frozen=True)
@@ -56,11 +56,12 @@ MODEL_COST_TABLE: dict[str, ModelCostRates] = {
         Decimal("0.20"),
         Decimal("12.00"),
     ),
-    # Voice / capture frontier model — estimate for guardrails only; not a router default.
+    # Voice / capture frontier model. OpenAI standard rates, not a router default.
+    # https://developers.openai.com/api/docs/pricing
     "gpt-6-astra": ModelCostRates(
-        Decimal("2.00"),
-        Decimal("0.10"),
         Decimal("10.00"),
+        Decimal("1.00"),
+        Decimal("50.00"),
     ),
 }
 

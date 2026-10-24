@@ -87,3 +87,4 @@ def test_readiness_ready_with_mock_providers(client: TestClient) -> None:
     assert body["ready"] is True
     assert body["providers_unavailable"] == 0
     assert body["providers_total"] > 0
+    assert body["degraded_providers"] == []

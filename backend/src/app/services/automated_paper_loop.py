@@ -135,10 +135,19 @@ class AutomatedPaperLoop:
         runtime: ProductionCanonicalRuntime,
         settings: Settings,
         clock: Clock,
+        *,
+        internal_paper_db_enabled: bool | None = None,
+        market_source: object | None = None,
     ) -> None:
         self._runtime = runtime
         self._settings = settings
         self._clock = clock
+        # None keeps env-only checks for direct callers. The worker passes a
+        # bool so approval re-reads the owner switch.
+        self._paper_switch_enforced = internal_paper_db_enabled is not None
+        # When set, an SFP fill replaces the scan quote with a fresh aggTrades
+        # read. Tests that already supply a fixture quote leave this empty.
+        self._market_source = market_source
 
     def continue_confirmed_setup(
         self,
@@ -156,6 +165,13 @@ class AutomatedPaperLoop:
 
         self._observed_kill_switch = kill_switch_active
         self._autonomous_settings = None
+        # A killed loop must not spend a fresh aggTrades read.
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
+        assembled, fresh_failed = self._fresh_sfp_fill_evidence(assembled, policy)
+        if fresh_failed:
+            return _proof(candidate, "skipped", "stale_evidence")
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -212,10 +228,9 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
-        if kill_switch_active or _global_kill_switch_active(self._settings):
-            return _proof(candidate, "blocked", "kill_switch_active")
-        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
-            return _proof(candidate, "blocked", "kill_switch_unverified")
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
@@ -241,6 +256,54 @@ class AutomatedPaperLoop:
             policy.authored_spec, (NestedContinuationSpec, SfpSpec)
         ):
             return _proof(candidate, "skipped", "direction_not_paper_executable")
+        return None
+
+    def _fresh_sfp_fill_evidence(
+        self,
+        assembled: AssembledCanonicalEvidence,
+        policy: ExecutableStrategyPolicy,
+    ) -> tuple[AssembledCanonicalEvidence, bool]:
+        """SFP fills and their action receipts ignore the 10s quote cache.
+
+        Returns the original assembly when this is not an SFP fill, no market
+        source was supplied, or the caller has not built a policy yet. The
+        second value is True only when the fresh aggTrades read fails closed.
+        A missing policy must not look like that failure. The caller runs this
+        only after the kill switch has already refused.
+        """
+
+        from app.market_contracts.errors import MarketContractError
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        authored = getattr(policy, "authored_spec", None)
+        if self._market_source is None or not isinstance(authored, SfpSpec):
+            return assembled, False
+        try:
+            from app.evidence_pipeline.current_price import bind_paper_sfp_fill_quote
+
+            return (
+                bind_paper_sfp_fill_quote(
+                    assembled,
+                    self._market_source,  # type: ignore[arg-type]
+                    evaluated_at=self._clock.now(),
+                ),
+                False,
+            )
+        except MarketContractError:
+            return assembled, True
+
+    def _kill_switch_refusal(
+        self,
+        candidate: Candidate,
+        *,
+        kill_switch_active: bool,
+    ) -> AutomatedPaperLoopProof | None:
+        """Refuse before any fill read when the switch is on or unreadable."""
+
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
         return None
 
     def _bound(
@@ -704,6 +767,14 @@ class AutomatedPaperLoop:
         refusal = continuation_refusal(self._settings, expected=AutonomousMode.INTERNAL_PAPER)
         if refusal is not None:
             return refusal
+        if self._paper_switch_enforced:
+            from app.services.autonomous_paper_switch import read_internal_paper_switch
+
+            enabled = read_internal_paper_switch(session, organization_id)
+            if enabled is None:
+                return "autonomous_paper_toggle_unverified"
+            if not enabled:
+                return "autonomous_paper_disarmed"
         observed = getattr(self, "_observed_kill_switch", None)
         if observed is not None and not isinstance(observed, bool):
             return "kill_switch_unverified"
@@ -799,6 +870,22 @@ class AutomatedPaperLoop:
             risk_records=risk_records,
             fixed_risk_percent=fixed_risk_percent,
             internal_paper_sfp=True,
+            side_aware_fill=True,
+            spread_haircut=self._fill_spread_haircut(assembled),
+            min_stop_atr_floor=self._settings.sfp_min_stop_atr_multiple,
+        )
+
+    def _fill_spread_haircut(self, assembled: AssembledCanonicalEvidence) -> Decimal:
+        """Per-asset mid haircut. A supplied bid/ask still bypasses it."""
+
+        from app.services.paper_fill import paper_fill_spread_haircut_for_symbol
+
+        quote = getattr(assembled, "current_price", None)
+        symbol = getattr(quote, "provider_symbol", None) if quote is not None else None
+        return paper_fill_spread_haircut_for_symbol(
+            symbol if isinstance(symbol, str) else None,
+            major_haircut=self._settings.paper_fill_major_spread_haircut,
+            default_haircut=self._settings.paper_fill_spread_haircut,
         )
 
     def _eligibility_service(self) -> ActionEligibilityService:
@@ -1347,6 +1434,8 @@ def _eligibility_command(
 def _sfp_structural_plan(
     assembled: AssembledCanonicalEvidence,
     spec: object,
+    *,
+    atr_multiple_floor: Decimal = Decimal("0"),
 ) -> tuple[Decimal, Decimal, Decimal, UUID] | str:
     """Read the confirmed SFP plan. Sizing and tick rounding stay with the caller."""
 
@@ -1373,6 +1462,7 @@ def _sfp_structural_plan(
         spec,
         evaluated_at=assembled.evaluated_at,
         tick_size=assembled.bundle.tick_size,
+        atr_multiple_floor=atr_multiple_floor,
     )
     detection = select_detection(scan, assembled.bundle.bars_15m)
     if detection is None or detection.state is not BrainSetupState.CONFIRMED:
@@ -1393,8 +1483,8 @@ def _sfp_quote_refusal(
     """Refuse a live quote that is already through the plan, or a rebased sub-1R.
 
     The structural entry stays the confirmation close. The paper fill is this
-    quote, with the same stop and target. A quote on the stop or the target has
-    no remaining distance. Exactly 1R is still allowed.
+    side-aware price, with the same stop and target. A fill on the stop or the
+    target has no remaining distance. Exactly 1R is still allowed.
     """
 
     beyond = (quote <= stop or quote >= target) if is_long else (quote >= stop or quote <= target)
@@ -1427,6 +1517,9 @@ def _plan_terms(
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
     internal_paper_sfp: bool = False,
+    side_aware_fill: bool = False,
+    spread_haircut: Decimal = Decimal("0"),
+    min_stop_atr_floor: Decimal = Decimal("0"),
 ) -> TradePlanRevisionCreate | str:
     from app.schemas.nested_continuation import NestedContinuationSpec
     from app.strategy_brain.detector import detect_nested
@@ -1441,6 +1534,17 @@ def _plan_terms(
     quote = assembled.current_price
     if quote is None:
         return "evidence_unavailable"
+    is_long = candidate.direction is TradeDirection.LONG
+    # Demo keeps the raw quote and replaces the entry from its own book.
+    # Internal paper fills a long at the ask and a short at the bid.
+    fill_quote = quote.price
+    if side_aware_fill:
+        from app.services.paper_fill import paper_fill_price
+
+        filled = paper_fill_price(quote, is_long=is_long, spread_haircut=spread_haircut)
+        if filled is None:
+            return "evidence_unavailable"
+        fill_quote = filled
     sfp = isinstance(spec, SfpSpec)
     nested = isinstance(spec, NestedContinuationSpec)
     structural_setup_id: UUID | None = None
@@ -1449,7 +1553,7 @@ def _plan_terms(
     entry: Decimal
     stop: Decimal | None
     if sfp:
-        resolved = _sfp_structural_plan(assembled, spec)
+        resolved = _sfp_structural_plan(assembled, spec, atr_multiple_floor=min_stop_atr_floor)
         if isinstance(resolved, str):
             return resolved
         entry, stop, sfp_target, structural_setup_id = resolved
@@ -1457,14 +1561,14 @@ def _plan_terms(
         events = detect_nested(assembled.bundle.bars_15m, spec, evaluated_at=assembled.evaluated_at)
         if not events or events[-1].state.value != "CONFIRMED":
             return "setup_not_confirmed"
-        entry = quote.price
+        entry = fill_quote
         stop = events[-1].stop
         nested_target = events[-1].targets[0] if events[-1].targets else None
         structural_setup_id = events[-1].setup_id
     else:
         from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
 
-        entry = quote.price
+        entry = fill_quote
         if not isinstance(policy.evaluation_params, FirstSliceEvaluationParams):
             return "execution_policy_unsupported"
         stop = first_slice_short_invalidation_price(
@@ -1475,7 +1579,6 @@ def _plan_terms(
         )
     if stop is None:
         return "invalidation_unavailable"
-    is_long = candidate.direction is TradeDirection.LONG
     stop = (
         _floor_to_lot(stop, assembled.bundle.tick_size)
         if is_long
@@ -1485,12 +1588,12 @@ def _plan_terms(
         if sfp_target is None:
             return "sfp_trade_plan_invalid"
         refusal = _sfp_quote_refusal(
-            quote=quote.price, stop=stop, target=sfp_target, is_long=is_long
+            quote=fill_quote, stop=stop, target=sfp_target, is_long=is_long
         )
         if refusal is not None:
             return refusal
-        # Fill at the live quote. Stop and target stay on the structural plan.
-        entry = quote.price
+        # Fill at the side-aware live quote. Stop and target stay structural.
+        entry = fill_quote
     if (is_long and stop >= entry) or (not is_long and stop <= entry):
         return "invalidated_by_price"
     distance = abs(stop - entry)

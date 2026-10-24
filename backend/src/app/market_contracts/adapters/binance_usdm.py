@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,8 +21,12 @@ from app.market_contracts.adapters.aggtrades import (
     iter_contiguous_agg_trade_rows,
 )
 from app.market_contracts.adapters.book_sequence import BookSequenceGuard
-from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
+from app.market_contracts.adapters.http import ReadOnlyHttpGetClient, UpstreamPause
 from app.market_contracts.adapters.observation_cache import CausalObservationCache
+from app.market_contracts.adapters.public_read_cache import (
+    PUBLIC_READ_TTL_SECONDS,
+    ShortTtlSingleflight,
+)
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget, record_cache_hit
 from app.market_contracts.catalog import PerpetualInstrumentCatalog, default_perpetual_catalog
 from app.market_contracts.coverage import build_complete_trade_window_coverage
@@ -37,6 +42,7 @@ from app.market_contracts.errors import (
     FallbackForbiddenError,
     FormingCandleError,
     GapDetectedError,
+    RateLimitedError,
     RegionalProviderFailureError,
     SpotFallbackRejectedError,
     UnsupportedTradeContractError,
@@ -120,7 +126,7 @@ class BinanceUsdmPerpetualSource:
         transport: httpx.BaseTransport | None = None,
         client: ReadOnlyHttpGetClient | None = None,
         catalog: PerpetualInstrumentCatalog | None = None,
-        max_retries: int = 3,
+        max_retries: int = 1,
         weight_per_minute: int = 1800,
         max_backoff_seconds: float = 30.0,
         trade_cache_entries: int = 8,
@@ -132,6 +138,9 @@ class BinanceUsdmPerpetualSource:
         progress_interval_seconds: float = 5.0,
         observation_cache: CausalObservationCache | None = None,
         observation_clock: Callable[[], datetime] | None = None,
+        pause: UpstreamPause | None = None,
+        kline_cache: ShortTtlSingleflight | None = None,
+        quote_cache: ShortTtlSingleflight | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = client or ReadOnlyHttpGetClient(
@@ -143,6 +152,7 @@ class BinanceUsdmPerpetualSource:
             max_backoff_seconds=max_backoff_seconds,
             budget=budget,
             progress_interval_seconds=progress_interval_seconds,
+            pause=pause,
         )
         self._catalog = catalog if catalog is not None else default_perpetual_catalog()
         # An empty cache is still a cache. ``or`` would replace it because len is 0.
@@ -164,6 +174,16 @@ class BinanceUsdmPerpetualSource:
         self._last_success_at: datetime | None = None
         self._last_error: str | None = None
         self._regional_failure = False
+        self._kline_cache = kline_cache or ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=64,
+        )
+        self.public_quote_cache = quote_cache or ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=32,
+        )
+        self._cached_status: ProviderStatus | None = None
+        self._cached_status_at: float | None = None
         self._observation_cache = observation_cache or CausalObservationCache()
         self._observation_clock = observation_clock
         self._book_sequences: dict[str, BookSequenceGuard] = {}
@@ -338,6 +358,7 @@ class BinanceUsdmPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._assert_request(identity, instrument, timeframe)
         interval = _BINANCE_INTERVAL.get(timeframe)
@@ -346,11 +367,67 @@ class BinanceUsdmPerpetualSource:
                 f"Timeframe {timeframe.value} is not contracted for USD-M evidence."
             )
         limit = min(max(min_final_bars + 2, min_final_bars), 1500)
+        end_ms = int(evaluated_at.timestamp() * 1000)
+        ttl_ms = max(int(self._kline_cache.ttl_seconds * 1000), 1)
+        key = (
+            "klines",
+            instrument.provider_symbol,
+            interval,
+            str(limit),
+            str(end_ms // ttl_ms),
+        )
+
+        def load_payload() -> list[Any]:
+            return self._confirmed_klines(
+                instrument=instrument,
+                timeframe=timeframe,
+                evaluated_at=evaluated_at,
+                interval=interval,
+                limit=limit,
+                end_ms=end_ms,
+                min_final_bars=min_final_bars,
+            )
+
+        # Probes skip the cache so a changed symbol is not served from a prior read.
+        payload = (
+            self._kline_cache.get_or_load(key, load_payload)
+            if use_public_kline_cache
+            else load_payload()
+        )
+        final_bars = self._settled_bars(
+            payload, instrument=instrument, timeframe=timeframe, evaluated_at=evaluated_at
+        )
+        if len(final_bars) < min_final_bars:
+            raise FormingCandleError(
+                f"Need {min_final_bars} final {timeframe.value} candles; "
+                f"received {len(final_bars)} confirmed closed candidates."
+            )
+        return require_closed_series(
+            final_bars,
+            identity=identity,
+            timeframe=timeframe,
+            evaluated_at=evaluated_at,
+            min_bars=min_final_bars,
+        )
+
+    def _confirmed_klines(
+        self,
+        *,
+        instrument: InstrumentIdentity,
+        timeframe: Timeframe,
+        evaluated_at: datetime,
+        interval: str,
+        limit: int,
+        end_ms: int,
+        min_final_bars: int,
+    ) -> list[Any]:
+        """Read klines twice. A changed candle is not cached and is not final."""
+
         params: dict[str, str | int] = {
             "symbol": instrument.provider_symbol,
             "interval": interval,
             "limit": limit,
-            "endTime": int(evaluated_at.timestamp() * 1000),
+            "endTime": end_ms,
         }
         payload = self._get("/fapi/v1/klines", params)
         final_bars = self._settled_bars(
@@ -361,8 +438,9 @@ class BinanceUsdmPerpetualSource:
                 f"Need {min_final_bars} final {timeframe.value} candles; "
                 f"received {len(final_bars)} confirmed closed candidates."
             )
+        confirmed_payload = self._get("/fapi/v1/klines", params)
         confirmed = self._settled_bars(
-            self._get("/fapi/v1/klines", params),
+            confirmed_payload,
             instrument=instrument,
             timeframe=timeframe,
             evaluated_at=evaluated_at,
@@ -371,13 +449,9 @@ class BinanceUsdmPerpetualSource:
             raise FormingCandleError(
                 "Closed Binance REST candles changed between confirmation reads."
             )
-        return require_closed_series(
-            final_bars,
-            identity=identity,
-            timeframe=timeframe,
-            evaluated_at=evaluated_at,
-            min_bars=min_final_bars,
-        )
+        if not isinstance(confirmed_payload, list):
+            raise WrongMarketError("USD-M kline payload is not a list.")
+        return confirmed_payload
 
     def _settled_bars(
         self,
@@ -528,59 +602,117 @@ class BinanceUsdmPerpetualSource:
             receive_at=receive_at,
         )
 
+    def upstream_ban_remaining_seconds(self) -> float | None:
+        return self._http.ban_remaining_seconds()
+
     def status(self) -> ProviderStatus:
+        if self._http.ban_remaining_seconds() is not None:
+            return self._remember_status(self._banned_status(self._last_error))
+        paused = self._http.pause_remaining()
+        if paused is not None and paused[0] == "rate_limit":
+            return self._remember_status(self._rate_limited_status(self._last_error))
+        cached = self._recent_status()
+        if cached is not None:
+            return cached
         try:
             self._get("/fapi/v1/ping", None)
             self._regional_failure = False
             self._last_error = None
             self._last_success_at = datetime.now(UTC)
-            return ProviderStatus(
-                name=self.name,
-                kind=self.kind,
-                health=ProviderHealth.HEALTHY,
-                using_fallback=False,
-                is_mock=False,
-                detail="Binance USD-M futures public REST (read-only, no spot fallback).",
-                last_success_at=self._last_success_at,
-                error_message=None,
-            )
+            return self._remember_status(self._healthy_status())
         except RegionalProviderFailureError as exc:
             self._regional_failure = True
             self._last_error = str(exc)[:200]
-            return ProviderStatus(
-                name=self.name,
-                kind=self.kind,
-                health=ProviderHealth.UNAVAILABLE,
-                using_fallback=False,
-                is_mock=False,
-                detail="Preferred USD-M perpetual source unreachable; no spot fallback.",
-                last_success_at=self._last_success_at,
-                error_message=self._last_error,
-            )
+            return self._remember_status(self._unavailable_status(self._last_error))
         except UpstreamBanError as exc:
             self._last_error = str(exc)[:200]
-            return ProviderStatus(
-                name=self.name,
-                kind=self.kind,
-                health=ProviderHealth.DEGRADED,
-                using_fallback=False,
-                is_mock=False,
-                detail="Binance USD-M temporarily banned this client; no spot fallback.",
-                last_success_at=self._last_success_at,
-                error_message=self._last_error,
-            )
+            return self._remember_status(self._banned_status(self._last_error))
+        except RateLimitedError as exc:
+            self._last_error = str(exc)[:200]
+            return self._remember_status(self._rate_limited_status(self._last_error))
         except (SpotFallbackRejectedError, WrongMarketError, FallbackForbiddenError) as exc:
             self._last_error = str(exc)[:200]
-            return ProviderStatus(
-                name=self.name,
-                kind=self.kind,
-                health=ProviderHealth.UNAVAILABLE,
-                using_fallback=False,
-                is_mock=False,
-                detail="Perpetual evidence source misconfigured; refusing incompatible market.",
-                last_success_at=self._last_success_at,
-                error_message=self._last_error,
-            )
+            return self._remember_status(self._misconfigured_status(self._last_error))
+
+    def _recent_status(self) -> ProviderStatus | None:
+        cached = self._cached_status
+        cached_at = self._cached_status_at
+        if cached is None or cached_at is None:
+            return None
+        if time.monotonic() - cached_at > PUBLIC_READ_TTL_SECONDS:
+            return None
+        pause_open = (
+            self._http.ban_remaining_seconds() is not None
+            or self._http.pause_remaining() is not None
+        )
+        if cached.health is ProviderHealth.DEGRADED and not pause_open:
+            return None
+        return cached
+
+    def _remember_status(self, status: ProviderStatus) -> ProviderStatus:
+        self._cached_status = status
+        self._cached_status_at = time.monotonic()
+        return status
+
+    def _healthy_status(self) -> ProviderStatus:
+        return ProviderStatus(
+            name=self.name,
+            kind=self.kind,
+            health=ProviderHealth.HEALTHY,
+            using_fallback=False,
+            is_mock=False,
+            detail="Binance USD-M futures public REST (read-only, no spot fallback).",
+            last_success_at=self._last_success_at,
+            error_message=None,
+        )
+
+    def _unavailable_status(self, error: str | None) -> ProviderStatus:
+        return ProviderStatus(
+            name=self.name,
+            kind=self.kind,
+            health=ProviderHealth.UNAVAILABLE,
+            using_fallback=False,
+            is_mock=False,
+            detail="Preferred USD-M perpetual source unreachable; no spot fallback.",
+            last_success_at=self._last_success_at,
+            error_message=error,
+        )
+
+    def _banned_status(self, error: str | None) -> ProviderStatus:
+        return ProviderStatus(
+            name=self.name,
+            kind=self.kind,
+            health=ProviderHealth.DEGRADED,
+            using_fallback=False,
+            is_mock=False,
+            detail="Binance USD-M temporarily banned this client; no spot fallback.",
+            last_success_at=self._last_success_at,
+            error_message=error,
+        )
+
+    def _rate_limited_status(self, error: str | None) -> ProviderStatus:
+        return ProviderStatus(
+            name=self.name,
+            kind=self.kind,
+            health=ProviderHealth.DEGRADED,
+            using_fallback=False,
+            is_mock=False,
+            detail="Binance USD-M rate-limited this client; no spot fallback.",
+            last_success_at=self._last_success_at,
+            error_message=error,
+        )
+
+    def _misconfigured_status(self, error: str | None) -> ProviderStatus:
+        return ProviderStatus(
+            name=self.name,
+            kind=self.kind,
+            health=ProviderHealth.UNAVAILABLE,
+            using_fallback=False,
+            is_mock=False,
+            detail="Perpetual evidence source misconfigured; refusing incompatible market.",
+            last_success_at=self._last_success_at,
+            error_message=error,
+        )
 
     def release_symbol_history(self, symbol: str) -> None:
         """Release cached trade windows for one symbol after its evaluation."""
@@ -786,14 +918,25 @@ class BinanceUsdmPerpetualSource:
     def _get(self, path: str, params: Mapping[str, str | int] | None) -> Any:
         try:
             payload = self._http.get_json(path, params)
-        except RegionalProviderFailureError:
+        except RegionalProviderFailureError as exc:
             self._regional_failure = True
+            self._last_error = str(exc)[:200]
+            self._remember_status(self._unavailable_status(self._last_error))
+            raise
+        except UpstreamBanError as exc:
+            self._last_error = str(exc)[:200]
+            self._remember_status(self._banned_status(self._last_error))
+            raise
+        except RateLimitedError as exc:
+            self._last_error = str(exc)[:200]
+            self._remember_status(self._rate_limited_status(self._last_error))
             raise
         except SpotFallbackRejectedError:
             raise
         self._last_success_at = datetime.now(UTC)
         self._last_error = None
         self._regional_failure = False
+        self._remember_status(self._healthy_status())
         return payload
 
 

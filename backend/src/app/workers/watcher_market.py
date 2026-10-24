@@ -416,6 +416,7 @@ class SymbolMarketFactory:
                     timeframe=Timeframe.M15,
                     min_final_bars=2,
                     evaluated_at=now,
+                    use_public_kline_cache=False,
                 )
             except EvidenceSourceSwitchRequiredError:
                 if attempt:

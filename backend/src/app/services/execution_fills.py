@@ -107,6 +107,10 @@ def convert_reservation_for_fill(
 
     Unused remainder stays charged. Daily-loss allocation stays reserved while
     the position remains open. Trade slots convert once per reservation.
+    A reservation already released by the paper day roll keeps that release:
+    the fill still counts in ``actual_trade_count``, and ``reserved_trade_slots``
+    is not decremented again. The caller holds the reservation row and the
+    accounting row lock; this function does not take another lock.
     Linear CONTRACTS quote exposure is quantity * contract_multiplier * price.
     Linear BASE quote exposure is quantity * price. The two paths share
     :func:`app.services.execution_exposure.linear_quote_exposure`.
@@ -119,8 +123,10 @@ def convert_reservation_for_fill(
     )
     convert = min(fill_notional, reservation.remaining_reserved_notional)
     reservation.remaining_reserved_notional -= convert
-    reservation.release_reason = RiskReservationReleaseReason.FILL_CONVERSION
-    reservation.release_state = RiskReservationReleaseState.PARTIALLY_RELEASED
+    already_released = reservation.release_state == RiskReservationReleaseState.RELEASED
+    if not already_released:
+        reservation.release_reason = RiskReservationReleaseReason.FILL_CONVERSION
+        reservation.release_state = RiskReservationReleaseState.PARTIALLY_RELEASED
     reservation.updated_at = now
 
     accounting.reserved_notional -= convert
@@ -138,9 +144,13 @@ def convert_reservation_for_fill(
         reservation.converted_trade_slots
     )
     if unconverted_slots > 0:
-        accounting.reserved_trade_slots -= unconverted_slots
-        if accounting.reserved_trade_slots < 0:
-            accounting.reserved_trade_slots = 0
+        # The roll already returned these slots. Decrementing again would
+        # free a slot another reservation still holds and admit one trade
+        # past max_trade_slots. converted_trade_slots makes a replay a no-op.
+        if not already_released:
+            accounting.reserved_trade_slots -= unconverted_slots
+            if accounting.reserved_trade_slots < 0:
+                accounting.reserved_trade_slots = 0
         accounting.actual_trade_count += unconverted_slots
         reservation.converted_trade_slots = int(reservation.daily_trade_allocation)
 

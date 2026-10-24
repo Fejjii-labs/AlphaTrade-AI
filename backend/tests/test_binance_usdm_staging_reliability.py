@@ -82,11 +82,13 @@ def test_repeated_418_with_a_long_ban_does_not_send_another_request() -> None:
     with pytest.raises(UpstreamBanError) as second:
         client.get_json("/fapi/v1/time")
     client.close()
-    assert calls["n"] == 2
+    assert calls["n"] == 1
     assert sleeps == []
     assert first.value.retry_after_seconds == 180.0
-    assert second.value.retry_after_seconds == 180.0
+    assert second.value.retry_after_seconds is not None
+    assert 0 < second.value.retry_after_seconds <= 180.0
     assert not isinstance(first.value, RegionalProviderFailureError)
+    assert not isinstance(second.value, RegionalProviderFailureError)
 
 
 def _assert_regional_status_is_not_retried(status: int) -> None:

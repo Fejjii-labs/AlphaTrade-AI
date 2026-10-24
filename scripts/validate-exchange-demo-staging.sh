@@ -78,6 +78,9 @@ python3 - <<'PY' "$ready_json"
 import json, sys
 p = json.loads(sys.argv[1])
 assert p.get("ready") is True, p
+names = p.get("degraded_providers") or []
+if names:
+    print("  degraded_providers=" + ",".join(str(name) for name in names))
 print("  OK: ready=true")
 PY
 assert_no_secrets "$ready_json"

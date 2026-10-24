@@ -17,12 +17,17 @@ from app.core.dependencies import ProviderRegistryDep, SettingsDep
 from app.core.deploy_info import resolve_git_sha
 from app.market_activation.profile import perpetual_evidence_health
 from app.persistence.runtime_health import project_worker_component
-from app.providers.base import ProviderHealth
+from app.persistence.worker_runtime_state import (
+    load_worker_runtime_row,
+    project_worker_effective,
+)
+from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.schemas.health import (
     ArmingRefusalObservation,
     HealthResponse,
     PaperWorkerHeartbeatResponse,
     ReadinessResponse,
+    WorkerEffectiveObservation,
     WorkerRuntimeObservation,
 )
 from app.telegram_activation.contracts import PreflightReport
@@ -54,6 +59,38 @@ def _load_runtime_rows() -> dict[str, object] | None:
             return dict(load_runtime_rows(session))
     except Exception:
         return None
+
+
+def _worker_effective(settings: Settings, *, now: datetime) -> WorkerEffectiveObservation:
+    """Worker flags, or unavailable when the row cannot be read."""
+
+    limit = settings.watcher_heartbeat_stale_after_seconds
+    return project_worker_effective(load_worker_runtime_row(), now=now, stale_after_seconds=limit)
+
+
+def _apply_worker_flags(
+    payload: dict[str, object],
+    effective: WorkerEffectiveObservation,
+) -> None:
+    """Replace watcher and Telegram flags when the worker has published them.
+
+    Execution mode and real trading stay on the API process. A stale row is
+    still the worker's last report; ``worker_flags_stale`` says so.
+    """
+
+    payload["worker_effective"] = effective
+    if effective.source != "worker":
+        payload["worker_flags_source"] = "api_process"
+        payload["worker_flags_stale"] = False
+        return
+    payload["worker_flags_source"] = "worker"
+    payload["worker_flags_stale"] = effective.stale
+    payload["watcher_orchestration_enabled"] = effective.watcher_orchestration_enabled
+    payload["watcher_paper_staging_activation"] = effective.watcher_paper_staging_activation
+    payload["telegram_alerts_enabled"] = effective.telegram_alerts_enabled
+    payload["telegram_interaction_enabled"] = effective.telegram_interaction_enabled
+    payload["automatic_telegram_delivery_enabled"] = effective.automatic_telegram_delivery_enabled
+    payload["telegram_paper_activation_armed"] = effective.telegram_paper_activation_armed
 
 
 def _read_worker_runtime(
@@ -140,7 +177,7 @@ async def health(settings: SettingsDep) -> HealthResponse:
     observed_at = datetime.now(UTC)
     rows = _load_runtime_rows()
     arming = _arming_refusal(rows)
-    return HealthResponse(
+    payload: dict[str, object] = dict(  # noqa: C408 — mutated before HealthResponse
         app=settings.app_name,
         version=__version__,
         environment=settings.environment.value,
@@ -183,6 +220,8 @@ async def health(settings: SettingsDep) -> HealthResponse:
         arming_refusal=arming,
         timestamp=observed_at,
     )
+    _apply_worker_flags(payload, _worker_effective(settings, now=observed_at))
+    return HealthResponse(**payload)
 
 
 @router.get(
@@ -313,8 +352,47 @@ async def paper_worker_heartbeat(
         exit_monitor=exit_observation,
         exit_monitor_alert_raised=exit_alert,
         kill_switch=read_paper_worker_kill_switch(settings),
+        worker_effective=_worker_effective(settings, now=observed_at),
         timestamp=observed_at,
     )
+
+
+def readiness_projection(
+    statuses: list[ProviderStatus],
+    *,
+    fail_closed: bool,
+) -> tuple[bool, str, int, tuple[str, ...]]:
+    """Return ``(ready, status, unavailable, degraded_providers)``.
+
+    ``ready`` stays true while every provider is reachable. Nothing in the
+    staging checks reads ``status``. ``degraded_providers`` names each
+    non-mock market-data provider that is degraded without a fallback, so a
+    banned Binance primary is visible without failing the probe or restarting
+    Render.
+    """
+
+    unavailable = sum(1 for item in statuses if item.health is ProviderHealth.UNAVAILABLE)
+    if fail_closed:
+        # Staging/production: authoritative LLM/embeddings/vector must not be
+        # silently degraded onto mocks or in-memory substitutes.
+        critical = {"llm", "embeddings", "vector"}
+        unavailable += sum(
+            1
+            for item in statuses
+            if item.kind.value in critical
+            and (item.is_mock or (item.health is ProviderHealth.DEGRADED and item.using_fallback))
+        )
+    degraded = tuple(
+        item.name
+        for item in statuses
+        if item.kind is ProviderKind.MARKET_DATA
+        and item.health is ProviderHealth.DEGRADED
+        and not item.is_mock
+        and not item.using_fallback
+    )
+    ready = unavailable == 0
+    label = "ready" if ready and not degraded else "degraded"
+    return ready, label, unavailable, degraded
 
 
 @router.get("/health/ready", response_model=ReadinessResponse, summary="Readiness probe")
@@ -322,22 +400,14 @@ async def readiness(registry: ProviderRegistryDep, settings: SettingsDep) -> Rea
     from app.core.provider_policy import provider_fail_closed
 
     statuses = registry.statuses()
-    unavailable = sum(1 for s in statuses if s.health is ProviderHealth.UNAVAILABLE)
-    if provider_fail_closed(settings):
-        # Staging/production: authoritative LLM/embeddings/vector must not be
-        # silently degraded onto mocks or in-memory substitutes.
-        critical = {"llm", "embeddings", "vector"}
-        unavailable += sum(
-            1
-            for s in statuses
-            if s.kind.value in critical
-            and (s.is_mock or (s.health is ProviderHealth.DEGRADED and s.using_fallback))
-        )
-    ready = unavailable == 0
+    ready, label, unavailable, degraded = readiness_projection(
+        statuses, fail_closed=provider_fail_closed(settings)
+    )
     return ReadinessResponse(
-        status="ready" if ready else "degraded",
+        status=label,
         ready=ready,
         providers_total=len(statuses),
         providers_unavailable=unavailable,
+        degraded_providers=list(degraded),
         timestamp=datetime.now(UTC),
     )

@@ -93,6 +93,9 @@ export interface HealthResponse {
   first_perpetual_symbol?: "BTCUSDT";
   git_sha?: string | null;
   worker_runtime?: WorkerRuntimeObservation;
+  worker_effective?: WorkerEffectiveObservation;
+  worker_flags_source?: "worker" | "api_process";
+  worker_flags_stale?: boolean;
   timestamp: string;
 }
 
@@ -130,6 +133,28 @@ export interface WorkerRuntimeObservation {
   available?: boolean;
   watcher?: WorkerComponentObservation;
   telegram?: WorkerComponentObservation;
+}
+
+export interface WorkerEffectiveObservation {
+  source: "worker" | "unavailable";
+  health_state: "RUNNING" | "STALE" | "UNAVAILABLE";
+  stale: boolean;
+  heartbeat_at?: string | null;
+  heartbeat_age_seconds?: number | null;
+  heartbeat_stale_after_seconds?: number;
+  last_cycle_at?: string | null;
+  autonomy_mode: string;
+  autonomous_internal_paper_env_ceiling: boolean;
+  autonomous_internal_paper_db_enabled: boolean;
+  autonomous_internal_paper_effective: boolean;
+  watcher_orchestration_enabled: boolean;
+  watcher_paper_staging_activation: boolean;
+  telegram_paper_activation_armed: boolean;
+  telegram_interaction_enabled: boolean;
+  telegram_alerts_enabled: boolean;
+  automatic_telegram_delivery_enabled: boolean;
+  watchlist: string[];
+  real_trading_enabled: false;
 }
 
 export interface ReadinessResponse {
@@ -1155,6 +1180,13 @@ export interface AutonomousTradingSettingsView {
   symbol_options: string[];
   max_daily_loss_percent_ceiling: string;
   max_risk_per_trade_percent_ceiling: string;
+  internal_paper_enabled?: boolean;
+  internal_paper_env_ceiling?: boolean | null;
+  internal_paper_effective?: boolean;
+  worker_runtime_health?: "RUNNING" | "STALE" | "UNAVAILABLE";
+  worker_heartbeat_age_seconds?: number | null;
+  worker_flags_stale?: boolean;
+  autonomy_mode?: string;
 }
 
 export interface KillSwitchStatus {
@@ -3548,6 +3580,7 @@ export interface WatcherConfigFlags {
   telegram_paper_activation_armed?: boolean;
   telegram_inbound_mode?: string;
   telegram_network_permitted?: boolean;
+  watcher_paper_staging_activation?: boolean;
 }
 
 export interface PaperMonitoringPosture {
@@ -3679,6 +3712,7 @@ export interface WatcherMonitoringSnapshot {
   worker: WatcherWorkerHealth;
   recent_errors: WatcherRecentError[];
   limitations: string[];
+  worker_effective?: WorkerEffectiveObservation;
   generated_at: string;
   paper_only: true;
 }
@@ -4095,6 +4129,7 @@ export interface ExchangeDiagnosticsSummary {
   last_cancel_status?: string | null;
   readiness: "ready" | "degraded" | "blocked";
   warnings: string[];
+  worker_effective?: WorkerEffectiveObservation;
   generated_at: string;
 }
 

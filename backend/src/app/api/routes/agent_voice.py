@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 
+import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -13,6 +14,8 @@ from pydantic import ValidationError
 from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import VoiceUnavailableError, load_limits
 from app.agent_voice.contracts import VoiceConfig, VoiceStart
+from app.agent_voice.live_config import load_live_limits
+from app.agent_voice.live_socket import live_voice
 from app.agent_voice.service import RealtimeSession
 from app.core.config import get_settings
 from app.core.dependencies import SettingsDep
@@ -25,15 +28,30 @@ router = APIRouter(prefix="/agent/voice", tags=["agent-voice"])
 
 @router.get("/config", response_model=VoiceConfig)
 def voice_config(tenant: TraderDep, settings: SettingsDep) -> VoiceConfig:
+    provider = "gpt_live" if settings.agent_live_enabled else "realtime"
+    if not settings.agent_live_enabled and not settings.agent_realtime_enabled:
+        return VoiceConfig(available=False, reason="voice_not_enabled", provider=provider)
     try:
-        limits = load_limits(settings)
+        limits = (
+            load_live_limits(settings) if settings.agent_live_enabled else load_limits(settings)
+        )
         if limits.organization_id != str(tenant.organization_id):
             raise VoiceUnavailableError("voice_budget_tenant_mismatch")
     except VoiceUnavailableError as exc:
-        return VoiceConfig(available=False, reason=str(exc))
+        return VoiceConfig(
+            available=False,
+            reason=str(exc),
+            provider=provider,
+        )
     return VoiceConfig(
-        available=True, maximum_seconds=limits.maximum_seconds, maximum_turns=limits.maximum_turns
+        available=True,
+        maximum_seconds=limits.maximum_seconds,
+        maximum_turns=limits.maximum_turns,
+        provider="gpt_live" if settings.agent_live_enabled else "realtime",
     )
+
+
+router.add_api_websocket_route("/live", live_voice)
 
 
 @router.websocket("/realtime")
@@ -113,7 +131,19 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 ]
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
-                    task.result()
+                    # result() re-raises a child CancelledError. That BaseException
+                    # is not an anyio cancellation, so it escapes this handler and
+                    # cancels the ASGI portal future.
+                    if task.cancelled():
+                        continue
+                    try:
+                        error = task.exception()
+                    except asyncio.CancelledError:
+                        continue
+                    if isinstance(error, asyncio.CancelledError):
+                        continue
+                    if error is not None:
+                        raise error
     except WebSocketDisconnect:
         pass
     except (AppError, VoiceUnavailableError, ValidationError, ValueError, TimeoutError) as exc:
@@ -126,13 +156,15 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 {"type": "session.error", "reason": "voice_provider_unavailable"}
             )
     finally:
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if session:
-            await session.stop()
-        elif ledger:
-            await asyncio.to_thread(ledger.close)
-        with contextlib.suppress(RuntimeError):
-            await websocket.close()
+        # Finish the ledger close if the browser is already gone.
+        with anyio.CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if session is not None:
+                await session.stop()
+            elif ledger is not None:
+                await asyncio.to_thread(ledger.close)
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()

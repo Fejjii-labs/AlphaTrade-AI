@@ -117,6 +117,9 @@ def _binance_source(
         observation_cache=None if pool is None else pool.observations,
         observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
         budget=None if pool is None else pool.budget,
+        pause=None if pool is None else pool.ban_gate,
+        kline_cache=None if pool is None else pool.kline_cache,
+        quote_cache=None if pool is None else pool.quote_cache,
     )
 
 
