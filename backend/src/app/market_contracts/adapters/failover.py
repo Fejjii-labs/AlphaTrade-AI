@@ -114,8 +114,13 @@ class FailoverPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._require_active_identity(identity, instrument)
+        # Omit the flag when True so doubles that predate the cache still match.
+        extra: dict[str, bool] = {}
+        if not use_public_kline_cache:
+            extra["use_public_kline_cache"] = False
         try:
             return self.active_source.fetch_closed_ohlcv(
                 identity=identity,
@@ -123,6 +128,7 @@ class FailoverPerpetualSource:
                 timeframe=timeframe,
                 min_final_bars=min_final_bars,
                 evaluated_at=evaluated_at,
+                **extra,
             )
         except _SWITCH_ERRORS as exc:
             self._switch(exc)
@@ -250,12 +256,35 @@ class FailoverPerpetualSource:
             self._switch(exc)
 
     def status(self) -> ProviderStatus:
+        if self._primary_ban_remaining() is not None:
+            # A health read must not ping the banned primary or the secondary.
+            if self._using_secondary:
+                detail = (
+                    "Primary Binance USD-M is temporarily banned; no spot fallback. "
+                    f"Active source is {self._secondary.name}. Secondary was not probed."
+                )
+            else:
+                detail = (
+                    "Primary Binance USD-M is temporarily banned; no spot fallback. "
+                    "Secondary was not called."
+                )
+            return ProviderStatus(
+                name=self.name,
+                kind=self.kind,
+                health=ProviderHealth.DEGRADED,
+                using_fallback=False,
+                is_mock=False,
+                detail=detail[:300],
+                error_message="HTTP 418",
+            )
         return self.active_source.status()
 
     def try_recover_primary(self) -> InstrumentIdentity | None:
         """Return the primary instrument when it is healthy again. Do not publish yet."""
 
         if not self._using_secondary:
+            return None
+        if self._primary_ban_remaining() is not None:
             return None
         report = self._primary.status()
         if report.health is not ProviderHealth.HEALTHY or report.using_fallback or report.is_mock:
@@ -264,6 +293,17 @@ class FailoverPerpetualSource:
         self.name = self._primary.name
         self.kind = self._primary.kind
         return self._primary_instrument
+
+    def _primary_ban_remaining(self) -> float | None:
+        probe = getattr(self._primary, "upstream_ban_remaining_seconds", None)
+        if not callable(probe):
+            return None
+        remaining = probe()
+        if isinstance(remaining, bool) or not isinstance(remaining, int | float):
+            return None
+        if remaining <= 0:
+            return None
+        return float(remaining)
 
     def _require_active_identity(
         self,

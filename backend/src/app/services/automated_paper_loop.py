@@ -137,6 +137,7 @@ class AutomatedPaperLoop:
         clock: Clock,
         *,
         internal_paper_db_enabled: bool | None = None,
+        market_source: object | None = None,
     ) -> None:
         self._runtime = runtime
         self._settings = settings
@@ -144,6 +145,9 @@ class AutomatedPaperLoop:
         # None keeps env-only checks for direct callers. The worker passes a
         # bool so approval re-reads the owner switch.
         self._paper_switch_enforced = internal_paper_db_enabled is not None
+        # When set, an SFP fill replaces the scan quote with a fresh aggTrades
+        # read. Tests that already supply a fixture quote leave this empty.
+        self._market_source = market_source
 
     def continue_confirmed_setup(
         self,
@@ -161,6 +165,13 @@ class AutomatedPaperLoop:
 
         self._observed_kill_switch = kill_switch_active
         self._autonomous_settings = None
+        # A killed loop must not spend a fresh aggTrades read.
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
+        assembled, fresh_failed = self._fresh_sfp_fill_evidence(assembled, policy)
+        if fresh_failed:
+            return _proof(candidate, "skipped", "stale_evidence")
         stopped = self._preface(
             target=target,
             candidate=candidate,
@@ -217,10 +228,9 @@ class AutomatedPaperLoop:
         policy: ExecutableStrategyPolicy,
         kill_switch_active: bool,
     ) -> AutomatedPaperLoopProof | None:
-        if kill_switch_active or _global_kill_switch_active(self._settings):
-            return _proof(candidate, "blocked", "kill_switch_active")
-        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
-            return _proof(candidate, "blocked", "kill_switch_unverified")
+        killed = self._kill_switch_refusal(candidate, kill_switch_active=kill_switch_active)
+        if killed is not None:
+            return killed
         refusal = self._posture_refusal()
         if refusal is not None:
             return _proof(candidate, "blocked", refusal)
@@ -246,6 +256,54 @@ class AutomatedPaperLoop:
             policy.authored_spec, (NestedContinuationSpec, SfpSpec)
         ):
             return _proof(candidate, "skipped", "direction_not_paper_executable")
+        return None
+
+    def _fresh_sfp_fill_evidence(
+        self,
+        assembled: AssembledCanonicalEvidence,
+        policy: ExecutableStrategyPolicy,
+    ) -> tuple[AssembledCanonicalEvidence, bool]:
+        """SFP fills and their action receipts ignore the 10s quote cache.
+
+        Returns the original assembly when this is not an SFP fill, no market
+        source was supplied, or the caller has not built a policy yet. The
+        second value is True only when the fresh aggTrades read fails closed.
+        A missing policy must not look like that failure. The caller runs this
+        only after the kill switch has already refused.
+        """
+
+        from app.market_contracts.errors import MarketContractError
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        authored = getattr(policy, "authored_spec", None)
+        if self._market_source is None or not isinstance(authored, SfpSpec):
+            return assembled, False
+        try:
+            from app.evidence_pipeline.current_price import bind_paper_sfp_fill_quote
+
+            return (
+                bind_paper_sfp_fill_quote(
+                    assembled,
+                    self._market_source,  # type: ignore[arg-type]
+                    evaluated_at=self._clock.now(),
+                ),
+                False,
+            )
+        except MarketContractError:
+            return assembled, True
+
+    def _kill_switch_refusal(
+        self,
+        candidate: Candidate,
+        *,
+        kill_switch_active: bool,
+    ) -> AutomatedPaperLoopProof | None:
+        """Refuse before any fill read when the switch is on or unreadable."""
+
+        if kill_switch_active or _global_kill_switch_active(self._settings):
+            return _proof(candidate, "blocked", "kill_switch_active")
+        if not isinstance(getattr(self._settings, "global_kill_switch_active", None), bool):
+            return _proof(candidate, "blocked", "kill_switch_unverified")
         return None
 
     def _bound(

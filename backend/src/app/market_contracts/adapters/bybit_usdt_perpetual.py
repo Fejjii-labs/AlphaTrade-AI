@@ -17,6 +17,10 @@ from app.market_contracts.adapters.aggtrade_cache import TtlValueCache
 from app.market_contracts.adapters.book_sequence import BookSequenceGuard
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
 from app.market_contracts.adapters.observation_cache import CausalObservationCache
+from app.market_contracts.adapters.public_read_cache import (
+    PUBLIC_READ_TTL_SECONDS,
+    ShortTtlSingleflight,
+)
 from app.market_contracts.adapters.request_budget import record_cache_hit
 from app.market_contracts.coverage import build_complete_trade_window_coverage
 from app.market_contracts.cursor import TradeStreamSnapshot
@@ -141,7 +145,7 @@ class BybitUsdtPerpetualSource:
         timeout_seconds: float = 10.0,
         transport: httpx.BaseTransport | None = None,
         client: ReadOnlyHttpGetClient | None = None,
-        max_retries: int = 3,
+        max_retries: int = 1,
         max_backoff_seconds: float = 30.0,
         instrument: InstrumentIdentity | None = None,
         observation_cache: CausalObservationCache | None = None,
@@ -186,6 +190,14 @@ class BybitUsdtPerpetualSource:
         self._book_snapshot_hashes: dict[str, str] = {}
         self._recent_print_cache = TtlValueCache(max_entries=1, ttl_seconds=1)
         self._recent_print_guard = threading.Lock()
+        self._kline_cache = ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=32,
+        )
+        self.public_quote_cache = ShortTtlSingleflight(
+            ttl_seconds=PUBLIC_READ_TTL_SECONDS,
+            max_entries=8,
+        )
         self._reuse_recent_pages = reuse_recent_pages
 
     def active_instrument(self) -> InstrumentIdentity:
@@ -371,6 +383,7 @@ class BybitUsdtPerpetualSource:
         timeframe: Timeframe,
         min_final_bars: int,
         evaluated_at: datetime,
+        use_public_kline_cache: bool = True,
     ) -> ClosedOhlcvSeries:
         self._assert_request(identity, instrument)
         interval = _BYBIT_INTERVAL.get(timeframe)
@@ -382,20 +395,32 @@ class BybitUsdtPerpetualSource:
         # Omitting ``end`` returns only the latest window. The exit monitor
         # walks backward by passing an earlier ``evaluated_at``, so the
         # request must close at that time or a later page repeats the same bars.
-        result = self._public_result(
-            "/v5/market/kline",
-            {
-                "category": BYBIT_CATEGORY,
-                "symbol": self._symbol,
-                "interval": interval,
-                "end": int(evaluated_at.astimezone(UTC).timestamp() * 1000),
-                "limit": limit,
-            },
+        end_ms = int(evaluated_at.astimezone(UTC).timestamp() * 1000)
+        ttl_ms = max(int(self._kline_cache.ttl_seconds * 1000), 1)
+        key = ("klines", self._symbol, interval, str(limit), str(end_ms // ttl_ms))
+
+        def load_rows() -> list[Any]:
+            result = self._public_result(
+                "/v5/market/kline",
+                {
+                    "category": BYBIT_CATEGORY,
+                    "symbol": self._symbol,
+                    "interval": interval,
+                    "end": end_ms,
+                    "limit": limit,
+                },
+            )
+            self._assert_linear(result)
+            loaded = result.get("list")
+            if not isinstance(loaded, list):
+                raise WrongMarketError("Bybit kline payload is not a list.")
+            return loaded
+
+        # Probes skip the cache. ``_assert_linear`` runs only inside ``load_rows``,
+        # so a cached payload would hide a later wrong-instrument response.
+        rows = (
+            self._kline_cache.get_or_load(key, load_rows) if use_public_kline_cache else load_rows()
         )
-        self._assert_linear(result)
-        rows = result.get("list")
-        if not isinstance(rows, list):
-            raise WrongMarketError("Bybit kline payload is not a list.")
         grace = timedelta(seconds=first_slice_freshness_policy().ohlcv_post_close_grace_seconds)
         bars = [
             self._parse_kline(

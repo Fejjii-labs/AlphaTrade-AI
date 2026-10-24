@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 
+import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -130,7 +131,19 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 ]
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
-                    task.result()
+                    # result() re-raises a child CancelledError. That BaseException
+                    # is not an anyio cancellation, so it escapes this handler and
+                    # cancels the ASGI portal future.
+                    if task.cancelled():
+                        continue
+                    try:
+                        error = task.exception()
+                    except asyncio.CancelledError:
+                        continue
+                    if isinstance(error, asyncio.CancelledError):
+                        continue
+                    if error is not None:
+                        raise error
     except WebSocketDisconnect:
         pass
     except (AppError, VoiceUnavailableError, ValidationError, ValueError, TimeoutError) as exc:
@@ -143,13 +156,15 @@ async def realtime_voice(websocket: WebSocket) -> None:
                 {"type": "session.error", "reason": "voice_provider_unavailable"}
             )
     finally:
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if session:
-            await session.stop()
-        elif ledger:
-            await asyncio.to_thread(ledger.close)
-        with contextlib.suppress(RuntimeError):
-            await websocket.close()
+        # Finish the ledger close if the browser is already gone.
+        with anyio.CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if session is not None:
+                await session.stop()
+            elif ledger is not None:
+                await asyncio.to_thread(ledger.close)
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()

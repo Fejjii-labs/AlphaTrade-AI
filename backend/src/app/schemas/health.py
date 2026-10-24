@@ -212,7 +212,14 @@ class HealthResponse(BaseModel):
 
 
 class ReadinessResponse(BaseModel):
-    """Readiness payload: ``ready`` only when no provider is unavailable."""
+    """Readiness payload: ``ready`` only when no provider is unavailable.
+
+    Staging smoke, live smoke, docker validate, and the demo and Telegram
+    checks read ``ready`` and sometimes ``providers_unavailable``. They do not
+    read ``status``. Render's health check is ``/health``, so a degraded
+    market-data provider must not set ``ready`` false. ``degraded_providers``
+    names those providers. The checks print the list and still pass.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -220,6 +227,7 @@ class ReadinessResponse(BaseModel):
     ready: bool
     providers_total: int
     providers_unavailable: int
+    degraded_providers: list[str] = Field(default_factory=list)
     timestamp: datetime
 
 
