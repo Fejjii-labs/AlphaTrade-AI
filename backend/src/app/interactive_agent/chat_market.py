@@ -9,11 +9,10 @@ read stops at ``agent_chat_market_retrieval_budget_seconds``.
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
 from uuid import UUID
 
 import httpx
+import structlog
 
 from app.core.config import Settings
 from app.evidence_pipeline.service import CanonicalEvidenceService
@@ -22,6 +21,7 @@ from app.interactive_agent.canonical_market import (
     CanonicalPerpetualQuoteReader,
 )
 from app.interactive_agent.contracts import MarketQuoteView
+from app.market_contracts.adapters import http as market_http
 from app.market_contracts.adapters.factory import resolve_chat_market_source
 from app.market_contracts.errors import (
     RateLimitedError,
@@ -29,6 +29,8 @@ from app.market_contracts.errors import (
     RetrievalBudgetExceededError,
     UpstreamBanError,
 )
+
+logger = structlog.get_logger(__name__)
 
 MARKET_DATA_UNAVAILABLE = "market data unavailable"
 _OUTAGE_REASONS = (
@@ -54,19 +56,16 @@ class ChatMarketQuoteReader:
         *,
         transport: httpx.BaseTransport | None = None,
         evidence: CanonicalEvidenceService | None = None,
-        clock: Callable[[], float] | None = None,
     ) -> None:
         self._settings = settings
         self._organization_id = organization_id
         self._transport = transport
         self._evidence = evidence
-        self._clock = clock or time.monotonic
 
     def quote(self, symbol: str) -> MarketQuoteView:
         budget = float(self._settings.agent_chat_market_retrieval_budget_seconds)
-        deadline = self._clock() + budget
-        if self._clock() > deadline:
-            raise CanonicalMarketStateError("unavailable", MARKET_DATA_UNAVAILABLE)
+        # Same clock as the HTTP client, which enforces this deadline per GET.
+        deadline = market_http.deadline_clock() + budget
         source = None
         service = self._evidence
         try:
@@ -85,10 +84,24 @@ class ChatMarketQuoteReader:
                     raise CanonicalMarketStateError("unavailable", MARKET_DATA_UNAVAILABLE) from exc
                 raise
             except _OUTAGE_ERRORS as exc:
+                logger.info(
+                    "chat_market_retrieval_outage",
+                    symbol=symbol,
+                    error_type=type(exc).__name__,
+                )
                 raise CanonicalMarketStateError("unavailable", MARKET_DATA_UNAVAILABLE) from exc
-            except Exception as exc:
+            except (httpx.HTTPError, OSError) as exc:
+                # Transport-level failures are outages. Anything else (a
+                # programming error) propagates instead of reading as "unavailable".
+                logger.warning(
+                    "chat_market_retrieval_transport_error",
+                    symbol=symbol,
+                    error_type=type(exc).__name__,
+                )
                 raise CanonicalMarketStateError("unavailable", MARKET_DATA_UNAVAILABLE) from exc
-            if self._clock() > deadline:
+            # A read can finish (e.g. from cache or a slow evidence step) after
+            # the budget; do not hand back a quote that arrived too late.
+            if market_http.deadline_clock() > deadline:
                 raise CanonicalMarketStateError("unavailable", MARKET_DATA_UNAVAILABLE)
             return view
         finally:

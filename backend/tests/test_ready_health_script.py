@@ -87,3 +87,8 @@ def test_staging_scripts_key_on_the_ready_helper() -> None:
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "scripts/lib/ready_health.py" in text, relative
         assert "degraded_providers=" not in text, relative
+        use = text.find("${ROOT_DIR}/scripts/lib/ready_health.py")
+        assert use != -1, relative
+        define = text.find('ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"')
+        assert define != -1, f"{relative} uses ROOT_DIR without defining it"
+        assert define < use, relative

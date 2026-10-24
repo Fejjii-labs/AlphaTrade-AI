@@ -13,6 +13,7 @@ from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSourc
 from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
 from app.market_contracts.adapters.evidence_pool import shared_binance_evidence_pool
 from app.market_contracts.adapters.failover import FailoverPerpetualSource
+from app.market_contracts.adapters.http import SharedBanPauseView, UpstreamPause
 from app.market_contracts.adapters.replay import ReplayPerpetualSource
 from app.market_contracts.catalog import PerpetualInstrumentCatalog
 from app.market_contracts.errors import FallbackForbiddenError
@@ -165,6 +166,11 @@ def _binance_source(
     deadline_monotonic: float | None = None,
 ) -> BinanceUsdmPerpetualSource:
     pool = shared_binance_evidence_pool(settings) if shared else None
+    pause: UpstreamPause | None = None if pool is None else pool.ban_gate
+    if pool is None and fail_fast_rate_limits:
+        # Chat keeps its own no-retry client but must honor a process-wide 418
+        # ban (or worker 429 pause) instead of calling Binance through it.
+        pause = SharedBanPauseView(shared_binance_evidence_pool(settings).ban_gate)
     retries = settings.binance_request_max_retries if max_retries is None else max_retries
     return BinanceUsdmPerpetualSource(
         base_url=settings.market_data_futures_base_url,
@@ -184,7 +190,7 @@ def _binance_source(
         observation_cache=None if pool is None else pool.observations,
         observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
         budget=None if pool is None else pool.budget,
-        pause=None if pool is None else pool.ban_gate,
+        pause=pause,
         kline_cache=None if pool is None else pool.kline_cache,
         quote_cache=None if pool is None else pool.quote_cache,
     )
