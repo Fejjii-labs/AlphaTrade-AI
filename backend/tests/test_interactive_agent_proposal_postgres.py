@@ -32,9 +32,11 @@ from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import MembershipRole
 from tests.support.postgres_template import refresh_database
 
-POSTGRES_URL = os.environ.get(
-    "PHASE1_POSTGRES_URL",
-    "postgresql+psycopg://alphatrade:alphatrade@127.0.0.1:5432/pr150_journal_fix",
+# CI provides the disposable database as AT028_POSTGRES_URL. Without this
+# fallback the module silently skipped in every CI run.
+_EXPLICIT_URL = os.environ.get("PHASE1_POSTGRES_URL") or os.environ.get("AT028_POSTGRES_URL")
+POSTGRES_URL = _EXPLICIT_URL or (
+    "postgresql+psycopg://alphatrade:alphatrade@127.0.0.1:5432/pr150_journal_fix"
 )
 ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000c0a1")
 USER_A = uuid.UUID("00000000-0000-0000-0000-00000000c0a2")
@@ -54,7 +56,11 @@ def _postgres_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _postgres_available(), reason="Disposable PostgreSQL is down")
+_AVAILABLE = _postgres_available()
+if _EXPLICIT_URL and not _AVAILABLE:
+    # A configured database that is unreachable is a failure, not a skip.
+    raise RuntimeError("Configured disposable PostgreSQL for proposal tests is unreachable")
+pytestmark = pytest.mark.skipif(not _AVAILABLE, reason="Disposable PostgreSQL is down")
 
 
 def _settings() -> Settings:
