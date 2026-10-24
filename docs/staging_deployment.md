@@ -292,3 +292,17 @@ See [notifications.md](notifications.md) and [alerts.md](alerts.md).
 - [deployment_command_pack.md](deployment_command_pack.md) — copy-paste commands
 - [demo_script.md](demo_script.md) — portfolio walkthrough
 - [limitations_roadmap.md](limitations_roadmap.md) — scope boundaries
+
+## Render auto-deploy source (2026-10-24)
+
+- `alphatrade-api-staging` (`srv-d8fvbcd7vvec739mc060`) and
+  `alphatrade-paper-worker-staging` (`srv-daqej7o473hc73fsc1k0`) track
+  `Fejjii-labs/AlphaTrade-AI` branch `main` with auto-deploy on every commit.
+- Push-triggered deploys need Render's GitHub app installed on the
+  `Fejjii-labs` organization with access to this repo. Without it, Render gets
+  no push events and only API/manual deploys run (trigger `api`); because the
+  repo is public, manual deploys still succeed, which hides the gap.
+- Verify after a merge: the newest deploy on both services should show trigger
+  `new_commit` for the merge SHA. If it shows only `api`, check the app install.
+- `ai-alphatrade-api-staging` (`srv-d8fvblmrnols73d2j1j0`) is a legacy
+  duplicate with auto-deploy off and incomplete env; do not deploy it.
