@@ -1,6 +1,6 @@
 # Limitations and roadmap
 
-Baseline: main `b58beda`, October 7, 2026. “Implemented” means source exists; “accepted” needs evidence for the relevant runtime and release. [Current status](current_status.md) records supplied supervising evidence and unknowns.
+Refreshed October 24, 2026 against main `df09c22d` in [Fejjii-labs/AlphaTrade-AI](https://github.com/Fejjii-labs/AlphaTrade-AI); rows below marked (Oct 7) are the original baseline. Original baseline: main `b58beda`, October 7, 2026. “Implemented” means source exists; “accepted” needs evidence for the relevant runtime and release. [Current status](current_status.md) records supplied supervising evidence and unknowns.
 
 ## Current boundaries
 
@@ -22,7 +22,25 @@ Baseline: main `b58beda`, October 7, 2026. “Implemented” means source exists
 
 Real-money execution is permanently refused by the inspected source. It cannot be enabled as an ordinary feature flag or Agent command. Demo and paper performance do not guarantee real-world results.
 
-## Priority: finish current evidence
+## Open items as of October 24, 2026
+
+| Item | Reference |
+| --- | --- |
+| Demo daily trade cap is a lifetime count | [#318](https://github.com/Fejjii-labs/AlphaTrade-AI/issues/318), PR #325 |
+| Live voice cancel handling and 30s bounded shielded close | PR #326 |
+| Proposal Postgres tests never ran in CI | PR #327 |
+| Pre-existing red full backend suite (18 failures) | [#316](https://github.com/Fejjii-labs/AlphaTrade-AI/issues/316) |
+| $100/month default org quota vs $1 voice session ceiling (product decision) | Griller review of #322 |
+| No Postgres test for two concurrent first voice reserves | Griller review of #322 |
+| Abandoned GETs can occupy all 8 API threads | Griller review of #321 |
+| AT014 staging test orgs keep active kill switches | staging DB `kill_switch_states` |
+| Legacy `ai-alphatrade-api-staging` missing env (REDIS_URL, OPENAI_API_KEY, TRUSTED_PROXY_HOPS) | Render |
+| Autonomous paper loop armed on staging; first automatic trade not yet observed | `/health/paper-worker` |
+| SFP / Nested 1-2 tuning with the owner | — |
+| UI walkthrough → prioritized fix list | — |
+| Bybit failover not observed | `/providers/status` |
+
+## Priority: finish current evidence (Oct 7)
 
 1. Complete bounded fresh SFP recovery acceptance on the intended deployed policy/SHA while preserving historical receipts.
 2. Complete and verify the separately supervised existing Journal target repair without inventing/backdating outcomes.
