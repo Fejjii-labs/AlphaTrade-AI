@@ -1,5 +1,25 @@
 # Current status and evidence
 
+**Refreshed:** October 24, 2026, 22:50 Europe/Berlin. **Repository:** [Fejjii-labs/AlphaTrade-AI](https://github.com/Fejjii-labs/AlphaTrade-AI) (moved from `Fejjii/AlphaTrade-AI`; older links below point at the original repository and are kept as historical evidence).
+
+## Status as of October 24, 2026
+
+**Main:** [`df09c22d`](https://github.com/Fejjii-labs/AlphaTrade-AI/commit/df09c22d91be5de853098afd36504d26ae106296) (#324). Recent merges: #310 journal owner checks, #321 bounded chat market retrieval and readiness alerting, #322 voice quota lazy init, #323 autonomous switch gated on org membership role.
+
+| Area | Observation (direct checks on Oct 24 unless noted) | Remaining limit |
+| --- | --- | --- |
+| Render staging API `alphatrade-api-staging` | Live on `df09c22d`, deploy trigger `new_commit` (push auto-deploy proven after the Render GitHub app was installed on Fejjii-labs). | Legacy duplicate `ai-alphatrade-api-staging` has auto-deploy off and incomplete env; do not deploy it. |
+| Render paper worker | Live on `df09c22d` (`new_commit`). `/health/paper-worker`: fresh, `autonomy_mode=internal_paper`, `real_trading_enabled=false`, org kill switch inactive. | No automatic paper trade observed yet after arming. Three AT014 test orgs still hold active kill switches and make the top-level `kill_switch` block read active. |
+| Readiness | `/health/ready`: `status=ready`, `degraded_providers=[]`. Staging scripts exit non-zero on degraded status ([ready_health.py](../scripts/lib/ready_health.py), #321). | Scripts are run manually; there is no scheduled alerting job. |
+| Market data | Binance public and Binance USD-M perpetual healthy. | Bybit secondary source configured but not reported on `/providers/status`; failover not observed. |
+| Models | `openai-llm` healthy (gpt-6-luna); embeddings `degraded` until generation is verified. | Model-quality evaluation beyond offline suites. |
+| Voice | GPT Live voice merged disabled (#315); $1 staging smoke passed Oct 23. New-org quota fix (#322). | Follow-ups in review: cancelled Live children and bounded shielded close (#326). Device/Safari/iOS acceptance unknown. |
+| BloFin demo | Read-only sync OK. | Daily trade cap behaved as lifetime count ([#318](https://github.com/Fejjii-labs/AlphaTrade-AI/issues/318), fix in #325). Native order/fill/protection acceptance pending. |
+| CI | Six jobs (backend, frontend, e2e-smoke, evaluation, docker-build, deployment-safety). #321 run 40099208349 executed e2e-smoke (58 passed) and evaluation (agent 16/16, RAG 5/5, guardrail 7/7). | [#316](https://github.com/Fejjii-labs/AlphaTrade-AI/issues/316): pre-existing red full backend suite (18 failures). Proposal Postgres tests skipped in CI until #327. |
+| Real trading | Refused by [paper safety](../backend/src/app/core/paper_safety.py). | Unchanged, by design. |
+
+## Historical baseline (October 7, 2026)
+
 **Documentation inspection date:** October 7, 2026. **GitHub evidence check:** 15:32:19 Europe/Berlin (13:32:19 UTC).
 
 **Main/source baseline:** [`b58bedae1baad82b36fd32b04d056372cac3c733`](https://github.com/Fejjii/AlphaTrade-AI/commit/b58bedae1baad82b36fd32b04d056372cac3c733), the merge of [PR220](https://github.com/Fejjii/AlphaTrade-AI/pull/220). The documentation branch starts from that commit. Local tree `9b36f0e1c681a2b3f5ec307e2da17bc124b5eba6` was verified against GitHub before editing.
