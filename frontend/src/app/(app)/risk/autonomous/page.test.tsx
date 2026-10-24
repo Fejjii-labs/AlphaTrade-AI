@@ -21,6 +21,7 @@ const settings = {
 const auth = {
   user: { id: "user", role: "trader" },
   organization: { id: "org" },
+  membershipRole: "trader" as string | null,
 };
 
 const appContext = {
@@ -77,6 +78,7 @@ describe("Autonomous trading settings form", () => {
 
   beforeEach(() => {
     auth.user = { id: "user", role: "trader" };
+    auth.membershipRole = "trader";
     appContext.killSwitchStatus = { execution_blocked: false, reason: null };
     useAsyncDataMock.mockReturnValue({
       data: settings,
@@ -107,7 +109,9 @@ describe("Autonomous trading settings form", () => {
   });
 
   it("lets an owner persist the paper switch without changing limits", async () => {
-    auth.user = { id: "user", role: "owner" };
+    // /auth/me reports user.role as admin/trader/viewer; ownership comes from the membership.
+    auth.user = { id: "user", role: "trader" };
+    auth.membershipRole = "owner";
     const { api } = await import("@/lib/api");
     vi.mocked(api.autonomous.updateSettings).mockResolvedValue({
       ...settings,
@@ -129,6 +133,13 @@ describe("Autonomous trading settings form", () => {
     });
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeChecked();
     expect(screen.getByTestId("autonomous-paper-switch-status")).toHaveTextContent("Stale");
+  });
+
+  it("keeps the paper switch disabled for a trader membership even if user.role says owner", () => {
+    auth.user = { id: "user", role: "owner" };
+    auth.membershipRole = "trader";
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
   });
 
   it("shows a ceiling validation message from the API", async () => {
