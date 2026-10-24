@@ -683,7 +683,8 @@ def test_utc_clock_does_not_roll_before_the_user_midnight(session: Session) -> N
     assert row.max_trade_slots == 1
 
 
-def test_demo_claim_does_not_roll_trade_slots(session: Session) -> None:
+def test_demo_claim_rolls_trade_slots_at_the_user_day_boundary(session: Session) -> None:
+    """#318: the demo cap is per local day, not a lifetime count."""
     settings = paper_settings(database_url="sqlite+pysqlite:///:memory:")
     assert settings.real_trading_enabled is False
     assert settings.enable_real_trading is False
@@ -703,17 +704,47 @@ def test_demo_claim_does_not_roll_trade_slots(session: Session) -> None:
         timezone_name="Europe/Berlin",
     )
     session.commit()
-    result = _claim(session, ids, plan, authorization, when=DAY, key="demo-unchanged")
+    result = _claim(session, ids, plan, authorization, when=DAY, key="demo-rolled")
+
+    assert result.outcome is ExecutionCommandOutcome.ALLOW
+    row = _ledger_row(session)
+    assert row.actual_trade_count == 0
+    # Yesterday's open reservations keep their slots; today's claim adds one.
+    assert row.reserved_trade_slots == 3
+    assert row.max_trade_slots == 9
+    assert _stored_day(row) == DAY.date()
+
+
+def test_demo_same_day_exhaustion_still_blocks(session: Session) -> None:
+    ids, plan, authorization = _prepare(session, venue="BLOFIN_DEMO", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=1,
+        configured_max=9,
+        actual=1,
+        reserved=0,
+        timezone_name="UTC",
+    )
+    session.commit()
+    result = _claim(session, ids, plan, authorization, when=DAY, key="demo-same-day")
 
     assert result.outcome is ExecutionCommandOutcome.BLOCKED
     assert result.blocked_reason_code == "insufficient_daily_trade_allocation"
     row = _ledger_row(session)
-    assert row.actual_trade_count == 5
-    assert row.reserved_trade_slots == 2
+    assert row.actual_trade_count == 1
     assert row.max_trade_slots == 1
-    assert _stored_day(row) == DAY.date() - timedelta(days=1)
-    assert row.actual_daily_loss == Decimal("12.50")
-    assert row.version == 1
+
+
+def test_daily_roll_venues() -> None:
+    from app.services.safety_epoch import paper_daily_trade_roll
+
+    assert paper_daily_trade_roll("PAPER_INTERNAL") is True
+    assert paper_daily_trade_roll("BLOFIN_DEMO") is True
+    assert paper_daily_trade_roll(None) is False
+    assert paper_daily_trade_roll("BLOFIN_LIVE") is False
 
 
 def test_roll_is_idempotent_and_keeps_reserved_slots_for_a_later_fill(session: Session) -> None:

@@ -129,8 +129,9 @@ class SafetyEpochService:
     ) -> AccountRiskAccountingState:
         """Lock the account ledger. Paper callers may roll the trade-slot day.
 
-        ``roll_daily_trade_slots`` is for the internal paper venue only. Demo
-        and every other caller leave the lifetime counters untouched. The roll
+        ``roll_daily_trade_slots`` is for the internal paper and BloFin demo
+        venues (see ``paper_daily_trade_roll``). Other callers leave the
+        counters untouched. The roll
         runs while this row lock is held, so two claims at a day boundary
         apply it once.
         """
@@ -439,10 +440,19 @@ class SafetyEpochService:
         }
 
 
-def paper_daily_trade_roll(execution_venue: str | None) -> bool:
-    """Trade-slot days roll on the internal paper venue only."""
+BLOFIN_DEMO_VENUE = "BLOFIN_DEMO"
+DAILY_TRADE_ROLL_VENUES = frozenset({INTERNAL_PAPER_VENUE, BLOFIN_DEMO_VENUE})
 
-    return execution_venue == INTERNAL_PAPER_VENUE
+
+def paper_daily_trade_roll(execution_venue: str | None) -> bool:
+    """Trade-slot days roll on the internal paper and BloFin demo venues (#318).
+
+    Demo shares the same roll: row lock, idempotent within a business day,
+    open reservations keep their slots. Orphaned demo reservations are still
+    released only by manual demo recovery, which checks venue truth first.
+    """
+
+    return execution_venue in DAILY_TRADE_ROLL_VENUES
 
 
 def paper_trading_day(now: datetime, timezone_name: str) -> date:
