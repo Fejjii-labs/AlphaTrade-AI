@@ -157,7 +157,7 @@ describe("ResearchValidationPage AT-035", () => {
     fireEvent.click(screen.getByTestId(`research-validation-promote-submit-${RUN_ID}`));
 
     await waitFor(() => {
-      expect(await screen.findByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+      expect(screen.getByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
         /already exists in the paper validation queue/i,
       );
     });
