@@ -260,13 +260,20 @@ class SafetyEpochService:
         ``PAPER_UNFILLED_RESERVATION_MAX_AGE`` and has no fill, is released
         here so a crash cannot hold the slot forever. ``max_trade_slots`` is
         copied from the user's current ``max_trades_per_day`` only when the
-        business day changes. A row already stamped with that day is a no-op,
-        including a second claim that waited on this lock.
+        business day moves forward. A row already stamped with that day, or a
+        later one (another user in a timezone ahead), is a no-op, including a
+        second claim that waited on this lock.
         """
 
         settings = self._risk_settings.get(organization_id=organization_id, user_id=user_id)
         today = paper_trading_day(now, settings.timezone)
-        if _as_date(accounting.trade_slot_business_date) == today:
+        stamped = _as_date(accounting.trade_slot_business_date)
+        # Forward-only. The ledger row is shared by the whole org account, but
+        # the day comes from the claiming user's timezone. A user whose local
+        # day is behind the stamped day must never reset the count backwards,
+        # or alternating users could bypass the daily cap. ``max_trade_slots``
+        # is likewise refreshed only on a forward roll.
+        if stamped is not None and today <= stamped:
             return
         self._release_orphaned_paper_reservations(
             accounting,

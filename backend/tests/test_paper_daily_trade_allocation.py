@@ -738,6 +738,63 @@ def test_demo_same_day_exhaustion_still_blocks(session: Session) -> None:
     assert row.max_trade_slots == 1
 
 
+@pytest.mark.parametrize("venue", ["PAPER_INTERNAL", "BLOFIN_DEMO"])
+def test_user_behind_the_stamped_day_cannot_reset_the_count_backwards(
+    session: Session, venue: str
+) -> None:
+    """Griller C1 on #325: the roll only moves forward on a shared org account."""
+    when = datetime(2026, 10, 22, 11, 0, tzinfo=UTC)
+    ahead_day = when.astimezone(ZoneInfo("Pacific/Kiritimati")).date()
+    behind_day = when.astimezone(ZoneInfo("Pacific/Pago_Pago")).date()
+    assert ahead_day == date(2026, 10, 23)
+    assert behind_day == date(2026, 10, 22)
+
+    ids, plan, _authorization = _prepare(session, venue=venue, when=when)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=ahead_day,
+        max_slots=1,
+        configured_max=1,
+        actual=1,
+        reserved=0,
+        timezone_name="Pacific/Kiritimati",
+    )
+    other = ids["other_user"]
+    session.add(
+        UserRiskSettings(
+            organization_id=ids["organization"].id,  # type: ignore[attr-defined]
+            user_id=other.id,  # type: ignore[attr-defined]
+            max_trades_per_day=50,
+            timezone="Pacific/Pago_Pago",
+            default_account_balance=Decimal("100000"),
+            daily_loss_limit=Decimal("100000"),
+        )
+    )
+    session.commit()
+
+    service = SafetyEpochService(
+        session,
+        paper_settings(database_url="sqlite+pysqlite:///:memory:"),
+        RiskSettingsService(session, AuditService(session)),
+    )
+    for user in (other, ids["user"], other):
+        service.lock_risk_accounting(
+            organization_id=ids["organization"].id,  # type: ignore[attr-defined]
+            account_id=plan.account_id,  # type: ignore[attr-defined]
+            user_id=user.id,  # type: ignore[attr-defined]
+            exposure_unit="USDT",
+            now=when,
+            roll_daily_trade_slots=True,
+        )
+        session.commit()
+        row = _ledger_row(session)
+        assert row.actual_trade_count == 1
+        assert row.max_trade_slots == 1
+        assert _stored_day(row) == ahead_day
+
+
 def test_daily_roll_venues() -> None:
     from app.services.safety_epoch import paper_daily_trade_roll
 
