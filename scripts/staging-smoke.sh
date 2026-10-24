@@ -72,20 +72,11 @@ PY
 
 echo "2/12 — /health/ready"
 ready_json="$(curl_api "${BASE_URL}/health/ready")"
-python3 - <<'PY' "$ready_json" "$ALLOW_DEGRADED_READY"
-import json, sys
-payload = json.loads(sys.argv[1])
-allow_degraded = sys.argv[2].lower() in ("1", "true", "yes")
-if payload.get("ready") is True:
-    print("  OK: ready")
-    names = payload.get("degraded_providers") or []
-    if names:
-        print("  degraded_providers=" + ",".join(str(name) for name in names))
-elif allow_degraded:
-    print(f"  WARN: degraded readiness — {payload.get('providers_unavailable', '?')} providers unavailable")
-else:
-    assert payload.get("ready") is True, payload
-PY
+ready_check=(python3 "${ROOT_DIR}/scripts/lib/ready_health.py" "$ready_json")
+case "${ALLOW_DEGRADED_READY}" in
+  1|true|TRUE|yes|YES) ready_check+=(--allow-degraded-ready) ;;
+esac
+"${ready_check[@]}"
 
 echo "3/12 — /providers/status"
 providers_json="$(curl_api "${BASE_URL}/providers/status")"

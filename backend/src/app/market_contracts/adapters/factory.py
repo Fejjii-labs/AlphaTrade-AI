@@ -13,6 +13,7 @@ from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSourc
 from app.market_contracts.adapters.bybit_usdt_perpetual import BybitUsdtPerpetualSource
 from app.market_contracts.adapters.evidence_pool import shared_binance_evidence_pool
 from app.market_contracts.adapters.failover import FailoverPerpetualSource
+from app.market_contracts.adapters.http import SharedBanPauseView, UpstreamPause
 from app.market_contracts.adapters.replay import ReplayPerpetualSource
 from app.market_contracts.catalog import PerpetualInstrumentCatalog
 from app.market_contracts.errors import FallbackForbiddenError
@@ -58,6 +59,32 @@ def canonical_evidence_source_for_process(
     return source
 
 
+def resolve_chat_market_source(
+    settings: Settings,
+    *,
+    deadline_monotonic: float,
+    transport: httpx.BaseTransport | None = None,
+    symbol: str = "BTCUSDT",
+) -> PerpetualEvidenceSource:
+    """Source for one agent chat quote. Not used by Worker or Watcher scans.
+
+    HTTP 429 and 418 raise without sleeping on Retry-After. Bybit stays the
+    secondary source when settings already select it. The deadline is a
+    monotonic timestamp; the caller owns the wall-clock budget.
+    """
+
+    return resolve_perpetual_evidence_source(
+        settings,
+        transport=transport,
+        catalog=None,
+        shared=False,
+        symbol=symbol,
+        max_retries=0,
+        fail_fast_rate_limits=True,
+        deadline_monotonic=deadline_monotonic,
+    )
+
+
 def resolve_perpetual_evidence_source(
     settings: Settings,
     *,
@@ -65,6 +92,9 @@ def resolve_perpetual_evidence_source(
     catalog: PerpetualInstrumentCatalog | None = None,
     shared: bool = False,
     symbol: str = "BTCUSDT",
+    max_retries: int | None = None,
+    fail_fast_rate_limits: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> PerpetualEvidenceSource:
     mode = settings.perpetual_evidence_source.strip().lower()
     secondary = settings.perpetual_evidence_secondary_source.strip().lower()
@@ -78,16 +108,48 @@ def resolve_perpetual_evidence_source(
     if mode in REPLAY_MODES:
         return ReplayPerpetualSource()
     if mode == "bybit_usdt_perpetual":
-        return _bybit_source(settings, transport=transport, symbol=symbol, shared=shared)
+        return _bybit_source(
+            settings,
+            transport=transport,
+            symbol=symbol,
+            shared=shared,
+            max_retries=max_retries,
+            fail_fast_rate_limits=fail_fast_rate_limits,
+            deadline_monotonic=deadline_monotonic,
+        )
     if mode in LIVE_MODES and secondary == "bybit_usdt_perpetual":
         return FailoverPerpetualSource(
-            _binance_source(settings, transport=transport, catalog=catalog, shared=shared),
-            _bybit_source(settings, transport=transport, symbol=symbol, shared=shared),
+            _binance_source(
+                settings,
+                transport=transport,
+                catalog=catalog,
+                shared=shared,
+                max_retries=max_retries,
+                fail_fast_rate_limits=fail_fast_rate_limits,
+                deadline_monotonic=deadline_monotonic,
+            ),
+            _bybit_source(
+                settings,
+                transport=transport,
+                symbol=symbol,
+                shared=shared,
+                max_retries=max_retries,
+                fail_fast_rate_limits=fail_fast_rate_limits,
+                deadline_monotonic=deadline_monotonic,
+            ),
             primary_instrument=binance_usdm_perpetual(symbol),
             secondary_instrument=bybit_usdt_perpetual(symbol),
         )
     if mode in LIVE_MODES:
-        return _binance_source(settings, transport=transport, catalog=catalog, shared=shared)
+        return _binance_source(
+            settings,
+            transport=transport,
+            catalog=catalog,
+            shared=shared,
+            max_retries=max_retries,
+            fail_fast_rate_limits=fail_fast_rate_limits,
+            deadline_monotonic=deadline_monotonic,
+        )
     raise FallbackForbiddenError(
         f"Unknown perpetual_evidence_source={mode}; refusing silent fallback."
     )
@@ -99,16 +161,27 @@ def _binance_source(
     transport: httpx.BaseTransport | None,
     catalog: PerpetualInstrumentCatalog | None,
     shared: bool,
+    max_retries: int | None = None,
+    fail_fast_rate_limits: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> BinanceUsdmPerpetualSource:
     pool = shared_binance_evidence_pool(settings) if shared else None
+    pause: UpstreamPause | None = None if pool is None else pool.ban_gate
+    if pool is None and fail_fast_rate_limits:
+        # Chat keeps its own no-retry client but must honor a process-wide 418
+        # ban (or worker 429 pause) instead of calling Binance through it.
+        pause = SharedBanPauseView(shared_binance_evidence_pool(settings).ban_gate)
+    retries = settings.binance_request_max_retries if max_retries is None else max_retries
     return BinanceUsdmPerpetualSource(
         base_url=settings.market_data_futures_base_url,
         timeout_seconds=settings.perpetual_evidence_timeout_seconds,
         transport=transport,
         catalog=catalog,
-        max_retries=settings.binance_request_max_retries,
+        max_retries=retries,
         weight_per_minute=settings.binance_request_weight_per_minute,
         max_backoff_seconds=settings.binance_request_max_backoff_seconds,
+        fail_fast_rate_limits=fail_fast_rate_limits,
+        deadline_monotonic=deadline_monotonic,
         trade_cache_entries=settings.binance_evidence_cache_entries,
         cache_ttl_seconds=settings.binance_evidence_cache_ttl_seconds,
         max_cached_rows=settings.binance_evidence_cache_max_rows,
@@ -117,7 +190,7 @@ def _binance_source(
         observation_cache=None if pool is None else pool.observations,
         observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
         budget=None if pool is None else pool.budget,
-        pause=None if pool is None else pool.ban_gate,
+        pause=pause,
         kline_cache=None if pool is None else pool.kline_cache,
         quote_cache=None if pool is None else pool.quote_cache,
     )
@@ -129,7 +202,11 @@ def _bybit_source(
     transport: httpx.BaseTransport | None,
     symbol: str = "BTCUSDT",
     shared: bool = False,
+    max_retries: int | None = None,
+    fail_fast_rate_limits: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> BybitUsdtPerpetualSource:
+    retries = settings.binance_request_max_retries if max_retries is None else max_retries
     return BybitUsdtPerpetualSource(
         reuse_recent_pages=shared,
         observation_clock=(lambda: datetime.now(UTC)) if transport is None else None,
@@ -137,6 +214,8 @@ def _bybit_source(
         base_url=settings.bybit_perpetual_base_url,
         timeout_seconds=settings.perpetual_evidence_timeout_seconds,
         transport=transport,
-        max_retries=settings.binance_request_max_retries,
+        max_retries=retries,
         max_backoff_seconds=settings.binance_request_max_backoff_seconds,
+        fail_fast_rate_limits=fail_fast_rate_limits,
+        deadline_monotonic=deadline_monotonic,
     )

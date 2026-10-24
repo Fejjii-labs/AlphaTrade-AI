@@ -84,20 +84,11 @@ assert_no_secrets "$health_json"
 
 echo "2/16 — /health/ready"
 ready_json="$(curl_api "${BACKEND_URL}/health/ready")"
-python3 - <<'PY' "$ready_json" "$ALLOW_DEGRADED_READY"
-import json, sys
-p = json.loads(sys.argv[1])
-allow = sys.argv[2].lower() in ("1", "true", "yes")
-if p.get("ready") is True:
-    print("  OK: ready")
-    names = p.get("degraded_providers") or []
-    if names:
-        print("  degraded_providers=" + ",".join(str(name) for name in names))
-elif allow:
-    print(f"  WARN: degraded — {p.get('providers_unavailable', '?')} providers unavailable")
-else:
-    assert p.get("ready") is True, p
-PY
+ready_check=(python3 "${ROOT_DIR}/scripts/lib/ready_health.py" "$ready_json")
+case "${ALLOW_DEGRADED_READY}" in
+  1|true|TRUE|yes|YES) ready_check+=(--allow-degraded-ready) ;;
+esac
+"${ready_check[@]}"
 assert_no_secrets "$ready_json"
 
 echo "3/16 — verify-safety invariants"

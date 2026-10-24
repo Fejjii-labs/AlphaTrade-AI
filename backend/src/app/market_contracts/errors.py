@@ -71,6 +71,14 @@ class UpstreamBanError(RateLimitedError):
     """Binance HTTP 418 IP ban. Temporary. Not a 401/403/451 regional block."""
 
 
+class RetrievalBudgetExceededError(Exception):
+    """A bounded read stopped because its wall-clock budget was spent.
+
+    This is not a market-contract failure. Chat retrieval uses it so a long
+    upstream wait cannot be turned into a partial quote and then continued.
+    """
+
+
 class NetworkMutationForbiddenError(MarketContractError):
     """The read-only adapter refused a non-GET or non-allowlisted path."""
 

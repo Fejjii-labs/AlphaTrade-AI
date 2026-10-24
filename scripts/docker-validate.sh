@@ -26,17 +26,7 @@ python3 "${ROOT_DIR}/scripts/lib/watcher_paper_health.py" "$health_json"
 
 echo "Checking /health/ready..."
 ready_json="$(curl -fsS "${BASE_URL}/health/ready")"
-python3 - <<'PY' "$ready_json"
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-assert payload.get("ready") is True, payload
-names = payload.get("degraded_providers") or []
-if names:
-    print("  degraded_providers=" + ",".join(str(name) for name in names))
-print("  ready=true")
-PY
+python3 "${ROOT_DIR}/scripts/lib/ready_health.py" "$ready_json"
 
 echo "Checking /providers/status fallback/mock posture..."
 providers_json="$(curl -fsS "${BASE_URL}/providers/status")"

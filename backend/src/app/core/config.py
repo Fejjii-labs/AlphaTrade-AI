@@ -413,6 +413,9 @@ class Settings(BaseSettings):
     perpetual_evidence_secondary_source: str = "none"
     bybit_perpetual_base_url: str = "https://api.bybit.com"
     perpetual_evidence_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
+    # Agent chat only. The whole market quote stops at this wall clock.
+    # Worker and Watcher scans keep the request retry settings below.
+    agent_chat_market_retrieval_budget_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
     # Public USD-M request-weight budget. 2400/min is the exchange IP cap.
     binance_request_weight_per_minute: int = Field(default=1800, ge=20, le=2400)
     # One retry. Extra retries during HTTP 418/429 multiply request weight.

@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -28,6 +30,7 @@ from app.market_contracts.errors import (
     NetworkMutationForbiddenError,
     RateLimitedError,
     RegionalProviderFailureError,
+    RetrievalBudgetExceededError,
     SpotFallbackRejectedError,
     UnapprovedEvidenceHostError,
     UpstreamBanError,
@@ -78,6 +81,16 @@ _SECRET_MARKERS = (
 
 logger = structlog.get_logger(__name__)
 
+# Bounded chat reads run each GET on this pool so the caller can stop waiting
+# at the deadline even when a slow body keeps the socket busy.
+_BOUNDED_GET_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bounded-market-get")
+
+
+def deadline_clock() -> float:
+    """The one clock for chat retrieval deadlines (reader and HTTP client)."""
+
+    return time.monotonic()
+
 
 @dataclass
 class UpstreamPause:
@@ -118,6 +131,35 @@ class UpstreamPause:
             self._kind = None
 
 
+class SharedBanPauseView(UpstreamPause):
+    """Honor a process-wide pause without leaking private 429 pauses into it.
+
+    A chat client reads the shared gate, so an open 418 ban or worker 429 pause
+    fails the chat read before any request. Its own 418 is a process fact and is
+    recorded on the shared gate; its own 429 stays private to this client.
+    """
+
+    def __init__(self, shared: UpstreamPause) -> None:
+        super().__init__()
+        self._shared = shared
+
+    def remaining(self) -> tuple[str, float] | None:
+        shared = self._shared.remaining()
+        if shared is not None and shared[0] == "ban":
+            return shared
+        local = super().remaining()
+        return local if local is not None else shared
+
+    def note(self, kind: str, seconds: float) -> None:
+        if kind == "ban":
+            self._shared.note(kind, seconds)
+            return
+        super().note(kind, seconds)
+
+    def clear(self) -> None:
+        super().clear()
+
+
 class ReadOnlyHttpGetClient:
     """Allowlisted HTTPS GET client. Never sends credentials or mutations."""
 
@@ -138,6 +180,8 @@ class ReadOnlyHttpGetClient:
         budget: SlidingWeightBudget | None = None,
         progress_interval_seconds: float = _PROGRESS_INTERVAL_SECONDS,
         pause: UpstreamPause | None = None,
+        fail_fast_rate_limits: bool = False,
+        deadline_monotonic: float | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._allowed_hosts = allowed_hosts or APPROVED_BINANCE_USDM_REST_HOSTS
@@ -147,6 +191,9 @@ class ReadOnlyHttpGetClient:
         self._owns_client = client is None
         self._max_retries = max_retries
         self._max_backoff_seconds = max_backoff_seconds
+        self._timeout_seconds = timeout_seconds
+        self._fail_fast_rate_limits = fail_fast_rate_limits
+        self._deadline_monotonic = deadline_monotonic
         self._sleep = sleeper if sleeper is not None else time.sleep
         self._progress_interval_seconds = max(progress_interval_seconds, 0.01)
         self._budget = budget or SlidingWeightBudget(
@@ -207,7 +254,8 @@ class ReadOnlyHttpGetClient:
         attempts = self._max_retries + 1
         last_retry_after: float | None = None
         for attempt in range(attempts):
-            self._budget.acquire(weight, sleeper=self._sleep)
+            self._raise_if_past_deadline()
+            self._budget.acquire(weight, sleeper=self._weight_sleeper())
             try:
                 response = self._exchange_get(url, params)
             except httpx.TransportError as exc:
@@ -245,10 +293,11 @@ class ReadOnlyHttpGetClient:
                     retry_after_seconds=last_retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
-                if attempt + 1 >= attempts:
+                if self._fail_fast_rate_limits or attempt + 1 >= attempts:
                     # A finished 429 belongs to the caller. Parking this process
                     # for Retry-After would block the next attempt after the
-                    # in-call sleep already honored that header.
+                    # in-call sleep already honored that header. Chat retrieval
+                    # sets fail_fast so the first 429 does not sleep at all.
                     raise RateLimitedError(
                         f"{self._failure_label} source rate-limited the read-only client.",
                         retry_after_seconds=last_retry_after,
@@ -274,7 +323,9 @@ class ReadOnlyHttpGetClient:
                 # Hold the full Retry-After, not only the capped in-call sleep,
                 # so the next call does not extend the ban.
                 self._pause.note("ban", _pause_seconds(retry_after, delay))
-                if not self._upstream_ban_retry_allowed(attempt, retry_after):
+                if self._fail_fast_rate_limits or not self._upstream_ban_retry_allowed(
+                    attempt, retry_after
+                ):
                     raise UpstreamBanError(
                         f"{self._failure_label} source temporarily banned this client (HTTP 418).",
                         retry_after_seconds=retry_after,
@@ -356,6 +407,46 @@ class ReadOnlyHttpGetClient:
             path=path,
         )
 
+    def _weight_sleeper(self) -> Callable[[float], None]:
+        """Worker scans sleep inside the weight window. Chat does not."""
+
+        if self._fail_fast_rate_limits or self._deadline_monotonic is not None:
+            return self._refuse_weight_wait
+        return self._sleep
+
+    def _refuse_weight_wait(self, seconds: float) -> None:
+        self._raise_if_past_deadline()
+        if seconds <= 0:
+            return
+        if self._fail_fast_rate_limits:
+            raise RateLimitedError(
+                f"{self._failure_label} source rate-limited the read-only client.",
+                retry_after_seconds=seconds,
+            )
+        remaining = self._seconds_left()
+        if remaining is not None and seconds > remaining:
+            raise RetrievalBudgetExceededError("market data unavailable")
+        self._sleep(seconds)
+
+    def _seconds_left(self) -> float | None:
+        if self._deadline_monotonic is None:
+            return None
+        return self._deadline_monotonic - deadline_clock()
+
+    def _raise_if_past_deadline(self) -> None:
+        remaining = self._seconds_left()
+        if remaining is not None and remaining <= 0:
+            raise RetrievalBudgetExceededError("market data unavailable")
+
+    def _request_timeout(self) -> float:
+        """Cap one GET by the time still left in a chat retrieval budget."""
+
+        self._raise_if_past_deadline()
+        remaining = self._seconds_left()
+        if remaining is None:
+            return self._timeout_seconds
+        return max(min(self._timeout_seconds, remaining), 0.001)
+
     def _upstream_ban_retry_allowed(self, attempt: int, retry_after: float | None) -> bool:
         """Retry a 418 only inside the existing attempt budget and ban window.
 
@@ -376,8 +467,9 @@ class ReadOnlyHttpGetClient:
 
         hook = current_progress_hook()
         query = dict(params or {})
+        timeout = self._request_timeout()
         if hook is None:
-            return self._client.get(url, params=query)
+            return self._bounded_get(url, query, timeout)
         stop = threading.Event()
 
         def _pulse() -> None:
@@ -390,10 +482,27 @@ class ReadOnlyHttpGetClient:
         thread = threading.Thread(target=_pulse, name="binance-read-heartbeat", daemon=True)
         thread.start()
         try:
-            return self._client.get(url, params=query)
+            return self._bounded_get(url, query, timeout)
         finally:
             stop.set()
             thread.join(timeout=self._progress_interval_seconds)
+
+    def _bounded_get(self, url: str, query: dict[str, str | int], timeout: float) -> httpx.Response:
+        """One GET. With a deadline, the whole request must finish inside it.
+
+        httpx timeouts are per phase (connect, read, write, pool), so a body that
+        trickles in can outlive them. With a deadline the GET runs on a helper
+        thread and the caller stops waiting once the remaining budget is spent.
+        """
+
+        if self._deadline_monotonic is None:
+            return self._client.get(url, params=query, timeout=timeout)
+        future = _BOUNDED_GET_POOL.submit(self._client.get, url, params=query, timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise RetrievalBudgetExceededError("market data unavailable") from exc
 
     def _normalize_path(self, path: str) -> str:
         if path.startswith("http://") or path.startswith("https://"):
