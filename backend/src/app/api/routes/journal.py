@@ -20,7 +20,7 @@ from app.core.dependencies import (
     SessionDep,
     SetupEvidenceServiceDep,
 )
-from app.core.errors import NotFoundError
+from app.core.errors import JOURNAL_ENTRY_NOT_FOUND_MSG, JOURNAL_TRADE_NOT_FOUND_MSG, NotFoundError
 from app.schemas.backtest import (
     JournalComparisonFilters,
     JournalComparisonResponse,
@@ -84,12 +84,11 @@ from app.services.manual_demo_history import ManualDemoHistoryService
 router = APIRouter(prefix="/journal", tags=["journal"])
 
 _ATTACHMENT_NOT_FOUND_MSG = "Attachment not found."
-_JOURNAL_ENTRY_NOT_FOUND_MSG = "Journal entry not found."
 
 
 def _require_journal_trade_owner(trade: JournalTradeRead, tenant: TenantDep) -> None:
     if trade.user_id != tenant.user_id:
-        raise NotFoundError("Journal trade not found.")
+        raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
 
 
 def _load_owned_journal_trade(
@@ -109,7 +108,7 @@ def _load_owned_journal_entry(
 ) -> JournalEntry:
     entry = journal_service.get(journal_entry_id)
     if entry.organization_id != tenant.organization_id or entry.user_id != tenant.user_id:
-        raise NotFoundError(_JOURNAL_ENTRY_NOT_FOUND_MSG)
+        raise NotFoundError(JOURNAL_ENTRY_NOT_FOUND_MSG)
     return entry
 
 
@@ -677,7 +676,7 @@ async def get_journal_trade(
         if ref.startswith("blofin-demo-history:"):
             return detail
         if detail.trade.execution_lifecycle_id is None:
-            raise NotFoundError("Journal trade not found.")
+            raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
         attempt = ManualDemoHistoryService(session).get(tenant, detail.trade.execution_lifecycle_id)
         if attempt.evidence.journal_trade_id != journal_trade_id:
             raise NotFoundError("Journal trade lineage mismatch.")

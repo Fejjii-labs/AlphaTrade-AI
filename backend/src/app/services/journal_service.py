@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFoundError
+from app.core.errors import JOURNAL_ENTRY_NOT_FOUND_MSG, NotFoundError
 from app.db.models import TradeJournal as JournalModel
 from app.repositories.documents import DocumentRepository
 from app.repositories.journal import JournalRepository
@@ -92,13 +92,13 @@ class JournalService:
     def get(self, entry_id: uuid.UUID) -> JournalEntry:
         row = self._repo.get(entry_id)
         if row is None:
-            raise NotFoundError("Journal entry not found")
+            raise NotFoundError(JOURNAL_ENTRY_NOT_FOUND_MSG)
         return _to_schema(row, documents=self._documents)
 
     def update(self, entry_id: uuid.UUID, data: JournalEntryUpdate) -> JournalEntry:
         row = self._repo.get(entry_id)
         if row is None:
-            raise NotFoundError("Journal entry not found")
+            raise NotFoundError(JOURNAL_ENTRY_NOT_FOUND_MSG)
         updates = data.model_dump(exclude_unset=True)
         for key, value in updates.items():
             setattr(row, key, value)
@@ -171,7 +171,7 @@ class JournalService:
     def delete(self, entry_id: uuid.UUID) -> None:
         row = self._repo.get(entry_id)
         if row is None:
-            raise NotFoundError("Journal entry not found")
+            raise NotFoundError(JOURNAL_ENTRY_NOT_FOUND_MSG)
         self._record_audit(row, "delete")
         self._repo.delete(row)
 

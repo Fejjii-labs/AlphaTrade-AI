@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError, ValidationAppError
+from app.core.errors import JOURNAL_TRADE_NOT_FOUND_MSG, NotFoundError, ValidationAppError
 from app.db.models import JournalTrade, JournalTradeAttachment, JournalTradeEvidence
 from app.repositories.journal_trades import (
     JournalTradeAttachmentRepository,
@@ -171,18 +171,6 @@ class JournalAttachmentService:
         attachment = self._get_attachment(attachment_id, organization_id=organization_id)
         return self._storage.retrieve(attachment)
 
-    def get_content(
-        self,
-        attachment_id: uuid.UUID,
-        *,
-        organization_id: uuid.UUID,
-    ) -> tuple[JournalTradeAttachmentRead, bytes]:
-        attachment = self._get_attachment(attachment_id, organization_id=organization_id)
-        return (
-            JournalTradeAttachmentRead.model_validate(attachment),
-            self._storage.retrieve(attachment),
-        )
-
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
@@ -190,7 +178,7 @@ class JournalAttachmentService:
     def _get_trade(self, trade_id: uuid.UUID, *, organization_id: uuid.UUID) -> JournalTrade:
         trade = self._trades.get_scoped(trade_id, organization_id=organization_id)
         if trade is None:
-            raise NotFoundError("Journal trade not found")
+            raise NotFoundError(JOURNAL_TRADE_NOT_FOUND_MSG)
         return trade
 
     def _get_attachment(

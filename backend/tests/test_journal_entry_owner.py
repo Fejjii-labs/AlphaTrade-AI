@@ -225,3 +225,33 @@ def test_discipline_routes_require_entry_owner(
         headers=headers_other_user,
     )
     assert denied_candidate.status_code == 404
+
+
+def test_journal_entry_missing_and_not_owned_404_bodies_are_identical(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    _seed_other_trader_in_org_a(factory)
+    headers_owner = _auth(test_client, "entry-a@test.example")
+    headers_other_org = _auth(test_client, "entry-b@test.example")
+    headers_other_user = _auth(test_client, "entry-other-trader-a@test.example")
+    entry_id = _create_entry(test_client, headers_owner)
+
+    missing = test_client.get(f"/journal/entries/{uuid.uuid4()}", headers=headers_other_user)
+    not_owned = test_client.get(f"/journal/entries/{entry_id}", headers=headers_other_user)
+    other_org = test_client.get(f"/journal/entries/{entry_id}", headers=headers_other_org)
+    assert missing.status_code == not_owned.status_code == other_org.status_code == 404
+    assert (
+        _stable_error_body(missing)
+        == _stable_error_body(not_owned)
+        == _stable_error_body(other_org)
+    )
+    assert set(missing.json()) == {"error"}
+
+
+def _stable_error_body(response: object) -> dict[str, object]:
+    """Error body without per-request correlation ids, for byte-identity checks."""
+    error = dict(response.json()["error"])  # type: ignore[attr-defined]
+    for key in ("request_id", "trace_id"):
+        error.pop(key, None)
+    return error

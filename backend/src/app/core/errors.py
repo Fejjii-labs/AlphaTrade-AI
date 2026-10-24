@@ -180,3 +180,9 @@ def register_exception_handlers(app: FastAPI) -> None:
                 request=request,
             ),
         )
+
+
+# Shared 404 messages: "missing" and "not owned" must be byte-identical so the
+# response body cannot be used as an existence oracle for another user's ids.
+JOURNAL_TRADE_NOT_FOUND_MSG = "Journal trade not found."
+JOURNAL_ENTRY_NOT_FOUND_MSG = "Journal entry not found."
