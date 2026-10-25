@@ -273,7 +273,16 @@ class SafetyEpochService:
         # day is behind the stamped day must never reset the count backwards,
         # or alternating users could bypass the daily cap. ``max_trade_slots``
         # is likewise refreshed only on a forward roll.
-        if stamped is not None and today <= stamped:
+        if stamped is None:
+            # First roll on a row that was never stamped (created before #318,
+            # or by a non-rolling caller). Its counters may hold today's
+            # trades, so stamp today and keep them: zeroing here would let an
+            # unstamped row bypass the cap once. The next forward day rolls.
+            accounting.max_trade_slots = int(settings.max_trades_per_day)
+            accounting.trade_slot_business_date = today
+            accounting.version = int(accounting.version) + 1
+            return
+        if today <= stamped:
             return
         self._release_orphaned_paper_reservations(
             accounting,
