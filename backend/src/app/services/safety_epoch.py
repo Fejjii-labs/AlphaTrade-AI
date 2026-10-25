@@ -129,8 +129,9 @@ class SafetyEpochService:
     ) -> AccountRiskAccountingState:
         """Lock the account ledger. Paper callers may roll the trade-slot day.
 
-        ``roll_daily_trade_slots`` is for the internal paper venue only. Demo
-        and every other caller leave the lifetime counters untouched. The roll
+        ``roll_daily_trade_slots`` is for the internal paper and BloFin demo
+        venues (see ``paper_daily_trade_roll``). Other callers leave the
+        counters untouched. The roll
         runs while this row lock is held, so two claims at a day boundary
         apply it once.
         """
@@ -259,13 +260,29 @@ class SafetyEpochService:
         ``PAPER_UNFILLED_RESERVATION_MAX_AGE`` and has no fill, is released
         here so a crash cannot hold the slot forever. ``max_trade_slots`` is
         copied from the user's current ``max_trades_per_day`` only when the
-        business day changes. A row already stamped with that day is a no-op,
-        including a second claim that waited on this lock.
+        business day moves forward. A row already stamped with that day, or a
+        later one (another user in a timezone ahead), is a no-op, including a
+        second claim that waited on this lock.
         """
 
         settings = self._risk_settings.get(organization_id=organization_id, user_id=user_id)
         today = paper_trading_day(now, settings.timezone)
-        if _as_date(accounting.trade_slot_business_date) == today:
+        stamped = _as_date(accounting.trade_slot_business_date)
+        # Forward-only. The ledger row is shared by the whole org account, but
+        # the day comes from the claiming user's timezone. A user whose local
+        # day is behind the stamped day must never reset the count backwards,
+        # or alternating users could bypass the daily cap. ``max_trade_slots``
+        # is likewise refreshed only on a forward roll.
+        if stamped is None:
+            # First roll on a row that was never stamped (created before #318,
+            # or by a non-rolling caller). Its counters may hold today's
+            # trades, so stamp today and keep them: zeroing here would let an
+            # unstamped row bypass the cap once. The next forward day rolls.
+            accounting.max_trade_slots = int(settings.max_trades_per_day)
+            accounting.trade_slot_business_date = today
+            accounting.version = int(accounting.version) + 1
+            return
+        if today <= stamped:
             return
         self._release_orphaned_paper_reservations(
             accounting,
@@ -439,10 +456,19 @@ class SafetyEpochService:
         }
 
 
-def paper_daily_trade_roll(execution_venue: str | None) -> bool:
-    """Trade-slot days roll on the internal paper venue only."""
+BLOFIN_DEMO_VENUE = "BLOFIN_DEMO"
+DAILY_TRADE_ROLL_VENUES = frozenset({INTERNAL_PAPER_VENUE, BLOFIN_DEMO_VENUE})
 
-    return execution_venue == INTERNAL_PAPER_VENUE
+
+def paper_daily_trade_roll(execution_venue: str | None) -> bool:
+    """Trade-slot days roll on the internal paper and BloFin demo venues (#318).
+
+    Demo shares the same roll: row lock, idempotent within a business day,
+    open reservations keep their slots. Orphaned demo reservations are still
+    released only by manual demo recovery, which checks venue truth first.
+    """
+
+    return execution_venue in DAILY_TRADE_ROLL_VENUES
 
 
 def paper_trading_day(now: datetime, timezone_name: str) -> date:

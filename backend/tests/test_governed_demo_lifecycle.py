@@ -658,7 +658,9 @@ def test_a_new_confirmed_candidate_can_enter_after_verified_exit_without_reset(m
         assert (
             session.scalar(select(func.count()).select_from(GovernedDemoLifecycleResolution)) == 1
         )
-        assert session.scalar(select(AccountRiskAccountingState)).actual_trade_count == 2
+        # #318: demo trade slots roll per business day. The second entry is 30
+        # days later, so only it counts toward today's cap.
+        assert session.scalar(select(AccountRiskAccountingState)).actual_trade_count == 1
         assert has_demo_entry_history(
             session, organization_id=ORG, account_id=commands[-1].account_id
         )

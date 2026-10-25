@@ -187,7 +187,7 @@ describe("ResearchValidationPage AT-035", () => {
         backtest_run_id: RUN_ID,
       });
     });
-    expect(screen.getByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+    expect(await screen.findByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
       /promoted to the paper validation queue/i,
     );
   });
