@@ -275,9 +275,15 @@ class SafetyEpochService:
         # is likewise refreshed only on a forward roll.
         if stamped is None:
             # First roll on a row that was never stamped (created before #318,
-            # or by a non-rolling caller). Its counters may hold today's
-            # trades, so stamp today and keep them: zeroing here would let an
-            # unstamped row bypass the cap once. The next forward day rolls.
+            # or by a non-rolling caller). ``actual_trade_count`` is then a
+            # lifetime count. If the row was last written before today's
+            # local midnight, none of it is from today, so drop it. If it was
+            # written today it may hold today's trades: keep it, so an
+            # unstamped row cannot bypass the cap. Reserved slots are kept
+            # either way. Orphan release is not run here; the next forward
+            # roll does it.
+            if self._last_written_before(accounting, day=today, timezone_name=settings.timezone):
+                accounting.actual_trade_count = 0
             accounting.max_trade_slots = int(settings.max_trades_per_day)
             accounting.trade_slot_business_date = today
             accounting.version = int(accounting.version) + 1
@@ -294,6 +300,26 @@ class SafetyEpochService:
         accounting.max_trade_slots = int(settings.max_trades_per_day)
         accounting.trade_slot_business_date = today
         accounting.version = int(accounting.version) + 1
+
+    @staticmethod
+    def _last_written_before(
+        accounting: AccountRiskAccountingState,
+        *,
+        day: date,
+        timezone_name: str,
+    ) -> bool:
+        """True when the row's last write is before local midnight of ``day``."""
+
+        written = accounting.updated_at
+        if written is None:
+            return False
+        tz_name, fell_back = normalize_timezone(timezone_name)
+        try:
+            zone = UTC if fell_back else ZoneInfo(tz_name)
+        except Exception:
+            zone = UTC
+        start = datetime(day.year, day.month, day.day, tzinfo=zone)
+        return _aware(written) < start.astimezone(UTC)
 
     def _release_orphaned_paper_reservations(
         self,

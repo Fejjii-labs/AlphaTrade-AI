@@ -795,6 +795,119 @@ def test_user_behind_the_stamped_day_cannot_reset_the_count_backwards(
         assert _stored_day(row) == ahead_day
 
 
+def test_unstamped_legacy_row_with_only_past_trades_is_allowed_on_first_stamp(
+    session: Session,
+) -> None:
+    """K1, adapted: a legacy actual=5, max=3 row from past days no longer blocks."""
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=None,
+        max_slots=3,
+        configured_max=3,
+        actual=5,
+        reserved=0,
+        timezone_name="Europe/Berlin",
+        updated_at=DAY - timedelta(days=2),
+    )
+    session.commit()
+
+    result = _claim(session, ids, plan, authorization, when=DAY, key="legacy-past")
+
+    assert result.outcome is ExecutionCommandOutcome.ALLOW
+    row = _ledger_row(session)
+    assert row.actual_trade_count == 0
+    assert row.reserved_trade_slots == 1
+    assert row.max_trade_slots == 3
+    assert _stored_day(row) == DAY.date()
+
+
+def test_unstamped_row_with_todays_trades_at_the_cap_is_refused(session: Session) -> None:
+    ids = _unstamped_with_todays_fills(session, todays_slots=2, lifetime=5, cap=2)
+
+    blocked = _claim_new_plan(session, ids, when=DAY, key="today-full")
+
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"
+    row = _ledger_row(session)
+    # Written today, so the lifetime count is kept rather than zeroed.
+    assert row.actual_trade_count == 5
+    assert row.max_trade_slots == 2
+    assert _stored_day(row) == DAY.date()
+
+
+def test_unstamped_row_refused_today_is_allowed_after_the_next_day_roll(
+    session: Session,
+) -> None:
+    ids = _unstamped_with_todays_fills(session, todays_slots=3, lifetime=5, cap=3)
+
+    blocked = _claim_new_plan(session, ids, when=DAY, key="k1-today")
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"
+    assert _ledger_row(session).actual_trade_count == 5
+
+    allowed = _claim_new_plan(session, ids, when=NEXT_DAY, key="k1-next")
+
+    assert allowed.outcome is ExecutionCommandOutcome.ALLOW
+    row = _ledger_row(session)
+    assert row.actual_trade_count == 0
+    assert _stored_day(row) == NEXT_DAY.date()
+
+
+def _unstamped_with_todays_fills(
+    session: Session, *, todays_slots: int, lifetime: int, cap: int
+) -> dict[str, object]:
+    """An unstamped legacy row last written today, with fills from today."""
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=cap,
+        configured_max=cap,
+        actual=0,
+        reserved=0,
+        timezone_name="Europe/Berlin",
+    )
+    session.commit()
+    opened = _claim(session, ids, plan, authorization, when=DAY, key="today-fill")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+    reservation = _only_reservation(session)
+    reservation.created_at = DAY - timedelta(hours=1)
+    reservation.converted_trade_slots = todays_slots
+    reservation.remaining_reserved_notional = Decimal("0")
+    reservation.release_state = RiskReservationReleaseState.PARTIALLY_RELEASED
+    reservation.release_reason = RiskReservationReleaseReason.FILL_CONVERSION
+    row = _ledger_row(session)
+    row.trade_slot_business_date = None
+    row.actual_trade_count = lifetime
+    row.reserved_trade_slots = 0
+    row.updated_at = DAY - timedelta(minutes=30)
+    session.commit()
+    return ids
+
+
+def _claim_new_plan(
+    session: Session, ids: dict[str, object], *, when: datetime, key: str
+) -> object:
+    plan = persist_plan(
+        session,
+        ids,
+        plan_request(
+            ids,
+            execution_venue="PAPER_INTERNAL",
+            quantity={"value": "5", "unit": "CONTRACTS"},
+            **_window(when),
+        ),
+    )
+    authorization = approve_plan(session, ids, plan, clock=when - timedelta(minutes=1))
+    session.commit()
+    return _claim(session, ids, plan, authorization, when=when, key=key)
+
+
 def test_daily_roll_venues() -> None:
     from app.services.safety_epoch import paper_daily_trade_roll
 
@@ -1113,12 +1226,13 @@ def _ledger(
     ids: dict[str, object],
     plan: object,
     *,
-    business_day: date,
+    business_day: date | None,
     max_slots: int,
     configured_max: int,
     actual: int,
     reserved: int,
     timezone_name: str,
+    updated_at: datetime | None = None,
 ) -> None:
     organization = ids["organization"]
     user = ids["user"]
@@ -1152,6 +1266,7 @@ def _ledger(
             exposure_unit="USDT",
             trade_slot_business_date=business_day,
             version=1,
+            **({"updated_at": updated_at} if updated_at is not None else {}),
         )
     )
 
