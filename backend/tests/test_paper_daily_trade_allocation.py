@@ -856,6 +856,63 @@ def test_unstamped_row_refused_today_is_allowed_after_the_next_day_roll(
     assert _stored_day(row) == NEXT_DAY.date()
 
 
+def test_real_fill_on_unstamped_row_bumps_updated_at_and_same_day_stamp_keeps_count(
+    session: Session,
+) -> None:
+    """C1: the only actual_trade_count increment also moves updated_at."""
+    ids, plan, authorization = _prepare(session, venue="PAPER_INTERNAL", when=DAY)
+    _ledger(
+        session,
+        ids,
+        plan,
+        business_day=DAY.date(),
+        max_slots=1,
+        configured_max=1,
+        actual=0,
+        reserved=0,
+        timezone_name="Europe/Berlin",
+    )
+    session.commit()
+    opened = _claim(session, ids, plan, authorization, when=DAY, key="real-fill-open")
+    assert opened.outcome is ExecutionCommandOutcome.ALLOW
+
+    stale = DAY - timedelta(days=3)
+    row = _ledger_row(session)
+    row.trade_slot_business_date = None
+    session.flush()
+    row.updated_at = stale
+    session.commit()
+    assert _aware_utc(_ledger_row(session).updated_at) == stale
+
+    reservation = _only_reservation(session)
+    accounting = _ledger_row(session)
+    convert_reservation_for_fill(
+        reservation=reservation,
+        accounting=accounting,
+        fill_quantity=Decimal("1"),
+        fill_price=Decimal("100"),
+        now=DAY,
+    )
+    session.commit()
+
+    filled = _ledger_row(session)
+    assert filled.actual_trade_count == 1
+    assert filled.trade_slot_business_date is None
+    assert _aware_utc(filled.updated_at) > stale
+
+    blocked = _claim_new_plan(session, ids, when=DAY, key="real-fill-same-day")
+
+    assert blocked.outcome is ExecutionCommandOutcome.BLOCKED
+    assert blocked.blocked_reason_code == "insufficient_daily_trade_allocation"
+    row = _ledger_row(session)
+    assert row.actual_trade_count == 1
+    assert _stored_day(row) == DAY.date()
+
+
+def _aware_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _unstamped_with_todays_fills(
     session: Session, *, todays_slots: int, lifetime: int, cap: int
 ) -> dict[str, object]:
