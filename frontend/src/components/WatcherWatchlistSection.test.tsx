@@ -42,6 +42,20 @@ describe("WatcherWatchlistEditor", () => {
     expect(screen.getByTestId("watchlist-status-2")).toHaveTextContent("contract unverified");
   });
 
+  it("lays each slot on the Row baseline with the source badge on that baseline", () => {
+    render(
+      <WatcherWatchlistEditor
+        slots={DEFAULT_WATCHLIST_SLOTS}
+        statuses={statuses}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("watchlist-slot-1")).toHaveClass("grid", "items-baseline", "min-h-10");
+    const badge = screen.getByTestId("watchlist-status-1").firstElementChild;
+    expect(badge).toHaveClass("self-baseline", "leading-none");
+  });
+
   it("toggles enable, edits a symbol, and reorders", () => {
     const onChange = vi.fn();
     render(

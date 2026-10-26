@@ -13,7 +13,7 @@ export default function SettingsBillingAndUsagePage() {
     <div className="space-y-10" data-testid="settings-billing-usage-page">
       <PageHeader
         title="Billing & Usage"
-        description="Subscription plans, billing actions, and organization token usage under one Settings section."
+        description="Plans, billing, and token usage."
       />
       <BillingPageView embedded />
       <section
