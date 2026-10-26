@@ -39,7 +39,7 @@ export function ApprovalDetailPanel({
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle>Approval {approval.id.slice(0, 8)}</CardTitle>
+          <CardTitle>Approval · {formatDate(approval.created_at)}</CardTitle>
           <StatusBadge label={approval.status.replaceAll("_", " ")} tone="pending" />
         </div>
       </CardHeader>

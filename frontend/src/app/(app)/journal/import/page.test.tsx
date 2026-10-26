@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import JournalImportPage from "./page";
 import { api } from "@/lib/api";
 import type { JournalImportResult } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 vi.mock("@/lib/api", () => ({
   api: {
@@ -101,7 +102,7 @@ describe("JournalImportPage (AT-033)", () => {
         ],
       }),
     );
-    expect(screen.getByText(/existing trade 11111111/)).toBeInTheDocument();
+    expect(screen.getByText("Already in your journal")).toBeInTheDocument();
   });
 
   it("disables commit while the dry-run reports invalid rows", async () => {
@@ -141,8 +142,9 @@ describe("JournalImportPage (AT-033)", () => {
     const commitButton = await screen.findByRole("button", { name: /Commit 2 row\(s\)/ });
     expect(commitButton).toBeEnabled();
     fireEvent.click(commitButton);
-    expect(await screen.findByText(/Import committed — batch aaaaaaaa/)).toBeInTheDocument();
+    expect(await screen.findByText(/Import committed — created/)).toBeInTheDocument();
     expect(importTrades).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "commit" }));
+    expectNoIdentifiers();
   });
 
   it("surfaces a commit failure and explains that re-running is safe", async () => {

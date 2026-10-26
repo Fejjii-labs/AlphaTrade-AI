@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AttentionCard, AttentionContent } from "./AttentionCard";
 import type { AttentionItem, AttentionQueue } from "@/lib/api/attention-types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const attention = vi.fn();
 vi.mock("@/lib/api", () => ({ api: { dashboard: { attention: () => attention() } } }));
@@ -28,10 +29,11 @@ describe("Dashboard attention", () => {
   it("shows provenance, recommendation and review state without mutation controls", () => {
     render(<AttentionContent queue={queue} now={now} />);
     expect(screen.getByText(/Risk block to review/)).toBeInTheDocument();
-    expect(screen.getByText(/source-1/)).toBeInTheDocument();
-    expect(screen.getByText(/Strategy version: version-1/)).toBeInTheDocument();
+    expect(screen.getByText(/Risk Events ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/source-1|version-1/)).not.toBeInTheDocument();
     expect(screen.getByText(/Acknowledgement: Unsupported/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /execute|approve|send|acknowledge/i })).not.toBeInTheDocument();
+    expectNoIdentifiers();
   });
   it("distinguishes no action from unavailable", async () => {
     attention.mockResolvedValue({ ...queue, items: [], recommended_next_action: null });

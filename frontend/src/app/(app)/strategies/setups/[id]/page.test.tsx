@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { BrainSetup } from "@/lib/api/brain-types";
 import BrainSetupPage from "./page";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const mocks = vi.hoisted(() => ({ setup: vi.fn() }));
 vi.mock("@/lib/api", () => ({ api: { strategyBrain: mocks } }));
@@ -58,7 +59,7 @@ it("shows the SFP condition, bound timeframe and research scope in stored detail
   expect(
     screen.getByText(/BTCUSDT · long · 4h · evidence/),
   ).toBeInTheDocument();
-  expect(screen.getByText("Strategy version sfp-version")).toBeInTheDocument();
+  expect(screen.queryByText(/sfp-version|Evidence reference/)).toBeNull();
   expect(
     screen.getByText(/No SFP execution plan is authorized/),
   ).toBeInTheDocument();
@@ -66,6 +67,7 @@ it("shows the SFP condition, bound timeframe and research scope in stored detail
   expect(
     screen.getByRole("link", { name: "← Back to detections" }),
   ).toHaveAttribute("href", "/strategies/detections?family=sfp");
+  expectNoIdentifiers();
 });
 
 it("shows a stored CONFIRMED setup as EXPIRED once its expiry has passed", async () => {

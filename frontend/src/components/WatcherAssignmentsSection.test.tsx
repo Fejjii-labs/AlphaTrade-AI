@@ -6,6 +6,7 @@ import { bindRecoverySession, invalidateRecoverySession } from "@/lib/auth/recov
 import { sessionCleared } from "@/lib/auth/session-events";
 import type { AssignmentsConfiguration } from "@/lib/monitoring/assignments-api";
 import { WatcherAssignmentsSection } from "./WatcherAssignmentsSection";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const { read, replace, validateRequest, auth } = vi.hoisted(() => ({ read: vi.fn(), replace: vi.fn(), validateRequest: vi.fn(), auth: { user: { id: "user-a" }, organization: { id: "org-a" } } }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
@@ -30,14 +31,15 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 async function loaded() { render(<WatcherAssignmentsSection />); await screen.findByText("BTCUSDT · Nested"); }
 function toggleFirst() { fireEvent.click(screen.getByLabelText("Monitor BTCUSDT Nested")); }
 
-it("renders compact saved versions and reasons, keeping identifiers and parameter evidence in details", async () => {
+it("renders compact saved versions and reasons, keeping parameter evidence in details without identifiers", async () => {
   await loaded();
   expect(screen.getAllByTestId("monitoring-assignment")).toHaveLength(2);
   expect(screen.getByTestId("monitoring-assignments")).toHaveTextContent("draft not executable");
   expect(screen.getByTestId("monitoring-assignments")).not.toHaveTextContent("assignment-0");
   fireEvent.click(within(screen.getAllByTestId("monitoring-assignment")[0]!).getByRole("button", { name: "Details" }));
   expect(screen.getByTestId("monitoring-assignment-details")).toHaveTextContent("confirmation_window");
-  expect(screen.getByTestId("monitoring-assignment-details")).toHaveTextContent("assignment-0");
+  expect(screen.getByTestId("monitoring-assignment-details")).not.toHaveTextContent("assignment-0");
+  expectNoIdentifiers();
   fireEvent.click(screen.getByRole("button", { name: "Back to monitoring" }));
   expect(screen.getByTestId("monitoring-assignments")).toBeInTheDocument();
 });

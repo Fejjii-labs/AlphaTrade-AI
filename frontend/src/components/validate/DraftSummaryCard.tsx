@@ -44,7 +44,7 @@ export function DraftSummaryCard({ draft }: DraftSummaryCardProps) {
               href={sourceAlertHref(draft.source_alert_id)}
               className="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
-              {draft.source_alert_id.slice(0, 8)}…
+              Open
             </Link>
           </p>
         </div>

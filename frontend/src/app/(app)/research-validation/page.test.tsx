@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ResearchValidationPage from "./page";
 import { PROMOTE_RESEARCH_VALIDATION_CANDIDATE } from "@/lib/api";
 import type { ResearchValidationEvidenceResponse } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const RUN_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -126,6 +127,7 @@ describe("ResearchValidationPage AT-035", () => {
     expect(screen.getByText(/confirm trade sample is below/i)).toBeInTheDocument();
     expect(screen.getByText(/out-of-sample metrics are missing/i)).toBeInTheDocument();
     expect(screen.getAllByText(/advisory only/i).length).toBeGreaterThan(0);
+    expectNoIdentifiers();
   });
 
   it("disables promote submit until confirm phrase typed", () => {

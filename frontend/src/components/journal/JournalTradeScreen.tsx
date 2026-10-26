@@ -157,10 +157,9 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
         {!reconciled && evidence?.missing_evidence[0] ? <p role="status" className="text-sm text-warning">{evidence.missing_evidence[0]}</p> : null}
         {attempt && !reconciled ? <Link href={`/execution/manual-demo/${encodeURIComponent(attempt.command_id)}`} className="inline-flex min-h-11 items-center text-sm text-accent">Open this exact attempt</Link> : null}
         <details className="rounded-control border border-border-subtle p-3 text-sm">
-          <summary className="cursor-pointer">Supporting evidence and identities</summary>
+          <summary className="cursor-pointer">Supporting evidence</summary>
           <div className="mt-3 space-y-2 break-words [overflow-wrap:anywhere]">
-            <p>Journal trade: {trade.id}</p>
-            {attempt && !reconciled ? <><p>Command: {attempt.command_id}</p><p>Native entry order: {evidence?.venue_order_id ?? "Unverified"}</p><p>Historically configured protection: {humanizeToken(evidence?.historical_protection)}</p><p>Active protection: {evidence?.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence?.protection)}</p><p>Triggered protection: {humanizeToken(evidence?.triggered_protection)}</p><p>Evidence observed: {formatDateTime(evidence?.observed_at)}</p></> : null}
+            {attempt && !reconciled ? <><p>Entry order: {evidence?.venue_order_id ? "Recorded on venue" : "Unverified"}</p><p>Historically configured protection: {humanizeToken(evidence?.historical_protection)}</p><p>Active protection: {evidence?.position_status === "closed_verified" ? "Not applicable to verified closed exposure" : humanizeToken(evidence?.protection)}</p><p>Triggered protection: {humanizeToken(evidence?.triggered_protection)}</p><p>Evidence observed: {formatDateTime(evidence?.observed_at)}</p></> : null}
             {!reconciled ? evidence?.missing_evidence.map((note) => <p key={note}>{note}</p>) : null}
             {data.evidence.map((item) => <p key={item.id}>{humanizeToken(item.kind)}: {item.caption ?? item.ref ?? "Recorded evidence"}</p>)}
             {data.rule_checks.map((item) => <p key={item.id}>{humanizeToken(item.rule_key)}: {humanizeToken(item.status)}{item.notes ? ` · ${item.notes}` : ""}</p>)}

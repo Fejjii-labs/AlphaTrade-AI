@@ -5,6 +5,7 @@ import type { SourceResult } from "@/components/workflows/sourceResult";
 import type { PaperValidationRunPlanItem } from "@/lib/api/types";
 
 import PaperValidationCandidatesPage from "./page";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => ({ killSwitchActive: false }),
@@ -54,7 +55,7 @@ const sampleCandidate = {
 };
 
 const activePlan: PaperValidationRunPlanItem = {
-  plan_id: "plan-active-1",
+  plan_id: "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
   candidate_id: "candidate-1",
   draft_id: "draft-1",
   source_alert_id: "alert-1",
@@ -146,9 +147,10 @@ describe("PaperValidationCandidatesPage Slice 80 / Phase C2", () => {
     render(<PaperValidationCandidatesPage />);
 
     const link = screen.getByTestId("paper-candidate-run-plan-link-candidate-1");
-    expect(link).toHaveAttribute("href", "/paper-validation/run-plans/plan-active-1");
+    expect(link).toHaveAttribute("href", "/paper-validation/run-plans/7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d");
     expect(link).toHaveTextContent(/planned/i);
     expect(link).not.toHaveTextContent(/historical/i);
+    expectNoIdentifiers();
   });
 
   it("labels a sole archived plan as historical", () => {

@@ -11,6 +11,7 @@ import type {
   ReviewSource,
   ReviewTopic,
 } from "@/lib/api/daily-review-types";
+import { formatDateTime, humanizeToken } from "@/lib/format";
 
 const TOPICS: Record<ReviewTopic, string> = {
   watcher_activity: "Watcher activity",
@@ -40,14 +41,10 @@ function Sources({ sources }: { sources: ReviewSource[] }) {
       <ul className="mt-1 space-y-1 break-words">
         {sources.map((source, index) => (
           <li key={index}>
-            {source.record_type} · {source.record_id} ·{" "}
-            <time dateTime={source.occurred_at}>{source.occurred_at}</time>
+            {humanizeToken(source.record_type)} ·{" "}
+            <time dateTime={source.occurred_at}>{formatDateTime(source.occurred_at)}</time>
             {source.version !== null ? ` · version ${source.version}` : ""}
             {source.upstream_system ? ` · ${source.upstream_system}` : ""}
-            {source.upstream_event_id
-              ? ` · event ${source.upstream_event_id}`
-              : ""}
-            {source.content_hash ? ` · hash ${source.content_hash}` : ""}
           </li>
         ))}
       </ul>
@@ -175,16 +172,6 @@ export function DailyReviewContent({
                   </p>
                   {item.text ? (
                     <p className="mt-1 whitespace-pre-wrap">{item.text}</p>
-                  ) : null}
-                  {item.candidate_id ? (
-                    <p className="text-xs text-text-muted">
-                      Candidate: {item.candidate_id}
-                    </p>
-                  ) : null}
-                  {item.strategy_version_id ? (
-                    <p className="text-xs text-text-muted">
-                      Strategy version: {item.strategy_version_id}
-                    </p>
                   ) : null}
                   <Sources sources={item.sources} />
                 </li>

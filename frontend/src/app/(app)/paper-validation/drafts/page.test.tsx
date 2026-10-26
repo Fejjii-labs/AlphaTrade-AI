@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SourceResult } from "@/components/workflows/sourceResult";
 
 import PaperValidationDraftsPage from "./page";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => ({ killSwitchActive: false }),
@@ -24,7 +25,7 @@ vi.mock("@/contexts/ShellFreshnessContext", () => ({
 
 const sampleDraft = {
   draft_id: "draft-1",
-  source_alert_id: "alert-1",
+  source_alert_id: "5f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
   symbol: "BTCUSDT",
   timeframe: "15m",
   condition: "order_block",
@@ -89,5 +90,6 @@ describe("PaperValidationDraftsPage Slice 78 / Phase C2", () => {
     expect(screen.getByTestId("paper-draft-next-draft-1")).toHaveTextContent(/missing checklist/i);
     expect(screen.queryByRole("button", { name: /place order/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /send to telegram/i })).not.toBeInTheDocument();
+    expectNoIdentifiers();
   });
 });

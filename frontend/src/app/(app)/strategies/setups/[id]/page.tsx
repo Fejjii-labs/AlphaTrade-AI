@@ -66,10 +66,6 @@ export default function BrainSetupPage() {
         <summary className="min-h-11 cursor-pointer">
           Technical evidence
         </summary>
-        <p>Strategy version {data.strategy_version_id}</p>
-        <p className="break-all">
-          Evidence reference {data.evidence_reference}
-        </p>
         <ul>
           {Object.entries(data.evidence).map(([name, state]) => (
             <li key={name}>

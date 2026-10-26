@@ -110,9 +110,8 @@ export function WatcherAssignmentsSection() {
       <p className="text-sm">Version {version?.version ?? saved?.version} · {selectedDetail.timeframes.join(" / ")}</p>
       <p className="text-xs text-text-muted">Saved parameters are immutable. Capture changes in Agent as a new strategy version.</p>
       <details>
-        <summary className="min-h-11 cursor-pointer content-center text-sm">Saved parameters &amp; IDs</summary>
+        <summary className="min-h-11 cursor-pointer content-center text-sm">Saved parameters</summary>
         <pre className="whitespace-pre-wrap break-words text-sm">{JSON.stringify(selectedDetail.parameters, null, 2)}</pre>
-        <p className="break-all text-sm text-text-muted">Assignment: {selectedDetail.id} · Version: {selectedDetail.strategy_version_id}</p>
       </details>
       {saved?.latest && <p className="text-xs">{formatDateTime(saved.latest.observed_at)} · {reason(saved.latest.reason_code)} · {saved.latest.candidate_count} candidates{saved.latest.replayed ? " · original scan replay" : ""}</p>}
     </section>;

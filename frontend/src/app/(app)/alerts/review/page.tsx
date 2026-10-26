@@ -490,7 +490,7 @@ export default function SetupAlertReviewPage() {
           data-testid="setup-alert-deep-link-active"
           role="status"
         >
-          Highlighting source alert {requestedAlertId.slice(0, 8)}… from Validate deep link. No
+          Highlighting the source alert from Validate. No
           review status was changed.
         </p>
       ) : null}

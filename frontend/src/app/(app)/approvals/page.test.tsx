@@ -176,7 +176,7 @@ describe("ApprovalsPage route honesty (FP2-129)", () => {
       reload: vi.fn(),
     };
     render(<ApprovalsPage />);
-    expect(screen.getByText(/Approval appr-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Approval ·/i)).toBeInTheDocument();
     expect(screen.getByTestId("approval-detail-panel")).toBeInTheDocument();
     expect(screen.queryByText(/No approval requests/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /approve for paper review/i }));

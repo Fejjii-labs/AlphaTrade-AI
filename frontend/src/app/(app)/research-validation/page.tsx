@@ -26,11 +26,6 @@ type EvidenceLoadResult =
   | { forbidden: true; data: null }
   | { forbidden: false; data: Awaited<ReturnType<typeof api.researchValidation.evidence>> };
 
-function shortHash(value: string | null | undefined): string {
-  if (!value) return "—";
-  return `${value.slice(0, 8)}…`;
-}
-
 function tierLabel(tier: SetupEvidenceTier): string {
   switch (tier) {
     case "tier1":
@@ -188,9 +183,8 @@ function EvidenceCard({
             {item.regime ? <Badge variant="info">{item.regime}</Badge> : null}
           </div>
           <p className="text-xs text-zinc-500">
-            Backtest{" "}
             <Link href={`/backtests/${item.backtest_run_id}`} className="text-sky-400 underline">
-              {item.backtest_run_id.slice(0, 8)}…
+              Open backtest
             </Link>
             {" · "}
             Sample {item.sample_size} · OOS trades {item.oos_trade_count}
@@ -210,9 +204,6 @@ function EvidenceCard({
             : "—"}
         </p>
         <p>Confirm trades: {item.confirm_trade_count}</p>
-        <p>Dataset: {shortHash(item.dataset_hash)}</p>
-        <p>Config: {shortHash(item.config_hash)}</p>
-        <p>Result: {shortHash(item.result_hash)}</p>
       </div>
 
       <EvidenceWarnings item={item} />

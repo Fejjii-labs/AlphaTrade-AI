@@ -222,7 +222,13 @@ describe("JournalQuickEntry prefill relationship integrity", () => {
     expect(screen.getByLabelText(/^Symbol$/i)).toHaveValue("SOLUSDT");
     expect(screen.getByLabelText(/^Direction$/i)).toHaveValue("short");
     expect(screen.getByLabelText(/What happened versus plan/i)).toHaveValue("Position B rationale");
-    expect(screen.getByTestId("quick-entry-related-position")).toHaveTextContent("pos-b");
+    expect(screen.getByTestId("quick-entry-related-position")).toHaveTextContent("Linked to an open position");
+    expect(screen.getByTestId("quick-entry-related-position")).not.toHaveTextContent("pos-b");
+    fireEvent.click(screen.getByRole("button", { name: /Save journal entry/i }));
+    await waitFor(() => {
+      expect(createMock).toHaveBeenCalled();
+    });
+    expect(createMock.mock.calls[0]?.[0].linked_position_id).toBe("pos-b");
   });
 
   it("clears proposal links when switching from valid proposal to cleared query", async () => {

@@ -58,7 +58,7 @@ function RunPlanRelationDisplay({
         className="text-text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         data-testid={`paper-candidate-run-plan-link-${candidateId}`}
       >
-        {label} ({relation.planId.slice(0, 8)}…)
+        {label}
       </Link>
     </dd>
   );

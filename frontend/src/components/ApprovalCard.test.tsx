@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApprovalCard } from "@/components/ApprovalCard";
 import type { ApprovalRequest } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const pendingApproval: ApprovalRequest = {
   id: "approval-12345678",
@@ -32,6 +33,7 @@ describe("ApprovalCard", () => {
     expect(screen.getByRole("button", { name: /approve for paper review/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reject proposal/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /needs more analysis/i })).toBeInTheDocument();
+    expectNoIdentifiers();
   });
 
   it("hides action buttons when approval is approved", () => {

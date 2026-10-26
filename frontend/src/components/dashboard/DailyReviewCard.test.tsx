@@ -7,6 +7,7 @@ import { describeSafetyPosture } from "@/components/workflows/safetyPostureDispl
 
 import { DailyReviewCard, DailyReviewContent } from "./DailyReviewCard";
 import type { DailyReview, ReviewItem } from "@/lib/api/daily-review-types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const dailyReview = vi.fn();
 vi.mock("@/lib/api", () => ({ api: { dashboard: { dailyReview: (...args: unknown[]) => dailyReview(...args) } } }));
@@ -88,11 +89,13 @@ describe("Daily Review", () => {
     expect(within(section(/^User observations/)).getByText("My reflection")).toBeInTheDocument();
     expect(within(section(/^System inference/)).getByText("Recorded skip")).toBeInTheDocument();
     expect(within(section(/^Research suggestions/)).getByText("Review lesson")).toBeInTheDocument();
-    expect(within(section(/^Facts/)).getAllByText(/trade-1/)[0]).toHaveTextContent("2026-10-01T12:00:00Z");
+    expect(within(section(/^Facts/)).getAllByText(/Journal Trades ·/)[0].querySelector("time")).toHaveAttribute("dateTime", "2026-10-01T12:00:00Z");
+    expect(within(section(/^Facts/)).queryByText(/trade-1/)).not.toBeInTheDocument();
     expect(screen.getByText("Recording coverage is not guaranteed.")).toBeInTheDocument();
     expect(screen.getByText(/Recorded net PnL/)).toHaveTextContent("3.123456789 (incomplete)");
     expect(screen.getByText(/Win rate:/)).toHaveTextContent("Win rate: Unavailable · Expectancy: Unavailable");
     expect(screen.getByText(/Statistics require/)).toHaveTextContent("at least 5 measured closes");
+    expectNoIdentifiers();
   });
   it("does not invent empty-day PnL or combine accounts", () => {
     const { rerender } = render(<DailyReviewContent review={{ ...review, daily_pnl: [] }} />);

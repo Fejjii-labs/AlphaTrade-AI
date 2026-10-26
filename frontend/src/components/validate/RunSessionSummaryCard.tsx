@@ -68,7 +68,7 @@ export function RunSessionSummaryCard({
                 href={runPlanDetailHref(session.run_plan_id)}
                 className="text-text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               >
-                {session.run_plan_id.slice(0, 8)}…
+                Open plan
               </Link>
             ) : (
               "unavailable"
@@ -83,7 +83,7 @@ export function RunSessionSummaryCard({
                 href={candidateDetailHref(session.candidate_id)}
                 className="text-text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
               >
-                {session.candidate_id.slice(0, 8)}…
+                Open candidate
               </Link>
             ) : (
               "unavailable"
