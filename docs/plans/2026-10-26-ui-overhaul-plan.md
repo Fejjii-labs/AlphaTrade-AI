@@ -9,6 +9,33 @@ Decisions Sofien made during planning:
 - **Track order:** Track B starts once A1–A5 are merged and checked on staging. A6/A7 run in parallel, and only B5c (the Trades table) waits for A7.
 - **Cap conflict:** tightening the account cap is never blocked. Effective = min(bot, account). Only saving a bot cap above the account cap is rejected.
 
+**Status:** Sofien approved the plan with Griller's conditions (GO WITH CONDITIONS on PR #333). The conditions below are binding and are folded into the affected items in §6.
+
+## Griller conditions (PR #333)
+
+**K1 — A6/A7 BloFin trade import**
+- Closed rows are deduplicated by venue `historyId`. Open rows are deduplicated by `positionId` + open time (not the current per-cycle `{stamp}` key).
+- The open row is linked to its close, so one position never produces two trades.
+- Partial closes are handled: one history record per partial close, linked to the same open position. The doc defines how size and P&L split.
+- `positionId` reuse is checked (same id, different open time means a new position).
+- Ghost rows (open rows whose position no longer exists) get a gated cleanup: dry-run listing first, and no delete or update without Sofien's approval.
+- **The A6 dry-run runs before Nov 1, 2026.**
+
+**K2 — B7a GPT Live voice gate**
+- The voice-scoped gate replaces the `provider_mode == "live"` check in all three places: `agent_voice/live_config.py` (`load_live_limits`), `agent_voice/config.py:144` (`load_limits`, the realtime path), and `agent_voice/retrieval.py:39` (`embedding_limitation`).
+- A test proves that a voice session refuses mock or fallback answers: with `PROVIDER_MODE=fallback` and voice enabled, no mock reasoning provider and no mock embeddings ever produce a voice reply. It fails closed.
+- Retrieval decision, written into the B7 doc for Griller. Proposal: voice vector retrieval uses the same gate plus its own verified embedding receipt. Without that receipt, vector retrieval is off (the existing "Vector embedding unavailable" limitation) and never falls back to mock embeddings.
+- **B7 becomes its own track (Track V)** and needs a separate Griller security review before merge.
+
+**Sequencing**
+- A3 lands before B3a.
+- A3 validates bot ≤ account **only when the bot cap itself changes** in the request. The bot always uses min(bot, account).
+- B3a keeps the `TopBar.tsx:197` copy unchanged.
+
+**Work rules**
+- One `claude/` branch and one PR per item, targeted tests only, `Full-Backend: false`, never push to `main`.
+- A Notion Agent Reports entry after each PR.
+
 ---
 
 ## 1. Critique of the current UI (from the code)
@@ -240,7 +267,7 @@ Settings
 5. **The server `reason` is dropped** (`realtime-controller.ts:148`). Add the missing `limit_reached` and `unavailable` states, a countdown and turns left, and human text per reason code.
 6. **Two voice UIs** (Talk to Agent + Record). **Fix:** one mic. GPT Live when it is available, browser dictation as the fallback.
 7. **Tests:** `agent_live_enabled` is missing from `test_pr249_feature_flag_defaults.py`, and no browser test covers the Live socket path.
-8. **Coordination.** Draft PR #314 (xAI Grok, realtime path) touches `agent_voice/` and `config.py`. B7a stays on `live_config.py` and its tests only.
+8. **Coordination.** Draft PR #314 (xAI Grok, realtime path) touches `agent_voice/` and `config.py`. Per K2, B7a also has to touch `agent_voice/config.py`, so it is sequenced with #314.
 9. **Not fixed (out of scope):** there is no explicit concurrent-session cap; the budget holds bound concurrency.
 
 ## 6. PR plan (ordered; stop after each PR for Griller + Sofien)
@@ -252,13 +279,19 @@ Settings
 - Evidence: screenshots from the local preview, what was removed, tests run.
 - Squash merge only with Griller GO + green CI + Sofien's OK.
 - Hot files (risk, autonomous settings, BloFin, migrations) one PR at a time.
-- AGENTS.md scopes Notion Agent Reports to Codex/Cursor. I'll file one per PR with Agent = Other unless you say otherwise.
+- A Notion Agent Reports entry after each PR (Agent = Other, Repo = AlphaTrade AI), with the full transcript in the page body.
+- One `claude/` branch and one PR per item, never a push to `main`.
 
 ### Track A — broken features (A1–A5 merge and are checked on staging before Track B)
 
-**A1 `claude/a-resend-verification`** (frontend)
-- Change: `requestVerifyEmail` in `lib/api/index.ts:251` passes `auth: true`. The cause is `client.ts:101`, which defaults `/auth/*` calls to no token.
-- AC: a vitest asserts the request carries the `Authorization` header; a pytest checks that an authenticated empty body returns 200 and uses the profile email (extending `test_account_management.py`); staging shows a success message (the mail itself is the mock).
+**A1 `claude/a-resend-verification`** (frontend fix + backend test only; branch from `main`)
+- Change: `requestVerifyEmail` in `frontend/src/lib/api/index.ts:251` passes `auth: true`, matching `logout` and `me` next to it. The cause is `client.ts:101`, which defaults `/auth/*` calls to no token, so the backend (`account_service.request_verification`) sees neither a body email nor a tenant.
+- New `frontend/src/lib/api/auth.test.ts`, mocking `./client` the same way as `dashboard-demo-account.test.ts`: asserts `apiFetch` is called with `"/auth/verify-email/request"`, `method: "POST"`, `body: "{}"` and `auth: true`.
+- `backend/tests/test_account_management.py` gains two tests (no `backend/src` change):
+  - An authenticated `json={}` request returns 200, and the mock provider's `sent` has an `email_verification` message to the profile email.
+  - An unauthenticated `json={}` request returns 422 "Email is required." This pins the failure the fix avoids.
+- Tests run: `npx vitest run src/lib/api/auth.test.ts src/components/account/AccountPages.test.tsx` and `uv run pytest tests/test_account_management.py -q`.
+- AC: both tests pass; on staging, Settings → "Resend verification email" shows the success message (the mail itself is the mock).
 
 **A5 `claude/a-number-format`** (frontend)
 - Change: add `formatAmount(value, unit)` to `lib/format.ts`, reusing `parseDecimal`/`formatMoney`. Apply it plus `formatPercent(..., {alreadyPercent:true})` in `RiskSettingsSummary`.
@@ -278,7 +311,8 @@ Settings
 - AC: pytest that a Nested row without a family returns `nested_continuation`; pytest that with 25 SFP + 1 Nested the per-family query returns that Nested row; vitest shows a non-zero Nested count.
 
 **A3 `claude/a-trade-caps`** (backend hot files: `autonomous_trading_settings_service.py`, `schemas/autonomous_trading_settings.py`; full backend gate)
-- Validation: on update, reject a bot `max_trades_per_day` above the account cap with a 422 and a human message.
+- Validation (K-sequencing): only when the request changes the bot `max_trades_per_day`, reject a value above the account cap with a 422 and a human message. Other bot updates never re-validate the cap. The bot always uses min(bot, account).
+- Lands before B3a.
 - View: add `account_max_trades_per_day` and `effective_max_trades_per_day = min(...)`.
 - Not changed: the guard, the ledger and the account-cap save. Effective = min already matches how both caps enforce today.
 - UI labels: "Account: max trades/day (all trades)" and "Bot: max trades/day (≤ account)", plus "Effective N".
@@ -287,12 +321,17 @@ Settings
 **A6 `claude/a-blofin-journal-design`** (docs only; runs in parallel with Track B)
 - `docs/blofin_demo_trades_journal.md`. Proposed owner is `blofin_demo_manual_mirror.py`; it is the only journal writer and it has the economics. `blofin_activity_service.py` stays the fact store (it doesn't touch the journal).
 - The doc must settle:
-  1. **Open→closed duplicate risk.** Open rows use `blofin-demo-open:{positionId}:{stamp}` and closed rows `blofin-demo-history:{historyId}`, so one position can get two rows. Proposal: key on the venue position id and update in place.
+  1. **Open→closed duplicate risk (K1).** Open rows use `blofin-demo-open:{positionId}:{stamp}` and closed rows `blofin-demo-history:{historyId}`, so one position can get two rows.
+     - New keys: closed rows by `historyId`, open rows by `positionId` + open time.
+     - The open row is linked to its close.
+     - Partial closes are handled.
+     - `positionId` reuse is checked.
+     - Ghost rows get a gated cleanup: dry-run first, no deletes without Sofien's approval.
   2. **The 7-day window.** It comes from the funding route. Older history like Oct 8 needs a backfill path with funding left null when the venue doesn't return it.
   3. **Fees** come from fills or position history.
   4. **A dry-run diff format.**
   5. **Flag state.** `blofin_demo_manual_mirror_enabled` defaults off. Any staging change is an env gate.
-- Time risk: if venue retention is about 30 days (the activity service's fill lookback maximum is 30), the Oct 8 data could age out around Nov 7. I'll ask for an early read-only dry-run.
+- Time risk: if venue retention is about 30 days (the activity service's fill lookback maximum is 30), the Oct 8 data could age out around Nov 7. **Deadline: the read-only A6 dry-run runs before Nov 1, 2026** (K1).
 - AC: Griller GO on the doc.
 
 **A7 `claude/a-blofin-journal-impl`** (backend; may span 2 PRs; full backend gate)
@@ -316,7 +355,8 @@ Settings
 
 **B3a `claude/b-autonomous-page`**
 - `/autonomous` with the owner switch, Account limits and Bot limits. The `/risk` and `/risk/autonomous` forms are extracted into components; the kill switch moves here; Risk policy is removed from `/strategies`; redirects are added.
-- AC: old routes redirect; the owner-gating and both form tests are kept and pass; the kill switch is reachable.
+- Requires A3 merged first. Keeps the `TopBar.tsx:197` copy unchanged.
+- AC: old routes redirect; the owner-gating and both form tests are kept and pass; the kill switch is reachable; `TopBar.tsx` is not in the diff.
 
 **B3b `claude/b-bot-activity`**
 - The "What the bot is doing" panel. First I check whether the existing autonomous decision and watcher runtime reads are enough. If a backend read endpoint is needed, it gets its own PR with pytest and the full gate.
@@ -342,16 +382,21 @@ Settings
 - 7 items, plus the mobile 4 + More layout.
 - AC: navigation-config tests, `isNavLinkActive` cases for every primary route plus redirected and deep-link routes.
 
-**B7a `claude/b-voice-gate`** (backend, `live_config.py` only; full backend gate)
-- Voice admission no longer requires `provider_mode == "live"`. It requires `agent_live_enabled`, the key, the valid receipt and the model match. Every limit is unchanged.
-- Add `agent_live_enabled` to the flag-defaults test.
-- AC: pytest shows fallback + flag + receipt is admitted, and a missing flag, receipt or key is refused; all existing `test_agent_live_*` tests pass.
+### Track V — GPT Live voice (own track, K2; separate Griller security review before any merge)
 
-**B7b `claude/b-voice-ui`**
+**B7a `claude/v-voice-gate`** (backend; full backend gate)
+- Voice admission no longer requires `provider_mode == "live"` in any of `agent_voice/live_config.py`, `agent_voice/config.py:144` or `agent_voice/retrieval.py:39`. It requires the voice flag, the key, the valid receipt and the model match. Every limit is unchanged.
+- Add `agent_live_enabled` to the flag-defaults test.
+- The retrieval decision (K2) is written up in the PR.
+- AC: pytest shows fallback + flag + receipt is admitted, and a missing flag, receipt or key is refused; a pytest proves mock or fallback reasoning and embeddings are refused in a voice session; all existing `test_agent_live_*` and realtime tests pass.
+
+PR #314 (xAI) touches `agent_voice/config.py`. I'll coordinate before B7a so the two don't conflict.
+
+**B7b `claude/v-voice-ui`**
 - Fetch the config on mount, one mic, states including limit reached and unavailable, reason-code text, countdown and turns left, and the worklet served from `/public`.
 - AC: vitest for every state including limit reached; the existing controller and audio tests pass.
 
-**B7c `claude/b-agent-ui`**
+**B7c `claude/v-agent-ui`**
 - Proposals as cards with a human status and Confirm/Reject. Remove the "Stored evidence" IDs and JSON, render the strategy draft as readable rules, cut the header copy.
 - AC: vitest; the `AgentWorkspace` tests pass; screenshots.
 
@@ -366,6 +411,13 @@ Settings
 - **C2 `claude/c-telegram-picklists`**: a backend options endpoint maps names to ids (storage stays UUIDs), and the frontend uses multi-select chips. AC: pytest for the mapping; vitest that no free-text identifier inputs remain.
 - **C3 `claude/c-row-baseline`**: adopt `Row` on the Watcher slots and settings readouts. AC: screenshots + a vitest for the class contract.
 - **C4 `claude/c-copy-cut`**: `EmailVerificationNotice` dev text, header descriptions, knowledge cards showing dates only. AC: vitest; screenshots.
+
+## Next steps (this turn, once approved)
+
+1. On `claude/ui-overhaul-plan`, copy this plan unchanged to `docs/plans/2026-10-26-ui-overhaul-plan.md`, commit with `Full-Backend: false`, and push. That updates PR #333.
+2. Branch `claude/a-resend-verification` from `origin/main`. Implement A1 exactly as specified in §6 (three files: `lib/api/index.ts`, the new `lib/api/auth.test.ts`, and `tests/test_account_management.py`). Run the targeted tests, commit with `Full-Backend: false`, push, open a PR using the template, and bind it to this session.
+3. File Notion Agent Reports entries for the PR #333 update and the A1 PR.
+4. Stop for Griller review of A1.
 
 ## Verification
 
