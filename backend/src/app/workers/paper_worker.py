@@ -702,6 +702,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     Armed startup does not bind the disarmed role, so missing operational
     dependencies fail closed.
     """
+    from app.core.required_env import Role, validate_required_env
+
+    validate_required_env(Role.PAPER_WORKER)
 
     from app.core.disarmed_worker_boot import (
         WorkerBootRole,
