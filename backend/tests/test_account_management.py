@@ -249,6 +249,33 @@ def test_verify_email_invalid_token_fails(account_client: AccountClientFixture) 
     assert response.status_code == 401
 
 
+def test_resend_verification_uses_profile_email_for_authenticated_empty_body(
+    account_client: AccountClientFixture,
+    account_settings: Settings,
+) -> None:
+    client, _ = account_client
+    registered = _register(client, email="resend-profile@example.com")
+    reset_email_provider_for_tests()
+    response = client.post(
+        "/auth/verify-email/request",
+        json={},
+        headers=_auth(registered["tokens"]["access_token"]),
+    )
+    assert response.status_code == 200
+    provider = resolve_email_provider(account_settings)
+    sent = [m for m in provider.sent if m.template == "email_verification"]
+    assert [m.to_address for m in sent] == ["resend-profile@example.com"]
+
+
+def test_resend_verification_without_session_or_email_is_rejected(
+    account_client: AccountClientFixture,
+) -> None:
+    client, _ = account_client
+    response = client.post("/auth/verify-email/request", json={})
+    assert response.status_code == 422
+    assert "Email is required" in response.text
+
+
 def test_resend_verification_rate_limited(
     account_client: AccountClientFixture,
 ) -> None:

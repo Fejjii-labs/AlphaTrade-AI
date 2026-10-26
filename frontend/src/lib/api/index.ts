@@ -252,6 +252,7 @@ export const api = {
       apiFetch<MessageResponse>("/auth/verify-email/request", {
         method: "POST",
         body: JSON.stringify(body ?? {}),
+        auth: true,
       }),
     confirmVerifyEmail: (token: string) =>
       apiFetch<MessageResponse>("/auth/verify-email/confirm", {
