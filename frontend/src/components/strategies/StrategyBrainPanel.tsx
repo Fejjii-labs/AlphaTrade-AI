@@ -72,7 +72,6 @@ export function StrategyBrainPanel({ family }: { family: "nested" | "sfp" }) {
           <p className="text-sm">{strategy.spec.symbol} · {strategy.spec.trigger_timeframe} · {strategy.spec.direction}. Insufficient history for expectancy.</p>
           <details><summary>Review versioned rules</summary><pre className="overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(strategy.spec.parameters, null, 2)}</pre>
             <p className="text-sm">{sfp ? "Causal structural level, sweep, reclaim and closed confirmation. Approval enables governed research scans and alerts. No SFP entry, stop, target or execution plan is authorized." : "Closed impulse break after a controlled pullback; stop at the pullback extreme; measured impulse target. Existing risk and paper execution gates remain required."}</p>
-            <p className="break-all text-xs">Immutable strategy version: {strategy.version_id}</p>
           </details>
           {!["approved", "active", "paused", "retired"].includes(strategy.status) && <Button disabled={busy} variant="secondary" onClick={() => void mutate(async () => {
             const result = await api.strategies.compileVersion(strategy.strategy_id, strategy.version_id);

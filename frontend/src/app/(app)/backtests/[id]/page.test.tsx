@@ -9,6 +9,7 @@ import type {
   JournalComparisonResponse,
   SetupEvidenceResponse,
 } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const RUN_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -448,6 +449,7 @@ describe("BacktestRunDetailPage", () => {
       expect(mockJournalTrades).toHaveBeenCalledWith(RUN_ID, { dry_run: true }),
     );
     expect(await screen.findByTestId("journal-dry-run-summary")).toHaveTextContent("Would create: 2");
+    expectNoIdentifiers();
   });
 
   it.each(["completed", "cancelled"] as const)("renders %s SFP research without trade returns", (status) => {

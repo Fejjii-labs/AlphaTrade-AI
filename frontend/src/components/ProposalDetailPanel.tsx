@@ -37,7 +37,7 @@ export function PaperOrderButton({
     setError(null);
     setSuccess(null);
     try {
-      const order = await api.execution.paperOrder({
+      await api.execution.paperOrder({
         proposal_id: proposal.id,
         approval_id: approval.id,
         symbol: proposal.symbol,
@@ -46,7 +46,7 @@ export function PaperOrderButton({
         size: proposal.position_size,
         idempotency_key: newIdempotencyKey(),
       });
-      setSuccess(`Paper order filled (${order.id.slice(0, 8)}). No real exchange order was placed.`);
+      setSuccess("Paper order filled. No real exchange order was placed.");
       onSuccess?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Paper order failed");

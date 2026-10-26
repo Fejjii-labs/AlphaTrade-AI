@@ -391,7 +391,6 @@ export default function BacktestRunDetailPage() {
             <Link href={`/strategy-lab/${run.strategy_id}`} className="text-sky-400 hover:underline">
               Strategy lab
             </Link>
-            {" · "}Run {run.id.slice(0, 8)}…
           </p>
           <h1 className="text-2xl font-semibold text-zinc-100">Backtest run</h1>
         </div>
@@ -458,7 +457,6 @@ export default function BacktestRunDetailPage() {
               No SFP execution plan is authorized. This replay reports setups and evidence.
               Trade returns are unavailable.
             </p>
-            <p className="text-zinc-400">Strategy version: {research.strategy_version_id}</p>
             {research.samples.map((sample) => (
               <div key={sample.split_label} className="space-y-1">
                 <p>{sample.split_label}: {sample.status.replaceAll("_", " ")}</p>
@@ -695,8 +693,6 @@ export default function BacktestRunDetailPage() {
                         Dataset OK: {verifyResult.dataset_ok ? "yes" : "no"}
                       </Badge>
                     </div>
-                    <p>Stored: {verifyResult.result_hash_stored ?? "—"}</p>
-                    <p>Recomputed: {verifyResult.result_hash_recomputed ?? "—"}</p>
                     {verifyResult.detail ? <p className="text-zinc-500">{verifyResult.detail}</p> : null}
                   </div>
                 ) : null}
@@ -770,8 +766,7 @@ export default function BacktestRunDetailPage() {
               {datasetSummary ? (
                 <div className="space-y-1">
                   <p>
-                    Dataset hash:{" "}
-                    <code className="text-zinc-300">{datasetSummary.dataset_hash.slice(0, 16)}…</code>
+                    Dataset fingerprint
                     <Button
                       variant="outline"
                       size="sm"
@@ -791,8 +786,6 @@ export default function BacktestRunDetailPage() {
                 </div>
               ) : null}
               <p>Engine version: {run.engine_version ?? run.result?.engine_version ?? "—"}</p>
-              <p>Result hash: {run.result_hash ?? run.result?.result_hash ?? "—"}</p>
-              <p>Config hash: {run.config_hash ?? "—"}</p>
               <p>Data quality: {run.result?.data_quality ?? "—"}</p>
               {run.result?.limitations?.length ? (
                 <ul className="list-disc pl-4 text-amber-400">

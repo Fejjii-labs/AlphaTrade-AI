@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JournalTradeScreen } from "./JournalTradeScreen";
 import { journalTradeApi, type JournalTradeDetail } from "@/lib/api/journal-trade";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 vi.mock("@/lib/api/journal-trade", () => ({
   journalTradeApi: { detail: vi.fn(), reflect: vi.fn(), annotate: vi.fn() },
@@ -26,6 +27,7 @@ it("loads only the exact linked trade with unknown outcomes and precise tiny fee
   expect(screen.getAllByText("— USDT").length).toBeGreaterThan(0);
   expect(screen.getByText(/Account flatness alone/)).toBeInTheDocument();
   expect(screen.queryByTestId("journal-mirror-annotation")).not.toBeInTheDocument();
+  expectNoIdentifiers();
 });
 it("attaches a personal reflection through observations without editing execution evidence", async () => {
   let finish!: () => void;

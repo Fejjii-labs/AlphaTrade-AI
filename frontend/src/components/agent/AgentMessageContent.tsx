@@ -36,13 +36,6 @@ export function AgentMessageContent({
     metadata && typeof metadata === "object" && "full_reply" in metadata
       ? metadata.full_reply
       : null;
-  const usage =
-    metadata &&
-    typeof metadata === "object" &&
-    "model_usage" in metadata &&
-    Array.isArray(metadata.model_usage)
-      ? metadata.model_usage
-      : [];
   const sources =
     metadata &&
     typeof metadata === "object" &&
@@ -156,11 +149,10 @@ export function AgentMessageContent({
       ) : null}
       {evidence !== null ||
       explanation !== null ||
-      sources.length > 0 ||
-      usage.length > 0 ? (
+      sources.length > 0 ? (
         <details className="mt-3 border-t border-border-subtle pt-2">
           <summary className="cursor-pointer rounded-control text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
-            Stored evidence
+            Sources
           </summary>
           {explanation ? (
             <p className="mt-2 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
@@ -200,31 +192,22 @@ export function AgentMessageContent({
                         href={`/journal?saved=${encodeURIComponent(identity)}`}
                         className="underline"
                       >
-                        {title}: {identity}
+                        {title}
                       </Link>
                     ) : manualCommand ? (
                       <Link
                         className="underline"
                         href={`/execution/manual-demo/${encodeURIComponent(identity)}`}
                       >
-                        {title}: {identity}
+                        {title}
                       </Link>
                     ) : (
-                      <>
-                        {title}: {identity}
-                      </>
+                      title
                     )}
                   </li>
                 );
               })}
             </ul>
-          ) : null}
-          {usage.length ? (
-            <pre className="mt-2 overflow-auto whitespace-pre-wrap text-xs">
-              Model usage · cost unavailable unless reported or explicitly
-              estimated{"\n"}
-              {JSON.stringify(usage, null, 2)}
-            </pre>
           ) : null}
         </details>
       ) : null}

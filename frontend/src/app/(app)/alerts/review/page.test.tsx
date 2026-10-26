@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SetupAlertReviewPage from "./page";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const navigationState = vi.hoisted(() => ({
   search: new URLSearchParams(),
@@ -245,6 +246,7 @@ describe("SetupAlertReviewPage Slice 77 / Phase C2 deep links", () => {
     expect(screen.getByTestId("setup-alert-deep-link-active")).toBeInTheDocument();
     expect(screen.getByTestId("setup-alert-alert-2")).toHaveAttribute("data-highlighted", "false");
     expect(api.alerts.updateSetupReview).not.toHaveBeenCalled();
+    expectNoIdentifiers();
   });
 
   it("shows a missing-alert notice for an unavailable source-alert query", () => {

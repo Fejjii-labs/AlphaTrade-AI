@@ -325,7 +325,7 @@ export function JournalQuickEntry({
           ) : null}
           {showPositionLink && linkedPositionId ? (
             <span className="text-text-muted" data-testid="quick-entry-related-position">
-              Related position {linkedPositionId.slice(0, 8)}… (stored link on save)
+              Linked to an open position (stored link on save)
             </span>
           ) : null}
           {showValidationLink ? (

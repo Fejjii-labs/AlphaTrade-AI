@@ -90,7 +90,7 @@ function ResultTable({
                 {row.errors.length > 0
                   ? row.errors.join("; ")
                   : row.outcome === "duplicate" && row.journal_trade_id
-                    ? `existing trade ${row.journal_trade_id.slice(0, 8)}…`
+                    ? "Already in your journal"
                     : "—"}
               </td>
             </tr>
@@ -115,8 +115,7 @@ function BatchHistoryCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-1">
           <p className="text-sm text-zinc-200">
-            {batch.source_label || "Untitled import"}{" "}
-            <span className="font-mono text-xs text-zinc-500">{batch.id.slice(0, 8)}…</span>
+            {batch.source_label || "Untitled import"}
           </p>
           <p className="text-xs text-zinc-500">
             {new Date(batch.created_at).toLocaleString()} — {batch.created_count} created,{" "}
@@ -420,7 +419,7 @@ export default function JournalImportPage() {
             ) : null}
             {commitResult?.committed ? (
               <p className="text-sm text-emerald-300">
-                Import committed — batch {commitResult.batch_id?.slice(0, 8)}… created{" "}
+                Import committed — created{" "}
                 {commitResult.created_count} journal trade(s).
               </p>
             ) : (

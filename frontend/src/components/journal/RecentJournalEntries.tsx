@@ -149,7 +149,7 @@ export function RecentJournalEntries({
                       className="inline-flex h-10 items-center rounded-control border border-border px-3 text-sm text-text-muted"
                       data-testid={`related-position-${entry.id}`}
                     >
-                      Related position {entry.linked_position_id.slice(0, 8)}…
+                      Linked to a position
                     </span>
                   ) : null}
                   <Link

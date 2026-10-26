@@ -293,7 +293,7 @@ export function BacktestPanel({ strategyId, onRun, onLoadTrades, onListRuns, lat
               {runs.slice(0, 8).map((item) => (
                 <li key={item.id} className="flex flex-wrap items-center gap-2">
                   <Link href={`/backtests/${item.id}`} className="text-sky-400 hover:underline">
-                    {item.id.slice(0, 8)}…
+                    Run
                   </Link>
                   <span className="text-zinc-500">{item.status}</span>
                   <span className="text-zinc-600">{formatDate(item.created_at)}</span>

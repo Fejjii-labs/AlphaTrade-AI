@@ -32,13 +32,11 @@ export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: n
               <details className="mt-2 text-xs text-text-muted">
                 <summary className="cursor-pointer">Sources and review state</summary>
                 <p>{humanizeToken(item.category)}</p>
-                {item.strategy_id ? <p>Strategy: {item.strategy_id}</p> : null}
-                {item.strategy_version_id ? <p>Strategy version: {item.strategy_version_id}</p> : null}
                 <p>Acknowledgement: {humanizeToken(item.acknowledgement_state)}</p>
                 <p>Expires: {item.expires_at ? formatDateTime(item.expires_at) : "On recorded state change"}</p>
                 <ul className="mt-1 space-y-1">
                   {item.sources.map((source, index) => (
-                    <li key={index}>{source.record_type} · {source.record_id} · {formatDateTime(source.occurred_at)}</li>
+                    <li key={index}>{humanizeToken(source.record_type)} · {formatDateTime(source.occurred_at)}</li>
                   ))}
                 </ul>
               </details>
