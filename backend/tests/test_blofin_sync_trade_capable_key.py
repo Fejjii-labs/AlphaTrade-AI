@@ -64,3 +64,28 @@ def test_override_on_live_execution_mode_raises() -> None:
     live = next(m for m in ExecutionMode if m is not ExecutionMode.PAPER)
     with pytest.raises(ValueError):
         svc.ensure_trade_capable_key_allowed(_settings(execution_mode=live), _perms())
+
+
+def test_real_readonly_only_reply_is_accepted_as_venue_reports_no_withdraw() -> None:
+    """BloFin returns only ``readOnly``; the venue reports no withdraw/transfer."""
+    from app.providers.exchange.blofin_account import parse_account_permissions
+
+    perms = parse_account_permissions({"readOnly": 0, "type": 3})
+    assert perms.can_trade is True
+    assert perms.can_withdraw is False and perms.can_transfer is False
+    svc.ensure_trade_capable_key_allowed(_settings(), perms)
+    with pytest.raises(ValueError):
+        svc.ensure_trade_capable_key_allowed(
+            _settings(blofin_demo_allow_trade_capable_sync_key=False), perms
+        )
+
+
+def test_override_warning_is_logged_once_per_process(monkeypatch) -> None:
+    from structlog.testing import capture_logs
+
+    monkeypatch.setattr(svc, "_TRADE_CAPABLE_OVERRIDE_LOGGED", False)
+    with capture_logs() as logs:
+        svc.ensure_trade_capable_key_allowed(_settings(), _perms())
+        svc.ensure_trade_capable_key_allowed(_settings(), _perms())
+    events = [e for e in logs if e["event"] == "blofin_sync_key_trade_capable_demo_override"]
+    assert len(events) == 1

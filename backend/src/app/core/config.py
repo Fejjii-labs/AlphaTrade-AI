@@ -333,7 +333,8 @@ class Settings(BaseSettings):
     # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
     blofin_demo_manual_mirror_enabled: bool = False
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
-    # demo-only sync accept a read+trade demo key; requests stay GET-only.
+    # demo-only sync accept a read+trade demo key when the venue reports no
+    # withdraw/transfer permission; requests stay GET-only.
     blofin_demo_allow_trade_capable_sync_key: bool = False
     blofin_sync_max_positions: int = Field(default=50, ge=1, le=200)
     blofin_sync_max_balances: int = Field(default=50, ge=1, le=200)

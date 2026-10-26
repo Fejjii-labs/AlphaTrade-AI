@@ -55,7 +55,10 @@ def ensure_trade_capable_key_allowed(settings: Settings, permissions: Any) -> No
 
     The sync client stays GET-only either way. Raises unless the opt-in is on,
     the origin is the allowlisted BloFin demo host, execution is paper with
-    real trading off, and the key has no withdraw or transfer scope.
+    real trading off, and the venue reports no withdraw/transfer permission.
+    BloFin's key probe returns only ``readOnly`` (e.g. ``{"readOnly": 0,
+    "type": 3}``), so "no withdraw/transfer" means the venue reports none; it
+    is not positive proof that the key lacks those scopes.
     """
     from app.core.config import ExecutionMode
     from app.core.exchange_safety import is_allowlisted_demo_host
@@ -73,7 +76,10 @@ def ensure_trade_capable_key_allowed(settings: Settings, permissions: Any) -> No
         raise ValueError("Dedicated BloFin sync key must be read-only.")
     if not _TRADE_CAPABLE_OVERRIDE_LOGGED:
         _TRADE_CAPABLE_OVERRIDE_LOGGED = True
-        logger.warning("blofin_sync_key_trade_capable_demo_override")
+        logger.warning(
+            "blofin_sync_key_trade_capable_demo_override",
+            detail="venue reports no withdraw/transfer permission",
+        )
 
 
 def _demo_key_read(settings: Settings) -> bool:
