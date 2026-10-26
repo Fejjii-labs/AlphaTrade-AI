@@ -47,6 +47,34 @@ from app.services.dashboard.demo_performance import configured_demo_account
 
 logger = structlog.get_logger(__name__)
 
+_TRADE_CAPABLE_OVERRIDE_LOGGED = False
+
+
+def ensure_trade_capable_key_allowed(settings: Settings, permissions: Any) -> None:
+    """Accept a read+trade sync key only under the explicit demo-paper opt-in.
+
+    The sync client stays GET-only either way. Raises unless the opt-in is on,
+    the origin is the allowlisted BloFin demo host, execution is paper with
+    real trading off, and the key has no withdraw or transfer scope.
+    """
+    from app.core.config import ExecutionMode
+    from app.core.exchange_safety import is_allowlisted_demo_host
+
+    global _TRADE_CAPABLE_OVERRIDE_LOGGED
+    if not (
+        settings.blofin_demo_allow_trade_capable_sync_key
+        and is_allowlisted_demo_host(settings.blofin_demo_rest_base_url)
+        and settings.execution_mode is ExecutionMode.PAPER
+        and not settings.enable_real_trading
+        and not settings.real_trading_enabled
+        and not permissions.can_withdraw
+        and not permissions.can_transfer
+    ):
+        raise ValueError("Dedicated BloFin sync key must be read-only.")
+    if not _TRADE_CAPABLE_OVERRIDE_LOGGED:
+        _TRADE_CAPABLE_OVERRIDE_LOGGED = True
+        logger.warning("blofin_sync_key_trade_capable_demo_override")
+
 
 def _demo_key_read(settings: Settings) -> bool:
     """True when GET sync uses the main demo key. Execution stays sealed."""
@@ -209,7 +237,7 @@ class BloFinSyncService:
                 provider = get_demo_account_provider(self._settings)
             permissions = provider.get_account_permissions()
             if uses_dedicated and permissions.can_trade:
-                raise ValueError("Dedicated BloFin sync key must be read-only.")
+                ensure_trade_capable_key_allowed(self._settings, permissions)
             if permissions.can_withdraw or permissions.can_transfer or not permissions.can_read:
                 raise ValueError("BloFin sync requires read access without money-movement scopes.")
             uid = getattr(provider, "native_account_uid", None)
