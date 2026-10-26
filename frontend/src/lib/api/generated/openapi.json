@@ -3904,6 +3904,7 @@
           "approval_required",
           "approval_decision",
           "paper_order_created",
+          "paper_reservation_released",
           "execution_account_registered",
           "manual_demo_cancel_requested",
           "demo_lifecycle_reconciled",
@@ -4123,6 +4124,16 @@
       },
       "AuthResponse": {
         "properties": {
+          "membership_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MembershipRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "organization": {
             "$ref": "#/components/schemas/Organization"
           },
@@ -4204,6 +4215,17 @@
             ],
             "title": "Daily Loss Limit Percent"
           },
+          "internal_paper_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Internal Paper Enabled"
+          },
           "max_trades_per_day": {
             "anyOf": [
               {
@@ -4266,10 +4288,36 @@
       "AutonomousTradingSettingsView": {
         "additionalProperties": false,
         "properties": {
+          "autonomy_mode": {
+            "default": "",
+            "title": "Autonomy Mode",
+            "type": "string"
+          },
           "daily_loss_limit_percent": {
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Daily Loss Limit Percent",
             "type": "string"
+          },
+          "internal_paper_effective": {
+            "default": false,
+            "title": "Internal Paper Effective",
+            "type": "boolean"
+          },
+          "internal_paper_enabled": {
+            "default": false,
+            "title": "Internal Paper Enabled",
+            "type": "boolean"
+          },
+          "internal_paper_env_ceiling": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Internal Paper Env Ceiling"
           },
           "max_daily_loss_percent_ceiling": {
             "default": "6",
@@ -4350,6 +4398,32 @@
             "default": false,
             "title": "Using Defaults",
             "type": "boolean"
+          },
+          "worker_flags_stale": {
+            "default": true,
+            "title": "Worker Flags Stale",
+            "type": "boolean"
+          },
+          "worker_heartbeat_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Heartbeat Age Seconds"
+          },
+          "worker_runtime_health": {
+            "default": "UNAVAILABLE",
+            "enum": [
+              "RUNNING",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "Worker Runtime Health",
+            "type": "string"
           }
         },
         "required": [
@@ -12481,6 +12555,9 @@
             "title": "Warnings",
             "type": "array"
           },
+          "worker_effective": {
+            "$ref": "#/components/schemas/WorkerEffectiveObservation"
+          },
           "worker_enabled": {
             "title": "Worker Enabled",
             "type": "boolean"
@@ -16800,6 +16877,23 @@
           "watcher_paper_staging_activation": {
             "default": false,
             "title": "Watcher Paper Staging Activation",
+            "type": "boolean"
+          },
+          "worker_effective": {
+            "$ref": "#/components/schemas/WorkerEffectiveObservation"
+          },
+          "worker_flags_source": {
+            "default": "api_process",
+            "enum": [
+              "worker",
+              "api_process"
+            ],
+            "title": "Worker Flags Source",
+            "type": "string"
+          },
+          "worker_flags_stale": {
+            "default": false,
+            "title": "Worker Flags Stale",
             "type": "boolean"
           },
           "worker_runtime": {
@@ -27712,6 +27806,16 @@
       },
       "MeResponse": {
         "properties": {
+          "membership_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MembershipRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "organization": {
             "$ref": "#/components/schemas/Organization"
           },
@@ -37910,6 +38014,9 @@
             "format": "date-time",
             "title": "Timestamp",
             "type": "string"
+          },
+          "worker_effective": {
+            "$ref": "#/components/schemas/WorkerEffectiveObservation"
           }
         },
         "required": [
@@ -41105,8 +41212,15 @@
       },
       "ReadinessResponse": {
         "additionalProperties": false,
-        "description": "Readiness payload: ``ready`` only when no provider is unavailable.",
+        "description": "Readiness payload: ``ready`` only when no provider is unavailable.\n\nStaging smoke, live smoke, docker validate, and the demo and Telegram\nchecks read ``status`` and ``degraded_providers``. They exit non-zero when\n``status`` is not ``ready`` or that list is non-empty.\n``ALLOW_DEGRADED_READY`` still waives only a false ``ready`` flag with an\nempty degraded list (provider-unavailable readiness). Render's health\ncheck is ``/health``, so a degraded market-data provider must not set\n``ready`` false. ``degraded_providers`` names those providers.",
         "properties": {
+          "degraded_providers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Providers",
+            "type": "array"
+          },
           "providers_total": {
             "title": "Providers Total",
             "type": "integer"
@@ -45538,7 +45652,8 @@
             "default": "sfp-research/v1",
             "enum": [
               "sfp-research/v1",
-              "sfp-research/v2"
+              "sfp-research/v2",
+              "sfp-research/v3"
             ],
             "title": "Version",
             "type": "string"
@@ -45716,7 +45831,8 @@
             "default": "sfp-research/v1",
             "enum": [
               "sfp-research/v1",
-              "sfp-research/v2"
+              "sfp-research/v2",
+              "sfp-research/v3"
             ],
             "title": "Version",
             "type": "string"
@@ -55415,6 +55531,11 @@
             "title": "Watcher Orchestration Enabled",
             "type": "boolean"
           },
+          "watcher_paper_staging_activation": {
+            "default": false,
+            "title": "Watcher Paper Staging Activation",
+            "type": "boolean"
+          },
           "worker_enabled": {
             "default": false,
             "title": "Worker Enabled",
@@ -55889,6 +56010,9 @@
           },
           "worker": {
             "$ref": "#/components/schemas/WatcherWorkerHealth"
+          },
+          "worker_effective": {
+            "$ref": "#/components/schemas/WorkerEffectiveObservation"
           }
         },
         "required": [
@@ -57043,6 +57167,141 @@
           "status"
         ],
         "title": "WorkerControlResponse",
+        "type": "object"
+      },
+      "WorkerEffectiveObservation": {
+        "additionalProperties": false,
+        "description": "Effective flags published by the worker, with heartbeat freshness.\n\n``source`` is ``worker`` only when a row was read. ``stale`` is true unless\n``health_state`` is ``RUNNING``. These booleans are not the API process env.\n``real_trading_enabled`` is fixed false: this record cannot arm real money.",
+        "properties": {
+          "automatic_telegram_delivery_enabled": {
+            "default": false,
+            "title": "Automatic Telegram Delivery Enabled",
+            "type": "boolean"
+          },
+          "autonomous_internal_paper_db_enabled": {
+            "default": false,
+            "title": "Autonomous Internal Paper Db Enabled",
+            "type": "boolean"
+          },
+          "autonomous_internal_paper_effective": {
+            "default": false,
+            "title": "Autonomous Internal Paper Effective",
+            "type": "boolean"
+          },
+          "autonomous_internal_paper_env_ceiling": {
+            "default": false,
+            "title": "Autonomous Internal Paper Env Ceiling",
+            "type": "boolean"
+          },
+          "autonomy_mode": {
+            "default": "off",
+            "title": "Autonomy Mode",
+            "type": "string"
+          },
+          "health_state": {
+            "default": "UNAVAILABLE",
+            "enum": [
+              "RUNNING",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "Health State",
+            "type": "string"
+          },
+          "heartbeat_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat Age Seconds"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "heartbeat_stale_after_seconds": {
+            "default": 90,
+            "title": "Heartbeat Stale After Seconds",
+            "type": "integer"
+          },
+          "last_cycle_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Cycle At"
+          },
+          "real_trading_enabled": {
+            "const": false,
+            "default": false,
+            "title": "Real Trading Enabled",
+            "type": "boolean"
+          },
+          "source": {
+            "default": "unavailable",
+            "enum": [
+              "worker",
+              "unavailable"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "stale": {
+            "default": true,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "telegram_alerts_enabled": {
+            "default": false,
+            "title": "Telegram Alerts Enabled",
+            "type": "boolean"
+          },
+          "telegram_interaction_enabled": {
+            "default": false,
+            "title": "Telegram Interaction Enabled",
+            "type": "boolean"
+          },
+          "telegram_paper_activation_armed": {
+            "default": false,
+            "title": "Telegram Paper Activation Armed",
+            "type": "boolean"
+          },
+          "watcher_orchestration_enabled": {
+            "default": false,
+            "title": "Watcher Orchestration Enabled",
+            "type": "boolean"
+          },
+          "watcher_paper_staging_activation": {
+            "default": false,
+            "title": "Watcher Paper Staging Activation",
+            "type": "boolean"
+          },
+          "watchlist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Watchlist",
+            "type": "array"
+          }
+        },
+        "title": "WorkerEffectiveObservation",
         "type": "object"
       },
       "WorkerHealthResponse": {
