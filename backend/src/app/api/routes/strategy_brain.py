@@ -17,7 +17,7 @@ from app.security.rbac import ReaderDep, TraderDep
 from app.services.strategy_versioning import StrategyVersioningService
 from app.strategy_brain.nested_preview import preview_nested_subscriptions
 from app.strategy_brain.records import _insert_once
-from app.strategy_brain.service import create_template, details, overview
+from app.strategy_brain.service import BrainFamily, create_template, details, overview
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
 
 router = APIRouter(
@@ -30,8 +30,20 @@ router = APIRouter(
 
 
 @router.get("/overview")
-async def read_overview(tenant: ReaderDep, session: SessionDep, symbol: str | None = None) -> dict:
-    return overview(session, organization_id=tenant.organization_id, symbol=symbol)
+async def read_overview(
+    tenant: ReaderDep,
+    session: SessionDep,
+    symbol: str | None = None,
+    family: BrainFamily | None = None,
+    since: datetime | None = None,
+) -> dict:
+    return overview(
+        session,
+        organization_id=tenant.organization_id,
+        symbol=symbol,
+        family=family,
+        since=since,
+    )
 
 
 @router.get("/setups/{setup_id}")

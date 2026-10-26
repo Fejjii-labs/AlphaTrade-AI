@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import StrategiesPage from "./page";
 import { api } from "@/lib/api";
+import type { BrainSetup } from "@/lib/api/brain-types";
 import { savedEntries, type SavedEntry } from "@/lib/api/saved-entries";
 import { sessionCleared } from "@/lib/auth/session-events";
 
@@ -105,4 +106,23 @@ it("clears local notes on a same-account session invalidation and skips unauthen
   rerender(<StrategiesPage />);
   expect(screen.queryByTestId("trader-strategies")).not.toBeInTheDocument();
   expect(savedEntries.list).toHaveBeenCalledTimes(2);
+});
+
+it("counts Nested detections from their own family read, even behind a busy SFP week", async () => {
+  const setup = (family: "nested_continuation" | "sfp", i: number) => ({
+    setup_id: `${family}-${i}`, family, symbol: "BTCUSDT", instrument: "BTCUSDT", direction: "long",
+    timeframe: "15m", state: "CONFIRMED", observed_at: new Date(Date.now() - (i + 1) * 60000).toISOString(),
+  }) as unknown as BrainSetup;
+  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) => ({
+    strategies: [], watched_symbols: [], limitations: [], paper_only: true,
+    setups: params?.family === "nested_continuation"
+      ? [setup("nested_continuation", 0)]
+      : Array.from({ length: 25 }, (_, i) => setup("sfp", i)),
+  }));
+  render(<StrategiesPage />);
+  const [nested, sfp] = screen.getAllByTestId("strategy-family");
+  expect(await within(nested).findByText("Recent detections (1)")).toBeInTheDocument();
+  expect(within(sfp).getByText("Recent detections (25)")).toBeInTheDocument();
+  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "nested_continuation", since: expect.any(String) });
+  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "sfp", since: expect.any(String) });
 });

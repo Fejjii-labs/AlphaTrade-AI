@@ -12,6 +12,7 @@ import { SectionHeader } from "@/components/ui/section-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
+import type { BrainFamily, BrainSetup } from "@/lib/api/brain-types";
 import { savedEntries } from "@/lib/api/saved-entries";
 import { formatDateTime } from "@/lib/format";
 import { strategyStatusFor } from "@/lib/strategy-status";
@@ -26,7 +27,7 @@ const families = [
     kind: "operational_nested_continuation/v1",
   },
   { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
-];
+] satisfies { id: string; name: string; kind: string; detectionFamily: BrainFamily }[];
 export default function StrategiesPage() {
   const { user, organization } = useAuth();
   const [session, setSession] = useState(sessionGeneration);
@@ -41,13 +42,21 @@ function StrategiesWorkspace() {
   const params = useSearchParams();
   const family = families.find((f) => f.id === params.get("family"));
   const loader = useCallback(async () => {
-    const [brain, library, drafts] = await Promise.allSettled([
-      api.strategyBrain.overview(),
+    // One bounded read per family, so a busy SFP week cannot push Nested detections out.
+    const since = new Date(Date.now() - 7 * 86400000).toISOString();
+    const [nested, sfp, library, drafts] = await Promise.allSettled([
+      api.strategyBrain.overview({ family: "nested_continuation", since }),
+      api.strategyBrain.overview({ family: "sfp", since }),
       api.strategies.list({ limit: 50 }),
       savedEntries.list({ category: "strategies", limit: 6 }),
     ]);
+    const brain = [nested, sfp].find((r) => r.status === "fulfilled");
     return {
-      brain: brain.status === "fulfilled" ? brain.value : null,
+      brain: brain?.status === "fulfilled" ? brain.value : null,
+      recent: {
+        nested_continuation: nested.status === "fulfilled" ? nested.value.setups : null,
+        sfp: sfp.status === "fulfilled" ? sfp.value.setups : null,
+      } as Record<BrainFamily, BrainSetup[] | null>,
       library: library.status === "fulfilled" ? library.value.items : null,
       drafts: drafts.status === "fulfilled" ? drafts.value.items : null,
     };
@@ -139,9 +148,9 @@ function StrategiesWorkspace() {
               const configs = data?.brain?.strategies.filter(
                 (s) => s.spec.kind === f.kind,
               );
-              const recent = data?.brain?.setups.filter(s =>
-                s.family === f.detectionFamily && Date.parse(s.observed_at) >= Date.now() - 7 * 86400000,
-              ).sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at));
+              const recent = data?.recent[f.detectionFamily]
+                ?.slice()
+                .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at));
               return (
                 <article
                   key={f.id}
