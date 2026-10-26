@@ -81,11 +81,20 @@ def test_real_readonly_only_reply_is_accepted_as_venue_reports_no_withdraw() -> 
 
 
 def test_override_warning_is_logged_once_per_process(monkeypatch) -> None:
-    from structlog.testing import capture_logs
+    # Record calls on the module logger directly. structlog.testing.capture_logs
+    # misses loggers cached by earlier tests in a full-suite run.
+    calls: list[str] = []
 
+    class _Recorder:
+        def warning(self, event: str, **_: object) -> None:
+            calls.append(event)
+
+        def info(self, event: str, **_: object) -> None:
+            calls.append(event)
+
+    monkeypatch.setattr(svc, "logger", _Recorder())
     monkeypatch.setattr(svc, "_TRADE_CAPABLE_OVERRIDE_LOGGED", False)
-    with capture_logs() as logs:
-        svc.ensure_trade_capable_key_allowed(_settings(), _perms())
-        svc.ensure_trade_capable_key_allowed(_settings(), _perms())
-    events = [e for e in logs if e["event"] == "blofin_sync_key_trade_capable_demo_override"]
+    svc.ensure_trade_capable_key_allowed(_settings(), _perms())
+    svc.ensure_trade_capable_key_allowed(_settings(), _perms())
+    events = [e for e in calls if e == "blofin_sync_key_trade_capable_demo_override"]
     assert len(events) == 1
