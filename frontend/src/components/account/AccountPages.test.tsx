@@ -20,5 +20,7 @@ describe("Account UI", () => {
     render(<EmailVerificationNotice />);
     expect(screen.getByText(/Verify your email/i)).toBeInTheDocument();
     expect(screen.getByText(/trader@example.com/)).toBeInTheDocument();
+    expect(screen.getByText(/Check your inbox\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/mock provider|local dev|server-side/i)).not.toBeInTheDocument();
   });
 });

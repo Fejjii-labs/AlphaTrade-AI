@@ -330,9 +330,8 @@ function JournalWorkspaceContent() {
   return (
     <div className="page-sections [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
       <PageHeader
-        eyebrow="Review"
         title="Journal & Knowledge"
-        description="Execution-backed activity, reflections, and preserved knowledge."
+        description="Trades, reflections, and saved knowledge."
         actions={
           <Link
             href="/agent"
