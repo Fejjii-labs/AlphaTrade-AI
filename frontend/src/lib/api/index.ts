@@ -1,7 +1,7 @@
 import { validatedFetch } from "./validated-fetch";
 import * as validators from "./generated/validators";
 import * as generatedApi from "./generated/client";
-import type { BrainDraftBinding, BrainOverview, BrainSetup, SfpDraft } from "./brain-types";
+import type { BrainDraftBinding, BrainFamily, BrainOverview, BrainSetup, SfpDraft } from "./brain-types";
 import { apiFetch } from "@/lib/api/client";
 import type {
   ApprovalRequest,
@@ -211,7 +211,11 @@ export const APPROVE_PAPER_SIGNAL_PROPOSAL = "APPROVE_PAPER_SIGNAL_PROPOSAL";
 
 export const api = {
   strategyBrain: {
-    overview: () => apiFetch<BrainOverview>("/strategy-brain/overview", { auth: true }),
+    overview: (params?: { family?: BrainFamily; since?: string }) =>
+      apiFetch<BrainOverview>("/strategy-brain/overview", {
+        ...(params ? { query: params } : {}),
+        auth: true,
+      }),
     setup: (id: string) => apiFetch<BrainSetup>(`/strategy-brain/setups/${id}`, { auth: true }),
     createNested: (body: BrainDraftBinding) =>
       apiFetch<{ strategy_id: string; version_id: string }>("/strategy-brain/templates/nested", {

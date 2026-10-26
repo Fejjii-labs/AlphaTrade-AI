@@ -695,3 +695,89 @@ def test_new_family_fields_preserve_existing_compiled_hash_and_card_payload():
         stop_loss=["stop"],
     )
     assert "brain" not in card.model_dump(mode="json")
+
+
+def _record_nested_setup(session, org, user):
+    template = approved(session, org, user)
+    series = bars(PRICES[:13])
+    record_detections(
+        session,
+        organization_id=org,
+        strategy_id=template["strategy_id"],
+        version_id=template["version_id"],
+        spec=NestedContinuationSpec(symbol="BTCUSDT"),
+        bars=series,
+        events=detection(series),
+        evidence_hash="a" * 64,
+        evaluated_at=series[-1].interval_end,
+    )
+    session.commit()
+    return template
+
+
+def test_nested_setup_payload_records_its_family(tenant_store):
+    session, org, user = tenant_store
+    _record_nested_setup(session, org, user)
+    rows = session.scalars(select(BrainSetupRow)).all()
+    assert rows and {row.payload["family"] for row in rows} == {"nested_continuation"}
+    view = overview(session, organization_id=org, family="nested_continuation")
+    assert view["setups"] and {s["family"] for s in view["setups"]} == {"nested_continuation"}
+    assert overview(session, organization_id=org, family="sfp")["setups"] == []
+
+
+def test_stored_nested_setup_without_family_reads_as_nested_continuation(tenant_store):
+    session, org, user = tenant_store
+    _record_nested_setup(session, org, user)
+    for row in session.scalars(select(BrainSetupRow)):
+        row.payload = {key: value for key, value in row.payload.items() if key != "family"}
+    session.commit()
+    session.expire_all()
+    assert all("family" not in row.payload for row in session.scalars(select(BrainSetupRow)))
+    every = overview(session, organization_id=org)["setups"]
+    assert every and {s["family"] for s in every} == {"nested_continuation"}
+    scoped = overview(session, organization_id=org, family="nested_continuation")["setups"]
+    assert {s["setup_id"] for s in scoped} == {s["setup_id"] for s in every}
+
+
+@pytest.mark.parametrize("store", ["tenant_store", "postgres_tenant_store"])
+def test_busy_sfp_history_cannot_crowd_nested_out_of_its_family_query(store, request):
+    session, org, user = request.getfixturevalue(store)
+    template = approved(session, org, user)
+    now = datetime(2026, 10, 26, 12, tzinfo=UTC)
+
+    def row(observed_at, payload):
+        return BrainSetupRow(
+            id=uuid4(),
+            organization_id=org,
+            strategy_id=template["strategy_id"],
+            strategy_version_id=template["version_id"],
+            symbol="BTCUSDT",
+            state="CONFIRMED",
+            observed_at=observed_at,
+            expires_at=observed_at + timedelta(hours=4),
+            payload={"timeframe": "15m", **payload},
+        )
+
+    sfp = {
+        "family": "sfp",
+        "evidence_close_at": now.isoformat(),
+        "required_evidence_max_age_bars": 2,
+        "required_evidence": "AVAILABLE",
+    }
+    nested = row(now - timedelta(days=2), {})
+    stale_nested = row(now - timedelta(days=9), {})
+    session.add_all(
+        [nested, stale_nested] + [row(now - timedelta(minutes=15 * i), sfp) for i in range(1, 26)]
+    )
+    session.commit()
+
+    unscoped = overview(session, organization_id=org, now=now)["setups"]
+    assert len(unscoped) == 20 and {s["family"] for s in unscoped} == {"sfp"}
+    since = now - timedelta(days=7)
+    nested_view = overview(
+        session, organization_id=org, family="nested_continuation", since=since, now=now
+    )["setups"]
+    assert [s["setup_id"] for s in nested_view] == [str(nested.id)]
+    sfp_view = overview(session, organization_id=org, family="sfp", since=since, now=now)
+    assert len(sfp_view["setups"]) == 20
+    assert {s["family"] for s in sfp_view["setups"]} == {"sfp"}
