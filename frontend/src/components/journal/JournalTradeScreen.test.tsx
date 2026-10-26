@@ -198,3 +198,11 @@ it("shows reconciled state for a stuck manual demo row closed on the venue", asy
   expect(screen.getByText("h-long")).toBeInTheDocument();
   expect(screen.getByText("90.00 USDT")).toBeInTheDocument();
 });
+it("labels an entry order with a venue order id as recorded, not verified", async () => {
+  const withVenueOrder: JournalTradeDetail = { ...fixture, manual_demo: { ...fixture.manual_demo!, evidence: { ...fixture.manual_demo!.evidence!, venue_order_id: "venue-order" } } };
+  vi.mocked(journalTradeApi.detail).mockResolvedValue(withVenueOrder);
+  render(<JournalTradeScreen tradeId="exact-trade" />);
+  await screen.findByTestId("journal-trade-detail");
+  expect(screen.getByText("Entry order: Recorded on venue")).toBeInTheDocument();
+  expect(screen.queryByText(/Verified on venue/)).not.toBeInTheDocument();
+});
