@@ -586,7 +586,7 @@ describe("Agent workspace", () => {
     render(<AgentWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.click(await screen.findByRole("button", { name: "BTC plan" }));
-    const summary = await screen.findByText("Stored evidence");
+    const summary = await screen.findByText("Sources");
     const details = summary.closest("details")!;
     expect(details).not.toHaveAttribute("open");
     expect(summary.tagName).toBe("SUMMARY");
@@ -621,7 +621,7 @@ describe("Agent workspace", () => {
     render(<AgentWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.click(await screen.findByRole("button", { name: "BTC plan" }));
-    const details = (await screen.findByText("Stored evidence")).closest(
+    const details = (await screen.findByText("Sources")).closest(
       "details",
     )!;
     expect(details).toHaveTextContent(
@@ -699,7 +699,7 @@ describe("Agent workspace", () => {
       target: { value: "Compare my strategies" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    const details = (await screen.findByText("Stored evidence")).closest(
+    const details = (await screen.findByText("Sources")).closest(
       "details",
     )!;
     expect(details).toHaveTextContent(
@@ -708,7 +708,8 @@ describe("Agent workspace", () => {
     expect(details).toHaveTextContent(
       "Full additional explanation after the clean display ending.",
     );
-    expect(details).toHaveTextContent("TradePlan: plan-ref");
+    expect(details).toHaveTextContent("TradePlan");
+    expect(details).not.toHaveTextContent("plan-ref");
     expect(details).not.toHaveAttribute("open");
   });
 
@@ -959,7 +960,7 @@ describe("Agent workspace", () => {
     await act(async () => vi.advanceTimersByTimeAsync(AGENT_TURN_TIMEOUT_MS));
     expect(screen.getByLabelText("Message")).toHaveValue("");
     expect(screen.getAllByTestId("agent-message")[1]).toHaveTextContent(
-      "Stored evidence",
+      "Sources",
     );
     expect(apiMocks.agentTurn).toHaveBeenCalledTimes(1);
     expect(apiMocks.confirmProposal).not.toHaveBeenCalled();
@@ -1020,7 +1021,7 @@ describe("Agent workspace", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Capture failed");
   });
 
-  it("keeps the complete explanation and technical source references inside Stored evidence", async () => {
+  it("keeps the complete explanation and technical source references inside Sources", async () => {
     apiMocks.listMessages.mockResolvedValue({
       items: [
         {
@@ -1042,12 +1043,13 @@ describe("Agent workspace", () => {
     render(<AgentWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.click(await screen.findByRole("button", { name: "BTC plan" }));
-    const details = (await screen.findByText("Stored evidence")).closest(
+    const details = (await screen.findByText("Sources")).closest(
       "details",
     )!;
     expect(details).not.toHaveAttribute("open");
     expect(details).toHaveTextContent("Complete additional explanation");
-    expect(details).toHaveTextContent("TradePlan: plan-ref");
+    expect(details).toHaveTextContent("TradePlan");
+    expect(details).not.toHaveTextContent("plan-ref");
     expect(details).toHaveTextContent("Canonical amounts and hash");
     expect(screen.getByText(/BTC short: entry/).closest("details")).toBeNull();
     expect(screen.getByText(/BTC short: entry/)).toBeVisible();
@@ -1175,7 +1177,7 @@ describe("Agent workspace", () => {
       ] });
     });
     expect(screen.getAllByTestId("agent-message")).toHaveLength(2);
-    expect(screen.getAllByTestId("agent-message")[1]).toHaveTextContent("Stored evidence");
+    expect(screen.getAllByTestId("agent-message")[1]).toHaveTextContent("Sources");
     expect(apiMocks.agentTurn).toHaveBeenCalledTimes(1);
   });
 

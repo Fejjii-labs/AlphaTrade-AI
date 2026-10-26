@@ -191,6 +191,7 @@ export function AgentMessageContent({
                       <Link
                         href={`/journal?saved=${encodeURIComponent(identity)}`}
                         className="underline"
+                        aria-label={`Source: ${title}`}
                       >
                         {title}
                       </Link>
@@ -198,6 +199,7 @@ export function AgentMessageContent({
                       <Link
                         className="underline"
                         href={`/execution/manual-demo/${encodeURIComponent(identity)}`}
+                        aria-label={`Source: ${title}`}
                       >
                         {title}
                       </Link>
