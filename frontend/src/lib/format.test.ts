@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   containsCurrencySymbol,
+  formatAmount,
   formatCount,
   formatCurrency,
   formatDate,
@@ -87,5 +88,24 @@ describe("shared product formatters", () => {
     expect(formatTrendLabel("insufficient_data")).toBe("Insufficient data");
     expect(formatProfitFactor(null, ["no_losing_trades"])).toBe("n/a — no losing trades");
     expect(formatProfitFactor(1.8)).toBe("1.80");
+  });
+});
+
+describe("formatAmount", () => {
+  it.each([
+    ["50.00000000", "USDT", "50 USDT"],
+    ["10240.50000000", "USDT", "10,240.5 USDT"],
+    [1000.125, "USDT", "1,000.13 USDT"],
+    ["0.5", undefined, "0.5"],
+    [null, "USDT", UNAVAILABLE],
+    ["", "USDT", UNAVAILABLE],
+  ])("formats %s %s as %s", (value, unit, expected) => {
+    expect(formatAmount(value, unit)).toBe(expected);
+  });
+
+  it("trims percent zeros only when asked", () => {
+    expect(formatPercent(0.5, 2, { alreadyPercent: true, trimZeros: true })).toBe("0.5%");
+    expect(formatPercent(1, 2, { alreadyPercent: true, trimZeros: true })).toBe("1%");
+    expect(formatPercent(0.5, 2, { alreadyPercent: true })).toBe("0.50%");
   });
 });
