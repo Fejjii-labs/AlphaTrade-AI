@@ -126,3 +126,20 @@ it("counts Nested detections from their own family read, even behind a busy SFP 
   expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "nested_continuation", since: expect.any(String) });
   expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "sfp", since: expect.any(String) });
 });
+
+it("shows the server total when a family has more detections than the 20-row bound", async () => {
+  const setup = (family: "nested_continuation" | "sfp", i: number) => ({
+    setup_id: `${family}-${i}`, family, symbol: "BTCUSDT", instrument: "BTCUSDT", direction: "long",
+    timeframe: "15m", state: "CONFIRMED", observed_at: new Date(Date.now() - (i + 1) * 60000).toISOString(),
+  }) as unknown as BrainSetup;
+  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) => ({
+    strategies: [], watched_symbols: [], limitations: [], paper_only: true,
+    ...(params?.family === "sfp"
+      ? { setups: Array.from({ length: 20 }, (_, i) => setup("sfp", i)), setup_count: 37 }
+      : { setups: [setup("nested_continuation", 0)], setup_count: 1 }),
+  }));
+  render(<StrategiesPage />);
+  const [nested, sfp] = screen.getAllByTestId("strategy-family");
+  expect(await within(sfp).findByText("Recent detections (37)")).toBeInTheDocument();
+  expect(within(nested).getByText("Recent detections (1)")).toBeInTheDocument();
+});
