@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Row, rowBadgeClass } from "@/components/ui/row";
 import { api } from "@/lib/api";
 import type { WatcherSymbolRuntimeStatus, WatcherWatchlistSlot } from "@/lib/api/types";
 
@@ -93,81 +94,92 @@ export function WatcherWatchlistEditor({
           const found = statusBySymbol.get(slot.symbol.trim().toUpperCase());
           const status = found?.enabled === slot.enabled ? found : undefined;
           return (
-            <div
+            <Row
               key={slot.position}
-              className="grid gap-2 border-b border-border pb-3 md:grid-cols-[auto_1fr_auto]"
+              className="border-b border-border pb-3 sm:grid-cols-[3.5rem_auto_minmax(0,1fr)_auto]"
               data-testid={`watchlist-slot-${slot.position}`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="w-12 text-xs text-text-muted">Slot {slot.position}</span>
-                <Input
-                  aria-label={`Symbol for slot ${slot.position}`}
-                  value={slot.symbol}
-                  disabled={saving}
-                  className="w-36"
-                  onChange={(event) => {
-                    const next = slots.slice();
-                    const current = next[index];
-                    if (!current) return;
-                    next[index] = { ...current, symbol: event.target.value.toUpperCase() };
-                    onChange(next);
-                  }}
-                />
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={slot.enabled}
+              label={<span className="text-xs">Slot {slot.position}</span>}
+              value={
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <Input
+                    aria-label={`Symbol for slot ${slot.position}`}
+                    value={slot.symbol}
                     disabled={saving}
-                    aria-label={`Enable slot ${slot.position}`}
+                    className="w-36"
                     onChange={(event) => {
                       const next = slots.slice();
                       const current = next[index];
                       if (!current) return;
-                      next[index] = { ...current, enabled: event.target.checked };
+                      next[index] = { ...current, symbol: event.target.value.toUpperCase() };
                       onChange(next);
                     }}
                   />
-                  {slot.enabled ? "Enabled" : "Disabled"}
-                </label>
-              </div>
-              <p className="text-xs text-zinc-300" data-testid={`watchlist-status-${slot.position}`}>
-                {status ? (
-                  <>
-                    <StatusBadge
-                      label={statusLabel(status.error_state, status.market_source)}
-                      tone={status.error_state ? "warn" : "healthy"}
-                    />{" "}
-                    {status.freshness.replace(/_/g, " ")} · {status.setup_state.replace(/_/g, " ")}
-                    {status.alert_state !== "none" ? ` · ${status.alert_state.replace(/_/g, " ")}` : ""}
-                    {status.error_state ? ` · ${status.error_state.replace(/_/g, " ")}` : ""}
-                  </>
-                ) : (
-                  "Pending / unscanned"
-                )}
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  aria-label={`Move slot ${slot.position} up`}
-                  disabled={saving || index === 0}
-                  onClick={() => onChange(moveSlot(slots, index, -1))}
+                  <label className="flex items-baseline gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={slot.enabled}
+                      disabled={saving}
+                      aria-label={`Enable slot ${slot.position}`}
+                      onChange={(event) => {
+                        const next = slots.slice();
+                        const current = next[index];
+                        if (!current) return;
+                        next[index] = { ...current, enabled: event.target.checked };
+                        onChange(next);
+                      }}
+                    />
+                    {slot.enabled ? "Enabled" : "Disabled"}
+                  </label>
+                </div>
+              }
+              meta={
+                <span
+                  className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-zinc-300"
+                  data-testid={`watchlist-status-${slot.position}`}
                 >
-                  Up
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  aria-label={`Move slot ${slot.position} down`}
-                  disabled={saving || index === slots.length - 1}
-                  onClick={() => onChange(moveSlot(slots, index, 1))}
-                >
-                  Down
-                </Button>
-              </div>
-            </div>
+                  {status ? (
+                    <>
+                      <StatusBadge
+                        label={statusLabel(status.error_state, status.market_source)}
+                        tone={status.error_state ? "warn" : "healthy"}
+                        className={rowBadgeClass}
+                      />
+                      <span>
+                        {status.freshness.replace(/_/g, " ")} · {status.setup_state.replace(/_/g, " ")}
+                        {status.alert_state !== "none" ? ` · ${status.alert_state.replace(/_/g, " ")}` : ""}
+                        {status.error_state ? ` · ${status.error_state.replace(/_/g, " ")}` : ""}
+                      </span>
+                    </>
+                  ) : (
+                    "Pending / unscanned"
+                  )}
+                </span>
+              }
+              action={
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    aria-label={`Move slot ${slot.position} up`}
+                    disabled={saving || index === 0}
+                    onClick={() => onChange(moveSlot(slots, index, -1))}
+                  >
+                    Up
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    aria-label={`Move slot ${slot.position} down`}
+                    disabled={saving || index === slots.length - 1}
+                    onClick={() => onChange(moveSlot(slots, index, 1))}
+                  >
+                    Down
+                  </Button>
+                </>
+              }
+            />
           );
         })}
         <div className="flex items-center gap-3">

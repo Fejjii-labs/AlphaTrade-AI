@@ -66,12 +66,11 @@ function StrategiesWorkspace() {
   return (
     <div className="page-sections" data-testid="trader-strategies">
       <PageHeader
-        eyebrow={family ? "Strategy family" : "Research"}
         title={family?.name ?? "Strategies"}
         description={
           family
-            ? "Directional configurations and revisions. Approval and automation stay separate."
-            : "Nested Continuation and SFP families, detections, and captured drafts."
+            ? "Configurations and revisions."
+            : "Nested Continuation and SFP families, detections, and drafts."
         }
         actions={
           <Link
