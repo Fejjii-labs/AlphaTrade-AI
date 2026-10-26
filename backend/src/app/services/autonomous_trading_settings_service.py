@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
-from app.db.models import UserStrategy
+from app.db.models import UserRiskSettings, UserStrategy
 from app.persistence.worker_runtime_state import (
     load_worker_runtime_from_session,
     org_paper_effective,
@@ -30,6 +30,7 @@ from app.services.autonomous_paper_switch import (
     read_internal_paper_switch,
     write_internal_paper_switch,
 )
+from app.services.risk.settings_service import SYSTEM_RISK_DEFAULTS
 from app.services.risk_policy.ceilings import (
     HARD_MAX_DAILY_LOSS_PERCENT,
     PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
@@ -135,6 +136,7 @@ class AutonomousTradingSettingsService:
         row = self._load_row(organization_id=organization_id, user_id=user_id)
         options = self._options(organization_id=organization_id, user_id=user_id)
         switch = self._switch_view(organization_id)
+        account_cap = self._account_max_trades(organization_id=organization_id, user_id=user_id)
         if row is None:
             defaults = SYSTEM_AUTONOMOUS_DEFAULTS
             return AutonomousTradingSettingsView(
@@ -146,6 +148,9 @@ class AutonomousTradingSettingsService:
                 strategy_id=None,
                 symbol=None,
                 using_defaults=True,
+                # Unsaved settings do not enforce the bot cap; only the account cap applies.
+                account_max_trades_per_day=account_cap,
+                effective_max_trades_per_day=account_cap,
                 **options,
                 **switch,
             )
@@ -158,6 +163,8 @@ class AutonomousTradingSettingsService:
             strategy_id=row.strategy_id,
             symbol=row.symbol,
             using_defaults=False,
+            account_max_trades_per_day=account_cap,
+            effective_max_trades_per_day=min(row.max_trades_per_day, account_cap),
             **options,
             **switch,
         )
@@ -198,7 +205,19 @@ class AutonomousTradingSettingsService:
             daily = validate_daily_loss_limit_percent(data["daily_loss_limit_percent"])
             changes["daily_loss_limit_percent"] = format(daily, "f")
         if "max_trades_per_day" in data and data["max_trades_per_day"] is not None:
-            max_trades = validate_max_trades_per_day(data["max_trades_per_day"])
+            requested_trades = validate_max_trades_per_day(data["max_trades_per_day"])
+            # Only a change to the bot cap is checked; the account cap can always be
+            # tightened, and the bot then uses min(bot, account).
+            if requested_trades != max_trades:
+                account_cap = self._account_max_trades(
+                    organization_id=organization_id, user_id=user_id
+                )
+                if requested_trades > account_cap:
+                    raise AutonomousSettingsValidationError(
+                        "max_trades_per_day_exceeds_account",
+                        f"Bot max trades per day cannot exceed the account limit of {account_cap}.",
+                    )
+            max_trades = requested_trades
             changes["max_trades_per_day"] = str(max_trades)
         if payload.clear_risk_per_trade_percent:
             risk = None
@@ -354,6 +373,17 @@ class AutonomousTradingSettingsService:
                 "Autonomous trading settings could not be saved.",
             )
         return row
+
+    def _account_max_trades(self, *, organization_id: uuid.UUID, user_id: uuid.UUID) -> int:
+        """Account cap from the saved risk settings, or the system default."""
+
+        saved = self._session.scalar(
+            select(UserRiskSettings.max_trades_per_day).where(
+                UserRiskSettings.organization_id == organization_id,
+                UserRiskSettings.user_id == user_id,
+            )
+        )
+        return saved if saved is not None else SYSTEM_RISK_DEFAULTS.max_trades_per_day
 
     def _load_row(
         self,
