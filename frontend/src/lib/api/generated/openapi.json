@@ -4288,6 +4288,10 @@
       "AutonomousTradingSettingsView": {
         "additionalProperties": false,
         "properties": {
+          "account_max_trades_per_day": {
+            "title": "Account Max Trades Per Day",
+            "type": "integer"
+          },
           "autonomy_mode": {
             "default": "",
             "title": "Autonomy Mode",
@@ -4297,6 +4301,10 @@
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Daily Loss Limit Percent",
             "type": "string"
+          },
+          "effective_max_trades_per_day": {
+            "title": "Effective Max Trades Per Day",
+            "type": "integer"
           },
           "internal_paper_effective": {
             "default": false,
@@ -4430,7 +4438,9 @@
           "organization_id",
           "user_id",
           "daily_loss_limit_percent",
-          "max_trades_per_day"
+          "max_trades_per_day",
+          "account_max_trades_per_day",
+          "effective_max_trades_per_day"
         ],
         "title": "AutonomousTradingSettingsView",
         "type": "object"
@@ -76307,6 +76317,43 @@
                 }
               ],
               "title": "Symbol"
+            }
+          },
+          {
+            "in": "query",
+            "name": "family",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "nested_continuation",
+                    "sfp"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Family"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           }
         ],
