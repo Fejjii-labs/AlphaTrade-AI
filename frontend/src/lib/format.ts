@@ -38,6 +38,25 @@ export function formatMoney(value: string | number | null | undefined): string {
 }
 
 /**
+ * Amount with a unit suffix: "50 USDT", "10,240.5 USDT".
+ * At most two decimals with trailing zeros trimmed, so Decimal strings such as
+ * "50.00000000" read as "50".
+ */
+export function formatAmount(
+  value: string | number | null | undefined,
+  unit?: string | null,
+): string {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) return UNAVAILABLE;
+  const amount = numeric.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  const suffix = unit?.trim();
+  return suffix ? `${amount} ${suffix}` : amount;
+}
+
+/**
  * Format an amount with an explicit ISO currency code from the backend.
  * When currency is missing, falls back to plain decimal money (no invented symbol).
  */
@@ -85,16 +104,18 @@ export function formatPrice(
 
 /**
  * Format a ratio already expressed as a fraction (0.5123 → "51.2%").
- * Pass `alreadyPercent: true` when the value is already on a 0–100 scale.
+ * Pass `alreadyPercent: true` when the value is already on a 0–100 scale, and
+ * `trimZeros: true` to drop trailing zeros ("0.50%" → "0.5%").
  */
 export function formatPercent(
   value: number | null | undefined,
   digits = 1,
-  options?: { alreadyPercent?: boolean },
+  options?: { alreadyPercent?: boolean; trimZeros?: boolean },
 ): string {
   if (value === null || value === undefined || Number.isNaN(value)) return UNAVAILABLE;
   const pct = options?.alreadyPercent ? value : value * 100;
-  return `${pct.toFixed(digits)}%`;
+  const fixed = pct.toFixed(digits);
+  return `${options?.trimZeros && fixed.includes(".") ? fixed.replace(/\.?0+$/, "") : fixed}%`;
 }
 
 export function formatSignedPercent(
