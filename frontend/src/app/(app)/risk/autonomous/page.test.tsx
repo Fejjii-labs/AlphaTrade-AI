@@ -144,6 +144,35 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
   });
 
+  it("enables Save for an owner with no owner-only reason", () => {
+    auth.membershipRole = "owner";
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByRole("button", { name: /save settings/i })).toBeEnabled();
+    expect(screen.queryByTestId("autonomous-save-owner-reason")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("autonomous-switch-owner-reason")).not.toBeInTheDocument();
+  });
+
+  it("disables Save for a trader and names their role", () => {
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
+    expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
+      "Owner only (your role: Trader)",
+    );
+    expect(screen.getByTestId("autonomous-switch-owner-reason")).toHaveTextContent(
+      "Owner only (your role: Trader)",
+    );
+  });
+
+  it("shows an unknown role when the membership role is missing", () => {
+    auth.membershipRole = null;
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
+    expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
+      "Owner only (your role: unknown)",
+    );
+  });
+
   it("labels the bot cap and shows the effective cap held by the account limit", () => {
     useAsyncDataMock.mockReturnValue({
       data: { ...settings, using_defaults: false, max_trades_per_day: 5, account_max_trades_per_day: 3, effective_max_trades_per_day: 3 },
@@ -170,6 +199,7 @@ describe("Autonomous trading settings form", () => {
     vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
       new ApiError("max_trades_per_day_exceeds_account", 422, null),
     );
+    auth.membershipRole = "owner";
     render(<AutonomousTradingSettingsPage />);
     fireEvent.change(screen.getByTestId("autonomous-max-trades"), { target: { value: "25" } });
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
@@ -181,6 +211,7 @@ describe("Autonomous trading settings form", () => {
   });
 
   it("shows a ceiling validation message from the API", async () => {
+    auth.membershipRole = "owner";
     const { api, ApiError } = await import("@/lib/api");
     vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
       new ApiError("daily_loss_limit_exceeds_ceiling", 422, null),

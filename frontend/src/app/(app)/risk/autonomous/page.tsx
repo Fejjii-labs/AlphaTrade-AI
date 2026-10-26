@@ -66,6 +66,11 @@ export default function AutonomousTradingSettingsPage() {
   );
 }
 
+function roleLabel(role: string | null | undefined): string {
+  if (!role) return "unknown";
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 function AutonomousSettingsWorkspace() {
   const { membershipRole } = useAuth();
   const loader = useCallback(() => api.autonomous.settings(), []);
@@ -140,6 +145,8 @@ function AutonomousSettingsWorkspace() {
   }
 
   const owner = membershipRole === "owner";
+  // PATCH /autonomous/settings is owner-only; say why instead of letting it 403.
+  const ownerReason = owner ? null : `Owner only (your role: ${roleLabel(membershipRole)})`;
   const ceiling =
     view.internal_paper_env_ceiling == null
       ? "Not reported"
@@ -195,6 +202,11 @@ function AutonomousSettingsWorkspace() {
             />
             <span>Autonomous internal paper</span>
           </label>
+          {ownerReason ? (
+            <p className="text-text-muted" data-testid="autonomous-switch-owner-reason">
+              {ownerReason}
+            </p>
+          ) : null}
           <p className="text-text-muted" data-testid="autonomous-paper-switch-note">
             The environment ceiling wins when it is off. This switch cannot enable real money.
             Only an owner can change it. Turning it off stops new entries and does not close
@@ -318,9 +330,14 @@ function AutonomousSettingsWorkspace() {
             {savedMessage ? (
               <p className="text-sm text-accent" role="status">{savedMessage}</p>
             ) : null}
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving || !owner}>
               {saving ? "Saving…" : "Save settings"}
             </Button>
+            {ownerReason ? (
+              <p className="text-sm text-text-muted" data-testid="autonomous-save-owner-reason">
+                {ownerReason}
+              </p>
+            ) : null}
           </form>
         </CardContent>
       </Card>
