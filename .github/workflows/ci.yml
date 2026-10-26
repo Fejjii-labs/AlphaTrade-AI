@@ -228,6 +228,19 @@ jobs:
       - name: Unit tests
         if: steps.scope.outputs.app != 'false'
         run: npm run test
+      # The generated contract is exported from the backend, so drift from
+      # either side fails here. The exporter runs uv --offline --frozen.
+      - uses: astral-sh/setup-uv@v5
+        if: steps.scope.outputs.app != 'false'
+        with:
+          enable-cache: true
+      - name: Install backend for the API contract export
+        if: steps.scope.outputs.app != 'false'
+        working-directory: backend
+        run: uv sync --frozen
+      - name: API contract drift check
+        if: steps.scope.outputs.app != 'false'
+        run: npm run api:check
       - name: Build
         if: steps.scope.outputs.app != 'false'
         run: npm run build
