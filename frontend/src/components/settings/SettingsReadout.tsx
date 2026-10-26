@@ -1,15 +1,13 @@
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Row } from "@/components/ui/row";
 
 export function SettingsReadout({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <dl className="grid gap-3 text-sm sm:grid-cols-2">
+    <dl className="divide-y divide-border-subtle">
       {rows.map(([label, value]) => (
-        <div key={label} className="min-w-0">
-          <dt className="text-text-muted">{label}</dt>
-          <dd className="mt-1 break-words text-text-primary">{value}</dd>
-        </div>
+        <Row key={label} definition label={label} value={value} />
       ))}
     </dl>
   );

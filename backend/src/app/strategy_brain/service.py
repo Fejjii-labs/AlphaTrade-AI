@@ -1,10 +1,10 @@
 """Bounded tenant reads and explicit library template creation. No provider calls."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
@@ -21,8 +21,10 @@ from app.schemas.strategy_library import StrategyCard, UserStrategyCreate
 from app.services.canonical_serialization import canonical_sha256
 from app.services.strategy_library_service import StrategyLibraryService
 from app.services.strategy_versioning import StrategyVersioningService
-from app.strategy_brain.records import aware
+from app.strategy_brain.records import NESTED_FAMILY, aware
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
+
+BrainFamily = Literal["nested_continuation", "sfp"]
 
 
 def template_name(spec: NestedContinuationSpec | SfpSpec) -> str:
@@ -139,6 +141,7 @@ def create_template(
 
 def setup_view(session: Session, row: BrainSetupRow, *, now: datetime) -> dict[str, Any]:
     payload = dict(row.payload)
+    payload["family"] = payload.get("family") or NESTED_FAMILY
     observed = aware(row.observed_at)
     timeframe = payload.get("timeframe", "15m")
     from app.market_contracts.identity import interval_timedelta
@@ -202,6 +205,8 @@ def overview(
     organization_id: UUID,
     symbol: str | None = None,
     user_id: UUID | None = None,
+    family: BrainFamily | None = None,
+    since: datetime | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
@@ -209,6 +214,12 @@ def overview(
     stmt = select(BrainSetupRow).where(BrainSetupRow.organization_id == organization_id)
     if symbol:
         stmt = stmt.where(BrainSetupRow.symbol == symbol.strip().upper())
+    if family:
+        # The 20-row bound applies per family, so busy SFP history cannot crowd out Nested.
+        stored = func.coalesce(BrainSetupRow.payload["family"].as_string(), NESTED_FAMILY)
+        stmt = stmt.where(stored == family)
+    if since:
+        stmt = stmt.where(BrainSetupRow.observed_at >= aware(since))
     rows = session.scalars(
         stmt.order_by(BrainSetupRow.observed_at.desc(), BrainSetupRow.id).limit(20)
     ).all()

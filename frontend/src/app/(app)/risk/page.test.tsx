@@ -111,6 +111,7 @@ describe("Risk settings route ownership", () => {
     expect(screen.getByRole("link", { name: /Back to Strategies/ })).toHaveAttribute("href", "/strategies#risk");
     expect(screen.getByTestId("risk-settings-ownership")).toHaveTextContent(/configuration only/i);
     expect(screen.getByTestId("risk-daily-loss-limit")).toBeInTheDocument();
+    expect(screen.getByText("Account: max trades/day (all trades)")).toBeInTheDocument();
     expect(screen.getByTestId("paper-mode-indicator")).toBeInTheDocument();
     expect(screen.queryByTestId("portfolio-hub-safety")).not.toBeInTheDocument();
     expect(screen.queryByTestId("paper-mode-banner")).not.toBeInTheDocument();

@@ -267,6 +267,43 @@ def test_resend_verification_uses_profile_email_for_authenticated_empty_body(
     assert [m.to_address for m in sent] == ["resend-profile@example.com"]
 
 
+def test_resend_verification_ignores_body_email_when_authenticated(
+    account_client: AccountClientFixture,
+    account_settings: Settings,
+) -> None:
+    client, _ = account_client
+    registered = _register(client, email="resend-owner@example.com")
+    _register(client, email="resend-other@example.com", org="Other Org")
+    reset_email_provider_for_tests()
+    response = client.post(
+        "/auth/verify-email/request",
+        json={"email": "resend-other@example.com"},
+        headers=_auth(registered["tokens"]["access_token"]),
+    )
+    assert response.status_code == 200
+    provider = resolve_email_provider(account_settings)
+    sent = [m for m in provider.sent if m.template == "email_verification"]
+    assert [m.to_address for m in sent] == ["resend-owner@example.com"]
+
+
+def test_resend_verification_uses_body_email_when_signed_out(
+    account_client: AccountClientFixture,
+    account_settings: Settings,
+) -> None:
+    client, _ = account_client
+    _register(client, email="resend-anon@example.com")
+    reset_email_provider_for_tests()
+    response = client.post(
+        "/auth/verify-email/request",
+        json={"email": "resend-anon@example.com"},
+    )
+    assert response.status_code == 200
+    assert "requires verification" in response.json()["message"]
+    provider = resolve_email_provider(account_settings)
+    sent = [m for m in provider.sent if m.template == "email_verification"]
+    assert [m.to_address for m in sent] == ["resend-anon@example.com"]
+
+
 def test_resend_verification_without_session_or_email_is_rejected(
     account_client: AccountClientFixture,
 ) -> None:

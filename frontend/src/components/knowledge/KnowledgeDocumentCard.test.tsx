@@ -12,16 +12,15 @@ const document: RagDocument = {
 };
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-it("keeps lesson provenance inside collapsed details with a compact open control", () => {
+it("shows only the added date and a compact open control", () => {
   const open = vi.fn();
   render(<KnowledgeDocumentCard document={document} onToggleExpand={open} />);
   expect(screen.getByTestId("knowledge-category-badge")).toHaveTextContent("Accepted lesson");
-  expect(screen.getByTestId("knowledge-document-id")).not.toBeVisible();
+  expect(screen.getByTestId("knowledge-source-context")).toHaveTextContent(/^Added \S.*2026$/);
+  expect(screen.queryByText(/document-private-reference|local:\/\/|Provenance details/)).not.toBeInTheDocument();
   expect(screen.getByTestId("knowledge-indexing-status")).toHaveTextContent("Stored · Search unverified");
   fireEvent.click(screen.getByRole("button", { name: "Open" }));
   expect(open).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByText("Provenance details", { selector: "summary" }));
-  expect(screen.getByTestId("knowledge-document-id")).toBeVisible();
 });
 
 it("queues an explicit indexing retry without claiming current search readiness", async () => {

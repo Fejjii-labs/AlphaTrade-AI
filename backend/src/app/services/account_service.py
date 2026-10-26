@@ -106,9 +106,11 @@ class AccountService:
         *,
         tenant: TenantContext | None = None,
     ) -> str:
-        email = (str(data.email).lower() if data.email else None) or (
-            tenant.email.lower() if tenant else None
-        )
+        # A signed-in caller only ever gets mail at their own account email.
+        if tenant is not None:
+            email: str | None = tenant.email.lower()
+        else:
+            email = str(data.email).lower() if data.email else None
         if not email:
             raise ValidationAppError("Email is required.")
         user = self._users.get_by_email(email)
