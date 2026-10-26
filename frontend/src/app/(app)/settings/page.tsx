@@ -45,7 +45,6 @@ function SettingsWorkspace() {
   return (
     <div className="page-sections [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
       <PageHeader
-        eyebrow="Workspace"
         title="Settings"
         description="Market monitoring, notifications, and account controls."
       />

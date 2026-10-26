@@ -12,6 +12,8 @@ const settings = {
   strategy_id: "strategy-1",
   symbol: "BTCUSDT",
   using_defaults: true,
+  account_max_trades_per_day: 20,
+  effective_max_trades_per_day: 20,
   strategy_options: [{ strategy_id: "strategy-1", name: "Nested BTC" }],
   symbol_options: ["BTCUSDT", "ETHUSDT"],
   max_daily_loss_percent_ceiling: "6",
@@ -169,6 +171,43 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
       "Owner only (your role: unknown)",
     );
+  });
+
+  it("labels the bot cap and shows the effective cap held by the account limit", () => {
+    useAsyncDataMock.mockReturnValue({
+      data: { ...settings, using_defaults: false, max_trades_per_day: 5, account_max_trades_per_day: 3, effective_max_trades_per_day: 3 },
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByText("Bot: max trades/day (≤ account)")).toBeInTheDocument();
+    expect(screen.getByTestId("autonomous-effective-max-trades")).toHaveTextContent(
+      "Effective 3 (capped by account limit of 3)",
+    );
+  });
+
+  it("shows the account cap as effective until bot settings are saved", () => {
+    render(<AutonomousTradingSettingsPage />);
+    expect(screen.getByTestId("autonomous-effective-max-trades")).toHaveTextContent(
+      "Effective 20 · the bot limit applies once saved",
+    );
+  });
+
+  it("explains a bot cap above the account cap", async () => {
+    const { api, ApiError } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
+      new ApiError("max_trades_per_day_exceeds_account", 422, null),
+    );
+    auth.membershipRole = "owner";
+    render(<AutonomousTradingSettingsPage />);
+    fireEvent.change(screen.getByTestId("autonomous-max-trades"), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Bot max trades per day cannot exceed the account limit of 20.",
+      );
+    });
   });
 
   it("shows a ceiling validation message from the API", async () => {

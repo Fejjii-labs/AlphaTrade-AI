@@ -25,6 +25,9 @@ class AutonomousTradingSettingsView(StrictModel):
     strategy_id: UUID | None = None
     symbol: str | None = None
     using_defaults: bool = False
+    # Account cap counts all trades; the bot is held to min(bot, account).
+    account_max_trades_per_day: int
+    effective_max_trades_per_day: int
     strategy_options: list[AutonomousStrategyOption] = Field(default_factory=list)
     symbol_options: list[str] = Field(default_factory=list)
     max_daily_loss_percent_ceiling: Decimal = Field(default=Decimal("6"))

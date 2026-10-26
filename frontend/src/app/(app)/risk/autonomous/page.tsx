@@ -44,6 +44,7 @@ function validationMessage(code: string, ceilings: AutonomousTradingSettingsView
     daily_loss_limit_invalid: "Daily loss limit must be a number.",
     max_trades_per_day_non_positive: "Max trades per day must be at least 1.",
     max_trades_per_day_invalid: "Max trades per day must be a whole number.",
+    max_trades_per_day_exceeds_account: `Bot max trades per day cannot exceed the account limit of ${ceilings.account_max_trades_per_day}.`,
     risk_per_trade_exceeds_ceiling: `Risk per trade cannot exceed ${riskCeiling}% (paper/demo ceiling).`,
     risk_per_trade_non_positive: "Risk per trade must be greater than 0% when set.",
     risk_per_trade_invalid: "Risk per trade must be a number when set.",
@@ -259,13 +260,21 @@ function AutonomousSettingsWorkspace() {
               </span>
             </label>
             <label className="block space-y-1 text-sm">
-              <span>Max trades per day</span>
+              <span>Bot: max trades/day (≤ account)</span>
               <Input
                 data-testid="autonomous-max-trades"
                 inputMode="numeric"
                 value={form.max_trades_per_day}
                 onChange={(e) => setForm({ ...form, max_trades_per_day: e.target.value })}
               />
+              <span className="text-text-muted" data-testid="autonomous-effective-max-trades">
+                Effective {view.effective_max_trades_per_day}
+                {view.using_defaults
+                  ? " · the bot limit applies once saved"
+                  : view.effective_max_trades_per_day < view.max_trades_per_day
+                    ? ` (capped by account limit of ${view.account_max_trades_per_day})`
+                    : ` · account limit ${view.account_max_trades_per_day}`}
+              </span>
             </label>
             <label className="block space-y-1 text-sm">
               <span>Risk per trade % (optional override)</span>

@@ -5,12 +5,18 @@ import { useCallback } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
+import { formatAmount, formatCount, formatPercent, parseDecimal } from "@/lib/format";
 import { SettingsReadout, SettingsUnavailable } from "./SettingsReadout";
+
+const ACCOUNT_UNIT = "USDT";
 
 export function RiskSettingsSummary() {
   const loader = useCallback(() => api.risk.settings(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const enabled = (value: boolean) => (value ? "On" : "Off");
+  // Risk settings carry no currency; paper and BloFin demo accounts settle in USDT.
+  const amount = (value: string | null) =>
+    value === null ? "Not set" : formatAmount(value, ACCOUNT_UNIT);
 
   return (
     <Card data-testid="settings-risk-summary">
@@ -31,14 +37,17 @@ export function RiskSettingsSummary() {
           <>
             <SettingsReadout
               rows={[
-                ["Daily loss limit", data.daily_loss_limit ?? "Not set"],
-                ["Daily profit target", data.daily_target ?? "Not set"],
-                ["Maximum trades per day", data.max_trades_per_day],
+                ["Daily loss limit", amount(data.daily_loss_limit)],
+                ["Daily profit target", amount(data.daily_target)],
+                ["Maximum trades per day", formatCount(data.max_trades_per_day)],
                 [
                   "Maximum risk per trade",
-                  `${data.max_risk_per_trade_percent}%`,
+                  formatPercent(parseDecimal(data.max_risk_per_trade_percent), 2, {
+                    alreadyPercent: true,
+                    trimZeros: true,
+                  }),
                 ],
-                ["Default account balance", data.default_account_balance],
+                ["Default account balance", amount(data.default_account_balance)],
                 ["Risk day timezone", data.timezone],
                 [
                   "Green day protection",

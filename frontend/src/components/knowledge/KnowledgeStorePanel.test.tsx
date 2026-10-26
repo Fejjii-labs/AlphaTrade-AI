@@ -225,7 +225,7 @@ describe("Knowledge file preview and explicit save", () => {
     expect(api.knowledge.importFile).not.toHaveBeenCalled();
   });
 
-  it("keeps source filename/hash and recorded indexing visible on the canonical document", () => {
+  it("shows dates only, without file hashes, parser or index internals", () => {
     render(
       <KnowledgeDocumentCard
         document={{
@@ -234,7 +234,7 @@ describe("Knowledge file preview and explicit save", () => {
           source_type: "risk_policy",
           version: 1,
           created_at: "2026-10-05T10:00:00Z",
-          updated_at: "2026-10-05T10:00:00Z",
+          updated_at: "2026-10-07T10:00:00Z",
           ingestion_metadata: {
             file: {
               filename: "rules.txt",
@@ -257,15 +257,11 @@ describe("Knowledge file preview and explicit save", () => {
         }}
       />,
     );
-    fireEvent.click(
-      screen.getByText("Provenance details", { selector: "summary" }),
+    expect(screen.getByTestId("knowledge-source-context")).toHaveTextContent(
+      /^Added .*5, 2026 · Updated .*7, 2026$/,
     );
-    expect(screen.getByText("File: rules.txt")).toBeInTheDocument();
     expect(
-      screen.getByText(`Raw file SHA-256: ${"a".repeat(64)}`),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Current search availability is checked separately/),
-    ).toBeInTheDocument();
+      screen.queryByText(/SHA-256|knowledge-file\/v1|qdrant|rules\.txt|a{64}/),
+    ).not.toBeInTheDocument();
   });
 });

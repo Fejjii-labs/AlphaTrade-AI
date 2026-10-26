@@ -1176,6 +1176,8 @@ export interface AutonomousTradingSettingsView {
   strategy_id: string | null;
   symbol: string | null;
   using_defaults: boolean;
+  account_max_trades_per_day: number;
+  effective_max_trades_per_day: number;
   strategy_options: AutonomousStrategyOption[];
   symbol_options: string[];
   max_daily_loss_percent_ceiling: string;

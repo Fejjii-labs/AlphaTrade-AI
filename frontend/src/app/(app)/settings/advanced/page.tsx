@@ -14,7 +14,7 @@ export default function AdvancedSettingsPage() {
     <div className="space-y-6" data-testid="settings-advanced-page">
       <PageHeader
         title="Advanced"
-        description="Operational, audit, validation, billing, and engineering pages. Trading safety is unchanged."
+        description="Operational, audit, and engineering pages."
       />
       {ADVANCED_ROUTE_GROUPS.map((group) => {
         const routes = ADVANCED_ROUTES.filter((route) => route.group === group);
