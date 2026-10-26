@@ -192,7 +192,7 @@ function RiskSettingsWorkspace() {
                 />
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-zinc-300">Max trades per day</span>
+                <span className="text-zinc-300">Account: max trades/day (all trades)</span>
                 <Input
                   data-testid="risk-max-trades"
                   type="number"

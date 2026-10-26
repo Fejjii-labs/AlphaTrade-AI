@@ -216,6 +216,55 @@ def test_get_defaults_and_patch(client: TestClient) -> None:
     assert cleared.json()["risk_per_trade_percent"] is None
 
 
+def test_bot_cap_cannot_be_raised_above_the_account_cap(client: TestClient) -> None:
+    headers = _token(client, "owner-284@test.example")
+    defaults = client.get("/autonomous/settings", headers=headers).json()
+    assert defaults["account_max_trades_per_day"] == 20
+    # Unsaved bot settings are not enforced, so only the account cap applies.
+    assert defaults["effective_max_trades_per_day"] == 20
+
+    account = client.patch("/risk/settings", headers=headers, json={"max_trades_per_day": 4})
+    assert account.status_code == 200
+    over = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 6})
+    assert over.status_code == 422
+    assert over.json()["detail"] == "max_trades_per_day_exceeds_account"
+
+    equal = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 4})
+    assert equal.status_code == 200
+    body = equal.json()
+    assert body["max_trades_per_day"] == 4
+    assert body["account_max_trades_per_day"] == 4
+    assert body["effective_max_trades_per_day"] == 4
+
+
+def test_account_cap_can_be_tightened_below_the_bot_cap(client: TestClient) -> None:
+    headers = _token(client, "owner-284@test.example")
+    saved = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 5})
+    assert saved.status_code == 200
+
+    tightened = client.patch("/risk/settings", headers=headers, json={"max_trades_per_day": 3})
+    assert tightened.status_code == 200
+    view = client.get("/autonomous/settings", headers=headers).json()
+    assert view["max_trades_per_day"] == 5
+    assert view["account_max_trades_per_day"] == 3
+    assert view["effective_max_trades_per_day"] == 3
+
+    # Saving other bot fields while the stored bot cap is unchanged is not re-validated.
+    resaved = client.patch(
+        "/autonomous/settings",
+        headers=headers,
+        json={"max_trades_per_day": 5, "daily_loss_limit_percent": "2"},
+    )
+    assert resaved.status_code == 200
+    assert resaved.json()["effective_max_trades_per_day"] == 3
+    raised = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 6})
+    assert raised.status_code == 422
+    assert raised.json()["detail"] == "max_trades_per_day_exceeds_account"
+    lowered = client.patch("/autonomous/settings", headers=headers, json={"max_trades_per_day": 2})
+    assert lowered.status_code == 200
+    assert lowered.json()["effective_max_trades_per_day"] == 2
+
+
 def test_patch_rejects_ceiling_and_bad_symbol(client: TestClient) -> None:
     headers = _token(client, "owner-284@test.example")
     over_daily = client.patch(
