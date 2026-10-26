@@ -1,6 +1,6 @@
 # Agent instructions
 
-Canonical instructions for Codex and Cursor agents working in this repository.
+Canonical instructions for Codex, Cursor and Claude Code agents working in this repository.
 
 Product safety and the task lifecycle stay in `.ai/MASTER_WORKFLOW.md`,
 `.ai/PROJECT_CONTEXT.md`, and `.cursor/rules/`. Those documents remain
@@ -30,8 +30,8 @@ All trading, secrets, and git safety rules in `.cursor/rules/` still apply.
 ## Agent Reports
 
 After completing ANY task, prompt, or investigation — including a stop for
-review, a blocker, or a failed check — every Codex and Cursor agent writes a
-report to the Notion database **Agent Reports**.
+review, a blocker, or a failed check — every Codex, Cursor and Claude Code agent
+writes a report to the Notion database **Agent Reports**.
 
 Applies to all current active repos (SOF AI, DataPilot AI, AlphaTrade AI) and every future Simply AI project from day one.
 
@@ -48,7 +48,7 @@ Write a short summary in these properties. Use the names exactly.
 | --- | --- |
 | Task Name | Short name of the task, prompt, or investigation. |
 | Date | Completion date (`date:Date:start`, `YYYY-MM-DD`). |
-| Agent | `Cursor`, `Codex`, `Grok Bot`, or `Other`. |
+| Agent | `Cursor`, `Codex`, `Claude Code`, `Grok Bot`, or `Other`. |
 | Repo | The active project. Work in this repository uses `AlphaTrade AI`. DataPilot AI uses `DataPilot AI`. SOF AI uses the database option `SOF`. Parent-level Simply AI work uses `Simply AI`. |
 | Status | `Done`, `Blocked`, or `In progress`. |
 | Summary | Short outcome. |
@@ -83,6 +83,18 @@ If the agent cannot write to Notion, append the full verbatim output to its
 final message and to the pull request body under the heading
 `Findings report — full transcript`, so the orchestrator can file the database
 entry. Do not trim that appendix. Redact only secret values.
+
+## Plans
+
+Before writing code for any multi-PR or significant task, the agent saves its
+full plan, unchanged, to `docs/plans/YYYY-MM-DD-<topic>.md` on its own prefixed
+branch (`claude/`, `cursor/`, `codex/`) and opens a DRAFT pull request titled
+`docs: <topic> plan (for review)`.
+
+- No code until Griller gives GO and Sofien approves the plan.
+- Approved plans stay in `docs/plans/` as the record. Note later deviations in
+  the plan file.
+- Reports still go to Notion **Agent Reports** (or the PR body fallback above).
 
 ## Multi-agent coordination (Claude Code, Cursor, Codex)
 
