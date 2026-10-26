@@ -1,0 +1,16 @@
+# Single-owner hot files (see AGENTS.md, "Multi-agent coordination").
+/backend/src/app/db/migrations/ @Fejjii
+/backend/alembic.ini @Fejjii
+/backend/src/app/providers/exchange/blofin*.py @Fejjii
+/backend/src/app/providers/exchange/governed_blofin*.py @Fejjii
+/backend/src/app/core/blofin_readonly_access.py @Fejjii
+/backend/src/app/core/exchange_safety.py @Fejjii
+/backend/src/app/services/risk/ @Fejjii
+/backend/src/app/schemas/risk.py @Fejjii
+/backend/src/app/db/autonomous_trading_settings.py @Fejjii
+/backend/src/app/schemas/autonomous_trading_settings.py @Fejjii
+/backend/src/app/services/autonomous_trading_settings_service.py @Fejjii
+/backend/src/app/services/autonomous_trading_guard.py @Fejjii
+/.github/workflows/ @Fejjii
+/backend/uv.lock @Fejjii
+/frontend/package-lock.json @Fejjii
