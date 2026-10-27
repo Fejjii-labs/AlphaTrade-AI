@@ -164,6 +164,23 @@ class MirrorDraft:
 
 
 @dataclass(frozen=True, slots=True)
+class SkippedRow:
+    """One positions-history row that was not mirrored, and why.
+
+    ``history_id``/``inst_id`` are venue row ids (not secrets); ``reason`` is a
+    fixed code such as ``ambiguous_both_sides``, ``no_opening_fill``,
+    ``pnl_direction_conflict`` or ``unknown_position_side``.
+    """
+
+    history_id: str | None
+    inst_id: str | None
+    reason: str
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {"history_id": self.history_id, "inst_id": self.inst_id, "reason": self.reason}
+
+
+@dataclass(frozen=True, slots=True)
 class BuildResult:
     """Closed slices and the open trackers that are not a second trade."""
 
@@ -174,6 +191,7 @@ class BuildResult:
     funding_incomplete: bool = False
     positions_complete: bool = True
     instruments_incomplete: bool = False
+    skipped_rows: tuple[SkippedRow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +205,7 @@ class MirrorReport:
     closed: int
     opens: int
     ambiguous: int = 0
+    skipped_rows: tuple[SkippedRow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,26 +305,140 @@ def _instruments(rows: list[dict[str, Any]]) -> tuple[dict[str, _Instrument], bo
     return found, conflict
 
 
+_OPEN_FILL_LEAD = timedelta(seconds=5)
+
+
+def _price_move_side(row: dict[str, Any]) -> str | None:
+    """Opening side implied by the price move and the sign of ``realizedPnl``.
+
+    A long gains when price rises, a short when it falls. ``None`` when either
+    the move or the P&L is zero or missing (no signal).
+    """
+
+    open_price = _decimal(row.get("openAveragePrice"))
+    close_price = _decimal(row.get("closeAveragePrice"))
+    realized = _decimal(row.get("realizedPnl"))
+    if open_price is None or close_price is None or realized is None:
+        return None
+    move = close_price - open_price
+    if move == 0 or realized == 0:
+        return None
+    return "buy" if (move > 0) == (realized > 0) else "sell"
+
+
+def _opening_fill_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> str | None:
+    return _opening_fill_side_reason(row, fills)[0]
+
+
+def _opening_fill_side_reason(
+    row: dict[str, Any], fills: list[dict[str, Any]] | None
+) -> tuple[str | None, str | None]:
+    """The one side of the opening fill(s) at the row's ``createTime``.
+
+    Only fills on the same instrument within +/- ``_OPEN_FILL_LEAD`` of the open
+    count, and fills with a non-zero ``fillPnl`` (BloFin sets it on fills that
+    close a position) are excluded. Both sides present, or none: ``None``.
+    """
+
+    opened_at = _time(row.get("createTime"))
+    inst_id = row.get("instId")
+    if not fills or opened_at is None or not isinstance(inst_id, str):
+        return None, "no_opening_fill"
+    sides: set[str] = set()
+    for fill in fills:
+        when = _time(fill.get("ts"))
+        fill_side = fill.get("side")
+        if fill.get("instId") != inst_id or when is None or fill_side not in {"buy", "sell"}:
+            continue
+        if abs(when - opened_at) > _OPEN_FILL_LEAD:
+            continue
+        fill_pnl = _decimal(fill.get("fillPnl"))
+        if fill.get("fillPnl") not in (None, "") and (fill_pnl is None or fill_pnl != 0):
+            continue
+        sides.add(fill_side)
+    if len(sides) > 1:
+        return None, "ambiguous_both_sides"
+    if not sides:
+        return None, "no_opening_fill"
+    return sides.pop(), None
+
+
+def _opening_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> str | None:
+    return _opening_side_reason(row, fills)[0]
+
+
+def _opening_side_reason(
+    row: dict[str, Any], fills: list[dict[str, Any]] | None
+) -> tuple[str | None, str | None]:
+    """Side of the slice's opening trade when the history row carries no ``side``.
+
+    Some BloFin ``positions-history`` rows carry ``positionSide`` without
+    ``side``. ``long``/``short`` decide it directly. In one-way (``net``) mode
+    the side must come from an unambiguous opening fill at ``createTime``
+    (see ``_opening_fill_side``); when the price move and ``realizedPnl`` give a
+    signal it must agree. Anything else returns ``None`` so the row is skipped:
+    a wrong direction is never guessed.
+    """
+
+    side = row.get("side")
+    if isinstance(side, str) and side:
+        return side, None
+    position_side = row.get("positionSide")
+    if position_side == "long":
+        return "buy", None
+    if position_side == "short":
+        return "sell", None
+    if position_side not in (None, "", "net"):
+        return None, "unknown_position_side"
+    fill_side, reason = _opening_fill_side_reason(row, fills)
+    if fill_side is None:
+        return None, reason
+    price_side = _price_move_side(row)
+    if price_side is not None and price_side != fill_side:
+        return None, "pnl_direction_conflict"
+    return fill_side, None
+
+
 def _parse_slices(
     history: list[dict[str, Any]],
     instruments: dict[str, _Instrument],
+    fills: list[dict[str, Any]] | None = None,
 ) -> tuple[list[_Slice], int, bool]:
+    slices, skipped_rows, incomplete = _parse_slices_detailed(history, instruments, fills)
+    return slices, len(skipped_rows), incomplete
+
+
+def _parse_slices_detailed(
+    history: list[dict[str, Any]],
+    instruments: dict[str, _Instrument],
+    fills: list[dict[str, Any]] | None = None,
+) -> tuple[list[_Slice], list[SkippedRow], bool]:
+    """Like ``_parse_slices`` but returns each skipped row with its reason code."""
     slices: list[_Slice] = []
-    skipped = 0
+    skipped_rows: list[SkippedRow] = []
     incomplete = False
     seen: set[str] = set()
     for row in history:
         history_id = row.get("historyId")
         position_id = row.get("positionId")
         inst_id = row.get("instId")
-        side = row.get("side")
-        identity = (history_id, position_id, inst_id, side)
-        if not all(isinstance(item, str) and item for item in identity):
-            skipped += 1
+        side, side_reason = _opening_side_reason(row, fills)
+        ref = history_id if isinstance(history_id, str) and history_id else None
+        inst_ref = inst_id if isinstance(inst_id, str) and inst_id else None
+
+        def _skip(reason: str, *, ref: str | None = ref, inst_ref: str | None = inst_ref) -> None:
+            skipped_rows.append(SkippedRow(ref, inst_ref, reason))
+
+        if not all(isinstance(item, str) and item for item in (history_id, position_id, inst_id)):
+            _skip("missing_identity")
+            incomplete = True
+            continue
+        if not (isinstance(side, str) and side):
+            _skip(side_reason or "missing_side")
             incomplete = True
             continue
         if history_id in seen:
-            skipped += 1
+            _skip("duplicate_history_id")
             continue
         contracts = _decimal(row.get("closePositions"))
         max_contracts = _decimal(row.get("maxPositions"))
@@ -329,7 +462,7 @@ def _parse_slices(
             or not isinstance(history_id, str)
             or not isinstance(position_id, str)
         ):
-            skipped += 1
+            _skip("invalid_fields")
             incomplete = True
             continue
         position_side = row.get("positionSide")
@@ -337,7 +470,7 @@ def _parse_slices(
             side, position_side if isinstance(position_side, str) else ""
         )
         if direction is None:
-            skipped += 1
+            _skip("side_conflict")
             incomplete = True
             continue
         meta = instruments.get(inst_id)
@@ -366,7 +499,7 @@ def _parse_slices(
                 side_conflict=conflict,
             )
         )
-    return slices, skipped, incomplete
+    return slices, skipped_rows, incomplete
 
 
 def _price_pnl(sliver: _Slice) -> Decimal | None:
@@ -699,21 +832,22 @@ def drafts_from_raw(
     window_begin: datetime,
     window_end: datetime,
 ) -> BuildResult:
-    """Build journal drafts. ``fills[*].fillPnl`` is intentionally unused."""
+    """Build journal drafts. ``fillPnl`` never feeds P&L; it only marks closing fills."""
     del window_end
     meta, instruments_incomplete = _instruments(instruments)
-    slices, skipped, history_incomplete = _parse_slices(history, meta)
+    slices, skipped_rows, history_incomplete = _parse_slices_detailed(history, meta, fills)
     funding_incomplete = _assign_funding(slices, funding, window_begin=window_begin)
     _attach_orders(slices, fills, orders)
     opens, open_skipped, positions_complete = _open_drafts(positions, meta)
     return BuildResult(
         closed=tuple(_draft_from_slice(sliver) for sliver in slices),
         opens=tuple(opens),
-        skipped=skipped + open_skipped,
+        skipped=len(skipped_rows) + open_skipped,
         history_incomplete=history_incomplete,
         funding_incomplete=funding_incomplete,
         positions_complete=positions_complete,
         instruments_incomplete=instruments_incomplete,
+        skipped_rows=tuple(skipped_rows),
     )
 
 
@@ -1063,6 +1197,7 @@ class BloFinDemoManualMirror:
             updated=updated,
             reconciled=reconciled,
             skipped=built.skipped,
+            skipped_rows=[row.as_dict() for row in built.skipped_rows],
         )
         return MirrorReport(
             skipped_flag=False,
@@ -1072,6 +1207,7 @@ class BloFinDemoManualMirror:
             closed=len(built.closed),
             opens=opens_written,
             ambiguous=ambiguous,
+            skipped_rows=built.skipped_rows,
         )
 
 
@@ -1100,6 +1236,7 @@ def _without_verified_economics(built: BuildResult) -> BuildResult:
         funding_incomplete=built.funding_incomplete,
         positions_complete=built.positions_complete,
         instruments_incomplete=built.instruments_incomplete,
+        skipped_rows=built.skipped_rows,
     )
 
 

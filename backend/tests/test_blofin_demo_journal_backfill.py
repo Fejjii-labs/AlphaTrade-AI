@@ -244,3 +244,62 @@ def test_read_venue_walks_seven_day_chunks_with_get_only() -> None:
     replayed = VenuePages.replay(json.loads(json.dumps(captured)))
     assert replayed.window_begin == pages.window_begin
     assert replayed.positions == captured["pages"]["positions"]
+
+
+def _without_side(bundle: dict[str, Any], position_side: str) -> dict[str, Any]:
+    """Live positions-history rows carry positionSide but no side (staging, 2026-10-27)."""
+    bundle = copy.deepcopy(bundle)
+    for row in bundle["history"]:
+        row.pop("side", None)
+        row["positionSide"] = position_side
+    return bundle
+
+
+def test_live_history_row_without_side_still_plans_from_position_side() -> None:
+    expected, _ = _plan(_FIXTURE["partial_flat"])
+    lines, summary = _plan(_without_side(_FIXTURE["partial_flat"], "long"))
+    assert summary["legs_read"] == 2
+    assert [line["fields"] for line in lines] == [line["fields"] for line in expected]
+
+
+def test_net_mode_row_without_side_takes_the_opening_fill_side() -> None:
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    first = bundle["history"][0]
+    opening = {
+        "instId": first["instId"],
+        "side": "buy",
+        "ts": first["createTime"],
+        "orderId": "o-open",
+        "tradeId": "t-open",
+    }
+    closing = {**opening, "side": "sell", "ts": first["updateTime"], "tradeId": "t-close"}
+    bundle["fills"] = [closing, opening, *bundle["fills"]]
+    expected, _ = _plan(_FIXTURE["partial_flat"])
+    lines, summary = _plan(bundle)
+    assert summary["legs_read"] == 2
+    assert [line["fields"]["gross_pnl"] for line in lines] == [
+        line["fields"]["gross_pnl"] for line in expected
+    ]
+
+
+def test_net_mode_row_without_side_or_fills_is_still_skipped() -> None:
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    bundle["fills"] = []
+    lines, summary = _plan(bundle)
+    assert summary["legs_read"] == 0
+    assert lines == []
+
+
+def test_plan_summary_lists_skipped_rows_with_reasons() -> None:
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    bundle["fills"] = []
+    _, summary = _plan(bundle)
+    ids = [row["historyId"] for row in bundle["history"]]
+    assert summary["history_rows_skipped"] == len(ids)
+    assert summary["skipped_rows"] == [
+        {"history_id": hid, "inst_id": row["instId"], "reason": "no_opening_fill"}
+        for hid, row in zip(ids, bundle["history"], strict=True)
+    ]
+    _, clean = _plan(_FIXTURE["partial_flat"])
+    assert clean["history_rows_skipped"] == 0
+    assert clean["skipped_rows"] == []
