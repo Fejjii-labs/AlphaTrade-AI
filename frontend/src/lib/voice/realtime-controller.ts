@@ -3,6 +3,7 @@ import { getAccessToken } from "@/lib/auth/session";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { appConfig } from "@/lib/config";
 import { RealtimeAudio } from "./realtime-audio";
+import { voiceReason } from "./voice-reasons";
 import type { AgentTurnResult } from "@/lib/api/types";
 import type { TurnBody } from "@/components/agent/turn-recovery";
 
@@ -11,12 +12,21 @@ type Provider = "gpt_live" | "realtime";
 export type RealtimeSnapshot = Readonly<{
   state: State; active: boolean; error: string | null; transcript: string;
   provider?: Provider; inputCaption?: string; replyCaption?: string; outputMuted?: boolean;
+  /** The session stopped on a budget, quota, turn or time cap. */
+  limit?: boolean;
+  /** Epoch ms when the session's time cap ends it; set once the session is ready. */
+  endsAt?: number;
+  turnsLeft?: number;
 }>;
 type AudioDevice = Pick<RealtimeAudio, "start" | "play" | "interrupt" | "stop">;
 type VoiceConfiguration = {
   available: boolean; reason?: string | null; maximum_seconds?: number | null;
-  provider?: Provider; transport?: "websocket_pcm24";
+  maximum_turns?: number | null; provider?: Provider; transport?: "websocket_pcm24";
 };
+
+class VoiceStop extends Error {
+  constructor(message: string, readonly limit: boolean) { super(message); }
+}
 type Options = {
   ensureConversation(signal: AbortSignal): Promise<string | null>;
   context: { symbol?: string; strategy_id?: string };
@@ -43,6 +53,8 @@ export class RealtimeVoiceController {
   private outputMuted = false;
   private resumePending = false;
   private closingSockets = new Map<WebSocket, ReturnType<typeof setTimeout>>();
+  private maximumSeconds = 180;
+  private maximumTurns: number | null = null;
 
   constructor(private readonly options: Options) {
     this.audio = options.audio ?? new RealtimeAudio();
@@ -61,7 +73,7 @@ export class RealtimeVoiceController {
     const abort = new AbortController();
     this.controller = abort;
     const current = () => !this.disposed && generation === this.generation && session === sessionGeneration() && !abort.signal.aborted;
-    this.update({ state: "connecting", active: true, error: null, transcript: "", provider: undefined, inputCaption: "", replyCaption: "", outputMuted: false });
+    this.update({ state: "connecting", active: true, error: null, transcript: "", provider: undefined, inputCaption: "", replyCaption: "", outputMuted: false, limit: false, endsAt: undefined, turnsLeft: undefined });
     try {
       const config: VoiceConfiguration = await (this.options.configuration ?? (signal => agentVoiceConfig({ signal })))(abort.signal);
       if (!current()) return;
@@ -69,9 +81,15 @@ export class RealtimeVoiceController {
       this.outputMuted = false;
       this.resumePending = false;
       this.update({ provider: this.provider });
-      if (!config.available) throw new Error(this.provider === "gpt_live"
-        ? "GPT Live is unavailable. Continue typing or use Record."
-        : "Interactive voice is unavailable. Continue typing.");
+      this.maximumSeconds = Math.min(config.maximum_seconds ?? 180, 300);
+      this.maximumTurns = config.maximum_turns ?? null;
+      if (!config.available) {
+        const reason = voiceReason(config.reason);
+        if (reason) throw new VoiceStop(`${reason.text} Continue typing.`, reason.limit);
+        throw new Error(this.provider === "gpt_live"
+          ? "GPT Live is unavailable. Continue typing or use Record."
+          : "Interactive voice is unavailable. Continue typing.");
+      }
       const conversation = await this.options.ensureConversation(abort.signal);
       if (!current()) return;
       if (!conversation) throw new Error("Finish or recover the current request before starting voice.");
@@ -96,17 +114,25 @@ export class RealtimeVoiceController {
       };
       socket.onerror = () => { if (current()) this.fail("Voice connection failed. Recover any pending request or continue typing."); };
       socket.onclose = () => { if (current()) this.fail("Voice ended. Recover any pending request or continue typing."); };
-      this.timer = setTimeout(() => { if (current()) this.end(); }, Math.min(config.maximum_seconds ?? 180, 300) * 1000);
+      this.timer = setTimeout(() => { if (current()) this.end(); }, this.maximumSeconds * 1000);
     } catch (error) {
       if (current()) this.fail(error && typeof error === "object" && "name" in error && error.name === "NotAllowedError"
         ? "Microphone access was denied. Continue typing."
-        : error instanceof Error ? error.message : "Voice unavailable. Continue typing.");
+        : error instanceof Error ? error.message : "Voice unavailable. Continue typing.",
+        error instanceof VoiceStop && error.limit);
     }
   }
 
   private receive(event: Record<string, unknown>): void {
     switch (event.type) {
-      case "session.ready": this.ready = true; this.update({ state: "listening" }); break;
+      case "session.ready":
+        this.ready = true;
+        this.update({
+          state: "listening",
+          endsAt: Date.now() + this.maximumSeconds * 1000,
+          ...(this.maximumTurns != null ? { turnsLeft: this.maximumTurns } : {}),
+        });
+        break;
       case "speech.started": this.update({ state: "listening" }); break;
       case "speech.stopped": this.update({ state: "thinking" }); break;
       case "playback.clear": {
@@ -137,7 +163,11 @@ export class RealtimeVoiceController {
         if (!this.options.pending(key, body)) {
           this.fail("Voice recovery could not be retained. Continue typing."); return;
         }
-        this.update({ state: "thinking", transcript: body.message });
+        this.update({
+          state: "thinking",
+          transcript: body.message,
+          ...(this.snapshot.turnsLeft != null ? { turnsLeft: Math.max(0, this.snapshot.turnsLeft - 1) } : {}),
+        });
         this.send({ type: "turn.accept", request_key: key });
         break;
       }
@@ -145,7 +175,14 @@ export class RealtimeVoiceController {
         if (!this.options.result(String(event.request_key), event.result as AgentTurnResult)) throw new Error("Invalid canonical reply.");
         break;
       case "turn.uncertain": this.fail("The Agent request may have completed. Recover its original request before sending again."); break;
-      case "session.error": this.fail("Interactive voice is unavailable. Recover any pending request or continue typing."); break;
+      case "session.error": {
+        const reason = voiceReason(typeof event.reason === "string" ? event.reason : null);
+        this.fail(reason
+          ? `${reason.text} Recover any pending request or continue typing.`
+          : "Interactive voice is unavailable. Recover any pending request or continue typing.",
+        reason?.limit ?? false);
+        break;
+      }
       // Provider captions never complete a turn or become the canonical Agent reply.
       case "input.delta":
       case "reply.delta": {
@@ -208,7 +245,7 @@ export class RealtimeVoiceController {
     const socket = this.socket;
     this.socket = null;
     this.conversation = null;
-    this.update({ state: "idle", active: false, outputMuted: false });
+    this.update({ state: "idle", active: false, outputMuted: false, endsAt: undefined, turnsLeft: undefined });
     if (socket?.readyState === 1 && socket.bufferedAmount <= 192000) {
       if (this.provider === "gpt_live") this.drain(socket, generation);
       else {
@@ -219,8 +256,8 @@ export class RealtimeVoiceController {
     else if (socket) this.closeSocket(socket);
   }
 
-  private fail(error: string): void {
-    this.end(); this.update({ state: "error", error, active: false });
+  private fail(error: string, limit = false): void {
+    this.end(); this.update({ state: "error", error, active: false, limit });
   }
 
   private closeSocket(socket: WebSocket): void {

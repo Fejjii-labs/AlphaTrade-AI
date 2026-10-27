@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RealtimeVoiceControls } from "./RealtimeVoiceControls";
 import type { RealtimeSnapshot, RealtimeVoiceController } from "@/lib/voice/realtime-controller";
 
@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({ instances: [] as Array<{
   interrupt: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>; setConversation: ReturnType<typeof vi.fn>;
 }> }));
+
+const config = vi.hoisted(() => ({ voiceConfig: vi.fn() }));
+// Availability is read on mount; by default it stays unknown (pending), as before B7b.
+vi.mock("@/lib/api", () => ({ api: { agent: config } }));
 
 vi.mock("@/lib/voice/realtime-controller", () => ({
   RealtimeVoiceController: class {
@@ -27,6 +31,7 @@ function props() {
 }
 const active: RealtimeSnapshot = { state: "listening", active: true, error: null, transcript: "", provider: "gpt_live" };
 const snapshot = (state: RealtimeSnapshot) => act(() => mocks.instances.at(-1)!.options.changed(state));
+beforeEach(() => { config.voiceConfig.mockReset().mockReturnValue(new Promise(() => {})); });
 afterEach(() => { cleanup(); mocks.instances.length = 0; vi.restoreAllMocks(); });
 
 describe("GPT Live controls (mocked controller, no microphone)", () => {
@@ -86,5 +91,61 @@ describe("GPT Live controls (mocked controller, no microphone)", () => {
     expect(voice.setConversation).toHaveBeenLastCalledWith("different-conversation");
     view.rerender(<RealtimeVoiceControls {...p} authenticated={false} />);
     expect(voice.end).toHaveBeenCalledOnce();
+  });
+});
+
+describe("voice availability, countdown and limits (UI overhaul B7b)", () => {
+  it("hides the live mic when voice is off and reports it so dictation stays the one mic", async () => {
+    config.voiceConfig.mockResolvedValue({ available: false, reason: "voice_not_enabled", provider: "gpt_live" });
+    const p = { ...props(), onAvailability: vi.fn() };
+    render(<RealtimeVoiceControls {...p} />);
+    await waitFor(() => expect(p.onAvailability).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole("button", { name: "Talk to Agent" })).not.toBeInTheDocument();
+    expect(mocks.instances[0].start).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live mic when voice is available and reports it", async () => {
+    config.voiceConfig.mockResolvedValue({ available: true, provider: "gpt_live", maximum_seconds: 180, maximum_turns: 6 });
+    const p = { ...props(), onAvailability: vi.fn() };
+    render(<RealtimeVoiceControls {...p} />);
+    await waitFor(() => expect(p.onAvailability).toHaveBeenLastCalledWith(true));
+    expect(screen.getByRole("button", { name: "Talk to Agent" })).toBeEnabled();
+  });
+
+  it("keeps today's behaviour when availability cannot be read", async () => {
+    config.voiceConfig.mockRejectedValue(new Error("offline"));
+    const p = { ...props(), onAvailability: vi.fn() };
+    render(<RealtimeVoiceControls {...p} />);
+    await waitFor(() => expect(config.voiceConfig).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Talk to Agent" })).toBeInTheDocument();
+    expect(p.onAvailability).not.toHaveBeenCalledWith(false);
+  });
+
+  it("does not read availability while signed out", () => {
+    render(<RealtimeVoiceControls {...props()} authenticated={false} />);
+    expect(config.voiceConfig).not.toHaveBeenCalled();
+  });
+
+  it("shows time and turns left while listening", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-27T10:00:00Z"));
+    render(<RealtimeVoiceControls {...props()} />);
+    snapshot({ ...active, endsAt: Date.now() + 161_000, turnsLeft: 4 });
+    expect(screen.getByRole("status")).toHaveTextContent("GPT Live · Listening · 2:41 left · 4 turns left");
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(screen.getByRole("status")).toHaveTextContent("2:39 left");
+    snapshot({ ...active, endsAt: Date.now() + 1_000, turnsLeft: 1 });
+    expect(screen.getByRole("status")).toHaveTextContent("0:01 left · 1 turn left");
+    vi.useRealTimers();
+  });
+
+  it("marks a limit stop distinctly from other errors", () => {
+    render(<RealtimeVoiceControls {...props()} />);
+    snapshot({ ...active, state: "error", active: false, limit: true, error: "Daily voice limit reached. Continue typing." });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveAttribute("data-limit", "true");
+    expect(alert).toHaveTextContent("Limit reached · Daily voice limit reached. Continue typing.");
+    snapshot({ ...active, state: "error", active: false, limit: false, error: "Voice connection failed." });
+    expect(screen.getByRole("alert")).not.toHaveAttribute("data-limit");
   });
 });

@@ -105,6 +105,7 @@ export function AgentWorkspace() {
   const mounted = useRef(true);
   const conversationListGeneration = useRef(0);
   const [voiceContextKey, setVoiceContextKey] = useState(0);
+  const [liveVoice, setLiveVoice] = useState<boolean | null>(null);
   const [historyLoading, setHistoryLoading] = useState<{ generation: number; kind: "tail" | "earlier" } | null>(null);
   const messagesLoading = historyLoading?.kind === "tail";
   const earlierLoading = historyLoading?.kind === "earlier";
@@ -1007,6 +1008,7 @@ export function AgentWorkspace() {
                     strategyId={strategyContext?.id} symbol={params.get("symbol") ?? undefined}
                     ensureConversation={ensureConversation} onPending={retainRealtimeTurn}
                     onResult={acknowledgeRealtimeTurn} onActive={setRealtimeActive}
+                    onAvailability={setLiveVoice}
                   />
                 </div>
 
@@ -1025,7 +1027,8 @@ export function AgentWorkspace() {
                     </Select> : null}
                   </div>
                 </details>
-                <VoiceConversationControls
+                {/* One mic: browser dictation only when live voice is not known to be available. */}
+                {liveVoice !== true ? <VoiceConversationControls
                   conversationId={conversationId}
                   sessionKey={recoveryScope}
                   authenticated={Boolean(recoveryScope) && sessionLive}
@@ -1039,7 +1042,7 @@ export function AgentWorkspace() {
                   transport={voiceTransport}
                   ensureConversation={ensureConversation}
                   showReply={false}
-                />
+                /> : null}
                 {sendError ? (
                   <p
                     role="alert"

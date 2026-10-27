@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
 import { RealtimeVoiceController, type RealtimeSnapshot } from "@/lib/voice/realtime-controller";
+import { formatCountdown } from "@/lib/voice/voice-reasons";
 import type { TurnBody } from "./turn-recovery";
 import type { AgentTurnResult } from "@/lib/api/types";
 
@@ -18,13 +20,51 @@ type Props = {
   onPending(key: string, body: TurnBody): boolean;
   onResult(key: string, result: AgentTurnResult): boolean;
   onActive?(active: boolean): void;
+  /** Live voice availability from `/agent/voice/config`: true, false, or null when unknown. */
+  onAvailability?(available: boolean | null): void;
 };
+
+type Availability = { available: boolean | null; reason: string | null };
+
+/** Reads voice availability once per session so the mic can hide before a click. */
+function useVoiceAvailability(sessionKey: string | null, authenticated: boolean): Availability {
+  const [availability, setAvailability] = useState<Availability>({ available: null, reason: null });
+  useEffect(() => {
+    if (!authenticated) return;
+    const abort = new AbortController();
+    (async () => {
+      try {
+        const config = await api.agent.voiceConfig({ signal: abort.signal });
+        if (!abort.signal.aborted) setAvailability({ available: config.available, reason: config.reason ?? null });
+      } catch {
+        // Unknown: keep today's behaviour (the button explains on click).
+        if (!abort.signal.aborted) setAvailability({ available: null, reason: null });
+      }
+    })();
+    return () => abort.abort();
+  }, [sessionKey, authenticated]);
+  return availability;
+}
+
+function useNow(running: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  return now;
+}
 
 export function RealtimeVoiceControls(props: Props) {
   const current = useRef(props);
   current.current = props;
   const controller = useRef<RealtimeVoiceController | null>(null);
   const [state, setState] = useState<RealtimeSnapshot>({ state: "idle", active: false, error: null, transcript: "" });
+  const availability = useVoiceAvailability(props.sessionKey, props.authenticated);
+  useEffect(() => { current.current.onAvailability?.(availability.available); }, [availability.available]);
+  const now = useNow(state.active && state.endsAt != null);
   useEffect(() => {
     const voice = new RealtimeVoiceController({
       context: { symbol: current.current.symbol, strategy_id: current.current.strategyId },
@@ -46,6 +86,8 @@ export function RealtimeVoiceControls(props: Props) {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();
   }, [props.authenticated, props.conversationId]);
+  // One mic: when live voice is known to be off, the composer keeps browser dictation only.
+  if (availability.available === false && !state.active) return null;
   return (
     <>
       <Button type="button" variant="secondary" className="h-11"
@@ -59,6 +101,8 @@ export function RealtimeVoiceControls(props: Props) {
         {state.provider === "gpt_live" && "GPT Live · "}
         {state.outputMuted && "Audio muted · "}
         {state.state === "connecting" ? "Connecting…" : state.state === "thinking" ? "Thinking…" : state.state === "speaking" ? "Speaking" : "Listening"}
+        {state.endsAt != null && ` · ${formatCountdown(state.endsAt - now)} left`}
+        {state.turnsLeft != null && ` · ${state.turnsLeft} ${state.turnsLeft === 1 ? "turn" : "turns"} left`}
       </span>}
       {state.transcript ? (
         <details className="basis-full text-sm text-text-muted">
@@ -74,7 +118,11 @@ export function RealtimeVoiceControls(props: Props) {
         </details>
       ) : null}
       {state.error ? (
-        <p role="alert" className="basis-full text-sm text-text-secondary">{state.error}</p>
+        <p role="alert" data-limit={state.limit ? "true" : undefined}
+          className={state.limit ? "basis-full text-sm text-warning" : "basis-full text-sm text-text-secondary"}>
+          {state.limit ? <span className="font-medium">Limit reached · </span> : null}
+          {state.error}
+        </p>
       ) : null}
     </>
   );

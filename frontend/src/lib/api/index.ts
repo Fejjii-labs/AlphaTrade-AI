@@ -374,6 +374,7 @@ export const api = {
     retryCapture: generatedApi.captureRetry,
     confirmProposal: generatedApi.confirmProposal,
     rejectProposal: generatedApi.rejectProposal,
+    voiceConfig: (options?: { signal?: AbortSignal }) => generatedApi.agentVoiceConfig(options),
   },
   conversations: {
     list: (params?: { strategy_id?: string; limit?: number; offset?: number }) =>

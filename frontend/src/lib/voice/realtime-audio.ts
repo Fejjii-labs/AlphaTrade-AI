@@ -28,19 +28,8 @@ export function decodeAudio(encoded: string): Float32Array {
   return Float32Array.from({ length: bytes.length / 2 }, (_, i) => view.getInt16(i * 2, true) / 32768);
 }
 
-const processor = `class AlphaTradeCapture extends AudioWorkletProcessor {
-  constructor() { super(); this.samples = []; }
-  process(inputs) {
-    const input = inputs[0] && inputs[0][0];
-    if (input) for (let i = 0; i < input.length; i++) this.samples.push(input[i]);
-    if (this.samples.length >= 2048) {
-      const chunk = new Float32Array(this.samples.splice(0, 2048));
-      this.port.postMessage(chunk, [chunk.buffer]);
-    }
-    return true;
-  }
-}
-registerProcessor('alphatrade-voice-capture', AlphaTradeCapture);`;
+/** Same-origin worklet (public/voice/capture-worklet.js); CSP needs no blob: source. */
+export const CAPTURE_WORKLET_URL = "/voice/capture-worklet.js";
 
 export class RealtimeAudio {
   private context: AudioContext | null = null;
@@ -64,9 +53,7 @@ export class RealtimeAudio {
     this.stream = stream;
     const context = new AudioContext({ sampleRate: 24000 });
     this.context = context;
-    const url = URL.createObjectURL(new Blob([processor], { type: "application/javascript" }));
-    try { await context.audioWorklet.addModule(url); }
-    finally { URL.revokeObjectURL(url); }
+    await context.audioWorklet.addModule(CAPTURE_WORKLET_URL);
     if (generation !== this.generation) return;
     await context.resume();
     this.capture = new AudioWorkletNode(context, "alphatrade-voice-capture");
