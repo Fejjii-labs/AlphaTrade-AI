@@ -13,7 +13,8 @@ const state = vi.hoisted(() => ({
     user: { id: string } | null; organization: { id: string } | null;
   },
 }));
-vi.mock("next/navigation", () => ({ useSearchParams: () => state.params }));
+const router = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => state.params, useRouter: () => router }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => state.identity }));
 vi.mock("@/components/strategies/ExperimentsPanel", () => ({
   ExperimentsPanel: () => <section aria-label="Bounded experiments" />,
@@ -57,13 +58,15 @@ it("separates persisted captures from authored configurations with compact expan
   expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
 });
 
-it("opens risk configuration when returning to its Strategies anchor", async () => {
+it("forwards the old Strategies risk anchor to Autonomous and has no risk section", async () => {
   window.history.replaceState(null, "", "/strategies#risk");
+  router.replace.mockClear();
   render(<StrategiesPage />);
-  const policy = screen.getByText("Risk policy", { selector: "summary" }).closest("details");
-  expect(policy).toHaveAttribute("open");
-  expect(screen.getByRole("link", { name: "Configure account limits" })).toHaveAttribute("href", "/risk");
+  expect(router.replace).toHaveBeenCalledExactlyOnceWith("/autonomous#account");
+  expect(screen.queryByText("Risk policy", { selector: "summary" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Configure account limits" })).not.toBeInTheDocument();
   await screen.findByTestId("captured-strategy-note");
+  window.history.replaceState(null, "", "/strategies");
 });
 
 it("keeps family details and their parent navigation separate from captured notes", async () => {

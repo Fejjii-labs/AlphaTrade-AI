@@ -1,7 +1,7 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import RiskSettingsPage from "./page";
+import { AccountLimitsCard } from "./AccountLimitsCard";
 
 const settings = {
   organization_id: "org",
@@ -66,16 +66,13 @@ vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
-describe("Risk settings route ownership", () => {
+describe("Account limits card", () => {
   afterEach(() => {
     cleanup();
     useAsyncDataMock.mockClear();
   });
 
   beforeEach(() => {
-    appContext.killSwitchStatus = { execution_blocked: false, reason: null };
-    appContext.killSwitchError = null;
-    appContext.loading = false;
     useAsyncDataMock.mockReturnValue({
       data: settings,
       loading: false,
@@ -84,37 +81,30 @@ describe("Risk settings route ownership", () => {
     });
   });
 
-  it("shares the portfolio hub chrome header (FP2-222)", () => {
-    render(<RiskSettingsPage />);
-    const heading = screen.getByRole("heading", { level: 1 });
-    expect(heading).toHaveTextContent("Risk settings");
-    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  it("shows the account cap, loss limit and risk per trade first, the rest under More", () => {
+    render(<AccountLimitsCard />);
+    expect(screen.getByTestId("risk-settings-form-card")).toHaveAttribute("id", "account");
+    expect(screen.getByText("Account limits (all trades)")).toBeInTheDocument();
+    expect(screen.getByText("Account: max trades/day (all trades)")).toBeVisible();
+    expect(screen.getByTestId("risk-max-trades")).toHaveValue(5);
+    expect(screen.getByTestId("risk-daily-loss-limit")).toHaveValue("50");
+    expect(screen.getByTestId("risk-max-risk-percent")).toHaveValue("1");
+    const more = screen.getByText("More (target, balance, timezone)").closest("details");
+    expect(more).not.toHaveAttribute("open");
+    for (const id of ["risk-daily-target", "risk-default-balance", "risk-timezone", "risk-green-day", "risk-notes"])
+      expect(more).toContainElement(screen.getByTestId(id));
   });
 
-  it("shows the risk BLOCK panel when the kill switch blocks execution", () => {
-    appContext.killSwitchStatus = { execution_blocked: true, reason: "Drawdown breach" };
-    render(<RiskSettingsPage />);
-    expect(screen.getByTestId("portfolio-risk-block")).toHaveTextContent(
-      "Kill switch blocking execution: Drawdown breach",
+  it("saves the account limits", async () => {
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.risk.updateSettings).mockResolvedValue({ ...settings, max_trades_per_day: 3 });
+    render(<AccountLimitsCard />);
+    fireEvent.change(screen.getByTestId("risk-max-trades"), { target: { value: "3" } });
+    fireEvent.click(screen.getByTestId("risk-settings-save"));
+    await waitFor(() =>
+      expect(api.risk.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ max_trades_per_day: 3 })),
     );
-  });
-
-  it("shows no BLOCK panel while the kill switch is clear", () => {
-    render(<RiskSettingsPage />);
-    expect(screen.queryByTestId("portfolio-risk-block")).not.toBeInTheDocument();
-  });
-
-  it("keeps /risk reachable as configuration-only with parent strategy navigation", () => {
-    render(<RiskSettingsPage />);
-    expect(screen.getByTestId("risk-settings-page")).toBeInTheDocument();
-    expect(screen.getByTestId("risk-settings-form-card")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Back to Strategies/ })).toHaveAttribute("href", "/strategies#risk");
-    expect(screen.getByTestId("risk-settings-ownership")).toHaveTextContent(/configuration only/i);
-    expect(screen.getByTestId("risk-daily-loss-limit")).toBeInTheDocument();
-    expect(screen.getByText("Account: max trades/day (all trades)")).toBeInTheDocument();
-    expect(screen.getByTestId("paper-mode-indicator")).toBeInTheDocument();
-    expect(screen.queryByTestId("portfolio-hub-safety")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("paper-mode-banner")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("risk-settings-saved")).toHaveTextContent("Risk settings saved.");
   });
 
   it("renders loading and error states", () => {
@@ -124,7 +114,7 @@ describe("Risk settings route ownership", () => {
       error: null,
       reload: vi.fn(),
     });
-    const { rerender } = render(<RiskSettingsPage />);
+    const { rerender } = render(<AccountLimitsCard />);
     expect(screen.getByText(/loading risk settings/i)).toBeInTheDocument();
 
     useAsyncDataMock.mockReturnValue({
@@ -133,7 +123,7 @@ describe("Risk settings route ownership", () => {
       error: "settings down",
       reload: vi.fn(),
     });
-    rerender(<RiskSettingsPage />);
+    rerender(<AccountLimitsCard />);
     expect(screen.getByText(/settings down/i)).toBeInTheDocument();
   });
 });

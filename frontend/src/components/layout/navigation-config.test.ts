@@ -59,7 +59,7 @@ describe("Trader primary navigation", () => {
     expect(new Set(paths).size).toBe(5);
     for (const path of [
       "/watcher",
-      "/risk",
+      "/autonomous",
       "/strategy-lab",
       "/lessons",
       "/market",
@@ -113,6 +113,7 @@ describe("Trader primary navigation", () => {
     expect(getDestinationId("/backtests/bt-123")).toBe("settings");
     expect(getDestinationId("/portfolio")).toBe("settings");
     expect(getDestinationId("/risk")).toBe("strategies");
+    expect(getDestinationId("/autonomous")).toBe("strategies");
     expect(getDestinationId("/workspace")).toBe("settings");
     expect(getDestinationId("/decision")).toBe("settings");
     expect(getDestinationId("/decision/candidates")).toBe("settings");
@@ -194,9 +195,9 @@ describe("Trader primary navigation", () => {
       title: "Settings",
       subtitle: "AI assist",
     });
-    expect(resolvePageIdentity("/risk")).toMatchObject({
+    expect(resolvePageIdentity("/autonomous")).toMatchObject({
       title: "Strategies",
-      subtitle: "Risk settings",
+      subtitle: null,
     });
   });
 
@@ -229,7 +230,8 @@ describe("AT-040 Phase B redirects", () => {
     );
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source).not.toBe(rule.destination);
-      expect(rule.destination.startsWith(rule.source.startsWith("/strategy-lab/") ? "/agent?" : "/settings/")).toBe(true);
+      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : "/settings/";
+      expect(rule.destination.startsWith(home), rule.source).toBe(true);
       expect(destinations.has(rule.source)).toBe(false);
     }
     expect(sources.has("/billing")).toBe(true);
