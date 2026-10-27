@@ -11,6 +11,10 @@ class FormingCandleError(MarketContractError):
     """A forming (non-final) candle was supplied where FINAL is required."""
 
 
+class SettlementGuardError(FormingCandleError):
+    """The venue refused a read inside its post-close settlement guard."""
+
+
 class WrongMarketError(MarketContractError):
     """Venue or market type is incompatible with the requested evidence contract."""
 

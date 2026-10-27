@@ -44,6 +44,7 @@ from app.market_contracts.errors import (
     GapDetectedError,
     RateLimitedError,
     RegionalProviderFailureError,
+    SettlementGuardError,
     SpotFallbackRejectedError,
     UnsupportedTradeContractError,
     UpstreamBanError,
@@ -484,7 +485,7 @@ class BinanceUsdmPerpetualSource:
         if any(timedelta(0) <= evaluated_at - bar.interval_end < grace for bar in bars):
             # Do not return an older trigger as though the just-closed bar were ready.
             # The existing worker poll retries acquisition after the settlement guard.
-            raise FormingCandleError(
+            raise SettlementGuardError(
                 "Binance REST candle is inside the post-close settlement guard."
             )
         return [bar for bar in bars if bar.finality.value == "final"]

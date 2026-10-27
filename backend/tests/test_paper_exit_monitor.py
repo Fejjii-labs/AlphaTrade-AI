@@ -23,6 +23,7 @@ from app.market_contracts.errors import (
     EvidenceSourceSwitchRequiredError,
     FormingCandleError,
     RegionalProviderFailureError,
+    SettlementGuardError,
 )
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
@@ -2181,7 +2182,7 @@ class _SettlementGuardSource:
             timedelta(0) <= evaluated_at - bar.interval_end < timedelta(seconds=5)
             for bar in self.bars
         ):
-            raise FormingCandleError("inside settlement guard")
+            raise SettlementGuardError("inside settlement guard")
         eligible = [bar for bar in self.bars if bar.interval_end <= evaluated_at]
         selected = eligible[-min_final_bars:]
         if not selected:
@@ -2265,9 +2266,146 @@ def test_monitor_defers_a_settling_read_without_degrading() -> None:
             closer=RecordingCloser(),
             evaluated_at=datetime(2026, 10, 27, 7, 45, 3, tzinfo=UTC),
         )
-    assert report.status == "idle"
+    assert report.status == "settling"
+    assert report.settling == 1
     assert report.refused == 0
     assert report.error == ""
     events = [entry["event"] for entry in logs]
     assert "paper_exit_monitor_candles_settling" in events
     assert "paper_exit_monitor_candles_unusable" not in events
+
+
+def _guard_fetch(source: object, evaluated: datetime, entry: datetime) -> FetchedBars:
+    market = identity()
+    return fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=entry,
+        evaluated_at=evaluated,
+    )
+
+
+class _AlwaysRaises:
+    name = "test-perpetual"
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def fetch_closed_ohlcv(self, **_kwargs: object) -> object:
+        raise self.error
+
+
+def test_settlement_window_constant_is_the_venue_guard() -> None:
+    from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
+    from app.services import paper_exit_candles
+
+    assert paper_exit_candles._PAGE_CURSOR_CLEARANCE is BINANCE_REST_SETTLEMENT_GRACE
+
+
+@pytest.mark.parametrize(
+    ("offset", "inside"),
+    [
+        (timedelta(0), True),
+        (timedelta(seconds=4, microseconds=999_000), True),
+        (timedelta(seconds=5), False),
+    ],
+)
+def test_settlement_window_boundaries(offset: timedelta, inside: bool) -> None:
+    from app.services.paper_exit_candles import within_settlement_guard
+
+    close = datetime(2026, 10, 27, 7, 45, tzinfo=UTC)
+    assert within_settlement_guard(close + offset, timedelta(minutes=15)) is inside
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    fetched = _guard_fetch(_AlwaysRaises(SettlementGuardError("guard")), close + offset, entry)
+    assert fetched.settling is inside
+
+
+def test_other_market_error_inside_the_window_is_not_settling() -> None:
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 2, tzinfo=UTC)
+    fetched = _guard_fetch(_AlwaysRaises(FormingCandleError("outage")), evaluated, entry)
+    assert fetched.settling is False
+    assert fetched.covers_entry is False
+
+
+def test_refused_page_inside_the_window_is_not_settling() -> None:
+    from app.market_contracts.errors import EvidenceSourceSwitchRequiredError
+
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 2, tzinfo=UTC)
+    # A switch whose instrument is unusable refuses the page.
+    error = EvidenceSourceSwitchRequiredError("switch", instrument=None)
+    fetched = _guard_fetch(_AlwaysRaises(error), evaluated, entry)
+    assert fetched.settling is False
+    assert fetched.covers_entry is False
+
+
+def _settling_bars(_trade: OpenInternalPaperTrade) -> FetchedBars:
+    return FetchedBars(bars=(), covers_entry=False, source_name="binance-usdm", settling=True)
+
+
+def _gap_bars(_trade: OpenInternalPaperTrade) -> FetchedBars:
+    return FetchedBars(bars=(), covers_entry=False, source_name="binance-usdm")
+
+
+def test_consecutive_settling_escalates_to_refused() -> None:
+    from app.services.paper_exit_monitor import MAX_SETTLING_DEFERRALS
+
+    start = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    moment = datetime(2026, 10, 27, 7, 45, 3, tzinfo=UTC)
+    streaks: dict[UUID, int] = {}
+    statuses = []
+    for _ in range(MAX_SETTLING_DEFERRALS + 1):
+        report = run_paper_exit_monitor(
+            enabled=True,
+            dry_run=False,
+            trades=(_trade(entry_time=start),),
+            candles=_settling_bars,
+            closer=RecordingCloser(),
+            evaluated_at=moment,
+            settling_streaks=streaks,
+        )
+        statuses.append(report.status)
+    assert statuses[:-1] == ["settling"] * MAX_SETTLING_DEFERRALS
+    assert statuses[-1] == "degraded"
+    assert report.refused == 1
+    # A normal read resets the per-trade count; closed trades are pruned.
+    run_paper_exit_monitor(
+        enabled=True,
+        dry_run=False,
+        trades=(),
+        candles=_settling_bars,
+        closer=RecordingCloser(),
+        evaluated_at=moment,
+        settling_streaks=streaks,
+    )
+    assert streaks == {}
+
+
+def test_settling_cycle_keeps_the_degraded_streak_and_alert_fires() -> None:
+    threshold = timedelta(seconds=900)
+    t0 = datetime(2026, 10, 27, 7, 30, tzinfo=UTC)
+    watch = observe_repeated_degradation(
+        None, status="degraded", observed_at=t0, threshold=threshold, refused=1
+    )
+    assert watch.streak is not None
+    started = watch.streak
+    settling = observe_repeated_degradation(
+        watch.streak,
+        status="settling",
+        observed_at=t0 + timedelta(seconds=600),
+        threshold=threshold,
+    )
+    assert settling.streak == started
+    assert settling.alert is None
+    fired = observe_repeated_degradation(
+        settling.streak,
+        status="degraded",
+        observed_at=t0 + timedelta(seconds=901),
+        threshold=threshold,
+        refused=1,
+    )
+    assert fired.alert is not None
+    assert fired.alert.code == "degraded_repeat"

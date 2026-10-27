@@ -169,6 +169,7 @@ class MonitorReport:
     errors: int = 0
     error: str = ""
     alerts: tuple[ExitMonitorAlert, ...] = ()
+    settling: int = 0
     organization_ids: tuple[UUID, ...] = ()
 
 
@@ -445,6 +446,9 @@ def observe_repeated_degradation(
     """
 
     failed = status in _REPEATED_FAILURE or refused > 0
+    if not failed and status == STATUS_SETTLING:
+        # Deferred reads are neither healthy nor failed. Keep the streak as is.
+        return DegradationWatch(streak=streak, alert=None)
     if not failed or observed_at.tzinfo is None:
         return DegradationWatch(streak=None, alert=None)
     if threshold <= timedelta(0):
@@ -886,6 +890,11 @@ def close_request_for(decision: ExitDecision) -> ClosePaperPlanRequest:
     )
 
 
+STATUS_SETTLING = "settling"
+# Consecutive settling deferrals one trade may take before the read is refused.
+MAX_SETTLING_DEFERRALS = 3
+
+
 def run_paper_exit_monitor(
     *,
     enabled: bool,
@@ -896,8 +905,13 @@ def run_paper_exit_monitor(
     evaluated_at: datetime,
     rejected: int = 0,
     shutdown: Callable[[], bool] | None = None,
+    settling_streaks: dict[UUID, int] | None = None,
 ) -> MonitorReport:
-    """Examine open trades once. Flag off does not load candles or close."""
+    """Examine open trades once. Flag off does not load candles or close.
+
+    ``settling_streaks`` carries consecutive settling deferrals per trade across
+    cycles. After ``MAX_SETTLING_DEFERRALS`` the read is refused instead.
+    """
 
     if not enabled:
         return MonitorReport(status="disarmed")
@@ -907,7 +921,9 @@ def run_paper_exit_monitor(
     skipped = rejected
     refused = 0
     errors = 0
+    settling = 0
     error = ""
+    streaks = settling_streaks if settling_streaks is not None else {}
     ordered = sorted(
         trades,
         key=lambda trade: (trade.symbol, trade.timeframe.value, trade.entry_time),
@@ -926,15 +942,25 @@ def run_paper_exit_monitor(
                 error=redact_text(str(exc))[:200],
             )
             continue
+        block: str | None = None
         if fetched.settling:
-            logger.info(
-                "paper_exit_monitor_candles_settling",
-                journal_trade_id=str(trade.journal_trade_id),
-                symbol=trade.symbol,
-                timeframe=trade.timeframe.value,
-            )
-            continue
-        block = "leading_gap" if not fetched.covers_entry else None
+            deferrals = streaks.get(trade.journal_trade_id, 0) + 1
+            streaks[trade.journal_trade_id] = deferrals
+            if deferrals <= MAX_SETTLING_DEFERRALS:
+                settling += 1
+                logger.info(
+                    "paper_exit_monitor_candles_settling",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    symbol=trade.symbol,
+                    timeframe=trade.timeframe.value,
+                    deferrals=deferrals,
+                )
+                continue
+            block = "settling_exhausted"
+        else:
+            streaks.pop(trade.journal_trade_id, None)
+        if block is None and not fetched.covers_entry:
+            block = "leading_gap"
         if block is None:
             block = candle_series_block(
                 fetched.bars,
@@ -996,6 +1022,9 @@ def run_paper_exit_monitor(
             replayed=bool(getattr(result, "replayed", False)),
             **_decision_log(decision),
         )
+    open_ids = {trade.journal_trade_id for trade in ordered}
+    for stale in [key for key in streaks if key not in open_ids]:
+        del streaks[stale]
     if errors or refused:
         status = "degraded"
         if not error and refused:
@@ -1004,6 +1033,8 @@ def run_paper_exit_monitor(
         status = "dry_run"
     elif closed or replayed:
         status = "closed"
+    elif settling:
+        status = STATUS_SETTLING
     else:
         status = "idle"
     return MonitorReport(
@@ -1016,6 +1047,7 @@ def run_paper_exit_monitor(
         refused=refused,
         errors=errors,
         error=error,
+        settling=settling,
         organization_ids=tuple(dict.fromkeys(trade.organization_id for trade in ordered)),
     )
 
