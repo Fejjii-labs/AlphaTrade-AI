@@ -18,6 +18,10 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/audit", destination: "/settings/audit", permanent: false },
   { source: "/exchange", destination: "/settings/exchange", permanent: false },
   { source: "/settings/advanced", destination: "/settings/diagnostics", permanent: false },
+  // Risk and bot settings live on Autonomous; the kill switch moved there from /watchlist.
+  { source: "/risk", destination: "/autonomous#account", permanent: false },
+  { source: "/risk/autonomous", destination: "/autonomous#bot", permanent: false },
+  { source: "/watchlist", destination: "/settings/watcher", permanent: false },
   { source: "/strategy-lab/new", destination: "/agent?intent=strategy", permanent: false },
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
 ] as const;
@@ -38,7 +42,7 @@ export const PHASE_B_CAPABILITY_PATHS: readonly string[] = [
   "/portfolio",
   "/settings",
   "/settings/billing",
-  "/risk",
+  "/autonomous",
   "/workspace",
   "/decision",
   "/proposals",

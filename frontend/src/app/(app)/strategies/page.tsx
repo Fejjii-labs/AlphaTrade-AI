@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { RiskSettingsSummary } from "@/components/settings/RiskSettingsSummary";
 import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -67,16 +66,11 @@ function StrategiesWorkspace() {
     };
   }, []);
   const { data, loading, reload } = useAsyncData(loader, []);
+  const router = useRouter();
   useEffect(() => {
-    const openRisk = () => {
-      if (window.location.hash !== "#risk") return;
-      const target = document.getElementById("risk");
-      if (target instanceof HTMLDetailsElement) target.open = true;
-    };
-    openRisk();
-    window.addEventListener("hashchange", openRisk);
-    return () => window.removeEventListener("hashchange", openRisk);
-  }, []);
+    // Risk policy moved to Autonomous; old `/strategies#risk` links follow it.
+    if (window.location.hash === "#risk") router.replace("/autonomous#account");
+  }, [router]);
   return (
     <div className="page-sections" data-testid="trader-strategies">
       <PageHeader
@@ -295,24 +289,6 @@ function StrategiesWorkspace() {
           </section>
         </>
       )}
-      <details
-        className="rounded-card border border-border-subtle p-4"
-        id="risk"
-      >
-        <summary className="min-h-11 cursor-pointer font-semibold">
-          Risk policy
-        </summary>
-        <div className="space-y-3 pt-3">
-          <RiskSettingsSummary />
-          <div className="flex flex-wrap gap-4 text-accent">
-            <Link href="/risk/autonomous">Autonomous trading settings</Link>
-            <Link href="/risk">Configure account limits</Link>
-          </div>
-          <p className="text-sm text-text-muted">
-            Strategy limits remain bounded by the enforced account policy.
-          </p>
-        </div>
-      </details>
     </div>
   );
 }
