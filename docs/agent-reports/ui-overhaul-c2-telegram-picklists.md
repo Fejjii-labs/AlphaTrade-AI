@@ -7,7 +7,7 @@ Branch from `main`. Scope: one read-only backend endpoint + the Telegram policy 
 
 ## What changed
 
-- **Backend options endpoint** `GET /notifications/telegram/options` (reader,
+- **Backend options endpoint** `GET /notifications/filter-options` (reader,
   own organization and user, read-only). It returns named choices and the
   stored values behind each one:
   - Symbols: the organization's enabled watcher symbols (label = value).
@@ -37,6 +37,12 @@ Branch from `main`. Scope: one read-only backend endpoint + the Telegram policy 
 
 ## Decisions taken without asking
 
+- **The endpoint is `/notifications/filter-options`, not under `/telegram`.**
+  `test_worker_notifier` and `test_exchange_blackbox` allow no new API path
+  containing "telegram" (no inbound Telegram surface). The first gate run
+  caught this. I renamed the route instead of widening that security
+  allowlist.
+
 - **One chip per strategy, covering strategy id + recent versions.** Matching
   stays exactly as today. Picking "Nested" subscribes to both Candidate and
   legacy alerts for it. Versions older than the newest 10 are left out to
@@ -65,6 +71,14 @@ Branch from `main`. Scope: one read-only backend endpoint + the Telegram policy 
 - Backend: `pytest tests/test_telegram_policy_options.py` → 5 passed; with the
   notification and Telegram delivery suites → 56 passed. ruff, ruff format,
   mypy clean.
+- Full backend gate (Postgres 16, local, 4 file shards): 6,546 passed. The
+  first run had 2 real failures (the "telegram" route allowlist, above). After
+  the rename, those two, every test that walks `app.routes` or the OpenAPI
+  document, and the C2 and notification suites → **253 passed**. The other 22
+  were from the local harness: the shard DB rename is refused by
+  `test_execution_account_registration.py` and three migration tests, and
+  `test_pr237_migration_aware_rollback` needs history missing from the
+  shallow clone. Re-run alone → **25 passed**.
 - Frontend: `vitest run src/components/settings src/components/Notification src/lib/api`
   → 19 files, 107 passed. Mutation: showing raw strategy ids
   (`hideUnknown` off) fails the "never shows them" test. eslint and

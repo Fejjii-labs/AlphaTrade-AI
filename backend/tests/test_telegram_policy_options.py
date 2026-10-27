@@ -116,7 +116,7 @@ def test_options_name_each_choice_and_list_its_stored_identifiers(
         sfp, sfp_versions = _strategy(session, name="Liquidity sweep")
         session.commit()
 
-    body = c2_client.get("/notifications/telegram/options").json()
+    body = c2_client.get("/notifications/filter-options").json()
 
     assert [o["label"] for o in body["strategies"]] == ["Liquidity sweep", "Nested"]
     by_label = {o["label"]: o["values"] for o in body["strategies"]}
@@ -138,7 +138,7 @@ def test_chosen_values_are_accepted_by_the_saved_policy(
     with c2_db() as session:
         _strategy(session, name="Nested", versions=3)
         session.commit()
-    body = c2_client.get("/notifications/telegram/options").json()
+    body = c2_client.get("/notifications/filter-options").json()
     policy = TelegramNotificationPolicyV2(
         strategy_subscriptions=tuple(body["strategies"][0]["values"]),
         symbol_subscriptions=tuple(v for o in body["symbols"] for v in o["values"]),
@@ -161,7 +161,7 @@ def test_only_the_callers_own_strategies_are_offered(
         _strategy(session, name="Teammate", user_id=READER_ID)
         _strategy(session, name="Other org", org_id=OTHER_ORG)
         session.commit()
-    body = c2_client.get("/notifications/telegram/options").json()
+    body = c2_client.get("/notifications/filter-options").json()
     assert [o["label"] for o in body["strategies"]] == ["Mine"]
 
 
@@ -180,4 +180,4 @@ def test_version_list_is_bounded_per_strategy(c2_db: sessionmaker[Session], monk
 
 def test_options_require_authentication(c2_client: TestClient) -> None:
     c2_client.headers.pop("Authorization")
-    assert c2_client.get("/notifications/telegram/options").status_code == 401
+    assert c2_client.get("/notifications/filter-options").status_code == 401
