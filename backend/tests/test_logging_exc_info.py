@@ -205,3 +205,134 @@ def test_stack_info_is_redacted(capsys: pytest.CaptureFixture[str]) -> None:
 
 def _emit_stack_with_secret(log: structlog.stdlib.BoundLogger) -> None:
     log.info("stack_probe_frame", stack_info=True)  # secret=STACKFRAMEhhh
+
+
+# --- Griller PR #365 re-review: ReDoS (R-B1) and conditions C1-C4 ---
+_ADVERSARIAL_64K: dict[str, str] = {
+    "x_dash": "x-" * 32_768,
+    "x_dash_token": "x-" * 32_768 + "token",
+    "uuid_chain": "-".join(f"{i:08x}-1111-2222-3333-444455556666" for i in range(1_800)),
+    "kebab_slug": "-".join(["order", "btc", "usdt", "perp"] * 3_300),
+    "secret_quote_unterminated": 'secret="' * 8_192,
+    "secret_bracket_unterminated": "secret=[" * 8_192,
+    "bytes_unterminated": "secret=b'" * 7_282,
+    "email_like": "a." * 32_768 + "@",
+    "pydantic_like": ("api_key\n" + " " * 16 + "x" * 500 + "\n") * 120,
+    "pem_unterminated": "-----BEGIN RSA PRIVATE KEY-----" + "A" * 65_000,
+}
+
+
+@pytest.mark.parametrize("name", sorted(_ADVERSARIAL_64K))
+def test_redaction_is_linear_on_adversarial_input(name: str) -> None:
+    import time
+
+    from app.guardrails.redaction import redact_text
+
+    text = _ADVERSARIAL_64K[name]
+    assert len(text) >= 60_000
+    started = time.perf_counter()
+    redact_text(text)
+    elapsed = time.perf_counter() - started
+    # The quadratic prefix took ~28s at 32KB; linear matching is well under 100ms.
+    assert elapsed < 0.5, f"{name}: {elapsed:.2f}s"
+
+
+_EXTRA_SHAPES: dict[str, tuple[str, str]] = {
+    "json_escaped_quote": ('{"secret": "ab\\"ESCSECRETaa"}', "ESCSECRETaa"),
+    "json_object_value": ('{"secret": {"v": "OBJSECRETbb"}}', "OBJSECRETbb"),
+    "json_array_value": ('{"secret": ["ARRSECRETcc"]}', "ARRSECRETcc"),
+    "bytes_repr": ("{'secret': b'BYTESECRETdd'}", "BYTESECRETdd"),
+    "authorization_basic": ("Authorization: Basic BASICCREDee", "BASICCREDee"),
+    "authorization_bearer": ("Authorization: Bearer BEARERCREDff", "BEARERCREDff"),
+    "secret_scheme": ("secret: Basic SCHEMECREDgg", "SCHEMECREDgg"),
+    "headers_dict_auth": ("{'Authorization': 'Basic DICTAUTHhh'}", "DICTAUTHhh"),
+    "pem": (
+        "-----BEGIN PRIVATE KEY-----\nMIIEPEMSECRETii\n-----END PRIVATE KEY-----",
+        "PEMSECRETii",
+    ),
+    "private_key": ("private_key=PRIVKEYjj", "PRIVKEYjj"),
+    "bare_key": ("key=BAREKEYkk", "BAREKEYkk"),
+    "credential": ("credential=CREDll", "CREDll"),
+    "auth": ("auth=AUTHmm", "AUTHmm"),
+    "pwd": ("pwd=PWDnn", "PWDnn"),
+    "cookie": ("Cookie: session=COOKIEoo", "COOKIEoo"),
+    "akia": ("id AKIAABCDEFGHIJKLMNOP here", "AKIAABCDEFGHIJKLMNOP"),
+    "pydantic_input_value": (
+        "1 validation error for S\napi_secret\n  Input should be x "
+        "[type=string_type, input_value='PYDSECRETpp', input_type=str]",
+        "PYDSECRETpp",
+    ),
+    "tuple_repr": ("('secret', 'TUPLESECRETqq')", "TUPLESECRETqq"),
+    "comparison": ("secret == 'CMPSECRETrr'", "CMPSECRETrr"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_EXTRA_SHAPES))
+def test_extra_credential_shapes_are_redacted(shape: str) -> None:
+    from app.guardrails.redaction import redact_text
+
+    text, marker = _EXTRA_SHAPES[shape]
+    assert marker not in redact_text(text)
+    try:
+        raise _BoomError(f"request failed {text}")
+    except _BoomError:
+        event = _redact_sensitive(None, "error", {"event": "x", "exc_info": True})
+    assert marker not in json.dumps(event)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "usage tokens=1234 max_tokens=4096",
+        "prompt_tokens: 12, completion_tokens: 30",
+        "fencing_token=5 lease=w1",
+        "has_secret: True",
+        "token_count=7 tokenizer=cl100k signature_valid=true",
+        "cache_key_hits=3 oauth_mode=pkce",
+    ],
+)
+def test_harmless_counters_are_not_masked(text: str) -> None:
+    from app.guardrails.redaction import redact_text
+
+    assert redact_text(text) == text
+
+
+def test_event_field_names_use_keyword_match() -> None:
+    from app.guardrails.redaction import redact_for_log
+
+    event = redact_for_log(
+        {
+            "event": "x",
+            "api_secret": "EVSECRETaa",
+            "X-API-KEY": "EVKEYbb",
+            "ACCESS-SIGN": "EVSIGNcc",
+            "blofin_private_key": "EVPKdd",
+            "tokens": 1234,
+            "max_tokens": 4096,
+            "prompt_tokens": 12,
+            "fencing_token": 5,
+            "has_secret": True,
+        }
+    )
+    rendered = json.dumps(event)
+    for marker in ("EVSECRETaa", "EVKEYbb", "EVSIGNcc", "EVPKdd"):
+        assert marker not in rendered
+    assert event["tokens"] == 1234
+    assert event["max_tokens"] == 4096
+    assert event["prompt_tokens"] == 12
+    assert event["fencing_token"] == 5
+    assert event["has_secret"] is True
+
+
+def test_secret_straddling_traceback_cap_is_redacted_before_cap() -> None:
+    # The key sits before the 32KB tail cut and its value runs past it. Capping
+    # first would drop ``secret=`` and keep the raw value tail.
+    value = "CAPSECRET" * 4_000  # 36KB, longer than the cap
+    try:
+        raise _BoomError("secret=" + value)
+    except _BoomError:
+        event = _redact_sensitive(None, "error", {"event": "x", "exc_info": True})
+    exception = str(event["exception"])
+    assert len(exception) <= 32 * 1024
+    assert "CAPSECRET" not in exception
+    assert "secret=***REDACTED***" in exception
