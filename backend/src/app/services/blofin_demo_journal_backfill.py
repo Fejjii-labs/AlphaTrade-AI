@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
@@ -21,6 +22,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import event, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -704,6 +706,38 @@ class ApplyReport:
     rerun_updates: int
 
 
+_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+_SQL_STRING = re.compile(r"'(?:[^']|'')*'")
+_ALWAYS_REFUSED = re.compile(r"\b(DELETE|TRUNCATE|MERGE|DROP|ALTER)\b")
+_DO_UPDATE = re.compile(r"\bON\s+CONFLICT\b.*?\bDO\s+UPDATE\b", re.DOTALL)
+_DO_BLOCK = re.compile(r"^\s*DO\b")
+_UPDATE = re.compile(r"\bUPDATE\b")
+_JOURNAL = re.compile(r"\bJOURNAL_TRADES\b")
+
+
+def refused_statement(statement: str) -> str | None:
+    """The refused verb in ``statement`` for the apply write window, else None.
+
+    Comments and string literals are stripped first, so ``/* */ DELETE`` and
+    a CTE ``WITH t AS (DELETE ...)`` are both caught. DELETE, TRUNCATE, MERGE,
+    DROP, ALTER, ``ON CONFLICT DO UPDATE`` and ``DO`` blocks are refused
+    anywhere; UPDATE is refused when the statement touches ``journal_trades``.
+    This catches in-process code bugs; it is not a sandbox (a raw DBAPI cursor
+    or a second connection bypasses it, and the 0/0 re-plan is the backstop).
+    """
+    bare = _SQL_STRING.sub("''", _SQL_COMMENT.sub(" ", statement)).upper().replace('"', "")
+    found = _ALWAYS_REFUSED.search(bare)
+    if found:
+        return found.group(1)
+    if _DO_UPDATE.search(bare):
+        return "ON CONFLICT DO UPDATE"
+    if _DO_BLOCK.search(bare):
+        return "DO"
+    if _UPDATE.search(bare) and _JOURNAL.search(bare):
+        return "UPDATE"
+    return None
+
+
 def _normal(lines: Iterable[dict[str, Any]]) -> list[Any]:
     """JSON round trip so tuples and lists from a plan file compare equal."""
     return [json.loads(json.dumps(line, sort_keys=True)) for line in lines]
@@ -768,9 +802,8 @@ def apply_plan(
     bind = session.connection()
 
     def guard(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
-        words = statement.lstrip().split(None, 3)
-        verb = words[0].upper() if words else ""
-        if verb == "DELETE" or (verb == "UPDATE" and "journal_trades" in statement.lower()):
+        verb = refused_statement(statement)
+        if verb:
             raise ApplyRefusedError("write_refused", f"{verb} is not allowed in the backfill apply")
 
     event.listen(bind, "before_cursor_execute", guard)
@@ -788,7 +821,12 @@ def apply_plan(
             _apply_venue(row, draft, fresh=True)
             row.tags = [*row.tags, f"{POSITION_TAG_PREFIX}{key}"]
             session.add(row)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise ApplyRefusedError(
+                "concurrent_insert", "a journal row with a planned ref was written concurrently"
+            ) from exc
         rows, annotated = stored_rows(session, organization_id=organization_id, user_id=user_id)
         _again, rerun = build_plan(pages, rows, annotated=annotated, user_id=user_id)
     finally:

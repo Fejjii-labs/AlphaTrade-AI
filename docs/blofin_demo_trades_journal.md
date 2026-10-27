@@ -285,6 +285,15 @@ or email appears in the output or logs.
   `journal_trades`; the venue client is GET-only; the #304 read pin runs first,
   also with `--replay`. After the inserts the plan is rebuilt and must show 0
   creates and 0 updates before commit.
+  Before any write the apply also: takes the per-org advisory lock the live
+  demo-mirror cycle takes before it writes (`pg_try_advisory_xact_lock`; refuses
+  `mirror_cycle_busy` if the cycle holds it), and refuses unless `--user` is an
+  active owner or trader of `--org` (`user_not_member`, `user_role_refused`,
+  `user_inactive`); the digest stays unbound to org/user so the approved digest
+  holds. `--plan-file <approved dry-run output>` makes the re-planned lines match
+  that file exactly (`plan_file_mismatch`). The guard strips SQL comments and
+  also refuses `TRUNCATE`, `MERGE`, `ON CONFLICT DO UPDATE`, `DO` blocks and CTE
+  `UPDATE`/`DELETE`. A duplicate-ref race exits 3 with `concurrent_insert`.
 
 ## 10. Tests A7 must add
 

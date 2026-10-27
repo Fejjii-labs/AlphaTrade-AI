@@ -48,6 +48,17 @@ from app.services.blofin_demo_journal_backfill import (
 )
 
 
+def _refusal_code(exc: BaseException) -> str | None:
+    """Stable code for a refusal SQLAlchemy wrapped (statement guard) or a DB race."""
+    from sqlalchemy.exc import IntegrityError, StatementError
+
+    if isinstance(exc, StatementError) and isinstance(exc.orig, ApplyRefusedError):
+        return exc.orig.code
+    if isinstance(exc, IntegrityError):
+        return "concurrent_insert"
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--org", type=uuid.UUID, required=True)
@@ -122,9 +133,13 @@ def main() -> int:
                 session.rollback()
                 print(json.dumps({"apply": "refused", "code": refused.code}), file=sys.stderr)
                 return 3
-            except BaseException:
+            except BaseException as exc:
                 session.rollback()
-                raise
+                code = _refusal_code(exc)
+                if code is None:
+                    raise
+                print(json.dumps({"apply": "refused", "code": code}), file=sys.stderr)
+                return 3
         result = {
             "apply": "committed",
             "plan_digest": report.plan_digest,

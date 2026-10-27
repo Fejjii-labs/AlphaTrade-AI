@@ -484,3 +484,103 @@ def test_script_apply_with_plan_file_commits_and_refuses_a_mismatched_file(
     assert _run_script(monkeypatch, maker, client, [*argv, str(plan)]) == 0
     with maker() as current:
         assert len(_journal(current)) == 1
+
+
+@pytest.mark.parametrize(
+    ("statement", "verb"),
+    [
+        ("/* hide */ DELETE FROM journal_trades", "DELETE"),
+        ("-- hide\nDELETE FROM journal_trades", "DELETE"),
+        ("WITH t AS (DELETE FROM journal_trades RETURNING id) SELECT 1", "DELETE"),
+        ("WITH t AS (UPDATE journal_trades SET notes='x' RETURNING id) SELECT 1", "UPDATE"),
+        ('update "Journal_Trades" set notes = 1', "UPDATE"),
+        ("TRUNCATE journal_trades", "TRUNCATE"),
+        ("MERGE INTO journal_trades USING x ON true WHEN MATCHED THEN DELETE", "MERGE"),
+        (
+            "INSERT INTO journal_trades (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id=1",
+            "ON CONFLICT DO UPDATE",
+        ),
+        ("DO $$ BEGIN PERFORM 1; END $$", "DO"),
+    ],
+)
+def test_statement_guard_refuses_hidden_and_indirect_writes(statement: str, verb: str) -> None:
+    from app.services.blofin_demo_journal_backfill import refused_statement
+
+    assert refused_statement(statement) == verb
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO journal_trades (id, updated_at) VALUES (?, ?)",
+        "SELECT * FROM journal_trades WHERE notes = 'please DELETE me'",
+        "UPDATE journal_mirror_cycles SET x = 1",
+        "INSERT INTO t (id) VALUES (1) ON CONFLICT DO NOTHING",
+    ],
+)
+def test_statement_guard_allows_inserts_and_reads(statement: str) -> None:
+    from app.services.blofin_demo_journal_backfill import refused_statement
+
+    assert refused_statement(statement) is None
+
+
+def test_statement_guard_refuses_a_cte_update_during_apply(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.blofin_demo_journal_backfill as module
+
+    _apply(session, _FIXTURE["long"])
+    pages = _pages(_FIXTURE["partial_flat"])
+    digest = _digest(session, pages)
+    original = module.stored_rows
+    calls = {"n": 0}
+
+    def sneaky(current: Session, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            current.execute(
+                text("WITH t AS (UPDATE journal_trades SET notes = 'x' RETURNING id) SELECT 1")
+            )
+        return original(current, **kwargs)
+
+    monkeypatch.setattr(module, "stored_rows", sneaky)
+    with pytest.raises(Exception, match="UPDATE is not allowed"):
+        apply_plan(session, pages, organization_id=ORG, user_id=USER, approved_digest=digest)
+    session.rollback()
+
+
+def test_script_maps_a_guard_refusal_and_a_race_to_exit_3(
+    monkeypatch: pytest.MonkeyPatch, maker: Any, tmp_path: Path, capsys: Any
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    import app.services.blofin_demo_journal_backfill as module
+
+    client = _Client(_paths(_FIXTURE["partial_flat"]))  # type: ignore[arg-type]
+    replay = str(_capture(tmp_path))
+    _run_script(monkeypatch, maker, client, ["--replay", replay])
+    digest = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["summary"]["plan_digest"]
+    argv = ["--replay", replay, "--apply", "--plan-digest", digest]
+    original = module.stored_rows
+    calls = {"n": 0}
+
+    def sneaky(current: Session, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            current.execute(text("TRUNCATE journal_trades"))
+        return original(current, **kwargs)
+
+    monkeypatch.setattr(module, "stored_rows", sneaky)
+    assert _run_script(monkeypatch, maker, client, argv) == 3
+    assert '"write_refused"' in capsys.readouterr().err
+    monkeypatch.setattr(module, "stored_rows", original)
+
+    def race(self: Session, *_a: Any, **_k: Any) -> None:
+        raise IntegrityError("INSERT", {}, Exception("uq_journal_trades_org_external_ref"))
+
+    monkeypatch.setattr(Session, "flush", race)
+    assert _run_script(monkeypatch, maker, client, argv) == 3
+    assert '"concurrent_insert"' in capsys.readouterr().err
+    monkeypatch.undo()
+    with maker() as current:
+        assert _journal(current) == []
