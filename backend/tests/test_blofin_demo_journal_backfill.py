@@ -288,3 +288,18 @@ def test_net_mode_row_without_side_or_fills_is_still_skipped() -> None:
     lines, summary = _plan(bundle)
     assert summary["legs_read"] == 0
     assert lines == []
+
+
+def test_plan_summary_lists_skipped_rows_with_reasons() -> None:
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    bundle["fills"] = []
+    _, summary = _plan(bundle)
+    ids = [row["historyId"] for row in bundle["history"]]
+    assert summary["history_rows_skipped"] == len(ids)
+    assert summary["skipped_rows"] == [
+        {"history_id": hid, "inst_id": row["instId"], "reason": "no_opening_fill"}
+        for hid, row in zip(ids, bundle["history"], strict=True)
+    ]
+    _, clean = _plan(_FIXTURE["partial_flat"])
+    assert clean["history_rows_skipped"] == 0
+    assert clean["skipped_rows"] == []

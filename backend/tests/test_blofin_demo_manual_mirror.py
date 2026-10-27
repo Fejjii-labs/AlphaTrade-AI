@@ -46,6 +46,7 @@ from app.services.blofin_demo_manual_mirror import (
     BloFinDemoManualMirror,
     MirrorReadError,
     _opening_side,
+    _opening_side_reason,
     drafts_from_raw,
     publish_mirror_performance,
     record_mirror_cycle,
@@ -1540,6 +1541,30 @@ def test_side_falls_back_to_long_and_short_position_side() -> None:
     assert _opening_side({"positionSide": "weird"}, [_fill(_T, "buy")]) is None
 
 
+def test_unknown_position_side_is_never_treated_as_net() -> None:
+    # A qualifying opening fill exists; only the unknown positionSide stops it.
+    fills = [_fill(_T, "buy")]
+    assert _opening_side(_net_row(), fills) == "buy"
+    for odd in ("weird", "both", "LONG"):
+        assert _opening_side_reason(_net_row(positionSide=odd), fills) == (
+            None,
+            "unknown_position_side",
+        )
+
+
+def test_skip_reason_codes_for_net_rows() -> None:
+    assert _opening_side_reason(_net_row(), [_fill(_T, "buy")]) == ("buy", None)
+    both = [_fill(_T, "buy"), _fill(_T, "sell")]
+    assert _opening_side_reason(_net_row(), both) == (None, "ambiguous_both_sides")
+    assert _opening_side_reason(_net_row(), [_fill(_T + _H, "sell")]) == (None, "no_opening_fill")
+    assert _opening_side_reason(_net_row(), None) == (None, "no_opening_fill")
+    long_win = {"openAveragePrice": "100", "closeAveragePrice": "110", "realizedPnl": "10"}
+    assert _opening_side_reason(_net_row(**long_win), [_fill(_T, "sell")]) == (
+        None,
+        "pnl_direction_conflict",
+    )
+
+
 def test_net_side_is_the_opening_fill_at_create_time() -> None:
     assert _opening_side(_net_row(), [_fill(_T, "buy"), _fill(_T + _H, "sell")]) == "buy"
     assert _opening_side(_net_row(), [_fill(_T + 1, "sell")]) == "sell"
@@ -1619,3 +1644,32 @@ def test_mirror_apply_skips_a_net_row_without_a_qualifying_fill(session: Session
     )
     _apply(session, _net_long_bundle([closing]))
     assert _rows(session) == []
+
+
+def test_mirror_report_lists_each_skipped_row_with_its_reason(session: Session) -> None:
+    history_id = _FIXTURE["long"]["history"][0]["historyId"]
+    closing = _fill(
+        int(_FIXTURE["long"]["history"][0]["updateTime"]), "sell", fillPnl="0.2", tradeId="t-close"
+    )
+    report = _apply(session, _net_long_bundle([closing]))
+    assert _rows(session) == []
+    rows = [row.as_dict() for row in report.skipped_rows]  # type: ignore[attr-defined]
+    assert rows == [{"history_id": history_id, "inst_id": "BTC-USDT", "reason": "no_opening_fill"}]
+
+    open_ms = int(_FIXTURE["long"]["history"][0]["createTime"])
+    both = [_fill(open_ms, "buy", tradeId="a"), _fill(open_ms, "sell", tradeId="b")]
+    built = drafts_from_raw(
+        instruments=_FIXTURE["instruments"],
+        positions=[],
+        history=_net_long_bundle(both)["history"],
+        fills=both,
+        funding=[],
+        orders=[],
+        window_begin=WINDOW_BEGIN,
+        window_end=NOW,
+    )
+    assert built.closed == ()
+    assert [(r.history_id, r.reason) for r in built.skipped_rows] == [
+        (history_id, "ambiguous_both_sides")
+    ]
+    assert built.skipped == 1

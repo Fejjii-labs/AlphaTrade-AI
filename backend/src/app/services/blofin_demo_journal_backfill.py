@@ -41,7 +41,7 @@ from app.services.blofin_demo_manual_mirror import (
     _history_pages,
     _instruments,
     _money,
-    _parse_slices,
+    _parse_slices_detailed,
     _price_pnl,
     _Slice,
     _time,
@@ -307,7 +307,7 @@ def build_plan(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Plan lines and the summary object. Pure: reads its inputs, writes nothing."""
     meta, _conflict = _instruments(pages.instruments)
-    slices, _skipped, _incomplete = _parse_slices(pages.history, meta, pages.fills)
+    slices, skipped_rows, _incomplete = _parse_slices_detailed(pages.history, meta, pages.fills)
     _assign_funding(slices, pages.funding, window_begin=pages.funding_begin)
     _attach_orders(slices, pages.fills, pages.orders)
     lifetimes: dict[tuple[str, int], _Lifetime] = {}
@@ -531,6 +531,8 @@ def build_plan(
         "window": [pages.window_begin.isoformat(), pages.window_end.isoformat()],
         "funding_coverage_begin": pages.funding_begin.isoformat(),
         "legs_read": len(slices),
+        "history_rows_skipped": len(skipped_rows),
+        "skipped_rows": [row.as_dict() for row in skipped_rows],
         "lifetimes": len(lifetimes),
         **counts,
         "ghosts": ghosts,
