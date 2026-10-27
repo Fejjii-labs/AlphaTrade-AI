@@ -22,11 +22,12 @@ _PREFIXABLE_KEYWORDS = (
 )
 # Keywords too generic for a prefix (``cache_key``, ``oauth_mode``); whole key only.
 _EXACT_KEYWORDS = r"key|auth|pwd"
+# The prefix is unbounded but still linear: a key can only start at the beginning
+# of a run of key characters (``_KEY_START``), so each run is scanned once.
 _KEY_BODY = (
-    rf"(?:[{_KEY_CHARS}]{{0,64}}?(?:{_PREFIXABLE_KEYWORDS})|(?:{_EXACT_KEYWORDS}))"
+    rf"(?:[{_KEY_CHARS}]*?(?:{_PREFIXABLE_KEYWORDS})|(?:{_EXACT_KEYWORDS}))"
     rf"(?![{_KEY_CHARS}])"
 )
-_MAX_VALUE = 2048
 _AUTH_SCHEME = r"(?:Basic|Bearer|Digest|Token|Negotiate|ApiKey)"
 
 # Credential-like key/value pairs in any rendering: ``k=v``, ``k: v``, ``k == v``,
@@ -38,11 +39,13 @@ _CREDENTIAL_KV = re.compile(
     r"(?P<sep>\s*(?:==|[:=])\s*|(?(q),\s*|(?!)))"
     r"(?P<value>"
     rf"{_AUTH_SCHEME}\s+[^\s'\",;&}}\])]+"  # scheme plus credential
-    rf"|b'(?:[^'\\]|\\.){{0,{_MAX_VALUE}}}'"  # bytes reprs
-    rf"|b\"(?:[^\"\\]|\\.){{0,{_MAX_VALUE}}}\""
-    rf"|\"(?:[^\"\\]|\\.){{0,{_MAX_VALUE}}}\""  # quoted, escapes allowed
-    rf"|'(?:[^'\\]|\\.){{0,{_MAX_VALUE}}}'"
-    rf"|[{{\[][^}}\]]{{0,{_MAX_VALUE}}}[}}\]]?"  # object/array, to the first close
+    # Quoted and bytes values: possessive, so a value of any length is consumed
+    # (and redacted) in one pass; an unterminated value runs to the end of the line.
+    r"|b'(?:[^'\\\n]|\\.)*+'?"  # bytes reprs
+    r"|b\"(?:[^\"\\\n]|\\.)*+\"?"
+    r"|\"(?:[^\"\\\n]|\\.)*+\"?"  # quoted, escapes allowed
+    r"|'(?:[^'\\\n]|\\.)*+'?"
+    r"|[{\[]"  # object/array: extended to its balanced close by _bracket_end
     r"|[^\s'\",;&}\])]+"
     r"|[\])}][^\s'\",;&]+"  # a stray closing bracket must not end the value
     r")",
@@ -53,18 +56,60 @@ _CREDENTIAL_KV = re.compile(
 _PYDANTIC_INPUT_VALUE = re.compile(
     rf"(?P<head>^[ \t]{{0,16}}[A-Za-z0-9_.\-]{{0,128}}?(?:{_PREFIXABLE_KEYWORDS}|{_EXACT_KEYWORDS})"
     r"[A-Za-z0-9_.\-]{0,64}[ \t]*\n[^\n]{0,512}?\binput_value=)"
-    rf"(?P<value>'(?:[^'\\]|\\.){{0,{_MAX_VALUE}}}'|\"(?:[^\"\\]|\\.){{0,{_MAX_VALUE}}}\""
+    r"(?P<value>'(?:[^'\\\n]|\\.)*+'?|\"(?:[^\"\\\n]|\\.)*+\"?"
     r"|[^\s,\]]+)",
     re.IGNORECASE | re.MULTILINE,
 )
 _PEM_PRIVATE_KEY = re.compile(
-    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----[A-Za-z0-9+/=\s]{0,16384}"
+    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----[A-Za-z0-9+/=\s]*+"
     r"(?:-----END [A-Z ]{0,40}PRIVATE KEY-----)?"
 )
 _AWS_ACCESS_KEY_ID = re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16,20}(?![A-Z0-9])")
 # Counters such as ``fencing_token=5`` or ``has_secret=True`` are not credentials.
 _BARE_SCALAR = re.compile(r"(?:\d{1,12}|true|false|none|null)", re.IGNORECASE)
-_SCALAR_EXEMPT_KEY = re.compile(r".*token|has_.*", re.IGNORECASE)
+# Only these explicit counter/flag keys may keep a bare scalar value; any other
+# credential key (``otp_token=123456``, ``password=123456``) is always redacted.
+_SCALAR_EXEMPT_KEY = re.compile(
+    r"fencing[_-]?tokens?"
+    r"|(?:max|input|output|prompt|completion|total|cached|reasoning)[_-]?tokens?"
+    r"|tokens?[_-]?(?:count|used|limit)"
+    r"|has[_-][A-Za-z0-9_\-]+",
+    re.IGNORECASE,
+)
+# CLI form with a space separator: ``--api-key VALUE``.
+_CLI_FLAG = re.compile(
+    rf"(?<![{_KEY_CHARS}])(?P<flag>--{_KEY_BODY})(?P<sep>[ \t]+)(?P<value>(?!-)[^\s'\"]+)",
+    re.IGNORECASE,
+)
+
+
+def _bracket_end(text: str, start: int) -> int:
+    """Index just past the bracket opened at ``start``, honouring nesting and quotes.
+
+    Linear in the scanned length; an unbalanced value runs to the end of the text.
+    """
+    depth = 0
+    quote = ""
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
 
 
 def _redact_credential_kv(match: re.Match[str]) -> str:
@@ -187,7 +232,31 @@ def redact_text(value: str) -> str:
     redacted = _PEM_PRIVATE_KEY.sub(_REDACTED, redacted)
     redacted = _AWS_ACCESS_KEY_ID.sub(_REDACTED, redacted)
     redacted = _PYDANTIC_INPUT_VALUE.sub(rf"\g<head>{_REDACTED}", redacted)
-    return _CREDENTIAL_KV.sub(_redact_credential_kv, redacted)
+    redacted = _CLI_FLAG.sub(rf"\g<flag>\g<sep>{_REDACTED}", redacted)
+    return _sub_credential_kv(redacted)
+
+
+def _sub_credential_kv(text: str) -> str:
+    """``_CREDENTIAL_KV.sub`` with object/array values extended to their balanced close."""
+    parts: list[str] = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        match = _CREDENTIAL_KV.search(text, pos)
+        if match is None:
+            break
+        parts.append(text[pos : match.start()])
+        value = match.group("value")
+        if value in {"{", "["}:
+            end = _bracket_end(text, match.start("value"))
+            q = match.group("q")
+            parts.append(f"{q}{match.group('key')}{q}{match.group('sep')}{_REDACTED}")
+        else:
+            end = match.end()
+            parts.append(_redact_credential_kv(match))
+        pos = max(end, match.start() + 1)
+    parts.append(text[pos:])
+    return "".join(parts)
 
 
 def redact_value(value: Any) -> Any:

@@ -336,3 +336,103 @@ def test_secret_straddling_traceback_cap_is_redacted_before_cap() -> None:
     assert len(exception) <= 32 * 1024
     assert "CAPSECRET" not in exception
     assert "secret=***REDACTED***" in exception
+
+
+# --- Griller PR #365 re-review 2 (cbdf7381): conditions C1, C2 and minor gaps ---
+_LONG = "L" * 5_000 + "TAILSECRETzz"
+_OVERFLOW_SHAPES: dict[str, str] = {
+    "double_quoted": f'{{"secret": "{_LONG}"}}',
+    "single_quoted": f"{{'secret': '{_LONG}'}}",
+    "bytes_repr": f"{{'secret': b'{_LONG}'}}",
+    "object_value": f'{{"secret": {{"v": "{_LONG}"}}}}',
+    "array_value": f'{{"secret": ["{_LONG}"]}}',
+    "escaped_quotes": '{"secret": "' + '\\"' * 3_000 + 'TAILSECRETzz"}',
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_OVERFLOW_SHAPES))
+def test_values_longer_than_2048_chars_are_redacted_in_full(shape: str) -> None:
+    from app.guardrails.redaction import redact_text
+
+    out = redact_text(_OVERFLOW_SHAPES[shape])
+    assert "TAILSECRETzz" not in out
+    assert "LLLL" not in out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "verification_token=482913",
+        "otp_token: 123456",
+        "api_token=123456789012",
+        "password=123456",
+        "api_secret=123456",
+        "session_token=null",
+        "secret=True",
+    ],
+)
+def test_numeric_and_scalar_credentials_are_redacted(text: str) -> None:
+    from app.guardrails.redaction import redact_text
+
+    assert redact_text(text).endswith("***REDACTED***"), redact_text(text)
+
+
+def test_scalar_skip_is_limited_to_counter_keys_for_fields() -> None:
+    from app.guardrails.redaction import redact_mapping
+
+    out = redact_mapping({"otp_token": 123456, "api_secret": 123456, "fencing_token": 5})
+    assert out == {
+        "otp_token": "***REDACTED***",
+        "api_secret": "***REDACTED***",
+        "fencing_token": 5,
+    }
+
+
+_MINOR_GAPS: dict[str, tuple[str, str]] = {
+    "cli_space_flag": ("run --api-key CLISECRETaa --verbose", "CLISECRETaa"),
+    "long_key_prefix": ("a" * 70 + "_secret=LONGPREFIXbb", "LONGPREFIXbb"),
+    "nested_second_field": ('{"secret": {"a": {"b": 1}, "c": "NESTEDcc"}}', "NESTEDcc"),
+    "pem_over_16k": (
+        "-----BEGIN PRIVATE KEY-----\n" + "QUJD" * 5_000 + "PEMTAILdd\n-----END PRIVATE KEY-----",
+        "PEMTAILdd",
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_MINOR_GAPS))
+def test_minor_gap_shapes_are_redacted(shape: str) -> None:
+    from app.guardrails.redaction import redact_text
+
+    text, marker = _MINOR_GAPS[shape]
+    assert marker not in redact_text(text)
+
+
+def test_nested_object_redaction_keeps_following_fields() -> None:
+    from app.guardrails.redaction import redact_text
+
+    out = redact_text('{"secret": {"a": {"b": "x"}}, "symbol": "BTCUSDT"}')
+    assert out == '{"secret": ***REDACTED***, "symbol": "BTCUSDT"}'
+
+
+_ADVERSARIAL_OVERFLOW_64K: dict[str, str] = {
+    "long_quoted": 'secret="' + "x" * 64_000 + '"',
+    "escaped_quote_chain": 'secret="' + '\\"' * 32_000,
+    "nested_brackets": "secret=" + "{" * 64_000,
+    "quoted_brackets": "secret={" + '"' * 64_000,
+    "long_prefix": "a" * 64_000 + "secret",
+    "cli_flags": "--api-key " * 7_000,
+    "kv_chain": "a_secret=" * 7_200,
+}
+
+
+@pytest.mark.parametrize("name", sorted(_ADVERSARIAL_OVERFLOW_64K))
+def test_overflow_redaction_is_linear(name: str) -> None:
+    import time
+
+    from app.guardrails.redaction import redact_text
+
+    text = _ADVERSARIAL_OVERFLOW_64K[name]
+    assert len(text) >= 60_000
+    started = time.perf_counter()
+    redact_text(text)
+    assert time.perf_counter() - started < 0.5
