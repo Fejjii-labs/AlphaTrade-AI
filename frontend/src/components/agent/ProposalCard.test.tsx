@@ -11,7 +11,7 @@ vi.mock("@/components/agent/StrategyDraftReview", () => ({
 
 function proposal(overrides: Partial<AgentStructuredProposal> = {}): AgentStructuredProposal {
   return {
-    id: "7f0f8a52-7a6c-4b2b-9c55-1f3a5b2d9e10",
+    proposal_id: "7f0f8a52-7a6c-4b2b-9c55-1f3a5b2d9e10",
     conversation_id: "11111111-1111-4111-8111-111111111111",
     content_hash: "a".repeat(64),
     kind: "propose_journal_entry",

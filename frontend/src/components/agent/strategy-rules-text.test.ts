@@ -11,14 +11,14 @@ describe("strategyRuleLines", () => {
         trigger_type: "liquidity_sweep",
         conditions: [{ indicator: "rsi", operator: "lt", value: "30", timeframe: "15m" }],
       }],
-      exit_rules: [{ rule_type: "take_profit", r_multiple: 2, size_fraction: 0.5 }],
+      exit_rules: [{ rule_type: "take_profit", r_multiple: 2, size_fraction: 0.5 }, { rule_type: "tp_multiple", r_multiple: "1" }],
       no_trade_rules: [{ rule_type: "high_impact_news" }],
     } as never);
 
     expect(groups).toEqual([
       { group: "Timeframe", lines: ["15m"] },
       { group: "Entry", lines: ["Long on liquidity sweep when RSI < 30 on 15m"] },
-      { group: "Exit", lines: ["Take profit 2R 50% of size"] },
+      { group: "Exit", lines: ["Take profit 2R 50% of size", "Take profit multiple 1R"] },
       { group: "No trade", lines: ["High impact news"] },
     ]);
     expect(groups.flatMap((g) => g.lines).join(" ")).not.toMatch(/[{}]|_/);

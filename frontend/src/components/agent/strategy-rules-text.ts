@@ -8,9 +8,12 @@ const OPERATORS: Record<string, string> = {
   crosses_above: "crosses above", crosses_below: "crosses below",
 };
 
+/** Trader shorthand inside rule tokens, spelled out or kept as acronyms. */
+const ABBREVIATIONS: Record<string, string> = { tp: "take profit", sl: "stop loss", atr: "ATR", rsi: "RSI", ema: "EMA", sma: "SMA", vwap: "VWAP", cvd: "CVD", htf: "HTF", ltf: "LTF" };
+
 function words(token: string | null | undefined): string {
   if (!token) return "";
-  const text = token.replaceAll("_", " ").toLowerCase().trim();
+  const text = token.toLowerCase().split("_").map((w) => ABBREVIATIONS[w] ?? w).join(" ").trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
