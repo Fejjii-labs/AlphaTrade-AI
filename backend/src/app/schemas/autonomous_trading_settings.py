@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, StrictBool
 
 from app.schemas.common import StrictModel
 
@@ -48,4 +48,5 @@ class AutonomousTradingSettingsUpdate(StrictModel):
     clear_risk_per_trade_percent: bool = False
     strategy_id: UUID | None = None
     symbol: str | None = Field(default=None, min_length=3, max_length=32)
-    internal_paper_enabled: bool | None = None
+    # Strict: only JSON true/false, never "yes"/1 (Griller #356 review).
+    internal_paper_enabled: StrictBool | None = None

@@ -56,6 +56,10 @@ describe("Autonomous page", () => {
     expect(screen.getByRole("region", { name: "Bot limits" })).toHaveAttribute("id", "bot");
     expect(screen.getByRole("region", { name: "Account limits" })).toHaveAttribute("id", "account");
     expect(screen.getByTestId("paper-mode-indicator")).toBeInTheDocument();
+    expect(screen.getByTestId("autonomous-settings-ownership")).toHaveTextContent(
+      "Real-money execution stays blocked.",
+    );
+    expect(screen.getByTestId("autonomous-real-trading-footer")).toHaveTextContent("Real trading remains disabled.");
   });
 
   it("shows the BLOCK panel while the kill switch blocks execution", () => {
