@@ -48,15 +48,29 @@ class RedactingFormatter(logging.Formatter):
 
 
 def _redact_sensitive(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
-    """structlog processor. Exception text is redacted before it is rendered."""
+    """structlog processor. Exception text is redacted before it is rendered.
+
+    ``exc_info=True`` (and ``logger.exception``) means "the exception being
+    handled now". It is resolved with :func:`sys.exc_info` here; rendering the
+    bare flag produced ``"exception": "True"`` with no type or traceback.
+    """
+    exc_info = event_dict.get("exc_info")
     event: dict[str, Any] = redact_for_log(dict(event_dict))
-    exc_info = event.get("exc_info")
     if not exc_info:
         return event
-    if isinstance(exc_info, BaseException):
-        text = "".join(traceback.format_exception(exc_info))
-    elif isinstance(exc_info, tuple) and exc_info[0] is not None:
-        text = "".join(traceback.format_exception(*exc_info))
+    error: BaseException | None = None
+    if exc_info is True:
+        error = sys.exc_info()[1]
+    elif isinstance(exc_info, BaseException):
+        error = exc_info
+    elif isinstance(exc_info, tuple) and len(exc_info) == 3:
+        error = exc_info[1] if isinstance(exc_info[1], BaseException) else None
+    if error is not None:
+        text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        event["exception_type"] = type(error).__qualname__
+        event["exception_message"] = redact_text(str(error))[:500]
+    elif exc_info is True:
+        text = "exc_info=True logged outside an active exception"
     else:
         text = str(exc_info)
     event["exception"] = redact_text(text)
