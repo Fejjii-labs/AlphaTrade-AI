@@ -69,3 +69,14 @@ Branch from `main`. Scope: one read-only backend endpoint + the Telegram policy 
   → 19 files, 107 passed. Mutation: showing raw strategy ids
   (`hideUnknown` off) fails the "never shows them" test. eslint and
   `tsc --noEmit` clean. `npm run api:check` passes.
+
+## Screenshots
+
+Production builds of `main` (before) and this branch (after) against this
+branch's mock backend. One account, two strategies, a saved policy with one
+strategy, BTCUSDT, N2 and N3.
+
+- Desktop: `ui-overhaul-c2-telegram-picklists/before-telegram-policy-1280.png` →
+  `ui-overhaul-c2-telegram-picklists/after-telegram-policy-1280.png`
+- Phone: `ui-overhaul-c2-telegram-picklists/before-telegram-policy-390.png` →
+  `ui-overhaul-c2-telegram-picklists/after-telegram-policy-390.png`
