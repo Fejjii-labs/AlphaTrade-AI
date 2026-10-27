@@ -46,6 +46,7 @@ rate only when every closed mirrored row is verified.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -54,7 +55,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from typing import Any, Protocol
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import ExecutionMode, Settings
@@ -1007,6 +1008,38 @@ def _should_recompute(row: JournalTrade, draft: MirrorDraft) -> bool:
     return stored <= fetched
 
 
+def journal_mirror_lock_key(organization_id: uuid.UUID) -> int:
+    """Signed 64-bit advisory lock key for one org's demo-mirror journal writes."""
+    digest = hashlib.sha256(f"blofin-demo-journal:{organization_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def lock_journal_mirror(session: Session, organization_id: uuid.UUID) -> None:
+    """Live cycle: wait for the per-org mirror lock (held until the transaction ends).
+
+    The A7b backfill apply takes the same key with a try-lock, so the two never
+    write one org's journal concurrently. No-op off PostgreSQL.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": journal_mirror_lock_key(organization_id)},
+    )
+
+
+def try_lock_journal_mirror(session: Session, organization_id: uuid.UUID) -> bool:
+    """Backfill: take the per-org mirror lock without waiting; False if it is held."""
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    return bool(
+        session.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:key)"),
+            {"key": journal_mirror_lock_key(organization_id)},
+        )
+    )
+
+
 class BloFinDemoManualMirror:
     """Upsert journal rows from one read-only account snapshot of history."""
 
@@ -1064,6 +1097,7 @@ class BloFinDemoManualMirror:
         )
         if incomplete:
             built = _without_verified_economics(built)
+        lock_journal_mirror(session, organization_id)
         report = self._persist(session, built, organization_id=organization_id, user_id=user_id)
         if report.ambiguous:
             incomplete = True

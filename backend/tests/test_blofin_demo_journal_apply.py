@@ -23,6 +23,7 @@ from app.services.blofin_demo_journal_backfill import (
     build_plan,
     stored_rows,
 )
+from tests.support.postgres_persistence import requires_postgres
 from tests.test_blofin_demo_journal_backfill import _pages
 from tests.test_blofin_demo_manual_mirror import (  # noqa: F401 (autouse pin fixture)
     _FIXTURE,
@@ -339,3 +340,66 @@ def test_apply_accepts_a_trader_member(session: Session) -> None:
         session, pages, organization_id=ORG, user_id=OTHER_USER, approved_digest=digest
     )
     assert report.created == 1
+
+
+def test_live_cycle_takes_the_journal_lock_before_it_writes(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.blofin_demo_manual_mirror as mirror
+
+    order: list[str] = []
+    real_persist = mirror.BloFinDemoManualMirror._persist
+    monkeypatch.setattr(mirror, "lock_journal_mirror", lambda _s, org: order.append(f"lock:{org}"))
+
+    def persist(self: Any, *args: Any, **kwargs: Any) -> Any:
+        order.append("persist")
+        return real_persist(self, *args, **kwargs)
+
+    monkeypatch.setattr(mirror.BloFinDemoManualMirror, "_persist", persist)
+    _apply(session, _FIXTURE["long"])
+    assert order == [f"lock:{ORG}", "persist"]
+
+
+@requires_postgres
+def test_apply_refuses_while_the_live_cycle_holds_the_org_lock() -> None:
+    from app.services.blofin_demo_manual_mirror import (
+        journal_mirror_lock_key,
+        lock_journal_mirror,
+    )
+    from tests.support.postgres_persistence import phase7_plan_session_factory
+
+    factory = phase7_plan_session_factory()
+    with factory() as seed:
+        seed.add(Organization(id=ORG, name="Lock Org"))
+        seed.add(Organization(id=OTHER_ORG, name="Other Lock Org"))
+        seed.add(User(id=USER, email="lock@test.example", hashed_password="x"))
+        seed.flush()
+        seed.add(Membership(user_id=USER, organization_id=ORG, role=MembershipRole.OWNER))
+        seed.commit()
+    pages = _pages(_FIXTURE["partial_flat"])
+    with factory() as live, factory() as backfill:
+        digest = _digest(backfill, pages)
+        backfill.rollback()
+        lock_journal_mirror(live, ORG)  # the live cycle mid-transaction
+        # Another org's lock is independent.
+        lock_journal_mirror(live, OTHER_ORG)
+        with pytest.raises(ApplyRefusedError) as refused:
+            apply_plan(backfill, pages, organization_id=ORG, user_id=USER, approved_digest=digest)
+        assert refused.value.code == "mirror_cycle_busy"
+        backfill.rollback()
+        assert _journal(backfill) == []
+        live.commit()  # releases the transaction-scoped lock
+        report = apply_plan(
+            backfill, pages, organization_id=ORG, user_id=USER, approved_digest=digest
+        )
+        assert report.created == 1
+        # While the backfill transaction is open, the live cycle would wait on it.
+        assert (
+            live.scalar(
+                text("SELECT pg_try_advisory_xact_lock(:k)"),
+                {"k": journal_mirror_lock_key(ORG)},
+            )
+            is False
+        )
+        backfill.commit()
+        live.rollback()

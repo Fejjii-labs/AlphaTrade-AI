@@ -62,6 +62,7 @@ from app.services.blofin_demo_manual_mirror import (
     _price_pnl,
     _Slice,
     _time,
+    try_lock_journal_mirror,
 )
 from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, exact_prefix
 
@@ -722,6 +723,10 @@ def apply_plan(
     transaction and must show 0 creates and 0 updates, or nothing is kept.
     The caller commits; on any exception it must roll back.
     """
+    if not try_lock_journal_mirror(session, organization_id):
+        raise ApplyRefusedError(
+            "mirror_cycle_busy", "the live demo-mirror cycle holds this org's journal lock"
+        )
     require_apply_member(session, organization_id=organization_id, user_id=user_id)
     rows, annotated = stored_rows(session, organization_id=organization_id, user_id=user_id)
     lines, summary = build_plan(pages, rows, annotated=annotated, user_id=user_id)
