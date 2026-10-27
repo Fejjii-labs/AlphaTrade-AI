@@ -110,14 +110,17 @@ def _log_snapshot_identity(result: str) -> None:
     emit("blofin_snapshot_identity", result=result)
 
 
-def _require_fallback_account_pin(settings: Settings, organization_id: uuid.UUID) -> None:
+def _require_fallback_account_pin(
+    settings: Settings, organization_id: uuid.UUID, *, enforce: bool = False
+) -> None:
     """Refuse the main demo key unless the activity org and UID pins match.
 
-    A missing pin, or a pin for a different organization, does not fall open.
-    The log carries a reason token only.
+    ``enforce`` applies the same pin to another key path (the dedicated
+    read-only mirror key). A missing pin, or a pin for a different
+    organization, does not fall open. The log carries a reason token only.
     """
 
-    if not _demo_key_read(settings):
+    if not (enforce or _demo_key_read(settings)):
         return
     config = get_activity_settings()
     pinned_org = config.organization_id
@@ -138,23 +141,34 @@ def _require_fallback_account_pin(settings: Settings, organization_id: uuid.UUID
     raise ValueError(message)
 
 
+def mirror_identity_pin_applies(settings: Settings) -> bool:
+    """True when the mirror read key must pass the #304 org and UID pin."""
+
+    return (
+        settings.blofin_paper_internal_main_key_selected
+        or settings.blofin_read_sync_uses_dedicated_credentials
+    )
+
+
 def require_internal_snapshot_mirror_identity(
     settings: Settings,
     organization_id: uuid.UUID,
     *,
     fetch_identity: Callable[[], Any],
 ) -> None:
-    """Refuse the paper_internal main demo key unless the #304 pin matches.
+    """Refuse the mirror read key unless the #304 pin matches.
 
-    No-op for the dedicated read-only key and for ``paper_exchange_demo``.
+    Applies to the paper_internal main demo key and to the dedicated
+    read-only key, so a wrong-account read-only key cannot mirror another
+    account's trades. No-op for the ``paper_exchange_demo`` trading key.
     The organization and expected-UID pins are checked before
     ``fetch_identity``. That callable is the identity GET only. A mismatch
     or an unverified UID raises before the caller reads positions or history.
     """
 
-    if not settings.blofin_paper_internal_main_key_selected:
+    if not mirror_identity_pin_applies(settings):
         return
-    _require_fallback_account_pin(settings, organization_id)
+    _require_fallback_account_pin(settings, organization_id, enforce=True)
     payload = fetch_identity()
     permissions = parse_account_permissions(payload)
     uid = native_uid(payload) if permissions.can_read else None
