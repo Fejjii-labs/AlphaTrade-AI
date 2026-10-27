@@ -14,8 +14,10 @@ from app.schemas.notifications import (
     NotificationPreferencesUpdate,
     NotificationTestResult,
 )
+from app.schemas.telegram_policy import TelegramPolicyOptions
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import ReaderDep, TraderDep
+from app.services.notifications.telegram_policy_options import telegram_policy_options
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -45,6 +47,20 @@ async def get_notification_preferences(
     service: NotificationPreferencesServiceDep,
 ) -> NotificationPreferencesResponse:
     return service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
+
+
+@router.get(
+    "/telegram/options",
+    response_model=TelegramPolicyOptions,
+    summary="Named choices for Telegram policy filters",
+    dependencies=[_PREFS_READ],
+)
+async def get_telegram_policy_options(
+    tenant: ReaderDep, session: SessionDep
+) -> TelegramPolicyOptions:
+    return telegram_policy_options(
+        session, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
 
 
 @router.patch(

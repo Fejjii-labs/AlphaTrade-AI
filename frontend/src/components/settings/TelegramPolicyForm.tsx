@@ -1,12 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { TelegramNotificationPolicyV2 } from "@/lib/api/types";
+import type { TelegramFilterOption, TelegramNotificationPolicyV2, TelegramPolicyOptions } from "@/lib/api/types";
+import { cn } from "@/lib/utils";
 
 const inputClass =
   "min-h-11 w-full min-w-0 rounded border border-border bg-surface-0 px-3 text-text-primary";
+const chipClass =
+  "min-h-11 rounded-full border border-border px-4 text-sm text-text-secondary";
+const chipOnClass = "border-accent bg-accent/15 text-text-primary";
 const toggles = [
   ["forming_alerts", "Forming setup notifications"],
   ["confirmed_alerts", "Confirmed setup notifications"],
@@ -18,19 +22,45 @@ const toggles = [
   ["daily_review_event", "Daily review event"],
 ] as const;
 
-function Subscription({
+type Choices = TelegramFilterOption[] | "loading" | "unavailable";
+
+/** All / None / Selected, where Selected is picked from named chips, never typed identifiers. */
+function ChipFilter({
   label,
   value,
+  choices,
+  empty,
+  hideUnknown = false,
   onChange,
 }: {
   label: string;
   value: string[] | null;
+  choices: Choices;
+  empty: string;
+  /** Unknown saved values are identifiers: count them instead of showing them. */
+  hideUnknown?: boolean;
   onChange: (value: string[] | null) => void;
 }) {
   const [mode, setMode] = useState(
     value === null ? "all" : value.length ? "selected" : "none",
   );
-  const [text, setText] = useState(value?.join(", ") ?? "");
+  const [kept, setKept] = useState(value ?? []);
+  const selected = value ?? [];
+  const options = Array.isArray(choices) ? choices : [];
+  const known = new Set(options.flatMap((o) => o.values));
+  const unknown = selected.filter((v) => !known.has(v));
+  function select(next: string[]) {
+    setKept(next);
+    onChange(next);
+  }
+  function toggle(option: TelegramFilterOption) {
+    const on = option.values.some((v) => selected.includes(v));
+    select(
+      on
+        ? selected.filter((v) => !option.values.includes(v))
+        : [...selected, ...option.values.filter((v) => !selected.includes(v))],
+    );
+  }
   return (
     <div className="space-y-2">
       <label className="block space-y-1">
@@ -42,45 +72,61 @@ function Subscription({
           onChange={(event) => {
             const next = event.target.value;
             setMode(next);
-            onChange(
-              next === "all"
-                ? null
-                : next === "none"
-                  ? []
-                  : text
-                      .split(",")
-                      .map((v) => v.trim())
-                      .filter(Boolean),
-            );
+            onChange(next === "all" ? null : next === "none" ? [] : kept);
           }}
         >
           <option value="all">All</option>
           <option value="none">None</option>
-          <option value="selected">Selected identifiers</option>
+          <option value="selected">Selected</option>
         </select>
       </label>
       {mode === "selected" && (
-        <label className="block space-y-1">
-          <span>{label} identifiers</span>
-          <input
-            className={inputClass}
-            value={text}
-            aria-label={`${label} identifiers`}
-            required
-            onChange={(event) => {
-              setText(event.target.value);
-              onChange(
-                event.target.value
-                  .split(",")
-                  .map((v) => v.trim())
-                  .filter(Boolean),
-              );
-            }}
-          />
-          <span className="block text-xs text-text-muted">
-            Comma-separated exact identifiers; case-sensitive.
-          </span>
-        </label>
+        <div role="group" aria-label={`${label} choices`} className="flex flex-wrap gap-2">
+          {choices === "loading" ? (
+            <p className="text-xs text-text-muted">Loading choices…</p>
+          ) : choices === "unavailable" ? (
+            <p className="text-xs text-text-muted">Choices unavailable. Saved picks are kept.</p>
+          ) : options.length === 0 && unknown.length === 0 ? (
+            <p className="text-xs text-text-muted">{empty}</p>
+          ) : null}
+          {options.map((option) => {
+            const on = option.values.some((v) => selected.includes(v));
+            return (
+              <button
+                key={option.label}
+                type="button"
+                aria-pressed={on}
+                onClick={() => toggle(option)}
+                className={cn(chipClass, on && chipOnClass)}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+          {choices === "loading" ? null : hideUnknown && unknown.length > 0 ? (
+            <button
+              type="button"
+              aria-pressed={true}
+              aria-label={`Remove ${unknown.length} other saved ${label.toLowerCase()}`}
+              onClick={() => select(selected.filter((v) => known.has(v)))}
+              className={cn(chipClass, chipOnClass)}
+            >
+              Other saved ({unknown.length}) ✕
+            </button>
+          ) : (
+            unknown.map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={true}
+                onClick={() => select(selected.filter((item) => item !== v))}
+                className={cn(chipClass, chipOnClass)}
+              >
+                {v}
+              </button>
+            ))
+          )}
+        </div>
       )}
     </div>
   );
@@ -99,6 +145,19 @@ export function TelegramPolicyForm({
   const [policyEnabled, setPolicyEnabled] = useState(enabled);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [options, setOptions] = useState<TelegramPolicyOptions | "loading" | "unavailable">("loading");
+  useEffect(() => {
+    let live = true;
+    api.notifications
+      .telegramOptions()
+      .then((loaded) => live && setOptions(loaded))
+      .catch(() => live && setOptions("unavailable"));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const choices = (key: keyof TelegramPolicyOptions) =>
+    typeof options === "string" ? options : options[key];
   function update<K extends keyof TelegramNotificationPolicyV2>(
     key: K,
     value: TelegramNotificationPolicyV2[K],
@@ -120,20 +179,7 @@ export function TelegramPolicyForm({
           list && (list.length > 200 || list.some((v) => !v || v.length > 80)),
       )
     ) {
-      setMessage(
-        "Use at most 200 identifiers per filter, each up to 80 characters.",
-      );
-      return;
-    }
-    if (
-      draft.strategy_subscriptions?.some(
-        (v) =>
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-            v,
-          ),
-      )
-    ) {
-      setMessage("Watched strategies must use valid strategy UUIDs.");
+      setMessage("Too many picks in one filter. Choose fewer.");
       return;
     }
     if (draft.quiet_hours) {
@@ -182,33 +228,32 @@ export function TelegramPolicyForm({
           />
           Enable Telegram notification policy
         </label>
-        <Subscription
+        <ChipFilter
           label="Watched symbols"
           value={draft.symbol_subscriptions}
+          choices={choices("symbols")}
+          empty="No watched symbols yet."
           onChange={(v) => update("symbol_subscriptions", v)}
         />
-        <Subscription
+        <ChipFilter
           label="Watched strategies"
           value={draft.strategy_subscriptions}
+          choices={choices("strategies")}
+          empty="No strategies yet."
+          hideUnknown
           onChange={(v) => update("strategy_subscriptions", v)}
         />
-        <p className="text-xs text-text-muted">
-          Use strategy-version UUIDs for Candidate alerts; legacy paper alerts
-          use their strategy UUIDs. Watcher context below is informational.
-        </p>
-        <Subscription
+        <ChipFilter
           label="Nested stage filters"
           value={draft.setup_stages}
+          choices={choices("setup_stages")}
+          empty="No stages available."
           onChange={(v) => update("setup_stages", v)}
         />
         <p className="text-xs text-text-muted">
-          Nested stages use exact identifiers such as N2 and N3. A selected
-          stage filter excludes events without a matching stage.
-        </p>
-        <p className="text-xs text-text-muted">
           SFP lifecycle notifications use the shared phase, severity and event
           filters. SFP has no setup stage, so a selected Nested stage filter
-          excludes SFP events. Dedicated SFP controls are unavailable here.
+          excludes SFP events.
         </p>
         <label className="block space-y-1">
           <span>Minimum Telegram severity</span>
