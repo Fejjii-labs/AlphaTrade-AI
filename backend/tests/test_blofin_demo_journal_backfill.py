@@ -346,3 +346,29 @@ def test_read_venue_refuses_before_any_account_read_without_a_matching_uid(
         )
     paths = [path for _method, path, _params in client.calls]
     assert paths in ([], ["/api/v1/user/query-apikey"])
+
+
+def test_plan_summary_lists_each_leg_direction_and_its_source() -> None:
+    _, side_summary = _plan(_FIXTURE["partial_flat"])
+    _, pos_summary = _plan(_without_side(_FIXTURE["partial_flat"], "long"))
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    first = bundle["history"][0]
+    opening = {
+        "instId": first["instId"],
+        "side": "buy",
+        "ts": first["createTime"],
+        "orderId": "o-open",
+        "tradeId": "t-open",
+    }
+    bundle["fills"] = [opening, *bundle["fills"]]
+    _, fill_summary = _plan(bundle)
+    ids = sorted(row["historyId"] for row in _FIXTURE["partial_flat"]["history"])
+    for summary, source in (
+        (side_summary, "side"),
+        (pos_summary, "positionSide"),
+        (fill_summary, "opening_fill"),
+    ):
+        legs = summary["leg_directions"]
+        assert [leg["history_id"] for leg in legs] == ids
+        assert {leg["source"] for leg in legs} == {source}
+        assert {leg["direction"] for leg in legs} == {"long"}

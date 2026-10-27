@@ -550,6 +550,15 @@ def build_plan(
         "legs_read": len(slices),
         "history_rows_skipped": len(skipped_rows),
         "skipped_rows": [row.as_dict() for row in skipped_rows],
+        "leg_directions": [
+            {
+                "history_id": leg.history_id,
+                "inst_id": leg.inst_id,
+                "direction": leg.direction.value,
+                "source": leg.side_source,
+            }
+            for leg in sorted(slices, key=lambda item: item.history_id)
+        ],
         "lifetimes": len(lifetimes),
         **counts,
         "ghosts": ghosts,

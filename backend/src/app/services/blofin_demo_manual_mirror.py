@@ -238,6 +238,7 @@ class _Slice:
     stop: Decimal | None = None
     target: Decimal | None = None
     order_ids: tuple[str, ...] = ()
+    side_source: str = "side"
 
 
 def _money(value: Decimal) -> Decimal:
@@ -497,9 +498,20 @@ def _parse_slices_detailed(
                 contract_value=meta.contract_value if meta else None,
                 settle=meta.settle if meta else None,
                 side_conflict=conflict,
+                side_source=_side_source(row),
             )
         )
     return slices, skipped_rows, incomplete
+
+
+def _side_source(row: dict[str, Any]) -> str:
+    """Which field decided the slice's opening side (see ``_opening_side_reason``)."""
+    side = row.get("side")
+    if isinstance(side, str) and side:
+        return "side"
+    if row.get("positionSide") in ("long", "short"):
+        return "positionSide"
+    return "opening_fill"
 
 
 def _price_pnl(sliver: _Slice) -> Decimal | None:
@@ -1189,6 +1201,15 @@ class BloFinDemoManualMirror:
             row.net_pnl = None
             updated += 1
         session.flush()
+        if built.skipped_rows:
+            reasons: dict[str, int] = {}
+            for skipped in built.skipped_rows:
+                reasons[skipped.reason] = reasons.get(skipped.reason, 0) + 1
+            logger.warning(
+                "blofin_demo_manual_mirror_rows_skipped",
+                skipped_rows=len(built.skipped_rows),
+                reasons=dict(sorted(reasons.items())),
+            )
         logger.info(
             "blofin_demo_manual_mirror_applied",
             created=created,
