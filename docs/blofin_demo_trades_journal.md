@@ -277,6 +277,23 @@ or email appears in the output or logs.
 - **Before Nov 1, 2026:** this doc lands (Griller GO), then A7a (dry-run + capture
   only, read-only, no journal writes) lands and the dry-run runs with `--capture`.
 - After Sofien approves the diff: A7b (live-cycle grouping and the gated apply).
+  The A7b apply (`--apply --plan-digest sha256:...`) re-plans in one transaction,
+  refuses a digest mismatch, and only inserts `create` lines of closed lifetimes
+  through the live cycle's `_apply_venue`. A plan with `attach`, `close`, `merge`
+  or `supersede` lines is refused whole (those updates stay a later, separately
+  approved step). A statement guard refuses any `DELETE` and any `UPDATE` of
+  `journal_trades`; the venue client is GET-only; the #304 read pin runs first,
+  also with `--replay`. After the inserts the plan is rebuilt and must show 0
+  creates and 0 updates before commit.
+  Before any write the apply also: takes the per-org advisory lock the live
+  demo-mirror cycle takes before it writes (`pg_try_advisory_xact_lock`; refuses
+  `mirror_cycle_busy` if the cycle holds it), and refuses unless `--user` is an
+  active owner or trader of `--org` (`user_not_member`, `user_role_refused`,
+  `user_inactive`); the digest stays unbound to org/user so the approved digest
+  holds. `--plan-file <approved dry-run output>` makes the re-planned lines match
+  that file exactly (`plan_file_mismatch`). The guard strips SQL comments and
+  also refuses `TRUNCATE`, `MERGE`, `ON CONFLICT DO UPDATE`, `DO` blocks and CTE
+  `UPDATE`/`DELETE`. A duplicate-ref race exits 3 with `concurrent_insert`.
 
 ## 10. Tests A7 must add
 
