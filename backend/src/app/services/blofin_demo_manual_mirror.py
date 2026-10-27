@@ -938,23 +938,16 @@ class BloFinDemoManualMirror:
     def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
         """Run the #304 org pin and UID check before any account read.
 
-        This is the paper_internal main-key path only. The check lives here,
+        Runs for every selected key (read-only, paper_internal main key and
+        paper_exchange_demo trading key). The check lives here,
         rather than as a startup refusal of the mirror flag, so it still runs
         when the snapshot cycle skips ``BloFinSyncService.sync`` because the
         stored snapshot is fresh. A missing pin raises before a socket. The
         UID check's only request is ``GET /api/v1/user/query-apikey``.
-        The dedicated read-only key takes the same pin and fails closed.
-        ``paper_exchange_demo`` with the trading key is unchanged.
         """
 
         from app.providers.exchange.blofin_account import PERMISSIONS_ENDPOINT
-        from app.services.blofin_sync_service import (
-            mirror_identity_pin_applies,
-            require_internal_snapshot_mirror_identity,
-        )
-
-        if not mirror_identity_pin_applies(settings):
-            return
+        from app.services.blofin_sync_service import require_internal_snapshot_mirror_identity
 
         def fetch_identity() -> Any:
             return self._client.request("GET", PERMISSIONS_ENDPOINT, params=None, signed=True)

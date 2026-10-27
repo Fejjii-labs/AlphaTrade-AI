@@ -22,7 +22,15 @@ from app.services.blofin_demo_journal_backfill import (
     read_venue,
     stored_rows,
 )
-from tests.test_blofin_demo_manual_mirror import _FIXTURE, NOW, ORG, USER, _apply, _engine
+from tests.test_blofin_demo_manual_mirror import (  # noqa: F401 (autouse pin fixture)
+    _FIXTURE,
+    NOW,
+    ORG,
+    USER,
+    _apply,
+    _engine,
+    _pinned_mirror_account,
+)
 
 SINCE = datetime(2026, 10, 1, tzinfo=UTC)
 FUNDING_BEGIN = NOW - timedelta(days=7)
@@ -224,6 +232,8 @@ class _ChunkClient:
 
     def request(self, method: str, path: str, *, params: Any = None, **_: Any) -> Any:
         self.calls.append((method, path, params))
+        if path == "/api/v1/user/query-apikey":
+            return {"readOnly": 1, "uid": "123"}
         if path == "/api/v1/market/instruments":
             return _FIXTURE["instruments"]
         if path == "/api/v1/account/positions":
@@ -231,9 +241,28 @@ class _ChunkClient:
         return []
 
 
-def test_read_venue_walks_seven_day_chunks_with_get_only() -> None:
+def _pinned_venue_settings(monkeypatch: pytest.MonkeyPatch, expected_uid: str) -> Any:
+    from app.services.blofin_activity_config import BloFinActivitySettings
+    from tests.test_blofin_activity_provider import readonly_settings
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(
+            _env_file=None, organization_id=ORG, expected_uid=expected_uid
+        ),
+    )
+    return readonly_settings().model_copy(update={"blofin_readonly_sync_enabled": False})
+
+
+def test_read_venue_walks_seven_day_chunks_with_get_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _ChunkClient()
-    pages = read_venue(client, since=NOW - timedelta(days=15), now=NOW)
+    settings = _pinned_venue_settings(monkeypatch, "123")
+    pages = read_venue(
+        client, since=NOW - timedelta(days=15), now=NOW, organization_id=ORG, settings=settings
+    )
+    assert client.calls[0][1] == "/api/v1/user/query-apikey"
     assert {method for method, _path, _params in client.calls} == {"GET"}
     paths = [path for _method, path, _params in client.calls]
     assert paths.count("/api/v1/account/positions-history") == 3
@@ -244,3 +273,17 @@ def test_read_venue_walks_seven_day_chunks_with_get_only() -> None:
     replayed = VenuePages.replay(json.loads(json.dumps(captured)))
     assert replayed.window_begin == pages.window_begin
     assert replayed.positions == captured["pages"]["positions"]
+
+
+@pytest.mark.parametrize("expected_uid", ["999", ""])
+def test_read_venue_refuses_before_any_account_read_without_a_matching_uid(
+    monkeypatch: pytest.MonkeyPatch, expected_uid: str
+) -> None:
+    client = _ChunkClient()
+    settings = _pinned_venue_settings(monkeypatch, expected_uid)
+    with pytest.raises(ValueError):
+        read_venue(
+            client, since=NOW - timedelta(days=15), now=NOW, organization_id=ORG, settings=settings
+        )
+    paths = [path for _method, path, _params in client.calls]
+    assert paths in ([], ["/api/v1/user/query-apikey"])
