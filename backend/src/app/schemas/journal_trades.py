@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, computed_field
 
 from app.schemas.common import (
     JournalEvidenceKind,
@@ -28,6 +28,7 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.schemas.manual_demo import ManualDemoAttempt
+from app.services.display_names import display_name
 
 
 class PlannedTarget(StrictModel):
@@ -221,6 +222,12 @@ class JournalTradeRead(ORMModel):
     execution_lifecycle_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def display_name(self) -> str:
+        """Trader-facing name, e.g. "Nested · BTCUSDT · Long · 15m"."""
+        return display_name(self.strategy_label, self.symbol, self.direction, self.timeframe)
 
 
 class PaginatedJournalTrades(StrictModel):
