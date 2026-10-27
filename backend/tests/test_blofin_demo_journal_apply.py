@@ -516,6 +516,8 @@ def test_statement_guard_refuses_hidden_and_indirect_writes(statement: str, verb
         "SELECT * FROM journal_trades WHERE notes = 'please DELETE me'",
         "UPDATE journal_mirror_cycles SET x = 1",
         "INSERT INTO t (id) VALUES (1) ON CONFLICT DO NOTHING",
+        "/* journal_trades */ UPDATE journal_mirror_cycles SET x = 1",
+        "-- DELETE nothing here\nSELECT 1",
     ],
 )
 def test_statement_guard_allows_inserts_and_reads(statement: str) -> None:
@@ -584,3 +586,26 @@ def test_script_maps_a_guard_refusal_and_a_race_to_exit_3(
     monkeypatch.undo()
     with maker() as current:
         assert _journal(current) == []
+
+
+def test_apply_maps_a_duplicate_ref_race_to_a_refusal(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    pages = _pages(_FIXTURE["partial_flat"])
+    digest = _digest(session, pages)
+    real_flush = Session.flush
+
+    def race(self: Session, *args: Any, **kwargs: Any) -> None:
+        if any(isinstance(obj, JournalTrade) for obj in self.new):
+            raise IntegrityError("INSERT", {}, Exception("uq_journal_trades_org_external_ref"))
+        real_flush(self, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "flush", race)
+    with pytest.raises(ApplyRefusedError) as refused:
+        apply_plan(session, pages, organization_id=ORG, user_id=USER, approved_digest=digest)
+    assert refused.value.code == "concurrent_insert"
+    monkeypatch.undo()
+    session.rollback()
+    assert _journal(session) == []
