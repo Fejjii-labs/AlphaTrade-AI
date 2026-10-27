@@ -58,11 +58,14 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="Write the plan here instead of stdout.")
     parser.add_argument("--apply", action="store_true", help="A7b: insert the approved plan.")
     parser.add_argument("--plan-digest", help="sha256:... digest of the approved dry-run.")
+    parser.add_argument(
+        "--plan-file", type=Path, help="Approved dry-run output; re-planned lines must match."
+    )
     args = parser.parse_args()
     if args.apply and not args.plan_digest:
         parser.error("--apply requires --plan-digest from the approved dry-run")
-    if args.plan_digest and not args.apply:
-        parser.error("--plan-digest is only used with --apply")
+    if (args.plan_digest or args.plan_file) and not args.apply:
+        parser.error("--plan-digest and --plan-file are only used with --apply")
 
     settings = get_settings()
     if settings.enable_real_trading or settings.execution_mode is not ExecutionMode.PAPER:
@@ -94,6 +97,15 @@ def main() -> int:
         if args.capture:
             args.capture.write_text(json.dumps(pages.capture(), indent=1, sort_keys=True))
 
+    approved_lines: list[dict[str, object]] | None = None
+    if args.plan_file:
+        parsed = [json.loads(raw) for raw in args.plan_file.read_text().splitlines() if raw.strip()]
+        approved_lines = [item for item in parsed if "summary" not in item]
+        summaries = [item["summary"] for item in parsed if "summary" in item]
+        if len(summaries) != 1 or summaries[0].get("plan_digest") != args.plan_digest:
+            print(json.dumps({"apply": "refused", "code": "plan_file_mismatch"}), file=sys.stderr)
+            return 3
+
     if args.apply:
         with get_session_factory()() as session:
             try:
@@ -103,6 +115,7 @@ def main() -> int:
                     organization_id=args.org,
                     user_id=args.user,
                     approved_digest=args.plan_digest,
+                    approved_lines=approved_lines,
                 )
                 session.commit()
             except ApplyRefusedError as refused:

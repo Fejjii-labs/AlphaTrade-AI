@@ -704,6 +704,11 @@ class ApplyReport:
     rerun_updates: int
 
 
+def _normal(lines: Iterable[dict[str, Any]]) -> list[Any]:
+    """JSON round trip so tuples and lists from a plan file compare equal."""
+    return [json.loads(json.dumps(line, sort_keys=True)) for line in lines]
+
+
 def apply_plan(
     session: Session,
     pages: VenuePages,
@@ -711,6 +716,7 @@ def apply_plan(
     organization_id: uuid.UUID,
     user_id: uuid.UUID,
     approved_digest: str,
+    approved_lines: list[dict[str, Any]] | None = None,
 ) -> ApplyReport:
     """A7b: re-plan, refuse any digest mismatch, then insert the planned creates.
 
@@ -721,6 +727,8 @@ def apply_plan(
     statement guard refuses any DELETE and any UPDATE or DELETE of
     ``journal_trades``. After the inserts the plan is rebuilt in the same
     transaction and must show 0 creates and 0 updates, or nothing is kept.
+    With ``approved_lines`` (the approved dry-run's plan lines) the re-planned
+    lines must also equal them exactly, or the apply refuses ``plan_file_mismatch``.
     The caller commits; on any exception it must roll back.
     """
     if not try_lock_journal_mirror(session, organization_id):
@@ -743,14 +751,18 @@ def apply_plan(
     creates = [line for line in lines if line["action"] == "create"]
     if any(not str(line["ref_after"]).startswith("blofin-demo-history:") for line in creates):
         raise ApplyRefusedError("open_lifetime_create", "open lifetimes are left to the live cycle")
+    if approved_lines is not None and _normal(approved_lines) != _normal(lines):
+        raise ApplyRefusedError(
+            "plan_file_mismatch", "the re-planned lines differ from the approved plan file"
+        )
     meta, _slices, _skipped, lifetimes = _group(pages)
     by_key = {life.key: life for life in lifetimes.values()}
     drafts: list[tuple[MirrorDraft, str]] = []
     for line in creates:
-        life = by_key[line["lifetime"]]
+        life = by_key.get(line["lifetime"])
+        if life is None:
+            raise ApplyRefusedError("plan_lifetime_missing", "a planned create has no lifetime")
         fields, verified, _reasons = _proposed(life, pages, meta)
-        if _diff(None, fields) != line["fields"] or verified is not line["verified"]:
-            raise ApplyRefusedError("plan_drift", "a create no longer matches its planned fields")
         drafts.append((_lifetime_draft(life, fields, line["ref_after"], verified), life.key))
 
     bind = session.connection()

@@ -403,3 +403,84 @@ def test_apply_refuses_while_the_live_cycle_holds_the_org_lock() -> None:
         )
         backfill.commit()
         live.rollback()
+
+
+def test_apply_refuses_a_create_for_an_open_lifetime(session: Session) -> None:
+    pages = _pages(_FIXTURE["partial_open"])
+    rows, annotated = stored_rows(session, organization_id=ORG, user_id=USER)
+    lines, summary = build_plan(pages, rows, annotated=annotated, user_id=USER)
+    creates = [line for line in lines if line["action"] == "create"]
+    assert creates and all(line["ref_after"].startswith("blofin-demo-open:") for line in creates)
+    code = _refused_code(session, pages, org=ORG, user=USER, digest=summary["plan_digest"])
+    assert code == "open_lifetime_create"
+    assert _journal(session) == []
+
+
+def test_apply_refuses_when_the_post_insert_replan_still_writes(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.services.blofin_demo_journal_backfill as module
+
+    pages = _pages(_FIXTURE["partial_flat"])
+    digest = _digest(session, pages)
+    original = module.build_plan
+    calls = {"n": 0}
+
+    def leaky(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        lines, summary = original(*args, **kwargs)
+        if calls["n"] == 2:  # the post-insert re-plan
+            summary = {**summary, "updates": 1}
+        return lines, summary
+
+    monkeypatch.setattr(module, "build_plan", leaky)
+    assert _refused_code(session, pages, org=ORG, user=USER, digest=digest) == "not_idempotent"
+    assert calls["n"] == 2
+    assert _journal(session) == []
+
+
+def test_apply_compares_against_the_approved_plan_lines(session: Session) -> None:
+    pages = _pages(_FIXTURE["partial_flat"])
+    rows, annotated = stored_rows(session, organization_id=ORG, user_id=USER)
+    lines, summary = build_plan(pages, rows, annotated=annotated, user_id=USER)
+    approved = [json.loads(json.dumps(line)) for line in lines]
+    tampered = [{**approved[0], "verified": not approved[0]["verified"]}, *approved[1:]]
+    with pytest.raises(ApplyRefusedError) as refused:
+        apply_plan(
+            session,
+            pages,
+            organization_id=ORG,
+            user_id=USER,
+            approved_digest=summary["plan_digest"],
+            approved_lines=tampered,
+        )
+    assert refused.value.code == "plan_file_mismatch"
+    session.rollback()
+    report = apply_plan(
+        session,
+        pages,
+        organization_id=ORG,
+        user_id=USER,
+        approved_digest=summary["plan_digest"],
+        approved_lines=approved,
+    )
+    assert report.created == 1
+
+
+def test_script_apply_with_plan_file_commits_and_refuses_a_mismatched_file(
+    monkeypatch: pytest.MonkeyPatch, maker: Any, tmp_path: Path, capsys: Any
+) -> None:
+    client = _Client(_paths(_FIXTURE["partial_flat"]))  # type: ignore[arg-type]
+    replay = str(_capture(tmp_path))
+    plan = tmp_path / "plan.jsonl"
+    _run_script(monkeypatch, maker, client, ["--replay", replay, "--out", str(plan)])
+    digest = json.loads(plan.read_text().splitlines()[-1])["summary"]["plan_digest"]
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(plan.read_text().replace(digest, "sha256:" + "1" * 64))
+    capsys.readouterr()
+    argv = ["--replay", replay, "--apply", "--plan-digest", digest, "--plan-file"]
+    assert _run_script(monkeypatch, maker, client, [*argv, str(bad)]) == 3
+    assert '"plan_file_mismatch"' in capsys.readouterr().err
+    assert _run_script(monkeypatch, maker, client, [*argv, str(plan)]) == 0
+    with maker() as current:
+        assert len(_journal(current)) == 1
