@@ -27,7 +27,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataNumber } from "@/components/ui/data-number";
 import { PageHeader } from "@/components/ui/page-header";
-import { ManualDemoTest } from "@/components/settings/ManualDemoTest";
 import type { SafetyPostureDisplay } from "@/components/workflows/safetyPostureDisplay";
 import type { SourceResult } from "@/components/workflows/sourceResult";
 import {
@@ -175,12 +174,6 @@ export function TraderDashboardView({
           <NativeActivity statistics refreshKey={demoRefreshKey} />
         </div>
       ) : null}
-      <details className="rounded-card border border-border-subtle p-4">
-        <summary className="min-h-11 cursor-pointer font-semibold">
-          Manual demo preparation &amp; history
-        </summary>
-        <ManualDemoTest />
-      </details>
       {simulator ? (
         <>
           <Card>

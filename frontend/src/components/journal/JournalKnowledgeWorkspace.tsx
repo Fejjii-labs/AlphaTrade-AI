@@ -8,6 +8,7 @@ import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { LinkTabs } from "@/components/ui/link-tabs";
 import { PageHeader } from "@/components/ui/page-header";
+import { NewDemoOrder } from "./NewDemoOrder";
 import { TradeStats } from "./TradeStats";
 import { cn } from "@/lib/utils";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -346,6 +347,7 @@ function JournalWorkspaceContent() {
                 Knowledge
               </Link>
             ) : null}
+            {!knowledge ? <NewDemoOrder /> : null}
             <Link
               href="/agent"
               className={cn(
