@@ -1191,6 +1191,25 @@ export interface AutonomousTradingSettingsView {
   autonomy_mode?: string;
 }
 
+export type BotActionOutcome = "entered" | "blocked" | "rejected";
+
+export interface BotAction {
+  at: string;
+  outcome: BotActionOutcome;
+  symbol?: string | null;
+  direction?: string | null;
+  reason?: string | null;
+  journal_trade_id?: string | null;
+}
+
+/** GET /autonomous/activity: the count the bot cap checks, and audited loop actions. */
+export interface AutonomousActivityView {
+  day: string;
+  timezone: string;
+  trades_today: number | null;
+  recent_actions: BotAction[];
+}
+
 export interface KillSwitchStatus {
   organization_id: string;
   active: boolean;

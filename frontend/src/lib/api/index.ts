@@ -112,6 +112,7 @@ import type {
   PositionSizingResult,
   HumanVsSystemComparison,
   UserStrategy,
+  AutonomousActivityView,
   AutonomousTradingSettingsView,
   UserRiskSettings,
   UserRiskSettingsUpdate,
@@ -1318,6 +1319,8 @@ export const api = {
   autonomous: {
     settings: () =>
       apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", { auth: true }),
+    activity: () =>
+      apiFetch<AutonomousActivityView>("/autonomous/activity", { auth: true }),
     updateSettings: (body: Record<string, unknown>) =>
       apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", {
         method: "PATCH",
