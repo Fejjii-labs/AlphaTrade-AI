@@ -217,6 +217,8 @@ def test_dashboard_uses_existing_execution_demo_account_sync(demo_client, monkey
     settings.blofin_api_secret = "fixture-secret"
     settings.blofin_api_passphrase = "fixture-pass"
     seen = []
+    # The trading-key API path is pinned too (C2); without a pin it refuses.
+    pin_activity(monkeypatch)
     monkeypatch.setattr(
         "app.services.blofin_sync_service.get_demo_account_provider",
         lambda _: get_readonly_account_provider(readonly_settings(), transport=transport(seen)),
@@ -548,3 +550,42 @@ def test_public_bulk_metadata_is_unsigned_and_readonly_transport_stays_bounded()
     for options in ({"signed": True}, {"params": {"instType": "SWAP"}}, {"body": {}}):
         with pytest.raises(ExchangeDemoInactiveError):
             safe_client.request("GET", "/api/v1/market/instruments", **options)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(lambda: BloFinActivitySettings(_env_file=None), id="no_pin"),
+        pytest.param(
+            lambda: BloFinActivitySettings(_env_file=None, organization_id=ORG_A, expected_uid=""),
+            id="uid_unset",
+        ),
+        pytest.param(
+            lambda: BloFinActivitySettings(_env_file=None, expected_uid="dashboard-native-uid"),
+            id="org_unset",
+        ),
+    ],
+)
+def test_dashboard_refuses_without_the_activity_pin(demo_client, monkeypatch, config):
+    """C4: wire() always pins, so prove the dashboard refuses when no pin is configured."""
+    client, factory, settings = demo_client
+    owner = _login(client, "at037-a@test.example")
+    configure(settings)
+    seen = []
+    wire(monkeypatch, seen)
+    ok = client.post("/dashboard/demo-account/refresh", headers=owner)
+    assert ok.status_code == 200 and ok.json()["status"] == "ok"
+    seen.clear()
+    pin = config()
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: pin)
+    saved = client.get("/dashboard/demo-account", headers=owner).json()
+    assert saved["status"] != "ok"
+    assert saved["balances"] == [] and saved["positions"] == []
+    refused = client.post("/dashboard/demo-account/refresh", headers=owner).json()
+    assert refused["status"] != "ok"
+    assert refused["balances"] == [] and refused["positions"] == []
+    assert refused["total_equity_usd"] is None
+    assert seen == []  # No account GET without the pin.
+    with factory() as session:
+        stored = session.scalars(select(BloFinDemoSyncSnapshot)).all()
+        assert [row.health_status for row in stored].count("ok") == 1

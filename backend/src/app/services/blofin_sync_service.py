@@ -91,14 +91,17 @@ def _demo_key_read(settings: Settings) -> bool:
 
 
 def _account_pin_applies(settings: Settings) -> bool:
-    """True when this sync key must match the pinned native demo account.
+    """Always True: every snapshot sync key must match the pinned demo account.
 
-    The dedicated read-only key and the main demo-key read both do.
-    The execution-provider path, used when a partial or unused read-only set
-    is present, keeps its previous gate.
+    This covers the dedicated read-only key, the main demo-key read, and the
+    API path that falls back to the trading-capable demo key when the
+    read-only set is partial or its sync flag is off. That last path used to
+    read balances and positions with no UID pin. A missing org or UID pin
+    refuses instead of falling open.
     """
 
-    return settings.blofin_read_sync_uses_dedicated_credentials or _demo_key_read(settings)
+    del settings
+    return True
 
 
 def _log_snapshot_identity(result: str) -> None:
