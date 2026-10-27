@@ -53,7 +53,9 @@ for (const width of [1280, 390]) {
     const explanation = page.getByRole("region", { name: "Agent explanation" });
     await expect(explanation).toContainText("Entry verified: 0.1 contracts");
     await expect(explanation).not.toContainText("Recorded facts");
-    await expect(explanation.locator("details")).not.toHaveAttribute("open");
+    // Sources disclosure and its nested Technical details both start collapsed.
+    await expect(explanation.locator("details")).toHaveCount(2);
+    await expect(explanation.locator("details[open]")).toHaveCount(0);
     await expect(explanation.getByRole("link", { name: "Open Journal detail" })).toHaveAttribute("href", `/journal?trade_id=${tradeId}`);
     await expect(page.getByTestId("manual-demo-detail")).not.toContainText("0E-8");
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
