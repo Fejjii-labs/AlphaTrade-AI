@@ -78,7 +78,7 @@ it("shows Trades and Stats as URL tabs, and Stats skips the trade list reads", a
   const stats = await screen.findByTestId("trade-stats");
   expect(screen.getByRole("link", { name: "Stats" })).toHaveAttribute("aria-current", "page");
   expect(stats).toHaveTextContent("Win rate75.0%");
-  expect(stats).toHaveTextContent("Net P&L+42.50");
+  expect(stats).toHaveTextContent("Net P&L (paper/demo)+42.50");
   expect(stats).toHaveTextContent("Profit factor2.50");
   expect(stats).toHaveTextContent("Avg R0.80");
   expect(within(screen.getByRole("region", { name: "By strategy" })).getByText("Nested BTC")).toBeInTheDocument();

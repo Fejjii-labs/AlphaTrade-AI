@@ -83,7 +83,7 @@ export function TradeStats() {
         <Stat label="Trades" value={String(m.trade_count)} />
         <Stat label="Win rate" value={m.win_rate == null ? null : formatPercent(m.win_rate)} />
         <Stat
-          label="Net P&L"
+          label="Net P&L (paper/demo)"
           value={
             signedMoney(m.net_pnl_total) == null ? null : (
               <span className={pnlClass(m.net_pnl_total)}>{signedMoney(m.net_pnl_total)}</span>
