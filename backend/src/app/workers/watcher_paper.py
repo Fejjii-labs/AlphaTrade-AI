@@ -710,6 +710,7 @@ class WatcherPaperRuntime:
             logger.error(
                 "watcher_paper_activation_gate_error",
                 worker_id=self._worker_id,
+                exc_info=True,
             )
             reason = "activation_gate_error"
         else:
@@ -1162,7 +1163,8 @@ class WatcherPaperRuntime:
         if outcome.reason_code != "canonical_contract_invalid_contract":
             return False
         return any(
-            item.reason is DiagnosticReason.FORMING_CANDLE for item in outcome.evidence_diagnostics
+            item.reason_code is DiagnosticReason.FORMING_CANDLE
+            for item in outcome.evidence_diagnostics
         )
 
     def _evaluation_observer(

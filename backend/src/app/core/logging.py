@@ -47,19 +47,45 @@ class RedactingFormatter(logging.Formatter):
         return redact_text(super().formatException(ei))
 
 
+_EXCEPTION_MESSAGE_CAP = 500
+_TRACEBACK_CAP = 32 * 1024
+_TRACEBACK_TRUNCATED = "...[traceback truncated]...\n"
+
+
+def _cap_traceback(text: str) -> str:
+    """Cap an already-redacted traceback, keeping its tail (the raised exception)."""
+    if len(text) <= _TRACEBACK_CAP:
+        return text
+    return _TRACEBACK_TRUNCATED + text[-(_TRACEBACK_CAP - len(_TRACEBACK_TRUNCATED)) :]
+
+
 def _redact_sensitive(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
-    """structlog processor. Exception text is redacted before it is rendered."""
+    """structlog processor. Exception text is redacted before it is rendered.
+
+    ``exc_info=True`` (and ``logger.exception``) means "the exception being
+    handled now". It is resolved with :func:`sys.exc_info` here; rendering the
+    bare flag produced ``"exception": "True"`` with no type or traceback.
+    """
+    exc_info = event_dict.get("exc_info")
     event: dict[str, Any] = redact_for_log(dict(event_dict))
-    exc_info = event.get("exc_info")
     if not exc_info:
         return event
-    if isinstance(exc_info, BaseException):
-        text = "".join(traceback.format_exception(exc_info))
-    elif isinstance(exc_info, tuple) and exc_info[0] is not None:
-        text = "".join(traceback.format_exception(*exc_info))
+    error: BaseException | None = None
+    if exc_info is True:
+        error = sys.exc_info()[1]
+    elif isinstance(exc_info, BaseException):
+        error = exc_info
+    elif isinstance(exc_info, tuple) and len(exc_info) == 3:
+        error = exc_info[1] if isinstance(exc_info[1], BaseException) else None
+    if error is not None:
+        text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        event["exception_type"] = type(error).__qualname__
+        event["exception_message"] = redact_text(str(error))[:_EXCEPTION_MESSAGE_CAP]
+    elif exc_info is True:
+        text = "exc_info=True logged outside an active exception"
     else:
         text = str(exc_info)
-    event["exception"] = redact_text(text)
+    event["exception"] = _cap_traceback(redact_text(text))
     event.pop("exc_info", None)
     return event
 
@@ -103,8 +129,9 @@ def configure_logging(*, log_level: str = "INFO", json_logs: bool = True) -> Non
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        _redact_sensitive,
+        # Render stack_info first so its text goes through redaction too.
         structlog.processors.StackInfoRenderer(),
+        _redact_sensitive,
     ]
 
     renderer = (

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+import structlog
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -356,6 +358,13 @@ def _message(*, update_id: int, chat_id: str, text: str) -> ParsedTelegramUpdate
         message_id=f"msg-{update_id}",
         text=text,
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_structlog() -> Iterator[None]:
+    """``configure_logging`` caches loggers; reset so later files' ``capture_logs`` work."""
+    yield
+    structlog.reset_defaults()
 
 
 def test_telegram_token_cannot_appear_in_logs_exceptions_or_health(
