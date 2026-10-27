@@ -301,3 +301,16 @@ def test_history_uses_dedicated_read_key_in_active_demo_without_changing_existin
     assert provider.client._api_key == "fixture-key"
     with pytest.raises(ExchangeDemoInactiveError):
         get_readonly_client(settings)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    ["DEMO-USER-1", "Demo-User-1", " demo-user-1", "demo-user-1 ", "demo-user-1\n"],
+)
+def test_identity_uid_comparison_is_exact_for_case_and_whitespace(reported):
+    venue = HistoryVenue()
+    venue.identity = {**venue.identity, "uid": reported}
+    with pytest.raises(ActivityIdentityError):
+        venue.provider().verify_identity("demo-user-1", lambda: None)
+    venue.identity = {**venue.identity, "uid": "demo-user-1"}
+    assert venue.provider().verify_identity("demo-user-1", lambda: None) == "demo-user-1"
