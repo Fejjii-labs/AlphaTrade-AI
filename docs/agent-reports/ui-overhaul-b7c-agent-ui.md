@@ -33,9 +33,9 @@ Branch from `main`; independent of B7a/B7b. Scope: frontend only.
 
 ## Decisions taken without asking
 
-- **"Stored evidence" is not removed here.** On current `main` it lives in
-  `AgentMessageContent.tsx` (via `TechnicalDetails`), which #350 owns. Removing
-  it there would collide with #350, so it is left for #350 or a follow-up.
+- **"Stored evidence" is not changed here.** #350 (merged) already moved the
+  raw evidence in `AgentMessageContent.tsx` behind a collapsed "Technical
+  details" disclosure. This slice keeps #350's files untouched, as instructed.
 - **Button names kept for tests and e2e.** `AgentWorkspace.test.tsx` (#350's,
   unchanged) and `e2e/strategy-conversation.spec.ts` find the buttons by name
   and the draft by `agent-strategy-draft`; both still match.
@@ -54,7 +54,8 @@ Branch from `main`; independent of B7a/B7b. Scope: frontend only.
 - [x] Header copy cut.
 - [x] `AgentWorkspace` tests pass unchanged.
 - [x] Screenshots (below).
-- [ ] "Stored evidence" removal: out of scope here (#350's file), see above.
+- [x] "Stored evidence": handled by #350 (collapsed "Technical details"), not
+      changed here.
 
 ## Test evidence
 
@@ -86,4 +87,3 @@ real strategy-draft proposal created through "Review strategy draft".
 - The proposal summary itself ("strategy.create proposal. Ready for explicit
   review.") is written by the backend. A plain summary needs a backend change;
   left for C1a-style backend polish.
-- "Stored evidence" in agent messages: #350's file, see above.
