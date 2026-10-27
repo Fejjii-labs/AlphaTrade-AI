@@ -17,7 +17,9 @@ Scope: frontend only. No backend, API schema, workflow or lockfile changes.
     contains `TelegramPolicyForm`.
   - `/settings/watcher`: watcher status, watchlist slots, coin strategies, worker
     runtime readout.
-- **Account (`/settings`).** The page is flat now: Email, Workspace, Team →,
+- **Account (`/settings`).** The h1 stays "Settings", matching the sidebar label
+  (`e2e/simplified-ui-smoke.spec.ts` checks this for every destination); the sub-nav
+  marks Account. The page is flat now: Email, Workspace, Team →,
   Billing & usage →, email verification, paper account, and a closed "System"
   disclosure. The link row (Exchange connections / Team / Billing / Diagnostics /
   Help) is gone. Each of those is a sub-nav section or a row with an Open link.
@@ -70,6 +72,8 @@ From `frontend/`:
 - `npx playwright test e2e/notification-settings-v2.spec.ts e2e/auth-boundary.spec.ts --project=chromium`
   → 9 passed (mock-mode backend + `next dev`).
 - `npx playwright test e2e/workspace-redesign.spec.ts --project=chromium` → 2 passed.
+- `npx playwright test e2e/simplified-ui-smoke.spec.ts --project=chromium` → 1 passed
+  (after the h1 fix in the second commit).
 - `npx eslint` on the touched files → clean. `npx tsc --noEmit` → clean.
 - Backend: not touched (`Full-Backend: false`).
 

@@ -220,7 +220,8 @@ afterEach(() => {
 
 it("shows the Account section flat, with Team and Billing reachable and no link row", async () => {
   render(<SettingsPage />);
-  expect(screen.getByRole("heading", { name: "Account" })).toBeInTheDocument();
+  // The landing h1 matches the sidebar label; the sub-nav marks Account.
+  expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
   expect(screen.getByText("owner@example.com")).toBeVisible();
   expect(screen.getByText("Alpha Org")).toBeVisible();
   expect(screen.getByRole("link", { name: "Team" })).toHaveAttribute("href", "/settings/team");
