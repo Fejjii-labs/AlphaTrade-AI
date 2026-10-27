@@ -94,6 +94,10 @@ class FetchedBars:
     source_name: str
     candle_venue: str = ""
     switched_from: str = ""
+    # True when evaluation fell inside the post-close settlement guard, so the
+    # venue refused the page. The read is deferred to the next cycle; it is
+    # not a gap in the series.
+    settling: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -920,6 +924,14 @@ def run_paper_exit_monitor(
                 "paper_exit_monitor_candle_failed",
                 journal_trade_id=str(trade.journal_trade_id),
                 error=redact_text(str(exc))[:200],
+            )
+            continue
+        if fetched.settling:
+            logger.info(
+                "paper_exit_monitor_candles_settling",
+                journal_trade_id=str(trade.journal_trade_id),
+                symbol=trade.symbol,
+                timeframe=trade.timeframe.value,
             )
             continue
         block = "leading_gap" if not fetched.covers_entry else None

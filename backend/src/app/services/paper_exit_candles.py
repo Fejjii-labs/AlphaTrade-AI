@@ -13,7 +13,7 @@ close, because an earlier stop may sit outside the fetched bars.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import structlog
@@ -49,6 +49,7 @@ _FALLBACK_PAGES = (200, 50, 1)
 # ``FIRST_SLICE_OHLCV_GRACE_SECONDS`` (0), so its post-close guard is not
 # longer than 5 seconds and this clearance stays one value for every source.
 _PAGE_CURSOR_CLEARANCE = timedelta(seconds=5)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 logger = structlog.get_logger(__name__)
 
@@ -260,6 +261,21 @@ def fetch_closed_bars_since(
         evaluated_at=evaluated_at,
         allow_switch=True,
     )
+    if (
+        first.switch_to is None
+        and not first.bars
+        and not first.refused
+        and within_settlement_guard(evaluated_at, interval)
+    ):
+        # The venue refuses every page size inside its post-close guard. That
+        # empty read is not a missing stretch, so it must not surface as a
+        # leading gap. The next cycle reads the series again.
+        return FetchedBars(
+            bars=(),
+            covers_entry=False,
+            source_name=_source_name(source),
+            settling=True,
+        )
     if first.switch_to is None:
         return FetchedBars(
             bars=first.bars,
@@ -294,6 +310,15 @@ def fetch_closed_bars_since(
         candle_venue=second.candle_venue or rebound_identity.venue.value,
         switched_from=identity.venue.value,
     )
+
+
+def within_settlement_guard(evaluated_at: datetime, interval: timedelta) -> bool:
+    """True inside ``_PAGE_CURSOR_CLEARANCE`` after an epoch-aligned bar close."""
+
+    if evaluated_at.tzinfo is None or interval.total_seconds() <= 0:
+        return False
+    since_close = (evaluated_at - _EPOCH) % interval
+    return since_close < _PAGE_CURSOR_CLEARANCE
 
 
 def _covers(bars: tuple[ExitBar, ...], entry_time: datetime) -> bool:
