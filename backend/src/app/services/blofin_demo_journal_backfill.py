@@ -24,8 +24,19 @@ from sqlalchemy import event, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import JournalTrade, JournalTradeAttachment, JournalTradeObservation
-from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeResult
+from app.db.models import (
+    JournalTrade,
+    JournalTradeAttachment,
+    JournalTradeObservation,
+    Membership,
+    User,
+)
+from app.schemas.common import (
+    JournalTradeSource,
+    JournalTradeStatus,
+    MembershipRole,
+    TradeResult,
+)
 from app.services.blofin_demo_manual_mirror import (
     _FILLS,
     _FUNDING,
@@ -658,6 +669,31 @@ def _lifetime_draft(
     )
 
 
+_APPLY_ROLES = frozenset({MembershipRole.OWNER, MembershipRole.TRADER})
+
+
+def require_apply_member(
+    session: Session, *, organization_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Refuse unless ``user_id`` is an active owner or trader of ``organization_id``.
+
+    The plan digest is not bound to the org or user (binding it would change
+    the approved digest), so the apply checks the pair itself before any write.
+    """
+    found = session.execute(
+        select(Membership.role, User.is_active)
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.organization_id == organization_id, Membership.user_id == user_id)
+    ).first()
+    if found is None:
+        raise ApplyRefusedError("user_not_member", "--user is not a member of --org")
+    role, active = found
+    if not active:
+        raise ApplyRefusedError("user_inactive", "--user is not an active user")
+    if role not in _APPLY_ROLES:
+        raise ApplyRefusedError("user_role_refused", "--user must be an owner or trader of --org")
+
+
 @dataclass(frozen=True, slots=True)
 class ApplyReport:
     plan_digest: str
@@ -686,6 +722,7 @@ def apply_plan(
     transaction and must show 0 creates and 0 updates, or nothing is kept.
     The caller commits; on any exception it must roll back.
     """
+    require_apply_member(session, organization_id=organization_id, user_id=user_id)
     rows, annotated = stored_rows(session, organization_id=organization_id, user_id=user_id)
     lines, summary = build_plan(pages, rows, annotated=annotated, user_id=user_id)
     digest = summary["plan_digest"]

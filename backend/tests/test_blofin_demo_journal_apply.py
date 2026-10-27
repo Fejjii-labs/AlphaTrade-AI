@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,8 +14,8 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
-from app.db.models import JournalTrade, Organization, User
-from app.schemas.common import JournalTradeStatus
+from app.db.models import JournalTrade, Membership, Organization, User
+from app.schemas.common import JournalTradeStatus, MembershipRole
 from app.services.blofin_demo_journal_backfill import (
     ApplyRefusedError,
     GetOnlyClient,
@@ -42,6 +43,8 @@ def maker() -> Any:
     with factory() as current:
         current.add(Organization(id=ORG, name="Apply Org"))
         current.add(User(id=USER, email="apply@test.example", hashed_password="not-a-hash"))
+        current.flush()
+        current.add(Membership(user_id=USER, organization_id=ORG, role=MembershipRole.OWNER))
         current.commit()
     return factory
 
@@ -278,3 +281,61 @@ def test_script_apply_commits_then_rerun_shows_zero_creates(
     assert (summary["creates"], summary["updates"]) == (0, 0)
     with maker() as current:
         assert len(_journal(current)) == 1
+
+
+OTHER_ORG = uuid.UUID("00000000-0000-4000-8000-0000000000b2")
+OTHER_USER = uuid.UUID("00000000-0000-4000-8000-0000000000b3")
+
+
+def _refused_code(session: Session, pages: Any, *, org: Any, user: Any, digest: str) -> str:
+    with pytest.raises(ApplyRefusedError) as refused:
+        apply_plan(session, pages, organization_id=org, user_id=user, approved_digest=digest)
+    session.rollback()
+    return refused.value.code
+
+
+@pytest.mark.parametrize(
+    ("role", "active", "code"),
+    [
+        (None, True, "user_not_member"),
+        (MembershipRole.VIEWER, True, "user_role_refused"),
+        (MembershipRole.TRADER, False, "user_inactive"),
+    ],
+)
+def test_apply_refuses_a_wrong_user_before_any_write(
+    session: Session, role: Any, active: bool, code: str
+) -> None:
+    pages = _pages(_FIXTURE["partial_flat"])
+    digest = _digest(session, pages)
+    session.add(User(id=OTHER_USER, email="o@test.example", hashed_password="x", is_active=active))
+    session.flush()
+    if role is not None:
+        session.add(Membership(user_id=OTHER_USER, organization_id=ORG, role=role))
+    session.commit()
+    # Same pages give the same digest for any user, so only the member check refuses.
+    assert _refused_code(session, pages, org=ORG, user=OTHER_USER, digest=digest) == code
+    assert _journal(session) == []
+
+
+def test_apply_refuses_the_right_user_in_a_wrong_org(session: Session) -> None:
+    pages = _pages(_FIXTURE["partial_flat"])
+    digest = _digest(session, pages)
+    session.add(Organization(id=OTHER_ORG, name="Other Org"))
+    session.commit()
+    code = _refused_code(session, pages, org=OTHER_ORG, user=USER, digest=digest)
+    assert code == "user_not_member"
+    assert _journal(session) == []
+
+
+def test_apply_accepts_a_trader_member(session: Session) -> None:
+    pages = _pages(_FIXTURE["partial_flat"])
+    session.add(User(id=OTHER_USER, email="t@test.example", hashed_password="x"))
+    session.flush()
+    session.add(Membership(user_id=OTHER_USER, organization_id=ORG, role=MembershipRole.TRADER))
+    session.commit()
+    rows, annotated = stored_rows(session, organization_id=ORG, user_id=OTHER_USER)
+    digest = build_plan(pages, rows, annotated=annotated, user_id=OTHER_USER)[1]["plan_digest"]
+    report = apply_plan(
+        session, pages, organization_id=ORG, user_id=OTHER_USER, approved_digest=digest
+    )
+    assert report.created == 1
