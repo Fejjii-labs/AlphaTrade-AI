@@ -9,14 +9,15 @@ const SHOTS =
   process.env.SIMPLIFIED_UI_SHOTS ?? "/opt/cursor/artifacts/screenshots";
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 const DESTINATIONS = [
-  { route: "/", heading: "Dashboard", file: "dashboard" },
-  { route: "/agent", heading: "Agent", file: "agent" },
-  { route: "/journal", heading: "Trades", file: "journal" },
-  { route: "/strategies", heading: "Strategies", file: "strategies" },
-  { route: "/settings", heading: "Settings", file: "settings" },
+  { route: "/", heading: "Dashboard", file: "dashboard", more: false },
+  { route: "/autonomous", heading: "Autonomous", file: "autonomous", more: true },
+  { route: "/strategies", heading: "Strategies", file: "strategies", more: false },
+  { route: "/journal", heading: "Trades", file: "journal", more: false },
+  { route: "/agent", heading: "Agent", file: "agent", more: false },
+  { route: "/knowledge", heading: "Knowledge", file: "knowledge", more: true },
+  { route: "/settings", heading: "Settings", file: "settings", more: true },
 ] as const;
 const RETAINED = [
-  "/knowledge",
   "/strategy-lab",
   "/lessons",
   "/settings/advanced",
@@ -63,7 +64,8 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
         viewport.width >= 1024
           ? page.getByRole("navigation", { name: "Primary destinations" })
           : page.getByTestId("mobile-bottom-navigation");
-      await expect(nav.getByRole("link")).toHaveCount(5);
+      // Seven sidebar links; four phone tabs plus More.
+      await expect(nav.getByRole("link")).toHaveCount(viewport.width >= 1024 ? 7 : 4);
       await page.screenshot({
         path: path.join(SHOTS, `${viewport.label}-${destination.file}.png`),
         fullPage: true,
@@ -79,7 +81,9 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
       if (portal instanceof HTMLElement) portal.style.pointerEvents = "none";
     });
     for (const destination of DESTINATIONS) {
-      await nav
+      const phoneMore = viewport.width < 1024 && destination.more;
+      if (phoneMore) await nav.getByRole("button", { name: "More" }).click();
+      await (phoneMore ? page.getByRole("dialog", { name: "More" }) : nav)
         .getByRole("link", { name: destination.heading, exact: true })
         .click();
       await expect(

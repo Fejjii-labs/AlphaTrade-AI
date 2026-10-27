@@ -165,7 +165,8 @@ for (const viewport of [
     ).toBeVisible();
     const nav = page.getByTestId("mobile-bottom-navigation");
     await expect(nav).toBeVisible();
-    await expect(nav.getByRole("link")).toHaveCount(5);
+    await expect(nav.getByRole("link")).toHaveCount(4);
+    await expect(nav.getByRole("button", { name: "More" })).toHaveAttribute("data-active", "true");
     await form
       .getByLabel("Watched symbols", { exact: true })
       .selectOption("none");

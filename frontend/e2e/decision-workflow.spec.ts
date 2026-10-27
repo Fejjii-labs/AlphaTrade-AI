@@ -186,8 +186,8 @@ test.describe("Canonical paper decision workflow", () => {
     await expect(nav.getByRole("link", { name: "Agent" })).toHaveAttribute("href", "/agent");
     await expect(nav.getByRole("link", { name: "Strategies" })).toHaveAttribute("href", "/strategies");
     await expect(nav.getByRole("link", { name: "Trades" })).toHaveAttribute("href", "/journal");
-    await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-    await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+    // Settings sits behind More on the phone bar; More marks the current section.
+    await expect(nav.getByRole("button", { name: "More" })).toHaveAttribute("data-active", "true");
     await expect(page.getByRole("banner").getByTestId("kill-switch-button")).toBeVisible();
     await expect(
       page.getByTestId("decision-safety-rail").getByTestId("kill-switch-button"),

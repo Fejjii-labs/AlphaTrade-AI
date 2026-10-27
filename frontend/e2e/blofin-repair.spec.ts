@@ -45,8 +45,13 @@ for (const width of [1280, 390]) {
     await page.goto(`/execution/manual-demo/${command}`);
     await expect(page.getByText("0.1 requested contracts = 0.0001 BTC")).toBeVisible();
     const activeNav = page.locator('a[data-destination][aria-current="page"]:visible');
-    await expect(activeNav).toHaveCount(1);
-    await expect(activeNav).toHaveAttribute("data-destination", "settings");
+    if (width >= 1024) {
+      await expect(activeNav).toHaveCount(1);
+      await expect(activeNav).toHaveAttribute("data-destination", "settings");
+    } else {
+      // Settings sits behind More on the phone bar; More marks the current section.
+      await expect(page.getByTestId("mobile-more-button")).toHaveAttribute("data-active", "true");
+    }
     await expect(page.getByText("Stored identities and history").locator("..")).not.toHaveAttribute("open");
     await expect(page.getByRole("button", { name: "Resolve verified lifecycle" })).toHaveCount(0);
     await page.getByRole("button", { name: "Ask Agent about this exact attempt" }).click();

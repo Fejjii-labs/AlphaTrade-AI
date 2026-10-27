@@ -40,7 +40,7 @@ for (const viewport of [
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${name} fits`).toBe(true);
       const nav = viewport.width >= 1024 ? page.getByRole("navigation", { name: "Primary destinations" }) : page.getByTestId("mobile-bottom-navigation");
       await expect(nav).toBeVisible();
-      await expect(nav.getByRole("link")).toHaveCount(5);
+      await expect(nav.getByRole("link")).toHaveCount(viewport.width >= 1024 ? 7 : 4);
     }
     expect(writes).toEqual([]);
     expect(failures).toEqual([]);
