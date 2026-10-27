@@ -23,6 +23,7 @@ from app.market_contracts.errors import (
     EvidenceSourceSwitchRequiredError,
     FormingCandleError,
     RegionalProviderFailureError,
+    SettlementGuardError,
 )
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
@@ -2155,3 +2156,288 @@ def test_naive_database_now_is_not_a_trusted_clock() -> None:
             return datetime(2026, 10, 18, 12, 0)
 
     assert read_database_now(Session()) is None  # type: ignore[arg-type]
+
+
+class _SettlementGuardSource:
+    """Refuses every page inside the 5 second post-close guard, like USD-M REST."""
+
+    name = "test-perpetual"
+
+    def __init__(self, bars: list[OhlcvBar], market: object) -> None:
+        self.bars = bars
+        self.market = market
+        self.calls = 0
+
+    def fetch_closed_ohlcv(
+        self,
+        *,
+        identity: object,
+        instrument: object,
+        timeframe: Timeframe,
+        min_final_bars: int,
+        evaluated_at: datetime,
+    ) -> object:
+        self.calls += 1
+        if any(
+            timedelta(0) <= evaluated_at - bar.interval_end < timedelta(seconds=5)
+            for bar in self.bars
+        ):
+            raise SettlementGuardError("inside settlement guard")
+        eligible = [bar for bar in self.bars if bar.interval_end <= evaluated_at]
+        selected = eligible[-min_final_bars:]
+        if not selected:
+            raise FormingCandleError("no closed bars")
+        return require_closed_series(
+            selected,
+            identity=self.market,
+            timeframe=timeframe,
+            evaluated_at=evaluated_at,
+            min_bars=min(min_final_bars, len(selected)),
+        )
+
+
+def test_settlement_guard_read_is_deferred_not_a_leading_gap() -> None:
+    # Staging 2026-10-27: entry 07:15Z, evaluated 07:45:03Z, 3s after a close.
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 3, tzinfo=UTC)
+    market = identity()
+    bars = [
+        closed_bar(
+            open_time=entry + timedelta(minutes=15 * index), index=index, evaluated_at=evaluated
+        )
+        for index in range(2)
+    ]
+    source = _SettlementGuardSource(bars, market)
+    fetched = fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=entry,
+        evaluated_at=evaluated,
+    )
+    assert fetched.settling is True
+    assert fetched.bars == ()
+
+    later = evaluated + timedelta(seconds=16)
+    recovered = fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=entry,
+        evaluated_at=later,
+    )
+    assert recovered.settling is False
+    assert recovered.covers_entry is True
+    assert recovered.bars[0].interval_start == entry
+
+
+def test_empty_read_outside_the_guard_still_refuses_as_leading_gap() -> None:
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 30, tzinfo=UTC)
+    market = identity()
+    source = _SettlementGuardSource([], market)
+    fetched = fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=entry,
+        evaluated_at=evaluated,
+    )
+    assert fetched.settling is False
+    assert fetched.covers_entry is False
+
+
+def test_monitor_defers_a_settling_read_without_degrading() -> None:
+    start = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    with capture_logs() as logs:
+        report = run_paper_exit_monitor(
+            enabled=True,
+            dry_run=False,
+            trades=(_trade(entry_time=start),),
+            candles=lambda _trade: FetchedBars(
+                bars=(),
+                covers_entry=False,
+                source_name="binance-usdm",
+                settling=True,
+            ),
+            closer=RecordingCloser(),
+            evaluated_at=datetime(2026, 10, 27, 7, 45, 3, tzinfo=UTC),
+        )
+    assert report.status == "settling"
+    assert report.settling == 1
+    assert report.refused == 0
+    assert report.error == ""
+    events = [entry["event"] for entry in logs]
+    assert "paper_exit_monitor_candles_settling" in events
+    assert "paper_exit_monitor_candles_unusable" not in events
+
+
+def _guard_fetch(source: object, evaluated: datetime, entry: datetime) -> FetchedBars:
+    market = identity()
+    return fetch_closed_bars_since(
+        source,  # type: ignore[arg-type]
+        identity=market,
+        instrument=market.instrument,
+        timeframe=Timeframe.M15,
+        entry_time=entry,
+        evaluated_at=evaluated,
+    )
+
+
+class _AlwaysRaises:
+    name = "test-perpetual"
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def fetch_closed_ohlcv(self, **_kwargs: object) -> object:
+        raise self.error
+
+
+def test_settlement_window_constant_is_the_venue_guard() -> None:
+    from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
+    from app.services import paper_exit_candles
+
+    assert paper_exit_candles._PAGE_CURSOR_CLEARANCE is BINANCE_REST_SETTLEMENT_GRACE
+
+
+@pytest.mark.parametrize(
+    ("offset", "inside"),
+    [
+        (timedelta(0), True),
+        (timedelta(seconds=4, microseconds=999_000), True),
+        (timedelta(seconds=5), False),
+    ],
+)
+def test_settlement_window_boundaries(offset: timedelta, inside: bool) -> None:
+    from app.services.paper_exit_candles import within_settlement_guard
+
+    close = datetime(2026, 10, 27, 7, 45, tzinfo=UTC)
+    assert within_settlement_guard(close + offset, timedelta(minutes=15)) is inside
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    fetched = _guard_fetch(_AlwaysRaises(SettlementGuardError("guard")), close + offset, entry)
+    assert fetched.settling is inside
+
+
+def test_other_market_error_inside_the_window_is_not_settling() -> None:
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 2, tzinfo=UTC)
+    fetched = _guard_fetch(_AlwaysRaises(FormingCandleError("outage")), evaluated, entry)
+    assert fetched.settling is False
+    assert fetched.covers_entry is False
+
+
+def test_refused_page_inside_the_window_is_not_settling() -> None:
+    from app.market_contracts.errors import EvidenceSourceSwitchRequiredError
+
+    entry = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    evaluated = datetime(2026, 10, 27, 7, 45, 2, tzinfo=UTC)
+    # A switch whose instrument is unusable refuses the page.
+    error = EvidenceSourceSwitchRequiredError("switch", instrument=None)
+    fetched = _guard_fetch(_AlwaysRaises(error), evaluated, entry)
+    assert fetched.settling is False
+    assert fetched.covers_entry is False
+
+
+def _settling_bars(_trade: OpenInternalPaperTrade) -> FetchedBars:
+    return FetchedBars(bars=(), covers_entry=False, source_name="binance-usdm", settling=True)
+
+
+def _gap_bars(_trade: OpenInternalPaperTrade) -> FetchedBars:
+    return FetchedBars(bars=(), covers_entry=False, source_name="binance-usdm")
+
+
+def test_consecutive_settling_escalates_to_refused() -> None:
+    from app.services.paper_exit_monitor import MAX_SETTLING_DEFERRALS
+
+    start = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    moment = datetime(2026, 10, 27, 7, 45, 3, tzinfo=UTC)
+    streaks: dict[UUID, int] = {}
+    statuses = []
+    for _ in range(MAX_SETTLING_DEFERRALS + 1):
+        report = run_paper_exit_monitor(
+            enabled=True,
+            dry_run=False,
+            trades=(_trade(entry_time=start),),
+            candles=_settling_bars,
+            closer=RecordingCloser(),
+            evaluated_at=moment,
+            settling_streaks=streaks,
+        )
+        statuses.append(report.status)
+    assert statuses[:-1] == ["settling"] * MAX_SETTLING_DEFERRALS
+    assert statuses[-1] == "degraded"
+    assert report.refused == 1
+    # A normal read resets the per-trade count; closed trades are pruned.
+    run_paper_exit_monitor(
+        enabled=True,
+        dry_run=False,
+        trades=(),
+        candles=_settling_bars,
+        closer=RecordingCloser(),
+        evaluated_at=moment,
+        settling_streaks=streaks,
+    )
+    assert streaks == {}
+
+
+def test_settling_cycle_keeps_the_degraded_streak_and_alert_fires() -> None:
+    threshold = timedelta(seconds=900)
+    t0 = datetime(2026, 10, 27, 7, 30, tzinfo=UTC)
+    watch = observe_repeated_degradation(
+        None, status="degraded", observed_at=t0, threshold=threshold, refused=1
+    )
+    assert watch.streak is not None
+    started = watch.streak
+    settling = observe_repeated_degradation(
+        watch.streak,
+        status="settling",
+        observed_at=t0 + timedelta(seconds=600),
+        threshold=threshold,
+    )
+    assert settling.streak == started
+    assert settling.alert is None
+    fired = observe_repeated_degradation(
+        settling.streak,
+        status="degraded",
+        observed_at=t0 + timedelta(seconds=901),
+        threshold=threshold,
+        refused=1,
+    )
+    assert fired.alert is not None
+    assert fired.alert.code == "degraded_repeat"
+
+
+def test_normal_read_resets_the_settling_deferral_count() -> None:
+    from app.services.paper_exit_monitor import MAX_SETTLING_DEFERRALS
+
+    start = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    trade = _trade(entry_time=start)
+    bar = _bar(start, low="99", high="101")
+    moment = bar.interval_end + timedelta(seconds=30)
+    streaks: dict[UUID, int] = {}
+
+    def run(candles: object) -> MonitorReport:
+        return run_paper_exit_monitor(
+            enabled=True,
+            dry_run=False,
+            trades=(trade,),
+            candles=candles,  # type: ignore[arg-type]
+            closer=RecordingCloser(),
+            evaluated_at=moment,
+            settling_streaks=streaks,
+        )
+
+    assert run(_settling_bars).status == "settling"
+    normal = run(
+        lambda _trade: FetchedBars(bars=(bar,), covers_entry=True, source_name="binance-usdm")
+    )
+    assert normal.refused == 0
+    assert streaks == {}
+    for _ in range(MAX_SETTLING_DEFERRALS):
+        report = run(_settling_bars)
+        assert report.status == "settling"
+        assert report.refused == 0

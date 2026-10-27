@@ -13,7 +13,7 @@ close, because an earlier stop may sit outside the fetched bars.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import structlog
@@ -23,11 +23,16 @@ from app.market_activation.profile import (
     LIVE_SOURCE,
     canonicalize_perpetual_evidence_source,
 )
+from app.market_contracts.adapters.binance_usdm import BINANCE_REST_SETTLEMENT_GRACE
 from app.market_contracts.adapters.factory import resolve_perpetual_evidence_source
 from app.market_contracts.adapters.protocol import PerpetualMarketSource
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
 from app.market_contracts.enums import SourceFamily, VenueId
-from app.market_contracts.errors import EvidenceSourceSwitchRequiredError, MarketContractError
+from app.market_contracts.errors import (
+    EvidenceSourceSwitchRequiredError,
+    MarketContractError,
+    SettlementGuardError,
+)
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import (
     EvidenceMarketIdentity,
@@ -41,14 +46,14 @@ from app.services.paper_exit_monitor import ExitBar, FetchedBars, OpenInternalPa
 _MAX_PAGE_BARS = 1400
 _MAX_PAGES = 24
 _FALLBACK_PAGES = (200, 50, 1)
-# Binance USD-M rejects a page whose evaluation time is inside 5 seconds
-# after a bar close, and age zero counts. The next cursor is the oldest
-# bar's start, which is the previous bar's end. Stay past that guard or a
-# short first page can never be extended. Matches
-# ``BINANCE_REST_SETTLEMENT_GRACE``. Bybit classifies a bar with
+# Binance USD-M rejects a page whose evaluation time is inside its
+# post-close settlement guard, and age zero counts. The next cursor is the
+# oldest bar's start, which is the previous bar's end. Stay past that guard or
+# a short first page can never be extended. Bybit classifies a bar with
 # ``FIRST_SLICE_OHLCV_GRACE_SECONDS`` (0), so its post-close guard is not
-# longer than 5 seconds and this clearance stays one value for every source.
-_PAGE_CURSOR_CLEARANCE = timedelta(seconds=5)
+# longer than this and one value serves every source.
+_PAGE_CURSOR_CLEARANCE = BINANCE_REST_SETTLEMENT_GRACE
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 logger = structlog.get_logger(__name__)
 
@@ -260,6 +265,21 @@ def fetch_closed_bars_since(
         evaluated_at=evaluated_at,
         allow_switch=True,
     )
+    if (
+        first.settling
+        and first.switch_to is None
+        and not first.bars
+        and within_settlement_guard(evaluated_at, interval)
+    ):
+        # The venue refuses every page size inside its post-close guard. That
+        # empty read is not a missing stretch, so it must not surface as a
+        # leading gap. The next cycle reads the series again.
+        return FetchedBars(
+            bars=(),
+            covers_entry=False,
+            source_name=_source_name(source),
+            settling=True,
+        )
     if first.switch_to is None:
         return FetchedBars(
             bars=first.bars,
@@ -296,6 +316,15 @@ def fetch_closed_bars_since(
     )
 
 
+def within_settlement_guard(evaluated_at: datetime, interval: timedelta) -> bool:
+    """True inside ``_PAGE_CURSOR_CLEARANCE`` after an epoch-aligned bar close."""
+
+    if evaluated_at.tzinfo is None or interval.total_seconds() <= 0:
+        return False
+    since_close = (evaluated_at - _EPOCH) % interval
+    return since_close < _PAGE_CURSOR_CLEARANCE
+
+
 def _covers(bars: tuple[ExitBar, ...], entry_time: datetime) -> bool:
     """True when the earliest bar starts at or before the trade entry.
 
@@ -319,6 +348,7 @@ class _WalkResult:
     candle_venue: str
     switch_to: tuple[EvidenceMarketIdentity, InstrumentIdentity] | None = None
     refused: bool = False
+    settling: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +358,7 @@ class _PageRead:
     instrument: InstrumentIdentity
     switch_to: tuple[EvidenceMarketIdentity, InstrumentIdentity] | None = None
     refuse: bool = False
+    settling: bool = False
 
 
 def _walk_pages(
@@ -371,6 +402,8 @@ def _walk_pages(
         active_identity = page.identity
         active_instrument = page.instrument
         if not page.bars:
+            if page.settling and not collected:
+                return _WalkResult(bars=(), covers_entry=False, candle_venue="", settling=True)
             break
         if any(
             not isinstance(bar, ExitBar) and bar.instrument.venue is not active_identity.venue
@@ -430,6 +463,7 @@ def _fetch_page(
     current_identity = identity
     current_instrument = instrument
     switched = False
+    guarded_only = True
     for size in _page_sizes(needed):
         try:
             series = _read_closed_page(
@@ -479,10 +513,13 @@ def _fetch_page(
                 current_instrument,
                 switch_to=switch_to,
             )
+        except SettlementGuardError:
+            continue
         except MarketContractError:
+            guarded_only = False
             continue
         return _PageRead(tuple(series.bars), current_identity, current_instrument)
-    return _PageRead(None, current_identity, current_instrument)
+    return _PageRead(None, current_identity, current_instrument, settling=guarded_only)
 
 
 def _read_closed_page(

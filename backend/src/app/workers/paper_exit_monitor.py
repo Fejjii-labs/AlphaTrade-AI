@@ -99,6 +99,7 @@ def run_configured_exit_monitor(
     clock: Callable[[], datetime] | None = None,
     exchange_time: Callable[[], datetime | None] | None = None,
     alert_sink: Callable[[ExitMonitorAlert], None] | None = None,
+    settling_streaks: dict[UUID, int] | None = None,
 ) -> MonitorReport:
     """One monitor pass. The flag off returns before any database or market read.
 
@@ -184,6 +185,7 @@ def run_configured_exit_monitor(
         evaluated_at=evaluated_at,
         rejected=rejected,
         shutdown=shutdown,
+        settling_streaks=settling_streaks,
     )
 
 
@@ -205,6 +207,7 @@ class PaperExitMonitorCycle:
         self._streak_store = streak_store
         self._streak_loaded = False
         self._streak: DegradationStreak | None = None
+        self._settling_streaks: dict[UUID, int] = {}
 
     def __call__(self) -> CycleOutcome:
         from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
@@ -221,6 +224,7 @@ class PaperExitMonitorCycle:
                 self._settings,
                 shutdown=self._stop.is_set,
                 clock=self._clock,
+                settling_streaks=self._settling_streaks,
             )
         except Exception as exc:
             self._note_repetition("degraded", error="paper_exit_monitor_failed", refused=0)
