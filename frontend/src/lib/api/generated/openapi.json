@@ -49820,6 +49820,32 @@
         "title": "TelegramAlertDeliveryResponse",
         "type": "object"
       },
+      "TelegramFilterOption": {
+        "additionalProperties": false,
+        "description": "One named choice for a Telegram filter and the stored values it stands for.",
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "values"
+        ],
+        "title": "TelegramFilterOption",
+        "type": "object"
+      },
       "TelegramNotificationPolicyV2-Input": {
         "additionalProperties": false,
         "description": "None subscriptions allow all; empty subscriptions allow none. Full replacement.",
@@ -50153,6 +50179,40 @@
           }
         },
         "title": "TelegramNotificationPolicyV2",
+        "type": "object"
+      },
+      "TelegramPolicyOptions": {
+        "additionalProperties": false,
+        "description": "Named choices for the policy's subscription filters. Storage stays identifiers.",
+        "properties": {
+          "setup_stages": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramFilterOption"
+            },
+            "title": "Setup Stages",
+            "type": "array"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramFilterOption"
+            },
+            "title": "Strategies",
+            "type": "array"
+          },
+          "symbols": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramFilterOption"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "symbols",
+          "strategies",
+          "setup_stages"
+        ],
+        "title": "TelegramPolicyOptions",
         "type": "object"
       },
       "TelegramTestAlertRequest": {
@@ -71045,6 +71105,32 @@
           }
         ],
         "summary": "Reset notification preferences to defaults",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/notifications/telegram/options": {
+      "get": {
+        "operationId": "get_telegram_policy_options_notifications_telegram_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramPolicyOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Named choices for Telegram policy filters",
         "tags": [
           "notifications"
         ]
