@@ -158,6 +158,7 @@ import type {
   AlertDeliveryStatusResponse,
   NotificationPreferences,
   NotificationTestResult,
+  TelegramPolicyOptions,
   TelegramEnrollmentStartResponse,
   MarketWatcherStatus,
   MarketWatcherSummary,
@@ -934,6 +935,8 @@ export const api = {
       }),
     sendTest: () =>
       apiFetch<NotificationTestResult>("/notifications/test", { method: "POST", auth: true }),
+    telegramOptions: () =>
+      apiFetch<TelegramPolicyOptions>("/notifications/filter-options", { auth: true }),
   },
   watcherWatchlist: {
     configuration: () =>

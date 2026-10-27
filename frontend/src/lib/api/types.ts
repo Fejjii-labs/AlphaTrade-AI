@@ -3541,6 +3541,18 @@ export interface TelegramNotificationPolicyV2 {
   quiet_hours: { start: string; end: string; timezone: string } | null;
 }
 
+/** One named filter choice and the stored values it stands for (`GET /notifications/filter-options`). */
+export interface TelegramFilterOption {
+  label: string;
+  values: string[];
+}
+
+export interface TelegramPolicyOptions {
+  symbols: TelegramFilterOption[];
+  strategies: TelegramFilterOption[];
+  setup_stages: TelegramFilterOption[];
+}
+
 export interface NotificationPreferences {
   telegram_policy?: TelegramNotificationPolicyV2 | null;
   in_app_enabled: boolean;

@@ -120,3 +120,18 @@ class TelegramNotificationEvent(StrictModel):
         if self.mandatory_risk and self.event_type != NotificationEventType.RISK:
             raise ValueError("Only risk events can be mandatory.")
         return self
+
+
+class TelegramFilterOption(StrictModel):
+    """One named choice for a Telegram filter and the stored values it stands for."""
+
+    label: str = Field(min_length=1, max_length=120)
+    values: tuple[str, ...] = Field(min_length=1)
+
+
+class TelegramPolicyOptions(StrictModel):
+    """Named choices for the policy's subscription filters. Storage stays identifiers."""
+
+    symbols: tuple[TelegramFilterOption, ...]
+    strategies: tuple[TelegramFilterOption, ...]
+    setup_stages: tuple[TelegramFilterOption, ...]
