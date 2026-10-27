@@ -12,7 +12,7 @@ import { SectionHeader } from "@/components/ui/section-header";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { BrainFamily, BrainSetup } from "@/lib/api/brain-types";
+import type { BrainFamily, BrainOverview, BrainSetup } from "@/lib/api/brain-types";
 import { savedEntries } from "@/lib/api/saved-entries";
 import { formatDateTime } from "@/lib/format";
 import { strategyStatusFor } from "@/lib/strategy-status";
@@ -28,6 +28,11 @@ const families = [
   },
   { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
 ] satisfies { id: string; name: string; kind: string; detectionFamily: BrainFamily }[];
+// The server bounds setups to 20 rows; setup_count is the family's full total.
+function recentOf(view: BrainOverview) {
+  return { setups: view.setups, count: view.setup_count ?? view.setups.length };
+}
+
 export default function StrategiesPage() {
   const { user, organization } = useAuth();
   const [session, setSession] = useState(sessionGeneration);
@@ -54,9 +59,9 @@ function StrategiesWorkspace() {
     return {
       brain: brain?.status === "fulfilled" ? brain.value : null,
       recent: {
-        nested_continuation: nested.status === "fulfilled" ? nested.value.setups : null,
-        sfp: sfp.status === "fulfilled" ? sfp.value.setups : null,
-      } as Record<BrainFamily, BrainSetup[] | null>,
+        nested_continuation: nested.status === "fulfilled" ? recentOf(nested.value) : null,
+        sfp: sfp.status === "fulfilled" ? recentOf(sfp.value) : null,
+      } as Record<BrainFamily, { setups: BrainSetup[]; count: number } | null>,
       library: library.status === "fulfilled" ? library.value.items : null,
       drafts: drafts.status === "fulfilled" ? drafts.value.items : null,
     };
@@ -148,8 +153,9 @@ function StrategiesWorkspace() {
               const configs = data?.brain?.strategies.filter(
                 (s) => s.spec.kind === f.kind,
               );
-              const recent = data?.recent[f.detectionFamily]
-                ?.slice()
+              const detections = data?.recent[f.detectionFamily];
+              const recent = detections?.setups
+                .slice()
                 .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at));
               return (
                 <article
@@ -174,7 +180,7 @@ function StrategiesWorkspace() {
                   </div>
                   <details className="border-t border-border-subtle pt-2">
                     <summary className="min-h-11 cursor-pointer content-center text-sm">
-                      Recent detections{recent ? ` (${recent.length})` : ""}
+                      Recent detections{detections ? ` (${detections.count})` : ""}
                     </summary>
                     <div className="space-y-3 pt-2 text-sm">
                       <p className="text-text-muted">Last 7 days · market observations</p>

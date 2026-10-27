@@ -220,6 +220,8 @@ def overview(
         stmt = stmt.where(stored == family)
     if since:
         stmt = stmt.where(BrainSetupRow.observed_at >= aware(since))
+    # Total matches before the 20-row bound, so a busy family is counted, not capped.
+    setup_count = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = session.scalars(
         stmt.order_by(BrainSetupRow.observed_at.desc(), BrainSetupRow.id).limit(20)
     ).all()
@@ -275,6 +277,7 @@ def overview(
         "watchlist_revision": config.revision,
         "strategies": versions,
         "setups": [setup_view(session, row, now=now) for row in rows],
+        "setup_count": setup_count,
         "limitations": [
             "Stored observations only; no current conditions inferred.",
             "Stored setup evidence retains its recorded availability; optional current OI, "

@@ -781,3 +781,51 @@ def test_busy_sfp_history_cannot_crowd_nested_out_of_its_family_query(store, req
     sfp_view = overview(session, organization_id=org, family="sfp", since=since, now=now)
     assert len(sfp_view["setups"]) == 20
     assert {s["family"] for s in sfp_view["setups"]} == {"sfp"}
+
+
+def _stored_setup(template, org, observed_at, payload=None):
+    return BrainSetupRow(
+        id=uuid4(),
+        organization_id=org,
+        strategy_id=template["strategy_id"],
+        strategy_version_id=template["version_id"],
+        symbol="BTCUSDT",
+        state="CONFIRMED",
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(hours=4),
+        payload={"timeframe": "15m", **(payload or {})},
+    )
+
+
+@pytest.mark.parametrize("store", ["tenant_store", "postgres_tenant_store"])
+def test_family_count_is_the_full_total_past_the_twenty_row_bound(store, request):
+    session, org, user = request.getfixturevalue(store)
+    template = approved(session, org, user)
+    now = datetime(2026, 10, 26, 12, tzinfo=UTC)
+    session.add_all(
+        [_stored_setup(template, org, now - timedelta(minutes=15 * i)) for i in range(25)]
+    )
+    session.commit()
+
+    view = overview(session, organization_id=org, family="nested_continuation", now=now)
+    assert len(view["setups"]) == 20
+    assert view["setup_count"] == 25
+    assert overview(session, organization_id=org, family="sfp", now=now)["setup_count"] == 0
+
+
+@pytest.mark.parametrize("store", ["tenant_store", "postgres_tenant_store"])
+def test_since_boundary_includes_the_exact_instant_and_excludes_earlier(store, request):
+    session, org, user = request.getfixturevalue(store)
+    template = approved(session, org, user)
+    now = datetime(2026, 10, 26, 12, tzinfo=UTC)
+    since = now - timedelta(days=7)
+    at_boundary = _stored_setup(template, org, since)
+    just_before = _stored_setup(template, org, since - timedelta(microseconds=1))
+    session.add_all([at_boundary, just_before])
+    session.commit()
+
+    view = overview(
+        session, organization_id=org, family="nested_continuation", since=since, now=now
+    )
+    assert [s["setup_id"] for s in view["setups"]] == [str(at_boundary.id)]
+    assert view["setup_count"] == 1

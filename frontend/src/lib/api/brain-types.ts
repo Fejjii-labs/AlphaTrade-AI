@@ -73,6 +73,8 @@ export interface BrainOverview {
   watched_symbols: string[];
   strategies: BrainStrategy[];
   setups: BrainSetup[];
+  /** Total matching setups before the server's 20-row bound; absent on older APIs. */
+  setup_count?: number;
   limitations: string[];
   paper_only: boolean;
 }
