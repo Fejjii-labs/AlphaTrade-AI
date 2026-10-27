@@ -11,13 +11,14 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
 from app.agent_voice.accounting import VoiceLedger
-from app.agent_voice.config import VoiceUnavailableError
+from app.agent_voice.config import VoiceUnavailableError, voice_route_refusal
 from app.db.models import UsageEvent
 from app.interactive_agent.vector_adapter import DetachedUsage
 from app.providers.base import ProviderHealth, ProviderStatus
 from app.providers.embeddings import (
     EmbeddingResult,
     EmbeddingsProvider,
+    MockEmbeddingsProvider,
     OpenAIEmbeddingsProvider,
 )
 from app.schemas.usage import UsageEvent as UsageEventRecord
@@ -36,13 +37,16 @@ def embedding_limitation(ledger: VoiceLedger) -> str | None:
         reason = "configured embedding route differs from its verified receipt"
     elif not settings.openai_api_key.strip():
         reason = "configured provider credential is unbound"
-    elif settings.provider_mode.strip().lower() != "live":
+    elif voice_route_refusal(settings):
         reason = "approved live embedding route is unavailable"
     return "Vector embedding unavailable: " + reason + "." if reason else None
 
 
 class VoiceEmbeddingsProvider:
     def __init__(self, provider: EmbeddingsProvider, ledger: VoiceLedger, key: str):
+        if isinstance(provider, MockEmbeddingsProvider):
+            # A voice session never uses mock embeddings; retrieval stays off instead.
+            raise VoiceUnavailableError("voice_embedding_mock_refused")
         if isinstance(provider, OpenAIEmbeddingsProvider):
             # Preserve ordinary text defaults. Only this prepaid voice route
             # refuses raw missing/model-coerced metadata and all mock fallback.

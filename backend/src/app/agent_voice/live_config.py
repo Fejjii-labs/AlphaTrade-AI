@@ -10,7 +10,12 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from app.agent_voice.config import EmbeddingPrice, RoutePrice, VoiceUnavailableError
+from app.agent_voice.config import (
+    EmbeddingPrice,
+    RoutePrice,
+    VoiceUnavailableError,
+    voice_route_refusal,
+)
 from app.core.config import Settings
 from app.schemas.common import StrictModel
 
@@ -138,10 +143,8 @@ class LiveLimits(StrictModel):
 def load_live_limits(settings: Settings) -> LiveLimits:
     if not settings.agent_live_enabled:
         raise VoiceUnavailableError("gpt_live_not_enabled")
-    if not settings.openai_api_key:
-        raise VoiceUnavailableError("provider_credential_unbound")
-    if settings.provider_mode != "live":
-        raise VoiceUnavailableError("approved_live_route_unavailable")
+    if refusal := voice_route_refusal(settings):
+        raise VoiceUnavailableError(refusal)
     if not settings.agent_live_limits_file:
         raise VoiceUnavailableError("verified_live_limits_unbound")
     try:
