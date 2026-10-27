@@ -86,7 +86,6 @@ export const SETTINGS_ROUTE_PREFIXES: readonly string[] = [
   "/exchange",
   "/portfolio",
   "/positions",
-  "/risk",
   "/alerts",
   "/watcher",
   "/market-watcher",
