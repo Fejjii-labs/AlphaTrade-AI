@@ -131,10 +131,8 @@ test("history recovers original after reload and a separate attempt; refresh pin
   page,
 }) => {
   const io = await fixture(page);
-  await page.goto("/");
-  await page
-    .getByText("Manual demo preparation & history", { exact: true })
-    .click();
+  await page.goto("/journal");
+  await page.getByRole("button", { name: "New demo order" }).click();
   const history = page.getByRole("region", {
     name: "Recent manual demo activity",
   });

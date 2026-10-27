@@ -95,3 +95,13 @@ it("says Stats are unavailable instead of showing zeros", async () => {
   render(<JournalPage />);
   expect(await screen.findByText("Stats unavailable.")).toBeInTheDocument();
 });
+
+it("offers New demo order in the Trades header on both tabs, not on Knowledge", async () => {
+  render(<JournalPage />);
+  expect(screen.getByRole("button", { name: "New demo order" })).toBeInTheDocument();
+  cleanup();
+  vi.spyOn(api.journal, "statistics").mockRejectedValue(new Error("down"));
+  params.set("tab", "stats");
+  render(<JournalPage />);
+  expect(screen.getByRole("button", { name: "New demo order" })).toBeInTheDocument();
+});
