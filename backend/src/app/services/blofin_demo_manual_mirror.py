@@ -286,9 +286,50 @@ def _instruments(rows: list[dict[str, Any]]) -> tuple[dict[str, _Instrument], bo
     return found, conflict
 
 
+_OPEN_FILL_LEAD = timedelta(seconds=5)
+
+
+def _opening_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> str | None:
+    """Side of the slice's opening trade when the history row carries no ``side``.
+
+    Live BloFin ``positions-history`` rows have ``positionSide`` but no ``side``.
+    ``long``/``short`` decide it directly. In one-way (``net``) mode the side is
+    the earliest fill on the same instrument between the row's open and close
+    times (a few seconds of lead allowed for clock skew). No match: ``None``.
+    """
+
+    side = row.get("side")
+    if isinstance(side, str) and side:
+        return side
+    position_side = row.get("positionSide")
+    if position_side == "long":
+        return "buy"
+    if position_side == "short":
+        return "sell"
+    opened_at = _time(row.get("createTime"))
+    closed_at = _time(row.get("updateTime"))
+    inst_id = row.get("instId")
+    if not fills or opened_at is None or closed_at is None or not isinstance(inst_id, str):
+        return None
+    best: tuple[datetime, str] | None = None
+    for fill in fills:
+        when = _time(fill.get("ts"))
+        fill_side = fill.get("side")
+        if fill.get("instId") != inst_id or when is None or fill_side not in {"buy", "sell"}:
+            continue
+        if when < opened_at - _OPEN_FILL_LEAD or when > closed_at:
+            continue
+        if fill.get("reduceOnly") in {True, "true"}:
+            continue
+        if best is None or when < best[0]:
+            best = (when, fill_side)
+    return best[1] if best else None
+
+
 def _parse_slices(
     history: list[dict[str, Any]],
     instruments: dict[str, _Instrument],
+    fills: list[dict[str, Any]] | None = None,
 ) -> tuple[list[_Slice], int, bool]:
     slices: list[_Slice] = []
     skipped = 0
@@ -298,7 +339,7 @@ def _parse_slices(
         history_id = row.get("historyId")
         position_id = row.get("positionId")
         inst_id = row.get("instId")
-        side = row.get("side")
+        side = _opening_side(row, fills)
         identity = (history_id, position_id, inst_id, side)
         if not all(isinstance(item, str) and item for item in identity):
             skipped += 1
@@ -702,7 +743,7 @@ def drafts_from_raw(
     """Build journal drafts. ``fills[*].fillPnl`` is intentionally unused."""
     del window_end
     meta, instruments_incomplete = _instruments(instruments)
-    slices, skipped, history_incomplete = _parse_slices(history, meta)
+    slices, skipped, history_incomplete = _parse_slices(history, meta, fills)
     funding_incomplete = _assign_funding(slices, funding, window_begin=window_begin)
     _attach_orders(slices, fills, orders)
     opens, open_skipped, positions_complete = _open_drafts(positions, meta)

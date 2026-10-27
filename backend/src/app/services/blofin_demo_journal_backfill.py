@@ -307,7 +307,7 @@ def build_plan(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Plan lines and the summary object. Pure: reads its inputs, writes nothing."""
     meta, _conflict = _instruments(pages.instruments)
-    slices, _skipped, _incomplete = _parse_slices(pages.history, meta)
+    slices, _skipped, _incomplete = _parse_slices(pages.history, meta, pages.fills)
     _assign_funding(slices, pages.funding, window_begin=pages.funding_begin)
     _attach_orders(slices, pages.fills, pages.orders)
     lifetimes: dict[tuple[str, int], _Lifetime] = {}
