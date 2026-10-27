@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.db.models import JournalTrade, JournalTradeAttachment, JournalTradeObservation
 from app.schemas.common import JournalTradeStatus
 from app.services.blofin_demo_manual_mirror import (
@@ -32,6 +33,7 @@ from app.services.blofin_demo_manual_mirror import (
     _ORDERS,
     _POSITIONS,
     _WINDOW,
+    BloFinDemoManualMirror,
     MirrorReadError,
     _assign_funding,
     _attach_orders,
@@ -98,8 +100,23 @@ def _scrub(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key.lower() not in _UNSAFE_KEYS}
 
 
-def read_venue(client: Any, *, since: datetime, now: datetime) -> VenuePages:
-    """GET history in 7-day chunks from ``since``; funding only for the live window."""
+def read_venue(
+    client: Any,
+    *,
+    since: datetime,
+    now: datetime,
+    organization_id: uuid.UUID,
+    settings: Settings,
+) -> VenuePages:
+    """GET history in 7-day chunks from ``since``; funding only for the live window.
+
+    The #304 org pin and UID check run first, inside this function, so no
+    caller can read account data without it. A refusal raises before any
+    account GET.
+    """
+    BloFinDemoManualMirror(client, now=now)._require_internal_read_pin(
+        organization_id=organization_id, settings=settings
+    )
     end = now.astimezone(UTC)
     begin = since.astimezone(UTC)
     instruments = client.request("GET", _INSTRUMENTS, params=None, signed=False)

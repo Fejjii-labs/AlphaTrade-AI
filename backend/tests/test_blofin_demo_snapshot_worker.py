@@ -1744,20 +1744,35 @@ def test_disabled_internal_mirror_does_not_read_or_pin() -> None:
     assert client.paths == []
 
 
-@pytest.mark.parametrize("mode", ["paper_exchange_demo", "dedicated_readonly"])
-def test_other_mirror_paths_do_not_take_the_internal_pin(mode: str) -> None:
-    if mode == "paper_exchange_demo":
-        settings = _trading_key_settings().model_copy(
-            update={"blofin_demo_manual_mirror_enabled": True}
-        )
-    else:
-        settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+def test_trading_key_mirror_path_takes_the_pin_and_refuses_a_uid_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # paper_exchange_demo now pins too: a wrong-account trading key must not mirror.
+    settings = _trading_key_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True}
+    )
     assert settings.blofin_paper_internal_main_key_selected is False
-    client = _PinClient(uid=None, account_reads=True)
+    assert settings.blofin_read_sync_uses_dedicated_credentials is False
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    with pytest.raises(ValueError, match="does not match connection pin"):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+
+
+def test_trading_key_mirror_path_reads_after_a_matching_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _trading_key_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True}
+    )
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
     with pytest.raises(MirrorReadError, match="stopped after the pin"):
-        _apply_mirror(client, settings, uuid4())
-    assert _IDENTITY not in client.paths
-    assert client.paths[0] == "/api/v1/market/instruments"
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths[:2] == [_IDENTITY, "/api/v1/market/instruments"]
 
 
 def _fresh_internal_cycle(
@@ -1892,3 +1907,115 @@ def test_sync_identity_log_is_captured_after_structlog_reconfiguration() -> None
     finally:
         blofin_sync_service.logger = original_logger
         structlog.configure(**configuration)
+
+
+_READONLY_SECRETS = ("fixture-key", "fixture-secret", "fixture-passphrase")
+
+
+def _readonly_mirror_settings() -> Settings:
+    settings = _open_settings().model_copy(update={"blofin_demo_manual_mirror_enabled": True})
+    assert settings.blofin_paper_internal_main_key_selected is False
+    assert settings.blofin_read_sync_uses_dedicated_credentials is True
+    return settings
+
+
+def test_readonly_mirror_refuses_a_uid_mismatch_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _readonly_mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    with (
+        _capture_blofin_logs() as logs,
+        pytest.raises(ValueError, match="does not match connection pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "native_account_mismatch"
+        for item in logs
+    )
+    _assert_secrets_absent(logs, *_READONLY_SECRETS)
+
+
+@pytest.mark.parametrize(
+    "venue_uid",
+    ["PINNED-DEMO-ACCOUNT", "Pinned-Demo-Account", " pinned-demo-account", "pinned-demo-account "],
+)
+def test_readonly_mirror_uid_comparison_is_exact_for_case_and_whitespace(
+    monkeypatch: pytest.MonkeyPatch, venue_uid: str
+) -> None:
+    settings = _readonly_mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid=venue_uid, account_reads=True)
+    with pytest.raises(ValueError):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+
+
+def test_readonly_mirror_refuses_a_missing_expected_uid_before_any_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _readonly_mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "")
+    client = _PinClient(uid="pinned-demo-account", account_reads=False)
+    with (
+        _capture_blofin_logs() as logs,
+        pytest.raises(ValueError, match="BLOFIN_ACTIVITY_EXPECTED_UID"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == []
+    assert any(
+        item.get("event") == "blofin_fallback_sync_refused"
+        and item.get("reason") == "activity_expected_uid_unset"
+        for item in logs
+    )
+    _assert_secrets_absent(logs, *_READONLY_SECRETS)
+
+
+def test_readonly_mirror_reads_after_a_matching_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _readonly_mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="pinned-demo-account", account_reads=True)
+    with (
+        _capture_blofin_logs() as logs,
+        pytest.raises(MirrorReadError, match="stopped after the pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths[:2] == [_IDENTITY, "/api/v1/market/instruments"]
+    assert any(
+        item.get("event") == "blofin_snapshot_identity" and item.get("result") == "verified"
+        for item in logs
+    )
+    _assert_secrets_absent(logs, *_READONLY_SECRETS)
+
+
+def test_readonly_key_with_sync_flag_off_is_still_pinned_before_account_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Griller #359 B1: dedicated creds set, BLOFIN_READONLY_SYNC_ENABLED=false.
+    settings = _readonly_mirror_settings().model_copy(
+        update={"blofin_readonly_sync_enabled": False}
+    )
+    assert settings.blofin_read_sync_uses_dedicated_credentials is False
+    from app.core.blofin_readonly_access import get_readonly_client
+
+    # The activity client still selects the dedicated key with the flag off.
+    get_readonly_client(settings, activity_history=True, paper_internal_snapshot=True)
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid="other-demo-account", account_reads=False)
+    with (
+        _capture_blofin_logs() as logs,
+        pytest.raises(ValueError, match="does not match connection pin"),
+    ):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+    _assert_secrets_absent(logs, *_READONLY_SECRETS)
