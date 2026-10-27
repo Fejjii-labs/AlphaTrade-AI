@@ -105,7 +105,7 @@ describe("AT-040 Phase B AppShell", () => {
       within(bottom)
         .getAllByRole("link")
         .map((link) => link.textContent),
-    ).toEqual(["Dashboard", "Agent", "Journal", "Strategies", "Settings"]);
+    ).toEqual(["Dashboard", "Agent", "Trades", "Strategies", "Settings"]);
     expect(
       within(bottom).getByRole("link", { name: "Dashboard" }),
     ).toHaveAttribute("href", "/");
@@ -117,7 +117,7 @@ describe("AT-040 Phase B AppShell", () => {
       within(bottom).getByRole("link", { name: "Strategies" }),
     ).toHaveAttribute("href", "/strategies");
     expect(
-      within(bottom).getByRole("link", { name: "Journal & Knowledge" }),
+      within(bottom).getByRole("link", { name: "Trades" }),
     ).toHaveAttribute("href", "/journal");
     expect(
       within(bottom).getByRole("link", { name: "Settings" }),
@@ -143,7 +143,7 @@ describe("AT-040 Phase B AppShell", () => {
         screen.getByTestId("mobile-bottom-navigation"),
       ]) {
         expect(
-          within(nav).getByRole("link", { name: "Journal & Knowledge" }),
+          within(nav).getByRole("link", { name: "Trades" }),
         ).toHaveAttribute("aria-current", "page");
         expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
         expect(

@@ -3,10 +3,14 @@
  * Settings hub consolidations only. Advanced placements keep existing URLs.
  * Query strings are preserved by Next.js redirects by default.
  */
+export type RedirectQueryMatch = { type: "query"; key: string; value?: string };
+
 export type PhaseBRedirect = {
   source: string;
   destination: string;
   permanent: boolean;
+  /** Only redirect when the request has this query (Next.js `has`). */
+  has?: RedirectQueryMatch[];
 };
 
 export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
@@ -24,6 +28,13 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/watchlist", destination: "/settings/watcher", permanent: false },
   // Each family card holds its own 7-day history now.
   { source: "/strategies/detections", destination: "/strategies", permanent: false },
+  // Knowledge is its own page; the old Journal tab follows it (query kept).
+  {
+    source: "/journal",
+    has: [{ type: "query", key: "tab", value: "knowledge" }],
+    destination: "/knowledge",
+    permanent: false,
+  },
   { source: "/strategy-lab/new", destination: "/agent?intent=strategy", permanent: false },
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
 ] as const;
