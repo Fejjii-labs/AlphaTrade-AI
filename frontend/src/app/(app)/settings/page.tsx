@@ -47,7 +47,7 @@ function AccountSettings() {
   );
   return (
     <div className="page-sections [&_input:not([type=checkbox])]:text-base [&_select]:text-base lg:[&_input:not([type=checkbox])]:text-sm lg:[&_select]:text-sm" data-testid="settings-workspace">
-      <PageHeader title="Account" />
+      <PageHeader title="Settings" />
       <Card>
         <CardContent className="divide-y divide-border-subtle">
           <Row label="Email" value={user?.email ?? "Unavailable"} />
