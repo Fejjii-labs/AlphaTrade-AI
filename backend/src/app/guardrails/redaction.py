@@ -8,6 +8,26 @@ from typing import Any
 
 _REDACTED = "***REDACTED***"
 
+# Credential-like key/value pairs in any rendering: ``k=v``, ``k: v``, URL query
+# params (``?token=v&``), headers (``ACCESS-SIGN: v``), dict reprs
+# (``'secret': 'v'``) and JSON (``"passphrase": "v"``). The key may carry a prefix
+# such as ``blofin_api_secret``. The key and its quoting are kept; the value is not.
+_CREDENTIAL_KV = re.compile(
+    r"(?P<q>[\"']?)(?P<key>\b[A-Za-z0-9_\-]*?"
+    r"(?:secret|token|signature|passphrase|password|api[_-]?key|access[_-]?key"
+    r"|access[_-]?sign))(?P=q)(?P<sep>\s*[:=]\s*)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s'\",;&}\])]+)",
+    re.IGNORECASE,
+)
+
+
+def _redact_credential_kv(match: re.Match[str]) -> str:
+    value = match.group("value")
+    quote = value[0] if value[:1] in {'"', "'"} else ""
+    q = match.group("q")
+    return f"{q}{match.group('key')}{q}{match.group('sep')}{quote}{_REDACTED}{quote}"
+
+
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"sk-[a-zA-Z0-9]{20,}", re.IGNORECASE), _REDACTED),
     (re.compile(r"sk_(test|live)_[a-zA-Z0-9]{16,}", re.IGNORECASE), _REDACTED),
@@ -92,7 +112,7 @@ def redact_text(value: str) -> str:
     redacted = value
     for pattern, replacement in _PATTERNS:
         redacted = pattern.sub(replacement, redacted)
-    return redacted
+    return _CREDENTIAL_KV.sub(_redact_credential_kv, redacted)
 
 
 def redact_value(value: Any) -> Any:

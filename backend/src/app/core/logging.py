@@ -47,6 +47,18 @@ class RedactingFormatter(logging.Formatter):
         return redact_text(super().formatException(ei))
 
 
+_EXCEPTION_MESSAGE_CAP = 500
+_TRACEBACK_CAP = 32 * 1024
+_TRACEBACK_TRUNCATED = "...[traceback truncated]...\n"
+
+
+def _cap_traceback(text: str) -> str:
+    """Cap an already-redacted traceback, keeping its tail (the raised exception)."""
+    if len(text) <= _TRACEBACK_CAP:
+        return text
+    return _TRACEBACK_TRUNCATED + text[-(_TRACEBACK_CAP - len(_TRACEBACK_TRUNCATED)) :]
+
+
 def _redact_sensitive(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
     """structlog processor. Exception text is redacted before it is rendered.
 
@@ -68,12 +80,12 @@ def _redact_sensitive(_logger: object, _name: str, event_dict: EventDict) -> Eve
     if error is not None:
         text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
         event["exception_type"] = type(error).__qualname__
-        event["exception_message"] = redact_text(str(error))[:500]
+        event["exception_message"] = redact_text(str(error))[:_EXCEPTION_MESSAGE_CAP]
     elif exc_info is True:
         text = "exc_info=True logged outside an active exception"
     else:
         text = str(exc_info)
-    event["exception"] = redact_text(text)
+    event["exception"] = _cap_traceback(redact_text(text))
     event.pop("exc_info", None)
     return event
 
@@ -117,8 +129,9 @@ def configure_logging(*, log_level: str = "INFO", json_logs: bool = True) -> Non
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        _redact_sensitive,
+        # Render stack_info first so its text goes through redaction too.
         structlog.processors.StackInfoRenderer(),
+        _redact_sensitive,
     ]
 
     renderer = (
