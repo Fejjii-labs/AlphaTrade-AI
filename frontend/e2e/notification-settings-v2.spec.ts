@@ -220,6 +220,13 @@ for (const viewport of [
     await expect(
       page.getByText("Watchlist configuration unavailable. Reload to try again."),
     ).toBeVisible();
+    await page.getByRole("link", { name: "Account", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+    const account = page.getByTestId("settings-workspace");
+    await expect(
+      account.getByText("fixture@example.com", { exact: true }),
+    ).toBeVisible();
+    await expect(account.getByText("Fixture", { exact: true })).toBeVisible();
   });
 }
 
