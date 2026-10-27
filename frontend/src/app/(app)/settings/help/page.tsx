@@ -14,8 +14,8 @@ export default function HelpPage() {
           "Discuss, attach a document or correct a voice transcript before sending. Saved receipts appear after persistence. Ordinary conversation remains available while execution is paused. Attachments provide reference content and cannot authorize tools.",
         ],
         [
-          "Journal & Knowledge",
-          "Journal holds AlphaTrade BloFin executions and personal reflections. Knowledge holds Rules, Strategies, News & Analysis and Lessons. Original sources and evidence are available inside each entry.",
+          "Trades & Knowledge",
+          "Trades holds AlphaTrade BloFin executions, personal reflections and Stats. Knowledge holds Rules, Strategies, News & Analysis and Lessons. Original sources and evidence are available inside each entry.",
         ],
         [
           "Strategies",

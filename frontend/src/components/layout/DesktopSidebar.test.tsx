@@ -51,12 +51,12 @@ describe("AT-040 collapsible DesktopSidebar", () => {
     ).toEqual([
       "Dashboard",
       "Agent",
-      "Journal & Knowledge",
+      "Trades",
       "Strategies",
       "Settings",
     ]);
     expect(
-      within(nav).getByRole("link", { name: "Journal & Knowledge" }),
+      within(nav).getByRole("link", { name: "Trades" }),
     ).toHaveAttribute("aria-current", "page");
     expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
     expect(within(nav).getByRole("link", { name: "Agent" })).not.toHaveClass(
@@ -76,10 +76,10 @@ describe("AT-040 collapsible DesktopSidebar", () => {
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe("1");
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Journal & Knowledge" }),
+      screen.getByRole("link", { name: "Trades" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Journal & Knowledge" }),
+      screen.getByRole("link", { name: "Trades" }),
     ).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("sidebar-command-menu")).toHaveAttribute(
       "aria-label",

@@ -483,7 +483,7 @@ export function TraderDashboardView({
             href="/journal"
             className="inline-flex min-h-11 items-center text-sm text-accent"
           >
-            Open Journal &amp; Knowledge
+            Open Trades
           </Link>
         </CardContent>
       </Card> : null}

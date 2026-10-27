@@ -6,7 +6,9 @@ import { KnowledgeDocumentCard } from "@/components/knowledge/KnowledgeDocumentC
 import { KnowledgeDetailPanel } from "@/components/knowledge/KnowledgeDetailPanel";
 import { JournalReturnLink, journalReturnKey } from "./JournalReturnLink";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { LinkTabs } from "@/components/ui/link-tabs";
 import { PageHeader } from "@/components/ui/page-header";
+import { TradeStats } from "./TradeStats";
 import { cn } from "@/lib/utils";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useAsyncData } from "@/hooks/useAsyncData";
@@ -126,7 +128,7 @@ export function SavedEntryDetail({
         </Link>
         {current.source_document_id && (
           <Link
-            href={`/journal?tab=knowledge&document_id=${current.source_document_id}`}
+            href={`/knowledge?document_id=${current.source_document_id}`}
           >
             Original document
           </Link>
@@ -166,6 +168,7 @@ function JournalWorkspaceContent() {
   const { user, organization } = useAuth();
   const knowledge =
     params.get("tab") === "knowledge" || pathname === "/knowledge";
+  const stats = !knowledge && params.get("tab") === "stats";
   const category = params.get("category") ?? "";
   const query = params.get("q") ?? "";
   const savedId = params.get("saved");
@@ -174,6 +177,8 @@ function JournalWorkspaceContent() {
   const sourcePage = Math.max(0, Number(params.get("source_page")) || 0);
   const chunkPage = Math.max(0, Number(params.get("chunk_page")) || 0);
   const loader = useCallback(async () => {
+    // The Stats tab reads its own statistics; skip the list reads.
+    if (stats) return { entries: [], entryTotal: 0, sourceTotal: 0, trades: [], documents: [], linked: null, chunks: null };
     if (savedId || documentId) {
       // Exact source navigation must not wait for unrelated library listings.
       const [linked, chunks] = await Promise.allSettled([
@@ -234,6 +239,7 @@ function JournalWorkspaceContent() {
       chunks: chunks.status === "fulfilled" ? chunks.value : null,
     };
   }, [
+    stats,
     knowledge,
     category,
     query,
@@ -244,6 +250,7 @@ function JournalWorkspaceContent() {
     chunkPage,
   ]);
   const { data, loading, reload } = useAsyncData(loader, [
+    stats,
     knowledge,
     category,
     query,
@@ -330,51 +337,38 @@ function JournalWorkspaceContent() {
   return (
     <div className="page-sections [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm" data-testid="journal-knowledge-workspace">
       <PageHeader
-        title="Journal & Knowledge"
-        description="Trades, reflections, and saved knowledge."
+        title={knowledge ? "Knowledge" : "Trades"}
         actions={
-          <Link
-            href="/agent"
-            className={cn(
-              buttonVariants({ variant: "outline" }),
-              "h-11 border-accent-border bg-accent-muted text-accent hover:bg-accent-muted",
-            )}
-          >
-            Add with Agent
-          </Link>
+          <>
+            {/* Until Knowledge has its own sidebar item (UI overhaul B6). */}
+            {!knowledge ? (
+              <Link onClick={remember} href="/knowledge" className="inline-flex h-11 items-center px-2 text-sm text-accent">
+                Knowledge
+              </Link>
+            ) : null}
+            <Link
+              href="/agent"
+              className={cn(
+                buttonVariants({ variant: "outline" }),
+                "h-11 border-accent-border bg-accent-muted text-accent hover:bg-accent-muted",
+              )}
+            >
+              Add with Agent
+            </Link>
+          </>
         }
       />
-      <nav
-        aria-label="Journal and Knowledge"
-        className="flex gap-1 rounded-card border border-border-subtle bg-surface-1 p-1"
-      >
-        <Link
-          onClick={remember}
-          href="/journal"
-          aria-current={!knowledge ? "page" : undefined}
-          className={cn(
-            "min-h-10 flex-1 rounded-control px-3 py-2 text-center text-[length:var(--text-label)] font-medium",
-            !knowledge
-              ? "border border-accent-border bg-accent-muted text-accent"
-              : "text-text-secondary hover:bg-surface-2",
-          )}
-        >
-          Journal
-        </Link>
-        <Link
-          onClick={remember}
-          href="/journal?tab=knowledge"
-          aria-current={knowledge ? "page" : undefined}
-          className={cn(
-            "min-h-10 flex-1 rounded-control px-3 py-2 text-center text-[length:var(--text-label)] font-medium",
-            knowledge
-              ? "border border-accent-border bg-accent-muted text-accent"
-              : "text-text-secondary hover:bg-surface-2",
-          )}
-        >
-          Knowledge
-        </Link>
-      </nav>
+      {!knowledge ? (
+        <LinkTabs
+          aria-label="Trades views"
+          activeId={stats ? "stats" : "trades"}
+          items={[
+            { id: "trades", label: "Trades", href: "/journal" },
+            { id: "stats", label: "Stats", href: "/journal?tab=stats" },
+          ]}
+        />
+      ) : null}
+      {stats ? <TradeStats /> : <>
       {savedId || documentId ? <JournalReturnLink /> : null}
       {!knowledge && !savedId && !documentId ? <NativeActivity /> : null}
       <div
@@ -501,7 +495,7 @@ function JournalWorkspaceContent() {
                   </p>
                   <Link
                     onClick={remember}
-                    href={`/journal?${knowledge ? `tab=knowledge&category=${e.category}&` : ""}saved=${encodeURIComponent(e.id)}`}
+                    href={`${knowledge ? `/knowledge?category=${e.category}&` : "/journal?"}saved=${encodeURIComponent(e.id)}`}
                     className="inline-flex min-h-11 items-center text-sm text-accent"
                   >
                     Open
@@ -615,6 +609,7 @@ function JournalWorkspaceContent() {
           </Link>
         </details>
       )}
+      </>}
     </div>
   );
 }

@@ -14,6 +14,7 @@ const nextConfig: NextConfig = {
       source: rule.source,
       destination: rule.destination,
       permanent: rule.permanent,
+      ...(rule.has ? { has: rule.has } : {}),
     }));
   },
   async headers() {

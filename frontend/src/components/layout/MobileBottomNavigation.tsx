@@ -45,7 +45,7 @@ export function MobileBottomNavigation() {
             >
               <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
               <span className="text-center">
-                {id === "journal" ? "Journal" : label}
+                {label}
               </span>
             </Link>
           );

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { installSharedE2ESession, paperModeActive } from "./helpers/shared-e2e-auth";
 
 const workspaces = [
-  ["Dashboard", "/"], ["Agent", "/agent"], ["Journal", "/journal"],
+  ["Dashboard", "/"], ["Agent", "/agent"], ["Trades", "/journal"],
   ["Strategies", "/strategies"], ["Knowledge", "/knowledge"],
   ["Settings", "/settings"], ["Watcher", "/watcher"], ["Signals", "/tradingview-signals"],
 ];

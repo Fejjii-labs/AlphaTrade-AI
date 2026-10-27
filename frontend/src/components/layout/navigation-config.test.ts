@@ -31,7 +31,7 @@ describe("Trader primary navigation", () => {
     ).toEqual([
       "Dashboard",
       "Agent",
-      "Journal & Knowledge",
+      "Trades",
       "Strategies",
       "Settings",
     ]);
@@ -71,9 +71,9 @@ describe("Trader primary navigation", () => {
 
   it("selects exactly one destination for nested links and respects path boundaries", () => {
     for (const [path, label] of [
-      ["/knowledge/documents/doc-1", "Journal & Knowledge"],
-      ["/lessons/lesson-42", "Journal & Knowledge"],
-      ["/journal/statistics", "Journal & Knowledge"],
+      ["/knowledge/documents/doc-1", "Trades"],
+      ["/lessons/lesson-42", "Trades"],
+      ["/journal/statistics", "Trades"],
       ["/strategy-lab/strategy-7", "Strategies"],
       ["/agent/history", "Agent"],
       ["/settings/advanced", "Settings"],
@@ -162,7 +162,7 @@ describe("Trader primary navigation", () => {
       subtitle: null,
     });
     expect(resolvePageIdentity("/journal")).toMatchObject({
-      title: "Journal & Knowledge",
+      title: "Trades",
       subtitle: null,
     });
     expect(resolvePageIdentity("/settings")).toMatchObject({
@@ -174,11 +174,11 @@ describe("Trader primary navigation", () => {
       subtitle: "Diagnostics",
     });
     expect(resolvePageIdentity("/knowledge")).toMatchObject({
-      title: "Journal & Knowledge",
+      title: "Trades",
       subtitle: null,
     });
     expect(resolvePageIdentity("/journal/import")).toMatchObject({
-      title: "Journal & Knowledge",
+      title: "Trades",
       subtitle: "Journal import",
     });
     expect(resolvePageIdentity("/alerts/review")).toMatchObject({
@@ -230,7 +230,7 @@ describe("AT-040 Phase B redirects", () => {
     );
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source).not.toBe(rule.destination);
-      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : rule.source.startsWith("/strategies/") ? "/strategies" : "/settings/";
+      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : rule.source.startsWith("/strategies/") ? "/strategies" : rule.source === "/journal" ? "/knowledge" : "/settings/";
       expect(rule.destination.startsWith(home), rule.source).toBe(true);
       expect(destinations.has(rule.source)).toBe(false);
     }

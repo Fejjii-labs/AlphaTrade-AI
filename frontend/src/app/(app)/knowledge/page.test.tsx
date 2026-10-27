@@ -82,15 +82,15 @@ afterEach(() => {
 it("consolidates Knowledge categories and keeps original evidence on demand", async () => {
   render(<Page />);
   expect(await screen.findByText("Confirmation rule")).toBeInTheDocument();
-  expect(
-    screen.getByRole("navigation", { name: "Journal and Knowledge" }),
-  ).toHaveTextContent("JournalKnowledge");
+  // Knowledge is its own page: no Journal tab strip, its own h1.
+  expect(screen.queryByRole("navigation", { name: "Trades views" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1, name: "Knowledge" })).toBeInTheDocument();
   expect(screen.getByLabelText("Knowledge category")).toHaveTextContent(
     "RulesStrategiesNews & AnalysisLessons",
   );
   expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
     "href",
-    "/journal?tab=knowledge&category=rules&saved=note",
+    "/knowledge?category=rules&saved=note",
   );
   expect(screen.queryByText(entry.original_text)).not.toBeInTheDocument();
   expect(api.knowledge.listChunks).not.toHaveBeenCalled();
@@ -133,7 +133,7 @@ it("loads an exact saved record, corrects it with a revision check and retains s
   ).toHaveAttribute("href", "/agent?conversation=conversation");
   expect(
     screen.getByRole("link", { name: "Original document" }),
-  ).toHaveAttribute("href", "/journal?tab=knowledge&document_id=document");
+  ).toHaveAttribute("href", "/knowledge?document_id=document");
   fireEvent.click(screen.getByRole("button", { name: "Correct summary" }));
   fireEvent.change(screen.getByLabelText("Corrected summary"), {
     target: { value: "Wait for confirmation on close." },
