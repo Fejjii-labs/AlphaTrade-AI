@@ -54,7 +54,6 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/settings", kind: "primary", label: "Settings" },
   { path: "/autonomous", kind: "primary", label: "Autonomous" },
 
-  { path: "/strategies/detections", kind: "section", label: "Recent detections" },
   { path: "/settings/billing", kind: "section", label: "Billing & Usage" },
   { path: "/settings/team", kind: "section", label: "Team" },
   { path: "/settings/exchange", kind: "section", label: "Exchanges" },
@@ -126,6 +125,7 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/risk", kind: "redirect", label: "Risk settings (old link)" },
   { path: "/risk/autonomous", kind: "redirect", label: "Autonomous settings (old link)" },
   { path: "/watchlist", kind: "redirect", label: "Watchlist (old link)" },
+  { path: "/strategies/detections", kind: "redirect", label: "Recent detections (old link)" },
 
   { path: "/login", kind: "public", label: "Sign in" },
   { path: "/register", kind: "public", label: "Register" },

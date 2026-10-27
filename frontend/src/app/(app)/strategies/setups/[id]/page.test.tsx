@@ -65,7 +65,7 @@ it("shows the SFP condition, bound timeframe and research scope in stored detail
   ).toBeInTheDocument();
   expect(screen.queryByText(/Entry concept/)).toBeNull();
   expect(
-    screen.getByRole("link", { name: "← Back to detections" }),
+    screen.getByRole("link", { name: "← Back to Strategies" }),
   ).toHaveAttribute("href", "/strategies/detections?family=sfp");
   expectNoIdentifiers();
 });

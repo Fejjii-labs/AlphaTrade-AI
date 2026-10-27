@@ -484,14 +484,13 @@ for (const width of [1280, 390]) {
     await page
       .getByTestId("strategy-family")
       .filter({ has: page.getByRole("heading", { name: "SFP", exact: true }) })
-      .getByRole("link", { name: "Open", exact: true })
+      .getByRole("link", { name: "Versions", exact: true })
       .click();
     await expect(page.getByText("BTCUSDT · long · 1h")).toBeVisible();
     await page.getByRole("link", { name: /Back to Strategies/ }).click();
-    await page.getByRole("link", { name: "Recent detections →" }).click();
-    await expect(
-      page.getByText("Market observations · Last 7 days"),
-    ).toBeVisible();
+    // The standalone detections list folded into the family cards.
+    await page.goto("/strategies/detections");
+    await expect(page).toHaveURL(/\/strategies$/);
     await page.goto("/settings");
     const sections = page.getByRole("navigation", { name: "Settings sections" });
     await expect(sections.getByRole("link")).toHaveCount(6);

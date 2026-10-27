@@ -22,6 +22,8 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/risk", destination: "/autonomous#account", permanent: false },
   { source: "/risk/autonomous", destination: "/autonomous#bot", permanent: false },
   { source: "/watchlist", destination: "/settings/watcher", permanent: false },
+  // Each family card holds its own 7-day history now.
+  { source: "/strategies/detections", destination: "/strategies", permanent: false },
   { source: "/strategy-lab/new", destination: "/agent?intent=strategy", permanent: false },
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
 ] as const;

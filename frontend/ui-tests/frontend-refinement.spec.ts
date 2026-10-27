@@ -149,12 +149,10 @@ for (const viewport of [
 
     await page.goto("/strategies");
     const family = page.getByTestId("strategy-family").first();
-    await expect(family.locator("summary")).toHaveText("Recent detections (1)");
-    await expect(family.getByText("BTCUSDT · long · 15m", { exact: true })).not.toBeVisible();
-    await family.locator("summary").click();
-    await expect(family.getByText("BTCUSDT · long · 15m", { exact: true })).toBeVisible();
+    await expect(family.getByTestId("family-count")).toHaveText("1 in 7 days");
+    await expect(family.getByText(/BTCUSDT · Long · 15m/)).toBeVisible();
     await expect(family.getByText("ETHUSDT", { exact: false })).toHaveCount(0);
-    await expect(family.getByRole("link", { name: "Browse detections" })).toHaveAttribute("href", "/strategies/detections?family=nested_continuation");
+    await expect(family.getByRole("link", { name: "Versions" })).toHaveAttribute("href", "/strategies?family=nested");
     await fits(page);
     await screenshot(page, `strategies-${viewport.name}`);
 
