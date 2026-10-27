@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
+from app.db.models import UserStrategy, UserStrategyVersion
 from app.learning_attribution.contracts import LearningVenueMode
 from app.learning_attribution.query import LearningQueryService
 from app.paper_evaluation.journal_facts import SqlAlchemyJournalExcursionPort
@@ -31,6 +34,8 @@ from app.schemas.canonical_reads import (
     PaginatedCanonicalCandidates,
 )
 from app.schemas.execution_protocol import ExecutionProjectionView, ExecutionReceiptView
+from app.services.display_names import display_name
+from app.signal_fusion.candidate import Candidate
 from app.signal_fusion.enums import SetupAssessmentState
 
 
@@ -61,7 +66,7 @@ class CanonicalReadService:
             organization_id, limit=limit, offset=offset
         )
         return PaginatedCanonicalCandidates(
-            items=[CanonicalCandidateRead(candidate=item) for item in items],
+            items=self._candidate_reads(organization_id, items),
             total=total,
             limit=limit,
             offset=offset,
@@ -71,7 +76,41 @@ class CanonicalReadService:
         candidate = self._runtime.lifecycle.get_by_candidate_id(organization_id, candidate_id)
         if candidate is None:
             raise NotFoundError("Canonical Candidate is unknown in this organization.")
-        return CanonicalCandidateRead(candidate=candidate)
+        return self._candidate_reads(organization_id, [candidate])[0]
+
+    def _candidate_reads(
+        self, organization_id: UUID, candidates: Sequence[Candidate]
+    ) -> list[CanonicalCandidateRead]:
+        version_ids = {item.strategy_version_id for item in candidates}
+        names = (
+            dict(
+                self._session.execute(
+                    select(UserStrategyVersion.id, UserStrategy.name)
+                    .join(UserStrategy, UserStrategy.id == UserStrategyVersion.strategy_id)
+                    .where(
+                        UserStrategyVersion.id.in_(version_ids),
+                        UserStrategy.organization_id == organization_id,
+                    )
+                )
+                .tuples()
+                .all()
+            )
+            if version_ids
+            else {}
+        )
+        return [
+            CanonicalCandidateRead(
+                candidate=item,
+                display_name=display_name(
+                    names.get(item.strategy_version_id),
+                    item.evidence_identity.instrument.base_asset
+                    + item.evidence_identity.instrument.quote_asset,
+                    item.direction,
+                    item.timeframe,
+                ),
+            )
+            for item in candidates
+        ]
 
     def get_setup_assessment(
         self, *, organization_id: UUID, assessment_id: UUID

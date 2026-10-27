@@ -25,6 +25,9 @@ from app.signal_fusion.enums import SetupAssessmentState
 class CanonicalCandidateRead(StrictModel):
     authority: Literal["canonical"] = "canonical"
     candidate: Candidate
+    display_name: str = Field(
+        default="", description='Trader-facing name, e.g. "Nested · BTCUSDT · Long · 15m".'
+    )
 
 
 class PaginatedCanonicalCandidates(StrictModel):
