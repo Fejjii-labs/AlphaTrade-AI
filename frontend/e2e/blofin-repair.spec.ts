@@ -64,7 +64,9 @@ for (const width of [1280, 390]) {
     await expect(page.getByTestId("journal-trade-detail")).toBeVisible();
     await expect(activeNav).toHaveCount(1);
     await expect(activeNav).toHaveAttribute("data-destination", "journal");
-    await expect(page.getByText("BLOFIN_DEMO")).toBeVisible();
+    // The venue reads as a name; the raw code only lives in collapsed Technical details.
+    await expect(page.getByTestId("journal-trade-detail").getByText("BloFin demo", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("BLOFIN_DEMO", { exact: true })).toBeHidden();
     await expect(page.getByText("0.00493406 USDT")).toBeVisible();
     await expect(page.getByText("0.0001 BTC")).toBeVisible();
     await expect(page.getByText(/Canonical journal trade deep link/)).toHaveCount(0);
