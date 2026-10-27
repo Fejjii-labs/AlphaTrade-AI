@@ -19,6 +19,7 @@ from app.schemas.nested_continuation import (
 )
 from app.schemas.strategy_library import StrategyCard, UserStrategyCreate
 from app.services.canonical_serialization import canonical_sha256
+from app.services.display_names import display_name, family_label
 from app.services.strategy_library_service import StrategyLibraryService
 from app.services.strategy_versioning import StrategyVersioningService
 from app.strategy_brain.records import NESTED_FAMILY, aware
@@ -177,6 +178,9 @@ def setup_view(session: Session, row: BrainSetupRow, *, now: datetime) -> dict[s
         **payload,
         "setup_id": str(row.id),
         "symbol": row.symbol,
+        "display_name": display_name(
+            family_label(payload["family"]), row.symbol, payload.get("direction"), timeframe
+        ),
         "state": "EXPIRED"
         if expired and row.state not in {"COMPLETED", "INVALIDATED"}
         else row.state,

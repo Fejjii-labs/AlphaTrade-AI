@@ -6936,6 +6936,12 @@
           },
           "candidate": {
             "$ref": "#/components/schemas/Candidate"
+          },
+          "display_name": {
+            "default": "",
+            "description": "Trader-facing name, e.g. \"Nested · BTCUSDT · Long · 15m\".",
+            "title": "Display Name",
+            "type": "string"
           }
         },
         "required": [
@@ -21638,6 +21644,12 @@
           "direction": {
             "$ref": "#/components/schemas/TradeDirection"
           },
+          "display_name": {
+            "description": "Trader-facing name, e.g. \"Nested · BTCUSDT · Long · 15m\".",
+            "readOnly": true,
+            "title": "Display Name",
+            "type": "string"
+          },
           "entry_plan": {
             "anyOf": [
               {
@@ -22290,7 +22302,8 @@
           "market_regime",
           "direction",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "display_name"
         ],
         "title": "JournalTradeRead",
         "type": "object"

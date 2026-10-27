@@ -388,6 +388,9 @@ def test_http_paper_plan_binding_and_legacy_isolation() -> None:
         candidates = client.get("/canonical/candidates")
         assert candidates.status_code == 200
         assert candidates.json()["total"] == 1
+        assert candidates.json()["items"][0]["display_name"] == (
+            "Phase 7 compiled setup strategy · BTCUSDT · Short · 15m"
+        )
         eligibility = client.get(
             f"/canonical/candidates/{envelope.lineage.candidate_id}/eligibility"
         )
