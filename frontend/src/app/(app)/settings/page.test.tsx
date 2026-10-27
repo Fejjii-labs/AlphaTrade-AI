@@ -8,6 +8,8 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import SettingsPage from "./page";
+import NotificationSettingsPage from "./notifications/page";
+import WatcherSettingsPage from "./watcher/page";
 import { api } from "@/lib/api";
 import type {
   HealthResponse,
@@ -26,6 +28,8 @@ let identity = {
   user: { id: "user-1", email: "owner@example.com", email_verified: true },
   organization: { id: "org-1", name: "Alpha Org" },
 };
+const router = vi.hoisted(() => ({ replace: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: () => identity,
 }));
@@ -208,41 +212,30 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
-function openGroup(name: string) {
-  fireEvent.click(screen.getByText(name, { selector: "summary" }));
-}
-it("has exactly three expandable groups with contextual Diagnostics and Help", async () => {
+afterEach(() => {
+  cleanup();
+  window.location.hash = "";
+  router.replace.mockClear();
+});
+
+it("shows the Account section flat, with Team and Billing reachable and no link row", async () => {
   render(<SettingsPage />);
-  expect([
-    ...document.querySelectorAll("#settings-workspace > details"),
-  ]).toHaveLength(0);
-  const workspace = screen.getByTestId("settings-workspace");
-  expect(
-    [...workspace.children].filter((el) => el.tagName === "DETAILS"),
-  ).toHaveLength(3);
-  for (const name of ["Market Monitoring", "Notifications", "Account & System"])
-    expect(
-      screen.getByText(name, { selector: "summary" }).closest("details"),
-    ).not.toHaveAttribute("open");
-  openGroup("Account & System");
-  expect(screen.getByRole("link", { name: "Diagnostics" })).toHaveAttribute(
-    "href",
-    "/settings/advanced",
-  );
-  expect(screen.getByRole("link", { name: "Help & Guide" })).toHaveAttribute(
-    "href",
-    "/settings/help",
-  );
-  expect(
-    screen.queryByText("Manual demo preparation & history"),
-  ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText("Risk", { selector: "summary" }),
-  ).not.toBeInTheDocument();
+  // The landing h1 matches the sidebar label; the sub-nav marks Account.
+  expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+  expect(screen.getByText("owner@example.com")).toBeVisible();
+  expect(screen.getByText("Alpha Org")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Team" })).toHaveAttribute("href", "/settings/team");
+  expect(screen.getByRole("link", { name: "Billing & usage" })).toHaveAttribute("href", "/settings/billing");
+  for (const gone of ["Exchange connections", "Diagnostics", "Help & Guide"])
+    expect(screen.queryByRole("link", { name: gone })).not.toBeInTheDocument();
+  for (const moved of ["Market Monitoring", "Notifications", "Account & System"])
+    expect(screen.queryByText(moved, { selector: "summary" })).not.toBeInTheDocument();
+  expect(screen.getByText("System", { selector: "summary" }).closest("details")).not.toHaveAttribute("open");
+  expect(screen.queryByText("Manual demo preparation & history")).not.toBeInTheDocument();
+  expect(api.marketWatcher.monitoring).not.toHaveBeenCalled();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();
 });
-it("retains paper account setup within Account & System", async () => {
+it("keeps paper account setup in Account", async () => {
   vi.spyOn(api.execution, "registerPaperAccount").mockResolvedValue({
     account: {
       id: "paper-account",
@@ -254,7 +247,6 @@ it("retains paper account setup within Account & System", async () => {
     created: true,
   });
   render(<SettingsPage />);
-  openGroup("Account & System");
   fireEvent.click(
     await screen.findByRole("button", { name: "Set up paper account" }),
   );
@@ -262,48 +254,66 @@ it("retains paper account setup within Account & System", async () => {
   expect(api.execution.registerPaperAccount).toHaveBeenCalledExactlyOnceWith();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();
 });
-it("shows monitoring state without treating watchlist enablement as running", async () => {
+it.each([
+  ["notifications", "/settings/notifications"],
+  ["markets", "/settings/watcher"],
+])("forwards the old /settings#%s anchor to %s", (hash, target) => {
+  window.location.hash = hash;
   render(<SettingsPage />);
-  openGroup("Market Monitoring");
+  expect(router.replace).toHaveBeenCalledExactlyOnceWith(target);
+});
+it("stays on Account for the old #account-system anchor", () => {
+  window.location.hash = "account-system";
+  render(<SettingsPage />);
+  expect(router.replace).not.toHaveBeenCalled();
+});
+it("shows monitoring state on Watcher without treating watchlist enablement as running", async () => {
+  render(<WatcherSettingsPage />);
+  expect(screen.getByRole("heading", { name: "Watcher" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Enable slot 1")).toBeChecked();
   expect(screen.getByLabelText("Enable slot 2")).not.toBeChecked();
   expect(screen.getByText("STOPPED")).toBeInTheDocument();
   expect(screen.queryByText("Running")).not.toBeInTheDocument();
 });
-it("refreshes dependent monitoring and system views", async () => {
-  render(<SettingsPage />);
-  openGroup("Account & System");
-  await waitFor(() => expect(api.marketWatcher.monitoring).toHaveBeenCalled());
+it("refreshes Watcher monitoring", async () => {
+  render(<WatcherSettingsPage />);
+  await screen.findByText("STOPPED");
   const previous = vi.mocked(api.marketWatcher.monitoring).mock.calls.length;
-  fireEvent.click(
-    screen.getByRole("button", { name: "Refresh system status" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Refresh watcher" }));
   await waitFor(() =>
     expect(api.marketWatcher.monitoring).toHaveBeenCalledTimes(previous + 1),
   );
+});
+it("shows the notification controls on Notifications without sending anything", async () => {
+  render(<NotificationSettingsPage />);
+  expect(screen.getByRole("heading", { name: "Notifications" })).toBeInTheDocument();
+  await waitFor(() => expect(api.notifications.preferences).toHaveBeenCalled());
+  expect(api.notifications.sendTest).not.toHaveBeenCalled();
+  expect(api.alerts.testTelegram).not.toHaveBeenCalled();
+  expect(api.notifications.updatePreferences).not.toHaveBeenCalled();
+});
+it("refreshes system status from Account", async () => {
+  render(<SettingsPage />);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh system status" }));
   expect(runtime.refreshStatus).toHaveBeenCalledOnce();
 });
 it("keeps unknown system values unavailable", async () => {
   runtime.health = null;
   runtime.providers = null;
   render(<SettingsPage />);
-  openGroup("Account & System");
   expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
 });
 
 it("clears monitoring and account state before an authenticated account change reloads", async () => {
-  const { rerender } = render(<SettingsPage />);
-  openGroup("Market Monitoring");
+  const { rerender } = render(<><SettingsPage /><WatcherSettingsPage /></>);
   await screen.findByText("STOPPED");
   vi.mocked(api.marketWatcher.monitoring).mockImplementation(() => new Promise(() => {}));
   identity = {
     user: { id: "user-2", email: "reader@example.com", email_verified: true },
     organization: { id: "org-2", name: "Other Org" },
   };
-  rerender(<SettingsPage />);
-  openGroup("Market Monitoring");
+  rerender(<><SettingsPage /><WatcherSettingsPage /></>);
   expect(screen.queryByText("STOPPED")).not.toBeInTheDocument();
-  openGroup("Account & System");
   expect(screen.getByText("reader@example.com")).toBeInTheDocument();
   expect(screen.queryByText("owner@example.com")).not.toBeInTheDocument();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();
