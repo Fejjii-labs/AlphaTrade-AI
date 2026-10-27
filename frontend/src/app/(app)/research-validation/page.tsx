@@ -112,7 +112,7 @@ function EvidenceWarnings({ item }: { item: ResearchValidationEvidenceItem }) {
   if (!banners.length) return null;
 
   return (
-    <div className="space-y-2" data-testid={`research-validation-warnings-${item.backtest_run_id}`}>
+    <div className="space-y-2" data-testid="research-validation-warnings">
       {banners.map((message) => (
         <p
           key={message}
@@ -166,7 +166,7 @@ function EvidenceCard({
   return (
     <article
       className="space-y-4 rounded-lg border border-zinc-800 p-4"
-      data-testid={`research-validation-item-${item.backtest_run_id}`}
+      data-testid="research-validation-item"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="space-y-1">
@@ -219,7 +219,7 @@ function EvidenceCard({
             <Link
               href={`/paper-validation/candidates/${candidateId}`}
               className="text-sky-400 underline"
-              data-testid={`research-validation-candidate-link-${item.backtest_run_id}`}
+              data-testid="research-validation-candidate-link"
             >
               View paper validation candidate
             </Link>
@@ -228,7 +228,7 @@ function EvidenceCard({
             <Link
               href={`/paper-validation/run-plans/${runPlanId}`}
               className="text-sky-400 underline"
-              data-testid={`research-validation-run-plan-link-${item.backtest_run_id}`}
+              data-testid="research-validation-run-plan-link"
             >
               View run plan
             </Link>
@@ -237,7 +237,7 @@ function EvidenceCard({
       )}
 
       {promoteResult ? (
-        <p className="text-xs text-emerald-300" data-testid={`research-validation-promoted-${item.backtest_run_id}`}>
+        <p className="text-xs text-emerald-300" data-testid="research-validation-promoted">
           {promoteResult.already_exists
             ? "Candidate already exists in the paper validation queue."
             : "Promoted to the paper validation queue."}
@@ -247,7 +247,7 @@ function EvidenceCard({
       {canPromote ? (
         <div
           className="space-y-3 rounded border border-zinc-700 p-3"
-          data-testid={`research-validation-promote-${item.backtest_run_id}`}
+          data-testid="research-validation-promote"
         >
           <p className="text-xs text-zinc-400">
             Promote to paper validation — advisory queue only. No orders, no execution.
@@ -261,14 +261,14 @@ function EvidenceCard({
             value={confirm}
             onChange={(event) => setConfirm(event.target.value)}
             placeholder="Confirmation phrase"
-            data-testid={`research-validation-promote-confirm-${item.backtest_run_id}`}
+            data-testid="research-validation-promote-confirm"
             className="max-w-md font-mono text-xs"
           />
           <Button
             size="sm"
             disabled={promoting || confirm !== PROMOTE_RESEARCH_VALIDATION_CANDIDATE}
             onClick={() => void handlePromote()}
-            data-testid={`research-validation-promote-submit-${item.backtest_run_id}`}
+            data-testid="research-validation-promote-submit"
           >
             {promoting ? "Promoting…" : "Promote to paper validation"}
           </Button>

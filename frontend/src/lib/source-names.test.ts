@@ -30,6 +30,16 @@ describe("distinctSourceNames", () => {
     expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
   });
 
+  it("keeps a later real title that looks like a generated name exactly as written", () => {
+    const names = distinctSourceNames(["Risk notes", "Risk notes", "Risk notes (2)"]);
+    expect(names).toEqual(["Risk notes", "Risk notes (3)", "Risk notes (2)"]);
+    expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
+  });
+
+  it("never gives a fallback name that a later real title uses", () => {
+    expect(distinctSourceNames(["", "Source 1"])).toEqual(["Source 1 (2)", "Source 1"]);
+  });
+
   it("uses the given fallback label", () => {
     expect(distinctSourceNames([null], "Matching attempt")).toEqual(["Matching attempt 1"]);
   });
