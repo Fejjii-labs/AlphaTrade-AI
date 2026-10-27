@@ -37,6 +37,7 @@ from app.providers.exchange.base import AccountPermissions, ExchangeBalance, Exc
 from app.schemas.common import MembershipRole, StrategyId, TradingViewSignalStatus
 from app.schemas.tradingview_signal import CREATE_TRADINGVIEW_CANDIDATE_CONFIRM
 from app.security.tradingview_webhook import compute_tradingview_signature
+from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.blofin_sync_service import BloFinSyncService
 
 ORG_A = uuid.UUID("00000000-0000-0000-0000-000000037101")
@@ -442,6 +443,26 @@ def test_blofin_sync_read_only_contract(
         lambda _settings: provider,
     )
 
+    # This manual API path falls back to the trading-capable demo key, so it
+    # refuses without the activity org/UID pin (#366 C2) and reads once pinned.
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(_env_file=None),
+    )
+    unpinned = test_client.post("/exchange/blofin/sync", headers=owner)
+    assert unpinned.status_code == 200, unpinned.text
+    assert unpinned.json()["snapshot"]["health_status"] == "unavailable"
+    provider.get_balances.assert_not_called()
+    provider.get_positions.assert_not_called()
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(
+            _env_file=None,
+            organization_id=ORG_A,
+            expected_uid="sync-fixture-native-uid",
+        ),
+    )
+
     synced = test_client.post("/exchange/blofin/sync", headers=owner)
     assert synced.status_code == 200, synced.text
     snapshot = synced.json()["snapshot"]
@@ -464,8 +485,8 @@ def test_blofin_sync_read_only_contract(
 
     with factory() as session:
         rows = session.scalars(select(BloFinDemoSyncSnapshot)).all()
-        assert len(rows) == 1
-        assert rows[0].organization_id == ORG_A
+        assert {row.organization_id for row in rows} == {ORG_A}
+        assert sorted(row.health_status for row in rows) == ["ok", "unavailable"]
 
     # Unavailable path when demo gate fails.
     monkeypatch.setattr(

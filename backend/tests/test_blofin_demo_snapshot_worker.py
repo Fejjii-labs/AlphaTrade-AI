@@ -32,6 +32,7 @@ from app.core.execution_credentials import (
 )
 from app.db.blofin_activity import BloFinActivityAccount
 from app.market_activation.profile import live_market_activation_violations
+from app.providers.base import ProviderHealth
 from app.providers.exchange.base import AccountPermissions
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
@@ -2019,3 +2020,259 @@ def test_readonly_key_with_sync_flag_off_is_still_pinned_before_account_reads(
         _apply_mirror(client, settings, organization_id)
     assert client.paths == [_IDENTITY]
     _assert_secrets_absent(logs, *_READONLY_SECRETS)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("unset_uid", "activity_expected_uid_unset"),
+        ("unset_org", "activity_organization_unset"),
+    ],
+)
+def test_dedicated_readonly_snapshot_fails_closed_without_the_account_pin(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    """The dedicated read-only key used to skip the UID check when a pin was unset."""
+    organization_id = uuid4()
+    config = (
+        BloFinActivitySettings(_env_file=None, organization_id=organization_id, expected_uid=" ")
+        if case == "unset_uid"
+        else BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    calls: list[str] = []
+
+    def provider(_cfg: object) -> None:
+        calls.append("provider")
+        raise AssertionError("unpinned read-only key opened a client")
+
+    monkeypatch.setattr("app.services.blofin_sync_service.get_readonly_account_provider", provider)
+    settings = _readonly_mirror_settings()
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    refused: list[str] = []
+    real_warning = blofin_sync_service.logger.warning
+
+    def record_refusal(event: str, **kwargs: object) -> None:
+        if event == "blofin_fallback_sync_refused":
+            refused.append(str(kwargs.get("reason")))
+        real_warning(event, **kwargs)
+
+    monkeypatch.setattr("app.services.blofin_sync_service.logger.warning", record_refusal)
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="worker")
+    assert calls == []
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert refused == [reason]
+
+
+class _TradingKeyProvider:
+    """Stand-in for the trading-capable demo key on the manual API path."""
+
+    name = "blofin_demo"
+
+    def __init__(self, uid: str) -> None:
+        self.native_account_uid = uid
+        self.calls: list[str] = []
+
+    def get_account_permissions(self) -> AccountPermissions:
+        self.calls.append("permissions")
+        return AccountPermissions(
+            can_read=True, can_trade=True, can_withdraw=False, can_transfer=False
+        )
+
+    def get_balances(self) -> list[object]:
+        self.calls.append("balances")
+        return []
+
+    def get_positions(self) -> list[object]:
+        self.calls.append("positions")
+        return []
+
+    def status(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            name="blofin_demo",
+            health=ProviderHealth.HEALTHY,
+            using_fallback=False,
+            is_mock=False,
+            detail="",
+            error_message=None,
+        )
+
+
+_API_FALLBACK_CREDS = {
+    "partial_readonly_set": {"blofin_readonly_api_key": "fixture-ro-key"},
+    "full_set_sync_flag_off": {
+        "blofin_readonly_api_key": "fixture-ro-key",
+        "blofin_readonly_api_secret": "fixture-ro-secret",
+        "blofin_readonly_api_passphrase": "fixture-ro-pass",
+    },
+}
+
+
+def _api_fallback_service(
+    monkeypatch: pytest.MonkeyPatch, creds: str, uid: str
+) -> tuple[BloFinSyncService, _TradingKeyProvider, list[str]]:
+    settings = _trading_key_settings(**_API_FALLBACK_CREDS[creds])
+    assert not settings.blofin_read_sync_uses_dedicated_credentials
+    fake = _TradingKeyProvider(uid)
+    used: list[str] = []
+
+    def demo_provider(_cfg: object) -> _TradingKeyProvider:
+        used.append("demo_trading_key")
+        return fake
+
+    def readonly_provider(_cfg: object) -> _TradingKeyProvider:
+        used.append("readonly")
+        return fake
+
+    monkeypatch.setattr(blofin_sync_service, "get_demo_account_provider", demo_provider)
+    monkeypatch.setattr(blofin_sync_service, "get_readonly_account_provider", readonly_provider)
+    monkeypatch.setattr(blofin_sync_service, "ensure_demo_exchange_access", lambda _s: None)
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    return service, fake, used
+
+
+@pytest.mark.parametrize("creds", sorted(_API_FALLBACK_CREDS))
+def test_api_fallback_to_trading_key_refuses_a_different_demo_account(
+    monkeypatch: pytest.MonkeyPatch, creds: str
+) -> None:
+    """C2: the trading-key API path used to read balances with no UID pin."""
+    organization_id = uuid4()
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service, fake, used = _api_fallback_service(monkeypatch, creds, "other-demo-account")
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    assert used == ["demo_trading_key"]
+    assert fake.calls == ["permissions"]
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert result.snapshot.balance_count == 0
+
+
+@pytest.mark.parametrize("creds", sorted(_API_FALLBACK_CREDS))
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("no_pin", "activity_organization_unset"),
+        ("unset_uid", "activity_expected_uid_unset"),
+        ("other_org", "activity_organization_mismatch"),
+    ],
+)
+def test_api_fallback_to_trading_key_refuses_without_a_matching_pin(
+    monkeypatch: pytest.MonkeyPatch, creds: str, case: str, reason: str
+) -> None:
+    organization_id = uuid4()
+    config = {
+        "no_pin": BloFinActivitySettings(_env_file=None),
+        "unset_uid": BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=""
+        ),
+        "other_org": BloFinActivitySettings(
+            _env_file=None, organization_id=uuid4(), expected_uid="pinned-demo-account"
+        ),
+    }[case]
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    service, fake, used = _api_fallback_service(monkeypatch, creds, "pinned-demo-account")
+    refused: list[str] = []
+    real_warning = blofin_sync_service.logger.warning
+
+    def record_refusal(event: str, **kwargs: object) -> None:
+        if event == "blofin_fallback_sync_refused":
+            refused.append(str(kwargs.get("reason")))
+        real_warning(event, **kwargs)
+
+    monkeypatch.setattr("app.services.blofin_sync_service.logger.warning", record_refusal)
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    assert used == []
+    assert fake.calls == []
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert refused == [reason]
+
+
+@pytest.mark.parametrize("creds", sorted(_API_FALLBACK_CREDS))
+def test_api_fallback_to_trading_key_reads_the_pinned_demo_account(
+    monkeypatch: pytest.MonkeyPatch, creds: str
+) -> None:
+    organization_id = uuid4()
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    service, fake, used = _api_fallback_service(monkeypatch, creds, "pinned-demo-account")
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="api")
+    assert used == ["demo_trading_key"]
+    assert fake.calls == ["permissions", "balances", "positions"]
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.OK
+    assert result.snapshot.provenance["native_account_uid"] == "pinned-demo-account"
+
+
+@pytest.mark.parametrize(
+    "settings_factory",
+    [
+        pytest.param(lambda: _trading_key_settings(), id="demo_key_read"),
+        pytest.param(lambda: _readonly_mirror_settings(), id="dedicated_readonly"),
+        pytest.param(
+            lambda: _trading_key_settings(**_API_FALLBACK_CREDS["partial_readonly_set"]),
+            id="api_trading_key_fallback",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("unset_org", "activity_organization_unset"),
+        ("unset_uid", "activity_expected_uid_unset"),
+    ],
+)
+def test_latest_refuses_before_any_snapshot_read_without_the_account_pin(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_factory: object,
+    case: str,
+    reason: str,
+) -> None:
+    """C3: ``latest()`` must not serve a snapshot while the org or UID pin is unset."""
+    organization_id = uuid4()
+    config = (
+        BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+        if case == "unset_org"
+        else BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=" "
+        )
+    )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    session = MagicMock()
+    session.get.return_value = None
+    service = BloFinSyncService(session, settings_factory())  # type: ignore[operator]
+    monkeypatch.setattr(
+        service._snapshots, "verified_uid_for_binding", lambda *_a, **_k: "pinned-demo-account"
+    )
+    served: list[str] = []
+
+    def latest_for_connection(*_a: object, **_k: object) -> SimpleNamespace:
+        served.append("row")
+        return _snapshot_row(organization_id, uuid4())
+
+    monkeypatch.setattr(service._snapshots, "latest_for_connection", latest_for_connection)
+    refused: list[str] = []
+    real_warning = blofin_sync_service.logger.warning
+
+    def record(event: str, **kwargs: object) -> None:
+        if event == "blofin_snapshot_read_refused":
+            refused.append(str(kwargs.get("reason")))
+        real_warning(event, **kwargs)
+
+    monkeypatch.setattr("app.services.blofin_sync_service.logger.warning", record)
+    with pytest.raises(NotFoundError, match="unverified"):
+        service.latest(organization_id=organization_id)
+    assert served == []
+    assert refused == [reason]

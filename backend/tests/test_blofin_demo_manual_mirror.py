@@ -1690,3 +1690,22 @@ def test_mirror_report_lists_each_skipped_row_with_its_reason(session: Session) 
         (history_id, "ambiguous_both_sides")
     ]
     assert built.skipped == 1
+
+
+def test_mirror_apply_warns_with_skip_count_and_reason_codes(session: Session) -> None:
+    import structlog
+
+    closing = _fill(
+        int(_FIXTURE["long"]["history"][0]["updateTime"]), "sell", fillPnl="0.2", tradeId="t-close"
+    )
+    with structlog.testing.capture_logs() as logs:
+        _apply(session, _net_long_bundle([closing]))
+    warned = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]
+    assert len(warned) == 1
+    assert warned[0]["log_level"] == "warning"
+    assert warned[0]["skipped_rows"] == 1
+    assert warned[0]["reasons"] == {"no_opening_fill": 1}
+
+    with structlog.testing.capture_logs() as clean:
+        _apply(session, _FIXTURE["long"])
+    assert not [e for e in clean if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]

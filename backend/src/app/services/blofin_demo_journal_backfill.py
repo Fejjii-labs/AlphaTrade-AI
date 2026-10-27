@@ -51,6 +51,7 @@ from app.services.blofin_demo_manual_mirror import (
 from app.services.risk.mirror_economics import MIRROR_REF_PREFIX, exact_prefix
 
 SUPERSEDED_PREFIX = "blofin-superseded-by:"
+_DIGEST_VERSION = 2
 _UNSAFE_KEYS = frozenset({"uid", "userid", "apikey", "passphrase", "secret", "email"})
 _COMPARED = (
     "status",
@@ -539,17 +540,30 @@ def build_plan(
                 "ghost_class": ghost,
             }
         )
-    digest = hashlib.sha256(
-        "\n".join(
-            json.dumps(line, sort_keys=True, separators=(",", ":")) for line in lines
-        ).encode()
-    ).hexdigest()
+    leg_directions = [
+        {
+            "history_id": leg.history_id,
+            "inst_id": leg.inst_id,
+            "direction": leg.direction.value,
+            "source": leg.side_source,
+        }
+        for leg in sorted(slices, key=lambda item: item.history_id)
+    ]
+    # Digest v2: the lines plus every leg's direction and its source, so a
+    # long/short flip on an unverified create cannot keep an approved digest.
+    digest_parts = [
+        json.dumps({"digest_version": _DIGEST_VERSION}, separators=(",", ":")),
+        *(json.dumps(line, sort_keys=True, separators=(",", ":")) for line in lines),
+        json.dumps({"leg_directions": leg_directions}, sort_keys=True, separators=(",", ":")),
+    ]
+    digest = hashlib.sha256("\n".join(digest_parts).encode()).hexdigest()
     summary = {
         "window": [pages.window_begin.isoformat(), pages.window_end.isoformat()],
         "funding_coverage_begin": pages.funding_begin.isoformat(),
         "legs_read": len(slices),
         "history_rows_skipped": len(skipped_rows),
         "skipped_rows": [row.as_dict() for row in skipped_rows],
+        "leg_directions": leg_directions,
         "lifetimes": len(lifetimes),
         **counts,
         "ghosts": ghosts,
@@ -561,6 +575,7 @@ def build_plan(
         "tracker_open_time_differs_from_history": tracker_differs,
         "fee_mismatch": None,
         "legs_per_lifetime": legs_per,
+        "plan_digest_version": _DIGEST_VERSION,
         "plan_digest": f"sha256:{digest}",
     }
     return lines, summary

@@ -346,3 +346,56 @@ def test_read_venue_refuses_before_any_account_read_without_a_matching_uid(
         )
     paths = [path for _method, path, _params in client.calls]
     assert paths in ([], ["/api/v1/user/query-apikey"])
+
+
+def test_plan_summary_lists_each_leg_direction_and_its_source() -> None:
+    _, side_summary = _plan(_FIXTURE["partial_flat"])
+    _, pos_summary = _plan(_without_side(_FIXTURE["partial_flat"], "long"))
+    bundle = _without_side(_FIXTURE["partial_flat"], "net")
+    first = bundle["history"][0]
+    opening = {
+        "instId": first["instId"],
+        "side": "buy",
+        "ts": first["createTime"],
+        "orderId": "o-open",
+        "tradeId": "t-open",
+    }
+    bundle["fills"] = [opening, *bundle["fills"]]
+    _, fill_summary = _plan(bundle)
+    ids = sorted(row["historyId"] for row in _FIXTURE["partial_flat"]["history"])
+    for summary, source in (
+        (side_summary, "side"),
+        (pos_summary, "positionSide"),
+        (fill_summary, "opening_fill"),
+    ):
+        legs = summary["leg_directions"]
+        assert [leg["history_id"] for leg in legs] == ids
+        assert {leg["source"] for leg in legs} == {source}
+        assert {leg["direction"] for leg in legs} == {"long"}
+
+
+@pytest.mark.parametrize("base", ["partial_open", "short"])
+def test_plan_digest_changes_when_an_unverified_leg_flips_long_to_short(base: str) -> None:
+    """Unverified creates carry no P&L, so only the leg direction can tell them apart."""
+    plans = []
+    for side in ("long", "short"):
+        bundle = _without_side(_FIXTURE[base], side)
+        for row in bundle["history"]:
+            if "realizedPnl" in row:
+                row["realizedPnl"] = str(float(row["realizedPnl"]) + 123.0)
+        plans.append(_plan(bundle))
+    (lines_long, long_summary), (lines_short, short_summary) = plans
+    assert [line["fields"] for line in lines_long] == [line["fields"] for line in lines_short]
+    assert {leg["direction"] for leg in long_summary["leg_directions"]} == {"long"}
+    assert {leg["direction"] for leg in short_summary["leg_directions"]} == {"short"}
+    assert long_summary["plan_digest"] != short_summary["plan_digest"]
+    assert long_summary["plan_digest_version"] == 2
+
+
+def test_plan_digest_changes_when_only_the_direction_source_changes() -> None:
+    _, from_side = _plan(_FIXTURE["partial_flat"])
+    _, from_position = _plan(_without_side(_FIXTURE["partial_flat"], "long"))
+    assert [leg["direction"] for leg in from_side["leg_directions"]] == [
+        leg["direction"] for leg in from_position["leg_directions"]
+    ]
+    assert from_side["plan_digest"] != from_position["plan_digest"]

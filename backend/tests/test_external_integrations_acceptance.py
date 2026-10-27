@@ -111,6 +111,10 @@ def test_readonly_sync_in_paper_internal_keeps_execution_sealed(tv_client, monke
         "app.services.blofin_sync_service.get_readonly_account_provider",
         lambda cfg: get_readonly_account_provider(cfg, transport=account_transport(seen)),
     )
+    from tests.test_at037_tradingview_blofin import ORG_A as _PIN_ORG
+    from tests.test_dashboard_demo_account import pin_activity
+
+    pin_activity(monkeypatch, "acceptance-native-uid", _PIN_ORG)
     from tests.test_at037_tradingview_blofin import ORG_A as TV_ORG
     from tests.test_at037_tradingview_blofin import _login as tv_login
 
@@ -437,6 +441,10 @@ def test_readonly_sync_refuses_unsafe_permission_before_account_fetch(
             cfg, transport=account_transport(seen, permissions=[permission])
         ),
     )
+    from tests.test_at037_tradingview_blofin import ORG_A as _PIN_ORG
+    from tests.test_dashboard_demo_account import pin_activity
+
+    pin_activity(monkeypatch, "acceptance-native-uid", _PIN_ORG)
     from tests.test_at037_tradingview_blofin import _login as tv_login
 
     response = client.post(
