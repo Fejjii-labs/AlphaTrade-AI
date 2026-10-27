@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { TechnicalDetails } from "@/components/ui/technical-details";
 import type { ConversationMessageRecord } from "@/lib/api/types";
+import { distinctSourceNames } from "@/lib/source-names";
 
 const DOCUMENT_GUIDANCE =
   "Document guidance is reference data; these passages do not establish approved settings.";
@@ -17,6 +19,17 @@ function withoutDocumentGuidance(text: string): { text: string; guidance: boolea
       .replace(/[ \t]{2,}/g, " ")
       .trim(),
   };
+}
+
+type SourceRef = {
+  title?: unknown;
+  record_id?: unknown;
+  relation?: unknown;
+  artifact_kind?: unknown;
+};
+
+function titleOf(source: SourceRef): string | null {
+  return typeof source.title === "string" ? source.title : null;
 }
 
 export function AgentMessageContent({
@@ -41,8 +54,16 @@ export function AgentMessageContent({
     typeof metadata === "object" &&
     "sources" in metadata &&
     Array.isArray(metadata.sources)
-      ? metadata.sources
+      ? metadata.sources.filter(
+          (source): source is SourceRef => Boolean(source) && typeof source === "object",
+        )
       : [];
+  const sourceNames = distinctSourceNames(sources.map(titleOf));
+  const choices = sources.filter(
+    (source): source is SourceRef & { record_id: string } =>
+      source.relation === "manual demo choice" && typeof source.record_id === "string",
+  );
+  const choiceNames = distinctSourceNames(choices.map(titleOf), "Matching attempt");
   const evidence =
     message.role === "assistant"
       ? typeof stored === "string"
@@ -59,22 +80,13 @@ export function AgentMessageContent({
       : null;
   const journalAction = sources.find(
     (source) =>
-      source &&
-      typeof source === "object" &&
-      "artifact_kind" in source &&
       source.artifact_kind === "journal_entry" &&
-      "relation" in source &&
       source.relation === "recorded trade lineage" &&
-      "record_id" in source &&
       typeof source.record_id === "string",
   );
   const manualAction = sources.find(
     (source) =>
-      source &&
-      typeof source === "object" &&
-      "relation" in source &&
       source.relation === "manual demo command" &&
-      "record_id" in source &&
       typeof source.record_id === "string",
   );
   const action = journalAction ?? manualAction;
@@ -94,42 +106,21 @@ export function AgentMessageContent({
       {peeled.guidance ? (
         <p className="mt-2 text-xs text-text-muted">{DOCUMENT_GUIDANCE}</p>
       ) : null}
-      {sources.some(
-        (source) =>
-          source &&
-          typeof source === "object" &&
-          "relation" in source &&
-          source.relation === "manual demo choice",
-      ) && (
+      {choices.length > 0 && (
         <ul
           aria-label="Matching manual demo attempts"
           className="mt-2 space-y-2"
         >
-          {sources.map((source, index) => {
-            if (
-              !source ||
-              typeof source !== "object" ||
-              !("relation" in source) ||
-              source.relation !== "manual demo choice" ||
-              !("record_id" in source) ||
-              typeof source.record_id !== "string"
-            )
-              return null;
-            const title =
-              "title" in source && typeof source.title === "string"
-                ? source.title
-                : "Open matching attempt";
-            return (
-              <li key={`${source.record_id}-${index}`}>
-                <Link
-                  className="underline"
-                  href={`/execution/manual-demo/${encodeURIComponent(source.record_id)}`}
-                >
-                  {title}
-                </Link>
-              </li>
-            );
-          })}
+          {choices.map((source, index) => (
+            <li key={`${source.record_id}-${index}`}>
+              <Link
+                className="underline"
+                href={`/execution/manual-demo/${encodeURIComponent(source.record_id)}`}
+              >
+                {choiceNames[index]}
+              </Link>
+            </li>
+          ))}
         </ul>
       )}
       {action &&
@@ -147,9 +138,7 @@ export function AgentMessageContent({
           {journalAction ? "Open Journal detail" : "Open this exact attempt"}
         </Link>
       ) : null}
-      {evidence !== null ||
-      explanation !== null ||
-      sources.length > 0 ? (
+      {evidence !== null || explanation !== null || sources.length > 0 ? (
         <details className="mt-3 border-t border-border-subtle pt-2">
           <summary className="cursor-pointer rounded-control text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
             Sources
@@ -160,57 +149,52 @@ export function AgentMessageContent({
               {explanation}
             </p>
           ) : null}
-          {evidence !== null ? (
-            <p className="mt-2 whitespace-pre-wrap break-words text-xs [overflow-wrap:anywhere]">
-              {evidence}
-            </p>
-          ) : null}
           {sources.length > 0 ? (
             <ul
               aria-label="Source references"
               className="mt-2 space-y-1 text-xs [overflow-wrap:anywhere]"
             >
               {sources.map((source, index) => {
-                if (!source || typeof source !== "object") return null;
-                const title =
-                  "title" in source && typeof source.title === "string"
-                    ? source.title
-                    : "Stored record";
+                const name = sourceNames[index];
                 const identity =
-                  "record_id" in source && typeof source.record_id === "string"
-                    ? source.record_id
-                    : "unavailable";
+                  typeof source.record_id === "string" ? source.record_id : null;
                 const manualCommand =
-                  "relation" in source &&
-                  (source.relation === "manual demo choice" ||
-                    source.relation === "manual demo command");
+                  source.relation === "manual demo choice" ||
+                  source.relation === "manual demo command";
                 return (
-                  <li key={`${identity}-${index}`}>
-                    {"relation" in source &&
-                    source.relation === "saved user note" ? (
+                  <li key={`${identity ?? "source"}-${index}`}>
+                    {identity && source.relation === "saved user note" ? (
                       <Link
                         href={`/journal?saved=${encodeURIComponent(identity)}`}
                         className="underline"
-                        aria-label={`Source: ${title}`}
+                        aria-label={`Source: ${name}`}
                       >
-                        {title}
+                        {name}
                       </Link>
-                    ) : manualCommand ? (
+                    ) : identity && manualCommand ? (
                       <Link
                         className="underline"
                         href={`/execution/manual-demo/${encodeURIComponent(identity)}`}
-                        aria-label={`Source: ${title}`}
+                        aria-label={`Source: ${name}`}
                       >
-                        {title}
+                        {name}
                       </Link>
                     ) : (
-                      title
+                      name
                     )}
                   </li>
                 );
               })}
             </ul>
           ) : null}
+          <TechnicalDetails
+            className="mt-2"
+            raw={evidence}
+            items={sources.map((source, index) => ({
+              label: sourceNames[index],
+              value: typeof source.record_id === "string" ? source.record_id : null,
+            }))}
+          />
         </details>
       ) : null}
     </>

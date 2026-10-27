@@ -231,6 +231,14 @@ export function formatTrendLabel(label: string | null | undefined): string {
   return humanizeToken(label);
 }
 
+const VENUE_LABELS: Record<string, string> = { BLOFIN_DEMO: "BloFin demo", PAPER: "Paper" };
+
+/** Readable venue name; the raw venue code belongs in Technical details. */
+export function venueLabel(code: string | null | undefined): string {
+  if (!code) return UNAVAILABLE;
+  return VENUE_LABELS[code] ?? humanizeToken(code.toLowerCase());
+}
+
 /** Convert snake_case / enum tokens to short product labels. */
 export function humanizeToken(value: string | null | undefined): string {
   if (!value) return UNAVAILABLE;

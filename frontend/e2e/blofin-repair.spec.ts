@@ -53,7 +53,9 @@ for (const width of [1280, 390]) {
     const explanation = page.getByRole("region", { name: "Agent explanation" });
     await expect(explanation).toContainText("Entry verified: 0.1 contracts");
     await expect(explanation).not.toContainText("Recorded facts");
-    await expect(explanation.locator("details")).not.toHaveAttribute("open");
+    // Sources disclosure and its nested Technical details both start collapsed.
+    await expect(explanation.locator("details")).toHaveCount(2);
+    await expect(explanation.locator("details[open]")).toHaveCount(0);
     await expect(explanation.getByRole("link", { name: "Open Journal detail" })).toHaveAttribute("href", `/journal?trade_id=${tradeId}`);
     await expect(page.getByTestId("manual-demo-detail")).not.toContainText("0E-8");
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
@@ -62,7 +64,9 @@ for (const width of [1280, 390]) {
     await expect(page.getByTestId("journal-trade-detail")).toBeVisible();
     await expect(activeNav).toHaveCount(1);
     await expect(activeNav).toHaveAttribute("data-destination", "journal");
-    await expect(page.getByText("BLOFIN_DEMO")).toBeVisible();
+    // The venue reads as a name; the raw code only lives in collapsed Technical details.
+    await expect(page.getByTestId("journal-trade-detail").getByText("BloFin demo", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("BLOFIN_DEMO", { exact: true })).toBeHidden();
     await expect(page.getByText("0.00493406 USDT")).toBeVisible();
     await expect(page.getByText("0.0001 BTC")).toBeVisible();
     await expect(page.getByText(/Canonical journal trade deep link/)).toHaveCount(0);

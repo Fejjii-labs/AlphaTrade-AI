@@ -121,9 +121,9 @@ describe("ResearchValidationPage AT-035", () => {
   it("renders evidence tier and warning banners", () => {
     render(<ResearchValidationPage />);
     expect(screen.getByTestId("research-validation-list")).toBeInTheDocument();
-    expect(screen.getByTestId(`research-validation-item-${RUN_ID}`)).toBeInTheDocument();
+    expect(screen.getByTestId("research-validation-item")).toBeInTheDocument();
     expect(screen.getByText("Tier 2")).toBeInTheDocument();
-    expect(screen.getByTestId(`research-validation-warnings-${RUN_ID}`)).toBeInTheDocument();
+    expect(screen.getByTestId("research-validation-warnings")).toBeInTheDocument();
     expect(screen.getByText(/confirm trade sample is below/i)).toBeInTheDocument();
     expect(screen.getByText(/out-of-sample metrics are missing/i)).toBeInTheDocument();
     expect(screen.getAllByText(/advisory only/i).length).toBeGreaterThan(0);
@@ -132,9 +132,9 @@ describe("ResearchValidationPage AT-035", () => {
 
   it("disables promote submit until confirm phrase typed", () => {
     render(<ResearchValidationPage />);
-    const submit = screen.getByTestId(`research-validation-promote-submit-${RUN_ID}`);
+    const submit = screen.getByTestId("research-validation-promote-submit");
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByTestId(`research-validation-promote-confirm-${RUN_ID}`), {
+    fireEvent.change(screen.getByTestId("research-validation-promote-confirm"), {
       target: { value: PROMOTE_RESEARCH_VALIDATION_CANDIDATE },
     });
     expect(submit).not.toBeDisabled();
@@ -153,13 +153,13 @@ describe("ResearchValidationPage AT-035", () => {
     });
 
     render(<ResearchValidationPage />);
-    fireEvent.change(screen.getByTestId(`research-validation-promote-confirm-${RUN_ID}`), {
+    fireEvent.change(screen.getByTestId("research-validation-promote-confirm"), {
       target: { value: PROMOTE_RESEARCH_VALIDATION_CANDIDATE },
     });
-    fireEvent.click(screen.getByTestId(`research-validation-promote-submit-${RUN_ID}`));
+    fireEvent.click(screen.getByTestId("research-validation-promote-submit"));
 
     await waitFor(() => {
-      expect(screen.getByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+      expect(screen.getByTestId("research-validation-promoted")).toHaveTextContent(
         /already exists in the paper validation queue/i,
       );
     });
@@ -178,10 +178,10 @@ describe("ResearchValidationPage AT-035", () => {
     });
 
     render(<ResearchValidationPage />);
-    fireEvent.change(screen.getByTestId(`research-validation-promote-confirm-${RUN_ID}`), {
+    fireEvent.change(screen.getByTestId("research-validation-promote-confirm"), {
       target: { value: PROMOTE_RESEARCH_VALIDATION_CANDIDATE },
     });
-    fireEvent.click(screen.getByTestId(`research-validation-promote-submit-${RUN_ID}`));
+    fireEvent.click(screen.getByTestId("research-validation-promote-submit"));
 
     await waitFor(() => {
       expect(mockPromote).toHaveBeenCalledWith({
@@ -189,7 +189,7 @@ describe("ResearchValidationPage AT-035", () => {
         backtest_run_id: RUN_ID,
       });
     });
-    expect(await screen.findByTestId(`research-validation-promoted-${RUN_ID}`)).toHaveTextContent(
+    expect(await screen.findByTestId("research-validation-promoted")).toHaveTextContent(
       /promoted to the paper validation queue/i,
     );
   });
