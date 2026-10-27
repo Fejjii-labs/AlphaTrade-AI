@@ -182,6 +182,6 @@ describe("Compact truthful header", () => {
     expect(screen.getByTestId("topbar-page-identity")).toHaveTextContent(
       "AlphaTrade",
     );
-    expect(screen.queryByText("Journal & Knowledge")).not.toBeInTheDocument();
+    expect(screen.queryByText("Trades")).not.toBeInTheDocument();
   });
 });

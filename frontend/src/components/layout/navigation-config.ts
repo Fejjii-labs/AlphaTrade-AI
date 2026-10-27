@@ -52,10 +52,10 @@ export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
   },
   {
     id: "journal",
-    label: "Journal & Knowledge",
+    label: "Trades",
     href: "/journal",
     icon: BookOpen,
-    ariaLabel: "Journal & Knowledge",
+    ariaLabel: "Trades",
   },
   {
     id: "strategies",

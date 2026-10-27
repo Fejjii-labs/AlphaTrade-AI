@@ -137,6 +137,8 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
 export type RouteRedirect = {
   source: string;
   destination: string;
+  /** Redirect only when the path carries this query. */
+  has?: { key: string; value?: string }[];
   /** `config`: next.config redirects (run before pages). `page`: the page calls `redirect()`. */
   via: "config" | "page";
 };
@@ -145,13 +147,14 @@ export type RouteRedirect = {
 export const PAGE_REDIRECTS: readonly RouteRedirect[] = [
   { source: "/dashboard", destination: "/", via: "page" },
   { source: "/coaching", destination: "/agent", via: "page" },
-  { source: "/journal/statistics", destination: "/", via: "page" },
+  { source: "/journal/statistics", destination: "/journal?tab=stats", via: "page" },
 ];
 
 export const ROUTE_REDIRECTS: readonly RouteRedirect[] = [
   ...PHASE_B_REDIRECTS.map((rule) => ({
     source: rule.source,
     destination: rule.destination,
+    ...(rule.has ? { has: rule.has.map(({ key, value }) => ({ key, value })) } : {}),
     via: "config" as const,
   })),
   ...PAGE_REDIRECTS,
@@ -185,12 +188,16 @@ export function findRegisteredRoute(path: string): RegisteredRoute | null {
 
 function findRedirect(path: string): RouteRedirect | null {
   const target = segmentsOf(path);
+  const query = new URLSearchParams(path.split("#")[0]!.split("?")[1] ?? "");
   return (
     ROUTE_REDIRECTS.find((rule) => {
       const pattern = segmentsOf(rule.source);
       return (
         pattern.length === target.length &&
-        pattern.every((segment, index) => isDynamic(segment) || segment === target[index])
+        pattern.every((segment, index) => isDynamic(segment) || segment === target[index]) &&
+        (rule.has ?? []).every(({ key, value }) =>
+          value === undefined ? query.has(key) : query.get(key) === value,
+        )
       );
     }) ?? null
   );

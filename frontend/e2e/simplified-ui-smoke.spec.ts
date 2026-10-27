@@ -11,7 +11,7 @@ const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 const DESTINATIONS = [
   { route: "/", heading: "Dashboard", file: "dashboard" },
   { route: "/agent", heading: "Agent", file: "agent" },
-  { route: "/journal", heading: "Journal & Knowledge", file: "journal" },
+  { route: "/journal", heading: "Trades", file: "journal" },
   { route: "/strategies", heading: "Strategies", file: "strategies" },
   { route: "/settings", heading: "Settings", file: "settings" },
 ] as const;

@@ -185,7 +185,7 @@ test.describe("Canonical paper decision workflow", () => {
     await expect(nav.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/");
     await expect(nav.getByRole("link", { name: "Agent" })).toHaveAttribute("href", "/agent");
     await expect(nav.getByRole("link", { name: "Strategies" })).toHaveAttribute("href", "/strategies");
-    await expect(nav.getByRole("link", { name: "Journal" })).toHaveAttribute("href", "/journal");
+    await expect(nav.getByRole("link", { name: "Trades" })).toHaveAttribute("href", "/journal");
     await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("banner").getByTestId("kill-switch-button")).toBeVisible();

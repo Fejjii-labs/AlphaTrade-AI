@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function LegacyPage() {
-  redirect("/");
+  redirect("/journal?tab=stats");
 }

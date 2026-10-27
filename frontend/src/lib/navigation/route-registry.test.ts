@@ -89,7 +89,8 @@ describe("route registry", () => {
     );
     for (const rule of ROUTE_REDIRECTS) {
       const page = ROUTE_REGISTRY.find((route) => route.path === rule.source);
-      if (page) expect(redirectPages.has(page.path), rule.source).toBe(true);
+      // A query-only redirect (`/journal?tab=knowledge`) leaves its page live.
+      if (page && !rule.has) expect(redirectPages.has(page.path), rule.source).toBe(true);
     }
     for (const page of redirectPages) {
       expect(ROUTE_REDIRECTS.some((rule) => rule.source === page), page).toBe(true);
@@ -101,7 +102,8 @@ describe("redirects", () => {
   it.each(ROUTE_REDIRECTS.map((rule) => [rule.source, rule]))(
     "%s lands on a real page",
     (_source, rule) => {
-      const sample = rule.source.replace(":id", "sample-id");
+      const query = (rule.has ?? []).map(({ key, value }) => `${key}=${value ?? "1"}`).join("&");
+      const sample = rule.source.replace(":id", "sample-id") + (query ? `?${query}` : "");
       const landing = resolveRoute(sample);
       expect(landing, `${rule.source} → ${rule.destination}`).not.toBeNull();
       expect(landing!.kind).not.toBe("redirect");
@@ -147,5 +149,17 @@ describe("/risk belongs to one destination", () => {
     expect(SETTINGS_ROUTE_PREFIXES).not.toContain("/risk");
     expect(getDestinationId("/risk")).toBe("strategies");
     expect(getDestinationId("/risk/autonomous")).toBe("strategies");
+  });
+});
+
+describe("query-matched redirects", () => {
+  it("only redirects /journal when it carries tab=knowledge", () => {
+    expect(resolveRoute("/journal")?.path).toBe("/journal");
+    expect(resolveRoute("/journal?tab=stats")?.path).toBe("/journal");
+    expect(resolveRoute("/journal?tab=knowledge&category=rules")?.path).toBe("/knowledge");
+  });
+
+  it("sends the old statistics page to the Stats tab", () => {
+    expect(resolveRoute("/journal/statistics")?.path).toBe("/journal");
   });
 });
