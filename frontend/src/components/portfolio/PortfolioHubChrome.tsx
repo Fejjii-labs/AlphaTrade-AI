@@ -11,7 +11,9 @@ import { RiskBlock } from "@/components/ui/risk-block";
 
 type PortfolioHubChromeProps = {
   title: string;
-  description: string;
+  description?: string;
+  /** Right-aligned header actions. */
+  actions?: ReactNode;
   posture: SafetyPostureDisplay;
   providerMode?: string;
   /** Omitted by hub siblings that aggregate no sources of their own. */
@@ -34,6 +36,7 @@ const NO_FRESHNESS_SOURCES: FreshnessSourceInput[] = [];
 export function PortfolioHubChrome({
   title,
   description,
+  actions,
   posture,
   providerMode,
   freshnessSources = NO_FRESHNESS_SOURCES,
@@ -53,6 +56,7 @@ export function PortfolioHubChrome({
       <PageHeader
         title={title}
         description={description}
+        actions={actions}
         meta={<PaperModeIndicator active={posture.paperConfirmed} />}
       />
 

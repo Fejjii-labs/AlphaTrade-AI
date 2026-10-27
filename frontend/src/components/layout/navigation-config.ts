@@ -89,7 +89,8 @@ const JOURNAL_PREFIXES = [
   "/knowledge",
   "/lessons",
 ] as const;
-const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab", "/risk"] as const;
+// Autonomous sits under Strategies until it gets its own sidebar item (UI overhaul B6).
+const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab", "/autonomous", "/risk"] as const;
 const AGENT_PREFIXES = ["/agent"] as const;
 
 export const SECONDARY_NAV: readonly SecondaryNavGroup[] = [
@@ -251,7 +252,7 @@ export function resolvePageIdentity(pathname: string): PageIdentity {
 
 /** Flat reachability map used by tests — every retained capability path. */
 export function listReachableHrefs(): string[] {
-  const hrefs = new Set<string>(["/knowledge"]);
+  const hrefs = new Set<string>(["/knowledge", "/autonomous"]);
   for (const destination of PRIMARY_DESTINATIONS) {
     hrefs.add(destination.href);
   }
