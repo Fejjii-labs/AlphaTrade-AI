@@ -2,6 +2,7 @@
 
 import { FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 
+import { BotActivityPanel } from "@/components/autonomous/BotActivityPanel";
 import { ErrorState, LoadingState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -292,6 +293,7 @@ export function BotSettings({ between }: { between?: ReactNode } = {}) {
           </form>
         </CardContent>
       </Card>
+      <BotActivityPanel view={view} />
     </>
   );
 }

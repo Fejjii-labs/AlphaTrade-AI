@@ -41,6 +41,11 @@ const safetyPosture = {
 
 const useAsyncDataMock = vi.fn();
 
+// The activity panel has its own load and tests (BotActivityPanel.test.tsx).
+vi.mock("@/components/autonomous/BotActivityPanel", () => ({
+  BotActivityPanel: () => <section aria-label="What the bot is doing" />,
+}));
+
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => appContext,
   useSafetyPosture: () => safetyPosture,
@@ -92,6 +97,7 @@ describe("Autonomous trading settings form", () => {
 
   it("renders typed fields and selectors", () => {
     render(<BotSettings />);
+    expect(screen.getByRole("region", { name: "What the bot is doing" })).toBeInTheDocument();
     expect(screen.getByTestId("autonomous-daily-loss-percent")).toHaveValue("3");
     expect(screen.getByTestId("autonomous-max-trades")).toHaveValue("5");
     expect(screen.getByTestId("autonomous-risk-per-trade")).toHaveValue("");
