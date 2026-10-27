@@ -64,6 +64,11 @@ export function StrategyDraftReview({ conversationId, proposalId }: { conversati
           </div>)}
         </dl> : <p className="mt-2 text-sm text-text-muted">No structured rules in this draft.</p>}
       </details>
+      <details data-testid="agent-strategy-raw"><summary className="cursor-pointer text-sm">Raw draft (rules, pattern, card)</summary>
+        <pre className="whitespace-pre-wrap break-words text-sm">{JSON.stringify({
+          rules: proposal.proposed_structured_rules, pattern: proposal.proposed_pattern_spec, card: proposal.proposed_card,
+        }, null, 2)}</pre>
+      </details>
       <p className="text-xs">Saving creates a version. Compilation and approval remain separate.</p>
       {proposal.status === "draft" ? <Button disabled={busy || !proposal.content_hash || !proposal.validation.valid}
         onClick={() => void apply("save")}>Confirm and save strategy version</Button> : null}
