@@ -269,7 +269,6 @@ def fetch_closed_bars_since(
         first.settling
         and first.switch_to is None
         and not first.bars
-        and not first.refused
         and within_settlement_guard(evaluated_at, interval)
     ):
         # The venue refuses every page size inside its post-close guard. That

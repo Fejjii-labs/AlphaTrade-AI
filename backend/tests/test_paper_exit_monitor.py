@@ -2409,3 +2409,35 @@ def test_settling_cycle_keeps_the_degraded_streak_and_alert_fires() -> None:
     )
     assert fired.alert is not None
     assert fired.alert.code == "degraded_repeat"
+
+
+def test_normal_read_resets_the_settling_deferral_count() -> None:
+    from app.services.paper_exit_monitor import MAX_SETTLING_DEFERRALS
+
+    start = datetime(2026, 10, 27, 7, 15, tzinfo=UTC)
+    trade = _trade(entry_time=start)
+    bar = _bar(start, low="99", high="101")
+    moment = bar.interval_end + timedelta(seconds=30)
+    streaks: dict[UUID, int] = {}
+
+    def run(candles: object) -> MonitorReport:
+        return run_paper_exit_monitor(
+            enabled=True,
+            dry_run=False,
+            trades=(trade,),
+            candles=candles,  # type: ignore[arg-type]
+            closer=RecordingCloser(),
+            evaluated_at=moment,
+            settling_streaks=streaks,
+        )
+
+    assert run(_settling_bars).status == "settling"
+    normal = run(
+        lambda _trade: FetchedBars(bars=(bar,), covers_entry=True, source_name="binance-usdm")
+    )
+    assert normal.refused == 0
+    assert streaks == {}
+    for _ in range(MAX_SETTLING_DEFERRALS):
+        report = run(_settling_bars)
+        assert report.status == "settling"
+        assert report.refused == 0
