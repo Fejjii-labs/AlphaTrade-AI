@@ -252,7 +252,11 @@ class BloFinSyncService:
 
         try:
             uses_dedicated = self._settings.blofin_read_sync_uses_dedicated_credentials
-            _require_fallback_account_pin(self._settings, organization_id)
+            # Every pinned key path fails closed when the org or UID pin is
+            # unset; it used to skip the UID comparison silently.
+            _require_fallback_account_pin(
+                self._settings, organization_id, enforce=_account_pin_applies(self._settings)
+            )
             binding = connection_binding(self._settings, readonly=uses_dedicated)
             provenance.update(connection_binding=binding, environment="demo")
             provider: ExchangeAccountProvider
@@ -270,11 +274,7 @@ class BloFinSyncService:
             if native_uid({"uid": uid}) is None:
                 raise ValueError("BloFin sync native account UID is unverified.")
             config = get_activity_settings()
-            pin_applies = (
-                _account_pin_applies(self._settings)
-                and config.organization_id == organization_id
-                and bool(config.expected_uid.strip())
-            )
+            pin_applies = _account_pin_applies(self._settings)
             if pin_applies and config.expected_uid.strip() != uid:
                 _log_snapshot_identity("mismatch")
                 if _demo_key_read(self._settings):
@@ -453,6 +453,16 @@ class BloFinSyncService:
         uid = self._snapshots.verified_uid_for_binding(organization_id, binding)
         if _account_pin_applies(self._settings):
             config = get_activity_settings()
+            if config.organization_id is None or not config.expected_uid.strip():
+                logger.warning(
+                    "blofin_snapshot_read_refused",
+                    reason=(
+                        "activity_organization_unset"
+                        if config.organization_id is None
+                        else "activity_expected_uid_unset"
+                    ),
+                )
+                raise NotFoundError("Current BloFin connection is unverified.")
             if config.organization_id == organization_id and config.expected_uid:
                 proof = self._session.get(
                     BloFinActivityAccount, (organization_id, "demo", config.expected_uid)

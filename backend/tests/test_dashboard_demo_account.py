@@ -100,7 +100,20 @@ def instrument(**overrides):
     }
 
 
+def pin_activity(monkeypatch, uid="dashboard-native-uid", organization_id=ORG_A):
+    """The dedicated read-only key now fails closed without the activity org and UID pin."""
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(
+            _env_file=None, organization_id=organization_id, expected_uid=uid
+        ),
+    )
+
+
 def wire(monkeypatch, seen, **kwargs):
+    identity = kwargs.get("identity")
+    uid = identity.get("uid") if isinstance(identity, dict) else None
+    pin_activity(monkeypatch, uid if isinstance(uid, str) and uid else "dashboard-native-uid")
     monkeypatch.setattr(
         "app.services.blofin_sync_service.get_readonly_account_provider",
         lambda settings: get_readonly_account_provider(

@@ -2019,3 +2019,53 @@ def test_readonly_key_with_sync_flag_off_is_still_pinned_before_account_reads(
         _apply_mirror(client, settings, organization_id)
     assert client.paths == [_IDENTITY]
     _assert_secrets_absent(logs, *_READONLY_SECRETS)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("unset_uid", "activity_expected_uid_unset"),
+        ("unset_org", "activity_organization_unset"),
+    ],
+)
+def test_dedicated_readonly_snapshot_fails_closed_without_the_account_pin(
+    monkeypatch: pytest.MonkeyPatch, case: str, reason: str
+) -> None:
+    """The dedicated read-only key used to skip the UID check when a pin was unset."""
+    organization_id = uuid4()
+    config = (
+        BloFinActivitySettings(_env_file=None, organization_id=organization_id, expected_uid=" ")
+        if case == "unset_uid"
+        else BloFinActivitySettings(_env_file=None, expected_uid="pinned-demo-account")
+    )
+    monkeypatch.setattr("app.services.blofin_sync_service.get_activity_settings", lambda: config)
+    calls: list[str] = []
+
+    def provider(_cfg: object) -> None:
+        calls.append("provider")
+        raise AssertionError("unpinned read-only key opened a client")
+
+    monkeypatch.setattr("app.services.blofin_sync_service.get_readonly_account_provider", provider)
+    settings = _readonly_mirror_settings()
+    service = BloFinSyncService(MagicMock(), settings)
+
+    def keep(row: object) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(service._snapshots, "add", keep)
+    monkeypatch.setattr(service._audit, "record", lambda *_args, **_kwargs: None)
+    refused: list[str] = []
+    real_warning = blofin_sync_service.logger.warning
+
+    def record_refusal(event: str, **kwargs: object) -> None:
+        if event == "blofin_fallback_sync_refused":
+            refused.append(str(kwargs.get("reason")))
+        real_warning(event, **kwargs)
+
+    monkeypatch.setattr("app.services.blofin_sync_service.logger.warning", record_refusal)
+    result = service.sync(organization_id=organization_id, user_id=uuid4(), sync_origin="worker")
+    assert calls == []
+    assert result.snapshot.health_status is BloFinSyncHealthStatus.UNAVAILABLE
+    assert result.snapshot.provenance.get("native_account_uid") is None
+    assert refused == [reason]
