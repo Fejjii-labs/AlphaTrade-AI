@@ -7,6 +7,7 @@ import {
   isPrimaryDestinationActive,
   listReachableHrefs,
   MOBILE_BOTTOM_DESTINATION_IDS,
+  MOBILE_MORE_DESTINATION_IDS,
   PRIMARY_DESTINATIONS,
   resolvePageIdentity,
   resolveSecondaryActiveHref,
@@ -17,188 +18,124 @@ import {
 } from "@/lib/navigation/phase-b-redirects";
 
 describe("Trader primary navigation", () => {
-  it("exposes exactly five primary destinations", () => {
-    expect(PRIMARY_DESTINATIONS).toHaveLength(5);
-    expect(PRIMARY_DESTINATIONS.map((destination) => destination.id)).toEqual([
-      "dashboard",
-      "agent",
-      "journal",
-      "strategies",
-      "settings",
+  it("exposes the seven destinations in sidebar order", () => {
+    expect(PRIMARY_DESTINATIONS.map((d) => [d.id, d.label, d.href])).toEqual([
+      ["dashboard", "Dashboard", "/"],
+      ["autonomous", "Autonomous", "/autonomous"],
+      ["strategies", "Strategies", "/strategies"],
+      ["journal", "Trades", "/journal"],
+      ["agent", "Agent", "/agent"],
+      ["knowledge", "Knowledge", "/knowledge"],
+      ["settings", "Settings", "/settings"],
     ]);
+    expect(new Set(PRIMARY_DESTINATIONS.map((d) => d.href)).size).toBe(7);
+  });
+
+  it("puts four destinations on the phone bar and the rest behind More", () => {
+    expect(MOBILE_BOTTOM_DESTINATION_IDS).toEqual(["dashboard", "journal", "strategies", "agent"]);
+    expect(MOBILE_MORE_DESTINATION_IDS).toEqual(["autonomous", "knowledge", "settings"]);
     expect(
-      PRIMARY_DESTINATIONS.map((destination) => destination.label),
-    ).toEqual([
-      "Dashboard",
-      "Agent",
-      "Trades",
-      "Strategies",
-      "Settings",
-    ]);
+      [...MOBILE_BOTTOM_DESTINATION_IDS, ...MOBILE_MORE_DESTINATION_IDS].sort(),
+    ).toEqual(PRIMARY_DESTINATIONS.map((d) => d.id).sort());
   });
 
-  it("puts every primary destination on the mobile tab bar", () => {
-    expect(MOBILE_BOTTOM_DESTINATION_IDS).toEqual([
-      "dashboard",
-      "agent",
-      "journal",
-      "strategies",
-      "settings",
-    ]);
-  });
-
-  it("keeps primary paths unique and specialized routes outside the primary list", () => {
+  it("keeps specialized routes reachable but out of the primary list", () => {
     const paths = PRIMARY_DESTINATIONS.map((destination) => destination.href);
-    expect(paths).toEqual([
-      "/",
-      "/agent",
-      "/journal",
-      "/strategies",
-      "/settings",
-    ]);
-    expect(new Set(paths).size).toBe(5);
-    for (const path of [
-      "/watcher",
-      "/autonomous",
-      "/strategy-lab",
-      "/lessons",
-      "/market",
-    ]) {
+    for (const path of ["/watcher", "/strategy-lab", "/lessons", "/market"]) {
       expect(paths).not.toContain(path);
       expect(listReachableHrefs()).toContain(path);
     }
   });
 
-  it("selects exactly one destination for nested links and respects path boundaries", () => {
-    for (const [path, label] of [
-      ["/knowledge/documents/doc-1", "Trades"],
-      ["/lessons/lesson-42", "Trades"],
-      ["/journal/statistics", "Trades"],
-      ["/strategy-lab/strategy-7", "Strategies"],
-      ["/agent/history", "Agent"],
-      ["/settings/advanced", "Settings"],
-    ]) {
-      expect(
-        PRIMARY_DESTINATIONS.filter((item) =>
-          isPrimaryDestinationActive(path!, item),
-        ).map((item) => item.label),
-      ).toEqual([label]);
-    }
+  // Every primary route, sub-route, redirected (old) route and deep link lands
+  // on exactly one destination.
+  it.each([
+    ["/", "dashboard"],
+    ["/autonomous", "autonomous"],
+    ["/risk", "autonomous"],
+    ["/risk/autonomous", "autonomous"],
+    ["/strategies", "strategies"],
+    ["/strategies/detections", "strategies"],
+    ["/strategies/setups/setup-1", "strategies"],
+    ["/strategy-lab", "strategies"],
+    ["/strategy-lab/strategy-7", "strategies"],
+    ["/journal", "journal"],
+    ["/journal/statistics", "journal"],
+    ["/journal/import", "journal"],
+    ["/journal/comparison", "journal"],
+    ["/learning-analytics", "journal"],
+    ["/coaching", "journal"],
+    ["/agent", "agent"],
+    ["/agent/history", "agent"],
+    ["/knowledge", "knowledge"],
+    ["/knowledge/documents/doc-1", "knowledge"],
+    ["/lessons", "knowledge"],
+    ["/lessons/lesson-42", "knowledge"],
+    ["/settings", "settings"],
+    ["/settings/diagnostics", "settings"],
+    ["/settings/advanced", "settings"],
+    ["/settings/watcher", "settings"],
+    ["/settings/billing", "settings"],
+    ["/watchlist", "settings"],
+    ["/audit", "settings"],
+    ["/exchange", "settings"],
+    ["/tradingview-signals", "settings"],
+    ["/paper-validation/candidates/cand-1", "settings"],
+    ["/backtests/bt-123", "settings"],
+    ["/decision/candidates/cand-1", "settings"],
+    ["/execution/manual-demo/exact-command", "settings"],
+    ["/portfolio", "settings"],
+    ["/workspace", "settings"],
+  ])("%s → %s", (path, id) => {
+    expect(getDestinationId(path)).toBe(id);
+    expect(
+      PRIMARY_DESTINATIONS.filter((d) => isPrimaryDestinationActive(path, d)).map((d) => d.id),
+    ).toEqual([id]);
+  });
+
+  it("respects path boundaries", () => {
     expect(getDestinationId("/knowledge-base")).toBeNull();
     expect(getDestinationId("/lessons-learned")).toBeNull();
+    expect(getDestinationId("/autonomous-old")).toBeNull();
+    expect(getDestinationId("/riskier")).toBeNull();
   });
 
-  it("maps trader hubs and retained routes onto the five destinations", () => {
-    expect(getDestinationId("/")).toBe("dashboard");
-    expect(getDestinationId("/agent")).toBe("agent");
-    expect(getDestinationId("/strategies")).toBe("strategies");
-    expect(getDestinationId("/strategy-lab")).toBe("strategies");
-    expect(getDestinationId("/strategy-lab/new")).toBe("strategies");
-    expect(getDestinationId("/knowledge")).toBe("journal");
-    expect(getDestinationId("/journal")).toBe("journal");
-    expect(getDestinationId("/journal/comparison")).toBe("journal");
-    expect(getDestinationId("/journal/import")).toBe("journal");
-    expect(getDestinationId("/lessons")).toBe("journal");
-    expect(getDestinationId("/coaching")).toBe("journal");
-    expect(getDestinationId("/learning-analytics")).toBe("journal");
-    expect(getDestinationId("/settings")).toBe("settings");
-    expect(getDestinationId("/settings/advanced")).toBe("settings");
-    expect(getDestinationId("/settings/billing")).toBe("settings");
-    expect(getDestinationId("/tradingview-signals")).toBe("settings");
-    expect(getDestinationId("/paper-validation")).toBe("settings");
-    expect(getDestinationId("/paper-validation/candidates/cand-1")).toBe(
-      "settings",
-    );
-    expect(getDestinationId("/paper-signal-orchestration")).toBe("settings");
-    expect(getDestinationId("/backtests/bt-123")).toBe("settings");
-    expect(getDestinationId("/portfolio")).toBe("settings");
-    expect(getDestinationId("/risk")).toBe("strategies");
-    expect(getDestinationId("/autonomous")).toBe("strategies");
-    expect(getDestinationId("/workspace")).toBe("settings");
-    expect(getDestinationId("/decision")).toBe("settings");
-    expect(getDestinationId("/decision/candidates")).toBe("settings");
-    expect(getDestinationId("/analytics")).toBe("settings");
-  });
-
-  it("does not treat nested routes as the dashboard", () => {
+  it("matches nav links exactly where a parent must not light up for children", () => {
     expect(isNavLinkActive("/", "/")).toBe(true);
     expect(isNavLinkActive("/workspace", "/")).toBe(false);
     expect(isNavLinkActive("/journal", "/journal")).toBe(true);
     expect(isNavLinkActive("/journal/import", "/journal")).toBe(false);
-    const dashboard = PRIMARY_DESTINATIONS[0];
-    expect(isPrimaryDestinationActive("/", dashboard)).toBe(true);
-    expect(isPrimaryDestinationActive("/portfolio", dashboard)).toBe(false);
-    expect(isPrimaryDestinationActive("/agent", PRIMARY_DESTINATIONS[1]!)).toBe(
-      true,
-    );
+    expect(isNavLinkActive("/autonomous", "/autonomous")).toBe(true);
+    expect(isNavLinkActive("/knowledge", "/knowledge")).toBe(true);
+    expect(isNavLinkActive("/settings", "/settings")).toBe(true);
+    expect(isNavLinkActive("/settings/billing", "/settings")).toBe(false);
+    expect(isNavLinkActive("/risk/autonomous", "/risk")).toBe(true);
   });
 
   it("keeps one Settings parent link for retained operational routes", () => {
     const settings = getSecondaryItems("settings");
     expect(settings.map((item) => item.href)).toEqual(["/settings"]);
-    expect(settings.map((item) => item.label)).toEqual(["Back to Settings"]);
     expect(getSecondaryItems("dashboard")).toEqual([]);
-    expect(getSecondaryItems("agent")).toEqual([]);
     expect(resolveSecondaryActiveHref("/settings", settings)).toBe("/settings");
-    expect(
-      resolveSecondaryActiveHref("/settings/billing", settings),
-    ).toBeNull();
-    expect(
-      resolveSecondaryActiveHref("/tradingview-signals", settings),
-    ).toBeNull();
+    expect(resolveSecondaryActiveHref("/tradingview-signals", settings)).toBeNull();
   });
 
-  it("resolves trader titles and advanced subtitles", () => {
-    expect(resolvePageIdentity("/")).toMatchObject({
-      title: "Dashboard",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/agent")).toMatchObject({
-      title: "Agent",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/strategies")).toMatchObject({
-      title: "Strategies",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/journal")).toMatchObject({
-      title: "Trades",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/settings")).toMatchObject({
-      title: "Settings",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/settings/diagnostics")).toMatchObject({
-      title: "Settings",
-      subtitle: "Diagnostics",
-    });
-    expect(resolvePageIdentity("/knowledge")).toMatchObject({
-      title: "Trades",
-      subtitle: null,
-    });
-    expect(resolvePageIdentity("/journal/import")).toMatchObject({
-      title: "Trades",
-      subtitle: "Journal import",
-    });
-    expect(resolvePageIdentity("/alerts/review")).toMatchObject({
-      title: "Settings",
-      subtitle: "Setup review",
-    });
-    expect(
-      resolvePageIdentity("/paper-validation/candidates/example"),
-    ).toMatchObject({
-      title: "Settings",
-      subtitle: "Validation candidates",
-    });
-    expect(resolvePageIdentity("/workspace")).toMatchObject({
-      title: "Settings",
-      subtitle: "AI assist",
-    });
-    expect(resolvePageIdentity("/autonomous")).toMatchObject({
-      title: "Strategies",
-      subtitle: null,
-    });
+  it("resolves trader titles and subtitles", () => {
+    for (const [path, title] of [
+      ["/", "Dashboard"],
+      ["/autonomous", "Autonomous"],
+      ["/strategies", "Strategies"],
+      ["/journal", "Trades"],
+      ["/agent", "Agent"],
+      ["/knowledge", "Knowledge"],
+      ["/settings", "Settings"],
+    ]) {
+      expect(resolvePageIdentity(path!)).toMatchObject({ title, subtitle: null });
+    }
+    expect(resolvePageIdentity("/settings/diagnostics")).toMatchObject({ title: "Settings", subtitle: "Diagnostics" });
+    expect(resolvePageIdentity("/journal/import")).toMatchObject({ title: "Trades", subtitle: "Journal import" });
+    expect(resolvePageIdentity("/lessons")).toMatchObject({ title: "Knowledge", subtitle: "Lessons" });
+    expect(resolvePageIdentity("/workspace")).toMatchObject({ title: "Settings", subtitle: "AI assist" });
   });
 
   it("keeps required capability routes reachable", () => {
@@ -210,14 +147,8 @@ describe("Trader primary navigation", () => {
       }
       expect(reachable.has(path), path).toBe(true);
     }
-    expect(reachable.has("/settings/diagnostics")).toBe(true);
-    expect(reachable.has("/agent")).toBe(true);
-    expect(reachable.has("/strategies")).toBe(true);
-    expect(reachable.has("/strategy-lab")).toBe(true);
-    expect(getDestinationId("/knowledge")).toBe("journal");
-    expect(reachable.has("/lessons")).toBe(true);
-    expect(reachable.has("/watcher")).toBe(true);
-    expect(reachable.has("/market")).toBe(true);
+    for (const path of ["/settings/diagnostics", "/agent", "/strategies", "/strategy-lab", "/knowledge", "/autonomous", "/lessons", "/watcher", "/market"])
+      expect(reachable.has(path), path).toBe(true);
   });
 });
 

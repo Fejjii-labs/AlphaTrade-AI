@@ -147,8 +147,8 @@ describe("navigation links resolve to real pages (no 404)", () => {
 describe("/risk belongs to one destination", () => {
   it("is not also a Settings prefix", () => {
     expect(SETTINGS_ROUTE_PREFIXES).not.toContain("/risk");
-    expect(getDestinationId("/risk")).toBe("strategies");
-    expect(getDestinationId("/risk/autonomous")).toBe("strategies");
+    expect(getDestinationId("/risk")).toBe("autonomous");
+    expect(getDestinationId("/risk/autonomous")).toBe("autonomous");
   });
 });
 

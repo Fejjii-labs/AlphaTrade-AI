@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { BookOpen, Bot, Layers, LayoutDashboard, Settings } from "lucide-react";
+import { BookOpen, Bot, Cpu, Layers, LayoutDashboard, Library, Settings } from "lucide-react";
 
 import {
   ADVANCED_ROUTES,
@@ -11,7 +11,13 @@ import {
 } from "@/components/layout/advanced-routes";
 
 export type DestinationId =
-  "dashboard" | "agent" | "journal" | "strategies" | "settings";
+  | "dashboard"
+  | "autonomous"
+  | "strategies"
+  | "journal"
+  | "agent"
+  | "knowledge"
+  | "settings";
 
 export type NavLink = {
   href: string;
@@ -34,63 +40,36 @@ export type SecondaryNavGroup = {
   items: readonly NavLink[];
 };
 
-/** Five trader destinations. Specialized routes stay contextual or under Settings / Advanced. */
+/** Seven trader destinations (UI overhaul B6). Specialized routes stay under Settings → Diagnostics. */
 export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    href: "/",
-    icon: LayoutDashboard,
-    ariaLabel: "Dashboard",
-  },
-  {
-    id: "agent",
-    label: "Agent",
-    href: "/agent",
-    icon: Bot,
-    ariaLabel: "Agent",
-  },
-  {
-    id: "journal",
-    label: "Trades",
-    href: "/journal",
-    icon: BookOpen,
-    ariaLabel: "Trades",
-  },
-  {
-    id: "strategies",
-    label: "Strategies",
-    href: "/strategies",
-    icon: Layers,
-    ariaLabel: "Strategies",
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    href: "/settings",
-    icon: Settings,
-    ariaLabel: "Settings",
-  },
+  { id: "dashboard", label: "Dashboard", href: "/", icon: LayoutDashboard, ariaLabel: "Dashboard" },
+  { id: "autonomous", label: "Autonomous", href: "/autonomous", icon: Cpu, ariaLabel: "Autonomous" },
+  { id: "strategies", label: "Strategies", href: "/strategies", icon: Layers, ariaLabel: "Strategies" },
+  { id: "journal", label: "Trades", href: "/journal", icon: BookOpen, ariaLabel: "Trades" },
+  { id: "agent", label: "Agent", href: "/agent", icon: Bot, ariaLabel: "Agent" },
+  { id: "knowledge", label: "Knowledge", href: "/knowledge", icon: Library, ariaLabel: "Knowledge" },
+  { id: "settings", label: "Settings", href: "/settings", icon: Settings, ariaLabel: "Settings" },
 ] as const;
 
-/** Phone tab bar shows every primary destination. Advanced work stays inside Settings. */
+/** Phone tab bar: four destinations, then More. */
 export const MOBILE_BOTTOM_DESTINATION_IDS: readonly DestinationId[] = [
   "dashboard",
-  "agent",
   "journal",
   "strategies",
+  "agent",
+] as const;
+
+/** Destinations behind the phone More sheet. */
+export const MOBILE_MORE_DESTINATION_IDS: readonly DestinationId[] = [
+  "autonomous",
+  "knowledge",
   "settings",
 ] as const;
 
-const JOURNAL_PREFIXES = [
-  "/journal",
-  "/learning-analytics",
-  "/coaching",
-  "/knowledge",
-  "/lessons",
-] as const;
-// Autonomous sits under Strategies until it gets its own sidebar item (UI overhaul B6).
-const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab", "/autonomous", "/risk"] as const;
+const JOURNAL_PREFIXES = ["/journal", "/learning-analytics", "/coaching"] as const;
+const KNOWLEDGE_PREFIXES = ["/knowledge", "/lessons"] as const;
+const AUTONOMOUS_PREFIXES = ["/autonomous", "/risk"] as const;
+const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab"] as const;
 const AGENT_PREFIXES = ["/agent"] as const;
 
 export const SECONDARY_NAV: readonly SecondaryNavGroup[] = [
@@ -108,6 +87,14 @@ const DESTINATION_MATCHERS: readonly {
   {
     id: "journal",
     match: (pathname) => matchesAnyPrefix(pathname, JOURNAL_PREFIXES),
+  },
+  {
+    id: "knowledge",
+    match: (pathname) => matchesAnyPrefix(pathname, KNOWLEDGE_PREFIXES),
+  },
+  {
+    id: "autonomous",
+    match: (pathname) => matchesAnyPrefix(pathname, AUTONOMOUS_PREFIXES),
   },
   {
     id: "strategies",
@@ -252,7 +239,7 @@ export function resolvePageIdentity(pathname: string): PageIdentity {
 
 /** Flat reachability map used by tests — every retained capability path. */
 export function listReachableHrefs(): string[] {
-  const hrefs = new Set<string>(["/knowledge", "/autonomous"]);
+  const hrefs = new Set<string>();
   for (const destination of PRIMARY_DESTINATIONS) {
     hrefs.add(destination.href);
   }

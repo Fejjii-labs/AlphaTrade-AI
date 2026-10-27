@@ -408,7 +408,7 @@ for (const width of [1280, 390]) {
       page.locator(
         'nav[aria-label="Primary destinations"]:visible a, nav[aria-label="Primary mobile"]:visible a',
       ),
-    ).toHaveCount(5);
+    ).toHaveCount(width >= 1024 ? 7 : 4);
     await expect(page.getByTestId("dashboard-win-rate")).toContainText("—");
     await screenshot("dashboard");
     await noOverflow();
