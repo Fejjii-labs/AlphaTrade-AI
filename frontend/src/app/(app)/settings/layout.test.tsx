@@ -18,7 +18,7 @@ describe("Settings sub-nav", () => {
       ["Exchanges", "/settings/exchange"],
       ["Notifications", "/settings/notifications"],
       ["Watcher", "/settings/watcher"],
-      ["Diagnostics", "/settings/advanced"],
+      ["Diagnostics", "/settings/diagnostics"],
       ["Help", "/settings/help"],
     ]);
     expect(screen.getByText("Body")).toBeInTheDocument();
@@ -31,6 +31,7 @@ describe("Settings sub-nav", () => {
     ["/settings/exchange", "Exchanges"],
     ["/settings/notifications", "Notifications"],
     ["/settings/watcher", "Watcher"],
+    ["/settings/diagnostics", "Diagnostics"],
     ["/settings/advanced", "Diagnostics"],
     ["/settings/audit", "Diagnostics"],
     ["/settings/help", "Help"],

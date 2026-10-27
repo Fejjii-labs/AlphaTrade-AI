@@ -17,6 +17,7 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/invitations", destination: "/settings/team", permanent: false },
   { source: "/audit", destination: "/settings/audit", permanent: false },
   { source: "/exchange", destination: "/settings/exchange", permanent: false },
+  { source: "/settings/advanced", destination: "/settings/diagnostics", permanent: false },
   { source: "/strategy-lab/new", destination: "/agent?intent=strategy", permanent: false },
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
 ] as const;

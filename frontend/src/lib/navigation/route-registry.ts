@@ -57,13 +57,13 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/risk/autonomous", kind: "section", label: "Autonomous paper bot" },
   { path: "/strategies/detections", kind: "section", label: "Recent detections" },
   { path: "/watchlist", kind: "section", label: "Watchlist" },
-  { path: "/settings/advanced", kind: "section", label: "Advanced" },
   { path: "/settings/billing", kind: "section", label: "Billing & Usage" },
   { path: "/settings/team", kind: "section", label: "Team" },
   { path: "/settings/exchange", kind: "section", label: "Exchanges" },
   { path: "/settings/help", kind: "section", label: "Help" },
   { path: "/settings/notifications", kind: "section", label: "Notifications" },
   { path: "/settings/watcher", kind: "section", label: "Watcher" },
+  { path: "/settings/diagnostics", kind: "section", label: "Diagnostics" },
 
   { path: "/strategies/setups/[id]", kind: "deep-link", label: "Setup" },
   { path: "/strategy-lab/[id]", kind: "deep-link", label: "Strategy" },
@@ -124,6 +124,7 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/audit", kind: "redirect", label: "Audit (old link)" },
   { path: "/exchange", kind: "redirect", label: "Exchange (old link)" },
   { path: "/invitations", kind: "redirect", label: "Invitations (old link)" },
+  { path: "/settings/advanced", kind: "redirect", label: "Advanced (old link)" },
 
   { path: "/login", kind: "public", label: "Sign in" },
   { path: "/register", kind: "public", label: "Register" },

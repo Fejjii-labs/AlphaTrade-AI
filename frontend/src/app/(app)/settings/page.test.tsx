@@ -230,7 +230,8 @@ it("shows the Account section flat, with Team and Billing reachable and no link 
     expect(screen.queryByRole("link", { name: gone })).not.toBeInTheDocument();
   for (const moved of ["Market Monitoring", "Notifications", "Account & System"])
     expect(screen.queryByText(moved, { selector: "summary" })).not.toBeInTheDocument();
-  expect(screen.getByText("System", { selector: "summary" }).closest("details")).not.toHaveAttribute("open");
+  expect(screen.queryByText("System", { selector: "summary" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Refresh system status" })).not.toBeInTheDocument();
   expect(screen.queryByText("Manual demo preparation & history")).not.toBeInTheDocument();
   expect(api.marketWatcher.monitoring).not.toHaveBeenCalled();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();
@@ -272,12 +273,17 @@ it("shows monitoring state on Watcher without treating watchlist enablement as r
   expect(screen.getByRole("heading", { name: "Watcher" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Enable slot 1")).toBeChecked();
   expect(screen.getByLabelText("Enable slot 2")).not.toBeChecked();
-  expect(screen.getByText("STOPPED")).toBeInTheDocument();
+  const [watcher, lastScan, worker] = screen.getAllByTestId("status-tile");
+  expect(watcher).toHaveTextContent("WatcherStopped");
+  expect(watcher).toHaveAttribute("data-tone", "down");
+  expect(lastScan).toHaveAttribute("data-tone", "unknown");
+  expect(worker).toHaveTextContent("Not reported");
   expect(screen.queryByText("Running")).not.toBeInTheDocument();
+  expect(screen.getByText("Worker details").closest("details")).not.toHaveAttribute("open");
 });
 it("refreshes Watcher monitoring", async () => {
   render(<WatcherSettingsPage />);
-  await screen.findByText("STOPPED");
+  await screen.findByText("Stopped");
   const previous = vi.mocked(api.marketWatcher.monitoring).mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: "Refresh watcher" }));
   await waitFor(() =>
@@ -292,28 +298,22 @@ it("shows the notification controls on Notifications without sending anything", 
   expect(api.alerts.testTelegram).not.toHaveBeenCalled();
   expect(api.notifications.updatePreferences).not.toHaveBeenCalled();
 });
-it("refreshes system status from Account", async () => {
+it("keeps unknown account values unavailable", async () => {
+  identity = { user: { id: "user-1", email: "", email_verified: true }, organization: { id: "org-1", name: "" } };
   render(<SettingsPage />);
-  fireEvent.click(screen.getByRole("button", { name: "Refresh system status" }));
-  expect(runtime.refreshStatus).toHaveBeenCalledOnce();
-});
-it("keeps unknown system values unavailable", async () => {
-  runtime.health = null;
-  runtime.providers = null;
-  render(<SettingsPage />);
-  expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Unavailable").length).toBe(2);
 });
 
 it("clears monitoring and account state before an authenticated account change reloads", async () => {
   const { rerender } = render(<><SettingsPage /><WatcherSettingsPage /></>);
-  await screen.findByText("STOPPED");
+  await screen.findByText("Stopped");
   vi.mocked(api.marketWatcher.monitoring).mockImplementation(() => new Promise(() => {}));
   identity = {
     user: { id: "user-2", email: "reader@example.com", email_verified: true },
     organization: { id: "org-2", name: "Other Org" },
   };
   rerender(<><SettingsPage /><WatcherSettingsPage /></>);
-  expect(screen.queryByText("STOPPED")).not.toBeInTheDocument();
+  expect(screen.queryByText("Stopped")).not.toBeInTheDocument();
   expect(screen.getByText("reader@example.com")).toBeInTheDocument();
   expect(screen.queryByText("owner@example.com")).not.toBeInTheDocument();
   expect(api.risk.updateSettings).not.toHaveBeenCalled();

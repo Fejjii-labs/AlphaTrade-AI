@@ -168,9 +168,9 @@ describe("Trader primary navigation", () => {
       title: "Settings",
       subtitle: null,
     });
-    expect(resolvePageIdentity("/settings/advanced")).toMatchObject({
+    expect(resolvePageIdentity("/settings/diagnostics")).toMatchObject({
       title: "Settings",
-      subtitle: "Advanced",
+      subtitle: "Diagnostics",
     });
     expect(resolvePageIdentity("/knowledge")).toMatchObject({
       title: "Journal & Knowledge",
@@ -178,17 +178,17 @@ describe("Trader primary navigation", () => {
     });
     expect(resolvePageIdentity("/journal/import")).toMatchObject({
       title: "Journal & Knowledge",
-      subtitle: "Import",
+      subtitle: "Journal import",
     });
     expect(resolvePageIdentity("/alerts/review")).toMatchObject({
       title: "Settings",
-      subtitle: "Setup Review",
+      subtitle: "Setup review",
     });
     expect(
       resolvePageIdentity("/paper-validation/candidates/example"),
     ).toMatchObject({
       title: "Settings",
-      subtitle: "Candidates",
+      subtitle: "Validation candidates",
     });
     expect(resolvePageIdentity("/workspace")).toMatchObject({
       title: "Settings",
@@ -209,7 +209,7 @@ describe("Trader primary navigation", () => {
       }
       expect(reachable.has(path), path).toBe(true);
     }
-    expect(reachable.has("/settings/advanced")).toBe(true);
+    expect(reachable.has("/settings/diagnostics")).toBe(true);
     expect(reachable.has("/agent")).toBe(true);
     expect(reachable.has("/strategies")).toBe(true);
     expect(reachable.has("/strategy-lab")).toBe(true);
