@@ -22,6 +22,13 @@ _READ = Depends(
         "autonomous:settings:read", limit=120, window_seconds=3600, user_limit=120
     )
 )
+# Own bucket so polling the activity card never throttles settings reads, and
+# the reverse (Griller C2 on #368).
+_ACTIVITY_READ = Depends(
+    tenant_rate_limit_dependency(
+        "autonomous:activity:read", limit=120, window_seconds=3600, user_limit=120
+    )
+)
 _WRITE = Depends(
     tenant_rate_limit_dependency(
         "autonomous:settings:write", limit=30, window_seconds=3600, user_limit=30
@@ -46,7 +53,7 @@ async def get_autonomous_trading_settings(
     "/activity",
     response_model=AutonomousActivityView,
     summary="What the autonomous paper bot did today",
-    dependencies=[_READ],
+    dependencies=[_ACTIVITY_READ],
 )
 async def get_autonomous_activity(
     tenant: ReaderDep,

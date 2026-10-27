@@ -19,6 +19,7 @@ from app.db.base import Base
 from app.db.models import DailyRiskState, JournalTrade, Membership, Organization, User
 from app.main import create_app
 from app.schemas.audit import AuditRecordCreate
+from app.schemas.autonomous_activity import MAX_LABEL_CHARS
 from app.schemas.common import (
     ActorType,
     AuditEventType,
@@ -291,3 +292,33 @@ def test_trader_can_read_and_anonymous_cannot(client: TestClient) -> None:
     assert client.get("/autonomous/activity").status_code == 401
     resp = client.get("/autonomous/activity", headers=_token(client, "trader-b3b@test.example"))
     assert resp.status_code == 200
+
+
+def test_long_labels_are_capped(
+    client: TestClient, db: tuple[sessionmaker[Session], Settings]
+) -> None:
+    factory, _ = db
+    with factory() as session:
+        _loop_event(
+            session,
+            event_type=AuditEventType.RISK_BLOCK,
+            at=T0,
+            metadata={"reason_code": "r" * 20_000, "symbol": "S" * 5_000, "direction": "d" * 5_000},
+        )
+        session.commit()
+    resp = client.get("/autonomous/activity", headers=_token(client, "owner-b3b@test.example"))
+    assert resp.status_code == 200
+    (action,) = resp.json()["recent_actions"]
+    assert action["reason"] == "r" * MAX_LABEL_CHARS
+    assert action["symbol"] == "S" * MAX_LABEL_CHARS
+    assert action["direction"] == "d" * MAX_LABEL_CHARS
+    assert len(resp.content) < 2_000
+
+
+def test_activity_has_its_own_rate_limit_bucket(client: TestClient) -> None:
+    headers = _token(client, "owner-b3b@test.example")
+    for _ in range(120):
+        assert client.get("/autonomous/activity", headers=headers).status_code == 200
+    assert client.get("/autonomous/activity", headers=headers).status_code == 429
+    # The settings read budget is untouched by activity polling.
+    assert client.get("/autonomous/settings", headers=headers).status_code == 200

@@ -6,7 +6,11 @@ from datetime import date, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+# Audit metadata is free text; keep each label short so one row cannot bloat the
+# response (Griller C1 on #368).
+MAX_LABEL_CHARS = 120
 
 
 class BotActionOutcome(StrEnum):
@@ -26,6 +30,13 @@ class BotAction(BaseModel):
     direction: str | None = None
     reason: str | None = None
     journal_trade_id: UUID | None = None
+
+    @field_validator("symbol", "direction", "reason", mode="before")
+    @classmethod
+    def _cap_length(cls, value: object) -> object:
+        if isinstance(value, str) and len(value) > MAX_LABEL_CHARS:
+            return value[:MAX_LABEL_CHARS]
+        return value
 
 
 class AutonomousActivityView(BaseModel):
