@@ -43,16 +43,18 @@ describe("AT-040 collapsible DesktopSidebar", () => {
     const nav = within(sidebar).getByRole("navigation", {
       name: "Primary destinations",
     });
-    expect(within(nav).getAllByRole("link")).toHaveLength(5);
+    expect(within(nav).getAllByRole("link")).toHaveLength(7);
     expect(
       within(nav)
         .getAllByRole("link")
         .map((link) => link.getAttribute("aria-label")),
     ).toEqual([
       "Dashboard",
-      "Agent",
-      "Trades",
+      "Autonomous",
       "Strategies",
+      "Trades",
+      "Agent",
+      "Knowledge",
       "Settings",
     ]);
     expect(

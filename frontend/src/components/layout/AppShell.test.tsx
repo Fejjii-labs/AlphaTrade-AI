@@ -74,7 +74,7 @@ describe("AT-040 Phase B AppShell", () => {
 
   afterEach(() => cleanup());
 
-  it("renders five desktop primary destinations and highlights Settings on retained routes", () => {
+  it("renders seven desktop primary destinations and highlights Settings on retained routes", () => {
     render(
       <AppShell>
         <div>Page</div>
@@ -82,7 +82,7 @@ describe("AT-040 Phase B AppShell", () => {
     );
     const sidebar = screen.getByTestId("desktop-sidebar");
     const links = within(sidebar).getAllByRole("link");
-    expect(links).toHaveLength(5);
+    expect(links).toHaveLength(7);
     for (const destination of PRIMARY_DESTINATIONS) {
       expect(
         within(sidebar).getByRole("link", { name: destination.ariaLabel }),
@@ -93,44 +93,44 @@ describe("AT-040 Phase B AppShell", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders five mobile tabs and no engineering menu sheet", () => {
+  it("renders four phone tabs plus More, with Autonomous, Knowledge and Settings in its sheet", () => {
     render(
       <AppShell>
         <div>Page</div>
       </AppShell>,
     );
     const bottom = screen.getByTestId("mobile-bottom-navigation");
-    expect(within(bottom).getAllByRole("link")).toHaveLength(5);
     expect(
       within(bottom)
         .getAllByRole("link")
-        .map((link) => link.textContent),
-    ).toEqual(["Dashboard", "Agent", "Trades", "Strategies", "Settings"]);
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      ["Dashboard", "/"],
+      ["Trades", "/journal"],
+      ["Strategies", "/strategies"],
+      ["Agent", "/agent"],
+    ]);
+    const more = within(bottom).getByRole("button", { name: "More" });
+    // /tradingview-signals belongs to Settings, which sits behind More.
+    expect(more).toHaveAttribute("data-active", "true");
+    expect(bottom.querySelectorAll('[aria-current="page"]')).toHaveLength(0);
+    fireEvent.click(more);
+    const sheet = screen.getByRole("dialog", { name: "More" });
     expect(
-      within(bottom).getByRole("link", { name: "Dashboard" }),
-    ).toHaveAttribute("href", "/");
-    expect(within(bottom).getByRole("link", { name: "Agent" })).toHaveAttribute(
-      "href",
-      "/agent",
-    );
-    expect(
-      within(bottom).getByRole("link", { name: "Strategies" }),
-    ).toHaveAttribute("href", "/strategies");
-    expect(
-      within(bottom).getByRole("link", { name: "Trades" }),
-    ).toHaveAttribute("href", "/journal");
-    expect(
-      within(bottom).getByRole("link", { name: "Settings" }),
-    ).toHaveAttribute("href", "/settings");
-    expect(
-      within(bottom).getByRole("link", { name: "Settings" }),
-    ).toHaveAttribute("aria-current", "page");
+      within(sheet)
+        .getAllByRole("link")
+        .map((link) => [link.textContent, link.getAttribute("href")]),
+    ).toEqual([
+      ["Autonomous", "/autonomous"],
+      ["Knowledge", "/knowledge"],
+      ["Settings", "/settings"],
+    ]);
+    expect(within(sheet).getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByTestId("mobile-menu-button")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("mobile-menu-sheet")).not.toBeInTheDocument();
   });
 
   it.each(["/knowledge", "/lessons/lesson-42"])(
-    "selects Knowledge on %s in both navigation surfaces",
+    "selects Knowledge on %s in the sidebar and marks More on the phone",
     (pathname) => {
       navigationState.pathname = pathname;
       render(
@@ -138,23 +138,27 @@ describe("AT-040 Phase B AppShell", () => {
           <div>Page</div>
         </AppShell>,
       );
-      for (const nav of [
-        screen.getByTestId("desktop-sidebar"),
-        screen.getByTestId("mobile-bottom-navigation"),
-      ]) {
-        expect(
-          within(nav).getByRole("link", { name: "Trades" }),
-        ).toHaveAttribute("aria-current", "page");
-        expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
-        expect(
-          within(nav).getByRole("link", { name: "Agent" }),
-        ).toHaveAttribute("data-primary-workspace", "true");
-      }
-      expect(
-        screen.queryByTestId("secondary-navigation"),
-      ).not.toBeInTheDocument();
+      const sidebar = screen.getByTestId("desktop-sidebar");
+      expect(within(sidebar).getByRole("link", { name: "Knowledge" })).toHaveAttribute("aria-current", "page");
+      expect(sidebar.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+      const bottom = screen.getByTestId("mobile-bottom-navigation");
+      expect(within(bottom).getByRole("button", { name: "More" })).toHaveAttribute("data-active", "true");
+      expect(within(bottom).getByRole("link", { name: "Agent" })).toHaveAttribute("data-primary-workspace", "true");
+      expect(screen.queryByTestId("secondary-navigation")).not.toBeInTheDocument();
     },
   );
+
+  it("marks the Trades tab current on the phone bar", () => {
+    navigationState.pathname = "/journal";
+    render(
+      <AppShell>
+        <div>Page</div>
+      </AppShell>,
+    );
+    const bottom = screen.getByTestId("mobile-bottom-navigation");
+    expect(within(bottom).getByRole("link", { name: "Trades" })).toHaveAttribute("aria-current", "page");
+    expect(within(bottom).getByRole("button", { name: "More" })).not.toHaveAttribute("data-active");
+  });
 
   it("opens the command menu from the phone status menu", () => {
     render(

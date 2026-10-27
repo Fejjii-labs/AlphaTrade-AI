@@ -70,7 +70,8 @@ it("shows Trades and Stats as URL tabs, and Stats skips the trade list reads", a
     ["Trades", "/journal", "page"],
     ["Stats", "/journal?tab=stats", null],
   ]);
-  expect(screen.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/knowledge");
+  // Knowledge has its own sidebar item now; no interim header link.
+  expect(screen.queryByRole("link", { name: "Knowledge" })).not.toBeInTheDocument();
   cleanup();
   vi.mocked(api.journal.listTrades).mockClear();
   params.set("tab", "stats");

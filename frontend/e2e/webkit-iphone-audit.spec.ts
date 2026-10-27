@@ -90,7 +90,7 @@ test.describe("WebKit iPhone 15 Pro emulation audit", () => {
     await expect(bottomNav.getByRole("link", { name: "Agent" })).toBeVisible();
     await expect(bottomNav.getByRole("link", { name: "Strategies" })).toBeVisible();
     await expect(bottomNav.getByRole("link", { name: "Trades" })).toBeVisible();
-    await expect(bottomNav.getByRole("link", { name: "Settings" })).toBeVisible();
+    await expect(bottomNav.getByRole("button", { name: "More" })).toBeVisible();
     await expect(page.getByTestId("mobile-menu-button")).toHaveCount(0);
   });
 

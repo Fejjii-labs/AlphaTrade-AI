@@ -341,12 +341,6 @@ function JournalWorkspaceContent() {
         title={knowledge ? "Knowledge" : "Trades"}
         actions={
           <>
-            {/* Until Knowledge has its own sidebar item (UI overhaul B6). */}
-            {!knowledge ? (
-              <Link onClick={remember} href="/knowledge" className="inline-flex h-11 items-center px-2 text-sm text-accent">
-                Knowledge
-              </Link>
-            ) : null}
             {!knowledge ? <NewDemoOrder /> : null}
             <Link
               href="/agent"
