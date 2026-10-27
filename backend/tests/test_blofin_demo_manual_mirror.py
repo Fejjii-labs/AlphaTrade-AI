@@ -91,6 +91,20 @@ def _settings(**updates: object) -> Settings:
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
+_PIN_UID = "fixture-pinned-uid"
+
+
+@pytest.fixture(autouse=True)
+def _pinned_mirror_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every mirror read is pinned (#359); fixtures model the matching account."""
+    from app.services.blofin_activity_config import BloFinActivitySettings
+
+    monkeypatch.setattr(
+        "app.services.blofin_sync_service.get_activity_settings",
+        lambda: BloFinActivitySettings(_env_file=None, organization_id=ORG, expected_uid=_PIN_UID),
+    )
+
+
 class _Client:
     def __init__(self, bundle: dict[str, list[dict[str, object]]]) -> None:
         self.bundle = bundle
@@ -110,6 +124,9 @@ class _Client:
         assert method == "GET"
         assert body is None
         self.calls.append((method, path))
+        if path == "/api/v1/user/query-apikey":
+            assert signed is True
+            return {"readOnly": 1, "uid": _PIN_UID}  # type: ignore[return-value]
         if path == "/api/v1/market/instruments":
             assert signed is False and not params
             override = self.bundle.get(path)

@@ -56,15 +56,12 @@ def main() -> int:
         pages = VenuePages.replay(json.loads(args.replay.read_text()))
     else:
         from app.core.blofin_readonly_access import get_readonly_client
-        from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
 
         client = get_readonly_client(settings, activity_history=True, paper_internal_snapshot=True)
-        # Same #304 org pin and UID check the live mirror runs before any account read.
-        BloFinDemoManualMirror(client, now=now)._require_internal_read_pin(
-            organization_id=args.org, settings=settings
-        )
         since = datetime.fromisoformat(args.since).replace(tzinfo=UTC)
-        pages = read_venue(client, since=since, now=now)
+        pages = read_venue(
+            client, since=since, now=now, organization_id=args.org, settings=settings
+        )  # runs the #304 org pin and UID check before any account read
         if args.capture:
             args.capture.write_text(json.dumps(pages.capture(), indent=1, sort_keys=True))
 

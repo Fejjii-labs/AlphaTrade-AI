@@ -142,12 +142,18 @@ def _require_fallback_account_pin(
 
 
 def mirror_identity_pin_applies(settings: Settings) -> bool:
-    """True when the mirror read key must pass the #304 org and UID pin."""
+    """Always True: every mirror and backfill read key takes the #304 pin.
 
-    return (
-        settings.blofin_paper_internal_main_key_selected
-        or settings.blofin_read_sync_uses_dedicated_credentials
-    )
+    The pin used to depend on ``BLOFIN_READONLY_SYNC_ENABLED``, but
+    ``get_readonly_client(activity_history=True)`` selects the dedicated
+    read-only key whenever its credentials are set, flag or not. Keying the
+    pin to a config predicate let a wrong-account key read unpinned, so the
+    mirror pins whatever key the client selected, including the
+    ``paper_exchange_demo`` trading key.
+    """
+
+    del settings
+    return True
 
 
 def require_internal_snapshot_mirror_identity(
@@ -158,9 +164,9 @@ def require_internal_snapshot_mirror_identity(
 ) -> None:
     """Refuse the mirror read key unless the #304 pin matches.
 
-    Applies to the paper_internal main demo key and to the dedicated
-    read-only key, so a wrong-account read-only key cannot mirror another
-    account's trades. No-op for the ``paper_exchange_demo`` trading key.
+    Applies to every key the mirror or backfill client selected (dedicated
+    read-only key, paper_internal main key, paper_exchange_demo trading key),
+    so a wrong-account key cannot mirror another account's trades.
     The organization and expected-UID pins are checked before
     ``fetch_identity``. That callable is the identity GET only. A mismatch
     or an unverified UID raises before the caller reads positions or history.
