@@ -8,7 +8,8 @@ from app.schemas.autonomous_trading_settings import AutonomousTradingSettingsUpd
 
 @pytest.mark.parametrize("value", [True, False, None])
 def test_accepts_real_booleans(value):
-    assert AutonomousTradingSettingsUpdate(internal_paper_enabled=value).internal_paper_enabled is value
+    update = AutonomousTradingSettingsUpdate(internal_paper_enabled=value)
+    assert update.internal_paper_enabled is value
 
 
 @pytest.mark.parametrize("value", ["yes", "true", "1", 1, 0, "on"])
