@@ -289,13 +289,60 @@ def _instruments(rows: list[dict[str, Any]]) -> tuple[dict[str, _Instrument], bo
 _OPEN_FILL_LEAD = timedelta(seconds=5)
 
 
+def _price_move_side(row: dict[str, Any]) -> str | None:
+    """Opening side implied by the price move and the sign of ``realizedPnl``.
+
+    A long gains when price rises, a short when it falls. ``None`` when either
+    the move or the P&L is zero or missing (no signal).
+    """
+
+    open_price = _decimal(row.get("openAveragePrice"))
+    close_price = _decimal(row.get("closeAveragePrice"))
+    realized = _decimal(row.get("realizedPnl"))
+    if open_price is None or close_price is None or realized is None:
+        return None
+    move = close_price - open_price
+    if move == 0 or realized == 0:
+        return None
+    return "buy" if (move > 0) == (realized > 0) else "sell"
+
+
+def _opening_fill_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> str | None:
+    """The one side of the opening fill(s) at the row's ``createTime``.
+
+    Only fills on the same instrument within +/- ``_OPEN_FILL_LEAD`` of the open
+    count, and fills with a non-zero ``fillPnl`` (BloFin sets it on fills that
+    close a position) are excluded. Both sides present, or none: ``None``.
+    """
+
+    opened_at = _time(row.get("createTime"))
+    inst_id = row.get("instId")
+    if not fills or opened_at is None or not isinstance(inst_id, str):
+        return None
+    sides: set[str] = set()
+    for fill in fills:
+        when = _time(fill.get("ts"))
+        fill_side = fill.get("side")
+        if fill.get("instId") != inst_id or when is None or fill_side not in {"buy", "sell"}:
+            continue
+        if abs(when - opened_at) > _OPEN_FILL_LEAD:
+            continue
+        fill_pnl = _decimal(fill.get("fillPnl"))
+        if fill.get("fillPnl") not in (None, "") and (fill_pnl is None or fill_pnl != 0):
+            continue
+        sides.add(fill_side)
+    return sides.pop() if len(sides) == 1 else None
+
+
 def _opening_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> str | None:
     """Side of the slice's opening trade when the history row carries no ``side``.
 
-    Live BloFin ``positions-history`` rows have ``positionSide`` but no ``side``.
-    ``long``/``short`` decide it directly. In one-way (``net``) mode the side is
-    the earliest fill on the same instrument between the row's open and close
-    times (a few seconds of lead allowed for clock skew). No match: ``None``.
+    Some BloFin ``positions-history`` rows carry ``positionSide`` without
+    ``side``. ``long``/``short`` decide it directly. In one-way (``net``) mode
+    the side must come from an unambiguous opening fill at ``createTime``
+    (see ``_opening_fill_side``); when the price move and ``realizedPnl`` give a
+    signal it must agree. Anything else returns ``None`` so the row is skipped:
+    a wrong direction is never guessed.
     """
 
     side = row.get("side")
@@ -306,24 +353,15 @@ def _opening_side(row: dict[str, Any], fills: list[dict[str, Any]] | None) -> st
         return "buy"
     if position_side == "short":
         return "sell"
-    opened_at = _time(row.get("createTime"))
-    closed_at = _time(row.get("updateTime"))
-    inst_id = row.get("instId")
-    if not fills or opened_at is None or closed_at is None or not isinstance(inst_id, str):
+    if position_side not in (None, "", "net"):
         return None
-    best: tuple[datetime, str] | None = None
-    for fill in fills:
-        when = _time(fill.get("ts"))
-        fill_side = fill.get("side")
-        if fill.get("instId") != inst_id or when is None or fill_side not in {"buy", "sell"}:
-            continue
-        if when < opened_at - _OPEN_FILL_LEAD or when > closed_at:
-            continue
-        if fill.get("reduceOnly") in {True, "true"}:
-            continue
-        if best is None or when < best[0]:
-            best = (when, fill_side)
-    return best[1] if best else None
+    fill_side = _opening_fill_side(row, fills)
+    if fill_side is None:
+        return None
+    price_side = _price_move_side(row)
+    if price_side is not None and price_side != fill_side:
+        return None
+    return fill_side
 
 
 def _parse_slices(
@@ -740,7 +778,7 @@ def drafts_from_raw(
     window_begin: datetime,
     window_end: datetime,
 ) -> BuildResult:
-    """Build journal drafts. ``fills[*].fillPnl`` is intentionally unused."""
+    """Build journal drafts. ``fillPnl`` never feeds P&L; it only marks closing fills."""
     del window_end
     meta, instruments_incomplete = _instruments(instruments)
     slices, skipped, history_incomplete = _parse_slices(history, meta, fills)
