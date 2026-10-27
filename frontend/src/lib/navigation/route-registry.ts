@@ -62,6 +62,8 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/settings/team", kind: "section", label: "Team" },
   { path: "/settings/exchange", kind: "section", label: "Exchanges" },
   { path: "/settings/help", kind: "section", label: "Help" },
+  { path: "/settings/notifications", kind: "section", label: "Notifications" },
+  { path: "/settings/watcher", kind: "section", label: "Watcher" },
 
   { path: "/strategies/setups/[id]", kind: "deep-link", label: "Setup" },
   { path: "/strategy-lab/[id]", kind: "deep-link", label: "Strategy" },

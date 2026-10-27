@@ -119,7 +119,7 @@ async function installNotificationFixture(page: Page, supported = true) {
 }
 
 async function expectNotificationSession(page: Page) {
-  await expect(page).toHaveURL(/\/settings#notifications$/);
+  await expect(page).toHaveURL(/\/settings\/notifications$/);
   const marker = (await page.context().cookies(page.url())).find(
     (cookie) => cookie.name === SESSION_MARKER_COOKIE,
   );
@@ -133,15 +133,9 @@ async function expectNotificationSession(page: Page) {
   expect(
     await page.evaluate(() => sessionStorage.getItem("alphatrade_access_token")),
   ).toBe(FIXTURE_ACCESS_TOKEN);
-  const settings = page.getByTestId("settings-workspace");
-  const accountGroup = settings.locator("#account-system");
-  if (!(await accountGroup.evaluate((el) => (el as HTMLDetailsElement).open))) {
-    await settings.getByText("Account & System", { exact: true }).click();
-  }
   await expect(
-    settings.getByText("fixture@example.com", { exact: true }),
-  ).toBeVisible();
-  await expect(settings.getByText("Fixture", { exact: true })).toBeVisible();
+    page.getByRole("link", { name: "Notifications", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
 }
 
 for (const viewport of [
@@ -163,10 +157,6 @@ for (const viewport of [
     await expect(
       page.getByRole("region", { name: "Recent manual demo activity" }),
     ).toHaveCount(0);
-    await page.getByText("Market Monitoring", { exact: true }).click();
-    await expect(
-      page.getByText("Watchlist configuration unavailable. Reload to try again."),
-    ).toBeVisible();
     await expect(
       form.getByLabel("Enable Telegram notification policy"),
     ).toBeChecked();
@@ -214,7 +204,6 @@ for (const viewport of [
     await expect(
       page.getByRole("region", { name: "Recent manual demo activity" }),
     ).toHaveCount(0);
-    await page.getByText("Market Monitoring", { exact: true }).click();
     expect(
       await page.evaluate(
         () =>
@@ -226,6 +215,11 @@ for (const viewport of [
       path: `test-results/notifications-v2-mobile-${viewport.width}.png`,
       fullPage: true,
     });
+    await page.getByRole("link", { name: "Watcher", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings\/watcher$/);
+    await expect(
+      page.getByText("Watchlist configuration unavailable. Reload to try again."),
+    ).toBeVisible();
   });
 }
 
