@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { ADVANCED_ROUTES } from "@/components/layout/advanced-routes";
+import { ADVANCED_ROUTES, LABELED_ROUTES } from "@/components/layout/advanced-routes";
 import {
   PRIMARY_DESTINATIONS,
   SECONDARY_NAV,
@@ -39,12 +39,17 @@ function buildEntries(): CommandEntry[] {
       });
     }
   }
+  for (const route of LABELED_ROUTES) {
+    if (entries.some((entry) => entry.href === route.href)) continue;
+    if (ADVANCED_ROUTES.some((advanced) => advanced.href === route.href)) continue;
+    entries.push({ href: route.href, label: route.label, group: "Pages" });
+  }
   for (const route of ADVANCED_ROUTES) {
     if (entries.some((entry) => entry.href === route.href)) continue;
     entries.push({
       href: route.href,
       label: route.label,
-      group: "Advanced",
+      group: "Diagnostics",
     });
   }
   return entries;

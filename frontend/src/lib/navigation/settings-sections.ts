@@ -13,7 +13,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { href: "/settings/exchange", label: "Exchanges" },
   { href: "/settings/notifications", label: "Notifications" },
   { href: "/settings/watcher", label: "Watcher" },
-  { href: "/settings/advanced", label: "Diagnostics", includes: ["/settings/audit"] },
+  { href: "/settings/diagnostics", label: "Diagnostics", includes: ["/settings/advanced", "/settings/audit"] },
   { href: "/settings/help", label: "Help" },
 ];
 

@@ -4,8 +4,9 @@ import { BookOpen, Bot, Layers, LayoutDashboard, Settings } from "lucide-react";
 import {
   ADVANCED_ROUTES,
   isAdvancedPath,
+  LABELED_ROUTES,
   matchesAnyPrefix,
-  resolveAdvancedRoute,
+  resolveLabeledRoute,
   SETTINGS_ROUTE_PREFIXES,
 } from "@/components/layout/advanced-routes";
 
@@ -118,7 +119,6 @@ const DESTINATION_MATCHERS: readonly {
   {
     id: "settings",
     match: (pathname) =>
-      pathname === "/settings/advanced" ||
       matchesAnyPrefix(pathname, SETTINGS_ROUTE_PREFIXES) ||
       pathname.startsWith("/execution/manual-demo/") ||
       isAdvancedPath(pathname),
@@ -159,7 +159,7 @@ export function isNavLinkActive(pathname: string, href: string): boolean {
       pathname === "/settings" || pathname.startsWith("/execution/manual-demo/")
     );
   if (href === "/journal") return pathname === "/journal";
-  if (href === "/settings/advanced") {
+  if (href === "/settings/diagnostics") {
     return (
       pathname === href ||
       (pathname !== "/settings" && isAdvancedPath(pathname))
@@ -215,22 +215,13 @@ export function resolvePageIdentity(pathname: string): PageIdentity {
   }
 
   const primary = getPrimaryDestination(destinationId);
-  const labeled = resolveAdvancedRoute(pathname);
+  const labeled = resolveLabeledRoute(pathname);
   if (labeled && labeled.href !== primary.href) {
     return {
       primaryLabel: primary.label,
       secondaryLabel: labeled.label,
       title: primary.label,
       subtitle: labeled.label,
-    };
-  }
-
-  if (pathname === "/settings/advanced") {
-    return {
-      primaryLabel: primary.label,
-      secondaryLabel: "Advanced",
-      title: primary.label,
-      subtitle: "Advanced",
     };
   }
 
@@ -260,7 +251,7 @@ export function resolvePageIdentity(pathname: string): PageIdentity {
 
 /** Flat reachability map used by tests — every retained capability path. */
 export function listReachableHrefs(): string[] {
-  const hrefs = new Set<string>(["/settings/advanced", "/knowledge"]);
+  const hrefs = new Set<string>(["/knowledge"]);
   for (const destination of PRIMARY_DESTINATIONS) {
     hrefs.add(destination.href);
   }
@@ -269,7 +260,7 @@ export function listReachableHrefs(): string[] {
       hrefs.add(item.href);
     }
   }
-  for (const route of ADVANCED_ROUTES) {
+  for (const route of [...ADVANCED_ROUTES, ...LABELED_ROUTES]) {
     hrefs.add(route.href);
   }
   return [...hrefs].sort();
