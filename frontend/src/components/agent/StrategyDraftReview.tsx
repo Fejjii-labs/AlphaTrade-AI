@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { StrategyProposalRecord } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
+import { strategyRuleLines } from "./strategy-rules-text";
 
 export function StrategyDraftReview({ conversationId, proposalId }: { conversationId: string; proposalId: string }) {
   const [proposal, setProposal] = useState<StrategyProposalRecord | null>(null);
@@ -49,15 +50,19 @@ export function StrategyDraftReview({ conversationId, proposalId }: { conversati
     } finally { setBusy(false); }
   }
 
+  const rules = strategyRuleLines(proposal?.proposed_structured_rules);
   return <div className="mt-3 space-y-2 border-t border-border-subtle pt-3" data-testid="agent-strategy-draft">
     {error ? <p role="alert">{error}</p> : null}
     {proposal ? <>
-      <p className="text-sm font-medium">Strategy draft · {proposal.status}</p>
+      <p className="text-sm font-medium">Strategy draft · {proposal.status.replaceAll("_", " ")}</p>
       {(proposal.challenge_notes ?? []).slice(0, 3).map(note => <p key={note} className="text-sm">{note}</p>)}
-      <details><summary className="cursor-pointer text-sm">Review structured rules</summary>
-        <pre className="whitespace-pre-wrap break-words text-sm">{JSON.stringify({
-          rules: proposal.proposed_structured_rules, pattern: proposal.proposed_pattern_spec, card: proposal.proposed_card,
-        }, null, 2)}</pre>
+      <details><summary className="cursor-pointer text-sm">Review rules</summary>
+        {rules.length ? <dl className="mt-2 space-y-2 text-sm" data-testid="agent-strategy-rules">
+          {rules.map(({ group, lines }) => <div key={group}>
+            <dt className="text-xs text-text-muted">{group}</dt>
+            {lines.map((line, index) => <dd key={index}>{line}</dd>)}
+          </div>)}
+        </dl> : <p className="mt-2 text-sm text-text-muted">No structured rules in this draft.</p>}
       </details>
       <p className="text-xs">Saving creates a version. Compilation and approval remain separate.</p>
       {proposal.status === "draft" ? <Button disabled={busy || !proposal.content_hash || !proposal.validation.valid}

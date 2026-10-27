@@ -13,13 +13,13 @@ import { createAgentVoiceTransport } from "./agent-voice-transport";
 import { ApiError } from "@/lib/api/client";
 import { agentTurnRequest, agentTurnResponse } from "@/lib/api/generated/validators";
 import { clearPendingTurns, pendingFor, persistPending, persistPendingDurably, pendingTurn, persistTypedDraft, typedDraftFor, recordTerminal, subscribeRecovery, recoveryDetails, removePending, type PendingTurn, type TurnBody } from "./turn-recovery";
-import { StrategyDraftReview } from "./StrategyDraftReview";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { acknowledgedMessages, mergeProposals, proposalsFromMessages, reconcileMessages } from "./acknowledged-turn";
 import { AgentMessageContent } from "./AgentMessageContent";
 import { VoiceConversationControls } from "./VoiceConversationControls";
 import { RealtimeVoiceControls } from "./RealtimeVoiceControls";
+import { ProposalCard } from "./ProposalCard";
 import { useConversationViewport } from "./useConversationViewport";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -655,12 +655,7 @@ export function AgentWorkspace() {
       className="page-sections [&_input]:text-base [&_select]:text-base [&_textarea]:text-base lg:[&_input]:text-sm lg:[&_select]:text-sm lg:[&_textarea]:text-sm"
       data-testid="agent-workspace"
     >
-      <PageHeader
-        className="hidden lg:flex"
-        eyebrow="Copilot"
-        title="Agent"
-        description="Conversation, capture, and voice. Execution can stay paused."
-      />
+      <PageHeader className="hidden lg:flex" title="Agent" />
       <PageHeader className="lg:hidden" compact title="Agent" />
       {strategyContext || strategyError || (strategyId && !conversationId) ? <div className="flex flex-wrap gap-3 text-sm" data-testid="agent-strategy-context">
         {strategyContext ? <><span>Strategy: {strategyContext.name}</span>
@@ -883,59 +878,12 @@ export function AgentWorkspace() {
               {proposals.length > 0 ? (
                 <ul className="space-y-2" data-testid="agent-proposals">
                   {proposals.map((proposal) => (
-                    <li
+                    <ProposalCard
                       key={proposal.proposal_id}
-                      className="rounded-control border border-warning-border bg-warning-muted/30 p-4"
-                      data-proposal-status={proposal.status}
-                    >
-                      <p className="text-sm text-text-primary">
-                        {proposal.summary}
-                      </p>
-                      <p className="text-caption text-text-muted">
-                        Status {proposal.status}. The reply did not confirm this
-                        proposal.
-                      </p>
-                      {proposal.kind === "propose_strategy" ? (
-                        <p className="text-caption text-text-muted">
-                          Confirm records the request only. The strategy preview
-                          stays a draft.
-                        </p>
-                      ) : null}
-                      {proposal.linked_strategy_proposal_id ? <StrategyDraftReview
-                        key={proposal.linked_strategy_proposal_id}
-                        conversationId={proposal.conversation_id}
-                        proposalId={proposal.linked_strategy_proposal_id}
-                      /> : null}
-                      {proposal.kind === "propose_journal_entry" ? (
-                        <p className="text-caption text-text-muted">
-                          Confirm writes one journal entry. Sending a message
-                          does not.
-                        </p>
-                      ) : null}
-                      {proposal.status === "proposed" ? (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            onClick={() =>
-                              void decideProposal(proposal, "I confirm")
-                            }
-                            disabled={decidingId !== null}
-                          >
-                            Confirm proposal
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() =>
-                              void decideProposal(proposal, "I reject")
-                            }
-                            disabled={decidingId !== null}
-                          >
-                            Reject proposal
-                          </Button>
-                        </div>
-                      ) : null}
-                    </li>
+                      proposal={proposal}
+                      deciding={decidingId !== null}
+                      onDecide={(statement) => void decideProposal(proposal, statement)}
+                    />
                   ))}
                 </ul>
               ) : null}
