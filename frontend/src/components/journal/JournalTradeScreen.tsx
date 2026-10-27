@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
+import { TechnicalDetails } from "@/components/ui/technical-details";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { journalTradeApi } from "@/lib/api/journal-trade";
 import {
   blofinHistoryId,
   isBlofinReconciledJournalTrade,
 } from "@/lib/journal-blofin-reconciliation";
-import { formatDateTime, formatMoney, formatQuantity, humanizeToken } from "@/lib/format";
+import { formatDateTime, formatMoney, formatQuantity, humanizeToken, venueLabel } from "@/lib/format";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const load = useCallback(() => journalTradeApi.detail(tradeId), [tradeId]);
@@ -58,7 +59,7 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const currency = trade.exchange === "BLOFIN_DEMO" ? "USDT" : null;
   const money = (value: string | null | undefined) => `${formatMoney(value)}${currency ? ` ${currency}` : ""}`;
   const fields = [
-    ["Venue", trade.exchange ?? "Unavailable"],
+    ["Venue", trade.exchange ? venueLabel(trade.exchange) : "Unavailable"],
     ["Origin", humanizeToken(trade.source)],
     ["Contracts filled", formatQuantity(evidence?.filled_quantity, { maximumFractionDigits: 8 })],
     ["Base quantity", `${formatQuantity(trade.size, { maximumFractionDigits: 8 })}${attempt ? " BTC" : ""}`],
@@ -136,12 +137,6 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
                 {trade.exit_reason ? humanizeToken(trade.exit_reason) : "Unavailable"}
               </dd>
             </div>
-            <div>
-              <dt className="text-xs">Venue history id</dt>
-              <dd className="mt-1 break-all font-medium text-text-primary">
-                {venueHistoryId ?? "Unavailable"}
-              </dd>
-            </div>
           </dl>
         </CardContent>
       </Card>
@@ -165,6 +160,14 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
             {data.rule_checks.map((item) => <p key={item.id}>{humanizeToken(item.rule_key)}: {humanizeToken(item.status)}{item.notes ? ` · ${item.notes}` : ""}</p>)}
           </div>
         </details>
+        <TechnicalDetails items={[
+          { label: "Venue code", value: trade.exchange },
+          { label: "Journal trade ID", value: trade.id },
+          { label: "Manual demo command ID", value: attempt?.command_id },
+          { label: "Client order ID", value: attempt && !reconciled ? evidence?.client_order_id : null },
+          { label: "Venue order ID", value: attempt && !reconciled ? evidence?.venue_order_id : null },
+          { label: "Venue history ID", value: venueHistoryId },
+        ]} />
       </CardContent>
     </Card>
     {mirrorAnnotated ? (

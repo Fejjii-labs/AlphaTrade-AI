@@ -709,7 +709,12 @@ describe("Agent workspace", () => {
       "Full additional explanation after the clean display ending.",
     );
     expect(details).toHaveTextContent("TradePlan");
-    expect(details).not.toHaveTextContent("plan-ref");
+    expect(
+      screen.getByRole("list", { name: "Source references" }),
+    ).not.toHaveTextContent("plan-ref");
+    expect(
+      screen.getByText("plan-ref").closest("[data-technical-details]"),
+    ).not.toBeNull();
     expect(details).not.toHaveAttribute("open");
   });
 
@@ -1049,7 +1054,12 @@ describe("Agent workspace", () => {
     expect(details).not.toHaveAttribute("open");
     expect(details).toHaveTextContent("Complete additional explanation");
     expect(details).toHaveTextContent("TradePlan");
-    expect(details).not.toHaveTextContent("plan-ref");
+    expect(
+      screen.getByRole("list", { name: "Source references" }),
+    ).not.toHaveTextContent("plan-ref");
+    expect(
+      screen.getByText("plan-ref").closest("[data-technical-details]"),
+    ).not.toBeNull();
     expect(details).toHaveTextContent("Canonical amounts and hash");
     expect(screen.getByText(/BTC short: entry/).closest("details")).toBeNull();
     expect(screen.getByText(/BTC short: entry/)).toBeVisible();

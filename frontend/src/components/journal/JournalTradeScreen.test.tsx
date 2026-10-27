@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { JournalTradeScreen } from "./JournalTradeScreen";
 import { journalTradeApi, type JournalTradeDetail } from "@/lib/api/journal-trade";
@@ -21,7 +21,8 @@ it("loads only the exact linked trade with unknown outcomes and precise tiny fee
   render(<JournalTradeScreen tradeId="exact-trade" />);
   await screen.findByTestId("journal-trade-detail");
   expect(journalTradeApi.detail).toHaveBeenCalledExactlyOnceWith("exact-trade");
-  expect(screen.getByText("BLOFIN_DEMO")).toBeInTheDocument();
+  expect(screen.getByText("BloFin demo")).toBeVisible();
+  expect(screen.getByText("BLOFIN_DEMO")).not.toBeVisible();
   expect(screen.getByText("Manual Demo Test")).toBeInTheDocument();
   expect(screen.getByText("0.00493406 USDT")).toBeInTheDocument();
   expect(screen.getAllByText("— USDT").length).toBeGreaterThan(0);
@@ -195,7 +196,10 @@ it("shows reconciled state for a stuck manual demo row closed on the venue", asy
   render(<JournalTradeScreen tradeId="exact-trade" />);
   const reconciled = await screen.findByTestId("journal-reconciled-close");
   expect(reconciled).toHaveTextContent("Manual Demo Test");
-  expect(screen.getByText("h-long")).toBeInTheDocument();
+  expect(reconciled).not.toHaveTextContent("h-long");
+  const technical = screen.getByText("Technical details").closest("details")!;
+  expect(technical).not.toHaveAttribute("open");
+  expect(within(technical).getByText("h-long")).not.toBeVisible();
   expect(screen.getByText("90.00 USDT")).toBeInTheDocument();
 });
 it("labels an entry order with a venue order id as recorded, not verified", async () => {
@@ -205,4 +209,25 @@ it("labels an entry order with a venue order id as recorded, not verified", asyn
   await screen.findByTestId("journal-trade-detail");
   expect(screen.getByText("Entry order: Recorded on venue")).toBeInTheDocument();
   expect(screen.queryByText(/Verified on venue/)).not.toBeInTheDocument();
+});
+it("keeps venue code and trade, command and order IDs in collapsed Technical details only", async () => {
+  const tradeId = "0f0e0d0c-0b0a-4908-8706-050403020100";
+  const commandId = "a1a2a3a4-b1b2-4c1c-8d1d-e1e2e3e4e5e6";
+  const venueOrderId = "9876543210123456789";
+  const detail: JournalTradeDetail = {
+    ...fixture,
+    trade: { ...fixture.trade, id: tradeId, execution_lifecycle_id: commandId },
+    manual_demo: { ...fixture.manual_demo!, command_id: commandId, evidence: { ...fixture.manual_demo!.evidence!, command_id: commandId, journal_trade_id: tradeId, venue_order_id: venueOrderId } },
+  };
+  vi.mocked(journalTradeApi.detail).mockResolvedValue(detail);
+  render(<JournalTradeScreen tradeId={tradeId} />);
+  await screen.findByTestId("journal-trade-detail");
+  const technical = screen.getByText("Technical details").closest("details")!;
+  expect(technical).not.toHaveAttribute("open");
+  for (const [label, value] of [["Venue code", "BLOFIN_DEMO"], ["Journal trade ID", tradeId], ["Manual demo command ID", commandId], ["Venue order ID", venueOrderId], ["Client order ID", "fixture-client"]]) {
+    expect(within(technical).getByText(label).nextSibling).toHaveTextContent(value);
+  }
+  expect(within(technical).queryByText("Venue history ID")).not.toBeInTheDocument();
+  expect(screen.getByText("Entry order: Recorded on venue")).toBeInTheDocument();
+  expectNoIdentifiers();
 });

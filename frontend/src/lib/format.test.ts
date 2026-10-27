@@ -18,6 +18,7 @@ import {
   humanizeLimitation,
   humanizeToken,
   UNAVAILABLE,
+  venueLabel,
 } from "./format";
 
 describe("shared product formatters", () => {
@@ -107,5 +108,12 @@ describe("formatAmount", () => {
     expect(formatPercent(0.5, 2, { alreadyPercent: true, trimZeros: true })).toBe("0.5%");
     expect(formatPercent(1, 2, { alreadyPercent: true, trimZeros: true })).toBe("1%");
     expect(formatPercent(0.5, 2, { alreadyPercent: true })).toBe("0.50%");
+  });
+
+  it("labels venues without exposing raw venue codes", () => {
+    expect(venueLabel("BLOFIN_DEMO")).toBe("BloFin demo");
+    expect(venueLabel("PAPER")).toBe("Paper");
+    expect(venueLabel("SOME_TESTNET")).toBe("Some Testnet");
+    expect(venueLabel(null)).toBe(UNAVAILABLE);
   });
 });
