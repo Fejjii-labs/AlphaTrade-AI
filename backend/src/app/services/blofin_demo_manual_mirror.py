@@ -943,13 +943,18 @@ class BloFinDemoManualMirror:
         when the snapshot cycle skips ``BloFinSyncService.sync`` because the
         stored snapshot is fresh. A missing pin raises before a socket. The
         UID check's only request is ``GET /api/v1/user/query-apikey``.
-        ``paper_exchange_demo`` and the dedicated read-only key are unchanged.
+        The dedicated read-only key takes the same pin and fails closed.
+        ``paper_exchange_demo`` with the trading key is unchanged.
         """
 
-        if not settings.blofin_paper_internal_main_key_selected:
-            return
         from app.providers.exchange.blofin_account import PERMISSIONS_ENDPOINT
-        from app.services.blofin_sync_service import require_internal_snapshot_mirror_identity
+        from app.services.blofin_sync_service import (
+            mirror_identity_pin_applies,
+            require_internal_snapshot_mirror_identity,
+        )
+
+        if not mirror_identity_pin_applies(settings):
+            return
 
         def fetch_identity() -> Any:
             return self._client.request("GET", PERMISSIONS_ENDPOINT, params=None, signed=True)
