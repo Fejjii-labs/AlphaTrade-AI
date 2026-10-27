@@ -70861,6 +70861,32 @@
         ]
       }
     },
+    "/notifications/filter-options": {
+      "get": {
+        "operationId": "get_telegram_policy_options_notifications_filter_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramPolicyOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Named choices for Telegram policy filters",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/notifications/preferences": {
       "get": {
         "operationId": "get_notification_preferences_notifications_preferences_get",
@@ -70952,32 +70978,6 @@
           }
         ],
         "summary": "Reset notification preferences to defaults",
-        "tags": [
-          "notifications"
-        ]
-      }
-    },
-    "/notifications/telegram/options": {
-      "get": {
-        "operationId": "get_telegram_policy_options_notifications_telegram_options_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TelegramPolicyOptions"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Named choices for Telegram policy filters",
         "tags": [
           "notifications"
         ]

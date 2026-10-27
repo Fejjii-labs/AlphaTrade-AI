@@ -50,7 +50,7 @@ async def get_notification_preferences(
 
 
 @router.get(
-    "/telegram/options",
+    "/filter-options",
     response_model=TelegramPolicyOptions,
     summary="Named choices for Telegram policy filters",
     dependencies=[_PREFS_READ],
