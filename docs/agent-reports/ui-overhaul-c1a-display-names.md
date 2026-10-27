@@ -53,3 +53,27 @@ Branch from `main`. Scope: backend read models + regenerated API contract.
       canonical HTTP flow asserting the candidate name.
 - [x] No UUID or hash pattern in any display name (asserted).
 - [x] `npm run api:check` passes.
+
+## Test evidence
+
+From `backend/`:
+
+- `uv run pytest tests/test_display_names.py` → 9 passed.
+- The 60 existing test files that touch these reads (journal trades, Strategy
+  Brain, canonical candidates, OpenAPI) → all pass. 1,185 passed in the first
+  run. 195 Postgres tests in 11 files errored there because a concurrent gate
+  dropped the shared template DB; re-run alone → 195 passed.
+- `test_phase8_canonical_workflow` now asserts the candidate name
+  "Phase 7 compiled setup strategy · BTCUSDT · Short · 15m".
+- ruff, ruff format, mypy (touched files) clean. `npm run api:check` passes;
+  frontend `tsc --noEmit` clean; `vitest run src/lib/api` → 54 passed.
+- Full backend gate (Postgres 16, local, 4 file shards): **6,552 passed**. 22
+  failed or errored, all from the local harness. The shard DB rename is refused
+  by `test_execution_account_registration.py` and three migration tests, and
+  `test_pr237_migration_aware_rollback` needs history missing from the shallow
+  clone. Re-run alone → **25 passed**.
+
+## Screenshots
+
+Backend only; no page changes. Frontend adoption of `display_name` is a later
+Track C batch.
