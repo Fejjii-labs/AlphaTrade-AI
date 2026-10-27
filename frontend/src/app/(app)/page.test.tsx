@@ -159,6 +159,12 @@ afterEach(() => {
 });
 
 describe("Trader dashboard", () => {
+  it("no longer carries the manual demo order flow (it lives on Trades)", () => {
+    render(<DashboardPage />);
+    expect(screen.queryByText("Manual demo fixture")).not.toBeInTheDocument();
+    expect(screen.queryByText("Manual demo preparation & history")).not.toBeInTheDocument();
+  });
+
   it("refreshes the saved demo snapshot together with the Dashboard", () => {
     render(<DashboardPage />);
     expect(screen.getByTestId("dashboard-demo-account")).toHaveAttribute(
