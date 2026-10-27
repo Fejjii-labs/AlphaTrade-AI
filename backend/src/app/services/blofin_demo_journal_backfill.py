@@ -1,9 +1,11 @@
-"""Read-only backfill plan for BloFin demo trades in the journal (A6 §7, A7a).
+"""Backfill plan for BloFin demo trades in the journal (A6 §7, A7a) and its gated apply (A7b).
 
 Venue legs are grouped into position lifetimes ``(positionId, openTimeMs)``,
 matched to stored mirror rows, and printed as a JSON Lines diff with a plan
-digest. Nothing here writes the journal: the applied run is A7b and needs
-Sofien's approval of this output. See ``docs/blofin_demo_trades_journal.md``.
+digest. ``build_plan`` writes nothing. ``apply_plan`` (A7b) re-plans, refuses
+unless the digest equals the one Sofien approved, and then only inserts the
+planned closed-lifetime creates. It never deletes and never updates an
+existing row. See ``docs/blofin_demo_trades_journal.md`` §6-§10.
 """
 
 from __future__ import annotations
@@ -13,17 +15,17 @@ import json
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import event, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import JournalTrade, JournalTradeAttachment, JournalTradeObservation
-from app.schemas.common import JournalTradeStatus
+from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeResult
 from app.services.blofin_demo_manual_mirror import (
     _FILLS,
     _FUNDING,
@@ -34,7 +36,9 @@ from app.services.blofin_demo_manual_mirror import (
     _POSITIONS,
     _WINDOW,
     BloFinDemoManualMirror,
+    MirrorDraft,
     MirrorReadError,
+    _apply_venue,
     _assign_funding,
     _attach_orders,
     _claim_manual,
@@ -316,14 +320,10 @@ def _diff(row: JournalTrade | None, fields: dict[str, Any]) -> dict[str, list[st
     return changed
 
 
-def build_plan(
+def _group(
     pages: VenuePages,
-    rows: Iterable[JournalTrade],
-    *,
-    annotated: set[uuid.UUID],
-    user_id: uuid.UUID,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Plan lines and the summary object. Pure: reads its inputs, writes nothing."""
+) -> tuple[dict[str, Any], list[_Slice], list[Any], dict[tuple[str, int], _Lifetime]]:
+    """Live-cycle parse, funding and order attach, then grouping into closed lifetimes."""
     meta, _conflict = _instruments(pages.instruments)
     slices, skipped_rows, _incomplete = _parse_slices_detailed(pages.history, meta, pages.fills)
     _assign_funding(slices, pages.funding, window_begin=pages.funding_begin)
@@ -332,6 +332,18 @@ def build_plan(
     for leg in slices:
         key = (leg.position_id, _open_ms(leg.opened_at))
         lifetimes.setdefault(key, _Lifetime(*key)).legs.append(leg)
+    return meta, slices, skipped_rows, lifetimes
+
+
+def build_plan(
+    pages: VenuePages,
+    rows: Iterable[JournalTrade],
+    *,
+    annotated: set[uuid.UUID],
+    user_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Plan lines and the summary object. Pure: reads its inputs, writes nothing."""
+    meta, slices, skipped_rows, lifetimes = _group(pages)
     missing_open_time = 0
     for position in pages.positions:
         position_id = position.get("positionId")
@@ -579,3 +591,160 @@ def build_plan(
         "plan_digest": f"sha256:{digest}",
     }
     return lines, summary
+
+
+APPLY_ACTIONS = frozenset({"create"})
+_NO_WRITE_ACTIONS = frozenset({"skip", "list_ghost"})
+POSITION_TAG_PREFIX = "blofin-position:"
+
+
+class ApplyRefusedError(Exception):
+    """The gated apply wrote nothing. ``code`` is a stable reason for the operator."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class GetOnlyClient:
+    """Wrap a venue client so any non-GET request raises before it reaches the venue."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        if str(method).upper() != "GET":
+            raise ApplyRefusedError("venue_write_refused", "the backfill venue client is GET-only")
+        return self._client.request(method, path, **kwargs)
+
+
+def _lifetime_draft(
+    life: _Lifetime, fields: dict[str, Any], ref: str, verified: bool
+) -> MirrorDraft:
+    """One live-cycle ``MirrorDraft`` for a whole closed lifetime (A6 §4)."""
+    legs = sorted(life.legs, key=lambda leg: (leg.closed_at, leg.history_id))
+    first = _draft_from_slice(legs[0])
+    net = fields["net_pnl"]
+    if net is None:
+        result = TradeResult.OPEN
+    elif net > 0:
+        result = TradeResult.WIN
+    elif net < 0:
+        result = TradeResult.LOSS
+    else:
+        result = TradeResult.BREAKEVEN
+    orders = tuple(dict.fromkeys(item for leg in legs for item in leg.order_ids))
+    return replace(
+        first,
+        external_ref=ref,
+        history_ids=tuple(sorted(leg.history_id for leg in legs)),
+        status=fields["status"],
+        entry_price=fields["entry_price"],
+        exit_price=fields["exit_price"],
+        entry_time=datetime.fromtimestamp(life.open_ms / 1000, UTC),
+        exit_time=max(leg.closed_at for leg in legs),
+        size=fields["size"],
+        fees=fields["fees"],
+        funding=fields["funding"],
+        slippage=Decimal("0") if verified else None,
+        gross_pnl=fields["gross_pnl"],
+        net_pnl=net,
+        result=result,
+        exit_reason=fields["exit_reason"],
+        planned_risk=first.planned_risk if len(legs) == 1 and verified else None,
+        verified=verified,
+        order_ids=orders,
+        open_tracker=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyReport:
+    plan_digest: str
+    created: int
+    created_refs: tuple[str, ...]
+    rerun_creates: int
+    rerun_updates: int
+
+
+def apply_plan(
+    session: Session,
+    pages: VenuePages,
+    *,
+    organization_id: uuid.UUID,
+    user_id: uuid.UUID,
+    approved_digest: str,
+) -> ApplyReport:
+    """A7b: re-plan, refuse any digest mismatch, then insert the planned creates.
+
+    Only ``create`` lines of closed lifetimes (``blofin-demo-history:`` ref) are
+    written, through the live cycle's ``_apply_venue``. A plan that also holds
+    an ``attach``/``close``/``merge``/``supersede`` line is refused whole: those
+    update existing rows and are out of scope for this apply. While this runs, a
+    statement guard refuses any DELETE and any UPDATE or DELETE of
+    ``journal_trades``. After the inserts the plan is rebuilt in the same
+    transaction and must show 0 creates and 0 updates, or nothing is kept.
+    The caller commits; on any exception it must roll back.
+    """
+    rows, annotated = stored_rows(session, organization_id=organization_id, user_id=user_id)
+    lines, summary = build_plan(pages, rows, annotated=annotated, user_id=user_id)
+    digest = summary["plan_digest"]
+    if approved_digest != digest:
+        raise ApplyRefusedError(
+            "digest_mismatch", "the re-planned digest differs from the approved one"
+        )
+    unsupported = sorted({line["action"] for line in lines} - APPLY_ACTIONS - _NO_WRITE_ACTIONS)
+    if unsupported:
+        raise ApplyRefusedError(
+            "unsupported_action", f"plan holds actions this apply does not run: {unsupported}"
+        )
+    creates = [line for line in lines if line["action"] == "create"]
+    if any(not str(line["ref_after"]).startswith("blofin-demo-history:") for line in creates):
+        raise ApplyRefusedError("open_lifetime_create", "open lifetimes are left to the live cycle")
+    meta, _slices, _skipped, lifetimes = _group(pages)
+    by_key = {life.key: life for life in lifetimes.values()}
+    drafts: list[tuple[MirrorDraft, str]] = []
+    for line in creates:
+        life = by_key[line["lifetime"]]
+        fields, verified, _reasons = _proposed(life, pages, meta)
+        if _diff(None, fields) != line["fields"] or verified is not line["verified"]:
+            raise ApplyRefusedError("plan_drift", "a create no longer matches its planned fields")
+        drafts.append((_lifetime_draft(life, fields, line["ref_after"], verified), life.key))
+
+    bind = session.connection()
+
+    def guard(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        words = statement.lstrip().split(None, 3)
+        verb = words[0].upper() if words else ""
+        if verb == "DELETE" or (verb == "UPDATE" and "journal_trades" in statement.lower()):
+            raise ApplyRefusedError("write_refused", f"{verb} is not allowed in the backfill apply")
+
+    event.listen(bind, "before_cursor_execute", guard)
+    try:
+        for draft, key in drafts:
+            row = JournalTrade(
+                organization_id=organization_id,
+                user_id=user_id,
+                source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+                status=draft.status,
+                symbol=draft.symbol,
+                timeframe="manual",
+                direction=draft.direction,
+            )
+            _apply_venue(row, draft, fresh=True)
+            row.tags = [*row.tags, f"{POSITION_TAG_PREFIX}{key}"]
+            session.add(row)
+        session.flush()
+        rows, annotated = stored_rows(session, organization_id=organization_id, user_id=user_id)
+        _again, rerun = build_plan(pages, rows, annotated=annotated, user_id=user_id)
+    finally:
+        event.remove(bind, "before_cursor_execute", guard)
+    if rerun["creates"] or rerun["updates"]:
+        raise ApplyRefusedError("not_idempotent", "the re-plan after insert still proposes writes")
+    return ApplyReport(
+        plan_digest=digest,
+        created=len(drafts),
+        created_refs=tuple(draft.external_ref for draft, _key in drafts),
+        rerun_creates=rerun["creates"],
+        rerun_updates=rerun["updates"],
+    )
