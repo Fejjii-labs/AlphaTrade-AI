@@ -65,4 +65,11 @@ describe("ProposalCard", () => {
     expect(screen.getByTestId("agent-strategy-draft")).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}|a{16}/);
   });
+
+  it.each(["proposed", "applied", "rejected"] as const)("always says a chat or voice reply does not confirm (%s)", (status) => {
+    render(<ProposalCard proposal={proposal({ status })} deciding={false} onDecide={vi.fn()} />);
+    expect(screen.getByTestId("agent-proposal-reply-note")).toHaveTextContent(
+      "The reply did not confirm this proposal. Sending a chat or voice message does not confirm it either.",
+    );
+  });
 });

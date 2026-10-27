@@ -48,6 +48,9 @@ export function ProposalCard({
       <p className="text-caption text-text-secondary" data-testid="agent-proposal-status">
         {status.text}
       </p>
+      <p className="text-caption text-text-muted" data-testid="agent-proposal-reply-note">
+        The reply did not confirm this proposal. Sending a chat or voice message does not confirm it either.
+      </p>
       {note && proposal.status === "proposed" ? <p className="text-caption text-text-muted">{note}</p> : null}
       {proposal.linked_strategy_proposal_id ? (
         <StrategyDraftReview
