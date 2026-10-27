@@ -1,11 +1,9 @@
-import Link from "next/link";
+import { PageHeader } from "@/components/ui/page-header";
+
 export default function HelpPage() {
   return (
     <div className="space-y-4">
-      <Link href="/settings#account-system" className="text-accent">
-        ← Back to Settings
-      </Link>
-      <h1 className="text-2xl font-semibold">Help &amp; Guide</h1>
+      <PageHeader title="Help" />
       {[
         [
           "Dashboard",

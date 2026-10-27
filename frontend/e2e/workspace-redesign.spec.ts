@@ -493,11 +493,9 @@ for (const width of [1280, 390]) {
       page.getByText("Market observations · Last 7 days"),
     ).toBeVisible();
     await page.goto("/settings");
-    await expect(
-      page.locator('[data-testid="settings-workspace"] > details'),
-    ).toHaveCount(3);
-    await page.getByText("Account & System", { exact: true }).click();
-    await expect(page.getByRole("link", { name: "Diagnostics" })).toBeVisible();
+    const sections = page.getByRole("navigation", { name: "Settings sections" });
+    await expect(sections.getByRole("link")).toHaveCount(6);
+    await expect(sections.getByRole("link", { name: "Diagnostics" })).toBeVisible();
     await screenshot("settings");
     await noOverflow();
     const otherWrites = writes.filter(
