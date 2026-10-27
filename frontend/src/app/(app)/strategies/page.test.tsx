@@ -124,8 +124,8 @@ it("counts Nested detections from their own family read, even behind a busy SFP 
   }));
   render(<StrategiesPage />);
   const [nested, sfp] = screen.getAllByTestId("strategy-family");
-  expect(await within(nested).findByText("Recent detections (1)")).toBeInTheDocument();
-  expect(within(sfp).getByText("Recent detections (25)")).toBeInTheDocument();
+  await waitFor(() => expect(within(nested).getByTestId("family-count")).toHaveTextContent("1 in 7 days"));
+  expect(within(sfp).getByTestId("family-count")).toHaveTextContent("25 in 7 days");
   expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "nested_continuation", since: expect.any(String) });
   expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "sfp", since: expect.any(String) });
 });
@@ -143,6 +143,8 @@ it("shows the server total when a family has more detections than the 20-row bou
   }));
   render(<StrategiesPage />);
   const [nested, sfp] = screen.getAllByTestId("strategy-family");
-  expect(await within(sfp).findByText("Recent detections (37)")).toBeInTheDocument();
-  expect(within(nested).getByText("Recent detections (1)")).toBeInTheDocument();
+  await waitFor(() => expect(within(sfp).getByTestId("family-count")).toHaveTextContent("37 in 7 days"));
+  expect(within(nested).getByTestId("family-count")).toHaveTextContent("1 in 7 days");
+  expect(within(sfp).getByText("Bars and list cover the latest 20.")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Recent detections →" })).not.toBeInTheDocument();
 });

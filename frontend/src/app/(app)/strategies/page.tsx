@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ExperimentsPanel } from "@/components/strategies/ExperimentsPanel";
+import { FamilyCard } from "@/components/strategies/FamilyCard";
+import { StrategyRules } from "@/components/strategies/StrategyRules";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Eyebrow } from "@/components/ui/eyebrow";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,7 +14,7 @@ import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import type { BrainFamily, BrainOverview, BrainSetup } from "@/lib/api/brain-types";
 import { savedEntries } from "@/lib/api/saved-entries";
-import { formatDateTime } from "@/lib/format";
+import { humanizeToken } from "@/lib/format";
 import { strategyStatusFor } from "@/lib/strategy-status";
 import { cn } from "@/lib/utils";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
@@ -75,11 +76,6 @@ function StrategiesWorkspace() {
     <div className="page-sections" data-testid="trader-strategies">
       <PageHeader
         title={family?.name ?? "Strategies"}
-        description={
-          family
-            ? "Configurations and revisions."
-            : "Nested Continuation and SFP families, detections, and drafts."
-        }
         actions={
           <Link
             href="/agent?discuss=strategy"
@@ -113,12 +109,9 @@ function StrategiesWorkspace() {
                     {s.spec.trigger_timeframe}
                   </h2>
                   <span className="text-sm">
-                    {s.status} · v{s.version}
+                    {humanizeToken(s.status)} · v{s.version}
                   </span>
                 </div>
-                <p className="text-sm text-text-muted">
-                  Approval, validation and automation are separate.
-                </p>
                 <Link
                   href={`/strategy-lab/${s.strategy_id}`}
                   className="inline-flex min-h-11 items-center text-accent"
@@ -127,11 +120,9 @@ function StrategiesWorkspace() {
                 </Link>
                 <details>
                   <summary className="min-h-11 cursor-pointer text-sm">
-                    Rules &amp; evidence
+                    Rules
                   </summary>
-                  <pre className="whitespace-pre-wrap break-words text-xs">
-                    {JSON.stringify(s.spec, null, 2)}
-                  </pre>
+                  <StrategyRules spec={s.spec} />
                 </details>
               </article>
             ))}
@@ -143,66 +134,17 @@ function StrategiesWorkspace() {
         <>
           <SectionHeader eyebrow="Library" title="Strategy families" />
           <div className="grid items-start gap-3 md:grid-cols-2">
-            {families.map((f) => {
-              const configs = data?.brain?.strategies.filter(
-                (s) => s.spec.kind === f.kind,
-              );
-              const detections = data?.recent[f.detectionFamily];
-              const recent = detections?.setups
-                .slice()
-                .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at));
-              return (
-                <article
-                  key={f.id}
-                  data-testid="strategy-family"
-                  className="card-inner rounded-card border border-border-subtle bg-surface-1 p-4"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <h2 className="text-section">{f.name}</h2>
-                    <Eyebrow as="span">{f.id}</Eyebrow>
-                  </div>
-                  <p className="text-sm text-text-secondary">
-                    {loading
-                      ? "Loading…"
-                      : !configs
-                        ? "Configurations unavailable"
-                        : `${configs.length} configurations`}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                    <Link className="inline-flex h-10 items-center text-sm text-accent" href={`/strategies?family=${f.id}`}>Open</Link>
-                    <Link className="inline-flex h-10 items-center text-sm text-accent" href={`/agent?discuss=${f.id}`}>Ask Agent</Link>
-                  </div>
-                  <details className="border-t border-border-subtle pt-2">
-                    <summary className="min-h-11 cursor-pointer content-center text-sm">
-                      Recent detections{detections ? ` (${detections.count})` : ""}
-                    </summary>
-                    <div className="space-y-3 pt-2 text-sm">
-                      <p className="text-text-muted">Last 7 days · market observations</p>
-                      {loading ? <p role="status">Loading detections…</p> : !recent ?
-                        <p>Detections unavailable.</p> : recent.length === 0 ?
-                        <p>No recent detections.</p> : <ul className="space-y-3">
-                          {recent.slice(0, 3).map(s => <li key={s.setup_id}>
-                            <Link className="text-accent" href={`/strategies/setups/${s.setup_id}?returnTo=${encodeURIComponent("/strategies")}`}>
-                              {s.symbol || s.instrument} · {s.direction} · {s.timeframe}
-                            </Link>
-                            <p className="text-text-muted">{s.state.replaceAll("_", " ")} · {formatDateTime(s.observed_at)}</p>
-                          </li>)}
-                        </ul>}
-                      <Link className="inline-flex min-h-11 items-center text-accent" href={`/strategies/detections?family=${f.detectionFamily}`}>
-                        Browse detections
-                      </Link>
-                    </div>
-                  </details>
-                </article>
-              );
-            })}
+            {families.map((f) => (
+              <FamilyCard
+                key={f.id}
+                id={f.id}
+                name={f.name}
+                loading={loading}
+                versions={data?.brain ? data.brain.strategies.filter((s) => s.spec.kind === f.kind).length : null}
+                detections={data?.recent[f.detectionFamily] ?? null}
+              />
+            ))}
           </div>
-          <Link
-            href="/strategies/detections"
-            className="inline-flex min-h-11 items-center text-accent"
-          >
-            Recent detections →
-          </Link>
           <ExperimentsPanel initialExperiment={params.get("experiment")} />
           <section className="page-sections" data-testid="captured-strategy-notes">
             <SectionHeader
