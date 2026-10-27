@@ -315,3 +315,51 @@ describe("GPT Live controller (mocked transport, no live provider or microphone)
     expect(f.socket.close).toHaveBeenCalledOnce(); expect(f.states.at(-1)?.error).toContain("too slow");
   });
 });
+
+describe("reason codes, limits, countdown and turns (UI overhaul B7b)", () => {
+  it("says why voice is unavailable at start, by reason code", async () => {
+    const off = fixture({ configuration: vi.fn().mockResolvedValue({ available: false, reason: "voice_not_enabled", provider: "gpt_live" }) });
+    await off.controller.start();
+    expect(off.states.at(-1)).toMatchObject({ state: "error", active: false, limit: false, error: "Voice is off. Continue typing." });
+    const setup = fixture({ configuration: vi.fn().mockResolvedValue({ available: false, reason: "verified_live_limits_expired" }) });
+    await setup.controller.start();
+    expect(setup.states.at(-1)).toMatchObject({ limit: false, error: "Voice is not set up. Continue typing." });
+    expect(setup.connect).not.toHaveBeenCalled();
+  });
+
+  it("reports a limit reached at start as a limit", async () => {
+    const f = fixture({ configuration: vi.fn().mockResolvedValue({ available: false, reason: "verified_cap_cannot_cover_session" }) });
+    await f.controller.start();
+    expect(f.states.at(-1)).toMatchObject({ state: "error", limit: true, error: "Voice budget used up. Continue typing." });
+    expect(f.audio.start).not.toHaveBeenCalled();
+  });
+
+  it("ends on a server limit with plain text instead of one generic line", async () => {
+    const f = fixture(); await f.controller.start(); f.socket.onopen?.();
+    f.socket.emit({ type: "session.ready" });
+    f.socket.emit({ type: "session.error", reason: "voice_daily_request_quota_exhausted" });
+    expect(f.states.at(-1)).toMatchObject({
+      state: "error", active: false, limit: true,
+      error: "Daily voice limit reached. Recover any pending request or continue typing.",
+    });
+  });
+
+  it("keeps the generic text for an unknown server reason", async () => {
+    const f = fixture(); await f.controller.start(); f.socket.onopen?.();
+    f.socket.emit({ type: "session.error", reason: "something_new" });
+    expect(f.states.at(-1)).toMatchObject({ limit: false, error: "Interactive voice is unavailable. Recover any pending request or continue typing." });
+  });
+
+  it("counts down from readiness and counts turns left", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-27T10:00:00Z"));
+    const f = fixture({ configuration: vi.fn().mockResolvedValue({ available: true, maximum_seconds: 180, maximum_turns: 6 }) });
+    await f.controller.start(); f.socket.onopen?.();
+    f.socket.emit({ type: "session.ready" });
+    expect(f.states.at(-1)).toMatchObject({ endsAt: Date.parse("2026-10-27T10:03:00Z"), turnsLeft: 6 });
+    f.socket.emit({ type: "turn.pending", request_key: key, body });
+    expect(f.states.at(-1)).toMatchObject({ state: "thinking", turnsLeft: 5 });
+    f.controller.end();
+    expect(f.states.at(-1)).toMatchObject({ active: false, endsAt: undefined, turnsLeft: undefined });
+  });
+});
