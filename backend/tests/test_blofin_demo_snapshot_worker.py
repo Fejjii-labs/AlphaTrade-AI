@@ -1940,6 +1940,22 @@ def test_readonly_mirror_refuses_a_uid_mismatch_before_account_reads(
     _assert_secrets_absent(logs, *_READONLY_SECRETS)
 
 
+@pytest.mark.parametrize(
+    "venue_uid",
+    ["PINNED-DEMO-ACCOUNT", "Pinned-Demo-Account", " pinned-demo-account", "pinned-demo-account "],
+)
+def test_readonly_mirror_uid_comparison_is_exact_for_case_and_whitespace(
+    monkeypatch: pytest.MonkeyPatch, venue_uid: str
+) -> None:
+    settings = _readonly_mirror_settings()
+    organization_id = UUID(settings.governed_blofin_demo_organization_id)
+    _pin_activity(monkeypatch, organization_id, "pinned-demo-account")
+    client = _PinClient(uid=venue_uid, account_reads=True)
+    with pytest.raises(ValueError):
+        _apply_mirror(client, settings, organization_id)
+    assert client.paths == [_IDENTITY]
+
+
 def test_readonly_mirror_refuses_a_missing_expected_uid_before_any_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
