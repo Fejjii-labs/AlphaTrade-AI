@@ -31,10 +31,7 @@ export default function BrainSetupPage() {
         href={returnTo}
         className="inline-flex min-h-11 items-center text-accent"
       >
-        ← Back to{" "}
-        {returnTo.startsWith("/strategies/detections")
-          ? "detections"
-          : "Strategies"}
+        ← Back to Strategies
       </Link>
       <h1 className="text-xl">
         {data.family === "sfp"

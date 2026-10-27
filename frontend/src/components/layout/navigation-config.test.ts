@@ -230,7 +230,7 @@ describe("AT-040 Phase B redirects", () => {
     );
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source).not.toBe(rule.destination);
-      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : "/settings/";
+      const home = rule.source.startsWith("/strategy-lab/") ? "/agent?" : rule.source.startsWith("/risk") ? "/autonomous#" : rule.source.startsWith("/strategies/") ? "/strategies" : "/settings/";
       expect(rule.destination.startsWith(home), rule.source).toBe(true);
       expect(destinations.has(rule.source)).toBe(false);
     }
