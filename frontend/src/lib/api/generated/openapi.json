@@ -4172,6 +4172,46 @@
         "title": "AuthorizationState",
         "type": "string"
       },
+      "AutonomousActivityView": {
+        "additionalProperties": false,
+        "properties": {
+          "day": {
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          },
+          "recent_actions": {
+            "items": {
+              "$ref": "#/components/schemas/BotAction"
+            },
+            "title": "Recent Actions",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "trades_today": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trades Today"
+          }
+        },
+        "required": [
+          "day",
+          "timezone",
+          "trades_today",
+          "recent_actions"
+        ],
+        "title": "AutonomousActivityView",
+        "type": "object"
+      },
       "AutonomousStrategyOption": {
         "additionalProperties": false,
         "properties": {
@@ -6557,6 +6597,80 @@
         ],
         "title": "BookLevel",
         "type": "object"
+      },
+      "BotAction": {
+        "additionalProperties": false,
+        "description": "One recorded paper-loop decision. Only audited outcomes appear here.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "journal_trade_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal Trade Id"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/BotActionOutcome"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "at",
+          "outcome"
+        ],
+        "title": "BotAction",
+        "type": "object"
+      },
+      "BotActionOutcome": {
+        "enum": [
+          "entered",
+          "blocked",
+          "rejected"
+        ],
+        "title": "BotActionOutcome",
+        "type": "string"
       },
       "BridgeDashboardStatus": {
         "additionalProperties": false,
@@ -60478,6 +60592,32 @@
         "summary": "Request Verify Email",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/autonomous/activity": {
+      "get": {
+        "operationId": "get_autonomous_activity_autonomous_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomousActivityView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "What the autonomous paper bot did today",
+        "tags": [
+          "autonomous-trading"
         ]
       }
     },

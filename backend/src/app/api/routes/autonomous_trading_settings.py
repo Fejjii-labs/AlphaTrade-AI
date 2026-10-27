@@ -5,12 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.dependencies import AutonomousTradingSettingsServiceDep, SessionDep
+from app.schemas.autonomous_activity import AutonomousActivityView
 from app.schemas.autonomous_trading_settings import (
     AutonomousTradingSettingsUpdate,
     AutonomousTradingSettingsView,
 )
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep
+from app.services.autonomous_activity import AutonomousActivityService
 from app.services.autonomous_trading_settings_service import AutonomousSettingsValidationError
 
 router = APIRouter(prefix="/autonomous", tags=["autonomous-trading"])
@@ -38,6 +40,21 @@ async def get_autonomous_trading_settings(
     service: AutonomousTradingSettingsServiceDep,
 ) -> AutonomousTradingSettingsView:
     return service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
+
+
+@router.get(
+    "/activity",
+    response_model=AutonomousActivityView,
+    summary="What the autonomous paper bot did today",
+    dependencies=[_READ],
+)
+async def get_autonomous_activity(
+    tenant: ReaderDep,
+    session: SessionDep,
+) -> AutonomousActivityView:
+    return AutonomousActivityService(session).view(
+        organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
 
 
 @router.patch(
