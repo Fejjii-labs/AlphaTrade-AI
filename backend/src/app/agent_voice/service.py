@@ -30,18 +30,42 @@ from app.agent_voice.retrieval import (
     VoiceEmbeddingUsage,
     embedding_limitation,
 )
+from app.core.config import Settings
 from app.interactive_agent.contracts import AgentTurnRequest, AgentTurnResult
 from app.interactive_agent.turn_runtime import run_interactive
 from app.providers.base import ProviderHealth, ProviderStatus
 from app.providers.factory import resolve_providers
-from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMProvider
+from app.providers.llm import (
+    LLMCompletionRequest,
+    LLMCompletionResult,
+    LLMProvider,
+    MockLLMProvider,
+    OpenAILLMProvider,
+)
 from app.services.turn_coordinator import TurnCoordinator
+
+
+def voice_llm(provider: LLMProvider, settings: Settings) -> LLMProvider:
+    """The voice reasoning route, rebuilt fail-closed: no mock fallback, ever."""
+    if isinstance(provider, MockLLMProvider):
+        raise VoiceUnavailableError("voice_reasoning_mock_refused")
+    if isinstance(provider, OpenAILLMProvider):
+        # Outside staging the shared provider carries a mock fallback; voice must not.
+        return OpenAILLMProvider(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model=settings.agent_voice_reasoning_model,
+            fail_closed=True,
+        )
+    raise VoiceUnavailableError("voice_reasoning_provider_unknown")
 
 
 class VoiceReasoningProvider:
     """Preserves existing ModelRouter/capture and limits actual secondary attempts."""
 
     def __init__(self, provider: LLMProvider, ledger: VoiceLedger):
+        if isinstance(provider, MockLLMProvider):
+            raise VoiceUnavailableError("voice_reasoning_mock_refused")
         self.provider, self.ledger = provider, ledger
         self.name, self.kind = provider.name, provider.kind
 
@@ -62,6 +86,7 @@ class VoiceReasoningProvider:
         if (
             result.model != price.model
             or result.fallback_used
+            or result.provider.strip().lower().startswith("mock")
             or result.input_tokens > price.maximum_input_tokens
             or result.output_tokens > self.ledger.settings.agent_max_output_tokens
         ):
@@ -95,7 +120,7 @@ def shared_turn(ledger: VoiceLedger, key: str, body: dict[str, Any]) -> dict[str
     )
     coordinator = TurnCoordinator(ledger.sessions)
     providers = resolve_providers(ledger.settings)
-    provider = VoiceReasoningProvider(providers.llm, ledger)
+    provider = VoiceReasoningProvider(voice_llm(providers.llm, ledger.settings), ledger)
     limitation = embedding_limitation(ledger)
     embeddings = (
         VoiceEmbeddingsProvider(providers.embeddings, ledger, key) if limitation is None else None

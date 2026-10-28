@@ -18,6 +18,25 @@ class VoiceUnavailableError(RuntimeError):
     """Safe machine reason only; no provider body, credentials or prompt."""
 
 
+VOICE_PROVIDER_MODES = frozenset({"live", "fallback"})
+
+
+def voice_route_refusal(settings: Settings) -> str | None:
+    """Voice-scoped route gate (UI overhaul B7a).
+
+    Voice does not follow the global ``provider_mode``: it needs a bound key and
+    refuses an explicit mock mode. Every voice turn still requires its own flag
+    and a verified, unexpired limits receipt (checked by the callers), and the
+    voice reasoning and embedding routes are rebuilt fail-closed, so a mock or
+    fallback provider can never produce a voice reply.
+    """
+    if not settings.openai_api_key.strip():
+        return "provider_credential_unbound"
+    if settings.provider_mode.strip().lower() not in VOICE_PROVIDER_MODES:
+        return "approved_live_route_unavailable"
+    return None
+
+
 class RoutePrice(StrictModel):
     model: str = Field(min_length=1, max_length=80)
     source: str = Field(pattern=r"^https://", max_length=500)
@@ -139,10 +158,8 @@ class VoiceLimits(StrictModel):
 def load_limits(settings: Settings) -> VoiceLimits:
     if not getattr(settings, "agent_realtime_enabled", False):
         raise VoiceUnavailableError("realtime_not_enabled")
-    if not settings.openai_api_key:
-        raise VoiceUnavailableError("provider_credential_unbound")
-    if settings.provider_mode != "live":
-        raise VoiceUnavailableError("approved_live_route_unavailable")
+    if refusal := voice_route_refusal(settings):
+        raise VoiceUnavailableError(refusal)
     filename = getattr(settings, "agent_realtime_limits_file", "")
     if not filename:
         raise VoiceUnavailableError("verified_realtime_limits_unbound")

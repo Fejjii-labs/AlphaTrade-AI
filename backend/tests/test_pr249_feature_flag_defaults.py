@@ -11,6 +11,9 @@ from app.services.blofin_activity_config import BloFinActivitySettings
 PR249_SETTINGS_FLAGS: dict[str, str] = {
     "knowledge_indexing_enabled": "KNOWLEDGE_INDEXING_ENABLED",
     "agent_realtime_enabled": "AGENT_REALTIME_ENABLED",
+    # GPT Live voice: its admission no longer depends on PROVIDER_MODE (UI overhaul B7a),
+    # so the flag itself must load disabled.
+    "agent_live_enabled": "AGENT_LIVE_ENABLED",
     "trendpulse_screening_enabled": "TRENDPULSE_SCREENING_ENABLED",
 }
 ACTIVITY_ENABLED_ENV = "BLOFIN_ACTIVITY_ENABLED"
@@ -27,6 +30,7 @@ def test_pr249_settings_flags_load_disabled(monkeypatch: pytest.MonkeyPatch) -> 
     settings = Settings(_env_file=None)
     assert settings.knowledge_indexing_enabled is False
     assert settings.agent_realtime_enabled is False
+    assert settings.agent_live_enabled is False
     assert settings.trendpulse_screening_enabled is False
 
 
