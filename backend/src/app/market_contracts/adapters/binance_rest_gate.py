@@ -23,6 +23,7 @@ separate follow-up and out of scope here.
 
 from __future__ import annotations
 
+import math
 import random
 import threading
 import time
@@ -107,9 +108,7 @@ class BinanceRestGate:
         with self._lock:
             self._strikes += 1
             backoff = min(self._base * 2.0 ** (self._strikes - 1), self._cap)
-        floor = (
-            float(retry_after_seconds) if retry_after_seconds and retry_after_seconds > 0 else 0.0
-        )
+        floor = sanitize_retry_after(retry_after_seconds, cap=self._cap) or 0.0
         seconds = max(floor, backoff) * (1.0 + self._jitter * self._rng())
         self._close(kind, seconds)
         return seconds
@@ -150,7 +149,27 @@ class BinanceRestGate:
             return self._strikes
 
 
+def sanitize_retry_after(value: float | None, *, cap: float = BACKOFF_CAP_SECONDS) -> float | None:
+    """Usable Retry-After seconds, or None so the caller falls back to backoff.
+
+    Non-finite (inf, nan) and negative values are rejected. Everything else is
+    clamped to ``cap`` so one bad header cannot close the gate for days.
+    """
+
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return min(parsed, cap)
+
+
 def _used_weight(headers: Mapping[str, str] | None) -> int | None:
+    """Strict parse: ASCII digits only, so "12abc", "-1", "1.5" are ignored."""
+
     if not headers:
         return None
     raw = headers.get(_USED_WEIGHT_HEADER)
@@ -158,10 +177,10 @@ def _used_weight(headers: Mapping[str, str] | None) -> int | None:
         raw = headers.get("X-MBX-USED-WEIGHT-1M")
     if raw is None:
         return None
-    try:
-        return int(str(raw).strip())
-    except ValueError:
+    token = str(raw).strip()
+    if not token or not token.isascii() or not token.isdigit():
         return None
+    return int(token)
 
 
 _PROCESS_GATE: BinanceRestGate | None = None

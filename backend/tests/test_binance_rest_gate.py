@@ -13,6 +13,7 @@ from app.market_contracts.adapters.binance_rest_gate import (
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
 from app.market_contracts.adapters.public_read_cache import ShortTtlSingleflight
 from app.market_contracts.errors import RateLimitedError, UpstreamBanError
+from app.providers.market_data import BinancePublicMarketDataProvider
 
 BASE = "https://fapi.binance.com"
 NOW_S = 1_800_000_000.0
@@ -73,11 +74,11 @@ def _client(recorder: Recorder, gate: BinanceRestGate, **kw: object) -> ReadOnly
 def test_418_sets_ban_window_and_blocks_every_client_in_process() -> None:
     clock = Clock()
     gate = _gate(clock)
-    banned = Recorder([httpx.Response(418, headers={"Retry-After": "3600"})])
+    banned = Recorder([httpx.Response(418, headers={"Retry-After": "600"})])
     with pytest.raises(UpstreamBanError):
         _client(banned, gate).get_json("/fapi/v1/aggTrades", OPEN)
     closed = gate.remaining()
-    assert closed is not None and closed[0] == "ban" and closed[1] >= 3600
+    assert closed is not None and closed[0] == "ban" and closed[1] >= 600
 
     other = Recorder([])
     klines: dict[str, str | int] = {"symbol": "BTCUSDT", "interval": "15m", "limit": 10}
@@ -86,7 +87,7 @@ def test_418_sets_ban_window_and_blocks_every_client_in_process() -> None:
             _client(other, gate).get_json(path, params)
     assert other.calls == 0, "no Binance REST call may be sent during a ban"
 
-    clock.t += 3600 * 1.3
+    clock.t += 600 * 1.3
     assert gate.remaining() is None
     _client(other, gate).get_json("/fapi/v1/aggTrades", OPEN)
     assert other.calls == 1
@@ -194,7 +195,7 @@ def test_failed_load_is_not_cached() -> None:
     client = _client(rec, gate, aggtrades_request_cache=cache)
     with pytest.raises(UpstreamBanError):
         client.get_json("/fapi/v1/aggTrades", CLOSED)
-    assert cache.get(("/fapi/v1/aggTrades", tuple(sorted(CLOSED.items())))) is None
+    assert cache.get(("/fapi/v1/aggTrades", _key(CLOSED))) is None
 
 
 def test_boot_ramp_spreads_aggtrades_burst() -> None:
@@ -247,3 +248,154 @@ def test_real_network_clients_share_process_gate_but_injected_transports_do_not(
         assert injected._gate is None
     finally:
         reset_process_binance_rest_gate()
+
+
+def _key(params: dict[str, str | int]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(k), str(v)) for k, v in params.items()))
+
+
+def _provider(recorder: Recorder, gate: BinanceRestGate) -> BinancePublicMarketDataProvider:
+    return BinancePublicMarketDataProvider(
+        futures_base_url=BASE, rest_gate=gate, transport=httpx.MockTransport(recorder)
+    )
+
+
+def test_418_on_premium_index_blocks_aggtrades() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    banned = Recorder([httpx.Response(418, headers={"Retry-After": "600"})])
+    with pytest.raises(UpstreamBanError):
+        _provider(banned, gate).get_funding_rate("BTCUSDT")
+    closed = gate.remaining()
+    assert closed is not None and closed[0] == "ban" and closed[1] >= 600
+
+    other = Recorder([])
+    with pytest.raises(UpstreamBanError):
+        _client(other, gate).get_json("/fapi/v1/aggTrades", OPEN)
+    assert other.calls == 0
+
+
+def test_418_on_aggtrades_blocks_premium_index_and_open_interest_fail_closed() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    with pytest.raises(UpstreamBanError):
+        _client(Recorder([httpx.Response(418, headers={"Retry-After": "600"})]), gate).get_json(
+            "/fapi/v1/aggTrades", OPEN
+        )
+    rec = Recorder([])
+    provider = _provider(rec, gate)
+    with pytest.raises(UpstreamBanError):
+        provider.get_funding_rate("BTCUSDT")
+    with pytest.raises(UpstreamBanError):
+        provider.get_open_interest("BTCUSDT")
+    assert rec.calls == 0, "no fapi call and no mock fallback value during a ban"
+
+
+def test_429_on_open_interest_records_backoff_and_weight() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    rec = Recorder(
+        [httpx.Response(429, headers={"Retry-After": "30", "X-MBX-USED-WEIGHT-1M": "2390"})]
+    )
+    with pytest.raises(RateLimitedError):
+        _provider(rec, gate).get_open_interest("BTCUSDT")
+    closed = gate.remaining()
+    assert closed is not None and closed[0] == "rate_limit" and closed[1] >= 30
+    assert gate.last_used_weight == 2390
+
+
+def test_premium_index_success_records_used_weight() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    rec = Recorder(
+        [
+            httpx.Response(
+                200, json={"lastFundingRate": "0.0001"}, headers={"X-MBX-USED-WEIGHT-1M": "2100"}
+            )
+        ]
+    )
+    data = _provider(rec, gate).get_funding_rate("BTCUSDT")
+    assert data is not None and data.envelope.fallback_used is False
+    assert gate.last_used_weight == 2100
+    assert gate.remaining() is not None
+
+
+@pytest.mark.parametrize("header", ["inf", "1e12", "nan", "-5"])
+def test_retry_after_is_rejected_or_clamped(header: str) -> None:
+    clock = Clock()
+    gate = _gate(clock, rng=1.0)
+    rec = Recorder([httpx.Response(418, headers={"Retry-After": header})])
+    with pytest.raises(UpstreamBanError):
+        _client(rec, gate).get_json("/fapi/v1/aggTrades", OPEN)
+    closed = gate.remaining()
+    assert closed is not None
+    assert closed[1] <= 900.0 * 1.25
+    clock.t += 900.0 * 1.25 + 1
+    assert gate.remaining() is None
+
+
+def test_gate_note_failure_clamps_raw_retry_after() -> None:
+    gate = _gate(Clock())
+    # Non-finite is rejected: the exponential backoff applies instead.
+    assert gate.note_failure("ban", float("inf")) == pytest.approx(5.0)
+    assert gate.note_failure("ban", float("nan")) == pytest.approx(10.0)
+    assert gate.note_failure("ban", -1.0) == pytest.approx(20.0)
+    # Finite but huge is clamped to the 900 s ceiling.
+    assert gate.note_failure("ban", 1e12) == pytest.approx(900.0)
+
+
+def test_entry_gate_check_blocks_cached_closed_window_during_ban() -> None:
+    """Fails if only the request_json entry check is removed."""
+
+    clock = Clock()
+    gate = _gate(clock)
+    cache = ShortTtlSingleflight(ttl_seconds=15.0, clock=clock)
+    rec = Recorder([httpx.Response(200, json=[{"a": 1}])])
+    client = _client(rec, gate, aggtrades_request_cache=cache)
+    assert client.get_json("/fapi/v1/aggTrades", CLOSED) == [{"a": 1}]
+    gate.note_failure("ban", 600.0)
+    with pytest.raises(UpstreamBanError):
+        client.get_json("/fapi/v1/aggTrades", CLOSED)
+
+
+def test_per_attempt_gate_check_stops_retry_after_gate_closes() -> None:
+    """Fails if only the per-attempt check inside the retry loop is removed."""
+
+    clock = Clock()
+    gate = _gate(clock)
+    rec = Recorder([httpx.Response(429), httpx.Response(200, json=[{"a": 1}])])
+    client = _client(rec, gate, max_retries=1)
+    with pytest.raises(RateLimitedError):
+        client.get_json("/fapi/v1/aggTrades", OPEN)
+    assert rec.calls == 1, "the retry must not be sent while the gate is still closed"
+
+
+def test_aggtrades_without_end_time_is_never_cached() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    cache = ShortTtlSingleflight(ttl_seconds=15.0, clock=clock)
+    params: dict[str, str | int] = {"symbol": "BTCUSDT", "limit": 1000, "startTime": 1}
+    rec = Recorder([httpx.Response(200, json=[{"a": 1}]), httpx.Response(200, json=[{"a": 2}])])
+    client = _client(rec, gate, aggtrades_request_cache=cache)
+    assert client.get_json("/fapi/v1/aggTrades", params) == [{"a": 1}]
+    assert client.get_json("/fapi/v1/aggTrades", params) == [{"a": 2}]
+    assert rec.calls == 2
+
+
+def test_end_time_string_and_int_share_cache_key() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    cache = ShortTtlSingleflight(ttl_seconds=15.0, clock=clock)
+    rec = Recorder([httpx.Response(200, json=[{"a": 7}]), httpx.Response(200, json=[{"a": 8}])])
+    client = _client(rec, gate, aggtrades_request_cache=cache)
+    as_str = {k: str(v) for k, v in CLOSED.items()}
+    assert client.get_json("/fapi/v1/aggTrades", CLOSED) == [{"a": 7}]
+    assert client.get_json("/fapi/v1/aggTrades", as_str) == [{"a": 7}]
+    assert rec.calls == 1
+
+
+@pytest.mark.parametrize("raw", ["12abc", "-1", "1.5", "", "\uff11\uff12"])
+def test_used_weight_header_parse_is_strict(raw: str) -> None:
+    gate = _gate(Clock())
+    gate.note_used_weight({"x-mbx-used-weight-1m": raw})
+    assert gate.last_used_weight is None

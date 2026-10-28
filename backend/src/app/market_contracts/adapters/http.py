@@ -23,6 +23,7 @@ from app.market_contracts.adapters.binance_rest_gate import (
     AGGTRADES_PATH,
     BinanceRestGate,
     process_binance_rest_gate,
+    sanitize_retry_after,
 )
 from app.market_contracts.adapters.public_read_cache import ShortTtlSingleflight
 from app.market_contracts.adapters.request_budget import (
@@ -274,7 +275,10 @@ class ReadOnlyHttpGetClient:
         if self._aggtrades_cache is not None and self._is_closed_aggtrades_window(
             normalized_path, params
         ):
-            key = (normalized_path, tuple(sorted((params or {}).items())))
+            key = (
+                normalized_path,
+                tuple(sorted((str(k), str(v)) for k, v in (params or {}).items())),
+            )
             return self._aggtrades_cache.get_or_load(
                 key, lambda: self._send_get(url, normalized_path, params)
             )
@@ -694,6 +698,5 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         parsed = float(token)
     except ValueError:
         return None
-    if parsed < 0:
-        return None
-    return parsed
+    # Non-finite or negative values fall back to backoff; huge ones are clamped.
+    return sanitize_retry_after(parsed)
