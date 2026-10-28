@@ -12,6 +12,12 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 import structlog
 
+from app.market_contracts.adapters.binance_rest_gate import (
+    BinanceRestGate,
+    process_binance_rest_gate,
+    sanitize_retry_after,
+)
+from app.market_contracts.errors import RateLimitedError, UpstreamBanError
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.schemas.common import Timeframe
 
@@ -333,8 +339,14 @@ class BinancePublicMarketDataProvider:
         fallback: MockMarketDataProvider | None = None,
         timeout_seconds: float = 10.0,
         enabled: bool = True,
+        rest_gate: BinanceRestGate | None = None,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._spot_base = spot_base_url.rstrip("/")
+        self._transport = transport
+        # USD-M futures reads share the IP weight budget with aggTrades, so they
+        # go through the same process-wide gate (418/429/weight).
+        self._rest_gate = rest_gate
         self._futures_base = futures_base_url.rstrip("/")
         self._fallback = fallback or MockMarketDataProvider()
         self._timeout = timeout_seconds
@@ -343,11 +355,50 @@ class BinancePublicMarketDataProvider:
         self._last_error: str | None = None
         self._using_fallback = False
 
+    def _gate_for(self, url: str) -> BinanceRestGate | None:
+        if not url.startswith(self._futures_base + "/"):
+            return None
+        if self._rest_gate is None:
+            self._rest_gate = process_binance_rest_gate()
+        return self._rest_gate
+
     def _request(self, url: str, params: dict[str, Any] | None = None) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
+        gate = self._gate_for(url)
+        if gate is not None:
+            closed = gate.remaining()
+            if closed is not None:
+                kind, left = closed
+                if kind == "ban":
+                    raise UpstreamBanError(
+                        "Binance USD-M temporarily banned this process (HTTP 418).",
+                        retry_after_seconds=left,
+                    )
+                raise RateLimitedError(
+                    "Binance USD-M is in a rate-limit backoff for this process.",
+                    retry_after_seconds=left,
+                )
+        with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
             response = client.get(url, params=params)
+        if gate is not None:
+            if response.status_code in (418, 429):
+                kind = "ban" if response.status_code == 418 else "rate_limit"
+                retry_after = _retry_after_header(response)
+                gate.note_used_weight(response.headers)
+                gate.note_failure(kind, retry_after)
+                if kind == "ban":
+                    raise UpstreamBanError(
+                        "Binance USD-M temporarily banned this process (HTTP 418).",
+                        retry_after_seconds=retry_after,
+                    )
+                raise RateLimitedError(
+                    "Binance USD-M rate-limited this process (HTTP 429).",
+                    retry_after_seconds=retry_after,
+                )
             response.raise_for_status()
+            gate.note_success(response.headers)
             return response.json()
+        response.raise_for_status()
+        return response.json()
 
     def _envelope(
         self,
@@ -495,6 +546,11 @@ class BinancePublicMarketDataProvider:
                 ),
                 funding_rate=Decimal(str(payload.get("lastFundingRate", "0"))),
             )
+        except RateLimitedError as exc:
+            # Fail closed during a ban/backoff: no mock fallback value.
+            logger.warning("binance_funding_failed", symbol=sym, error=str(exc))
+            self._last_error = str(exc)[:200]
+            raise
         except Exception as exc:
             logger.warning("binance_funding_failed", symbol=sym, error=str(exc))
             self._last_error = str(exc)[:200]
@@ -521,6 +577,11 @@ class BinancePublicMarketDataProvider:
                 ),
                 open_interest=Decimal(str(payload.get("openInterest", "0"))),
             )
+        except RateLimitedError as exc:
+            # Fail closed during a ban/backoff: no mock fallback value.
+            logger.warning("binance_oi_failed", symbol=sym, error=str(exc))
+            self._last_error = str(exc)[:200]
+            raise
         except Exception as exc:
             logger.warning("binance_oi_failed", symbol=sym, error=str(exc))
             self._last_error = str(exc)[:200]
@@ -601,6 +662,16 @@ class BinancePublicMarketDataProvider:
             last_success_at=self._last_success_at,
             error_message=_redact_error(self._last_error),
         )
+
+
+def _retry_after_header(response: httpx.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return sanitize_retry_after(float(raw.strip()))
+    except ValueError:
+        return None
 
 
 def _redact_error(message: str | None) -> str | None:
