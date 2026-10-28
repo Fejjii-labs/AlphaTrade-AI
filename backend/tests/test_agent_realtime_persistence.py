@@ -48,6 +48,14 @@ from app.services.strategy_versioning import StrategyVersioningService
 from tests.test_agent_realtime_protocol import voice_limits  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _voice_llm_passthrough_for_synthetic_providers(monkeypatch):
+    # Test-only: voice_llm refuses unknown provider types (Griller C2). These
+    # tests inject synthetic LLM bundles via resolve_providers, so pass them
+    # through for this module only. Production voice_llm is unchanged.
+    monkeypatch.setattr("app.agent_voice.service.voice_llm", lambda provider, _settings: provider)
+
+
 @pytest.fixture
 def voice_database(request):
     receipt = request.getfixturevalue("voice_limits")
