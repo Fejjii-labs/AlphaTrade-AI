@@ -7,6 +7,7 @@ never leak internal details to the client.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import structlog
@@ -14,6 +15,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+from app.market_contracts.errors import RateLimitedError, UpstreamBanError
 
 logger = structlog.get_logger(__name__)
 
@@ -139,6 +142,17 @@ def _error_body(*, code: str, message: str, request: Request, details: dict | No
     return body
 
 
+_DEFAULT_RETRY_AFTER_SECONDS = 60
+_MAX_RETRY_AFTER_SECONDS = 900
+
+
+def _retry_after_header_value(seconds: float | None) -> int:
+    """Whole seconds for a Retry-After header: finite, >= 1, capped at 900."""
+    if seconds is None or not math.isfinite(seconds) or seconds < 0:
+        return _DEFAULT_RETRY_AFTER_SECONDS
+    return max(1, min(_MAX_RETRY_AFTER_SECONDS, math.ceil(seconds)))
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach handlers that produce consistent error envelopes."""
 
@@ -149,6 +163,24 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             content=_error_body(
                 code=exc.code, message=exc.message, request=request, details=exc.details
+            ),
+        )
+
+    @app.exception_handler(RateLimitedError)
+    async def _handle_upstream_rate_limit(request: Request, exc: RateLimitedError) -> JSONResponse:
+        # Binance futures 429/418 (or our process-wide gate during backoff):
+        # a temporary upstream condition, not a server bug -> 503 + Retry-After.
+        retry_after = _retry_after_header_value(exc.retry_after_seconds)
+        code = "upstream_banned" if isinstance(exc, UpstreamBanError) else "upstream_rate_limited"
+        logger.warning("upstream_rate_limited", code=code, retry_after=retry_after)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"Retry-After": str(retry_after)},
+            content=_error_body(
+                code=code,
+                message="Market data provider is temporarily rate limited. Retry later.",
+                request=request,
+                details={"retry_after_seconds": retry_after},
             ),
         )
 

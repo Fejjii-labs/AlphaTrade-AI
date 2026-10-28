@@ -1523,6 +1523,36 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     )
 
 
+def _snapshot_gaps(snap: object) -> list[str]:
+    gaps: list[str] = []
+    if not getattr(snap, "funding_rate_available", True):
+        gaps.append("funding_rate")
+    if not getattr(snap, "open_interest_available", True):
+        gaps.append("open_interest")
+    return gaps
+
+
+def _merge_gaps(existing: list[str], new: list[str]) -> list[str]:
+    return [*existing, *[g for g in new if g not in existing]]
+
+
+def data_gap_note(agent: AgentState) -> str:
+    if not agent.market_data_gaps:
+        return ""
+    fields = ", ".join(g.replace("_", " ") for g in agent.market_data_gaps)
+    return (
+        f"\nData gap: {fields} unavailable (futures market data provider is rate limited); "
+        "analysis proceeds without it."
+    )
+
+
+def _with_gap_note(answer: str, agent: AgentState) -> str:
+    note = data_gap_note(agent)
+    if not note or note.strip() in answer:
+        return answer
+    return answer + note
+
+
 def market_context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     agent = parse_state(state)
     symbol = agent.symbol or _extract_symbol(agent.message) or "BTCUSDT"
@@ -1533,8 +1563,12 @@ def market_context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     )
     quality = "missing"
     snapshot = None
+    gaps: list[str] = list(agent.market_data_gaps)
     if runtime.market_data_service is not None:
-        snap = runtime.market_data_service.get_snapshot(symbol, timeframe, exchange="binance")
+        snap = runtime.market_data_service.get_snapshot(
+            symbol, timeframe, exchange="binance", degrade_on_rate_limit=True
+        )
+        gaps = _merge_gaps(gaps, _snapshot_gaps(snap))
         if snap.meta.fallback_used or not snap.meta.is_live:
             quality = "mock"
         elif snap.meta.is_stale:
@@ -1577,6 +1611,7 @@ def market_context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
             "timeframe": timeframe,
             "market_context": dump_partial(snapshot),
             "market_data_quality": quality,
+            "market_data_gaps": gaps,
             "tool_outputs": [*agent.tool_outputs, dump_partial(output)],
         },
     )
@@ -1591,8 +1626,12 @@ def indicator_calculation(state: dict, runtime: AgentRuntime) -> dict:
         {"symbol": symbol, "timeframe": timeframe.value, "exchange": "binance"},
     )
     indicators = None
+    gaps: list[str] = list(agent.market_data_gaps)
     if runtime.market_data_service is not None:
-        snap = runtime.market_data_service.get_snapshot(symbol, timeframe, exchange="binance")
+        snap = runtime.market_data_service.get_snapshot(
+            symbol, timeframe, exchange="binance", degrade_on_rate_limit=True
+        )
+        gaps = _merge_gaps(gaps, _snapshot_gaps(snap))
         ohlcv = runtime.market_data_service.get_ohlcv(symbol, timeframe, exchange="binance")
         funding_rate = snap.funding_rate
         from app.providers.market_data import OHLCVBar
@@ -1633,6 +1672,7 @@ def indicator_calculation(state: dict, runtime: AgentRuntime) -> dict:
         state,
         {
             "indicator_context": dump_partial(indicators),
+            "market_data_gaps": gaps,
             "tool_outputs": [*agent.tool_outputs, dump_partial(output)],
         },
     )
@@ -1994,6 +2034,7 @@ def final_response(state: dict, runtime: AgentRuntime) -> dict:
     answer = format_reply_from_analysis(detail)
     if agent.citations:
         answer += f"\nCitations: {len(agent.citations)} reference(s) attached."
+    answer = _with_gap_note(answer, agent)
     if FORCE_INVALID_OUTPUT in agent.message.lower():
         answer = "Incomplete trading reply."
     return patch_state(
@@ -2042,7 +2083,7 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
                 validation_passed=True,
                 latency_ms=None,
             )
-            answer = format_reply_with_narrative(analysis, fallback, meta)
+            answer = _with_gap_note(format_reply_with_narrative(analysis, fallback, meta), agent)
             return patch_state(
                 state,
                 {
@@ -2073,7 +2114,9 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
         analysis,
         persist_usage=_persist,
     )
-    answer = format_reply_with_narrative(analysis, result.narrative, result.metadata)
+    answer = _with_gap_note(
+        format_reply_with_narrative(analysis, result.narrative, result.metadata), agent
+    )
 
     updates: dict = {
         "narrative_detail": dump_partial(result.narrative),

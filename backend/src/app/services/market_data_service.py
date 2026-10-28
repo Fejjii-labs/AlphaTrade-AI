@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import ClassVar
 
+from app.market_contracts.errors import RateLimitedError, UpstreamBanError
 from app.providers.market_data import (
     MarketDataEnvelope,
     MarketDataProvider,
@@ -123,17 +125,44 @@ class MarketDataService:
             self._cache.set(key, response.model_dump(mode="json"), ttl_seconds=ttl)
         return response
 
+    def _funding_for(
+        self, symbol: str, *, exchange: str, degrade_on_rate_limit: bool
+    ) -> tuple[Decimal | None, bool, bool, str | None]:
+        """Return (funding_rate, fallback_used, available, unavailable_reason).
+
+        During a futures rate limit / IP ban the provider raises
+        ``RateLimitedError``. API callers let it propagate (mapped to 503);
+        agent graph steps pass ``degrade_on_rate_limit=True`` and get
+        ``funding_rate=None`` flagged unavailable instead of a crash.
+        A non-ban mock fallback value is returned but flagged via the
+        snapshot's ``funding_fallback`` (not ``meta.fallback_used``, which
+        stays spot-only) so it never masquerades as live data.
+        """
+        try:
+            funding = self._provider.get_funding_rate(symbol, exchange=exchange)
+        except RateLimitedError as exc:
+            if not degrade_on_rate_limit:
+                raise
+            banned = isinstance(exc, UpstreamBanError)
+            reason = "futures_upstream_ban" if banned else "futures_rate_limited"
+            return None, False, False, reason
+        if funding is None:
+            return None, False, True, None
+        return funding.funding_rate, bool(funding.envelope.fallback_used), True, None
+
     def get_snapshot(
         self,
         symbol: str,
         timeframe: Timeframe,
         *,
         exchange: str = "binance",
+        degrade_on_rate_limit: bool = False,
     ) -> MarketSnapshotResponse:
         ticker = self.get_ticker(symbol, exchange=exchange)
         ohlcv = self.get_ohlcv(symbol, timeframe, exchange=exchange)
-        funding = self._provider.get_funding_rate(symbol, exchange=exchange)
-        funding_rate = funding.funding_rate if funding else None
+        funding_rate, funding_fallback, funding_ok, reason = self._funding_for(
+            symbol, exchange=exchange, degrade_on_rate_limit=degrade_on_rate_limit
+        )
         latest = ohlcv.bars[-1] if ohlcv.bars else None
         indicators = None
         if ohlcv.bars:
@@ -169,6 +198,11 @@ class MarketDataService:
             latest_bar=latest,
             indicators=indicators,
             funding_rate=funding_rate,
+            funding_rate_available=funding_ok,
+            funding_fallback=funding_fallback,
+            # Open interest shares the futures cluster; unavailable whenever funding is.
+            open_interest_available=funding_ok,
+            unavailable_reason=reason,
         )
 
     def analyze(self, request: MarketAnalyzeRequest) -> MarketAnalyzeResponse:
@@ -193,8 +227,8 @@ class MarketDataService:
             )
             for b in ohlcv.bars
         ]
-        funding = self._provider.get_funding_rate(request.symbol, exchange=request.exchange)
-        funding_rate = funding.funding_rate if funding else None
+        # Reuse the snapshot's funding read: one futures call.
+        funding_rate = snapshot.funding_rate
         indicators = self._indicators.calculate(
             symbol=request.symbol,
             timeframe=request.timeframe,

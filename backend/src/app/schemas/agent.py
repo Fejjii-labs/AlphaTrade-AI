@@ -256,6 +256,10 @@ class AgentState(BaseModel):
     market_data_quality: str | None = Field(
         default=None, description="live | mock | stale | missing"
     )
+    market_data_gaps: list[str] = Field(
+        default_factory=list,
+        description="Market data fields unavailable for this turn (e.g. funding during a ban)",
+    )
     strategy_signals: list[StrategySignal] = Field(default_factory=list)
     retrieved_context: list[Citation] = Field(default_factory=list)
 

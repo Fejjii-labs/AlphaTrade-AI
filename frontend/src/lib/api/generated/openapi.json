@@ -26840,6 +26840,11 @@
       "MarketSnapshotResponse": {
         "description": "Combined ticker + latest OHLCV bar + indicators.",
         "properties": {
+          "funding_fallback": {
+            "default": false,
+            "title": "Funding Fallback",
+            "type": "boolean"
+          },
           "funding_rate": {
             "anyOf": [
               {
@@ -26851,6 +26856,11 @@
               }
             ],
             "title": "Funding Rate"
+          },
+          "funding_rate_available": {
+            "default": true,
+            "title": "Funding Rate Available",
+            "type": "boolean"
           },
           "indicators": {
             "anyOf": [
@@ -26875,6 +26885,11 @@
           "meta": {
             "$ref": "#/components/schemas/MarketDataMeta"
           },
+          "open_interest_available": {
+            "default": true,
+            "title": "Open Interest Available",
+            "type": "boolean"
+          },
           "ticker": {
             "anyOf": [
               {
@@ -26884,6 +26899,17 @@
                 "type": "null"
               }
             ]
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
           }
         },
         "required": [
