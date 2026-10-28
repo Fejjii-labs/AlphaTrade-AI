@@ -326,6 +326,9 @@ def test_shared_agent_grounding_storage_exact_replay_and_secondary_usage(live_le
     monkeypatch.setattr(
         "app.agent_voice.service.resolve_providers", lambda _: SimpleNamespace(llm=SyntheticLLM())
     )
+    # voice_llm refuses unknown provider types (Griller C2); this synthetic
+    # provider stands in for the rebuilt fail-closed route.
+    monkeypatch.setattr("app.agent_voice.service.voice_llm", lambda provider, _settings: provider)
     for number, message in enumerate(
         ["My BTC risk rule may be outdated.", "What did I say about my BTC rule?"]
     ):

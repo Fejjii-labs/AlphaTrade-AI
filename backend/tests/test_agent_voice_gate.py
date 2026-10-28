@@ -177,3 +177,28 @@ def test_fallback_mode_voice_turn_fails_closed_and_never_uses_mock(live_ledger, 
     assert result["reply"].startswith(MODEL_REPLY_UNAVAILABLE)
     assert mock_calls == []
     assert result["authority_mutated"] is False and result["execution_attempted"] is False
+
+
+@pytest.mark.parametrize("mode", ["", "off", "lve", "auto", "staging", "MOCK", " mock "])
+def test_voice_route_gate_is_an_allowlist_of_live_and_fallback(mode):
+    """Griller C1: any provider_mode other than live/fallback is refused."""
+    settings = _settings(provider_mode=mode, openai_api_key="fixture")
+    assert voice_route_refusal(settings) == "approved_live_route_unavailable"
+
+
+@pytest.mark.parametrize("mode", ["live", "fallback", " LIVE ", "Fallback"])
+def test_voice_route_gate_admits_live_and_fallback(mode):
+    settings = _settings(provider_mode=mode, openai_api_key="fixture")
+    assert voice_route_refusal(settings) is None
+
+
+def test_voice_llm_refuses_unknown_provider_types():
+    """Griller C2: an unrecognised provider (e.g. a wrapper) is never passed through."""
+
+    class WrappedProvider:
+        name = "wrapper"
+        kind = "llm"
+
+    settings = _settings(provider_mode="fallback", openai_api_key="fixture")
+    with pytest.raises(VoiceUnavailableError, match="voice_reasoning_provider_unknown"):
+        voice_llm(WrappedProvider(), settings)  # type: ignore[arg-type]

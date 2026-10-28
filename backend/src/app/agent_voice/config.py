@@ -18,6 +18,9 @@ class VoiceUnavailableError(RuntimeError):
     """Safe machine reason only; no provider body, credentials or prompt."""
 
 
+VOICE_PROVIDER_MODES = frozenset({"live", "fallback"})
+
+
 def voice_route_refusal(settings: Settings) -> str | None:
     """Voice-scoped route gate (UI overhaul B7a).
 
@@ -29,7 +32,7 @@ def voice_route_refusal(settings: Settings) -> str | None:
     """
     if not settings.openai_api_key.strip():
         return "provider_credential_unbound"
-    if settings.provider_mode.strip().lower() == "mock":
+    if settings.provider_mode.strip().lower() not in VOICE_PROVIDER_MODES:
         return "approved_live_route_unavailable"
     return None
 

@@ -57,7 +57,7 @@ def voice_llm(provider: LLMProvider, settings: Settings) -> LLMProvider:
             model=settings.agent_voice_reasoning_model,
             fail_closed=True,
         )
-    return provider
+    raise VoiceUnavailableError("voice_reasoning_provider_unknown")
 
 
 class VoiceReasoningProvider:
