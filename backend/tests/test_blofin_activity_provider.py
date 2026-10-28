@@ -98,7 +98,7 @@ class HistoryVenue:
             self.on_page()
         return httpx.Response(200, json={"code": "0", "data": data})
 
-    def provider(self):
+    def provider(self, settings=None):
         return BloFinActivityProvider(
             BloFinReadOnlyClient(
                 base_url="https://demo-trading-openapi.blofin.com",
@@ -108,7 +108,8 @@ class HistoryVenue:
                 transport=httpx.MockTransport(self.handle),
                 sleeper=lambda _: None,
                 max_retries=0,
-            )
+            ),
+            settings,
         )
 
 
@@ -332,11 +333,78 @@ def _refused(venue, identity):
 
 def test_demo_trade_key_is_accepted_for_activity_sync():
     venue = HistoryVenue()
+    opted_in = readonly_settings(blofin_demo_allow_trade_capable_sync_key=True)
     venue.identity = dict(TRADE_KEY)
-    assert venue.provider().verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    assert venue.provider(opted_in).verify_identity(venue.uid, lambda: None) == "demo-user-1"
     venue.identity = {"uid": "demo-user-1", "permissions": "read,trade"}
-    assert venue.provider().verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    assert venue.provider(opted_in).verify_identity(venue.uid, lambda: None) == "demo-user-1"
     assert all(r.method == "GET" for r in venue.requests)
+
+
+def test_demo_trade_key_requires_shared_account_sync_opt_in():
+    """Same rule as account sync: flag off, no settings, or real trading refuse."""
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    for settings in (
+        None,
+        readonly_settings(),
+        readonly_settings(blofin_demo_allow_trade_capable_sync_key=False),
+        readonly_settings(blofin_demo_allow_trade_capable_sync_key=True).model_copy(
+            update={"enable_real_trading": True}
+        ),
+    ):
+        with pytest.raises(ActivityIdentityError) as info:
+            venue.provider(settings).verify_identity(venue.uid, lambda: None)
+        assert info.value.reason == "trade_key_demo_opt_in_missing"
+        assert info.value.uid_match is True
+
+
+def test_demo_trade_key_gate_uses_ensure_trade_capable_key_allowed(monkeypatch):
+    import app.services.blofin_sync_service as sync
+
+    calls = []
+    monkeypatch.setattr(sync, "ensure_trade_capable_key_allowed", lambda s, p: calls.append((s, p)))
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    settings = readonly_settings()
+    assert venue.provider(settings).verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    assert len(calls) == 1 and calls[0][0] is settings
+
+
+def test_read_only_key_needs_no_opt_in():
+    venue = HistoryVenue()
+    assert venue.provider().verify_identity(venue.uid, lambda: None) == "demo-user-1"
+
+
+def test_uid_mismatch_reports_uid_match_false():
+    venue = HistoryVenue()
+    venue.identity = {"uid": "other", "readOnly": 1}
+    with pytest.raises(ActivityIdentityError) as info:
+        venue.provider().verify_identity(venue.uid, lambda: None)
+    assert info.value.reason == "uid_mismatch" and info.value.uid_match is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["https://openapi.blofin.com/api/v1/user/query-apikey", "//openapi.blofin.com/x", "api/v1/x"],
+)
+def test_base_client_rejects_non_relative_paths(path):
+    from app.providers.exchange.blofin_client import BloFinClient
+    from app.providers.exchange.errors import ExchangeRequestError
+
+    seen = []
+    client = BloFinClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="k",
+        api_secret="s",
+        api_passphrase="p",
+        transport=httpx.MockTransport(lambda r: seen.append(r) or httpx.Response(200)),
+        sleeper=lambda _: None,
+        max_retries=0,
+    )
+    with pytest.raises(ExchangeRequestError):
+        client.request("GET", path)
+    assert seen == []
 
 
 def test_demo_withdraw_key_is_refused_with_reason():

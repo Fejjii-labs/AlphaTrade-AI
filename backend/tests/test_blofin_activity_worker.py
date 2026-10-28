@@ -179,7 +179,8 @@ def test_activity_provider_retains_retry_and_request_timeout_caps(monkeypatch):
         lambda settings, **_: captured.append(settings) or object(),
     )
     monkeypatch.setattr(
-        "app.services.blofin_activity_service.BloFinActivityProvider", lambda client: client
+        "app.services.blofin_activity_service.BloFinActivityProvider",
+        lambda client, settings=None: client,
     )
     settings = readonly_settings().model_copy(
         update={"blofin_max_retries": 9, "blofin_request_timeout_seconds": 99}

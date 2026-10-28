@@ -20,9 +20,31 @@ HISTORY_PATHS = {
 class ActivityIdentityError(ExchangeRequestError):
     """No verified UID binding; never fall back to credential identity."""
 
-    def __init__(self, message: str, reason: str = "identity_unverified") -> None:
+    def __init__(
+        self,
+        message: str,
+        reason: str = "identity_unverified",
+        *,
+        uid_match: bool | None = None,
+    ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.uid_match = uid_match
+
+
+# Static refusal codes; safe to persist and log (no key material).
+IDENTITY_REFUSAL_REASONS = frozenset(
+    {
+        "identity_unverified",
+        "identity_unavailable",
+        "uid_mismatch",
+        "withdraw_permission_refused",
+        "transfer_permission_refused",
+        "read_permission_missing",
+        "trade_permission_refused_outside_demo",
+        "trade_key_demo_opt_in_missing",
+    }
+)
 
 
 def is_demo_environment(base_url: str) -> bool:
@@ -31,12 +53,19 @@ def is_demo_environment(base_url: str) -> bool:
     return host not in BLOFIN_PRODUCTION_HOSTS and is_allowlisted_demo_host(base_url)
 
 
-def identity_refusal(data: Any, expected_uid: str, *, demo_environment: bool) -> str | None:
+def identity_refusal(
+    data: Any,
+    expected_uid: str,
+    *,
+    demo_environment: bool,
+    trade_key_gate: Callable[[Any], None] | None = None,
+) -> str | None:
     """Return a refusal reason code, or ``None`` when the key is acceptable.
 
     Read is always required; withdraw and transfer are always refused. A
     trade-capable key is accepted only on the BloFin demo environment (the
-    owner's single Read+Trade demo key); live keeps the strict read-only rule.
+    owner's single Read+Trade demo key) and only when ``trade_key_gate`` (the
+    shared account-sync opt-in rule) passes; live keeps the strict read-only rule.
     The activity transport stays GET-only regardless of key capability.
     """
     if not isinstance(data, dict):
@@ -50,8 +79,15 @@ def identity_refusal(data: Any, expected_uid: str, *, demo_environment: bool) ->
         return "transfer_permission_refused"
     if not permissions.can_read:
         return "read_permission_missing"
-    if permissions.can_trade and not demo_environment:
-        return "trade_permission_refused_outside_demo"
+    if permissions.can_trade:
+        if not demo_environment:
+            return "trade_permission_refused_outside_demo"
+        if trade_key_gate is None:
+            return "trade_key_demo_opt_in_missing"
+        try:
+            trade_key_gate(permissions)
+        except ValueError:
+            return "trade_key_demo_opt_in_missing"
     return None
 
 
@@ -149,21 +185,36 @@ def parse_fact(kind: Literal["order", "fill"], row: dict[str, Any]) -> NativeAct
 
 
 class BloFinActivityProvider:
-    def __init__(self, client: BloFinReadOnlyClient) -> None:
+    def __init__(self, client: BloFinReadOnlyClient, settings: Any = None) -> None:
         if not isinstance(client, BloFinReadOnlyClient):
             raise TypeError("Native activity requires the restricted read-only transport.")
         self.client = client
+        self.settings = settings
+
+    def _trade_key_gate(self) -> Callable[[Any], None] | None:
+        if self.settings is None:
+            return None
+        from app.services.blofin_sync_service import ensure_trade_capable_key_allowed
+
+        settings = self.settings
+        return lambda permissions: ensure_trade_capable_key_allowed(settings, permissions)
 
     def verify_identity(self, expected_uid: str, before_send: Callable[[], None]) -> str:
         data = self.client.request(
             "GET", "/api/v1/user/query-apikey", signed=True, before_send=before_send
         )
         reason = identity_refusal(
-            data, expected_uid, demo_environment=is_demo_environment(self.client._base_url)
+            data,
+            expected_uid,
+            demo_environment=is_demo_environment(self.client._base_url),
+            trade_key_gate=self._trade_key_gate(),
         )
         if reason is not None:
+            uid_match = isinstance(data, dict) and data.get("uid") == expected_uid
             raise ActivityIdentityError(
-                f"Native account identity or permissions refused: {reason}.", reason
+                f"Native account identity or permissions refused: {reason}.",
+                reason,
+                uid_match=uid_match,
             )
         return identifier(data["uid"])
 
