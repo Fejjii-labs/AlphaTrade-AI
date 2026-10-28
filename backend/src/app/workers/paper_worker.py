@@ -18,7 +18,10 @@ from __future__ import annotations
 import os
 import selectors
 import signal
+import socket
 import threading
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -182,8 +185,15 @@ class PaperWorkerSupervisor:
         telegram_authority: tuple[AuthorityProbe, AuthorityRestore] | None = None,
         on_stop: Callable[[], None] | None = None,
         memory_diagnostics_enabled: bool = False,
+        health_log_interval_seconds: float = 60.0,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._poll_seconds = poll_seconds
+        self._health_log_interval_seconds = health_log_interval_seconds
+        self._monotonic = monotonic if monotonic is not None else time.monotonic
+        self._next_health_log_at: float | None = None
+        self._worker_id = _new_worker_id()
+        self._render_instance_id = os.environ.get("RENDER_INSTANCE_ID", "")[:120]
         self._join_timeout_seconds = join_timeout_seconds
         self._clock = clock if clock is not None else _utc_now
         self._on_stop = on_stop
@@ -287,7 +297,7 @@ class PaperWorkerSupervisor:
 
         for component in self._components():
             self._step(component)
-        self._log_health()
+        self._log_health(phase="round")
         return self.snapshot()
 
     def start(self) -> None:
@@ -375,10 +385,16 @@ class PaperWorkerSupervisor:
                 "paper_worker_serving",
                 paper_only=True,
                 real_trading_enabled=False,
+                worker_id=self._worker_id,
+                render_instance_id=self._render_instance_id,
             )
+            self._log_health(phase="startup")
+            self._next_health_log_at = self._monotonic() + self._health_log_interval_seconds
             while not self._signaled:
-                selector.select(timeout=self._poll_seconds if self._poll_seconds > 0 else 0.05)
+                selector.select(timeout=self._select_timeout())
                 _drain_wakeup(read_fd)
+                if not self._signaled:
+                    self.log_health_if_due()
         finally:
             selector.close()
             signal.set_wakeup_fd(previous_wakeup)
@@ -389,7 +405,34 @@ class PaperWorkerSupervisor:
         for component in self._components():
             self._mark_stopped(component)
         self.close()
-        self._log_health()
+        self._log_health(phase="shutdown")
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    def _select_timeout(self) -> float:
+        timeout = self._poll_seconds if self._poll_seconds > 0 else 0.05
+        if self._next_health_log_at is not None:
+            remaining = self._next_health_log_at - self._monotonic()
+            timeout = min(timeout, max(remaining, 0.01))
+        return timeout
+
+    def log_health_if_due(self) -> bool:
+        """Emit a periodic ``paper_worker_health`` line while serving.
+
+        Without this, the only line a deploy leaves behind is the old
+        instance's shutdown snapshot (status ``stopped``).
+        """
+
+        if self._next_health_log_at is None or self._stop.is_set():
+            return False
+        now = self._monotonic()
+        if now < self._next_health_log_at:
+            return False
+        self._log_health(phase="running")
+        self._next_health_log_at = now + self._health_log_interval_seconds
+        return True
 
     def _ensure_thread(self, component: _Component) -> None:
         if component.thread is not None and component.thread.is_alive():
@@ -505,11 +548,14 @@ class PaperWorkerSupervisor:
                 component.status = "stopped"
                 component.last_heartbeat_at = self._clock()
 
-    def _log_health(self) -> None:
+    def _log_health(self, *, phase: str) -> None:
         health = self.snapshot()
         memory = read_process_memory()
         logger.info(
             "paper_worker_health",
+            phase=phase,
+            worker_id=self._worker_id,
+            render_instance_id=self._render_instance_id,
             rss_bytes=memory.rss_bytes,
             rss_peak_bytes=memory.peak_rss_bytes,
             watcher_status=health.watcher.status,
@@ -627,6 +673,7 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
             watcher_authority=authority_binding(watcher_settings),
             telegram_authority=authority_binding(telegram_settings),
             memory_diagnostics_enabled=settings.paper_worker_memory_diagnostics_enabled,
+            health_log_interval_seconds=float(settings.paper_worker_health_log_seconds),
         )
     else:
         supervisor = _build_armed_supervisor(watcher_settings, telegram_settings)
@@ -857,6 +904,7 @@ def _build_armed_supervisor(
         telegram_authority=authority_binding(telegram_settings),
         on_stop=on_stop,
         memory_diagnostics_enabled=watcher_settings.paper_worker_memory_diagnostics_enabled,
+        health_log_interval_seconds=float(watcher_settings.paper_worker_health_log_seconds),
     )
 
 
@@ -937,6 +985,12 @@ def _drain_wakeup(read_fd: int) -> None:
             return
         if not chunk:
             return
+
+
+def _new_worker_id() -> str:
+    """Per-process id: host, pid and a short random suffix. Not a secret."""
+
+    return f"{socket.gethostname()[:60]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
 def _utc_now() -> datetime:
