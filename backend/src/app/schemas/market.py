@@ -130,6 +130,9 @@ class MarketSnapshotResponse(ORMModel):
     latest_bar: OHLCVBarSchema | None = None
     indicators: IndicatorContext | None = None
     funding_rate: Decimal | None = None
+    funding_rate_available: bool = True
+    open_interest_available: bool = True
+    unavailable_reason: str | None = None
 
 
 class MarketAnalyzeRequest(StrictModel):
