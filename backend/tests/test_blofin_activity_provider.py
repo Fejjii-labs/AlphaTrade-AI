@@ -11,6 +11,8 @@ from app.core.errors import ExchangeDemoInactiveError
 from app.providers.exchange.blofin_activity import (
     ActivityIdentityError,
     BloFinActivityProvider,
+    identity_refusal,
+    is_demo_environment,
     parse_fact,
 )
 from app.providers.exchange.blofin_client import BloFinClient
@@ -96,7 +98,7 @@ class HistoryVenue:
             self.on_page()
         return httpx.Response(200, json={"code": "0", "data": data})
 
-    def provider(self):
+    def provider(self, settings=None):
         return BloFinActivityProvider(
             BloFinReadOnlyClient(
                 base_url="https://demo-trading-openapi.blofin.com",
@@ -106,7 +108,8 @@ class HistoryVenue:
                 transport=httpx.MockTransport(self.handle),
                 sleeper=lambda _: None,
                 max_retries=0,
-            )
+            ),
+            settings,
         )
 
 
@@ -172,8 +175,8 @@ def test_malformed_native_facts_refuse(field, value):
         {"uid": "different", "readOnly": 1},
         {"parentUid": "demo-user-1", "readOnly": 1},
         {"uid": "demo-user-1"},
-        {"uid": "demo-user-1", "readOnly": 0},
         {"uid": "demo-user-1", "readOnly": 1, "transfer": True},
+        {"uid": "demo-user-1", "readOnly": 0, "withdraw": True},
     ],
 )
 def test_uid_must_be_the_authenticated_account_not_parent(identity):
@@ -314,3 +317,189 @@ def test_identity_uid_comparison_is_exact_for_case_and_whitespace(reported):
         venue.provider().verify_identity("demo-user-1", lambda: None)
     venue.identity = {**venue.identity, "uid": "demo-user-1"}
     assert venue.provider().verify_identity("demo-user-1", lambda: None) == "demo-user-1"
+
+
+# --- Single Read+Trade demo key (owner-approved 2026-10-28) ---------------------
+
+TRADE_KEY = {"uid": "demo-user-1", "readOnly": 0}
+
+
+def _refused(venue, identity):
+    venue.identity = identity
+    with pytest.raises(ActivityIdentityError) as info:
+        venue.provider().verify_identity(venue.uid, lambda: None)
+    return info.value.reason
+
+
+def test_demo_trade_key_is_accepted_for_activity_sync():
+    venue = HistoryVenue()
+    opted_in = readonly_settings(blofin_demo_allow_trade_capable_sync_key=True)
+    venue.identity = dict(TRADE_KEY)
+    assert venue.provider(opted_in).verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    venue.identity = {"uid": "demo-user-1", "permissions": "read,trade"}
+    assert venue.provider(opted_in).verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    assert all(r.method == "GET" for r in venue.requests)
+
+
+def test_demo_trade_key_requires_shared_account_sync_opt_in():
+    """Same rule as account sync: flag off, no settings, or real trading refuse."""
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    for settings in (
+        None,
+        readonly_settings(),
+        readonly_settings(blofin_demo_allow_trade_capable_sync_key=False),
+        readonly_settings(blofin_demo_allow_trade_capable_sync_key=True).model_copy(
+            update={"enable_real_trading": True}
+        ),
+    ):
+        with pytest.raises(ActivityIdentityError) as info:
+            venue.provider(settings).verify_identity(venue.uid, lambda: None)
+        assert info.value.reason == "trade_key_demo_opt_in_missing"
+        assert info.value.uid_match is True
+
+
+def test_demo_trade_key_gate_uses_ensure_trade_capable_key_allowed(monkeypatch):
+    import app.services.blofin_sync_service as sync
+
+    calls = []
+    monkeypatch.setattr(sync, "ensure_trade_capable_key_allowed", lambda s, p: calls.append((s, p)))
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    settings = readonly_settings()
+    assert venue.provider(settings).verify_identity(venue.uid, lambda: None) == "demo-user-1"
+    assert len(calls) == 1 and calls[0][0] is settings
+
+
+def test_read_only_key_needs_no_opt_in():
+    venue = HistoryVenue()
+    assert venue.provider().verify_identity(venue.uid, lambda: None) == "demo-user-1"
+
+
+def test_uid_mismatch_reports_uid_match_false():
+    venue = HistoryVenue()
+    venue.identity = {"uid": "other", "readOnly": 1}
+    with pytest.raises(ActivityIdentityError) as info:
+        venue.provider().verify_identity(venue.uid, lambda: None)
+    assert info.value.reason == "uid_mismatch" and info.value.uid_match is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["https://openapi.blofin.com/api/v1/user/query-apikey", "//openapi.blofin.com/x", "api/v1/x"],
+)
+def test_base_client_rejects_non_relative_paths(path):
+    from app.providers.exchange.blofin_client import BloFinClient
+    from app.providers.exchange.errors import ExchangeRequestError
+
+    seen = []
+    client = BloFinClient(
+        base_url="https://demo-trading-openapi.blofin.com",
+        api_key="k",
+        api_secret="s",
+        api_passphrase="p",
+        transport=httpx.MockTransport(lambda r: seen.append(r) or httpx.Response(200)),
+        sleeper=lambda _: None,
+        max_retries=0,
+    )
+    with pytest.raises(ExchangeRequestError):
+        client.request("GET", path)
+    assert seen == []
+
+
+def test_demo_withdraw_key_is_refused_with_reason():
+    assert _refused(HistoryVenue(), {**TRADE_KEY, "withdraw": True}) == (
+        "withdraw_permission_refused"
+    )
+    assert _refused(
+        HistoryVenue(), {"uid": "demo-user-1", "permissions": "read,trade,withdraw"}
+    ) == ("withdraw_permission_refused")
+
+
+def test_demo_transfer_key_is_refused_with_reason():
+    assert _refused(HistoryVenue(), {**TRADE_KEY, "transfer": True}) == (
+        "transfer_permission_refused"
+    )
+
+
+def test_demo_uid_mismatch_is_refused_with_reason():
+    assert _refused(HistoryVenue(), {**TRADE_KEY, "uid": "other-user"}) == "uid_mismatch"
+
+
+def test_read_permission_still_required():
+    assert identity_refusal(
+        {"uid": "u", "permissions": "transfer"}, "u", demo_environment=True
+    ) in {"transfer_permission_refused", "read_permission_missing"}
+    assert identity_refusal({"uid": "u"}, "u", demo_environment=True) == "read_permission_missing"
+
+
+def test_live_environment_refuses_trade_key_and_keeps_read_only_rule():
+    assert (
+        identity_refusal(dict(TRADE_KEY), "demo-user-1", demo_environment=False)
+        == "trade_permission_refused_outside_demo"
+    )
+    assert (
+        identity_refusal(
+            {"uid": "demo-user-1", "readOnly": 1}, "demo-user-1", demo_environment=False
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://demo-trading-openapi.blofin.com", True),
+        ("https://openapi.blofin.com", False),
+        ("https://api.blofin.com", False),
+        ("http://demo-trading-openapi.blofin.com", False),
+        ("https://evil.example.com", False),
+    ],
+)
+def test_demo_environment_is_derived_from_base_url(url, expected):
+    assert is_demo_environment(url) is expected
+
+
+def test_live_base_url_provider_refuses_trade_key(monkeypatch):
+    """Even if the transport were pointed at production, a trade key is never accepted."""
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    provider = venue.provider()
+    monkeypatch.setattr(provider.client, "_base_url", "https://openapi.blofin.com")
+    with pytest.raises((ActivityIdentityError, ValueError, ExchangeDemoInactiveError)):
+        provider.verify_identity(venue.uid, lambda: None)
+    assert venue.requests == []
+
+
+def test_key_payload_cannot_claim_demo_environment(monkeypatch):
+    venue = HistoryVenue()
+    provider = venue.provider()
+    monkeypatch.setattr(
+        "app.providers.exchange.blofin_activity.is_demo_environment", lambda _url: False
+    )
+    assert (
+        _refused_with(provider, venue, {**TRADE_KEY, "demo": True, "environment": "demo"})
+        == "trade_permission_refused_outside_demo"
+    )
+
+
+def _refused_with(provider, venue, identity):
+    venue.identity = identity
+    with pytest.raises(ActivityIdentityError) as info:
+        provider.verify_identity(venue.uid, lambda: None)
+    return info.value.reason
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "post"])
+@pytest.mark.parametrize(
+    "path", ["/api/v1/trade/order", "/api/v1/trade/orders-history", "/api/v1/user/query-apikey"]
+)
+def test_activity_client_cannot_issue_write_methods(method, path):
+    venue = HistoryVenue()
+    venue.identity = dict(TRADE_KEY)
+    client = venue.provider().client
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request(method, path, signed=True, body={"x": 1})
+    with pytest.raises(ExchangeDemoInactiveError):
+        client.request(method, path, signed=True)
+    assert venue.requests == []

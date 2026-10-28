@@ -135,7 +135,7 @@ def test_snapshot_rotation_uid_switch_and_unverified_replacement_preserve_histor
         run_activity_sync(
             engine, replacement, config, provider=venue.provider(), clock=lambda: NOW
         ).error_code
-        == "identity_unverified"
+        == "uid_mismatch"
     )
     with Session(engine) as session, pytest.raises(NotFoundError, match="unverified"):
         BloFinSyncService(session, replacement).latest(organization_id=scope.organization_id)

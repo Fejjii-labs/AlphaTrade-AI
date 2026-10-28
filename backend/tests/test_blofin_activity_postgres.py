@@ -181,7 +181,7 @@ def test_rotation_same_uid_resumes_but_new_uid_never_reuses_scope(world):
         run_activity_sync(
             engine, rotated, config, provider=venue.provider(), clock=lambda: NOW
         ).error_code
-        == "identity_unverified"
+        == "uid_mismatch"
     )
     with Session(engine) as session:
         assert (
@@ -209,13 +209,51 @@ def test_rotation_same_uid_resumes_but_new_uid_never_reuses_scope(world):
 
 def test_initial_missing_identity_never_creates_facts(world):
     world[4].identity = {"readOnly": 1}
-    assert sync(world).error_code == "identity_unverified"
+    assert sync(world).error_code == "uid_mismatch"
     result = page(world)
     assert result.items == [] and result.identity_status == "unverified"
-    assert result.identity_error_code == "identity_unverified"
+    assert result.identity_error_code == "uid_mismatch"
     with Session(world[0]) as session:
         assert session.scalar(select(func.count()).select_from(BloFinActivityFact)) == 0
         assert session.get(BloFinActivityAccount, world[3].key()).identity_verified_at is None
+
+
+def test_refusal_reason_is_persisted_and_logged_without_secrets(world, monkeypatch):
+    import app.services.blofin_activity_service as service
+
+    events = []
+    monkeypatch.setattr(service.logger, "warning", lambda event, **kw: events.append((event, kw)))
+    world[4].identity = {"uid": world[4].uid, "readOnly": 0}  # trade key, no opt-in
+    assert sync(world).error_code == "trade_key_demo_opt_in_missing"
+    with Session(world[0]) as session:
+        account = session.get(BloFinActivityAccount, world[3].key())
+        assert account.identity_error == "trade_key_demo_opt_in_missing"
+        assert account.identity_verified_at is None
+        assert session.scalar(select(func.count()).select_from(BloFinActivityFact)) == 0
+    assert events == [
+        (
+            "blofin_activity_identity_refused",
+            {
+                "reason": "trade_key_demo_opt_in_missing",
+                "environment": "demo",
+                "uid_match": True,
+            },
+        )
+    ]
+    logged = repr(events)
+    for secret in (world[4].uid, "fixture-key", "fixture-secret", "fixture-passphrase"):
+        assert secret not in logged
+
+
+def test_trade_key_with_opt_in_syncs_on_demo(world):
+    engine, settings, config, _, venue = world
+    venue.identity = {"uid": venue.uid, "readOnly": 0}
+    opted = settings.model_copy(update={"blofin_demo_allow_trade_capable_sync_key": True})
+    result = run_activity_sync(
+        engine, opted, config, provider=venue.provider(opted), clock=lambda: NOW
+    )
+    assert result.status == "bounded"
+    assert all(r.method == "GET" for r in venue.requests)
 
 
 def test_rate_limit_backoff_persists_and_stops_network(world):

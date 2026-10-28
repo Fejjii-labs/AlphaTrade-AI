@@ -191,6 +191,9 @@ class BloFinClient:
         """
         # Re-assert demo host on every call; configuration cannot drift to prod.
         assert_demo_host(self._base_url)
+        # An absolute URL as ``path`` would override the base host; refuse it.
+        if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+            raise ExchangeRequestError("BloFin request path must be a relative '/' path.")
 
         body_str = json.dumps(body, separators=(",", ":")) if body is not None else ""
         sign_path = _signed_request_path(path, params)

@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
+import structlog
 from sqlalchemy import Engine, select, text, tuple_
 from sqlalchemy.orm import Session
 
@@ -24,7 +25,11 @@ from app.db.models import (
     TradePlanRevision,
     VenueSubmitEffect,
 )
-from app.providers.exchange.blofin_activity import ActivityIdentityError, BloFinActivityProvider
+from app.providers.exchange.blofin_activity import (
+    IDENTITY_REFUSAL_REASONS,
+    ActivityIdentityError,
+    BloFinActivityProvider,
+)
 from app.providers.exchange.errors import ExchangeError, ExchangeRateLimitError
 from app.repositories.blofin_activity import ActivityConflictError, BloFinActivityRepository
 from app.schemas.blofin_activity import (
@@ -65,6 +70,9 @@ class ActivitySyncResult:
     error_code: str | None = None
 
 
+logger = structlog.get_logger(__name__)
+
+
 def activity_provider(settings: Settings) -> BloFinActivityProvider:
     # A slower, separately capped read-only client does not alter execution rate settings.
     safe = settings.model_copy(
@@ -74,7 +82,7 @@ def activity_provider(settings: Settings) -> BloFinActivityProvider:
             "blofin_request_timeout_seconds": min(settings.blofin_request_timeout_seconds, 10),
         }
     )
-    return BloFinActivityProvider(get_readonly_client(safe, activity_history=True))
+    return BloFinActivityProvider(get_readonly_client(safe, activity_history=True), settings)
 
 
 def _window(
@@ -111,6 +119,18 @@ def _window(
         cursor.seen_cursors = []
         cursor.window_complete = False
     return cursor
+
+
+def _identity_code(exc: ActivityIdentityError, environment: str) -> str:
+    """Persist the static refusal code and log it. Never logs UID, key or payload."""
+    reason = exc.reason if exc.reason in IDENTITY_REFUSAL_REASONS else "identity_unverified"
+    logger.warning(
+        "blofin_activity_identity_refused",
+        reason=reason,
+        environment=environment,
+        uid_match=bool(exc.uid_match),
+    )
+    return reason
 
 
 def run_activity_sync(
@@ -211,7 +231,7 @@ def run_activity_sync(
                 except (ExchangeError, ExchangeDemoInactiveError, ActivityConflictError) as exc:
                     session.rollback()
                     code = (
-                        "identity_unverified"
+                        _identity_code(exc, scope.environment)
                         if isinstance(exc, ActivityIdentityError)
                         else "native_identity_conflict"
                         if isinstance(exc, ActivityConflictError)
@@ -232,7 +252,7 @@ def run_activity_sync(
                         )
                         session.add(account)
                         session.flush()
-                    elif code == "identity_unverified":
+                    elif isinstance(exc, ActivityIdentityError):
                         account.identity_error = code
                     cursor = _window(repo, kind, config, now)
                     cursor.last_attempt_at = now
