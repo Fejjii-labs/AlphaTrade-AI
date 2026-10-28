@@ -15,6 +15,7 @@ keeps the existing dependency and secret validation.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import selectors
 import signal
@@ -430,8 +431,14 @@ class PaperWorkerSupervisor:
         now = self._monotonic()
         if now < self._next_health_log_at:
             return False
-        self._log_health(phase="running")
         self._next_health_log_at = now + self._health_log_interval_seconds
+        try:
+            self._log_health(phase="running")
+        except Exception:
+            # A logging failure must never stop the worker loop.
+            with contextlib.suppress(Exception):
+                logger.warning("paper_worker_health_log_failed", phase="running")
+            return False
         return True
 
     def _ensure_thread(self, component: _Component) -> None:
