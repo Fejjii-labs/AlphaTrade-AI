@@ -144,6 +144,7 @@ class BinanceUsdmPerpetualSource:
         pause: UpstreamPause | None = None,
         kline_cache: ShortTtlSingleflight | None = None,
         quote_cache: ShortTtlSingleflight | None = None,
+        aggtrades_request_cache: ShortTtlSingleflight | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = client or ReadOnlyHttpGetClient(
@@ -158,6 +159,7 @@ class BinanceUsdmPerpetualSource:
             budget=budget,
             progress_interval_seconds=progress_interval_seconds,
             pause=pause,
+            aggtrades_request_cache=aggtrades_request_cache,
         )
         self._catalog = catalog if catalog is not None else default_perpetual_catalog()
         # An empty cache is still a cache. ``or`` would replace it because len is 0.

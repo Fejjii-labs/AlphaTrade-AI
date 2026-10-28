@@ -19,6 +19,8 @@ from app.market_contracts.adapters.public_read_cache import (
 )
 from app.market_contracts.adapters.request_budget import SlidingWeightBudget
 
+AGGTRADES_REQUEST_TTL_SECONDS = 15.0
+
 
 @dataclass(frozen=True, slots=True)
 class _PoolKey:
@@ -52,6 +54,12 @@ class BinanceEvidencePool:
         self.kline_cache = ShortTtlSingleflight(
             ttl_seconds=PUBLIC_READ_TTL_SECONDS,
             max_entries=64,
+        )
+        # Identical closed-window aggTrades GETs inside one scan cycle share
+        # one request. Open windows (live quotes, paper fills) never match.
+        self.aggtrades_requests = ShortTtlSingleflight(
+            ttl_seconds=AGGTRADES_REQUEST_TTL_SECONDS,
+            max_entries=128,
         )
         self.quote_cache = ShortTtlSingleflight(
             ttl_seconds=PUBLIC_READ_TTL_SECONDS,

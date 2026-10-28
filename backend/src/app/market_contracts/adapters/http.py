@@ -19,6 +19,12 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 import structlog
 
+from app.market_contracts.adapters.binance_rest_gate import (
+    AGGTRADES_PATH,
+    BinanceRestGate,
+    process_binance_rest_gate,
+)
+from app.market_contracts.adapters.public_read_cache import ShortTtlSingleflight
 from app.market_contracts.adapters.request_budget import (
     SlidingWeightBudget,
     bounded_backoff_seconds,
@@ -182,6 +188,9 @@ class ReadOnlyHttpGetClient:
         pause: UpstreamPause | None = None,
         fail_fast_rate_limits: bool = False,
         deadline_monotonic: float | None = None,
+        rest_gate: BinanceRestGate | None = None,
+        aggtrades_request_cache: ShortTtlSingleflight | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._allowed_hosts = allowed_hosts or APPROVED_BINANCE_USDM_REST_HOSTS
@@ -201,6 +210,17 @@ class ReadOnlyHttpGetClient:
             max_wait_seconds=max(max_backoff_seconds, 60.0),
         )
         self._pause = pause or UpstreamPause()
+        # Real network clients share one process gate, so a 418/429 seen by any
+        # client stops every Binance REST call in this process. Clients built on
+        # an injected transport or client (tests, harnesses) opt in explicitly.
+        binance_host = (urlsplit(self._base_url).hostname or "").lower() in (
+            APPROVED_BINANCE_USDM_REST_HOSTS
+        )
+        if rest_gate is None and transport is None and client is None and binance_host:
+            rest_gate = process_binance_rest_gate()
+        self._gate = rest_gate
+        self._aggtrades_cache = aggtrades_request_cache
+        self._wall_clock = wall_clock
         self._client = client or httpx.Client(
             base_url=self._base_url,
             timeout=timeout_seconds,
@@ -250,11 +270,29 @@ class ReadOnlyHttpGetClient:
         url = urljoin(self._base_url + "/", normalized_path.lstrip("/"))
         self._assert_url(url)
         self._reject_if_paused()
+        self._reject_if_gate_closed()
+        if self._aggtrades_cache is not None and self._is_closed_aggtrades_window(
+            normalized_path, params
+        ):
+            key = (normalized_path, tuple(sorted((params or {}).items())))
+            return self._aggtrades_cache.get_or_load(
+                key, lambda: self._send_get(url, normalized_path, params)
+            )
+        return self._send_get(url, normalized_path, params)
+
+    def _send_get(
+        self,
+        url: str,
+        normalized_path: str,
+        params: Mapping[str, str | int] | None,
+    ) -> Any:
         weight = request_weight(normalized_path, params)
         attempts = self._max_retries + 1
         last_retry_after: float | None = None
         for attempt in range(attempts):
             self._raise_if_past_deadline()
+            self._reject_if_gate_closed()
+            self._wait_for_spacing(normalized_path)
             self._budget.acquire(weight, sleeper=self._weight_sleeper())
             try:
                 response = self._exchange_get(url, params)
@@ -288,12 +326,19 @@ class ReadOnlyHttpGetClient:
                     path=normalized_path,
                 )
                 record_request(weight=weight, rate_limited=True, retry=attempt > 0)
+                gate_seconds = self._note_gate_failure("rate_limit", last_retry_after, response)
                 delay = bounded_backoff_seconds(
                     attempt=attempt,
                     retry_after_seconds=last_retry_after,
                     max_backoff_seconds=self._max_backoff_seconds,
                 )
-                if self._fail_fast_rate_limits or attempt + 1 >= attempts:
+                if gate_seconds is not None:
+                    delay = max(delay, gate_seconds)
+                if (
+                    self._fail_fast_rate_limits
+                    or attempt + 1 >= attempts
+                    or delay > self._max_backoff_seconds
+                ):
                     # A finished 429 belongs to the caller. Parking this process
                     # for Retry-After would block the next attempt after the
                     # in-call sleep already honored that header. Chat retrieval
@@ -323,8 +368,13 @@ class ReadOnlyHttpGetClient:
                 # Hold the full Retry-After, not only the capped in-call sleep,
                 # so the next call does not extend the ban.
                 self._pause.note("ban", _pause_seconds(retry_after, delay))
-                if self._fail_fast_rate_limits or not self._upstream_ban_retry_allowed(
-                    attempt, retry_after
+                gate_seconds = self._note_gate_failure("ban", retry_after, response)
+                if gate_seconds is not None:
+                    delay = max(delay, gate_seconds)
+                if (
+                    self._fail_fast_rate_limits
+                    or not self._upstream_ban_retry_allowed(attempt, retry_after)
+                    or delay > self._max_backoff_seconds
                 ):
                     raise UpstreamBanError(
                         f"{self._failure_label} source temporarily banned this client (HTTP 418).",
@@ -361,11 +411,62 @@ class ReadOnlyHttpGetClient:
                 ) from exc
             record_request(weight=weight, retry=attempt > 0)
             self._pause.clear()
+            if self._gate is not None:
+                self._gate.note_success(response.headers)
             return response.json()
         raise RateLimitedError(
             f"{self._failure_label} source rate-limited the read-only client.",
             retry_after_seconds=last_retry_after,
         )
+
+    def _reject_if_gate_closed(self) -> None:
+        """Refuse to send while the process-wide Binance gate is closed."""
+
+        if self._gate is None:
+            return
+        closed = self._gate.remaining()
+        if closed is None:
+            return
+        kind, left = closed
+        if kind == "ban":
+            raise UpstreamBanError(
+                f"{self._failure_label} source temporarily banned this process (HTTP 418).",
+                retry_after_seconds=left,
+            )
+        raise RateLimitedError(
+            f"{self._failure_label} source is in a rate-limit backoff for this process.",
+            retry_after_seconds=left,
+        )
+
+    def _note_gate_failure(
+        self, kind: str, retry_after: float | None, response: httpx.Response
+    ) -> float | None:
+        if self._gate is None:
+            return None
+        self._gate.note_used_weight(response.headers)
+        return self._gate.note_failure(kind, retry_after)
+
+    def _wait_for_spacing(self, path: str) -> None:
+        """Spread aggTrades reads (wider during boot). Chat reads do not queue."""
+
+        if self._gate is None or self._fail_fast_rate_limits:
+            return
+        delay = self._gate.reserve_spacing(path)
+        if delay > 0:
+            sleep_with_progress(delay, sleeper=self._weight_sleeper())
+
+    def _is_closed_aggtrades_window(
+        self, path: str, params: Mapping[str, str | int] | None
+    ) -> bool:
+        """Only a time window that already ended has one fixed answer to share."""
+
+        if path != AGGTRADES_PATH or not params or "endTime" not in params:
+            return False
+        try:
+            end_ms = int(params["endTime"])
+        except (TypeError, ValueError):
+            return False
+        return end_ms < int(self._wall_clock() * 1000) - 1000
 
     def _reject_if_paused(self) -> None:
         """Refuse another request during a 418 ban or an in-call 429 retry."""
