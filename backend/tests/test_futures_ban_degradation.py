@@ -2,7 +2,7 @@
 
 - API: RateLimitedError / UpstreamBanError map to 503 + Retry-After (not 500).
 - Agent chat: graph steps degrade (funding/OI unavailable) and state the gap.
-- Non-ban errors still fall back to mock funding, and the snapshot flags it.
+- Non-ban errors still fall back to mock funding, flagged via snapshot.funding_fallback.
 """
 
 from __future__ import annotations
@@ -164,6 +164,19 @@ def test_rate_limit_handler_maps_to_503(exc: Exception, code: str, retry_after: 
     assert r.json()["error"]["code"] == code
 
 
+def test_pretrade_endpoint_returns_503_with_retry_after_during_ban(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    r = client.post(
+        "/pretrade/analyze",
+        json={"symbol": "BTCUSDT", "account_size": "10000", "timeframe": "4h"},
+        headers=headers,
+    )
+    assert r.status_code == 503, r.text
+    assert r.headers["Retry-After"] == "121"
+    assert r.json()["error"]["code"] == "upstream_banned"
+
+
 # --- Agent graph degradation -------------------------------------------------
 
 
@@ -183,10 +196,7 @@ def test_snapshot_degrades_when_requested_and_raises_otherwise(
     assert snap.indicators.funding_rate is None
 
 
-def test_agent_chat_survives_futures_ban_and_states_gap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(MockMarketDataProvider, "get_funding_rate", _ban)
+def _ban_runtime(*, narrative: bool) -> object:
     settings = Settings(log_json=False, provider_mode="mock", market_data_provider="mock")
     strategy_service = StrategyService(registry=build_strategy_registry())
     from app.agents.runtime import AgentRuntime
@@ -199,7 +209,14 @@ def test_agent_chat_survives_futures_ban_and_states_gap(
         tool_registry=build_tools(settings, market_data_service=svc),
         market_data_service=svc,
     )
-    response = AgentService(runtime=runtime).run(
+    if not narrative:
+        # Plain final-answer path: no LLM narrative polish step.
+        runtime.narrative_service = None
+    return runtime
+
+
+def _ban_chat_reply(runtime: object) -> str:
+    response = AgentService(runtime=runtime).run(  # type: ignore[arg-type]
         "analyze btc setup",
         AgentInvokeContext(
             request_id="futures-ban-chat",
@@ -210,8 +227,28 @@ def test_agent_chat_survives_futures_ban_and_states_gap(
         timeframe="4h",
     )
     assert response.reply
-    assert "data gap" in response.reply.lower()
-    assert "funding rate" in response.reply.lower()
+    return response.reply.lower()
+
+
+def test_agent_chat_survives_futures_ban_and_states_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MockMarketDataProvider, "get_funding_rate", _ban)
+    reply = _ban_chat_reply(_ban_runtime(narrative=True))
+    assert "data gap" in reply
+    assert "funding rate" in reply
+
+
+def test_agent_plain_final_answer_states_gap_during_ban(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MockMarketDataProvider, "get_funding_rate", _ban)
+    runtime = _ban_runtime(narrative=False)
+    assert runtime.narrative_service is None  # type: ignore[attr-defined]
+    reply = _ban_chat_reply(runtime)
+    assert "data gap" in reply
+    assert "funding rate" in reply
+    assert "open interest" in reply
 
 
 # --- Non-ban fallback --------------------------------------------------------
@@ -240,11 +277,14 @@ def test_snapshot_flags_mock_funding_fallback(monkeypatch: pytest.MonkeyPatch) -
     svc = _service(_LiveSpotProvider())
     snap = svc.get_snapshot("BTCUSDT", Timeframe.H4)
     assert snap.funding_rate_available is True
-    assert snap.meta.fallback_used is True
+    assert snap.funding_fallback is True
+    # meta.fallback_used keeps its spot-only meaning, so a futures-only fallback
+    # (e.g. fapi 451 in some regions) doesn't label every analysis as mock.
+    assert snap.meta.fallback_used is False
 
     analysis = svc.analyze(MarketAnalyzeRequest(symbol="BTCUSDT", timeframe=Timeframe.H4))
-    assert analysis.snapshot.meta.fallback_used is True
-    assert analysis.confidence_penalty_applied is True
+    assert analysis.snapshot.funding_fallback is True
+    assert analysis.snapshot.meta.fallback_used is False
 
 
 def test_snapshot_not_flagged_when_funding_live(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,3 +296,4 @@ def test_snapshot_not_flagged_when_funding_live(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(_LiveSpotProvider, "get_funding_rate", _live)
     snap = _service(_LiveSpotProvider()).get_snapshot("BTCUSDT", Timeframe.H4)
     assert snap.meta.fallback_used is False
+    assert snap.funding_fallback is False

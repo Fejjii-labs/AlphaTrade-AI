@@ -131,6 +131,9 @@ class MarketSnapshotResponse(ORMModel):
     indicators: IndicatorContext | None = None
     funding_rate: Decimal | None = None
     funding_rate_available: bool = True
+    # Funding rate is a mock fallback value (non-ban futures error, e.g. 451 region).
+    # Kept separate from meta.fallback_used so spot-live analyses aren't labelled mock.
+    funding_fallback: bool = False
     open_interest_available: bool = True
     unavailable_reason: str | None = None
 

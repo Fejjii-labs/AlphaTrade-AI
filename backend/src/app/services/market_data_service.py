@@ -134,8 +134,9 @@ class MarketDataService:
         ``RateLimitedError``. API callers let it propagate (mapped to 503);
         agent graph steps pass ``degrade_on_rate_limit=True`` and get
         ``funding_rate=None`` flagged unavailable instead of a crash.
-        A non-ban mock fallback value is returned but flagged via
-        ``fallback_used`` so it never masquerades as live data.
+        A non-ban mock fallback value is returned but flagged via the
+        snapshot's ``funding_fallback`` (not ``meta.fallback_used``, which
+        stays spot-only) so it never masquerades as live data.
         """
         try:
             funding = self._provider.get_funding_rate(symbol, exchange=exchange)
@@ -186,9 +187,7 @@ class MarketDataService:
             update={
                 "is_live": ticker.meta.is_live and ohlcv.meta.is_live,
                 "is_stale": ticker.meta.is_stale or ohlcv.meta.is_stale,
-                "fallback_used": (
-                    ticker.meta.fallback_used or ohlcv.meta.fallback_used or funding_fallback
-                ),
+                "fallback_used": ticker.meta.fallback_used or ohlcv.meta.fallback_used,
                 "provider_name": ohlcv.meta.provider_name,
                 "cache_hit": ticker.meta.cache_hit or ohlcv.meta.cache_hit,
             }
@@ -200,6 +199,7 @@ class MarketDataService:
             indicators=indicators,
             funding_rate=funding_rate,
             funding_rate_available=funding_ok,
+            funding_fallback=funding_fallback,
             # Open interest shares the futures cluster; unavailable whenever funding is.
             open_interest_available=funding_ok,
             unavailable_reason=reason,
@@ -227,7 +227,7 @@ class MarketDataService:
             )
             for b in ohlcv.bars
         ]
-        # Reuse the snapshot's funding read: one futures call, same fallback flag.
+        # Reuse the snapshot's funding read: one futures call.
         funding_rate = snapshot.funding_rate
         indicators = self._indicators.calculate(
             symbol=request.symbol,
