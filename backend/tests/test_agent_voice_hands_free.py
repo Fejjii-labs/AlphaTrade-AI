@@ -13,10 +13,12 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent_voice as agent_voice_package
+import app.agent_voice.config as voice_config
 from app.agent_voice import service as voice_service
 from app.agent_voice.accounting import VoiceLedger
 from app.agent_voice.config import (
     LEGACY_DEFAULT_TURNS,
+    MAXIMUM_HANDS_FREE_AUDIO_SECONDS,
     MAXIMUM_VOICE_TURNS,
     VoiceLimits,
     VoiceUnavailableError,
@@ -25,10 +27,21 @@ from app.agent_voice.config import (
 )
 from app.agent_voice.live_config import LiveLimits, load_live_limits
 from app.agent_voice.live_protocol import INSTRUCTIONS as LIVE_INSTRUCTIONS
-from app.agent_voice.protocol import INSTRUCTIONS, TOOL, TOOL_NAME, session_update
+from app.agent_voice.protocol import (
+    INSTRUCTIONS,
+    TOOL,
+    TOOL_NAME,
+    auto_responses_off,
+    session_update,
+)
 from app.core.config import Settings
+from app.core.errors import TradingPolicyError
 from tests.test_agent_live_integration import live_limits  # noqa: F401
-from tests.test_agent_realtime_protocol import session_for, voice_limits  # noqa: F401
+from tests.test_agent_realtime_protocol import (  # noqa: F401
+    FakeLedger,
+    session_for,
+    voice_limits,
+)
 
 
 def _settings(**update: object) -> Settings:
@@ -104,6 +117,72 @@ def test_default_turns_shrink_to_fit_the_ceiling_but_not_below_legacy(voice_limi
     assert effective.reservation(settings) <= effective.session_ceiling_usd
 
 
+def test_turn_count_is_hard_capped_at_twenty_four(voice_limits):  # noqa: F811
+    # Bypass the Settings validator: the cap must hold inside apply_turn_setting too.
+    settings = _settings().model_copy(update={"agent_voice_maximum_turns": 50})
+    receipt = VoiceLimits.model_validate(_receipt_without_turns(voice_limits, cheap=True))
+    effective = apply_turn_setting(receipt, settings)
+    assert effective.maximum_turns == MAXIMUM_VOICE_TURNS == 24
+    assert effective.maximum_responses == 2 * MAXIMUM_VOICE_TURNS
+    data = _receipt_without_turns(voice_limits, cheap=True)
+    with pytest.raises(ValidationError):
+        VoiceLimits.model_validate(data | {"maximum_turns": 25, "maximum_responses": 50})
+
+
+def test_receipt_reserves_one_response_of_slack(voice_limits, monkeypatch):  # noqa: F811
+    settings = _settings()
+    with_slack = voice_limits.reservation(settings)
+    tokens = voice_limits.reserved_tokens(settings)
+    monkeypatch.setattr(voice_config, "RESPONSE_SLACK", 0)
+    realtime = voice_limits.realtime
+    one_response = (
+        realtime.maximum_input_tokens
+        * max(realtime.input_usd_per_million, realtime.audio_input_usd_per_million)
+        + voice_limits.maximum_output_tokens
+        * max(realtime.output_usd_per_million, realtime.audio_output_usd_per_million)
+    ) / 1000000
+    assert with_slack - voice_limits.reservation(settings) == one_response > 0
+    assert tokens - voice_limits.reserved_tokens(settings) == (
+        realtime.maximum_input_tokens + voice_limits.maximum_output_tokens
+    )
+
+
+def _receipt_without_audio(limits: VoiceLimits) -> dict:
+    data = _receipt_without_turns(limits, cheap=True)
+    data.pop("maximum_audio_seconds")
+    return data | {"maximum_seconds": 180}
+
+
+def test_hands_free_audio_follows_session_length_when_it_fits(voice_limits):  # noqa: F811
+    settings = _settings(agent_voice_maximum_turns=8)
+    effective = apply_turn_setting(
+        VoiceLimits.model_validate(_receipt_without_audio(voice_limits)), settings
+    )
+    assert effective.maximum_audio_seconds == MAXIMUM_HANDS_FREE_AUDIO_SECONDS == 180
+    assert effective.maximum_turns == 8
+    assert effective.reservation(settings) <= effective.session_ceiling_usd
+    # An explicit receipt value stays.
+    explicit = apply_turn_setting(voice_limits, settings)
+    assert explicit.maximum_audio_seconds == voice_limits.maximum_audio_seconds
+
+
+def test_hands_free_audio_keeps_receipt_default_when_longer_audio_cannot_fit(
+    voice_limits,  # noqa: F811
+):
+    settings = _settings(agent_voice_maximum_turns=20)
+    data = _receipt_without_audio(voice_limits)
+    legacy = VoiceLimits.model_validate(
+        data | {"maximum_turns": LEGACY_DEFAULT_TURNS, "maximum_responses": 12}
+    )
+    receipt = VoiceLimits.model_validate(
+        data | {"session_ceiling_usd": str(legacy.reservation(settings))}
+    )
+    effective = apply_turn_setting(receipt, settings)
+    assert effective.maximum_audio_seconds == 90
+    assert effective.maximum_turns == LEGACY_DEFAULT_TURNS
+    assert effective.reservation(settings) <= effective.session_ceiling_usd
+
+
 def test_load_limits_keeps_the_ceiling_check_fail_closed(tmp_path, voice_limits):  # noqa: F811
     settings = _settings(
         agent_realtime_enabled=True, openai_api_key="fixture", provider_mode="live"
@@ -169,6 +248,90 @@ def test_over_cap_provider_response_is_recorded_then_refused(voice_limits):  # n
     assert row.response_count == voice_limits.maximum_responses + 1
     assert data["responses"][-1]["response_id"] == "over-cap"
     assert data["responses"][-1]["state"] != "done"
+
+
+class CapLedger(FakeLedger):
+    """FakeLedger with the real VoiceLedger response admission on an in-memory row."""
+
+    def __init__(self, limits):
+        super().__init__(limits)
+        self.real, self.row, self.data = _ledger_with_row(limits)
+
+    def response(self):
+        super().response()
+        return self.real.response()
+
+    def response_started(self, key):
+        super().response_started(key)
+        self.real.response_started(key)
+
+    def provider_response(self, response_id):
+        super().provider_response(response_id)
+        return self.real.provider_response(response_id)
+
+
+@pytest.mark.asyncio
+async def test_barge_in_during_a_tool_at_the_cap_admits_no_over_cap_response(
+    voice_limits,  # noqa: F811
+):
+    # Griller PR390 B1: cap 4, user keeps barging in while a delegate runs.
+    session, _ledger, _sent, upstream = session_for(voice_limits)
+    session.ledger = ledger = CapLedger(voice_limits)
+    session.tool_task = asyncio.create_task(asyncio.sleep(30))
+    admitted = 0
+    with pytest.raises(VoiceUnavailableError, match="voice_response_cap_exhausted"):
+        for index in range(20):
+            await session.provider({"type": "input_audio_buffer.speech_started"})
+            # This fake provider ignores session.update: worst-case in-flight race.
+            await session.provider({"type": "response.created", "response": {"id": f"a{index}"}})
+            admitted += 1
+            if session.responses_used == voice_limits.maximum_responses - 1:
+                # Auto responses are switched off despite the running tool.
+                assert upstream == [auto_responses_off()]
+            await session.provider(
+                {"type": "response.done", "response": {"id": f"a{index}", "status": "cancelled"}}
+            )
+    session.tool_task.cancel()
+    assert admitted == voice_limits.maximum_responses
+    assert ledger.row.response_count == voice_limits.maximum_responses
+    assert upstream == [auto_responses_off()]
+    # Even the worst case (one more already in flight) stays within the reservation.
+    assert ledger.row.response_count + voice_config.RESPONSE_SLACK > admitted
+
+
+@pytest.mark.asyncio
+async def test_last_admission_turns_auto_responses_off_and_reconfirms(voice_limits):  # noqa: F811
+    session, ledger, sent, upstream = session_for(voice_limits)
+    session.responses_used = voice_limits.maximum_responses - 2
+    await session._respond(grounded=True)
+    assert upstream[0] == auto_responses_off()
+    assert upstream[1]["type"] == "response.create"
+    assert not session.auto_responses
+    effective = session_update(voice_limits)["session"]
+    effective["audio"]["input"]["turn_detection"]["create_response"] = False
+    await session.provider({"type": "session.updated", "session": effective})
+    assert "active" not in ledger.events and not sent  # no second activation/ready
+    effective["audio"]["input"]["turn_detection"]["create_response"] = True
+    with pytest.raises(VoiceUnavailableError, match="provider_audio_limits_not_confirmed"):
+        await session.provider({"type": "session.updated", "session": effective})
+
+
+@pytest.mark.asyncio
+async def test_tool_call_with_an_unknown_name_is_refused(voice_limits):  # noqa: F811
+    session, ledger, _sent, upstream = session_for(voice_limits)
+    await session.provider({"type": "response.created", "response": {"id": "r"}})
+    with pytest.raises(VoiceUnavailableError, match="unsupported_provider_tool"):
+        await session.provider(
+            {
+                "type": "response.function_call_arguments.done",
+                "response_id": "r",
+                "name": "place_order",
+                "call_id": "call-x",
+                "arguments": json.dumps({"message": "buy"}),
+            }
+        )
+    assert session.tool_task is None and not upstream
+    assert not [e for e in ledger.events if e[0] == "pending"]
 
 
 @pytest.mark.asyncio
@@ -263,6 +426,8 @@ def test_voice_exposes_only_the_read_propose_agent_delegate(voice_limits):  # no
     for text in (INSTRUCTIONS, LIVE_INSTRUCTIONS):
         assert "Never place, modify, close or cancel an order" in text
         assert "on-screen button" in text
+        assert "Never state a price, position, balance, P&L" in text
+    assert "unless it came from an alpha_trade_turn result" in INSTRUCTIONS
 
 
 def test_no_voice_module_imports_an_execution_path():
@@ -279,6 +444,114 @@ def test_no_voice_module_imports_an_execution_path():
             )
             for name in names:
                 assert not name.startswith(_EXECUTION_MODULES), (path.name, name)
+
+
+# Shared modules through which execution code is (transitively) importable from voice.
+# Import reachability is not a call path: each entry is audited. The delegate runs
+# without a paper executor (tested below and in the delegate test); the others are
+# read-only grounding, config, auth, quota, usage and provider plumbing. A new voice
+# import that reaches execution code must be reviewed and added here.
+_AUDITED_EXECUTION_REACHABLE = frozenset(
+    {
+        "app.agent_capture.service",
+        "app.core.config",
+        "app.db.session",
+        "app.interactive_agent.turn_runtime",
+        "app.interactive_agent.vector_adapter",
+        "app.providers.embeddings",
+        "app.providers.factory",
+        "app.security.rbac",
+        "app.services.auth_service",
+        "app.services.blofin_activity_config",
+        "app.services.blofin_activity_service",
+        "app.services.quota_service",
+        "app.services.turn_coordinator",
+        "app.services.usage_service",
+    }
+)
+
+
+def _module_file(src: Path, module: str) -> Path | None:
+    base = src.joinpath(*module.split("."))
+    for candidate in (base / "__init__.py", base.with_suffix(".py")):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _app_imports(src: Path, module: str) -> set[str]:
+    path = _module_file(src, module)
+    if path is None:
+        return set()
+    package = module if path.name == "__init__.py" else module.rsplit(".", 1)[0]
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            found |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parts = package.split(".")[: len(package.split(".")) - node.level + 1]
+                base = ".".join([*parts, *([base] if base else [])])
+            found |= {base, *(f"{base}.{alias.name}" for alias in node.names)}
+    return {name for name in found if name.startswith("app.") and _module_file(src, name)}
+
+
+def test_voice_reaches_execution_code_only_through_audited_modules():
+    root = Path(agent_voice_package.__file__).parent
+    src = root.parents[1]
+    voice = {f"app.agent_voice.{path.stem}" for path in root.glob("*.py")}
+    closure: dict[str, bool] = {}
+
+    def reaches_execution(module: str) -> bool:
+        if module not in closure:
+            seen, queue = {module}, [module]
+            while queue:
+                for name in _app_imports(src, queue.pop()):
+                    if name not in seen:
+                        seen.add(name)
+                        queue.append(name)
+            closure[module] = any(name.startswith(_EXECUTION_MODULES) for name in seen)
+        return closure[module]
+
+    reachable = {
+        name
+        for module in voice
+        for name in _app_imports(src, module)
+        if not name.startswith("app.agent_voice") and reaches_execution(name)
+    }
+    assert reachable  # the walk really follows transitive imports
+    assert reachable <= _AUDITED_EXECUTION_REACHABLE, sorted(
+        reachable - _AUDITED_EXECUTION_REACHABLE
+    )
+
+
+def test_spoken_prepare_paper_trade_is_refused_without_an_executor():
+    from app.interactive_agent.action_registry import resolve_action, route_action
+    from app.interactive_agent.contracts import AgentTurnRequest
+    from app.interactive_agent.orchestration import propose_action
+
+    # A well-formed spoken trade is inferred as prepare_execution; the voice delegate
+    # passes no paper executor, so orchestration refuses before any prepare call.
+    action = route_action(
+        AgentTurnRequest(
+            message=f"prepare paper trade candidate_id={uuid4()} account_id={uuid4()} "
+            "symbol=BTCUSDT venue=paper market=SPOT timeframe=15m direction=long "
+            "entry=100000 stop=99000 targets=102000",
+            conversation_id=uuid4(),
+        )
+    )
+    assert action is not None and action.name == "paper_trade.prepare_execution"
+    tool, inputs = resolve_action(action)
+    with pytest.raises(TradingPolicyError, match="paper execution authority is unavailable"):
+        propose_action(
+            None,  # type: ignore[arg-type]
+            tool=tool,
+            inputs=inputs,
+            conversation=SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4()),  # type: ignore[arg-type]
+            source_message_id=uuid4(),
+            paper_execution=None,
+        )
 
 
 @pytest.mark.asyncio

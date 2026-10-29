@@ -21,7 +21,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.agent_voice.config import VoiceLimits, VoiceUnavailableError, load_limits
 from app.agent_voice.contracts import VoiceStart
-from app.agent_voice.protocol import checked_audio, create_response, session_update
+from app.agent_voice.protocol import (
+    auto_responses_off,
+    checked_audio,
+    create_response,
+    session_update,
+)
 from app.agent_voice.service import RealtimeSession
 from app.api.routes.agent_voice import voice_config
 from app.core.config import Settings
@@ -62,6 +67,7 @@ def voice_limits():
 
 def test_pinned_official_sdk_validates_session_and_response_transport(voice_limits):
     TypeAdapter(SessionUpdateEventParam).validate_python(session_update(voice_limits))
+    TypeAdapter(SessionUpdateEventParam).validate_python(auto_responses_off())
     TypeAdapter(ResponseCreateEventParam).validate_python(create_response(voice_limits))
     TypeAdapter(ResponseCreateEventParam).validate_python(
         create_response(voice_limits, grounded=True)
@@ -111,7 +117,8 @@ def test_full_context_orphan_audio_and_shared_router_retries_are_reserved(voice_
     settings = Settings(_env_file=None)
     expected = (
         Decimal(
-            4 * (20000 * 3 + 1024 * 4)
+            # Four admitted responses plus one of slack for an in-flight VAD response.
+            (4 + 1) * (20000 * 3 + 1024 * 4)
             + 5 * 100 * 3
             + 2 * 4 * (20000 + settings.agent_max_output_tokens * 2)
         )

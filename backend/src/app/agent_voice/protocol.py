@@ -24,6 +24,11 @@ TRADE_REFUSAL = (
     "Never place, modify, close or cancel an order, trade or position by voice, and never "
     "say you did. For any trade action, tell the user to use the explicit on-screen button."
 )
+GROUNDED_FACTS = (
+    "Never state a price, position, balance, P&L, order or other account or market figure "
+    "unless it came from an alpha_trade_turn result in this conversation; otherwise call "
+    "alpha_trade_turn, or say you do not have it."
+)
 INSTRUCTIONS = (
     "You are AlphaTrade's hands-free voice interface. Keep replies short and natural. "
     "Answer simple conversational turns (greetings, thanks, clarifying what you heard, how "
@@ -37,6 +42,8 @@ INSTRUCTIONS = (
     "simulation differ; incomplete history proves no returns. A proposed strategy, risk, "
     "monitoring or order change is never confirmation. You cannot confirm, execute, enable, "
     "send notifications or change operator settings. "
+    + GROUNDED_FACTS
+    + " "
     + TRADE_REFUSAL
     + " Stop speaking when the user interrupts. Say when you did not understand; keep typed "
     "fallback available."
@@ -54,6 +61,26 @@ TOOL = {
 }
 
 
+def turn_detection(*, create_response: bool) -> dict[str, Any]:
+    return {
+        "type": "server_vad",
+        "create_response": create_response,
+        "interrupt_response": True,
+        "silence_duration_ms": 500,
+    }
+
+
+def auto_responses_off() -> dict[str, Any]:
+    """Stop server VAD from creating responses; barge-in still interrupts playback."""
+    return {
+        "type": "session.update",
+        "session": {
+            "type": "realtime",
+            "audio": {"input": {"turn_detection": turn_detection(create_response=False)}},
+        },
+    }
+
+
 def session_update(limits: VoiceLimits) -> dict[str, Any]:
     return {
         "type": "session.update",
@@ -69,12 +96,7 @@ def session_update(limits: VoiceLimits) -> dict[str, Any]:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": 24000},
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "create_response": True,
-                        "interrupt_response": True,
-                        "silence_duration_ms": 500,
-                    },
+                    "turn_detection": turn_detection(create_response=True),
                 },
                 "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": "marin"},
             },

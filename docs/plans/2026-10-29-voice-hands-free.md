@@ -25,7 +25,24 @@ directly, so implementation proceeds with this plan as the record (deviation fro
    value between the legacy 6 and the setting whose reservation fits the session ceiling;
    anything that failed before still fails (`verified_cap_cannot_cover_session`).
    `maximum_responses` defaults to `2 * maximum_turns`.
-5. Live path: instructions gain the same trade rule; same turn setting applies.
+   Griller PR390 B1 (spend ceiling): once at most one response admission is left, the
+   session sends `session.update` with `turn_detection.create_response: false` whatever
+   the tool state, so the last admission stays for a running delegate's spoken reply;
+   new speech ends the session at zero left (or below two with no tool running). Server
+   VAD may still have one response in flight; that response is recorded, and every
+   reservation includes one response of slack (`RESPONSE_SLACK`), so turn derivation
+   never fills the ceiling exactly and an in-flight extra response cannot breach it.
+   `session.updated` must then confirm `create_response: false`.
+4a. Audio: with the mic open, submitted audio tracks wall-clock time, so the 90 s
+   `maximum_audio_seconds` default would end a session early. A realtime receipt that
+   relies on the audio default gets `min(maximum_seconds, 180)` seconds if a turn count
+   at or above the legacy floor fits the ceiling with it; otherwise the receipt default
+   (90 s) stays. An explicit receipt value is unchanged. Either way, the session ends
+   with `voice_audio_duration_exhausted` when the audio budget is used.
+5. Live path: instructions gain the same trade and grounded-facts rules; same turn
+   setting applies.
+5a. Prompt (defence in depth): never state a price, position, balance, P&L, order or
+   other account/market figure unless it came from an `alpha_trade_turn` result.
 6. Audit + test: no voice-callable tool executes trades.
 
 ## Frontend

@@ -26,6 +26,13 @@ VOICE_PROVIDER_MODES = frozenset({"live", "fallback"})
 LEGACY_DEFAULT_TURNS = 6
 # Hard upper bound for delegated voice turns, whatever the setting or receipt says.
 MAXIMUM_VOICE_TURNS = 24
+# Server VAD creates responses itself, so one may already be in flight when the cap is
+# reached (e.g. a barge-in while a delegated turn runs). That response is recorded and
+# may be billed; the reservation always covers it, so it can never breach the ceiling.
+RESPONSE_SLACK = 1
+# Hands-free keeps the microphone open, so submitted audio tracks wall-clock time. A
+# receipt that relies on the audio default gets up to its session length, if that fits.
+MAXIMUM_HANDS_FREE_AUDIO_SECONDS = 180
 
 
 def voice_route_refusal(settings: Settings) -> str | None:
@@ -134,7 +141,7 @@ class VoiceLimits(StrictModel):
             else Decimal(0)
         )
         return (
-            self.maximum_responses * response
+            (self.maximum_responses + RESPONSE_SLACK) * response
             + orphan_audio
             + self.maximum_turns * 4 * reasoning
             + embedding
@@ -146,7 +153,7 @@ class VoiceLimits(StrictModel):
 
     def reserved_tokens(self, settings: Settings) -> int:
         return math.ceil(
-            self.maximum_responses
+            (self.maximum_responses + RESPONSE_SLACK)
             * (self.realtime.maximum_input_tokens + self.maximum_output_tokens)
             + self.maximum_audio_seconds * self.realtime.maximum_audio_input_tokens_per_second
             + self.maximum_turns
@@ -183,7 +190,9 @@ def apply_turn_setting[T: _TurnLimits](limits: T, settings: Settings) -> T:
     An explicit receipt value (and an explicit ``maximum_responses``) stays an upper
     bound. A receipt that relies on the default gets the largest value between the
     legacy default and the setting whose whole reservation fits the verified ceiling.
-    Nothing that was refused before is admitted: the floor is the legacy default and
+    A realtime receipt that relies on the audio default first tries submitted audio up to
+    its session length (continuous mic); if no turn count fits that, the receipt value
+    stays. Nothing that was refused before is admitted: the floor is the legacy default and
     the caller still runs its unchanged ceiling check.
     """
     explicit = "maximum_turns" in limits.model_fields_set
@@ -198,12 +207,19 @@ def apply_turn_setting[T: _TurnLimits](limits: T, settings: Settings) -> T:
     floor = requested if explicit else min(requested, limits.maximum_turns)
     ceiling = min(limits.session_ceiling_usd, limits.remaining_budget_usd)
 
-    def bounded(turns: int) -> T:
-        update: dict[str, Any] = {"maximum_turns": turns}
+    def bounded(turns: int, **extra: int) -> T:
+        update: dict[str, Any] = {"maximum_turns": turns, **extra}
         if paired and not responses_explicit:
             update["maximum_responses"] = 2 * turns
         return type(limits).model_validate(limits.model_dump() | update)  # type: ignore[attr-defined,no-any-return]
 
+    if isinstance(limits, VoiceLimits) and "maximum_audio_seconds" not in limits.model_fields_set:
+        audio = min(limits.maximum_seconds, MAXIMUM_HANDS_FREE_AUDIO_SECONDS)
+        if audio > limits.maximum_audio_seconds:
+            for turns in range(requested, floor - 1, -1):
+                candidate = bounded(turns, maximum_audio_seconds=audio)
+                if candidate.reservation(settings) <= ceiling:
+                    return candidate
     for turns in range(requested, floor, -1):
         candidate = bounded(turns)
         if candidate.reservation(settings) <= ceiling:

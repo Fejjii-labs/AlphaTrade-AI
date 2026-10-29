@@ -25,7 +25,13 @@ from app.agent_voice.contracts import (
 )
 from app.agent_voice.grounding import read_grounding
 from app.agent_voice.live_config import LiveLimits
-from app.agent_voice.protocol import TOOL_NAME, checked_audio, create_response, session_update
+from app.agent_voice.protocol import (
+    TOOL_NAME,
+    auto_responses_off,
+    checked_audio,
+    create_response,
+    session_update,
+)
 from app.agent_voice.retrieval import (
     VoiceEmbeddingsProvider,
     VoiceEmbeddingUsage,
@@ -187,6 +193,9 @@ class RealtimeSession:
         self.backend_responses: deque[bool] = deque()
         # Every admitted response, backend or provider-created, interrupted or not.
         self.responses_used = 0
+        # Server VAD creates responses until at most one admission is left; that one is
+        # kept for a running delegate's spoken reply.
+        self.auto_responses = True
 
     async def start_session(self) -> None:
         await self._provider_send(session_update(self.ledger.limits))
@@ -206,10 +215,22 @@ class RealtimeSession:
         self._context_limit()
         await asyncio.to_thread(self.ledger.response)
         self.responses_used += 1
+        await self._limit_auto_responses()
         self.backend_responses.append(grounded)
         self.response_active = True
         self.response_finished.clear()
         await self._provider_send(create_response(self.ledger.limits, grounded=grounded))
+
+    def _responses_left(self) -> int:
+        return self.ledger.limits.maximum_responses - self.responses_used
+
+    async def _limit_auto_responses(self) -> None:
+        # Whatever the tool state: once a VAD turn could take the last admission, stop
+        # the provider from creating responses. One already in flight is recorded and
+        # covered by the reservation slack (RESPONSE_SLACK).
+        if self.auto_responses and self._responses_left() <= 1:
+            self.auto_responses = False
+            await self._provider_send(auto_responses_off())
 
     def _tool_running(self) -> bool:
         return self.tool_task is not None and not self.tool_task.done()
@@ -299,7 +320,7 @@ class RealtimeSession:
             detection = incoming.get("turn_detection", {})
             if (
                 detection.get("type") != "server_vad"
-                or detection.get("create_response") is not True
+                or detection.get("create_response") is not self.auto_responses
                 or detection.get("interrupt_response") is not True
                 or effective.get("tool_choice") != "auto"
                 or [tool.get("name") for tool in effective.get("tools", [])] != [TOOL_NAME]
@@ -309,6 +330,8 @@ class RealtimeSession:
                 or effective.get("truncation") != "disabled"
             ):
                 raise VoiceUnavailableError("provider_audio_limits_not_confirmed")
+            if self.ready:
+                return  # Confirms auto_responses_off(); the session is already active.
             await asyncio.to_thread(self.ledger.activate)
             self.ready = True
             await self.send({"type": "session.ready", "session_id": str(self.ledger.id)})
@@ -327,6 +350,7 @@ class RealtimeSession:
                 self.context_bytes += self.ledger.limits.maximum_output_tokens
                 await asyncio.to_thread(self.ledger.provider_response, response_id)
                 self._context_limit()
+                await self._limit_auto_responses()
         elif kind == "response.done":
             await asyncio.to_thread(self.ledger.response_done, event["response"])
             self.response_active = False
@@ -342,10 +366,11 @@ class RealtimeSession:
             # interrupt_response: the provider cancels its own response (barge-in).
             # The browser flushes playback and reports the heard position to truncate.
             self.interruption += 1
-            left = self.ledger.limits.maximum_responses - self.responses_used
-            if left < 2 and not self._tool_running():
-                # A new turn may need a tool call and a spoken reply. End before the
-                # provider can create a response this session can no longer admit.
+            left = self._responses_left()
+            if left < 1 or (left < 2 and not self._tool_running()):
+                # A new turn may need a tool call and a spoken reply; a running delegate
+                # needs the last admission for its reply. End before the provider can
+                # create a response this session can no longer admit.
                 raise VoiceUnavailableError("voice_response_cap_exhausted")
             await self.send({"type": "playback.clear"})
             await self.send({"type": "speech.started"})
@@ -449,7 +474,8 @@ class RealtimeSession:
             if self.queued_speech:
                 self.queued_speech = False
                 await self._respond()
-            elif generation == self.interruption:
+            elif generation == self.interruption or not self.auto_responses:
+                # With auto responses off, a barge-in created no reply; speak the result.
                 await self._respond(grounded=True)
         except Exception:
             await self.send({"type": "turn.uncertain", "request_key": key})
