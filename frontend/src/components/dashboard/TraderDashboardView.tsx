@@ -92,12 +92,17 @@ export function TraderDashboardView({
   const closedByStrategy = closedStrategyRows(data.portfolio);
   const alerts = importantAlerts(data.alerts);
   const market = marketEvidenceSummary(data.market);
+  const portfolioPending = Boolean(data.portfolio.pending);
+  const metric = (value: string) => (portfolioPending ? "Loading…" : value);
   const daily = data.summary.available
     ? data.summary.data?.daily_discipline
     : null;
-  const watcherLabel = data.watcher.available
-    ? watcherTraderLabel(data.watcher.data?.paper_monitoring_status)
-    : "Unavailable";
+  const watcherLabel = data.watcher.pending
+    ? "Loading…"
+    : data.watcher.available
+      ? watcherTraderLabel(data.watcher.data?.paper_monitoring_status)
+      : "Unavailable";
+  const marketLabel = data.market.pending ? "Loading…" : market.label;
   const unavailable = [
     ["Portfolio", data.portfolio],
     ["Recent trades", data.journal],
@@ -107,7 +112,10 @@ export function TraderDashboardView({
     ["Market evidence", data.market],
     ["Alerts", data.alerts],
   ]
-    .filter(([, source]) => !(source as SourceResult<unknown>).available)
+    .filter(([, source]) => {
+      const result = source as SourceResult<unknown>;
+      return !result.available && !result.pending;
+    })
     .map(([name]) => name)
     .join(", ");
 
@@ -192,34 +200,34 @@ export function TraderDashboardView({
               </p>
               <TradingMetric
                 label="Portfolio value"
-                value={portfolioEquity(data.portfolio)}
+                value={metric(portfolioEquity(data.portfolio))}
                 note="Paper account equity"
                 testId="dashboard-equity"
               />
               <TradingMetric
                 label="Realized PnL"
-                value={portfolioPnl(data.portfolio)}
+                value={metric(portfolioPnl(data.portfolio))}
                 amount={data.portfolio.data?.metrics.net_pnl}
                 note="Closed paper trades · net of costs"
                 testId="dashboard-pnl"
               />
               <TradingMetric
                 label="Open positions"
-                value={formatCount(
-                  data.portfolio.data?.account.open_trade_count,
+                value={metric(
+                  formatCount(data.portfolio.data?.account.open_trade_count),
                 )}
                 note="Internal simulator · proposal and validation history"
                 testId="dashboard-open-count"
               />
               <TradingMetric
                 label="Win rate"
-                value={winRate.value}
+                value={metric(winRate.value)}
                 note={winRate.note ?? "Portfolio unavailable"}
                 testId="dashboard-win-rate"
               />
               <TradingMetric
                 label="Expectancy"
-                value={expectancy.value}
+                value={metric(expectancy.value)}
                 amount={data.portfolio.data?.metrics.expectancy}
                 note={expectancy.note}
                 testId="dashboard-expectancy"
@@ -256,7 +264,11 @@ export function TraderDashboardView({
                 <CardTitle>Daily status</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {daily ? (
+                {data.summary.pending ? (
+                  <p className="text-sm text-text-muted" data-testid="dashboard-daily-loading">
+                    Loading…
+                  </p>
+                ) : daily ? (
                   <>
                     <Badge
                       variant={
@@ -355,14 +367,14 @@ export function TraderDashboardView({
                     </p>
                     <Badge
                       variant={
-                        market.label === "Healthy"
+                        marketLabel === "Healthy"
                           ? "success"
-                          : market.label === "Unavailable"
+                          : marketLabel === "Unavailable"
                             ? "muted"
                             : "warning"
                       }
                     >
-                      {market.label}
+                      {marketLabel}
                     </Badge>
                   </div>
                   {market.symbol ? (
@@ -393,7 +405,9 @@ export function TraderDashboardView({
                 </Link>
               </CardHeader>
               <CardContent>
-                {alerts == null ? (
+                {data.alerts.pending ? (
+                  <p className="text-sm text-text-muted">Loading…</p>
+                ) : alerts == null ? (
                   <UnavailableState
                     message="Alerts unavailable"
                     onRetry={onRetry}
@@ -445,7 +459,9 @@ export function TraderDashboardView({
           <CardTitle>Recent simulator activity</CardTitle>
         </CardHeader>
         <CardContent>
-          {data.journal.available ? (
+          {data.journal.pending ? (
+            <p className="text-sm text-text-muted">Loading…</p>
+          ) : data.journal.available ? (
             <ul className="space-y-2">
               {data.journal.data?.items
                 .slice(0, 5)
@@ -503,7 +519,9 @@ export function TraderDashboardView({
                 <h4 className="mb-3 text-sm font-medium">
                   Closed paper results
                 </h4>
-                {closedByStrategy == null ? (
+                {portfolioPending ? (
+                  <p className="text-sm text-text-muted">Loading…</p>
+                ) : closedByStrategy == null ? (
                   <UnavailableState
                     message="Closed paper strategy performance unavailable"
                     onRetry={onRetry}

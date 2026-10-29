@@ -240,3 +240,13 @@ class ProviderStatusResponse(BaseModel):
 
     generated_at: datetime
     providers: list[ProviderStatus] = Field(default_factory=list)
+    checked_at: datetime | None = Field(
+        default=None, description="When the provider statuses were last probed (cache time)."
+    )
+    age_seconds: float | None = Field(
+        default=None, description="Age of the cached provider statuses in seconds."
+    )
+    stale: bool = Field(
+        default=False,
+        description="True when the cached statuses are too old to trust (status unknown).",
+    )

@@ -201,7 +201,7 @@ async def get_canonical_evidence(
     summary="Continuous USD-M perpetual market status",
     dependencies=[_CANONICAL_READ_LIMIT],
 )
-async def get_canonical_market_status(
+def get_canonical_market_status(
     tenant: ReaderDep,
     service: PerpetualMarketMonitorServiceDep,
     symbol: str = Query(default="BTCUSDT", min_length=3, max_length=16),

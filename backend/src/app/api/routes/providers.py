@@ -17,8 +17,14 @@ router = APIRouter(prefix="/providers", tags=["providers"])
 
 
 @router.get("/status", response_model=ProviderStatusResponse, summary="Provider status")
-async def provider_status(registry: ProviderRegistryDep) -> ProviderStatusResponse:
+def provider_status(registry: ProviderRegistryDep) -> ProviderStatusResponse:
+    # Plain ``def``: FastAPI runs it in the threadpool, so a cold-cache probe
+    # can never block the event loop. Statuses come from the TTL cache.
+    statuses, checked_at, age, stale = registry.cached_snapshot()
     return ProviderStatusResponse(
         generated_at=datetime.now(UTC),
-        providers=registry.statuses(),
+        providers=statuses,
+        checked_at=checked_at,
+        age_seconds=None if age is None else round(age, 1),
+        stale=stale,
     )

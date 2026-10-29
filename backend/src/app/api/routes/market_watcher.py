@@ -58,7 +58,7 @@ async def market_watcher_status(
     summary="Watcher paper-monitoring snapshot (read-only)",
     dependencies=[_MW_READ_LIMIT],
 )
-async def market_watcher_monitoring(
+def market_watcher_monitoring(
     tenant: ReaderDep,
     service: WatcherMonitoringServiceDep,
 ) -> WatcherMonitoringSnapshot:

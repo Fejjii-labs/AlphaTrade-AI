@@ -10,6 +10,7 @@ import { StatusTile } from "@/components/ui/status-tile";
 import { useAppContext } from "@/contexts/AppContext";
 import { appConfig } from "@/lib/config";
 import { DIAGNOSTICS_GROUPS, routesOfKind } from "@/lib/navigation/route-registry";
+import { ProviderFreshness } from "@/components/ProviderFreshness";
 import { apiTile, providerTiles } from "@/lib/status-tiles";
 
 /** Settings → Diagnostics: provider status tiles and every out-of-nav tool page. */
@@ -34,7 +35,9 @@ export default function DiagnosticsPage() {
             <StatusTile key={tile.name} {...tile} />
           ))}
         </div>
-        {providers ? null : <p className="text-sm text-text-muted">Provider status unavailable.</p>}
+        {providers ? <ProviderFreshness providers={providers} /> : (
+          <p className="text-sm text-text-muted">Provider status unavailable.</p>
+        )}
       </section>
       <section aria-labelledby="diagnostics-tools" className="space-y-1">
         <h2 id="diagnostics-tools" className="text-section">Tools</h2>

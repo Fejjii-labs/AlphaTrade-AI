@@ -3,6 +3,8 @@ export type SourceResult<T> = {
   available: boolean;
   error: string | null;
   fallbackUsed: boolean;
+  /** True while the request is still in flight (progressive rendering). */
+  pending?: boolean;
 };
 
 export type NamedSourceResult<T> = SourceResult<T> & {
@@ -17,6 +19,11 @@ export function okSource<T>(data: T, options?: { fallbackUsed?: boolean }): Sour
     error: null,
     fallbackUsed: options?.fallbackUsed ?? false,
   };
+}
+
+/** Placeholder for a source whose request has not resolved yet. */
+export function pendingSource<T>(): SourceResult<T> {
+  return { data: null, available: false, error: null, fallbackUsed: false, pending: true };
 }
 
 export function failedSource<T>(error: unknown, fallbackUsed = false): SourceResult<T> {
