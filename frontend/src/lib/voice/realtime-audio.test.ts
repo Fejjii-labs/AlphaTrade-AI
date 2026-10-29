@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeAudio, encodeAudio, pcm24 } from "./realtime-audio";
+import { decodeAudio, encodeAudio, pcm24, rms } from "./realtime-audio";
 
 describe("PCM24k protocol (synthetic samples, no microphone acceptance)", () => {
   it("encodes signed little-endian PCM with clipping", () => {
@@ -19,5 +19,11 @@ describe("PCM24k protocol (synthetic samples, no microphone acceptance)", () => 
   it("refuses malformed or oversized output", () => {
     expect(() => decodeAudio(btoa("x"))).toThrow();
     expect(() => decodeAudio(btoa("x".repeat(65538)))).toThrow();
+  });
+  it("measures RMS level for the voice orb", () => {
+    expect(rms(new Float32Array())).toBe(0);
+    expect(rms(new Float32Array([0, 0, 0]))).toBe(0);
+    expect(rms(new Float32Array([0.5, -0.5, 0.5, -0.5]))).toBeCloseTo(0.5);
+    expect(rms(new Float32Array([2, -2]))).toBe(1);
   });
 });

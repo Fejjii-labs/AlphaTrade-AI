@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { RealtimeVoiceController, type RealtimeSnapshot } from "@/lib/voice/realtime-controller";
 import { formatCountdown } from "@/lib/voice/voice-reasons";
 import type { TurnBody } from "./turn-recovery";
+import { VoiceOrb, type OrbState } from "./VoiceOrb";
 import type { AgentTurnResult } from "@/lib/api/types";
 
 type Props = {
@@ -86,24 +87,31 @@ export function RealtimeVoiceControls(props: Props) {
     controller.current?.setConversation(props.conversationId);
     if (!props.authenticated) controller.current?.end();
   }, [props.authenticated, props.conversationId]);
+  const meter = useCallback(() => controller.current?.meter() ?? { speaking: false, level: 0 }, []);
+  const orbState: OrbState = state.state === "connecting" || state.state === "thinking" || state.state === "speaking"
+    ? state.state : "listening";
+  const detail = [
+    state.provider === "gpt_live" ? "GPT Live" : null,
+    state.outputMuted ? "Audio muted" : null,
+    state.endsAt != null ? `${formatCountdown(state.endsAt - now)} left` : null,
+    state.turnsLeft != null ? `${state.turnsLeft} ${state.turnsLeft === 1 ? "turn" : "turns"} left` : null,
+  ].filter(Boolean).join(" · ");
   // One mic: when live voice is known to be off, the composer keeps browser dictation only.
   if (availability.available === false && !state.active) return null;
   return (
     <>
       <Button type="button" variant="secondary" className="h-11"
-        disabled={!state.active && (props.disabled || !props.authenticated)}
-        onClick={() => state.active ? controller.current?.end() : void controller.current?.start()}>
-        {state.active ? "End voice" : "Talk to Agent"}
+        disabled={state.active || props.disabled || !props.authenticated}
+        onClick={() => void controller.current?.start()}>
+        Talk to Agent
       </Button>
-      {state.active && <Button type="button" variant="secondary" className="h-11" onClick={() => controller.current?.interrupt()}>Interrupt</Button>}
-      {state.active && state.outputMuted && <Button type="button" variant="secondary" className="h-11" onClick={() => controller.current?.resume()}>Resume audio</Button>}
-      {state.active && <span role="status" className="text-sm text-text-muted">
-        {state.provider === "gpt_live" && "GPT Live · "}
-        {state.outputMuted && "Audio muted · "}
-        {state.state === "connecting" ? "Connecting…" : state.state === "thinking" ? "Thinking…" : state.state === "speaking" ? "Speaking" : "Listening"}
-        {state.endsAt != null && ` · ${formatCountdown(state.endsAt - now)} left`}
-        {state.turnsLeft != null && ` · ${state.turnsLeft} ${state.turnsLeft === 1 ? "turn" : "turns"} left`}
-      </span>}
+      {state.active && (
+        <VoiceOrb state={orbState} meter={meter} detail={detail || undefined} onEnd={() => controller.current?.end()}>
+          {state.outputMuted ? (
+            <Button type="button" variant="secondary" className="h-12" onClick={() => controller.current?.resume()}>Resume audio</Button>
+          ) : null}
+        </VoiceOrb>
+      )}
       {state.transcript ? (
         <details className="basis-full text-sm text-text-muted">
           <summary className="flex h-10 cursor-pointer items-center">Heard request</summary>

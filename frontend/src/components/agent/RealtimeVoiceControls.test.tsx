@@ -18,6 +18,7 @@ vi.mock("@/lib/voice/realtime-controller", () => ({
   RealtimeVoiceController: class {
     start = vi.fn(); end = vi.fn(); interrupt = vi.fn(); resume = vi.fn();
     dispose = vi.fn(); setConversation = vi.fn();
+    meter = vi.fn(() => ({ speaking: false, level: 0 }));
     constructor(public options: Options) { mocks.instances.push(this); }
   },
 }));
@@ -52,18 +53,27 @@ describe("GPT Live controls (mocked controller, no microphone)", () => {
     expect(mocks.instances[0].start).not.toHaveBeenCalled();
   });
 
-  it("connects existing callbacks and exposes explicit interrupt, resume and end controls", () => {
+  it("one Talk to Agent button opens the hands-free orb with resume and end controls", () => {
     const p = props(); render(<RealtimeVoiceControls {...p} />); const voice = mocks.instances[0];
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Talk to Agent" })); expect(voice.start).toHaveBeenCalledOnce();
-    snapshot(active); expect(screen.getByRole("status")).toHaveTextContent("GPT Live · Listening");
-    fireEvent.click(screen.getByRole("button", { name: "Interrupt" })); expect(voice.interrupt).toHaveBeenCalledOnce();
+    snapshot(active);
+    const dialog = screen.getByRole("dialog", { name: "Voice conversation" });
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
+    expect(dialog).toHaveTextContent("GPT Live");
+    // Hands-free: no per-reply press and no manual interrupt; barge-in is by voice.
+    expect(screen.queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Talk to Agent" })).toBeDisabled();
     snapshot({ ...active, outputMuted: true });
-    expect(screen.getByRole("status")).toHaveTextContent("Audio muted");
+    expect(dialog).toHaveTextContent("Audio muted");
     fireEvent.click(screen.getByRole("button", { name: "Resume audio" })); expect(voice.resume).toHaveBeenCalledOnce();
     snapshot({ ...active, outputMuted: false });
     expect(screen.queryByRole("button", { name: "Resume audio" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "End voice" })); expect(voice.end).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "End" })); expect(voice.end).toHaveBeenCalledOnce();
+    fireEvent.keyDown(document, { key: "Escape" }); expect(voice.end).toHaveBeenCalledTimes(2);
     expect(p.onActive).toHaveBeenCalledWith(true);
+    snapshot({ ...active, active: false, state: "idle" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("renders captions separately from the heard Agent request", () => {
@@ -131,11 +141,12 @@ describe("voice availability, countdown and limits (UI overhaul B7b)", () => {
     vi.setSystemTime(new Date("2026-10-27T10:00:00Z"));
     render(<RealtimeVoiceControls {...props()} />);
     snapshot({ ...active, endsAt: Date.now() + 161_000, turnsLeft: 4 });
-    expect(screen.getByRole("status")).toHaveTextContent("GPT Live · Listening · 2:41 left · 4 turns left");
+    expect(screen.getByRole("status")).toHaveTextContent("Listening");
+    expect(screen.getByRole("dialog")).toHaveTextContent("GPT Live · 2:41 left · 4 turns left");
     act(() => { vi.advanceTimersByTime(2000); });
-    expect(screen.getByRole("status")).toHaveTextContent("2:39 left");
+    expect(screen.getByRole("dialog")).toHaveTextContent("2:39 left");
     snapshot({ ...active, endsAt: Date.now() + 1_000, turnsLeft: 1 });
-    expect(screen.getByRole("status")).toHaveTextContent("0:01 left · 1 turn left");
+    expect(screen.getByRole("dialog")).toHaveTextContent("0:01 left · 1 turn left");
     vi.useRealTimers();
   });
 
