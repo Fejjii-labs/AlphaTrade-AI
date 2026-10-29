@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Protocol
 
 from app.core.config import Settings
 from app.evidence_pipeline.http_schemas import (
@@ -24,12 +25,17 @@ from app.market_monitor.http_schemas import (
     MarketMonitorStatusRead,
     MarketMonitorStreamRead,
 )
-from app.market_monitor.monitor import PerpetualMarketMonitor
 from app.market_monitor.types import MarketAvailability, SymbolMonitorSnapshot
 
 
+class MarketMonitorReader(Protocol):
+    """In-process monitor (replay/LOCAL) or the worker-persisted reader."""
+
+    def snapshot(self, symbol: str = "BTCUSDT") -> SymbolMonitorSnapshot: ...
+
+
 class PerpetualMarketMonitorService:
-    def __init__(self, monitor: PerpetualMarketMonitor, *, settings: Settings) -> None:
+    def __init__(self, monitor: MarketMonitorReader, *, settings: Settings) -> None:
         self._monitor = monitor
         self._settings = settings
 

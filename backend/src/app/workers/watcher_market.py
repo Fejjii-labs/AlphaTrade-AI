@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
 
 import httpx
+import structlog
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -51,10 +52,13 @@ from app.market_contracts.provider_contracts import (
     venue_for_evidence_source,
 )
 from app.market_monitor.factory import build_perpetual_market_monitor
+from app.market_monitor.types import SymbolMonitorSnapshot
 from app.market_monitor.watcher_port import MarketMonitorWatcherPort
 from app.persistence.setup_lifetime import SqlAlchemySetupLifetimeStore
 from app.schemas.common import Timeframe
 from app.watcher.ports import WatcherStore
+
+logger = structlog.get_logger("watcher_market")
 
 
 @dataclass(frozen=True)
@@ -274,6 +278,8 @@ class SymbolMarketFactory:
         self._replay = perpetual_source_is_replay(settings)
         self._reads: dict[str, int] = {}
         self._assembler_contract_book: ContractBook | None = None
+        # Best-effort publisher so the API reads monitor state instead of ticking.
+        self.snapshot_sink: Callable[[SymbolMonitorSnapshot], None] | None = None
 
     def retain(self, symbols: Sequence[str]) -> None:
         for symbol in list(self._entries):
@@ -368,7 +374,15 @@ class SymbolMarketFactory:
 
         if not self._replay:
             _, _, monitor, _ = self.composition(symbol)
-            monitor.snapshot(symbol)
+            snapshot = monitor.snapshot(symbol)
+            sink = self.snapshot_sink
+            if sink is not None:
+                try:
+                    sink(snapshot)
+                except Exception:
+                    logger.warning(
+                        "market_monitor_snapshot_sink_failed", symbol=symbol, exc_info=True
+                    )
 
     def ensure_bar_close_ready(self, symbol: str) -> bool:
         """Block until the just-closed M15 bar may be evaluated. Never admits forming rows."""

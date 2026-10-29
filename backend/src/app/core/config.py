@@ -434,10 +434,14 @@ class Settings(BaseSettings):
     binance_evidence_cache_ttl_seconds: float = Field(default=120.0, gt=0.0, le=3600.0)
     # Raw aggTrade rows above this count are not cached. Reduced snapshots are.
     binance_evidence_cache_max_rows: int = Field(default=4096, ge=1, le=100_000)
-    # AT-069 continuous read-only monitor. Tick-on-read only; no Watcher start.
+    # AT-069 continuous read-only monitor. The paper worker ticks it; no Watcher start.
     perpetual_monitor_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
     perpetual_monitor_backoff_initial_seconds: float = Field(default=0.25, ge=0.05, le=10.0)
     perpetual_monitor_backoff_max_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
+    # API reads the worker-persisted monitor row. Older rows are reported stale.
+    market_monitor_snapshot_stale_after_seconds: float = Field(default=60.0, ge=5.0, le=3600.0)
+    # LOCAL only: let the API tick its own live monitor per request (upstream I/O).
+    market_monitor_api_in_process_live: bool = False
 
     # --- Observability ---
     langsmith_api_key: str = ""

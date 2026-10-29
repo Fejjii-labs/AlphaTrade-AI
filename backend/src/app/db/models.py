@@ -97,6 +97,7 @@ from app.db.learning_attribution import (  # noqa: F401
 from app.db.learning_attribution import (
     register_learning_attribution_immutability as _register_learning_attribution_immutability,
 )
+from app.db.market_monitor_snapshots import MarketMonitorSnapshotRow  # noqa: F401
 from app.db.paper_evaluation import PaperEvaluationObservationRow  # noqa: F401
 from app.db.paper_evaluation import (
     register_paper_evaluation_immutability as _register_paper_evaluation_immutability,

@@ -229,8 +229,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.telegram_webhook_mounted = False
     app.state.provider_registry = build_default_registry(settings)
     from app.market_monitor.factory import build_perpetual_market_monitor
+    from app.market_monitor.persisted import api_monitor_runs_in_process
 
-    app.state.market_monitor = build_perpetual_market_monitor(settings)
+    # Live deployments serve the worker-persisted snapshot: no API-owned live source.
+    app.state.market_monitor = (
+        build_perpetual_market_monitor(settings) if api_monitor_runs_in_process(settings) else None
+    )
     app.state.strategy_registry = build_strategy_registry()
     app.state.tool_registry = build_tool_registry(settings)
 

@@ -412,7 +412,20 @@ def build_default_registry(settings: Settings) -> ProviderRegistry:
     market_data = resolve_market_data_provider(settings)
     registry.register(_MarketDataProviderAdapter(market_data))
     perpetual_evidence = resolve_perpetual_evidence_source(settings, shared=True)
-    registry.register(_PerpetualEvidenceAdapter(perpetual_evidence))
+    from app.market_monitor.persisted import (
+        PersistedPerpetualEvidenceStatus,
+        api_monitor_runs_in_process,
+    )
+
+    if api_monitor_runs_in_process(settings):
+        registry.register(_PerpetualEvidenceAdapter(perpetual_evidence))
+    else:
+        # The paper worker probes the venue; the API reports its persisted view.
+        registry.register(
+            PersistedPerpetualEvidenceStatus(
+                name=perpetual_evidence.name, kind=perpetual_evidence.kind, settings=settings
+            )
+        )
 
     # Exchange: mock by default; BloFin demo (read-only) when explicitly enabled.
     resolved_exchange = resolve_exchange_provider(settings)

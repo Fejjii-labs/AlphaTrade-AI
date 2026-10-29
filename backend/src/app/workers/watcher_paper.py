@@ -1934,6 +1934,22 @@ def build_watcher_paper_runtime(
     resolved_fence = (
         persistence_fence if persistence_fence is not None else canonical.candidate_repository
     )
+    resolved_worker_id = (
+        worker_id
+        if worker_id is not None
+        else new_worker_instance_id(settings.watcher_paper_worker_id)
+    )
+    from app.workers.watcher_market import SymbolMarketFactory
+
+    if (
+        isinstance(resolved_evidence, SymbolMarketFactory)
+        and resolved_evidence.snapshot_sink is None
+    ):
+        from app.market_monitor.persisted import MarketMonitorSnapshotPublisher
+
+        resolved_evidence.snapshot_sink = MarketMonitorSnapshotPublisher(
+            session_factory, worker_id=resolved_worker_id
+        )
     return WatcherPaperRuntime(
         store=resolved_store,
         lifecycle=resolved_lifecycle,
@@ -1941,9 +1957,7 @@ def build_watcher_paper_runtime(
         enabled=resolve_runtime_enabled(
             settings, enabled=enabled, activation_cleared=activation_cleared
         ),
-        worker_id=worker_id
-        if worker_id is not None
-        else new_worker_instance_id(settings.watcher_paper_worker_id),
+        worker_id=resolved_worker_id,
         symbols=watchlist.enabled_symbols(),
         watchlist_mode=True,
         watchlist=watchlist,
