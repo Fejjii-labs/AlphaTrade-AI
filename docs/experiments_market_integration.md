@@ -246,7 +246,7 @@ Render workspace `tea-d7hn0fvavr4c73f62c70`. They are not a new live revision ch
 |PostgreSQL `alphatrade-postgres-staging` / `dpg-d8fuok57vvec739lm0u0-a`|Available PG18; read-only head a8 and table-presence metadata verified|
 |Frontend|Current target/artifact/revision/API binding **unknown**. Historical projectprj_y7vFqwbFvdpHvf2nMaDkKQauBhZQ, teamteam_LNgcEGBkqntUnTrktNjFzh7a and aliashttps://alpha-trade-ai-eight.vercel.app are evidence to verify, not current deployment proof|
 
-Never target the separate `ai-alphatrade-api-staging`. No deployment was attempted.
+No deployment was attempted.
 The available Render deploy connector accepts no commit; using it would deploy main,
 not this candidate. No Render CLI/API credential, Vercel CLI/token or authenticated
 synthetic staging token is bound to this executor. HTTPS probes to api.render.com,

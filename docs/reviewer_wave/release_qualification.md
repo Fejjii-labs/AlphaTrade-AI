@@ -125,7 +125,7 @@ Read through authorized Render connector access on **2026-10-10**:
 
 Both Render services track **main**, auto-deploy enabled, Docker context `./backend`.
 API pre-deploy is `alembic upgrade head`; worker command bypasses the API entrypoint's
-migration command. Do not deploy the separate `ai-alphatrade-api-staging` service.
+migration command.
 Do not use a branch-trigger-only deploy: it would select main, not this frozen candidate.
 Coordinate against concurrent main auto-deploys; refresh service/deploy state before
 each step and stop if another revision supersedes the intended candidate.

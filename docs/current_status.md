@@ -8,7 +8,7 @@
 
 | Area | Observation (direct checks on Oct 24 unless noted) | Remaining limit |
 | --- | --- | --- |
-| Render staging API `alphatrade-api-staging` | Live on `df09c22d`, deploy trigger `new_commit` (push auto-deploy proven after the Render GitHub app was installed on Fejjii-labs). | Legacy duplicate `ai-alphatrade-api-staging` has auto-deploy off and incomplete env; do not deploy it. |
+| Render staging API `alphatrade-api-staging` | Live on `df09c22d`, deploy trigger `new_commit` (push auto-deploy proven after the Render GitHub app was installed on Fejjii-labs). | Legacy duplicate `ai-alphatrade-api-staging` was deleted on 2026-10-29; `alphatrade-api-staging` is the only staging API. |
 | Render paper worker | Live on `df09c22d` (`new_commit`). `/health/paper-worker`: fresh, `autonomy_mode=internal_paper`, `real_trading_enabled=false`, org kill switch inactive. | No automatic paper trade observed yet after arming. Three AT014 test orgs still hold active kill switches and make the top-level `kill_switch` block read active. |
 | Readiness | `/health/ready`: `status=ready`, `degraded_providers=[]`. Staging scripts exit non-zero on degraded status ([ready_health.py](../scripts/lib/ready_health.py), #321). | Scripts are run manually; there is no scheduled alerting job. |
 | Market data | Binance public and Binance USD-M perpetual healthy. | Bybit secondary source configured but not reported on `/providers/status`; failover not observed. |
