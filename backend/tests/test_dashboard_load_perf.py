@@ -17,7 +17,7 @@ from app.providers.registry import ProviderRegistry
 from app.services.watcher_monitoring_service import WatcherMonitoringService
 
 # A refresh-under-lock regression deadlocks; fail fast instead of stalling CI.
-pytestmark = pytest.mark.timeout(30)
+pytestmark = pytest.mark.timeout(30, method="thread")
 
 
 class _CountingProvider:
@@ -275,3 +275,94 @@ def test_cold_start_is_single_flight() -> None:
     assert provider.calls == 1
     assert len(results) == 20
     assert all(r[0].health is ProviderHealth.HEALTHY for r in results)
+
+
+def _hung_registry(n: int, monkeypatch: pytest.MonkeyPatch, timeout: float = 0.3):
+    monkeypatch.setattr(ProviderRegistry, "PROBE_TIMEOUT_SECONDS", timeout)
+    reg = ProviderRegistry()
+    providers = [_CountingProvider(name=f"p{i}") for i in range(n)]
+    for p in providers:
+        p.release.clear()
+        reg.register(p)
+    return reg, providers
+
+
+def test_refresh_has_one_overall_deadline_with_many_hung(monkeypatch: pytest.MonkeyPatch) -> None:
+    reg, providers = _hung_registry(4, monkeypatch)
+    try:
+        start = time.monotonic()
+        results = reg.refresh_statuses()
+        took = time.monotonic() - start
+        assert took < reg._refresh_deadline()
+        assert took < 2 * reg.PROBE_TIMEOUT_SECONDS
+        assert all(r.health is ProviderHealth.UNAVAILABLE for r in results)
+    finally:
+        for p in providers:
+            p.release.set()
+
+
+def test_hung_probe_not_resubmitted_no_thread_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    reg, providers = _hung_registry(3, monkeypatch, timeout=0.1)
+    try:
+        for _ in range(5):
+            reg.refresh_statuses()
+        assert all(p.calls == 1 for p in providers)
+        pool = reg._probe_pool
+        assert pool is not None
+        busy = sum(1 for f in reg._inflight.values() if not f.done())
+        assert busy == 3  # one hung probe per provider, never more
+        assert len(pool._threads) <= 4
+    finally:
+        for p in providers:
+            p.release.set()
+    # Once released, providers are probed again.
+    assert _wait_until(lambda: all(f.done() for f in reg._inflight.values()))
+    reg.refresh_statuses()
+    assert all(p.calls == 2 for p in providers)
+
+
+def test_older_run_cannot_clear_newer_runs_flag() -> None:
+    reg, _provider, clock = _registry()
+    reg.cached_statuses(ttl_seconds=45)
+    with reg._cache_lock:
+        reg._refresh_gen += 1
+        old = reg._refresh_gen
+        reg._refresh_gen += 1  # a newer run took over
+        reg._refreshing = True
+        reg._refresh_started_at = clock.now
+    reg._run_refresh(old)
+    assert reg._refreshing is True
+    reg._run_refresh(reg._refresh_gen)
+    assert reg._refreshing is False
+
+
+def test_overdue_refresher_is_declared_dead_and_replaced() -> None:
+    reg, provider, clock = _registry()
+    reg.cached_statuses(ttl_seconds=45)
+    with reg._cache_lock:  # simulate a refresher that never finished
+        reg._refreshing = True
+        reg._refresh_started_at = clock.now
+        reg._refresh_gen += 1
+    clock.now += 60  # cache stale
+    with reg._cache_lock:
+        reg._refresh_started_at = clock.now - 1  # still within deadline
+    reg.cached_statuses(ttl_seconds=45)
+    time.sleep(0.2)
+    assert provider.calls == 1  # live refresher respected
+    clock.now += reg._refresh_deadline() + 1
+    reg.cached_statuses(ttl_seconds=45)
+    assert _wait_until(lambda: provider.calls == 2 and not reg._refreshing)
+
+
+def test_provider_route_reports_stale_true_for_old_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    reg, _provider, clock = _registry()
+    provider_routes.provider_status(reg)
+
+    def boom() -> list[ProviderStatus]:
+        raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(reg, "refresh_statuses", boom)
+    clock.now += 1_000_000
+    resp = provider_routes.provider_status(reg)
+    assert resp.stale is True
+    assert resp.age_seconds is not None and resp.age_seconds > 135

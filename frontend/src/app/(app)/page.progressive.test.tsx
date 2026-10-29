@@ -72,7 +72,7 @@ it("fires all requests in parallel and renders sections while a slow one is pend
     expect(screen.getByTestId("dashboard-market-evidence")).toHaveTextContent("Unavailable"),
   );
   // The failed source is listed as unavailable; the pending watcher is not.
-  expect(screen.getByText(/Unavailable:/)).toHaveTextContent(/market/i);
+  await waitFor(() => expect(screen.getByText(/Unavailable:/)).toHaveTextContent(/market/i));
   expect(screen.getByText(/Unavailable:/)).not.toHaveTextContent(/watcher/i);
   expect(screen.getByTestId("dashboard-watcher-status")).toHaveTextContent("Loading…");
   expect(screen.getByRole("button", { name: "Refreshing…" })).toBeDisabled();

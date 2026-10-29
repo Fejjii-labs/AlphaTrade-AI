@@ -10,8 +10,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -60,6 +60,15 @@ class ProviderRegistry:
         self._cached_wall: datetime | None = None
         self._cold_done = threading.Event()
         self._cold_done.set()
+        #: Incremented per started refresh; only the owning run clears the flag.
+        self._refresh_gen = 0
+        self._written_gen = 0
+        #: Long-lived bounded probe pool, plus the in-flight probe per provider so a
+        #: hung probe is never resubmitted (at most one thread per provider).
+        self._probe_pool: ThreadPoolExecutor | None = None
+        self._inflight: dict[str, Future] = {}
+        self._probe_lock = threading.Lock()
+        self._tls = threading.local()
 
     def register(self, provider: Provider) -> None:
         if provider.name in self._providers:
@@ -123,9 +132,12 @@ class ProviderRegistry:
                 self._refreshing = False
             fresh = cached is not None and cached_at is not None and now - cached_at < ttl
             start_refresh = False
+            gen = 0
             if not fresh and not self._refreshing and (cached is None or background):
                 self._refreshing = True
                 self._refresh_started_at = now
+                self._refresh_gen += 1
+                gen = self._refresh_gen
                 if cached is None:
                     self._cold_done.clear()
                     leader_cold = True
@@ -133,13 +145,16 @@ class ProviderRegistry:
                     start_refresh = True
         if cached is None:
             if leader_cold:
-                self._run_refresh()
+                self._run_refresh(gen)
             else:
                 self._cold_done.wait(self._refresh_deadline())
             return self._snapshot_now(ttl)
         if start_refresh:
             threading.Thread(
-                target=self._run_refresh, name="provider-status-refresh", daemon=True
+                target=self._run_refresh,
+                args=(gen,),
+                name="provider-status-refresh",
+                daemon=True,
             ).start()
         elif not fresh and not background:
             self.refresh_statuses()
@@ -189,36 +204,66 @@ class ProviderRegistry:
         return marked, wall, age, True
 
     def refresh_statuses(self) -> list[ProviderStatus]:
-        """Probe all providers now (each bounded by a timeout) and cache the result."""
+        """Probe all providers concurrently under ONE overall deadline and cache it.
+
+        The whole refresh is bounded by ``PROBE_TIMEOUT_SECONDS`` (not per
+        provider), so it always finishes before the dead-refresher deadline.
+        Providers that have not answered by then are reported UNAVAILABLE.
+        A provider whose previous probe is still hung is not probed again, so
+        hung probes cannot pile up threads.
+        """
         providers = list(self._providers.values())
-        pool = ThreadPoolExecutor(
-            max_workers=max(1, min(8, len(providers))), thread_name_prefix="provider-probe"
-        )
-        try:
-            futures = [(p, pool.submit(self._probe_inline, p)) for p in providers]
-            results = [self._collect(p, f) for p, f in futures]
-        finally:
-            # Never wait for a hung probe thread.
-            pool.shutdown(wait=False, cancel_futures=True)
+        pool = self._get_pool(len(providers))
+        submitted: list[tuple[Provider, Future | None]] = []
+        with self._probe_lock:
+            for p in providers:
+                prev = self._inflight.get(p.name)
+                if prev is not None and not prev.done():
+                    submitted.append((p, None))
+                    continue
+                fut = pool.submit(self._probe_inline, p)
+                self._inflight[p.name] = fut
+                submitted.append((p, fut))
+        live = [f for _, f in submitted if f is not None]
+        if live:
+            futures_wait(live, timeout=self.PROBE_TIMEOUT_SECONDS)
+        results = [self._collect(p, f) for p, f in submitted]
+        _gen: int | None = getattr(self._tls, "gen", None)
         with self._cache_lock:
-            self._cached = list(results)
-            self._cached_at = self._clock()
-            self._cached_wall = datetime.now(UTC)
+            # A late, older refresh must not overwrite a newer one's result.
+            if _gen is None or _gen >= self._written_gen:
+                if _gen is not None:
+                    self._written_gen = _gen
+                self._cached = list(results)
+                self._cached_at = self._clock()
+                self._cached_wall = datetime.now(UTC)
         return results
+
+    def _get_pool(self, n: int) -> ThreadPoolExecutor:
+        with self._probe_lock:
+            if self._probe_pool is None:
+                self._probe_pool = ThreadPoolExecutor(
+                    max_workers=max(4, min(32, n)), thread_name_prefix="provider-probe"
+                )
+            return self._probe_pool
 
     @staticmethod
     def _probe_inline(provider: Provider) -> ProviderStatus:
         return provider.status()
 
-    def _collect(self, provider: Provider, future) -> ProviderStatus:
-        try:
-            return future.result(timeout=self.PROBE_TIMEOUT_SECONDS)
-        except FuturesTimeout:
+    def _collect(self, provider: Provider, future: Future | None) -> ProviderStatus:
+        if future is None:
+            logger.warning("provider_status_probe_still_running", provider=provider.name)
+            detail = "Status probe timed out (previous probe still running)."
+        elif not future.done():
             logger.warning("provider_status_timeout", provider=provider.name)
             detail = "Status probe timed out."
-        except Exception:
-            logger.error("provider_status_failed", provider=provider.name, exc_info=True)
-            detail = "Status probe raised an exception."
+        else:
+            try:
+                return future.result(timeout=0)
+            except Exception:
+                logger.error("provider_status_failed", provider=provider.name, exc_info=True)
+                detail = "Status probe raised an exception."
         return ProviderStatus(
             name=provider.name,
             kind=provider.kind,
@@ -226,15 +271,19 @@ class ProviderRegistry:
             detail=detail,
         )
 
-    def _run_refresh(self) -> None:
+    def _run_refresh(self, gen: int | None = None) -> None:
+        self._tls.gen = gen
         try:
             self.refresh_statuses()
         except Exception:
             logger.error("provider_status_refresh_failed", exc_info=True)
         finally:
             with self._cache_lock:
-                self._refreshing = False
-                self._refresh_started_at = None
+                # Only the run that owns the current generation clears the flag.
+                if gen is None or gen == self._refresh_gen:
+                    self._refreshing = False
+                    self._refresh_started_at = None
+            self._tls.gen = None
             self._cold_done.set()
 
     # Backwards-compatible name.
