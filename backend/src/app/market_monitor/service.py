@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Protocol
 
 from app.core.config import Settings
 from app.evidence_pipeline.http_schemas import (
@@ -24,16 +25,28 @@ from app.market_monitor.http_schemas import (
     MarketMonitorStatusRead,
     MarketMonitorStreamRead,
 )
-from app.market_monitor.monitor import PerpetualMarketMonitor
 from app.market_monitor.types import MarketAvailability, SymbolMonitorSnapshot
 
 
+class MarketMonitorReader(Protocol):
+    """In-process monitor (replay/LOCAL) or the worker-persisted reader."""
+
+    def snapshot(self, symbol: str = "BTCUSDT") -> SymbolMonitorSnapshot: ...
+
+
 class PerpetualMarketMonitorService:
-    def __init__(self, monitor: PerpetualMarketMonitor, *, settings: Settings) -> None:
+    def __init__(self, monitor: MarketMonitorReader, *, settings: Settings) -> None:
         self._monitor = monitor
         self._settings = settings
 
     def read(self, *, symbol: str = "BTCUSDT") -> MarketMonitorStatusRead:
+        view = getattr(self._monitor, "view", None)
+        if callable(view):
+            # Worker-persisted reader: expose how old the row is.
+            snapshot, written_at, age_seconds = view(symbol)
+            return status_from_snapshot(
+                snapshot, settings=self._settings, written_at=written_at, age_seconds=age_seconds
+            )
         snapshot = self._monitor.snapshot(symbol)
         return status_from_snapshot(snapshot, settings=self._settings)
 
@@ -42,6 +55,8 @@ def status_from_snapshot(
     snapshot: SymbolMonitorSnapshot,
     *,
     settings: Settings,
+    written_at: datetime | None = None,
+    age_seconds: float | None = None,
 ) -> MarketMonitorStatusRead:
     price = _price_read(snapshot)
     unavailable = None
@@ -122,6 +137,8 @@ def status_from_snapshot(
         content_hash=snapshot.content_hash,
         unavailable_reason=unavailable,
         activation=MarketMonitorActivationRead.model_validate(market_activation_public(settings)),
+        written_at=written_at,
+        age_seconds=age_seconds,
     )
 
 

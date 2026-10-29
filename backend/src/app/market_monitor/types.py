@@ -51,6 +51,8 @@ class MonitorReason(StrEnum):
     OUT_OF_ORDER = "out_of_order"
     DUPLICATE_CONFLICT = "duplicate_conflict"
     BACKOFF = "backoff"
+    MONITOR_STATE_MISSING = "monitor_state_missing"
+    MONITOR_STATE_STALE = "monitor_state_stale"
 
 
 class StreamHealth(CanonicalModel):

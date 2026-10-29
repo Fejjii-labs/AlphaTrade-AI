@@ -598,8 +598,8 @@ class WatcherMonitoringService:
         if monitor is None:
             return None
         try:
-            # Read-only monitoring: never force a fresh tick (upstream I/O) per
-            # request; the monitor re-ticks only when its poll window is stale.
+            # Read-only monitoring: deployed APIs pass the worker-persisted reader
+            # (no tick, no upstream I/O); replay/LOCAL keep a process monitor.
             snapshot = getattr(monitor, "snapshot", None)
             if callable(snapshot):
                 loaded_snapshot: object = snapshot(FIRST_SLICE_SYMBOL)

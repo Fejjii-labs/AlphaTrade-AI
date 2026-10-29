@@ -13,7 +13,8 @@ from app.db.session import get_session
 from app.evidence_pipeline.service import CanonicalEvidenceService
 from app.market_monitor.factory import build_perpetual_market_monitor
 from app.market_monitor.monitor import PerpetualMarketMonitor
-from app.market_monitor.service import PerpetualMarketMonitorService
+from app.market_monitor.persisted import PersistedMarketMonitorReader, api_monitor_runs_in_process
+from app.market_monitor.service import MarketMonitorReader, PerpetualMarketMonitorService
 from app.providers.exchange.factory import resolve_exchange_execution_provider
 from app.providers.factory import resolve_market_data_provider
 from app.providers.registry import ProviderRegistry, get_provider_registry
@@ -198,8 +199,16 @@ CanonicalEvidenceServiceDep = Annotated[
 ]
 
 
-def get_perpetual_market_monitor(request: Request, settings: SettingsDep) -> PerpetualMarketMonitor:
-    """Process-local USD-M monitor. Does not start Watcher."""
+def get_perpetual_market_monitor(
+    request: Request, settings: SettingsDep, session: SessionDep
+) -> MarketMonitorReader:
+    """Request-time monitor view. Does not start Watcher.
+
+    Default: the paper worker's persisted snapshot, with zero upstream I/O.
+    Replay (fixtures) and the LOCAL live opt-in keep a process-local monitor.
+    """
+    if not api_monitor_runs_in_process(settings):
+        return PersistedMarketMonitorReader(session, settings=settings)
     monitor = getattr(request.app.state, "market_monitor", None)
     if not isinstance(monitor, PerpetualMarketMonitor):
         monitor = build_perpetual_market_monitor(settings)
@@ -208,13 +217,13 @@ def get_perpetual_market_monitor(request: Request, settings: SettingsDep) -> Per
 
 
 def get_perpetual_market_monitor_service(
-    monitor: Annotated[PerpetualMarketMonitor, Depends(get_perpetual_market_monitor)],
+    monitor: Annotated[MarketMonitorReader, Depends(get_perpetual_market_monitor)],
     settings: SettingsDep,
 ) -> PerpetualMarketMonitorService:
     return PerpetualMarketMonitorService(monitor, settings=settings)
 
 
-PerpetualMarketMonitorDep = Annotated[PerpetualMarketMonitor, Depends(get_perpetual_market_monitor)]
+PerpetualMarketMonitorDep = Annotated[MarketMonitorReader, Depends(get_perpetual_market_monitor)]
 PerpetualMarketMonitorServiceDep = Annotated[
     PerpetualMarketMonitorService, Depends(get_perpetual_market_monitor_service)
 ]
