@@ -307,11 +307,11 @@ def test_hung_probe_not_resubmitted_no_thread_leak(monkeypatch: pytest.MonkeyPat
         for _ in range(5):
             reg.refresh_statuses()
         assert all(p.calls == 1 for p in providers)
-        pool = reg._probe_pool
-        assert pool is not None
         busy = sum(1 for f in reg._inflight.values() if not f.done())
         assert busy == 3  # one hung probe per provider, never more
-        assert len(pool._threads) <= 4
+        probes = [t for t in threading.enumerate() if t.name.startswith("provider-probe-")]
+        assert len(probes) <= 3
+        assert all(t.daemon for t in probes)
     finally:
         for p in providers:
             p.release.set()
@@ -366,3 +366,55 @@ def test_provider_route_reports_stale_true_for_old_cache(monkeypatch: pytest.Mon
     resp = provider_routes.provider_status(reg)
     assert resp.stale is True
     assert resp.age_seconds is not None and resp.age_seconds > 135
+
+
+def test_older_refresh_cannot_overwrite_newer_cache() -> None:
+    reg, provider, _clock = _registry()
+    with reg._cache_lock:
+        reg._refresh_gen = 2
+    provider.calls = 10
+    reg._run_refresh(2)  # newer run writes first
+    assert reg._cached is not None and reg._cached[0].detail == "11"
+    provider.calls = 0
+    reg._run_refresh(1)  # late, older run finishes afterwards
+    assert reg._cached[0].detail == "11"
+    assert reg._written_gen == 2
+
+
+_HUNG_EXIT_SCRIPT = """
+import threading
+from app.providers.registry import ProviderRegistry
+from app.providers.base import ProviderKind
+
+class P:
+    kind = ProviderKind.LLM
+    name = "hung"
+    def status(self):
+        threading.Event().wait()
+
+r = ProviderRegistry()
+r.PROBE_TIMEOUT_SECONDS = 0.3
+r.register(P())
+print(r.refresh_statuses()[0].health.value, flush=True)
+"""
+
+
+def test_process_exits_cleanly_with_hung_provider() -> None:
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = {**os.environ, "PYTHONPATH": src + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    t0 = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, "-c", _HUNG_EXIT_SCRIPT],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "unavailable" in proc.stdout.lower()
+    assert time.monotonic() - t0 < 10

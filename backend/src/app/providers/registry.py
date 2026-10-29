@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from concurrent.futures import wait as futures_wait
 from datetime import UTC, datetime
 from typing import Protocol
@@ -63,9 +63,9 @@ class ProviderRegistry:
         #: Incremented per started refresh; only the owning run clears the flag.
         self._refresh_gen = 0
         self._written_gen = 0
-        #: Long-lived bounded probe pool, plus the in-flight probe per provider so a
-        #: hung probe is never resubmitted (at most one thread per provider).
-        self._probe_pool: ThreadPoolExecutor | None = None
+        #: In-flight probe per provider: each probe runs on its own *daemon* thread
+        #: and a hung probe is never resubmitted, so there is at most one probe
+        #: thread per provider and a hung probe can never block interpreter exit.
         self._inflight: dict[str, Future] = {}
         self._probe_lock = threading.Lock()
         self._tls = threading.local()
@@ -213,7 +213,6 @@ class ProviderRegistry:
         hung probes cannot pile up threads.
         """
         providers = list(self._providers.values())
-        pool = self._get_pool(len(providers))
         submitted: list[tuple[Provider, Future | None]] = []
         with self._probe_lock:
             for p in providers:
@@ -221,7 +220,7 @@ class ProviderRegistry:
                 if prev is not None and not prev.done():
                     submitted.append((p, None))
                     continue
-                fut = pool.submit(self._probe_inline, p)
+                fut = self._spawn_probe(p)
                 self._inflight[p.name] = fut
                 submitted.append((p, fut))
         live = [f for _, f in submitted if f is not None]
@@ -239,13 +238,23 @@ class ProviderRegistry:
                 self._cached_wall = datetime.now(UTC)
         return results
 
-    def _get_pool(self, n: int) -> ThreadPoolExecutor:
-        with self._probe_lock:
-            if self._probe_pool is None:
-                self._probe_pool = ThreadPoolExecutor(
-                    max_workers=max(4, min(32, n)), thread_name_prefix="provider-probe"
-                )
-            return self._probe_pool
+    @classmethod
+    def _spawn_probe(cls, provider: Provider) -> Future:
+        """Run one probe on a daemon thread (no executor: its atexit join would
+        block shutdown on a hung probe)."""
+        fut: Future = Future()
+        fut.set_running_or_notify_cancel()
+
+        def _target() -> None:
+            try:
+                fut.set_result(cls._probe_inline(provider))
+            except BaseException as exc:
+                fut.set_exception(exc)
+
+        threading.Thread(
+            target=_target, name=f"provider-probe-{provider.name}", daemon=True
+        ).start()
+        return fut
 
     @staticmethod
     def _probe_inline(provider: Provider) -> ProviderStatus:
