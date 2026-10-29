@@ -485,9 +485,23 @@ def test_monitor_upkeep_respects_existing_safety_and_strategy_gates(
 
 
 def test_monitor_publish_failure_is_logged_not_raised(
-    session_factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+    session_factory: sessionmaker[Session],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dataclasses import replace
+
+    import structlog
+
+    import app.workers.watcher_paper as watcher_paper_module
+
+    # configure_logging caches the module logger on first use, so in the full
+    # suite capture_logs would only see this event on stdout. Re-bind a fresh
+    # lazy logger so capture_logs' processors apply (same pattern as
+    # test_paper_exit_monitor.py).
+    monkeypatch.setattr(
+        watcher_paper_module, "logger", structlog.get_logger("workers.watcher_paper")
+    )
 
     from app.strategy_brain.sfp.contracts import SFP_KIND
 
