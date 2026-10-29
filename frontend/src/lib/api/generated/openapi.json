@@ -40457,6 +40457,31 @@
         "additionalProperties": false,
         "description": "Aggregated provider statuses for operators and the frontend.",
         "properties": {
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Age of the cached provider statuses in seconds.",
+            "title": "Age Seconds"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the provider statuses were last probed (cache time).",
+            "title": "Checked At"
+          },
           "generated_at": {
             "format": "date-time",
             "title": "Generated At",
@@ -40468,6 +40493,12 @@
             },
             "title": "Providers",
             "type": "array"
+          },
+          "stale": {
+            "default": false,
+            "description": "True when the cached statuses are too old to trust (status unknown).",
+            "title": "Stale",
+            "type": "boolean"
           }
         },
         "required": [

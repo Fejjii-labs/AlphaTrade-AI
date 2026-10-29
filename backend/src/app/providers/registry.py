@@ -10,6 +10,9 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from datetime import UTC, datetime
 from typing import Protocol
 
 import structlog
@@ -41,6 +44,10 @@ class ProviderRegistry:
 
     #: Default freshness window for :meth:`cached_statuses` (seconds).
     STATUS_CACHE_TTL_SECONDS: float = 45.0
+    #: Entries older than this multiple of the TTL are reported as stale/unknown.
+    STALE_FACTOR: float = 3.0
+    #: Upper bound for a single provider probe during a cache refresh.
+    PROBE_TIMEOUT_SECONDS: float = 10.0
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._providers: dict[str, Provider] = {}
@@ -49,6 +56,10 @@ class ProviderRegistry:
         self._cached: list[ProviderStatus] | None = None
         self._cached_at: float | None = None
         self._refreshing = False
+        self._refresh_started_at: float | None = None
+        self._cached_wall: datetime | None = None
+        self._cold_done = threading.Event()
+        self._cold_done.set()
 
     def register(self, provider: Provider) -> None:
         if provider.name in self._providers:
@@ -86,46 +97,148 @@ class ProviderRegistry:
 
         Request paths (dashboard, provider card) must not probe every provider
         live: probes are sequential network calls (OpenAI, Binance, ...) that
-        took 2-13 s and blocked the event loop. Only the very first call in a
-        process probes synchronously; afterwards a stale cache is returned
-        immediately and a single background thread refreshes it.
+        took 2-13 s and blocked the event loop. Only one caller per process
+        probes on a cold cache (single-flight); afterwards a stale cache is
+        returned immediately and a single background thread refreshes it.
+        Entries older than ``STALE_FACTOR`` x TTL are never presented as
+        healthy: they are downgraded and flagged as stale/unknown.
         """
+        return self.cached_snapshot(ttl_seconds=ttl_seconds, background=background)[0]
+
+    def cached_snapshot(
+        self, *, ttl_seconds: float | None = None, background: bool = True
+    ) -> tuple[list[ProviderStatus], datetime | None, float | None, bool]:
+        """Return ``(statuses, checked_at, age_seconds, stale)`` from the cache."""
         ttl = self.STATUS_CACHE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+        leader_cold = False
         with self._cache_lock:
-            cached, cached_at = self._cached, self._cached_at
             now = self._clock()
+            cached, cached_at = self._cached, self._cached_at
+            # A refresher that outlived every probe timeout is presumed dead.
+            if (
+                self._refreshing
+                and self._refresh_started_at is not None
+                and now - self._refresh_started_at > self._refresh_deadline()
+            ):
+                self._refreshing = False
             fresh = cached is not None and cached_at is not None and now - cached_at < ttl
-            if fresh:
-                return list(cached or [])
-            start_refresh = cached is not None and background and not self._refreshing
-            if start_refresh:
+            start_refresh = False
+            if not fresh and not self._refreshing and (cached is None or background):
                 self._refreshing = True
+                self._refresh_started_at = now
+                if cached is None:
+                    self._cold_done.clear()
+                    leader_cold = True
+                else:
+                    start_refresh = True
         if cached is None:
-            return self.refresh_statuses()
+            if leader_cold:
+                self._run_refresh()
+            else:
+                self._cold_done.wait(self._refresh_deadline())
+            return self._snapshot_now(ttl)
         if start_refresh:
             threading.Thread(
-                target=self._background_refresh, name="provider-status-refresh", daemon=True
+                target=self._run_refresh, name="provider-status-refresh", daemon=True
             ).start()
-        elif not background:
-            return self.refresh_statuses()
-        return list(cached)
+        elif not fresh and not background:
+            self.refresh_statuses()
+        return self._snapshot_now(ttl)
+
+    def _refresh_deadline(self) -> float:
+        return self.PROBE_TIMEOUT_SECONDS + 5.0
+
+    def _snapshot_now(
+        self, ttl: float
+    ) -> tuple[list[ProviderStatus], datetime | None, float | None, bool]:
+        with self._cache_lock:
+            cached, cached_at, wall = self._cached, self._cached_at, self._cached_wall
+            now = self._clock()
+        if cached is None or cached_at is None:
+            # Cold probe failed/timed out entirely: report unknown, not healthy.
+            return (
+                [
+                    ProviderStatus(
+                        name=p.name,
+                        kind=p.kind,
+                        health=ProviderHealth.UNAVAILABLE,
+                        detail="Status unknown: provider check has not completed.",
+                    )
+                    for p in self._providers.values()
+                ],
+                None,
+                None,
+                True,
+            )
+        age = max(0.0, now - cached_at)
+        stale = age > self.STALE_FACTOR * ttl
+        if not stale:
+            return list(cached), wall, age, False
+        detail = f"Status unknown: last checked {int(age)}s ago."
+        marked = [
+            s.model_copy(
+                update={
+                    "health": (
+                        ProviderHealth.DEGRADED if s.health is ProviderHealth.HEALTHY else s.health
+                    ),
+                    "detail": detail,
+                }
+            )
+            for s in cached
+        ]
+        return marked, wall, age, True
 
     def refresh_statuses(self) -> list[ProviderStatus]:
-        """Probe all providers now and store the result in the cache."""
-        results = self.statuses()
+        """Probe all providers now (each bounded by a timeout) and cache the result."""
+        providers = list(self._providers.values())
+        pool = ThreadPoolExecutor(
+            max_workers=max(1, min(8, len(providers))), thread_name_prefix="provider-probe"
+        )
+        try:
+            futures = [(p, pool.submit(self._probe_inline, p)) for p in providers]
+            results = [self._collect(p, f) for p, f in futures]
+        finally:
+            # Never wait for a hung probe thread.
+            pool.shutdown(wait=False, cancel_futures=True)
         with self._cache_lock:
             self._cached = list(results)
             self._cached_at = self._clock()
+            self._cached_wall = datetime.now(UTC)
         return results
 
-    def _background_refresh(self) -> None:
+    @staticmethod
+    def _probe_inline(provider: Provider) -> ProviderStatus:
+        return provider.status()
+
+    def _collect(self, provider: Provider, future) -> ProviderStatus:
+        try:
+            return future.result(timeout=self.PROBE_TIMEOUT_SECONDS)
+        except FuturesTimeout:
+            logger.warning("provider_status_timeout", provider=provider.name)
+            detail = "Status probe timed out."
+        except Exception:
+            logger.error("provider_status_failed", provider=provider.name, exc_info=True)
+            detail = "Status probe raised an exception."
+        return ProviderStatus(
+            name=provider.name,
+            kind=provider.kind,
+            health=ProviderHealth.UNAVAILABLE,
+            detail=detail,
+        )
+
+    def _run_refresh(self) -> None:
         try:
             self.refresh_statuses()
-        except Exception:  # pragma: no cover - statuses() is already defensive
+        except Exception:
             logger.error("provider_status_refresh_failed", exc_info=True)
         finally:
             with self._cache_lock:
                 self._refreshing = False
+                self._refresh_started_at = None
+            self._cold_done.set()
+
+    # Backwards-compatible name.
+    _background_refresh = _run_refresh
 
     def get_llm(self) -> LLMProvider:
         for provider in self._providers.values():

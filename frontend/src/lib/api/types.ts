@@ -179,6 +179,12 @@ export interface ProviderStatus {
 export interface ProviderStatusResponse {
   generated_at: string;
   providers: ProviderStatus[];
+  /** When the statuses were last probed (server cache time). */
+  checked_at?: string | null;
+  /** Age of the cached statuses in seconds. */
+  age_seconds?: number | null;
+  /** True when the cache is too old to trust: treat statuses as unknown. */
+  stale?: boolean;
 }
 
 export interface TakeProfitLevel {
