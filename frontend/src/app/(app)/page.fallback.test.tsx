@@ -58,6 +58,10 @@ const asyncState: {
   reload: vi.fn(),
 };
 
+vi.mock("@/hooks/useDashboardSources", () => ({
+  useDashboardSources: () => asyncState,
+}));
+// Cards (e.g. Daily Review) load their own data through useAsyncData.
 vi.mock("@/hooks/useAsyncData", () => ({
   useAsyncData: () => asyncState,
 }));

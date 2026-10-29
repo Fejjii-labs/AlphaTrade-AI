@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import DashboardPage from "./page";
-import { okSource } from "@/components/workflows/sourceResult";
+import { okSource, pendingSource } from "@/components/workflows/sourceResult";
 import { formatCurrency, formatMonetary, UNAVAILABLE } from "@/lib/format";
 import { makeWatcherMonitoringSnapshot } from "@/lib/watcher-monitoring-fixtures";
 import type { TraderDashboardData } from "@/components/dashboard/TraderDashboardView";
@@ -145,6 +145,10 @@ const asyncState: {
   reload: vi.fn(),
 };
 
+vi.mock("@/hooks/useDashboardSources", () => ({
+  useDashboardSources: () => asyncState,
+}));
+// Cards (e.g. Daily Review) load their own data through useAsyncData.
 vi.mock("@/hooks/useAsyncData", () => ({
   useAsyncData: () => asyncState,
 }));
@@ -304,14 +308,24 @@ describe("Trader dashboard", () => {
     expect(screen.queryByText("BTCUSDT · long")).not.toBeInTheDocument();
   });
 
-  it("shows loading and error states", () => {
+  it("renders the page shell and cards while sections are still loading", () => {
+    const pending = pendingSource<never>();
     asyncState.loading = true;
-    asyncState.data = null;
-    const { rerender } = render(<DashboardPage />);
-    expect(screen.getByText(/loading dashboard/i)).toBeInTheDocument();
-    asyncState.loading = false;
-    asyncState.error = "Failed to load";
-    rerender(<DashboardPage />);
-    expect(screen.getByText("Failed to load")).toBeInTheDocument();
+    asyncState.data = {
+      portfolio: pending, journal: pending, strategyStats: pending, summary: pending,
+      watcher: pending, market: pending, alerts: pending,
+    } as TraderDashboardData;
+    render(<DashboardPage />);
+    expect(screen.queryByText(/loading dashboard/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-demo-account")).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable:/i)).not.toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Dashboard account" }),
+      { target: { value: "simulator" } },
+    );
+    expect(screen.getByTestId("dashboard-equity")).toHaveTextContent("Loading…");
+    expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent(UNAVAILABLE);
   });
+
 });

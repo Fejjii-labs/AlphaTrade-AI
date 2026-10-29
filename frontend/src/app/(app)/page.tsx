@@ -1,63 +1,45 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   TraderDashboardView,
   type TraderDashboardData,
 } from "@/components/dashboard/TraderDashboardView";
-import { ErrorState, LoadingState } from "@/components/states";
-import { describeSafetyPosture, loadSource } from "@/components/workflows";
+import { describeSafetyPosture } from "@/components/workflows";
 import { useSafetyPosture } from "@/contexts/AppContext";
-import { useAsyncData } from "@/hooks/useAsyncData";
+import { useDashboardSources } from "@/hooks/useDashboardSources";
 import { api } from "@/lib/api";
+
+type DashboardPayloads = {
+  [K in keyof TraderDashboardData]: NonNullable<TraderDashboardData[K]["data"]>;
+};
+
+type DashboardLoaders = {
+  [K in keyof DashboardPayloads]: () => Promise<DashboardPayloads[K]>;
+};
 
 export default function DashboardPage() {
   const [demoRefreshKey, setDemoRefreshKey] = useState(0);
   const { executionMode, realTradingEnabled } = useSafetyPosture();
 
-  const loader = useCallback(async (): Promise<TraderDashboardData> => {
-    const [
-      portfolio,
-      journal,
-      strategyStats,
-      summary,
-      watcher,
-      market,
-      alerts,
-    ] = await Promise.all([
-      loadSource(api.performance.portfolio()),
-      loadSource(api.journal.listTrades({ limit: 8 })),
-      loadSource(api.journal.statistics({ group_by: "strategy", limit: 8 })),
-      loadSource(api.dashboard.summary()),
-      loadSource(api.marketWatcher.monitoring()),
-      loadSource(api.canonical.getMarketStatus()),
-      loadSource(api.alerts.list({ limit: 8 })),
-    ]);
-    return {
-      portfolio,
-      journal,
-      strategyStats,
-      summary,
-      watcher,
-      market,
-      alerts,
-    };
-  }, []);
+  // All requests start in parallel and each section renders as soon as its own
+  // data arrives; the account cards mount immediately and fetch alongside.
+  const loaders = useMemo<DashboardLoaders>(
+    () => ({
+      portfolio: () => api.performance.portfolio(),
+      journal: () => api.journal.listTrades({ limit: 8 }),
+      strategyStats: () =>
+        api.journal.statistics({ group_by: "strategy", limit: 8 }),
+      summary: () => api.dashboard.summary(),
+      watcher: () => api.marketWatcher.monitoring(),
+      market: () => api.canonical.getMarketStatus(),
+      alerts: () => api.alerts.list({ limit: 8 }),
+    }),
+    [],
+  );
 
-  const { data, loading, error, reload } = useAsyncData(loader, []);
-
-  if (loading && !data) {
-    return <LoadingState label="Loading dashboard…" />;
-  }
-  if (error || !data) {
-    return (
-      <ErrorState
-        message={error ?? "Dashboard unavailable"}
-        onRetry={() => void reload()}
-      />
-    );
-  }
+  const { data, loading, reload } = useDashboardSources<DashboardPayloads>(loaders);
 
   const posture = describeSafetyPosture(
     data.summary.data?.safety.execution_mode ?? executionMode,
@@ -66,7 +48,7 @@ export default function DashboardPage() {
 
   return (
     <TraderDashboardView
-      data={data}
+      data={data as TraderDashboardData}
       posture={posture}
       onRetry={() => {
         setDemoRefreshKey((key) => key + 1);

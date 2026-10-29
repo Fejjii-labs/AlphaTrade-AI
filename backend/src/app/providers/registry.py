@@ -7,6 +7,9 @@ reporting via :meth:`ProviderStatus.using_fallback`.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from typing import Protocol
 
 import structlog
@@ -36,8 +39,16 @@ logger = structlog.get_logger(__name__)
 class ProviderRegistry:
     """Holds providers keyed by name and aggregates their statuses."""
 
-    def __init__(self) -> None:
+    #: Default freshness window for :meth:`cached_statuses` (seconds).
+    STATUS_CACHE_TTL_SECONDS: float = 45.0
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._providers: dict[str, Provider] = {}
+        self._clock = clock
+        self._cache_lock = threading.Lock()
+        self._cached: list[ProviderStatus] | None = None
+        self._cached_at: float | None = None
+        self._refreshing = False
 
     def register(self, provider: Provider) -> None:
         if provider.name in self._providers:
@@ -67,6 +78,54 @@ class ProviderRegistry:
                     )
                 )
         return results
+
+    def cached_statuses(
+        self, *, ttl_seconds: float | None = None, background: bool = True
+    ) -> list[ProviderStatus]:
+        """Serve provider statuses from a TTL cache (stale-while-revalidate).
+
+        Request paths (dashboard, provider card) must not probe every provider
+        live: probes are sequential network calls (OpenAI, Binance, ...) that
+        took 2-13 s and blocked the event loop. Only the very first call in a
+        process probes synchronously; afterwards a stale cache is returned
+        immediately and a single background thread refreshes it.
+        """
+        ttl = self.STATUS_CACHE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+        with self._cache_lock:
+            cached, cached_at = self._cached, self._cached_at
+            now = self._clock()
+            fresh = cached is not None and cached_at is not None and now - cached_at < ttl
+            if fresh:
+                return list(cached or [])
+            start_refresh = cached is not None and background and not self._refreshing
+            if start_refresh:
+                self._refreshing = True
+        if cached is None:
+            return self.refresh_statuses()
+        if start_refresh:
+            threading.Thread(
+                target=self._background_refresh, name="provider-status-refresh", daemon=True
+            ).start()
+        elif not background:
+            return self.refresh_statuses()
+        return list(cached)
+
+    def refresh_statuses(self) -> list[ProviderStatus]:
+        """Probe all providers now and store the result in the cache."""
+        results = self.statuses()
+        with self._cache_lock:
+            self._cached = list(results)
+            self._cached_at = self._clock()
+        return results
+
+    def _background_refresh(self) -> None:
+        try:
+            self.refresh_statuses()
+        except Exception:  # pragma: no cover - statuses() is already defensive
+            logger.error("provider_status_refresh_failed", exc_info=True)
+        finally:
+            with self._cache_lock:
+                self._refreshing = False
 
     def get_llm(self) -> LLMProvider:
         for provider in self._providers.values():

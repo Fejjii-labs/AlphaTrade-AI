@@ -456,7 +456,8 @@ class WatcherMonitoringService:
         )
         items: list[WatcherProviderHealthItem] = []
         try:
-            statuses = registry.statuses()
+            cached = getattr(registry, "cached_statuses", None)
+            statuses = cached() if callable(cached) else registry.statuses()
         except Exception:
             logger.warning("watcher_monitoring_provider_status_failed", exc_info=True)
             return []
@@ -597,14 +598,16 @@ class WatcherMonitoringService:
         if monitor is None:
             return None
         try:
+            # Read-only monitoring: never force a fresh tick (upstream I/O) per
+            # request; the monitor re-ticks only when its poll window is stale.
+            snapshot = getattr(monitor, "snapshot", None)
+            if callable(snapshot):
+                loaded_snapshot: object = snapshot(FIRST_SLICE_SYMBOL)
+                return loaded_snapshot
             latest = getattr(monitor, "latest", None)
             if callable(latest):
                 loaded: object = latest(FIRST_SLICE_SYMBOL)
                 return loaded
-            snapshot = getattr(monitor, "snapshot", None)
-            if callable(snapshot):
-                loaded_snapshot: object = snapshot(FIRST_SLICE_SYMBOL, force=True)
-                return loaded_snapshot
         except Exception:
             logger.warning("watcher_monitoring_monitor_snapshot_failed", exc_info=True)
             return None
