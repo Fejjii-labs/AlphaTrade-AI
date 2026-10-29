@@ -121,10 +121,6 @@ async def realtime_voice(websocket: WebSocket) -> None:
                         failure = session.tool_task.exception()
                         if failure is not None:
                             raise failure
-                    if session.response_request and session.response_request.done():
-                        failure = session.response_request.exception()
-                        if failure is not None:
-                            raise failure
 
             async with asyncio.timeout(limits.maximum_seconds):
                 tasks = [

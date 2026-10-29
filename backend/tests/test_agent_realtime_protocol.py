@@ -86,7 +86,9 @@ def test_pinned_official_sdk_validates_session_and_response_transport(voice_limi
     )
     session = session_update(voice_limits)["session"]
     assert "transcription" not in session["audio"]["input"]
-    assert session["audio"]["input"]["turn_detection"]["create_response"] is False
+    assert session["audio"]["input"]["turn_detection"]["create_response"] is True
+    assert session["audio"]["input"]["turn_detection"]["interrupt_response"] is True
+    assert session["tool_choice"] == "auto"
     assert session["truncation"] == "disabled"
     assert [tool["name"] for tool in session["tools"]] == ["alpha_trade_turn"]
 
@@ -214,6 +216,10 @@ class FakeLedger:
     def response_started(self, key):
         self.events.append(("started", key))
 
+    def provider_response(self, response_id):
+        self.events.append(("provider_response", response_id))
+        return 0
+
     def response_done(self, result):
         self.events.append(("done", result["id"]))
 
@@ -265,18 +271,25 @@ async def test_effective_provider_session_confirms_caps_before_audio_readiness(v
 
 
 @pytest.mark.asyncio
-async def test_effective_provider_auto_response_or_asr_refused_before_audio(voice_limits):
-    for enabled in ("create_response", "interrupt_response", "transcription"):
-        session, ledger, sent, _ = session_for(voice_limits)
-        session.ready = False
-        effective = session_update(voice_limits)["session"]
-        if enabled == "transcription":
-            effective["audio"]["input"][enabled] = {"model": "unapproved-transcription"}
-        else:
-            effective["audio"]["input"]["turn_detection"][enabled] = True
-        with pytest.raises(VoiceUnavailableError, match="audio_limits_not_confirmed"):
-            await session.provider({"type": "session.updated", "session": effective})
-        assert not session.ready and not ledger.events and not sent
+@pytest.mark.parametrize(
+    "change",
+    ["create_response", "interrupt_response", "transcription", "forced_tool", "extra_tool"],
+)
+async def test_effective_provider_session_drift_refused_before_audio(voice_limits, change):
+    session, ledger, sent, _ = session_for(voice_limits)
+    session.ready = False
+    effective = session_update(voice_limits)["session"]
+    if change == "transcription":
+        effective["audio"]["input"][change] = {"model": "unapproved-transcription"}
+    elif change == "forced_tool":
+        effective["tool_choice"] = {"type": "function", "name": "alpha_trade_turn"}
+    elif change == "extra_tool":
+        effective["tools"] = [*effective["tools"], {"type": "function", "name": "place_order"}]
+    else:
+        effective["audio"]["input"]["turn_detection"][change] = False
+    with pytest.raises(VoiceUnavailableError, match="audio_limits_not_confirmed"):
+        await session.provider({"type": "session.updated", "session": effective})
+    assert not session.ready and not ledger.events and not sent
 
 
 @pytest.mark.asyncio
@@ -309,13 +322,14 @@ async def test_audio_admission_precedes_forwarding_and_arbitrary_provider_contro
 
 
 @pytest.mark.asyncio
-async def test_ungrounded_audio_never_reaches_browser(voice_limits):
-    session, _, sent, _ = session_for(voice_limits)
-    with pytest.raises(VoiceUnavailableError, match="ungrounded"):
-        await session.provider(
-            {"type": "response.output_audio.delta", "delta": "eHg=", "item_id": "unsafe"}
-        )
-    assert not sent
+async def test_direct_answer_from_server_vad_response_reaches_browser(voice_limits):
+    session, ledger, sent, _ = session_for(voice_limits)
+    await session.provider({"type": "response.created", "response": {"id": "direct"}})
+    await session.provider(
+        {"type": "response.output_audio.delta", "delta": "eHg=", "item_id": "direct-audio"}
+    )
+    assert ("provider_response", "direct") in ledger.events
+    assert sent == [{"type": "audio.delta", "audio": "eHg=", "item_id": "direct-audio"}]
 
 
 @pytest.mark.asyncio
@@ -417,16 +431,26 @@ async def test_interrupt_truncates_actual_item_without_blocking_tool_thread(voic
 
 
 @pytest.mark.asyncio
-async def test_reader_remains_responsive_while_cancel_ack_is_pending(voice_limits):
-    session, _, _, upstream = session_for(voice_limits)
-    await session._respond()
+async def test_server_vad_barge_in_lets_provider_cancel_and_create(voice_limits):
+    session, ledger, sent, upstream = session_for(voice_limits)
+    await session._respond(grounded=True)
     await session.provider({"type": "response.created", "response": {"id": "old"}})
     await session.provider({"type": "input_audio_buffer.speech_started"})
-    await asyncio.wait_for(session.provider({"type": "input_audio_buffer.speech_stopped"}), 0.2)
-    assert not session.response_request.done()
+    await session.provider({"type": "input_audio_buffer.speech_stopped"})
+    # interrupt_response/create_response: the backend neither cancels nor creates.
+    assert [event["type"] for event in upstream] == ["response.create"]
     await session.provider(
         {"type": "response.done", "response": {"id": "old", "status": "cancelled"}}
     )
-    await session.response_request
-    assert upstream[-1]["type"] == "response.create"
+    await session.provider({"type": "response.created", "response": {"id": "new"}})
+    assert [event["type"] for event in sent] == [
+        "playback.clear",
+        "speech.started",
+        "speech.stopped",
+        "response.interrupted",
+        "response.done",
+    ]
+    assert ("started", "old") in ledger.events
+    assert ("provider_response", "new") in ledger.events
+    assert session.responses_used == 2
     await session.stop()

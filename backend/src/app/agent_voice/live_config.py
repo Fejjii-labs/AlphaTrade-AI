@@ -11,9 +11,12 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from app.agent_voice.config import (
+    LEGACY_DEFAULT_TURNS,
+    MAXIMUM_VOICE_TURNS,
     EmbeddingPrice,
     RoutePrice,
     VoiceUnavailableError,
+    apply_turn_setting,
     voice_route_refusal,
 )
 from app.core.config import Settings
@@ -57,7 +60,7 @@ class LiveLimits(StrictModel):
     embedding: EmbeddingPrice | None = None
     maximum_seconds: int = Field(default=180, ge=10, le=300)
     maximum_audio_seconds: int = Field(default=180, ge=1, le=300)
-    maximum_turns: int = Field(default=6, ge=1, le=12)
+    maximum_turns: int = Field(default=LEGACY_DEFAULT_TURNS, ge=1, le=MAXIMUM_VOICE_TURNS)
 
     @model_validator(mode="after")
     def valid_receipt(self) -> LiveLimits:
@@ -164,6 +167,10 @@ def load_live_limits(settings: Settings) -> LiveLimits:
         raise VoiceUnavailableError("verified_reasoning_route_mismatch")
     if limits.embedding and limits.embedding.model != settings.embeddings_model:
         raise VoiceUnavailableError("verified_embedding_route_mismatch")
+    try:
+        limits = apply_turn_setting(limits, settings)
+    except ValueError as exc:
+        raise VoiceUnavailableError("verified_live_limits_invalid") from exc
     if limits.reservation(settings) > min(limits.session_ceiling_usd, limits.remaining_budget_usd):
         raise VoiceUnavailableError("verified_cap_cannot_cover_session")
     return limits

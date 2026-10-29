@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any
@@ -180,8 +181,12 @@ class RealtimeSession:
         self.closed = False
         self.interruption = 0
         self.send_lock = asyncio.Lock()
-        self.response_request: asyncio.Task[None] | None = None
         self.response_statuses: dict[str, str] = {}
+        # Grounding flags of backend response.create events not yet seen as
+        # response.created. Any other response.created is a server-VAD response.
+        self.backend_responses: deque[bool] = deque()
+        # Every admitted response, backend or provider-created, interrupted or not.
+        self.responses_used = 0
 
     async def start_session(self) -> None:
         await self._provider_send(session_update(self.ledger.limits))
@@ -200,9 +205,14 @@ class RealtimeSession:
         self.context_bytes += self.ledger.limits.maximum_output_tokens
         self._context_limit()
         await asyncio.to_thread(self.ledger.response)
-        self.response_active, self.response_grounded = True, grounded
+        self.responses_used += 1
+        self.backend_responses.append(grounded)
+        self.response_active = True
         self.response_finished.clear()
         await self._provider_send(create_response(self.ledger.limits, grounded=grounded))
+
+    def _tool_running(self) -> bool:
+        return self.tool_task is not None and not self.tool_task.done()
 
     async def client(self, event: dict[str, Any]) -> bool:
         kind = event.get("type")
@@ -237,9 +247,10 @@ class RealtimeSession:
         elif kind == "audio.commit":
             VoiceCommit.model_validate(event)
             await self._provider_send({"type": "input_audio_buffer.commit"})
-            if self.tool_task and not self.tool_task.done():
+            # A manual commit never creates a provider response; server VAD does.
+            if self._tool_running():
                 self.queued_speech = True
-            else:
+            elif not self.response_active:
                 await self._respond()
         elif kind == "response.interrupt":
             interruption = VoiceInterrupt.model_validate(event)
@@ -288,8 +299,10 @@ class RealtimeSession:
             detection = incoming.get("turn_detection", {})
             if (
                 detection.get("type") != "server_vad"
-                or detection.get("create_response") is not False
-                or detection.get("interrupt_response") is not False
+                or detection.get("create_response") is not True
+                or detection.get("interrupt_response") is not True
+                or effective.get("tool_choice") != "auto"
+                or [tool.get("name") for tool in effective.get("tools", [])] != [TOOL_NAME]
                 or incoming.get("transcription") is not None
                 or incoming.get("format") != {"type": "audio/pcm", "rate": 24000}
                 or outgoing.get("format") != {"type": "audio/pcm", "rate": 24000}
@@ -300,47 +313,63 @@ class RealtimeSession:
             self.ready = True
             await self.send({"type": "session.ready", "session_id": str(self.ledger.id)})
         elif kind == "response.created":
-            await asyncio.to_thread(self.ledger.response_started, str(event["response"]["id"]))
+            response_id = str(event["response"]["id"])
+            self.response_active = True
+            self.response_finished.clear()
+            if self.backend_responses:
+                self.response_grounded = self.backend_responses.popleft()
+                await asyncio.to_thread(self.ledger.response_started, response_id)
+            else:
+                # Server VAD created this response. Admit it against the same response
+                # cap and context reservation; an over-cap one is recorded, then refused.
+                self.response_grounded = False
+                self.responses_used += 1
+                self.context_bytes += self.ledger.limits.maximum_output_tokens
+                await asyncio.to_thread(self.ledger.provider_response, response_id)
+                self._context_limit()
         elif kind == "response.done":
             await asyncio.to_thread(self.ledger.response_done, event["response"])
             self.response_active = False
-            self.response_statuses[str(event["response"]["id"])] = str(
-                event["response"].get("status", "unknown")
-            )
+            status = str(event["response"].get("status", "unknown"))
+            self.response_statuses[str(event["response"]["id"])] = status
             self.response_finished.set()
+            if status == "cancelled":
+                await self.send({"type": "response.interrupted"})
             await self.send({"type": "response.done"})
+        elif kind == "response.cancelled":
+            await self.send({"type": "response.interrupted"})
         elif kind == "input_audio_buffer.speech_started":
-            await self.interrupt()
+            # interrupt_response: the provider cancels its own response (barge-in).
+            # The browser flushes playback and reports the heard position to truncate.
+            self.interruption += 1
+            left = self.ledger.limits.maximum_responses - self.responses_used
+            if left < 2 and not self._tool_running():
+                # A new turn may need a tool call and a spoken reply. End before the
+                # provider can create a response this session can no longer admit.
+                raise VoiceUnavailableError("voice_response_cap_exhausted")
+            await self.send({"type": "playback.clear"})
             await self.send({"type": "speech.started"})
         elif kind == "input_audio_buffer.speech_stopped":
-            if self.tool_task and not self.tool_task.done():
-                self.queued_speech = True
-            else:
-                # The upstream reader must remain free to consume cancellation.
-                if self.response_request and not self.response_request.done():
-                    raise VoiceUnavailableError("overlapping_voice_input")
-
-                async def respond_after_cancel() -> None:
-                    await asyncio.wait_for(self.response_finished.wait(), timeout=10)
-                    await self._respond()
-
-                self.response_request = asyncio.create_task(respond_after_cancel())
+            # Server VAD creates the response; it arrives as response.created.
             await self.send({"type": "speech.stopped"})
         elif kind == "response.function_call_arguments.done":
             if event.get("name") != TOOL_NAME or self.response_grounded:
                 raise VoiceUnavailableError("unsupported_provider_tool")
-            if self.tool_task and not self.tool_task.done():
-                raise VoiceUnavailableError("overlapping_provider_tool")
+            call_id = str(event["call_id"])
+            if self._tool_running():
+                # The user spoke again while a request runs. Never queue or run a
+                # second Agent turn; tell the model so it can ask the user to wait.
+                await self._busy(call_id)
+                return
             try:
                 body = VoiceToolInput.model_validate(json.loads(event.get("arguments", "")))
             except (ValueError, ValidationError) as exc:
                 raise VoiceUnavailableError("invalid_provider_tool_arguments") from exc
             self.tool_task = asyncio.create_task(
-                self._delegate(str(event["call_id"]), body, str(event.get("response_id", "")))
+                self._delegate(call_id, body, str(event.get("response_id", "")))
             )
         elif kind in {"response.output_audio.delta", "response.output_audio_transcript.delta"}:
-            if not self.response_grounded:
-                raise VoiceUnavailableError("ungrounded_provider_audio_refused")
+            # Direct conversational answers are allowed; facts come from the delegate.
             if kind == "response.output_audio.delta":
                 delta = str(event.get("delta", ""))
                 decoded = checked_audio(delta, 65536, maximum_bytes=65536)
@@ -356,6 +385,23 @@ class RealtimeSession:
         elif kind == "error":
             # Never export raw provider errors or treat an error as non-billable.
             raise VoiceUnavailableError("realtime_provider_error")
+
+    async def _busy(self, call_id: str) -> None:
+        output = json.dumps(
+            {
+                "status": "busy",
+                "note": "The previous request is still running. Ask the user to wait; "
+                "nothing was sent.",
+            }
+        )
+        self.context_bytes += len(output.encode())
+        self._context_limit()
+        await self._provider_send(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": call_id, "output": output},
+            }
+        )
 
     async def _delegate(self, call_id: str, request: VoiceToolInput, response_id: str) -> None:
         # SDK documents arguments.done on cancellation/incompletion too. Such a
@@ -416,7 +462,4 @@ class RealtimeSession:
         if self.tool_task and not self.tool_task.done():
             self.tool_task.cancel()
             await asyncio.gather(self.tool_task, return_exceptions=True)
-        if self.response_request:
-            self.response_request.cancel()
-            await asyncio.gather(self.response_request, return_exceptions=True)
         await asyncio.to_thread(self.ledger.close)
