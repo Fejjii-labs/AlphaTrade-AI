@@ -34,6 +34,16 @@ def _voice_llm_passthrough_for_synthetic_providers(monkeypatch):
     monkeypatch.setattr("app.agent_voice.service.voice_llm", lambda provider, _settings: provider)
 
 
+def merge_session(current, update):
+    merged = dict(current)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_session(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class SyntheticConnection:
     """Speaks pinned official event shapes; performs no provider/network call."""
 
@@ -64,7 +74,10 @@ class SyntheticConnection:
         self.messages.append(event)
         kind = event["type"]
         if kind == "session.update":
-            await self.emit({"type": "session.updated", "session": event["session"]})
+            # Like the provider, session.updated carries the full effective session,
+            # so a partial update (auto_responses_off) is merged into the last one.
+            self.session = merge_session(getattr(self, "session", {}), event["session"])
+            await self.emit({"type": "session.updated", "session": self.session})
         elif kind == "response.create":
             self.response += 1
             response_id = f"synthetic-response-{self.response}"
