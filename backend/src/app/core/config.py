@@ -439,7 +439,7 @@ class Settings(BaseSettings):
     perpetual_monitor_backoff_initial_seconds: float = Field(default=0.25, ge=0.05, le=10.0)
     perpetual_monitor_backoff_max_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
     # API reads the worker-persisted monitor row. Older rows are reported stale.
-    market_monitor_snapshot_stale_after_seconds: float = Field(default=60.0, ge=5.0, le=3600.0)
+    market_monitor_snapshot_stale_after_seconds: float = Field(default=30.0, ge=5.0, le=3600.0)
     # LOCAL only: let the API tick its own live monitor per request (upstream I/O).
     market_monitor_api_in_process_live: bool = False
 

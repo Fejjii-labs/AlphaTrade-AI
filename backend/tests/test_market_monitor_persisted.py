@@ -414,3 +414,153 @@ def test_passive_perpetual_status_reflects_worker_row(db: sessionmaker[Session])
     assert status.status().health is snapshot.provider.health
     clock["now"] = T0 + timedelta(minutes=5)
     assert status.status().health is ProviderHealth.DEGRADED
+
+
+# --- freshness boundary, clock skew, write ordering (PR #388 review) --------
+
+
+def test_default_stale_after_is_thirty_seconds() -> None:
+    assert Settings(**_LIVE).market_monitor_snapshot_stale_after_seconds == 30.0
+
+
+def test_row_exactly_at_stale_after_is_not_stale_but_just_past_is(
+    db: sessionmaker[Session],
+) -> None:
+    _persist(db, _fresh_snapshot(), T0)
+    with db() as session:
+        at_bound = _reader(db, session, T0 + timedelta(seconds=30)).snapshot("BTCUSDT")
+        past = _reader(db, session, T0 + timedelta(seconds=30, microseconds=1)).snapshot("BTCUSDT")
+    assert at_bound.availability is MarketAvailability.FRESH
+    assert at_bound.current_price is not None
+    assert past.availability is MarketAvailability.STALE
+    assert past.reason is MonitorReason.MONITOR_STATE_STALE
+    assert past.current_price is None
+
+
+def test_future_written_at_is_stale(db: sessionmaker[Session]) -> None:
+    # Worker clock an hour ahead: the row must not stay "fresh" for an hour.
+    _persist(db, _fresh_snapshot(), T0 + timedelta(hours=1))
+    with db() as session:
+        served = _reader(db, session, T0).snapshot("BTCUSDT")
+    assert served.availability is MarketAvailability.STALE
+    assert served.reason is MonitorReason.MONITOR_STATE_STALE
+    assert served.current_price is None
+
+
+def test_future_evaluated_at_is_stale_even_with_db_written_at(
+    db: sessionmaker[Session],
+) -> None:
+    _persist(db, _fresh_snapshot(T0 + timedelta(minutes=10)), T0)
+    with db() as session:
+        served = _reader(db, session, T0 + timedelta(seconds=1)).snapshot("BTCUSDT")
+    assert served.availability is MarketAvailability.STALE
+    assert served.reason is MonitorReason.MONITOR_STATE_STALE
+
+
+def test_small_forward_skew_within_tolerance_is_tolerated(db: sessionmaker[Session]) -> None:
+    _persist(db, _fresh_snapshot(T0 + timedelta(seconds=4)), T0 + timedelta(seconds=4))
+    with db() as session:
+        served = _reader(db, session, T0).snapshot("BTCUSDT")
+    assert served.availability is MarketAvailability.FRESH
+
+
+def test_passive_status_degraded_for_future_row(db: sessionmaker[Session]) -> None:
+    from app.market_monitor.persisted import PersistedPerpetualEvidenceStatus
+    from app.providers.base import ProviderHealth, ProviderKind
+
+    _persist(db, _fresh_snapshot(), T0 + timedelta(hours=1))
+    status = PersistedPerpetualEvidenceStatus(
+        name="binance-usdm-perpetual",
+        kind=ProviderKind.MARKET_DATA,
+        settings=Settings(**_LIVE),
+        session_factory=db,
+        clock=lambda: T0,
+    )
+    assert status.status().health is ProviderHealth.DEGRADED
+
+
+def test_older_snapshot_never_overwrites_newer(db: sessionmaker[Session]) -> None:
+    newer = _fresh_snapshot(T0 + timedelta(seconds=10))
+    older = _fresh_snapshot(T0)
+    _persist(db, newer, T0 + timedelta(seconds=10))
+    _persist(db, older, T0 + timedelta(seconds=11))
+    with db() as session:
+        row = session.get(MarketMonitorSnapshotRow, "BTCUSDT")
+        assert row is not None
+        assert row.evaluated_at.replace(tzinfo=UTC) == newer.evaluated_at
+        assert row.written_at.replace(tzinfo=UTC) == T0 + timedelta(seconds=10)
+    later = _fresh_snapshot(T0 + timedelta(seconds=20))
+    _persist(db, later, T0 + timedelta(seconds=20))
+    with db() as session:
+        row = session.get(MarketMonitorSnapshotRow, "BTCUSDT")
+        assert row is not None
+        assert row.evaluated_at.replace(tzinfo=UTC) == later.evaluated_at
+
+
+def test_portable_fallback_keeps_newer_row(db: sessionmaker[Session]) -> None:
+    from app.market_monitor.persisted import _save_portable
+
+    newer = _fresh_snapshot(T0 + timedelta(seconds=10))
+    older = _fresh_snapshot(T0)
+    for snap in (newer, older):
+        with db() as session, session.begin():
+            _save_portable(
+                session,
+                snap,
+                snap.model_dump(mode="json"),
+                snap.evaluated_at,
+                "w",
+                snap.evaluated_at,
+            )
+    with db() as session:
+        row = session.get(MarketMonitorSnapshotRow, "BTCUSDT")
+        assert row is not None
+        assert row.evaluated_at.replace(tzinfo=UTC) == newer.evaluated_at
+
+
+def test_postgres_upsert_uses_db_clock_and_monotonic_guard() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    executed: list[object] = []
+
+    class _Bind:
+        dialect = postgresql.dialect()
+
+    class _Session:
+        def get_bind(self) -> _Bind:
+            return _Bind()
+
+        def execute(self, stmt: object) -> None:
+            executed.append(stmt)
+
+    save_monitor_snapshot(
+        _Session(),  # type: ignore[arg-type]
+        _fresh_snapshot(),
+        worker_id="w",
+        written_at=T0 + timedelta(hours=1),
+    )
+    sql = " ".join(str(executed[0].compile(dialect=postgresql.dialect())).split())  # type: ignore[attr-defined]
+    assert "ON CONFLICT (symbol) DO UPDATE" in sql
+    assert "WHERE market_monitor_snapshots.evaluated_at <= excluded.evaluated_at" in sql
+    assert "now()" in sql
+
+
+def test_market_status_exposes_row_age(
+    db: sessionmaker[Session], no_upstream_io: list[str]
+) -> None:
+    written = datetime.now(UTC) - timedelta(seconds=3)
+    _persist(db, _fresh_snapshot(written), written)
+    client, headers = _client(db)
+    body = client.get("/canonical/market-status", headers=headers).json()
+    assert datetime.fromisoformat(body["written_at"]) == written
+    assert 3.0 <= body["age_seconds"] < 30.0
+    assert no_upstream_io == []
+
+
+def test_market_status_missing_row_has_no_age(
+    db: sessionmaker[Session], no_upstream_io: list[str]
+) -> None:
+    client, headers = _client(db)
+    body = client.get("/canonical/market-status", headers=headers).json()
+    assert body["written_at"] is None
+    assert body["age_seconds"] is None

@@ -26572,6 +26572,17 @@
           "activation": {
             "$ref": "#/components/schemas/MarketMonitorActivationRead"
           },
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Seconds"
+          },
           "authority": {
             "const": "canonical_market_monitor",
             "default": "canonical_market_monitor",
@@ -26675,6 +26686,18 @@
             "default": false,
             "title": "Watcher Activated",
             "type": "boolean"
+          },
+          "written_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Written At"
           }
         },
         "required": [

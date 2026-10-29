@@ -11,8 +11,10 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from threading import Lock
+from typing import NamedTuple
 
 import structlog
+from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Environment, Settings
@@ -49,6 +51,9 @@ logger = structlog.get_logger("market_monitor.persisted")
 # Deterministic identity for synthesized "no worker state" snapshots.
 _MISSING_CONNECTION = uuid.UUID(int=0)
 
+# A row stamped further than this ahead of the API clock is treated as stale.
+FUTURE_SKEW_TOLERANCE = timedelta(seconds=5)
+
 
 def api_monitor_runs_in_process(settings: Settings) -> bool:
     """True when the API may own a monitor without upstream I/O at request time.
@@ -68,23 +73,91 @@ def save_monitor_snapshot(
     worker_id: str,
     written_at: datetime,
 ) -> None:
+    """Upsert the row unless it already holds a newer ``evaluated_at``.
+
+    On PostgreSQL ``written_at`` comes from the database clock so API freshness
+    never trusts the worker clock. ``written_at`` is used on other dialects.
+    """
+
     payload = snapshot.model_dump(mode="json")
+    evaluated_at = snapshot.evaluated_at.astimezone(UTC)
+    dialect = session.get_bind().dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        _save_portable(session, snapshot, payload, evaluated_at, worker_id, written_at)
+        return
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+
+        write_time: object = func.now()
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+
+        write_time = written_at.astimezone(UTC)
+    table = MarketMonitorSnapshotRow.__table__
+    stmt = insert(table).values(
+        symbol=snapshot.symbol,
+        payload=payload,
+        evaluated_at=evaluated_at,
+        written_at=write_time,
+        worker_id=worker_id,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[table.c.symbol],
+        set_={
+            "payload": stmt.excluded.payload,
+            "evaluated_at": stmt.excluded.evaluated_at,
+            "written_at": stmt.excluded.written_at,
+            "worker_id": stmt.excluded.worker_id,
+        },
+        # An older snapshot from a lagging worker never replaces a newer one.
+        where=table.c.evaluated_at <= stmt.excluded.evaluated_at,
+    )
+    session.execute(stmt)
+
+
+def _save_portable(
+    session: Session,
+    snapshot: SymbolMonitorSnapshot,
+    payload: dict[str, object],
+    evaluated_at: datetime,
+    worker_id: str,
+    written_at: datetime,
+) -> None:
     row = session.get(MarketMonitorSnapshotRow, snapshot.symbol)
     if row is None:
         session.add(
             MarketMonitorSnapshotRow(
                 symbol=snapshot.symbol,
                 payload=payload,
-                evaluated_at=snapshot.evaluated_at,
+                evaluated_at=evaluated_at,
                 written_at=written_at,
                 worker_id=worker_id,
             )
         )
         return
+    existing = row.evaluated_at
+    if existing.tzinfo is None:
+        existing = existing.replace(tzinfo=UTC)
+    if existing > evaluated_at:
+        return
     row.payload = payload
-    row.evaluated_at = snapshot.evaluated_at
+    row.evaluated_at = evaluated_at
     row.written_at = written_at
     row.worker_id = worker_id
+
+
+def monitor_row_is_stale(
+    now: datetime,
+    written_at: datetime,
+    evaluated_at: datetime,
+    *,
+    stale_after: timedelta,
+) -> bool:
+    """Old rows are stale. Rows stamped in the future (clock skew) are stale too."""
+
+    if written_at > now + FUTURE_SKEW_TOLERANCE or evaluated_at > now + FUTURE_SKEW_TOLERANCE:
+        return True
+    return now - written_at > stale_after
 
 
 def load_monitor_snapshot(
@@ -143,6 +216,13 @@ class MarketMonitorSnapshotPublisher:
             )
 
 
+class PersistedMonitorView(NamedTuple):
+    snapshot: SymbolMonitorSnapshot
+    written_at: datetime | None
+    # Negative when the row is stamped ahead of the API clock.
+    age_seconds: float | None
+
+
 class PersistedMarketMonitorReader:
     """Request-time monitor view from the worker row. Never ticks, never fetches."""
 
@@ -161,6 +241,11 @@ class PersistedMarketMonitorReader:
         self._stale_after = timedelta(seconds=settings.market_monitor_snapshot_stale_after_seconds)
 
     def snapshot(self, symbol: str = "BTCUSDT") -> SymbolMonitorSnapshot:
+        return self.view(symbol).snapshot
+
+    def view(self, symbol: str = "BTCUSDT") -> PersistedMonitorView:
+        """Snapshot plus the row's write time and age on the API clock."""
+
         try:
             instrument = self._catalog.require(symbol)
         except WrongInstrumentError as exc:
@@ -168,9 +253,19 @@ class PersistedMarketMonitorReader:
         now = self._clock().astimezone(UTC)
         loaded = load_monitor_snapshot(self._session, instrument.provider_symbol)
         if loaded is None:
-            return self._missing(instrument.provider_symbol, instrument.instrument_id, now)
+            missing = self._missing(instrument.provider_symbol, instrument.instrument_id, now)
+            return PersistedMonitorView(missing, None, None)
         snapshot, written_at = loaded
-        if now - written_at > self._stale_after:
+        age = (now - written_at).total_seconds()
+        logger.debug("market_monitor_snapshot_read", symbol=snapshot.symbol, age_seconds=age)
+        return PersistedMonitorView(self._presented(snapshot, written_at, now), written_at, age)
+
+    def _presented(
+        self, snapshot: SymbolMonitorSnapshot, written_at: datetime, now: datetime
+    ) -> SymbolMonitorSnapshot:
+        if monitor_row_is_stale(
+            now, written_at, snapshot.evaluated_at, stale_after=self._stale_after
+        ):
             return _rehash(
                 snapshot.model_copy(
                     update={
@@ -284,7 +379,12 @@ class PersistedPerpetualEvidenceStatus:
         if loaded is None:
             return self._degraded("No paper-worker monitor state; the API does not probe.")
         snapshot, written_at = loaded
-        if self._clock() - written_at > self._stale_after:
+        if monitor_row_is_stale(
+            self._clock().astimezone(UTC),
+            written_at,
+            snapshot.evaluated_at,
+            stale_after=self._stale_after,
+        ):
             return self._degraded("Paper-worker monitor state is stale.")
         provider = snapshot.provider
         return ProviderStatus(

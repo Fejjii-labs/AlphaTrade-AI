@@ -40,6 +40,13 @@ class PerpetualMarketMonitorService:
         self._settings = settings
 
     def read(self, *, symbol: str = "BTCUSDT") -> MarketMonitorStatusRead:
+        view = getattr(self._monitor, "view", None)
+        if callable(view):
+            # Worker-persisted reader: expose how old the row is.
+            snapshot, written_at, age_seconds = view(symbol)
+            return status_from_snapshot(
+                snapshot, settings=self._settings, written_at=written_at, age_seconds=age_seconds
+            )
         snapshot = self._monitor.snapshot(symbol)
         return status_from_snapshot(snapshot, settings=self._settings)
 
@@ -48,6 +55,8 @@ def status_from_snapshot(
     snapshot: SymbolMonitorSnapshot,
     *,
     settings: Settings,
+    written_at: datetime | None = None,
+    age_seconds: float | None = None,
 ) -> MarketMonitorStatusRead:
     price = _price_read(snapshot)
     unavailable = None
@@ -128,6 +137,8 @@ def status_from_snapshot(
         content_hash=snapshot.content_hash,
         unavailable_reason=unavailable,
         activation=MarketMonitorActivationRead.model_validate(market_activation_public(settings)),
+        written_at=written_at,
+        age_seconds=age_seconds,
     )
 
 

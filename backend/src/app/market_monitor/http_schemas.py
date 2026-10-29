@@ -104,3 +104,6 @@ class MarketMonitorStatusRead(StrictModel):
     content_hash: str = Field(min_length=64, max_length=64)
     unavailable_reason: str | None = None
     activation: MarketMonitorActivationRead
+    # Worker-persisted row write time and age on the API clock. Null when served in-process.
+    written_at: datetime | None = None
+    age_seconds: float | None = None
