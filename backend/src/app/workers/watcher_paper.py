@@ -334,6 +334,7 @@ class WatcherPaperRuntime:
         self._heartbeat_stale_after_seconds = heartbeat_stale_after_seconds
         self._session_factory = session_factory
         self._evidence_factory = evidence_factory
+        self._monitor_publish_unavailable_logged = False
         self._target_loader = target_loader
         self._kill_switch_probe = kill_switch_probe
         self._persistence_fence = persistence_fence
@@ -611,6 +612,7 @@ class WatcherPaperRuntime:
             close_session = True
         try:
             targets = self._load_targets(session)
+            self._publish_monitor_snapshots(session, targets)
             scans: list[WatcherPaperScanReport] = []
             any_kill = False
             created = 0
@@ -676,6 +678,48 @@ class WatcherPaperRuntime:
             rss_peak_bytes=memory.peak_rss_bytes,
         )
         return report
+
+    def _publish_monitor_snapshots(
+        self, session: Session | None, targets: Sequence[PaperScanTarget]
+    ) -> None:
+        """Tick the live monitor once per cycle for each scheduled symbol.
+
+        The API reads the persisted rows instead of calling the exchange, so this
+        must not depend on which fusion policy the scheduled scopes use. A symbol
+        is only polled when at least one of its scopes' organizations has the
+        kill switch off (the existing upkeep safety gate).
+        """
+
+        poll_monitor = getattr(self._evidence_factory, "poll_monitor", None)
+        if not callable(poll_monitor):
+            if not self._monitor_publish_unavailable_logged:
+                self._monitor_publish_unavailable_logged = True
+                logger.warning(
+                    "market_monitor_snapshot_publish_unavailable",
+                    worker_id=self._worker_id,
+                    reason_code="evidence_factory_without_poll_monitor",
+                )
+            return
+        kill_by_org: dict[object, bool] = {}
+        symbols: list[str] = []
+        for target in targets:
+            if target.symbol in symbols:
+                continue
+            org = target.organization_id
+            if org not in kill_by_org:
+                kill_by_org[org] = self._kill_switch_is_active(session, org)
+            if not kill_by_org[org]:
+                symbols.append(target.symbol)
+        for symbol in symbols:
+            try:
+                poll_monitor(symbol)
+            except Exception:
+                logger.warning(
+                    "market_monitor_snapshot_poll_failed",
+                    worker_id=self._worker_id,
+                    symbol=symbol,
+                    exc_info=True,
+                )
 
     def _reconcile_governed_demo_effects(self) -> None:
         # Existing exposure still needs actual fill/protection observations when

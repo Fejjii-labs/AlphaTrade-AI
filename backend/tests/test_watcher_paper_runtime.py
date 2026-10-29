@@ -476,8 +476,50 @@ def test_monitor_upkeep_respects_existing_safety_and_strategy_gates(
     assert report.scans[0].candidate_ids == ()
     if scope == "kill_switch":
         assert report.scans[0].reason_code == "kill_switch_active"
-    assert polled == []
+        assert polled == []
+    else:
+        # The API reads worker-persisted monitor state, so non-default strategy
+        # scopes still publish exactly one monitor tick per symbol per cycle.
+        assert polled == ["BTCUSDT"]
     assert side_effects.unused
+
+
+def test_monitor_publish_failure_is_logged_not_raised(
+    session_factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+) -> None:
+    from dataclasses import replace
+
+    from app.strategy_brain.sfp.contracts import SFP_KIND
+
+    with session_factory() as session:
+        _seed_approved_compiled(session)
+        targets = list_paper_scan_targets(
+            session, symbols=["BTCUSDT"], organization_id=ORG, limit=1
+        )
+    targets = tuple(replace(t, fusion_policy_version=SFP_KIND) for t in targets)
+    world = make_world(include_resistance=False)
+    factory = _world_factory(world)
+    calls: list[str] = []
+
+    def failing_poll(symbol: str) -> None:
+        calls.append(symbol)
+        raise RuntimeError("exchange down")
+
+    factory.poll_monitor = failing_poll
+    runtime, _, _, _ = _runtime(
+        session_factory,
+        world=world,
+        evidence_factory=factory,
+        target_loader=lambda _session: targets,
+    )
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        report = runtime.run_cycle()
+    assert calls == ["BTCUSDT"]
+    assert report.reason_code == "completed"
+    events = [entry for entry in logs if entry["event"] == "market_monitor_snapshot_poll_failed"]
+    assert events and events[0]["log_level"] == "warning"
 
 
 def test_defaults_keep_paper_runtime_disabled() -> None:
