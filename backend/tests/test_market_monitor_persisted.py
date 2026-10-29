@@ -585,3 +585,106 @@ def test_market_status_missing_row_has_no_age(
     body = client.get("/canonical/market-status", headers=headers).json()
     assert body["written_at"] is None
     assert body["age_seconds"] is None
+
+
+# --- GET /canonical/evidence: worker row only, zero upstream I/O -------------
+
+
+@pytest.fixture
+def no_live_evidence_source(
+    monkeypatch: pytest.MonkeyPatch, no_upstream_io: list[str]
+) -> list[str]:
+    def _source(*args: object, **kwargs: object) -> None:
+        no_upstream_io.append("evidence_source")
+        raise AssertionError("API constructed a live canonical evidence source")
+
+    monkeypatch.setattr(
+        "app.market_contracts.adapters.factory.canonical_evidence_source_for_process", _source
+    )
+    monkeypatch.setattr("app.evidence_pipeline.service.resolve_perpetual_evidence_source", _source)
+    return no_upstream_io
+
+
+def test_evidence_missing_row_fails_closed_with_zero_upstream_calls(
+    db: sessionmaker[Session], no_live_evidence_source: list[str]
+) -> None:
+    client, headers = _client(db)
+    response = client.get("/canonical/evidence", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["current_price"]["usable_as_current_market_price"] is False
+    assert body["current_price"]["price"] is None
+    assert body["unavailable_reason"] == "monitor_state_missing"
+    assert body["setup_evidence"]["available"] is False
+    assert body["setup_evidence"]["reason"] == "setup_not_persisted"
+    assert body["live_executable"] is False
+    assert body["market_intelligence"] == []
+    assert body["order_flow"] is None
+    assert body["order_book"] is None
+    assert no_live_evidence_source == []
+
+
+def test_evidence_fresh_row_serves_price_with_zero_upstream_calls(
+    db: sessionmaker[Session], no_live_evidence_source: list[str]
+) -> None:
+    now = datetime.now(UTC)
+    _persist(db, _fresh_snapshot(now), now)
+    client, headers = _client(db)
+    body = client.get("/canonical/evidence", headers=headers).json()
+    assert body["symbol"] == "BTCUSDT"
+    assert body["current_price"]["price"] == "101234.7"
+    assert body["current_price"]["usable_as_current_market_price"] is True
+    assert body["unavailable_reason"] is None
+    assert body["source"]["is_live"] is True
+    assert body["timestamps"]["monitor_written_at"] is not None
+    # Setup window is not persisted by the worker; never fabricated.
+    assert body["setup_evidence"]["available"] is False
+    assert body["setup_evidence"]["evidence_window_hash"] is None
+    assert no_live_evidence_source == []
+
+
+def test_evidence_and_market_status_agree_on_price(
+    db: sessionmaker[Session], no_live_evidence_source: list[str]
+) -> None:
+    now = datetime.now(UTC)
+    _persist(db, _fresh_snapshot(now), now)
+    client, headers = _client(db)
+    evidence = client.get("/canonical/evidence", headers=headers).json()
+    status = client.get("/canonical/market-status", headers=headers).json()
+    assert evidence["current_price"] == status["current_price"]
+    assert evidence["source"] == status["source"]
+
+
+def test_evidence_old_row_is_stale_and_price_dropped(
+    db: sessionmaker[Session], no_live_evidence_source: list[str]
+) -> None:
+    old = datetime.now(UTC) - timedelta(minutes=5)
+    _persist(db, _fresh_snapshot(old), old)
+    client, headers = _client(db)
+    body = client.get("/canonical/evidence", headers=headers).json()
+    assert body["current_price"]["usable_as_current_market_price"] is False
+    assert body["current_price"]["price"] is None
+    assert body["unavailable_reason"] == "monitor_state_stale"
+    assert no_live_evidence_source == []
+
+
+def test_evidence_unknown_symbol_still_rejected(
+    db: sessionmaker[Session], no_live_evidence_source: list[str]
+) -> None:
+    client, headers = _client(db)
+    response = client.get("/canonical/evidence", params={"symbol": "ETHUSDT"}, headers=headers)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "unknown_perpetual_instrument"
+    assert no_live_evidence_source == []
+
+
+def test_replay_keeps_in_process_assembler() -> None:
+    from types import SimpleNamespace
+
+    from app.core.dependencies import get_canonical_evidence_reader
+    from app.evidence_pipeline.service import CanonicalEvidenceService
+
+    settings = Settings(**{**_LIVE, "perpetual_evidence_source": "replay"})
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    reader = get_canonical_evidence_reader(request, settings, None)  # type: ignore[arg-type]
+    assert isinstance(reader, CanonicalEvidenceService)
