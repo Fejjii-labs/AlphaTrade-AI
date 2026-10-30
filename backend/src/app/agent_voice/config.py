@@ -33,6 +33,8 @@ RESPONSE_SLACK = 1
 # Hands-free keeps the microphone open, so submitted audio tracks wall-clock time. A
 # receipt that relies on the audio default gets up to its session length, if that fits.
 MAXIMUM_HANDS_FREE_AUDIO_SECONDS = 180
+# Longer hands-free audio is tried in these steps once the turn count is fixed.
+HANDS_FREE_AUDIO_STEP_SECONDS = 10
 
 
 def voice_route_refusal(settings: Settings) -> str | None:
@@ -190,10 +192,12 @@ def apply_turn_setting[T: _TurnLimits](limits: T, settings: Settings) -> T:
     An explicit receipt value (and an explicit ``maximum_responses``) stays an upper
     bound. A receipt that relies on the default gets the largest value between the
     legacy default and the setting whose whole reservation fits the verified ceiling.
-    A realtime receipt that relies on the audio default first tries submitted audio up to
-    its session length (continuous mic); if no turn count fits that, the receipt value
-    stays. Nothing that was refused before is admitted: the floor is the legacy default and
-    the caller still runs its unchanged ceiling check.
+    Turns are chosen first with the receipt's audio limit. A realtime receipt that relies
+    on the audio default then gets the longest submitted audio, up to its session length
+    and 180 s in 10 s steps, that still fits at that same turn count; otherwise the
+    receipt value stays. Longer audio never costs a turn. Nothing that was refused before
+    is admitted: the floor is the legacy default and the caller still runs its unchanged
+    ceiling check.
     """
     explicit = "maximum_turns" in limits.model_fields_set
     requested = min(settings.agent_voice_maximum_turns, MAXIMUM_VOICE_TURNS)
@@ -213,18 +217,23 @@ def apply_turn_setting[T: _TurnLimits](limits: T, settings: Settings) -> T:
             update["maximum_responses"] = 2 * turns
         return type(limits).model_validate(limits.model_dump() | update)  # type: ignore[attr-defined,no-any-return]
 
-    if isinstance(limits, VoiceLimits) and "maximum_audio_seconds" not in limits.model_fields_set:
-        audio = min(limits.maximum_seconds, MAXIMUM_HANDS_FREE_AUDIO_SECONDS)
-        if audio > limits.maximum_audio_seconds:
-            for turns in range(requested, floor - 1, -1):
-                candidate = bounded(turns, maximum_audio_seconds=audio)
-                if candidate.reservation(settings) <= ceiling:
-                    return candidate
+    chosen = bounded(floor)
     for turns in range(requested, floor, -1):
         candidate = bounded(turns)
         if candidate.reservation(settings) <= ceiling:
-            return candidate
-    return bounded(floor)
+            chosen = candidate
+            break
+    # Turns first: longer submitted audio is only added on top of the turn count
+    # the default audio allows, never at the cost of a turn.
+    if isinstance(limits, VoiceLimits) and "maximum_audio_seconds" not in limits.model_fields_set:
+        default_audio = limits.maximum_audio_seconds
+        audio = min(limits.maximum_seconds, MAXIMUM_HANDS_FREE_AUDIO_SECONDS)
+        while audio > default_audio:
+            upgraded = bounded(chosen.maximum_turns, maximum_audio_seconds=audio)
+            if upgraded.reservation(settings) <= ceiling:
+                return upgraded
+            audio = max(default_audio, audio - HANDS_FREE_AUDIO_STEP_SECONDS)
+    return chosen
 
 
 def load_limits(settings: Settings) -> VoiceLimits:

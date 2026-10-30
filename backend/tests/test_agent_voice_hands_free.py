@@ -183,6 +183,33 @@ def test_hands_free_audio_keeps_receipt_default_when_longer_audio_cannot_fit(
     assert effective.reservation(settings) <= effective.session_ceiling_usd
 
 
+def test_hands_free_audio_never_costs_a_turn(voice_limits):  # noqa: F811
+    # Griller PR390 non-blocker 2: at tight budgets 180 s used to cost one turn.
+    settings = _settings(agent_voice_maximum_turns=20)
+    data = _receipt_without_audio(voice_limits)
+    reference = VoiceLimits.model_validate(data | {"maximum_audio_seconds": 90})
+    upper = VoiceLimits.model_validate(
+        data | {"maximum_turns": 20, "maximum_responses": 40, "maximum_audio_seconds": 180}
+    ).reservation(settings)
+    lower = VoiceLimits.model_validate(
+        data | {"maximum_turns": LEGACY_DEFAULT_TURNS, "maximum_responses": 12}
+    ).reservation(settings)
+    upgraded = 0
+    for step in range(71):
+        ceiling = lower + (upper - lower) * step / 70
+        receipt = VoiceLimits.model_validate(data | {"session_ceiling_usd": str(ceiling)})
+        effective = apply_turn_setting(receipt, settings)
+        baseline = apply_turn_setting(
+            reference.model_copy(update={"session_ceiling_usd": ceiling}), settings
+        )
+        assert effective.maximum_turns == baseline.maximum_turns, ceiling
+        assert 90 <= effective.maximum_audio_seconds <= MAXIMUM_HANDS_FREE_AUDIO_SECONDS
+        if effective.maximum_turns > LEGACY_DEFAULT_TURNS or step == 0:
+            assert effective.reservation(settings) <= ceiling
+        upgraded += effective.maximum_audio_seconds > 90
+    assert upgraded  # longer audio is still granted when it fits on top
+
+
 def test_load_limits_keeps_the_ceiling_check_fail_closed(tmp_path, voice_limits):  # noqa: F811
     settings = _settings(
         agent_realtime_enabled=True, openai_api_key="fixture", provider_mode="live"
@@ -398,6 +425,64 @@ async def test_second_tool_call_while_one_runs_is_answered_busy_not_run(voice_li
     assert not calls and not [e for e in ledger.events if e[0] == "pending"]
     release.set()
     await session.tool_task
+
+
+async def _run_delegate_with_barge_in(voice_limits, *, auto_responses: bool):  # noqa: F811
+    """Delegate a tool turn; the user barges in while it runs (interruption bumps)."""
+
+    session = None
+
+    def turn(_ledger, key, body):
+        # Barge-in during the delegated turn: server VAD interrupts the reply.
+        session.interruption += 1
+        session.auto_responses = auto_responses
+        return {"reply": "Canonical.", "conversation_id": body["conversation_id"]}
+
+    session, _ledger, sent, upstream = session_for(voice_limits, turn)
+    await session.provider({"type": "response.created", "response": {"id": "tool"}})
+    await session.provider(
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": "tool",
+            "name": TOOL_NAME,
+            "call_id": "call-tool",
+            "arguments": json.dumps({"message": "what is BTC doing"}),
+        }
+    )
+    await session.provider(
+        {"type": "response.done", "response": {"id": "tool", "status": "completed"}}
+    )
+    for _ in range(200):
+        pending = [e for e in sent if e["type"] == "turn.pending"]
+        if pending:
+            break
+        await asyncio.sleep(0.001)
+    await session.client({"type": "turn.accept", "request_key": pending[0]["request_key"]})
+    await session.tool_task
+    return session, upstream
+
+
+@pytest.mark.asyncio
+async def test_tool_result_is_spoken_after_barge_in_once_auto_responses_are_off(
+    voice_limits,  # noqa: F811
+):
+    # Griller PR390 non-blocker 1: auto responses off, so the barge-in created no reply.
+    _session, upstream = await _run_delegate_with_barge_in(voice_limits, auto_responses=False)
+    output = [e for e in upstream if e["type"] == "conversation.item.create"]
+    assert output and output[-1]["item"]["call_id"] == "call-tool"
+    responses = [e for e in upstream if e["type"] == "response.create"]
+    assert len(responses) == 1  # the grounded spoken result
+    assert upstream.index(responses[0]) > upstream.index(output[-1])
+
+
+@pytest.mark.asyncio
+async def test_tool_result_is_not_spoken_twice_after_barge_in_with_auto_responses_on(
+    voice_limits,  # noqa: F811
+):
+    # Auto responses on: server VAD already answers the barge-in; no second reply.
+    _session, upstream = await _run_delegate_with_barge_in(voice_limits, auto_responses=True)
+    assert [e for e in upstream if e["type"] == "conversation.item.create"]
+    assert not [e for e in upstream if e["type"] == "response.create"]
 
 
 # --- trade safety audit ----------------------------------------------------------
