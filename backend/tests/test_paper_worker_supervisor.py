@@ -787,3 +787,111 @@ def test_postgres_telegram_lease_delivery_and_restart_stay_idempotent() -> None:
     assert after_id == before_id
     pending = world.protocol.store.list_outbox(organization_id=ORG)
     assert any(row.state is not OutboxState.ACKNOWLEDGED for row in pending)
+
+
+def test_staging_composition_wires_the_watcher_monitor_idle_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Staging drives run_cycle() from the supervisor; the inter-cycle sleep must
+    still re-publish the market monitor snapshot (f626a5c2 regression)."""
+
+    settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
+    waits: list[float] = []
+
+    class _Watcher:
+        def run_cycle(self) -> WatcherPaperCycleReport:
+            return WatcherPaperCycleReport(
+                reason_code="completed",
+                enabled=True,
+                scans=(_scan(),),
+                candidates_created=0,
+                kill_switch_active=False,
+            )
+
+        def wait_publishing_monitor(self, wait: float, stop: threading.Event) -> bool:
+            waits.append(wait)
+            return stop.is_set()
+
+        def stop(self) -> None:
+            return None
+
+    class _Telegram:
+        def run_cycle(self) -> TelegramRuntimeCycle:
+            return TelegramRuntimeCycle(
+                posture="disarmed",
+                delivered=0,
+                poll_applied=0,
+                poll_rejected=0,
+                kill_switch_active=False,
+                lease_held=True,
+                last_error_code="",
+            )
+
+        def stop(self) -> None:
+            return None
+
+    class _Session:
+        runtime = _Watcher()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: object())
+    monkeypatch.setattr(
+        "app.workers.watcher_activation.run_staging_activation",
+        lambda *_a, **_k: ActivationDecision(
+            allowed=True, reason_codes=("cleared",), primary_reason="cleared", phase="preflight"
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.watcher_activation.open_staging_watcher_session",
+        lambda *_a, **_k: _Session(),
+    )
+    monkeypatch.setattr(
+        "app.telegram_activation.runtime.build_telegram_runtime",
+        lambda *_a, **_k: _Telegram(),
+    )
+    supervisor = build_paper_worker_supervisor(settings)
+    try:
+        assert supervisor._watcher.idle_wait is not None
+        assert supervisor._telegram.idle_wait is None
+        assert supervisor._idle(supervisor._watcher, 15.0) is False
+        assert waits == [15.0]
+    finally:
+        supervisor.close()
+
+
+def test_failing_idle_wait_falls_back_to_a_plain_wait() -> None:
+    def broken(_wait: float, _stop: threading.Event) -> bool:
+        raise RuntimeError("db down")
+
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=_idle,
+        telegram_cycle=_idle,
+        poll_seconds=0.0,
+        watcher_idle_wait=broken,
+    )
+    assert supervisor._idle(supervisor._watcher, 0.01) is False
+    supervisor._stop.set()
+    assert supervisor._idle(supervisor._watcher, 0.01) is True
+
+
+def test_watcher_loop_uses_the_idle_wait_between_cycles() -> None:
+    calls = {"cycles": 0, "idle": 0}
+    supervisor: PaperWorkerSupervisor
+
+    def cycle() -> CycleOutcome:
+        calls["cycles"] += 1
+        return CycleOutcome(status="running")
+
+    def idle(_wait: float, stop: threading.Event) -> bool:
+        calls["idle"] += 1
+        if calls["idle"] >= 2:
+            stop.set()
+        return stop.is_set()
+
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=cycle, telegram_cycle=_idle, poll_seconds=15.0, watcher_idle_wait=idle
+    )
+    supervisor._loop(supervisor._watcher)
+    assert calls == {"cycles": 2, "idle": 2}

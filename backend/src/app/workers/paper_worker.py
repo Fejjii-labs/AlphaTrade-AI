@@ -140,11 +140,15 @@ class _Component:
         cycle: Callable[[], CycleOutcome],
         guard: _AuthorityGuard | None,
         poll_seconds: float | None = None,
+        idle_wait: Callable[[float, threading.Event], bool] | None = None,
     ) -> None:
         self.name = name
         self.cycle = cycle
         self.guard = guard
         self.poll_seconds = poll_seconds
+        # Optional inter-cycle wait (returns True when stopped). The watcher uses
+        # it to re-publish the market monitor snapshot between scan cycles.
+        self.idle_wait = idle_wait
         self.lock = threading.Lock()
         self.status = "idle"
         self.last_heartbeat_at: datetime | None = None
@@ -188,6 +192,7 @@ class PaperWorkerSupervisor:
         memory_diagnostics_enabled: bool = False,
         health_log_interval_seconds: float = 60.0,
         monotonic: Callable[[], float] | None = None,
+        watcher_idle_wait: Callable[[float, threading.Event], bool] | None = None,
     ) -> None:
         self._poll_seconds = poll_seconds
         self._health_log_interval_seconds = health_log_interval_seconds
@@ -203,7 +208,9 @@ class PaperWorkerSupervisor:
         self._start_lock = threading.Lock()
         self._closed = False
         self._authority_intact = True
-        self._watcher = _Component("watcher", watcher_cycle, _guard(watcher_authority))
+        self._watcher = _Component(
+            "watcher", watcher_cycle, _guard(watcher_authority), idle_wait=watcher_idle_wait
+        )
         self._telegram = _Component("telegram", telegram_cycle, _guard(telegram_authority))
         self._indexing: _Component | None = None
         self._indexing_stop: Callable[[], None] | None = None
@@ -458,9 +465,20 @@ class PaperWorkerSupervisor:
             interval = (
                 component.poll_seconds if component.poll_seconds is not None else self._poll_seconds
             )
-            if self._stop.wait(interval if interval > 0 else 0.05):
+            if self._idle(component, interval if interval > 0 else 0.05):
                 break
         self._mark_stopped(component)
+
+    def _idle(self, component: _Component, interval: float) -> bool:
+        """Inter-cycle sleep. A failing idle hook falls back to a plain wait."""
+
+        if component.idle_wait is not None:
+            try:
+                return bool(component.idle_wait(interval, self._stop)) or self._stop.is_set()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    logger.warning("paper_worker_idle_wait_failed", component=component.name)
+        return self._stop.wait(interval)
 
     def _step(self, component: _Component) -> None:
         # Sampler startup reads process memory before the cycle. A failure there
@@ -830,6 +848,7 @@ def _build_armed_supervisor(
     factory = get_session_factory()
     closers: list[Callable[[], None]] = []
     stops: list[Callable[[], None]] = []
+    watcher_idle_wait: Callable[[float, threading.Event], bool] | None = None
     clock = UtcClock()
     instance_id = new_worker_instance_id(watcher_settings.watcher_paper_worker_id)
 
@@ -863,6 +882,7 @@ def _build_armed_supervisor(
                 closers.append(session.close)
                 stops.append(session.runtime.stop)
                 watcher_cycle = _scanning_watcher_cycle(session.runtime)
+                watcher_idle_wait = getattr(session.runtime, "wait_publishing_monitor", None)
     elif paper_runtime_enabled(watcher_settings):
         runtime = build_watcher_paper_runtime(
             watcher_settings,
@@ -871,6 +891,7 @@ def _build_armed_supervisor(
         )
         stops.append(runtime.stop)
         watcher_cycle = _scanning_watcher_cycle(runtime)
+        watcher_idle_wait = getattr(runtime, "wait_publishing_monitor", None)
     else:
         watcher_cycle = _static_cycle("disarmed", error="watcher_disabled")
 
@@ -905,6 +926,7 @@ def _build_armed_supervisor(
 
     return PaperWorkerSupervisor(
         watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
+        watcher_idle_wait=watcher_idle_wait,
         telegram_cycle=telegram_cycle,
         poll_seconds=float(watcher_settings.watcher_paper_poll_interval_seconds),
         watcher_authority=authority_binding(watcher_settings),
