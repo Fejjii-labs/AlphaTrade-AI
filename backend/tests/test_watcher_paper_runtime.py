@@ -476,8 +476,64 @@ def test_monitor_upkeep_respects_existing_safety_and_strategy_gates(
     assert report.scans[0].candidate_ids == ()
     if scope == "kill_switch":
         assert report.scans[0].reason_code == "kill_switch_active"
-    assert polled == []
+        assert polled == []
+    else:
+        # The API reads worker-persisted monitor state, so non-default strategy
+        # scopes still publish exactly one monitor tick per symbol per cycle.
+        assert polled == ["BTCUSDT"]
     assert side_effects.unused
+
+
+def test_monitor_publish_failure_is_logged_not_raised(
+    session_factory: sessionmaker[Session],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    import structlog
+
+    import app.workers.watcher_paper as watcher_paper_module
+
+    # configure_logging caches the module logger on first use, so in the full
+    # suite capture_logs would only see this event on stdout. Re-bind a fresh
+    # lazy logger so capture_logs' processors apply (same pattern as
+    # test_paper_exit_monitor.py).
+    monkeypatch.setattr(
+        watcher_paper_module, "logger", structlog.get_logger("workers.watcher_paper")
+    )
+
+    from app.strategy_brain.sfp.contracts import SFP_KIND
+
+    with session_factory() as session:
+        _seed_approved_compiled(session)
+        targets = list_paper_scan_targets(
+            session, symbols=["BTCUSDT"], organization_id=ORG, limit=1
+        )
+    targets = tuple(replace(t, fusion_policy_version=SFP_KIND) for t in targets)
+    world = make_world(include_resistance=False)
+    factory = _world_factory(world)
+    calls: list[str] = []
+
+    def failing_poll(symbol: str) -> None:
+        calls.append(symbol)
+        raise RuntimeError("exchange down")
+
+    factory.poll_monitor = failing_poll
+    runtime, _, _, _ = _runtime(
+        session_factory,
+        world=world,
+        evidence_factory=factory,
+        target_loader=lambda _session: targets,
+    )
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        report = runtime.run_cycle()
+    assert calls == ["BTCUSDT"]
+    assert report.reason_code == "completed"
+    events = [entry for entry in logs if entry["event"] == "market_monitor_snapshot_poll_failed"]
+    assert events and events[0]["log_level"] == "warning"
 
 
 def test_defaults_keep_paper_runtime_disabled() -> None:
@@ -950,3 +1006,180 @@ def test_default_evidence_factory_uses_canonical_port() -> None:
     port = factory(None, InMemoryWatcherStore(), FIRST_SLICE_SYMBOL)
     assert isinstance(port, AssemblingWatcherScanEvidence)
     assert isinstance(port._monitor, MarketMonitorWatcherPort)
+
+
+def _publish_scan(
+    symbol: str,
+    *,
+    org: UUID = ORG,
+    scope: str = "s",
+    killed: bool = False,
+    owner: str | None = "self",
+):
+    from app.workers.watcher_paper import WatcherPaperScanReport
+
+    return WatcherPaperScanReport(
+        organization_id=org,
+        scan_scope=f"{scope}:15m",
+        symbol=symbol,
+        status="kill_switch_active" if killed else "succeeded",
+        reason_code="kill_switch_active" if killed else "replay",
+        replayed=not killed,
+        published=False,
+        candidate_ids=(),
+        kill_switch_active=killed,
+        lease_owner=owner,
+    )
+
+
+def _publish_runtime(session_factory: sessionmaker[Session]):
+    world = make_world(include_resistance=False)
+    factory = _world_factory(world)
+    polled: list[str] = []
+    factory.poll_monitor = lambda symbol: polled.append(symbol)
+    runtime, _, _, _ = _runtime(session_factory, world=world, evidence_factory=factory)
+    return runtime, factory, polled
+
+
+def _resolve(runtime, *scans):
+    return [replace_owner(s, runtime._worker_id) if s.lease_owner == "self" else s for s in scans]
+
+
+def replace_owner(scan, owner):
+    from dataclasses import replace
+
+    return replace(scan, lease_owner=owner)
+
+
+def test_monitor_publish_many_scopes_one_symbol_polls_once(
+    session_factory: sessionmaker[Session],
+) -> None:
+    runtime, _, polled = _publish_runtime(session_factory)
+    runtime._publish_monitor_snapshots(
+        _resolve(runtime, *(_publish_scan("BTCUSDT", scope=f"s{i}") for i in range(3)))
+    )
+    assert polled == ["BTCUSDT"]
+
+
+def test_monitor_publish_mixed_killed_and_live_orgs(
+    session_factory: sessionmaker[Session],
+) -> None:
+    runtime, _, polled = _publish_runtime(session_factory)
+    runtime._publish_monitor_snapshots(
+        _resolve(
+            runtime,
+            _publish_scan("BTCUSDT", org=ORG, killed=True),
+            _publish_scan("BTCUSDT", org=ORG_B, scope="b"),
+            _publish_scan("ETHUSDT", org=ORG, killed=True, scope="c"),
+        )
+    )
+    assert polled == ["BTCUSDT"]
+
+
+def test_monitor_publish_all_orgs_killed_polls_nothing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    runtime, _, polled = _publish_runtime(session_factory)
+    runtime._publish_monitor_snapshots(
+        _resolve(
+            runtime,
+            _publish_scan("BTCUSDT", org=ORG, killed=True),
+            _publish_scan("BTCUSDT", org=ORG_B, killed=True, scope="b"),
+        )
+    )
+    assert polled == []
+
+
+def test_monitor_publish_two_symbols_each_once(
+    session_factory: sessionmaker[Session],
+) -> None:
+    runtime, _, polled = _publish_runtime(session_factory)
+    runtime._publish_monitor_snapshots(
+        _resolve(
+            runtime,
+            _publish_scan("BTCUSDT"),
+            _publish_scan("ETHUSDT", scope="e"),
+            _publish_scan("BTCUSDT", scope="b2"),
+            _publish_scan("ETHUSDT", scope="e2"),
+        )
+    )
+    assert polled == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_monitor_publish_skips_scopes_leased_by_another_worker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    runtime, _, polled = _publish_runtime(session_factory)
+    runtime._publish_monitor_snapshots(
+        _resolve(
+            runtime,
+            _publish_scan("BTCUSDT", owner="other-worker"),
+            _publish_scan("ETHUSDT", owner=None, scope="e"),
+        )
+    )
+    assert polled == []
+
+
+def test_default_policy_scope_polls_once_per_cycle(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        _seed_approved_compiled(session)
+        targets = list_paper_scan_targets(
+            session, symbols=["BTCUSDT"], organization_id=ORG, limit=1
+        )
+    world = make_world(include_resistance=False)
+    factory = _world_factory(world)
+    polled: list[str] = []
+    factory.poll_monitor = lambda symbol: polled.append(symbol)
+    runtime, _, _, _ = _runtime(
+        session_factory,
+        world=world,
+        evidence_factory=factory,
+        target_loader=lambda _session: targets,
+    )
+    runtime.run_cycle()
+    assert polled == ["BTCUSDT"]
+
+
+def test_monitor_poll_failure_warning_is_rate_limited(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.workers.watcher_paper as wp
+
+    logs: list[dict[str, object]] = []
+
+    class _Log:
+        def warning(self, event: str, **kw: object) -> None:
+            logs.append({"event": event, "log_level": "warning", **kw})
+
+        def info(self, event: str, **kw: object) -> None:
+            logs.append({"event": event, "log_level": "info", **kw})
+
+    runtime, factory, _ = _publish_runtime(session_factory)
+
+    def failing(_symbol: str) -> None:
+        raise RuntimeError("exchange down")
+
+    factory.poll_monitor = failing
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(wp.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(wp, "logger", _Log())
+    scans = _resolve(runtime, _publish_scan("BTCUSDT"))
+    for _ in range(5):
+        runtime._publish_monitor_snapshots(scans)
+        clock["t"] += 10
+    clock["t"] += wp.MONITOR_POLL_FAILURE_SUMMARY_SECONDS
+    runtime._publish_monitor_snapshots(scans)
+    factory.poll_monitor = lambda _symbol: None
+    runtime._publish_monitor_snapshots(scans)
+    names = [e["event"] for e in logs]
+    assert names.count("market_monitor_snapshot_poll_failed") == 1
+    first = next(e for e in logs if e["event"] == "market_monitor_snapshot_poll_failed")
+    assert first["exc_info"] is True
+    summary = next(e for e in logs if e["event"] == "market_monitor_snapshot_poll_failing")
+    assert names.count("market_monitor_snapshot_poll_failing") == 1
+    assert summary["suppressed_failures"] == 5
+    assert summary["error"] == "RuntimeError"
+    assert "exc_info" not in summary
+    assert names.count("market_monitor_snapshot_poll_recovered") == 1

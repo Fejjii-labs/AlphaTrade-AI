@@ -247,7 +247,28 @@ def test_worker_persist_failure_never_crashes_poll(monkeypatch: pytest.MonkeyPat
         _broken,  # type: ignore[arg-type]
         worker_id="watcher-paper-test",
     )
-    factory.poll_monitor("BTCUSDT")
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        factory.poll_monitor("BTCUSDT")
+    failed = [e for e in logs if e["event"] == "market_monitor_snapshot_persist_failed"]
+    assert failed and failed[0]["log_level"] == "warning"
+    assert not [e for e in logs if e["event"] == "market_monitor_snapshot_published"]
+
+
+def test_publisher_announces_first_write_once(db: sessionmaker[Session]) -> None:
+    from structlog.testing import capture_logs
+
+    clock = {"now": T0}
+    publisher = MarketMonitorSnapshotPublisher(
+        db, worker_id="w", min_interval_seconds=5.0, clock=lambda: clock["now"]
+    )
+    with capture_logs() as logs:
+        publisher(_fresh_snapshot(T0))
+        clock["now"] = T0 + timedelta(seconds=10)
+        publisher(_fresh_snapshot(T0 + timedelta(seconds=10)))
+    published = [e for e in logs if e["event"] == "market_monitor_snapshot_published"]
+    assert len(published) == 1 and published[0]["symbol"] == "BTCUSDT"
 
 
 def test_publisher_throttles_per_symbol(db: sessionmaker[Session]) -> None:

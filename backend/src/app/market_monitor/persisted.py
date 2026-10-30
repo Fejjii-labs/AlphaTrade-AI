@@ -195,6 +195,7 @@ class MarketMonitorSnapshotPublisher:
         self._min_interval = timedelta(seconds=min_interval_seconds)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._last_written: dict[str, datetime] = {}
+        self._announced: set[str] = set()
         self._lock = Lock()
 
     def __call__(self, snapshot: SymbolMonitorSnapshot) -> None:
@@ -213,6 +214,14 @@ class MarketMonitorSnapshotPublisher:
                 symbol=snapshot.symbol,
                 worker_id=self._worker_id,
                 exc_info=True,
+            )
+            return
+        if snapshot.symbol not in self._announced:
+            self._announced.add(snapshot.symbol)
+            logger.info(
+                "market_monitor_snapshot_published",
+                symbol=snapshot.symbol,
+                worker_id=self._worker_id,
             )
 
 

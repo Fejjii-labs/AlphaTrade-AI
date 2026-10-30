@@ -14,7 +14,9 @@ persistence still requires persisted approved compiled authority.
 from __future__ import annotations
 
 import signal
+import sys
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -45,7 +47,6 @@ from app.runtime_safety.paper_actions import (
 )
 from app.schemas.nested_continuation import NESTED_KIND
 from app.signal_fusion.lifecycle import CandidateLifecycleService
-from app.signal_fusion.policy import DEFAULT_FUSION_POLICY_VERSION
 from app.watcher.contracts import (
     EvaluationMode,
     ScanRequest,
@@ -99,6 +100,8 @@ if TYPE_CHECKING:
 logger = structlog.get_logger("workers.watcher_paper")
 
 PaperEvidenceFactory = Callable[[Session | None, WatcherStore, str], WatcherScanEvidencePort]
+MONITOR_POLL_FAILURE_SUMMARY_SECONDS = 300.0
+
 PaperTargetLoader = Callable[[Session | None], tuple[PaperScanTarget, ...]]
 KillSwitchProbe = Callable[[UUID], bool]
 ActivationGate = Callable[[], object]
@@ -334,6 +337,8 @@ class WatcherPaperRuntime:
         self._heartbeat_stale_after_seconds = heartbeat_stale_after_seconds
         self._session_factory = session_factory
         self._evidence_factory = evidence_factory
+        self._monitor_publish_unavailable_logged = False
+        self._monitor_poll_failures: dict[str, list[float]] = {}
         self._target_loader = target_loader
         self._kill_switch_probe = kill_switch_probe
         self._persistence_fence = persistence_fence
@@ -628,6 +633,9 @@ class WatcherPaperRuntime:
                     any_kill = any_kill or scan.kill_switch_active
                 if not selected:
                     self._note_verified_contract_scans(set(), session=session, only_symbol=symbol)
+            # Successful evaluations replay until the next 15m bar; the live monitor
+            # still needs ticks, and the API reads the persisted rows.
+            self._publish_monitor_snapshots(scans)
         finally:
             if close_session and session is not None:
                 session.close()
@@ -676,6 +684,72 @@ class WatcherPaperRuntime:
             rss_peak_bytes=memory.peak_rss_bytes,
         )
         return report
+
+    def _publish_monitor_snapshots(self, scans: Sequence[WatcherPaperScanReport]) -> None:
+        """Tick the live monitor at most once per symbol per cycle.
+
+        Independent of the scope's fusion policy (the API reads the persisted
+        rows). Only symbols with a scope whose lease this worker holds and whose
+        organization kill switch is off are polled, so standby workers neither
+        call the exchange nor write. The upsert is also guarded on evaluated_at.
+        """
+
+        poll_monitor = getattr(self._evidence_factory, "poll_monitor", None)
+        if not callable(poll_monitor):
+            if not self._monitor_publish_unavailable_logged:
+                self._monitor_publish_unavailable_logged = True
+                logger.warning(
+                    "market_monitor_snapshot_publish_unavailable",
+                    worker_id=self._worker_id,
+                    reason_code="evidence_factory_without_poll_monitor",
+                )
+            return
+        symbols: list[str] = []
+        for scan in scans:
+            if scan.symbol in symbols or scan.kill_switch_active:
+                continue
+            if scan.lease_owner != self._worker_id:
+                continue
+            symbols.append(scan.symbol)
+        for symbol in symbols:
+            try:
+                poll_monitor(symbol)
+            except Exception:
+                self._note_monitor_poll_failure(symbol)
+            else:
+                self._note_monitor_poll_success(symbol)
+
+    def _note_monitor_poll_failure(self, symbol: str) -> None:
+        now = time.monotonic()
+        state = self._monitor_poll_failures.get(symbol)
+        if state is None:
+            self._monitor_poll_failures[symbol] = [now, 0]
+            logger.warning(
+                "market_monitor_snapshot_poll_failed",
+                worker_id=self._worker_id,
+                symbol=symbol,
+                exc_info=True,
+            )
+            return
+        state[1] += 1
+        if now - state[0] >= MONITOR_POLL_FAILURE_SUMMARY_SECONDS:
+            logger.warning(
+                "market_monitor_snapshot_poll_failing",
+                worker_id=self._worker_id,
+                symbol=symbol,
+                suppressed_failures=state[1],
+                error=type(sys.exc_info()[1]).__name__,
+            )
+            state[0] = now
+            state[1] = 0
+
+    def _note_monitor_poll_success(self, symbol: str) -> None:
+        if self._monitor_poll_failures.pop(symbol, None) is not None:
+            logger.info(
+                "market_monitor_snapshot_poll_recovered",
+                worker_id=self._worker_id,
+                symbol=symbol,
+            )
 
     def _reconcile_governed_demo_effects(self) -> None:
         # Existing exposure still needs actual fill/protection observations when
@@ -939,12 +1013,6 @@ class WatcherPaperRuntime:
         )
         self._wait_for_closed_bar(target.symbol)
         evidence = self._build_evidence(session, target.symbol)
-        if target.fusion_policy_version == DEFAULT_FUSION_POLICY_VERSION:
-            # Successful evaluations replay until the next 15m bar. The live
-            # monitor still needs ticks inside its bounded backfill horizon.
-            poll_monitor = getattr(self._evidence_factory, "poll_monitor", None)
-            if callable(poll_monitor):
-                poll_monitor(target.symbol)
         persistence_fence = self._persistence_fence
         if target.configuration_revision is not None and session is not None:
             from app.services.watcher_assignment_service import AssignmentCandidateFence
