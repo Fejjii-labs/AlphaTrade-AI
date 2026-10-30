@@ -848,6 +848,7 @@ def _build_armed_supervisor(
     factory = get_session_factory()
     closers: list[Callable[[], None]] = []
     stops: list[Callable[[], None]] = []
+    releases: list[Callable[[], int]] = []
     watcher_idle_wait: Callable[[float, threading.Event], bool] | None = None
     clock = UtcClock()
     instance_id = new_worker_instance_id(watcher_settings.watcher_paper_worker_id)
@@ -881,6 +882,7 @@ def _build_armed_supervisor(
             else:
                 closers.append(session.close)
                 stops.append(session.runtime.stop)
+                _append_release(releases, session.runtime)
                 watcher_cycle = _scanning_watcher_cycle(session.runtime)
                 watcher_idle_wait = getattr(session.runtime, "wait_publishing_monitor", None)
     elif paper_runtime_enabled(watcher_settings):
@@ -890,6 +892,7 @@ def _build_armed_supervisor(
             worker_id=instance_id,
         )
         stops.append(runtime.stop)
+        _append_release(releases, runtime)
         watcher_cycle = _scanning_watcher_cycle(runtime)
         watcher_idle_wait = getattr(runtime, "wait_publishing_monitor", None)
     else:
@@ -918,11 +921,7 @@ def _build_armed_supervisor(
                 research_session.commit()
         return outcome
 
-    def on_stop() -> None:
-        for stop in stops:
-            stop()
-        for close in closers:
-            close()
+    on_stop = compose_watcher_on_stop(stops, releases, closers)
 
     return PaperWorkerSupervisor(
         watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
@@ -950,6 +949,41 @@ def _with_worker_heartbeat(
     from app.services.worker_heartbeat import watch_cycle_with_heartbeat
 
     return watch_cycle_with_heartbeat(settings, cycle)
+
+
+def compose_watcher_on_stop(
+    stops: list[Callable[[], None]],
+    releases: list[Callable[[], int]],
+    closers: list[Callable[[], None]],
+) -> Callable[[], None]:
+    """Stop runtimes, then hand watcher leases over, then close resources.
+
+    Releases and closers run even when a stop raises; a failing release is
+    logged and leaves the lease to TTL expiry. The stop error still surfaces.
+    """
+
+    def on_stop() -> None:
+        try:
+            try:
+                for stop in stops:
+                    stop()
+            finally:
+                for release in releases:
+                    try:
+                        release()
+                    except Exception:
+                        logger.warning("paper_worker_lease_release_failed")
+        finally:
+            for close in closers:
+                close()
+
+    return on_stop
+
+
+def _append_release(releases: list[Callable[[], int]], runtime: object) -> None:
+    release = getattr(runtime, "release_held_leases", None)
+    if callable(release):
+        releases.append(release)
 
 
 def _static_cycle(status: str, *, error: str = "") -> Callable[[], CycleOutcome]:

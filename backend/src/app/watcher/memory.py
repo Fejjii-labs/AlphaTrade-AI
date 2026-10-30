@@ -360,6 +360,29 @@ class InMemoryWatcherStore:
             self._leases[key] = renewed
             return True
 
+    def release_lease(
+        self,
+        *,
+        organization_id: UUID,
+        scan_scope: str,
+        owner_id: str,
+        fencing_token: int,
+        now: datetime,
+    ) -> bool:
+        with self._lock:
+            if not self._fence_is_active_unlocked(
+                organization_id=organization_id,
+                scan_scope=scan_scope,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                now=now,
+            ):
+                return False
+            key = tenant_scope_key(organization_id, scan_scope)
+            current = self._leases[key]
+            self._leases[key] = current.model_copy(update={"renewed_at": now, "expires_at": now})
+            return True
+
     def get_lease(self, organization_id: UUID, scan_scope: str) -> WorkerLease | None:
         with self._lock:
             current = self._leases.get(tenant_scope_key(organization_id, scan_scope))

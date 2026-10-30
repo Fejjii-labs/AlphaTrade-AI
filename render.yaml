@@ -130,6 +130,10 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     dockerCommand: python -m app.workers.paper_worker
+    # SIGTERM grace (Render default 30s): watcher join up to 30s + lease
+    # release wait up to 10s + close, so a mid-cycle deploy still hands the
+    # watcher lease over instead of being SIGKILLed onto the TTL. Staging only.
+    maxShutdownDelaySeconds: 60
     envVars:
       - key: ENVIRONMENT
         value: staging
