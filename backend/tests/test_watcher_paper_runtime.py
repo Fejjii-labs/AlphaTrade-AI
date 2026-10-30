@@ -1183,3 +1183,151 @@ def test_monitor_poll_failure_warning_is_rate_limited(
     assert summary["error"] == "RuntimeError"
     assert "exc_info" not in summary
     assert names.count("market_monitor_snapshot_poll_recovered") == 1
+
+
+# --- interim monitor publishing (cadence independent of the scan cycle) ----------
+
+
+def _interim_runtime(session_factory, monkeypatch, *scans_spec):
+    import app.workers.watcher_paper as wp
+
+    runtime, _factory, polled = _publish_runtime(session_factory)
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(wp.time, "monotonic", lambda: clock["t"])
+    killed: set[object] = set()
+    monkeypatch.setattr(runtime, "_kill_switch_is_active", lambda _session, org: org in killed)
+    scans = _resolve(runtime, *(scans_spec or (_publish_scan("BTCUSDT"),)))
+    return runtime, polled, clock, killed, scans
+
+
+def test_interim_publish_follows_its_own_cadence(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.workers.watcher_paper as wp
+
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime.publish_due_monitor_snapshots()
+    assert polled == []  # nothing before a cycle-end publish by this worker
+    runtime._publish_monitor_snapshots(scans)
+    assert polled == ["BTCUSDT"]
+    clock["t"] += wp.MONITOR_PUBLISH_INTERVAL_SECONDS - 1
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]  # not due yet
+    clock["t"] += 1
+    runtime.publish_due_monitor_snapshots()
+    runtime.publish_due_monitor_snapshots()  # at most one poll per symbol per interval
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_interim_publish_rechecks_the_kill_switch(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, killed, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    killed.add(ORG)
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_interim_publish_needs_one_live_org_with_a_lease(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, killed, scans = _interim_runtime(
+        session_factory,
+        monkeypatch,
+        _publish_scan("BTCUSDT", org=ORG),
+        _publish_scan("BTCUSDT", org=ORG_B, scope="b"),
+        _publish_scan("ETHUSDT", owner="other-worker", scope="e"),
+    )
+    runtime._publish_monitor_snapshots(scans)
+    killed.add(ORG)
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT", "BTCUSDT"]  # ORG_B still live; ETH never leased here
+
+
+def test_interim_publish_stops_once_the_lease_view_is_older_than_its_ttl(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    clock["t"] += runtime._lease_ttl_seconds + 1
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+    # A new scan that still holds the lease renews eligibility.
+    runtime._note_monitor_eligibility(scans[0])
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_interim_publish_drops_a_scope_that_lost_its_lease_or_was_killed(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._note_monitor_eligibility(replace_owner(scans[0], "other-worker"))
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+    runtime._publish_monitor_snapshots([])  # next cycle without the scope
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_interim_publish_is_off_when_the_watcher_is_disabled(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._enabled = False
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_inter_cycle_wait_keeps_publishing_within_the_stale_cutoff(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    times = [clock["t"]]
+
+    def fake_wait(seconds: float) -> bool:
+        clock["t"] += seconds
+        return False
+
+    monkeypatch.setattr(runtime._stop, "wait", fake_wait)
+    original = runtime._poll_monitor_symbol
+
+    def record(poll, symbol):
+        times.append(clock["t"])
+        original(poll, symbol)
+
+    monkeypatch.setattr(runtime, "_poll_monitor_symbol", record)
+    runtime._wait_publishing_monitor(15.0)  # default watcher_paper_poll_interval_seconds
+    from itertools import pairwise
+
+    gaps = [b - a for a, b in pairwise(times)]
+    assert len(polled) == 1 + 1  # cycle end, then t+10
+    assert max(gaps) <= 30.0  # API stale cutoff (market_monitor_snapshot_stale_after_seconds)
+
+
+def test_inter_cycle_wait_returns_on_stop(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, _, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._stop.set()
+    runtime._wait_publishing_monitor(45.0)
+    assert polled == ["BTCUSDT"]
+
+
+def test_settings_publish_interval_is_well_inside_the_stale_cutoff() -> None:
+    settings = _settings()
+    assert settings.market_monitor_publish_interval_seconds == 10.0
+    assert (
+        2 * settings.market_monitor_publish_interval_seconds
+        <= settings.market_monitor_snapshot_stale_after_seconds
+    )
