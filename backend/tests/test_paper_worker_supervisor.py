@@ -912,12 +912,17 @@ def test_watcher_loop_stops_when_the_idle_hook_reports_stopped() -> None:
         poll_seconds=15.0,
         watcher_idle_wait=lambda _wait, _stop: True,
     )
-    worker = threading.Thread(target=supervisor._loop, args=(supervisor._watcher,))
+    worker = threading.Thread(target=supervisor._loop, args=(supervisor._watcher,), daemon=True)
     worker.start()
     worker.join(timeout=2.0)
-    assert not worker.is_alive()
+    alive = worker.is_alive()
+    stop_was_set = supervisor._stop.is_set()
+    # Bound the loop so a regression fails fast instead of hanging the suite.
+    supervisor._stop.set()
+    worker.join(timeout=2.0)
+    assert not alive
     assert calls["cycles"] == 1
-    assert supervisor._stop.is_set() is False
+    assert stop_was_set is False
 
 
 def test_local_composition_wires_the_watcher_monitor_idle_wait(
