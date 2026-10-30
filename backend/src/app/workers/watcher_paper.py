@@ -104,6 +104,8 @@ MONITOR_POLL_FAILURE_SUMMARY_SECONDS = 300.0
 # The API marks a row stale after 30 s. Scan cycles on staging run ~47 s, so the
 # worker also publishes between scans and during the inter-cycle wait.
 MONITOR_PUBLISH_INTERVAL_SECONDS = 10.0
+# Floor: bounds upstream request weight per symbol per lease-holding worker.
+MONITOR_PUBLISH_INTERVAL_FLOOR_SECONDS = 5.0
 
 PaperTargetLoader = Callable[[Session | None], tuple[PaperScanTarget, ...]]
 KillSwitchProbe = Callable[[UUID], bool]
@@ -344,9 +346,11 @@ class WatcherPaperRuntime:
         self._monitor_publish_unavailable_logged = False
         self._monitor_poll_failures: dict[str, list[float]] = {}
         # Monitor snapshot cadence, independent of the (much longer) scan cycle.
-        self._monitor_publish_interval = max(1.0, float(monitor_publish_interval_seconds))
-        # symbol -> {organization_id: monotonic time this worker last held its lease}
-        self._monitor_targets: dict[str, dict[UUID, float]] = {}
+        self._monitor_publish_interval = max(
+            MONITOR_PUBLISH_INTERVAL_FLOOR_SECONDS, float(monitor_publish_interval_seconds)
+        )
+        # symbol -> {(organization_id, scan_scope): monotonic time its lease was last seen}
+        self._monitor_targets: dict[str, dict[tuple[UUID, str], float]] = {}
         self._monitor_last_poll: dict[str, float] = {}
         self._target_loader = target_loader
         self._kill_switch_probe = kill_switch_probe
@@ -643,7 +647,7 @@ class WatcherPaperRuntime:
                     created += len(scan.candidate_ids)
                     any_kill = any_kill or scan.kill_switch_active
                     self._note_monitor_eligibility(scan)
-                    self.publish_due_monitor_snapshots()
+                    self._refresh_monitor_safely()
                 if not selected:
                     self._note_verified_contract_scans(set(), session=session, only_symbol=symbol)
             # Successful evaluations replay until the next 15m bar; the live monitor
@@ -718,12 +722,12 @@ class WatcherPaperRuntime:
                 )
             return
         symbols: list[str] = []
-        targets: dict[str, dict[UUID, float]] = {}
+        targets: dict[str, dict[tuple[UUID, str], float]] = {}
         observed = time.monotonic()
         for scan in scans:
             if scan.kill_switch_active or scan.lease_owner != self._worker_id:
                 continue
-            targets.setdefault(scan.symbol, {})[scan.organization_id] = observed
+            targets.setdefault(scan.symbol, {})[(scan.organization_id, scan.scan_scope)] = observed
             if scan.symbol not in symbols:
                 symbols.append(scan.symbol)
         # Interim publishing only follows this cycle's lease/kill-switch view.
@@ -743,10 +747,34 @@ class WatcherPaperRuntime:
             self._note_monitor_poll_success(symbol)
 
     def _note_monitor_eligibility(self, scan: WatcherPaperScanReport) -> None:
+        key = (scan.organization_id, scan.scan_scope)
         if scan.kill_switch_active or scan.lease_owner != self._worker_id:
-            self._monitor_targets.get(scan.symbol, {}).pop(scan.organization_id, None)
+            self._monitor_targets.get(scan.symbol, {}).pop(key, None)
             return
-        self._monitor_targets.setdefault(scan.symbol, {})[scan.organization_id] = time.monotonic()
+        self._monitor_targets.setdefault(scan.symbol, {})[key] = time.monotonic()
+
+    def _lease_still_held(self, organization_id: UUID, scan_scope: str) -> bool:
+        """Re-read the lease so a handover stops interim refreshes promptly."""
+
+        try:
+            lease = self._store.get_lease(organization_id, scan_scope)
+        except Exception:
+            return False
+        if lease is None or lease.owner_id != self._worker_id:
+            return False
+        return lease.expires_at is None or lease.expires_at > self._clock.now()
+
+    def _refresh_monitor_safely(self) -> None:
+        """Interim refresh never aborts a scan cycle or the worker loop."""
+
+        try:
+            self.publish_due_monitor_snapshots()
+        except Exception:
+            logger.warning(
+                "market_monitor_snapshot_interim_publish_failed",
+                worker_id=self._worker_id,
+                exc_info=True,
+            )
 
     def publish_due_monitor_snapshots(self) -> None:
         """Re-publish monitor snapshots between scan cycles. Read-only market data.
@@ -777,9 +805,12 @@ class WatcherPaperRuntime:
             session = self._session_factory()
         try:
             for symbol in due:
-                orgs = self._monitor_targets.get(symbol, {})
-                held = [org for org, seen in orgs.items() if now - seen <= self._lease_ttl_seconds]
-                live = [org for org in held if not self._kill_switch_is_active(session, org)]
+                scopes = self._monitor_targets.get(symbol, {})
+                recent = [k for k, seen in scopes.items() if now - seen <= self._lease_ttl_seconds]
+                held = [k for k in recent if self._lease_still_held(*k)]
+                for key in set(scopes) - set(held):
+                    scopes.pop(key, None)
+                live = [k for k in held if not self._kill_switch_is_active(session, k[0])]
                 if not live:
                     continue
                 self._poll_monitor_symbol(poll_monitor, symbol)
@@ -797,14 +828,7 @@ class WatcherPaperRuntime:
                 return
             if self._stop.wait(min(remaining, self._monitor_publish_interval)):
                 return
-            try:
-                self.publish_due_monitor_snapshots()
-            except Exception:
-                logger.warning(
-                    "market_monitor_snapshot_interim_publish_failed",
-                    worker_id=self._worker_id,
-                    exc_info=True,
-                )
+            self._refresh_monitor_safely()
 
     def _note_monitor_poll_failure(self, symbol: str) -> None:
         now = time.monotonic()

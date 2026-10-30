@@ -444,7 +444,7 @@ class Settings(BaseSettings):
     # API reads the worker-persisted monitor row. Older rows are reported stale.
     market_monitor_snapshot_stale_after_seconds: float = Field(default=30.0, ge=5.0, le=3600.0)
     # Paper worker re-publishes the monitor row on this cadence between scan cycles.
-    market_monitor_publish_interval_seconds: float = Field(default=10.0, ge=2.0, le=60.0)
+    market_monitor_publish_interval_seconds: float = Field(default=10.0, ge=5.0, le=60.0)
     # LOCAL only: let the API tick its own live monitor per request (upstream I/O).
     market_monitor_api_in_process_live: bool = False
 
