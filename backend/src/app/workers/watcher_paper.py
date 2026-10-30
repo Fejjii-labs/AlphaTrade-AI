@@ -821,14 +821,32 @@ class WatcherPaperRuntime:
     def _wait_publishing_monitor(self, wait: float) -> None:
         """Interruptible inter-cycle wait that keeps the monitor row fresh."""
 
+        self.wait_publishing_monitor(wait)
+
+    def wait_publishing_monitor(self, wait: float, stop: threading.Event | None = None) -> bool:
+        """Wait up to ``wait`` seconds, re-publishing due monitor snapshots.
+
+        Used by ``run_loop`` and by external schedulers (the consolidated paper
+        worker supervisor) that drive ``run_cycle`` themselves, so the interim
+        refresh runs whichever loop owns the inter-cycle sleep. Returns True
+        when ``stop`` (or this runtime's own stop) was set.
+        """
+
+        events = [self._stop] if stop is None or stop is self._stop else [self._stop, stop]
+
+        def stopped() -> bool:
+            return any(event.is_set() for event in events)
+
         deadline = time.monotonic() + max(0.0, wait)
-        while not self._stop.is_set():
+        while not stopped():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return
-            if self._stop.wait(min(remaining, self._monitor_publish_interval)):
-                return
+                return False
+            waiter = events[-1]
+            if waiter.wait(min(remaining, self._monitor_publish_interval)) or stopped():
+                return True
             self._refresh_monitor_safely()
+        return True
 
     def _note_monitor_poll_failure(self, symbol: str) -> None:
         now = time.monotonic()

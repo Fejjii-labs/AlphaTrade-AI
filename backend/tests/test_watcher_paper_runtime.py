@@ -1471,3 +1471,76 @@ def test_publish_interval_is_floored_at_five_seconds() -> None:
     assert build(12.0)._monitor_publish_interval == 12.0
     with pytest.raises(ValidationError):
         Settings(_env_file=None, market_monitor_publish_interval_seconds=4.0)
+
+
+# --- Staging condition: the consolidated paper worker supervisor drives
+# run_cycle() itself and owns the inter-cycle sleep, so run_loop's
+# _wait_publishing_monitor never ran there (f626a5c2 staging: ~26 s gaps).
+
+
+def _fake_waiting_event(clock: dict[str, float]):
+    import threading
+
+    class _Event(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            clock["t"] += float(timeout or 0.0)
+            return self.is_set()
+
+    return _Event()
+
+
+def test_supervisor_idle_wait_publishes_the_monitor_between_cycles(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.workers.paper_worker import PaperWorkerSupervisor
+
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: None,  # type: ignore[arg-type,return-value]
+        telegram_cycle=lambda: None,  # type: ignore[arg-type,return-value]
+        poll_seconds=15.0,
+        watcher_idle_wait=runtime.wait_publishing_monitor,
+    )
+    supervisor._stop = _fake_waiting_event(clock)
+    stopped = supervisor._idle(supervisor._watcher, 15.0)  # staging poll interval
+    assert stopped is False
+    assert polled == ["BTCUSDT", "BTCUSDT"]  # cycle end, then +10 s inside the wait
+
+
+def test_plain_supervisor_wait_reproduces_the_staging_gap(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.workers.paper_worker import PaperWorkerSupervisor
+
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: None,  # type: ignore[arg-type,return-value]
+        telegram_cycle=lambda: None,  # type: ignore[arg-type,return-value]
+        poll_seconds=15.0,
+    )
+    supervisor._stop = _fake_waiting_event(clock)
+    supervisor._idle(supervisor._watcher, 15.0)
+    assert polled == ["BTCUSDT"]  # no hook: nothing between cycles (pre-fix staging)
+
+
+def test_wait_publishing_monitor_honours_an_external_stop(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    stop = _fake_waiting_event(clock)
+    stop.set()
+    assert runtime.wait_publishing_monitor(45.0, stop) is True
+    assert polled == ["BTCUSDT"]
+
+
+def test_wait_publishing_monitor_keeps_gaps_under_the_stale_cutoff_with_external_stop(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    stop = _fake_waiting_event(clock)
+    assert runtime.wait_publishing_monitor(25.0, stop) is False
+    assert polled == ["BTCUSDT", "BTCUSDT", "BTCUSDT"]  # +10, +20
