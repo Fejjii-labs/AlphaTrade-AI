@@ -921,18 +921,7 @@ def _build_armed_supervisor(
                 research_session.commit()
         return outcome
 
-    def on_stop() -> None:
-        for stop in stops:
-            stop()
-        # After the loops joined and stopped: hand leases over without waiting
-        # for the TTL. Fenced per owner/token; a failure leaves TTL expiry.
-        for release in releases:
-            try:
-                release()
-            except Exception:
-                logger.warning("paper_worker_lease_release_failed")
-        for close in closers:
-            close()
+    on_stop = compose_watcher_on_stop(stops, releases, closers)
 
     return PaperWorkerSupervisor(
         watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
@@ -960,6 +949,35 @@ def _with_worker_heartbeat(
     from app.services.worker_heartbeat import watch_cycle_with_heartbeat
 
     return watch_cycle_with_heartbeat(settings, cycle)
+
+
+def compose_watcher_on_stop(
+    stops: list[Callable[[], None]],
+    releases: list[Callable[[], int]],
+    closers: list[Callable[[], None]],
+) -> Callable[[], None]:
+    """Stop runtimes, then hand watcher leases over, then close resources.
+
+    Releases and closers run even when a stop raises; a failing release is
+    logged and leaves the lease to TTL expiry. The stop error still surfaces.
+    """
+
+    def on_stop() -> None:
+        try:
+            try:
+                for stop in stops:
+                    stop()
+            finally:
+                for release in releases:
+                    try:
+                        release()
+                    except Exception:
+                        logger.warning("paper_worker_lease_release_failed")
+        finally:
+            for close in closers:
+                close()
+
+    return on_stop
 
 
 def _append_release(releases: list[Callable[[], int]], runtime: object) -> None:

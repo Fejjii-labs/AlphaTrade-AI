@@ -456,6 +456,8 @@ class WatcherPaperRuntime:
         """
 
         self._stop.set()
+        # Refuse later cycles even if the release below is skipped.
+        self._leases_released = True
         # Never release under an in-flight cycle: it could re-claim afterwards.
         if not self._cycle_lock.acquire(timeout=self._release_wait_seconds):
             logger.warning(
@@ -463,7 +465,6 @@ class WatcherPaperRuntime:
             )
             return 0
         try:
-            self._leases_released = True
             return self._release_held_leases_locked()
         finally:
             self._cycle_lock.release()
