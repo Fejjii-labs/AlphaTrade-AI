@@ -28,6 +28,14 @@ export function decodeAudio(encoded: string): Float32Array {
   return Float32Array.from({ length: bytes.length / 2 }, (_, i) => view.getInt16(i * 2, true) / 32768);
 }
 
+/** Root-mean-square amplitude of normalized samples, 0..1. */
+export function rms(samples: Float32Array): number {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (const value of samples) sum += value * value;
+  return Math.min(1, Math.sqrt(sum / samples.length));
+}
+
 /** Same-origin worklet (public/voice/capture-worklet.js); CSP needs no blob: source. */
 export const CAPTURE_WORKLET_URL = "/voice/capture-worklet.js";
 
@@ -37,6 +45,10 @@ export class RealtimeAudio {
   private capture: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private silence: GainNode | null = null;
+  private output: GainNode | null = null;
+  private inputMeter: AnalyserNode | null = null;
+  private outputMeter: AnalyserNode | null = null;
+  private meterBuffer: Float32Array<ArrayBuffer> | null = null;
   private outputs = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
   private item: { id: string; start: number; duration: number } | null = null;
@@ -66,6 +78,27 @@ export class RealtimeAudio {
     this.source.connect(this.capture);
     this.capture.connect(this.silence);
     this.silence.connect(context.destination);
+    // Level meters only read audio; nothing here is uploaded.
+    this.inputMeter = context.createAnalyser();
+    this.inputMeter.fftSize = 512;
+    this.source.connect(this.inputMeter);
+    this.output = context.createGain();
+    this.outputMeter = context.createAnalyser();
+    this.outputMeter.fftSize = 512;
+    this.output.connect(context.destination);
+    this.output.connect(this.outputMeter);
+  }
+
+  /** True while queued reply audio is still playing. */
+  playing(): boolean { return this.outputs.size > 0; }
+
+  /** Live RMS level (0..1) of the microphone or of the reply playback. */
+  level(kind: "input" | "output"): number {
+    const meter = kind === "input" ? this.inputMeter : this.outputMeter;
+    if (!meter) return 0;
+    if (this.meterBuffer?.length !== meter.fftSize) this.meterBuffer = new Float32Array(meter.fftSize);
+    meter.getFloatTimeDomainData(this.meterBuffer);
+    return rms(this.meterBuffer);
   }
 
   play(audio: string, itemId: string): void {
@@ -76,7 +109,7 @@ export class RealtimeAudio {
     buffer.copyToChannel(new Float32Array(samples), 0);
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.output ?? context.destination);
     const start = Math.max(context.currentTime + 0.015, this.nextStart);
     if (this.item?.id !== itemId) this.item = { id: itemId, start, duration: 0 };
     this.item.duration += buffer.duration;
@@ -104,6 +137,8 @@ export class RealtimeAudio {
     this.capture?.disconnect();
     if (this.capture) this.capture.port.onmessage = null;
     this.source?.disconnect(); this.silence?.disconnect();
+    this.output?.disconnect(); this.inputMeter?.disconnect(); this.outputMeter?.disconnect();
+    this.output = null; this.inputMeter = null; this.outputMeter = null;
     this.stream?.getTracks().forEach(track => track.stop());
     if (this.context) void this.context.close();
     this.capture = null; this.source = null; this.silence = null;

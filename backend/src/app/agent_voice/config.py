@@ -7,6 +7,7 @@ import math
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, Protocol
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -19,6 +20,19 @@ class VoiceUnavailableError(RuntimeError):
 
 
 VOICE_PROVIDER_MODES = frozenset({"live", "fallback"})
+
+# Receipt default before AGENT_VOICE_MAXIMUM_TURNS; a hands-free session that cannot
+# reserve at least this many turns fails closed exactly as it did before.
+LEGACY_DEFAULT_TURNS = 6
+# Hard upper bound for delegated voice turns, whatever the setting or receipt says.
+MAXIMUM_VOICE_TURNS = 24
+# Server VAD creates responses itself, so one may already be in flight when the cap is
+# reached (e.g. a barge-in while a delegated turn runs). That response is recorded and
+# may be billed; the reservation always covers it, so it can never breach the ceiling.
+RESPONSE_SLACK = 1
+# Hands-free keeps the microphone open, so submitted audio tracks wall-clock time. A
+# receipt that relies on the audio default gets up to its session length, if that fits.
+MAXIMUM_HANDS_FREE_AUDIO_SECONDS = 180
 
 
 def voice_route_refusal(settings: Settings) -> str | None:
@@ -76,8 +90,10 @@ class VoiceLimits(StrictModel):
     embedding: EmbeddingPrice | None = None
     maximum_seconds: int = Field(default=180, ge=10, le=300)
     maximum_audio_seconds: int = Field(default=90, ge=1, le=180)
-    maximum_turns: int = Field(default=6, ge=1, le=12)
-    maximum_responses: int = Field(default=12, ge=2, le=24)
+    maximum_turns: int = Field(default=LEGACY_DEFAULT_TURNS, ge=1, le=MAXIMUM_VOICE_TURNS)
+    # Every provider response counts, including server-VAD auto responses and
+    # interrupted ones; a delegated turn needs two (tool call + spoken reply).
+    maximum_responses: int = Field(default=12, ge=2, le=2 * MAXIMUM_VOICE_TURNS)
     maximum_output_tokens: int = Field(default=1024, ge=64, le=4096)
 
     @model_validator(mode="after")
@@ -125,7 +141,7 @@ class VoiceLimits(StrictModel):
             else Decimal(0)
         )
         return (
-            self.maximum_responses * response
+            (self.maximum_responses + RESPONSE_SLACK) * response
             + orphan_audio
             + self.maximum_turns * 4 * reasoning
             + embedding
@@ -137,7 +153,7 @@ class VoiceLimits(StrictModel):
 
     def reserved_tokens(self, settings: Settings) -> int:
         return math.ceil(
-            self.maximum_responses
+            (self.maximum_responses + RESPONSE_SLACK)
             * (self.realtime.maximum_input_tokens + self.maximum_output_tokens)
             + self.maximum_audio_seconds * self.realtime.maximum_audio_input_tokens_per_second
             + self.maximum_turns
@@ -153,6 +169,62 @@ class VoiceLimits(StrictModel):
             self.reasoning.valid_until,
             *([self.embedding.valid_until] if self.embedding else []),
         )
+
+
+class _TurnLimits(Protocol):
+    maximum_turns: int
+    session_ceiling_usd: Decimal
+    remaining_budget_usd: Decimal
+
+    @property
+    def model_fields_set(self) -> set[str]: ...
+
+    def model_dump(self) -> dict[str, Any]: ...
+
+    def reservation(self, settings: Settings) -> Decimal: ...
+
+
+def apply_turn_setting[T: _TurnLimits](limits: T, settings: Settings) -> T:
+    """Effective ``maximum_turns`` from ``AGENT_VOICE_MAXIMUM_TURNS``.
+
+    An explicit receipt value (and an explicit ``maximum_responses``) stays an upper
+    bound. A receipt that relies on the default gets the largest value between the
+    legacy default and the setting whose whole reservation fits the verified ceiling.
+    A realtime receipt that relies on the audio default first tries submitted audio up to
+    its session length (continuous mic); if no turn count fits that, the receipt value
+    stays. Nothing that was refused before is admitted: the floor is the legacy default and
+    the caller still runs its unchanged ceiling check.
+    """
+    explicit = "maximum_turns" in limits.model_fields_set
+    requested = min(settings.agent_voice_maximum_turns, MAXIMUM_VOICE_TURNS)
+    if explicit:
+        requested = min(requested, limits.maximum_turns)
+    paired = isinstance(limits, VoiceLimits)
+    responses_explicit = False
+    if isinstance(limits, VoiceLimits) and "maximum_responses" in limits.model_fields_set:
+        responses_explicit = True
+        requested = min(requested, limits.maximum_responses // 2)
+    floor = requested if explicit else min(requested, limits.maximum_turns)
+    ceiling = min(limits.session_ceiling_usd, limits.remaining_budget_usd)
+
+    def bounded(turns: int, **extra: int) -> T:
+        update: dict[str, Any] = {"maximum_turns": turns, **extra}
+        if paired and not responses_explicit:
+            update["maximum_responses"] = 2 * turns
+        return type(limits).model_validate(limits.model_dump() | update)  # type: ignore[attr-defined,no-any-return]
+
+    if isinstance(limits, VoiceLimits) and "maximum_audio_seconds" not in limits.model_fields_set:
+        audio = min(limits.maximum_seconds, MAXIMUM_HANDS_FREE_AUDIO_SECONDS)
+        if audio > limits.maximum_audio_seconds:
+            for turns in range(requested, floor - 1, -1):
+                candidate = bounded(turns, maximum_audio_seconds=audio)
+                if candidate.reservation(settings) <= ceiling:
+                    return candidate
+    for turns in range(requested, floor, -1):
+        candidate = bounded(turns)
+        if candidate.reservation(settings) <= ceiling:
+            return candidate
+    return bounded(floor)
 
 
 def load_limits(settings: Settings) -> VoiceLimits:
@@ -174,6 +246,10 @@ def load_limits(settings: Settings) -> VoiceLimits:
         raise VoiceUnavailableError("verified_reasoning_route_mismatch")
     if limits.embedding and limits.embedding.model != settings.embeddings_model:
         raise VoiceUnavailableError("verified_embedding_route_mismatch")
+    try:
+        limits = apply_turn_setting(limits, settings)
+    except ValidationError as exc:
+        raise VoiceUnavailableError("verified_realtime_limits_invalid") from exc
     if limits.reservation(settings) > min(limits.session_ceiling_usd, limits.remaining_budget_usd):
         raise VoiceUnavailableError("verified_cap_cannot_cover_session")
     return limits

@@ -230,6 +230,34 @@ class VoiceLedger:
 
         self.update(bind)
 
+    def provider_response(self, response_id: str) -> int:
+        """Admit and bind a response the provider created itself (server VAD).
+
+        It counts toward ``maximum_responses`` like a backend-created one, and so do
+        interrupted ones. An over-cap response is still recorded, because it may be
+        billed; the row then closes ``uncertain`` and the session fails closed.
+        Returns the response admissions left.
+        """
+
+        def admit(row: VoiceSessionReservation, data: dict[str, Any]) -> int:
+            if any(r.get("response_id") == response_id for r in data["responses"]):
+                return self.limits.maximum_responses - row.response_count
+            row.response_count += 1
+            data["responses"].append(
+                {
+                    "admission_id": str(uuid4()),
+                    "response_id": response_id,
+                    "state": "provider_created",
+                    "origin": "server_vad",
+                }
+            )
+            return self.limits.maximum_responses - row.response_count
+
+        left = int(self.update(admit))
+        if left < 0:
+            raise VoiceUnavailableError("voice_response_cap_exhausted")
+        return left
+
     def response_done(self, response: dict[str, Any]) -> None:
         # Never called with a client event. Only the authenticated upstream WS is trusted.
         response_id = str(response.get("id", ""))

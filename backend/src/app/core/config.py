@@ -200,6 +200,9 @@ class Settings(BaseSettings):
     # GPT Live is a separate disabled transport. It does not enable realtime.
     agent_live_enabled: bool = False
     agent_live_limits_file: str = ""
+    # Delegated voice turns per session. A receipt's explicit maximum_turns stays an
+    # upper bound, and the session reservation must still fit its verified ceiling.
+    agent_voice_maximum_turns: int = Field(default=20, ge=1, le=24)
 
     # --- Market watcher (Slice 41 — read-only, disabled by default) ---
     market_watcher_enabled: bool = False

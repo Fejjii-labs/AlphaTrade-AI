@@ -18,7 +18,10 @@ export type RealtimeSnapshot = Readonly<{
   endsAt?: number;
   turnsLeft?: number;
 }>;
-type AudioDevice = Pick<RealtimeAudio, "start" | "play" | "interrupt" | "stop">;
+type AudioDevice = Pick<RealtimeAudio, "start" | "play" | "interrupt" | "stop">
+  & Partial<Pick<RealtimeAudio, "level" | "playing">>;
+/** Live audio for the voice orb: reply output while it plays, otherwise the microphone. */
+export type VoiceMeter = Readonly<{ speaking: boolean; level: number }>;
 type VoiceConfiguration = {
   available: boolean; reason?: string | null; maximum_seconds?: number | null;
   maximum_turns?: number | null; provider?: Provider; transport?: "websocket_pcm24";
@@ -55,6 +58,8 @@ export class RealtimeVoiceController {
   private closingSockets = new Map<WebSocket, ReturnType<typeof setTimeout>>();
   private maximumSeconds = 180;
   private maximumTurns: number | null = null;
+  /** Reply item flushed by barge-in; its late deltas are never played. */
+  private discardedItem: string | null = null;
 
   constructor(private readonly options: Options) {
     this.audio = options.audio ?? new RealtimeAudio();
@@ -133,14 +138,16 @@ export class RealtimeVoiceController {
           ...(this.maximumTurns != null ? { turnsLeft: this.maximumTurns } : {}),
         });
         break;
-      case "speech.started": this.update({ state: "listening" }); break;
+      // Barge-in: the user started speaking, so the reply stops at once.
+      case "speech.started": this.flush(); this.update({ state: "listening" }); break;
+      case "response.interrupted": this.flush(); this.update({ state: "listening" }); break;
       case "speech.stopped": this.update({ state: "thinking" }); break;
       case "playback.clear": {
-        const position = this.audio.interrupt();
         if (this.provider === "gpt_live") {
+          this.audio.interrupt();
           if (event.muted === true) this.outputMuted = true;
           this.update({ state: "listening", outputMuted: this.outputMuted });
-        } else if (position) this.send({ type: "playback.truncate", ...position });
+        } else this.flush();
         break;
       }
       case "playback.ready":
@@ -152,7 +159,7 @@ export class RealtimeVoiceController {
         break;
       case "audio.delta":
         if (typeof event.audio !== "string" || typeof event.item_id !== "string") throw new Error("Invalid audio.");
-        if (this.outputMuted) break;
+        if (this.outputMuted || event.item_id === this.discardedItem) break;
         this.audio.play(event.audio, event.item_id); this.update({ state: "speaking" }); break;
       case "response.done":
         if (this.provider === "realtime") this.update({ state: "listening" });
@@ -205,6 +212,20 @@ export class RealtimeVoiceController {
     }
   }
 
+  /** Stop and drop queued reply audio; report the heard position so the reply is truncated. */
+  private flush(): void {
+    const position = this.audio.interrupt();
+    if (!position) return;
+    this.discardedItem = position.item_id;
+    if (this.provider === "realtime") this.send({ type: "playback.truncate", ...position });
+  }
+
+  /** Output level while the reply plays, microphone level otherwise. */
+  meter(): VoiceMeter {
+    const speaking = this.audio.playing?.() ?? false;
+    return { speaking, level: this.audio.level?.(speaking ? "output" : "input") ?? 0 };
+  }
+
   private send(event: Record<string, unknown>): void {
     if (this.socket?.readyState === 1) {
       if (this.socket.bufferedAmount > 192000) { this.fail("Voice connection is too slow. Continue typing."); return; }
@@ -214,6 +235,7 @@ export class RealtimeVoiceController {
 
   interrupt(): void {
     const position = this.audio.interrupt();
+    if (position) this.discardedItem = position.item_id;
     if (this.provider === "gpt_live") {
       this.outputMuted = true;
       this.resumePending = false;
@@ -236,6 +258,7 @@ export class RealtimeVoiceController {
   end(): void {
     const generation = ++this.generation;
     this.ready = false;
+    this.discardedItem = null;
     this.resumePending = false;
     this.outputMuted = false;
     this.controller?.abort(); this.controller = null;

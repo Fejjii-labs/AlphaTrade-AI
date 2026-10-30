@@ -362,4 +362,42 @@ describe("reason codes, limits, countdown and turns (UI overhaul B7b)", () => {
     f.controller.end();
     expect(f.states.at(-1)).toMatchObject({ active: false, endsAt: undefined, turnsLeft: undefined });
   });
+
+  it("barge-in: user speech flushes playback at once, truncates and drops late reply audio", async () => {
+    const f = fixture(); await f.controller.start(); f.socket.onopen?.();
+    f.socket.emit({ type: "session.ready" });
+    f.socket.emit({ type: "audio.delta", audio: "AAA=", item_id: "reply-1" });
+    expect(f.audio.play).toHaveBeenCalledTimes(1);
+    f.audio.interrupt.mockReturnValueOnce({ item_id: "reply-1", audio_end_ms: 320 });
+    f.socket.emit({ type: "speech.started" });
+    expect(f.audio.interrupt).toHaveBeenCalledTimes(1);
+    expect(f.socket.sent.at(-1)).toEqual({ type: "playback.truncate", item_id: "reply-1", audio_end_ms: 320 });
+    expect(f.states.at(-1)?.state).toBe("listening");
+    // The reply was cancelled upstream; a delta already in flight is not played.
+    f.socket.emit({ type: "audio.delta", audio: "AAA=", item_id: "reply-1" });
+    expect(f.audio.play).toHaveBeenCalledTimes(1);
+    f.socket.emit({ type: "audio.delta", audio: "AAA=", item_id: "reply-2" });
+    expect(f.audio.play).toHaveBeenCalledTimes(2);
+  });
+  it("forwards a server interruption to playback without ending the hands-free session", async () => {
+    const f = fixture(); await f.controller.start(); f.socket.onopen?.();
+    f.socket.emit({ type: "session.ready" });
+    f.socket.emit({ type: "audio.delta", audio: "AAA=", item_id: "reply-1" });
+    f.socket.emit({ type: "response.interrupted" });
+    f.socket.emit({ type: "response.done" });
+    expect(f.audio.interrupt).toHaveBeenCalled();
+    expect(f.states.at(-1)).toMatchObject({ state: "listening", active: true, error: null });
+    // Next turn needs no button press: server VAD drives it.
+    f.socket.emit({ type: "speech.stopped" });
+    expect(f.states.at(-1)?.state).toBe("thinking");
+  });
+  it("meters reply output while it plays and the microphone otherwise", async () => {
+    const level = vi.fn((kind: "input" | "output") => kind === "output" ? 0.4 : 0.1);
+    const playing = vi.fn().mockReturnValue(false);
+    const audio = { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn(), play: vi.fn(), interrupt: vi.fn().mockReturnValue(null), level, playing };
+    const f = fixture({ audio });
+    expect(f.controller.meter()).toEqual({ speaking: false, level: 0.1 });
+    playing.mockReturnValue(true);
+    expect(f.controller.meter()).toEqual({ speaking: true, level: 0.4 });
+  });
 });
