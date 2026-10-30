@@ -1183,3 +1183,291 @@ def test_monitor_poll_failure_warning_is_rate_limited(
     assert summary["error"] == "RuntimeError"
     assert "exc_info" not in summary
     assert names.count("market_monitor_snapshot_poll_recovered") == 1
+
+
+# --- interim monitor publishing (cadence independent of the scan cycle) ----------
+
+
+def _interim_runtime(session_factory, monkeypatch, *scans_spec):
+    import app.workers.watcher_paper as wp
+
+    runtime, _factory, polled = _publish_runtime(session_factory)
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(wp.time, "monotonic", lambda: clock["t"])
+    killed: set[object] = set()
+    monkeypatch.setattr(runtime, "_kill_switch_is_active", lambda _session, org: org in killed)
+    runtime.lost_leases = set()
+    monkeypatch.setattr(
+        runtime, "_lease_still_held", lambda org, scope: (org, scope) not in runtime.lost_leases
+    )
+    scans = _resolve(runtime, *(scans_spec or (_publish_scan("BTCUSDT"),)))
+    return runtime, polled, clock, killed, scans
+
+
+def test_interim_publish_follows_its_own_cadence(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.workers.watcher_paper as wp
+
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime.publish_due_monitor_snapshots()
+    assert polled == []  # nothing before a cycle-end publish by this worker
+    runtime._publish_monitor_snapshots(scans)
+    assert polled == ["BTCUSDT"]
+    clock["t"] += wp.MONITOR_PUBLISH_INTERVAL_SECONDS - 1
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]  # not due yet
+    clock["t"] += 1
+    runtime.publish_due_monitor_snapshots()
+    runtime.publish_due_monitor_snapshots()  # at most one poll per symbol per interval
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_interim_publish_rechecks_the_kill_switch(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, killed, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    killed.add(ORG)
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_interim_publish_needs_one_live_org_with_a_lease(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, killed, scans = _interim_runtime(
+        session_factory,
+        monkeypatch,
+        _publish_scan("BTCUSDT", org=ORG),
+        _publish_scan("BTCUSDT", org=ORG_B, scope="b"),
+        _publish_scan("ETHUSDT", owner="other-worker", scope="e"),
+    )
+    runtime._publish_monitor_snapshots(scans)
+    killed.add(ORG)
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT", "BTCUSDT"]  # ORG_B still live; ETH never leased here
+
+
+def test_interim_publish_stops_once_the_lease_view_is_older_than_its_ttl(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    clock["t"] += runtime._lease_ttl_seconds + 1
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+    # A new scan that still holds the lease renews eligibility.
+    runtime._note_monitor_eligibility(scans[0])
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_interim_publish_drops_a_scope_that_lost_its_lease_or_was_killed(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._note_monitor_eligibility(replace_owner(scans[0], "other-worker"))
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+    runtime._publish_monitor_snapshots([])  # next cycle without the scope
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_interim_publish_is_off_when_the_watcher_is_disabled(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._enabled = False
+    clock["t"] += 10
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+
+
+def test_inter_cycle_wait_keeps_publishing_within_the_stale_cutoff(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    times = [clock["t"]]
+
+    def fake_wait(seconds: float) -> bool:
+        clock["t"] += seconds
+        return False
+
+    monkeypatch.setattr(runtime._stop, "wait", fake_wait)
+    original = runtime._poll_monitor_symbol
+
+    def record(poll, symbol):
+        times.append(clock["t"])
+        original(poll, symbol)
+
+    monkeypatch.setattr(runtime, "_poll_monitor_symbol", record)
+    runtime._wait_publishing_monitor(15.0)  # default watcher_paper_poll_interval_seconds
+    from itertools import pairwise
+
+    gaps = [b - a for a, b in pairwise(times)]
+    assert len(polled) == 1 + 1  # cycle end, then t+10
+    assert max(gaps) <= 30.0  # API stale cutoff (market_monitor_snapshot_stale_after_seconds)
+
+
+def test_inter_cycle_wait_returns_on_stop(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, _, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime._stop.set()
+    runtime._wait_publishing_monitor(45.0)
+    assert polled == ["BTCUSDT"]
+
+
+def test_settings_publish_interval_is_well_inside_the_stale_cutoff() -> None:
+    settings = _settings()
+    assert settings.market_monitor_publish_interval_seconds == 10.0
+    assert (
+        2 * settings.market_monitor_publish_interval_seconds
+        <= settings.market_monitor_snapshot_stale_after_seconds
+    )
+
+
+def test_interim_publish_stops_promptly_on_lease_handover(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    runtime.lost_leases.add((scans[0].organization_id, scans[0].scan_scope))
+    clock["t"] += 10  # well inside the lease TTL
+    runtime.publish_due_monitor_snapshots()
+    assert polled == ["BTCUSDT"]
+    assert runtime._monitor_targets["BTCUSDT"] == {}
+
+
+def test_lease_still_held_reads_the_store_and_fails_closed(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    runtime, _, _ = _publish_runtime(session_factory)
+    now = runtime._clock.now()
+    leases = {
+        "mine": SimpleNamespace(
+            owner_id=runtime._worker_id, expires_at=now + timedelta(seconds=60)
+        ),
+        "other": SimpleNamespace(owner_id="other-worker", expires_at=now + timedelta(seconds=60)),
+        "expired": SimpleNamespace(
+            owner_id=runtime._worker_id, expires_at=now - timedelta(seconds=1)
+        ),
+    }
+
+    class Store:
+        def get_lease(self, _org, scope):
+            if scope == "boom":
+                raise RuntimeError("db down")
+            return leases.get(scope)
+
+    monkeypatch.setattr(runtime, "_store", Store())
+    assert runtime._lease_still_held(ORG, "mine") is True
+    assert runtime._lease_still_held(ORG, "other") is False
+    assert runtime._lease_still_held(ORG, "expired") is False
+    assert runtime._lease_still_held(ORG, "missing") is False
+    assert runtime._lease_still_held(ORG, "boom") is False
+
+
+def test_in_cycle_refresh_failure_does_not_abort_the_cycle(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Griller PR394 C1: a DB/session failure in the in-loop refresh is isolated.
+    with session_factory() as session:
+        _seed_approved_compiled(session)
+        targets = list_paper_scan_targets(
+            session, symbols=["BTCUSDT"], organization_id=ORG, limit=1
+        )
+    world = make_world(include_resistance=False)
+    factory = _world_factory(world)
+    polled: list[str] = []
+    factory.poll_monitor = lambda symbol: polled.append(symbol)
+    runtime, _, _, _ = _runtime(
+        session_factory,
+        world=world,
+        evidence_factory=factory,
+        target_loader=lambda _session: tuple(targets) * 2,
+    )
+    calls = {"n": 0}
+
+    def broken() -> None:
+        calls["n"] += 1
+        raise RuntimeError("session factory down")
+
+    monkeypatch.setattr(runtime, "publish_due_monitor_snapshots", broken)
+    report = runtime.run_cycle()
+    assert calls["n"] == 2  # called after each scan
+    assert len(report.scans) == 2  # the second scan still ran
+    assert polled == ["BTCUSDT"]  # cycle-end publish still happened
+
+
+def test_cycle_error_clears_interim_refresh_targets(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Griller PR394 W5.
+    runtime, _, _, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    assert runtime._monitor_targets
+
+    def failing_cycle():
+        raise RuntimeError("cycle failed")
+
+    monkeypatch.setattr(runtime, "run_cycle", failing_cycle)
+    runtime.run_loop(max_cycles=1)
+    assert runtime._monitor_targets == {}
+
+
+def test_wait_loop_survives_a_refresh_failure(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Griller PR394 W6: removing the isolation would raise out of the wait loop.
+    runtime, _, clock, _, _ = _interim_runtime(session_factory, monkeypatch)
+    calls = {"n": 0}
+
+    def broken() -> None:
+        calls["n"] += 1
+        raise RuntimeError("db down")
+
+    def fake_wait(seconds: float) -> bool:
+        clock["t"] += seconds
+        return False
+
+    monkeypatch.setattr(runtime, "publish_due_monitor_snapshots", broken)
+    monkeypatch.setattr(runtime._stop, "wait", fake_wait)
+    runtime._wait_publishing_monitor(25.0)
+    assert calls["n"] == 3  # t+10, t+20, t+25: kept going after each failure
+
+
+def test_publish_interval_is_floored_at_five_seconds() -> None:
+    from pydantic import ValidationError
+
+    import app.workers.watcher_paper as wp
+
+    def build(interval: float) -> WatcherPaperRuntime:
+        return WatcherPaperRuntime(
+            store=InMemoryWatcherStore(),
+            lifecycle=CandidateLifecycleService(
+                repository=InMemoryCandidateRepository(), clock=BoundEvaluationClock()
+            ),
+            clock=FakeClock(),
+            enabled=True,
+            monitor_publish_interval_seconds=interval,
+        )
+
+    assert wp.MONITOR_PUBLISH_INTERVAL_FLOOR_SECONDS == 5.0
+    assert build(1.0)._monitor_publish_interval == 5.0
+    assert build(12.0)._monitor_publish_interval == 12.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, market_monitor_publish_interval_seconds=4.0)
