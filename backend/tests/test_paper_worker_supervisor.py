@@ -895,3 +895,75 @@ def test_watcher_loop_uses_the_idle_wait_between_cycles() -> None:
     )
     supervisor._loop(supervisor._watcher)
     assert calls == {"cycles": 2, "idle": 2}
+
+
+def test_watcher_loop_stops_when_the_idle_hook_reports_stopped() -> None:
+    """X8: a True from the hook ends the loop even if the supervisor event is unset."""
+
+    calls = {"cycles": 0}
+
+    def cycle() -> CycleOutcome:
+        calls["cycles"] += 1
+        return CycleOutcome(status="running")
+
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=cycle,
+        telegram_cycle=_idle,
+        poll_seconds=15.0,
+        watcher_idle_wait=lambda _wait, _stop: True,
+    )
+    worker = threading.Thread(target=supervisor._loop, args=(supervisor._watcher,))
+    worker.start()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+    assert calls["cycles"] == 1
+    assert supervisor._stop.is_set() is False
+
+
+def test_local_composition_wires_the_watcher_monitor_idle_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """X2: the local paper branch connects the same hook as staging."""
+
+    settings = get_settings().model_copy(deep=True)
+    waits: list[float] = []
+
+    class _Runtime:
+        def run_cycle(self) -> WatcherPaperCycleReport:
+            raise AssertionError("not called")
+
+        def wait_publishing_monitor(self, wait: float, stop: threading.Event) -> bool:
+            waits.append(wait)
+            return stop.is_set()
+
+        def stop(self) -> None:
+            return None
+
+    class _Telegram:
+        def run_cycle(self) -> TelegramRuntimeCycle:
+            raise AssertionError("not called")
+
+        def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: object())
+    monkeypatch.setattr(
+        "app.workers.paper_worker.paper_runtime_enabled", lambda _s: True, raising=False
+    )
+    monkeypatch.setattr("app.workers.watcher_paper.paper_runtime_enabled", lambda _s: True)
+    monkeypatch.setattr(
+        "app.workers.watcher_paper.build_watcher_paper_runtime", lambda *_a, **_k: _Runtime()
+    )
+    monkeypatch.setattr(
+        "app.telegram_activation.runtime.build_telegram_runtime", lambda *_a, **_k: _Telegram()
+    )
+    from app.core.config import Environment
+
+    settings.environment = Environment.LOCAL
+    supervisor = build_paper_worker_supervisor(settings)
+    try:
+        assert supervisor._watcher.idle_wait is not None
+        assert supervisor._idle(supervisor._watcher, 15.0) is False
+        assert waits == [15.0]
+    finally:
+        supervisor.close()

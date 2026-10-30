@@ -106,6 +106,8 @@ MONITOR_POLL_FAILURE_SUMMARY_SECONDS = 300.0
 MONITOR_PUBLISH_INTERVAL_SECONDS = 10.0
 # Floor: bounds upstream request weight per symbol per lease-holding worker.
 MONITOR_PUBLISH_INTERVAL_FLOOR_SECONDS = 5.0
+# Max latency to notice the runtime's own stop while waiting on a caller's event.
+MONITOR_STOP_POLL_SECONDS = 0.25
 
 PaperTargetLoader = Callable[[Session | None], tuple[PaperScanTarget, ...]]
 KillSwitchProbe = Callable[[UUID], bool]
@@ -837,15 +839,25 @@ class WatcherPaperRuntime:
         def stopped() -> bool:
             return any(event.is_set() for event in events)
 
-        deadline = time.monotonic() + max(0.0, wait)
+        # With two events, wait on the caller's in short slices so a stop of
+        # either one is noticed within MONITOR_STOP_POLL_SECONDS.
+        slice_cap = MONITOR_STOP_POLL_SECONDS if len(events) > 1 else self._monitor_publish_interval
+        waiter = events[-1]
+        start = time.monotonic()
+        deadline = start + max(0.0, wait)
+        next_refresh = start + self._monitor_publish_interval
         while not stopped():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            now = time.monotonic()
+            if now >= deadline:
                 return False
-            waiter = events[-1]
-            if waiter.wait(min(remaining, self._monitor_publish_interval)) or stopped():
+            timeout = min(deadline, next_refresh) - now
+            if waiter.wait(max(0.0, min(timeout, slice_cap))) or stopped():
                 return True
-            self._refresh_monitor_safely()
+            after = time.monotonic()
+            # Same cadence as before: refresh each interval and once at the deadline.
+            if after >= next_refresh or after >= deadline:
+                self._refresh_monitor_safely()
+                next_refresh = time.monotonic() + self._monitor_publish_interval
         return True
 
     def _note_monitor_poll_failure(self, symbol: str) -> None:

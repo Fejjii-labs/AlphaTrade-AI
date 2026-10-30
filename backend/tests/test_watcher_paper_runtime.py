@@ -1528,12 +1528,67 @@ def test_plain_supervisor_wait_reproduces_the_staging_gap(
 def test_wait_publishing_monitor_honours_an_external_stop(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    runtime, polled, _clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    import threading
+
+    stop = threading.Event()
+    stop.set()
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(runtime.wait_publishing_monitor(45.0, stop))
+    )
+    worker.start()
+    worker.join(timeout=2.0)  # fail fast instead of hanging if the stop is ignored (X5)
+    assert not worker.is_alive()
+    assert result == [True]
+    assert polled == ["BTCUSDT"]
+
+
+def test_wait_publishing_monitor_returns_true_when_stopped_mid_wait(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """X7: a stop arriving during the wait must be reported as stopped."""
+
     runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
     runtime._publish_monitor_snapshots(scans)
     stop = _fake_waiting_event(clock)
-    stop.set()
+    original = runtime._refresh_monitor_safely
+
+    def refresh_then_stop() -> None:
+        original()
+        stop.set()
+
+    monkeypatch.setattr(runtime, "_refresh_monitor_safely", refresh_then_stop)
     assert runtime.wait_publishing_monitor(45.0, stop) is True
-    assert polled == ["BTCUSDT"]
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_wait_publishing_monitor_notices_the_runtime_stop_promptly(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-blocker 1: the runtime's own stop ends a supervisor-driven wait quickly."""
+
+    import threading
+    import time as real_time
+
+    runtime, _polled, _clock, _, _scans = _interim_runtime(session_factory, monkeypatch)
+    import app.workers.watcher_paper as wp
+
+    monkeypatch.setattr(wp.time, "monotonic", real_time.monotonic)
+    external = threading.Event()
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(runtime.wait_publishing_monitor(30.0, external))
+    )
+    worker.start()
+    real_time.sleep(0.1)
+    started = real_time.monotonic()
+    runtime._stop.set()
+    worker.join(timeout=3.0)
+    assert not worker.is_alive()
+    assert result == [True]
+    assert real_time.monotonic() - started < 1.0
 
 
 def test_wait_publishing_monitor_keeps_gaps_under_the_stale_cutoff_with_external_stop(
