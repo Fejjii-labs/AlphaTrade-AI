@@ -615,6 +615,7 @@ def test_evidence_missing_row_fails_closed_with_zero_upstream_calls(
     assert body["current_price"]["usable_as_current_market_price"] is False
     assert body["current_price"]["price"] is None
     assert body["unavailable_reason"] == "monitor_state_missing"
+    assert body["source"]["is_live"] is False
     assert body["setup_evidence"]["available"] is False
     assert body["setup_evidence"]["reason"] == "setup_not_persisted"
     assert body["live_executable"] is False
@@ -665,6 +666,7 @@ def test_evidence_old_row_is_stale_and_price_dropped(
     assert body["current_price"]["usable_as_current_market_price"] is False
     assert body["current_price"]["price"] is None
     assert body["unavailable_reason"] == "monitor_state_stale"
+    assert body["source"]["is_live"] is False
     assert no_live_evidence_source == []
 
 

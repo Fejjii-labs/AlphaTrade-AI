@@ -31,6 +31,7 @@ from app.market_monitor.persisted import PersistedMarketMonitorReader
 from app.market_monitor.service import status_from_snapshot
 
 SETUP_NOT_PERSISTED = "setup_not_persisted"
+MONITOR_STATE_NOT_CURRENT = frozenset({"monitor_state_missing", "monitor_state_stale"})
 
 
 class CanonicalEvidenceReader(Protocol):
@@ -68,10 +69,14 @@ class PersistedCanonicalEvidenceService:
         unavailable = None
         if not price.usable_as_current_market_price:
             unavailable = status.unavailable_reason or price.presentation
+        source = status.source
+        if unavailable in MONITOR_STATE_NOT_CURRENT:
+            # No current worker state: the source is not a live feed right now.
+            source = source.model_copy(update={"is_live": False})
         return CanonicalEvidenceRead(
             organization_id=str(organization_id),
             symbol=snapshot.provider_symbol,
-            source=status.source,
+            source=source,
             current_price=price,
             setup_evidence=setup,
             market_intelligence=(),
