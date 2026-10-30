@@ -422,6 +422,29 @@ class PostgresWatcherStore:
 
         return self._run(work)
 
+    def release_lease(
+        self,
+        *,
+        organization_id: UUID,
+        scan_scope: str,
+        owner_id: str,
+        fencing_token: int,
+        now: datetime,
+    ) -> bool:
+        def work(session: Session) -> bool:
+            current = _lock_lease(session, organization_id, scan_scope)
+            if current is None:
+                return False
+            self._reject_mismatch(current.organization_id, organization_id, record="lease")
+            if not _fence_matches(current, owner_id, fencing_token, now):
+                return False
+            current.renewed_at = now
+            current.expires_at = now
+            session.flush()
+            return True
+
+        return self._run(work)
+
     def get_lease(self, organization_id: UUID, scan_scope: str) -> WorkerLease | None:
         def work(session: Session) -> WorkerLease | None:
             current = _load_lease(session, organization_id, scan_scope)

@@ -122,6 +122,22 @@ class WatcherStore(Protocol):
         now: datetime,
     ) -> bool: ...
 
+    def release_lease(
+        self,
+        *,
+        organization_id: UUID,
+        scan_scope: str,
+        owner_id: str,
+        fencing_token: int,
+        now: datetime,
+    ) -> bool:
+        """Expire one lease now, only if ``owner_id`` still holds ``fencing_token``.
+
+        Owner, epoch and token are kept, so the next claim takes over with a new
+        epoch exactly as after a natural expiry. Any mismatch is a no-op (False).
+        """
+        ...
+
     def get_lease(self, organization_id: UUID, scan_scope: str) -> WorkerLease | None: ...
 
     def fence_is_active(

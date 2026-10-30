@@ -379,6 +379,8 @@ class WatcherPaperRuntime:
         self._thread: threading.Thread | None = None
         self._status_lock = threading.Lock()
         self._held_fencing_tokens: OrderedDict[str, int] = OrderedDict()
+        self._cycle_lock = threading.Lock()
+        self._leases_released = False
         self._fence_organizations: dict[str, UUID] = {}
         self._fence_capacity = max_scopes_per_cycle * (
             ceil(lease_ttl_seconds / max(1, poll_interval_seconds)) + 2
@@ -444,6 +446,60 @@ class WatcherPaperRuntime:
         set_runtime_active(False)
         logger.info("watcher_paper_runtime_stop", worker_id=self._worker_id)
 
+    def release_held_leases(self) -> int:
+        """Expire leases this worker still holds so a successor claims at once.
+
+        Call only after the scan loop has stopped. Each release is fenced on this
+        worker's owner_id and the fencing token it was granted, so a lease that
+        was already taken over is never touched. Errors are logged and skipped:
+        the lease then simply expires on its TTL. No trading path runs.
+        """
+
+        self._stop.set()
+        # Never release under an in-flight cycle: it could re-claim afterwards.
+        if not self._cycle_lock.acquire(timeout=self._release_wait_seconds):
+            logger.warning(
+                "watcher_paper_lease_release_skipped_cycle_running", worker_id=self._worker_id
+            )
+            return 0
+        try:
+            self._leases_released = True
+            return self._release_held_leases_locked()
+        finally:
+            self._cycle_lock.release()
+
+    _release_wait_seconds: float = 10.0
+
+    def _release_held_leases_locked(self) -> int:
+        released = 0
+        for scope, token in list(self._held_fencing_tokens.items()):
+            organization_id = self._fence_organizations.get(scope)
+            if organization_id is None:
+                continue
+            try:
+                ok = self._store.release_lease(
+                    organization_id=organization_id,
+                    scan_scope=scope,
+                    owner_id=self._worker_id,
+                    fencing_token=token,
+                    now=self._clock.now(),
+                )
+            except Exception:
+                logger.warning(
+                    "watcher_paper_lease_release_failed",
+                    worker_id=self._worker_id,
+                    scan_scope=scope,
+                    exc_info=True,
+                )
+                continue
+            self._held_fencing_tokens.pop(scope, None)
+            self._fence_organizations.pop(scope, None)
+            if ok:
+                released += 1
+        self._monitor_targets = {}
+        logger.info("watcher_paper_leases_released", worker_id=self._worker_id, released=released)
+        return released
+
     def run_loop(self, *, max_cycles: int | None = None) -> int:
         """Run bounded poll cycles until stopped. Interruptible sleep."""
 
@@ -504,9 +560,18 @@ class WatcherPaperRuntime:
 
         signal.signal(signal.SIGINT, _handle)
         signal.signal(signal.SIGTERM, _handle)
-        return self.run_loop()
+        try:
+            return self.run_loop()
+        finally:
+            self.release_held_leases()
 
     def run_cycle(self) -> WatcherPaperCycleReport:
+        with self._cycle_lock:
+            if self._leases_released:
+                raise RuntimeError("watcher_paper_runtime_released")
+            return self._run_cycle_locked()
+
+    def _run_cycle_locked(self) -> WatcherPaperCycleReport:
         if not self._tenant_watchlists:
             return self._run_cycle()
         self._assignment_observations = {}

@@ -848,6 +848,7 @@ def _build_armed_supervisor(
     factory = get_session_factory()
     closers: list[Callable[[], None]] = []
     stops: list[Callable[[], None]] = []
+    releases: list[Callable[[], int]] = []
     watcher_idle_wait: Callable[[float, threading.Event], bool] | None = None
     clock = UtcClock()
     instance_id = new_worker_instance_id(watcher_settings.watcher_paper_worker_id)
@@ -881,6 +882,7 @@ def _build_armed_supervisor(
             else:
                 closers.append(session.close)
                 stops.append(session.runtime.stop)
+                _append_release(releases, session.runtime)
                 watcher_cycle = _scanning_watcher_cycle(session.runtime)
                 watcher_idle_wait = getattr(session.runtime, "wait_publishing_monitor", None)
     elif paper_runtime_enabled(watcher_settings):
@@ -890,6 +892,7 @@ def _build_armed_supervisor(
             worker_id=instance_id,
         )
         stops.append(runtime.stop)
+        _append_release(releases, runtime)
         watcher_cycle = _scanning_watcher_cycle(runtime)
         watcher_idle_wait = getattr(runtime, "wait_publishing_monitor", None)
     else:
@@ -921,6 +924,13 @@ def _build_armed_supervisor(
     def on_stop() -> None:
         for stop in stops:
             stop()
+        # After the loops joined and stopped: hand leases over without waiting
+        # for the TTL. Fenced per owner/token; a failure leaves TTL expiry.
+        for release in releases:
+            try:
+                release()
+            except Exception:
+                logger.warning("paper_worker_lease_release_failed")
         for close in closers:
             close()
 
@@ -950,6 +960,12 @@ def _with_worker_heartbeat(
     from app.services.worker_heartbeat import watch_cycle_with_heartbeat
 
     return watch_cycle_with_heartbeat(settings, cycle)
+
+
+def _append_release(releases: list[Callable[[], int]], runtime: object) -> None:
+    release = getattr(runtime, "release_held_leases", None)
+    if callable(release):
+        releases.append(release)
 
 
 def _static_cycle(status: str, *, error: str = "") -> Callable[[], CycleOutcome]:
