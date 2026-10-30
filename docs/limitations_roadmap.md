@@ -34,7 +34,6 @@ Real-money execution is permanently refused by the inspected source. It cannot b
 | No Postgres test for two concurrent first voice reserves | Griller review of #322 |
 | Abandoned GETs can occupy all 8 API threads | Griller review of #321 |
 | AT014 staging test orgs keep active kill switches | staging DB `kill_switch_states` |
-| Legacy `ai-alphatrade-api-staging` missing env (REDIS_URL, OPENAI_API_KEY, TRUSTED_PROXY_HOPS) | Render |
 | Autonomous paper loop armed on staging; first automatic trade not yet observed | `/health/paper-worker` |
 | SFP / Nested 1-2 tuning with the owner | — |
 | UI walkthrough → prioritized fix list | — |

@@ -304,5 +304,3 @@ See [notifications.md](notifications.md) and [alerts.md](alerts.md).
   repo is public, manual deploys still succeed, which hides the gap.
 - Verify after a merge: the newest deploy on both services should show trigger
   `new_commit` for the merge SHA. If it shows only `api`, check the app install.
-- `ai-alphatrade-api-staging` (`srv-d8fvblmrnols73d2j1j0`) is a legacy
-  duplicate with auto-deploy off and incomplete env; do not deploy it.
