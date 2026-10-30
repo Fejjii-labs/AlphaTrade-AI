@@ -1489,6 +1489,27 @@ def _fake_waiting_event(clock: dict[str, float]):
     return _Event()
 
 
+def _bounded(call, runtime, stop, *, limit: float = 5.0):
+    """Run ``call`` on a daemon thread; fail fast, never hang the suite (X5)."""
+    import threading
+
+    result: list[object] = []
+    worker = threading.Thread(target=lambda: result.append(call()), daemon=True)
+    worker.start()
+    worker.join(timeout=limit)
+    if worker.is_alive():
+        runtime._stop.set()
+        stop.set()
+        pytest.fail("monitor wait did not return; stop ignored?")
+    return result[0]
+
+
+def _bounded_wait(runtime, wait: float, stop, *, limit: float = 5.0) -> bool:
+    return bool(
+        _bounded(lambda: runtime.wait_publishing_monitor(wait, stop), runtime, stop, limit=limit)
+    )
+
+
 def test_supervisor_idle_wait_publishes_the_monitor_between_cycles(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1503,7 +1524,9 @@ def test_supervisor_idle_wait_publishes_the_monitor_between_cycles(
         watcher_idle_wait=runtime.wait_publishing_monitor,
     )
     supervisor._stop = _fake_waiting_event(clock)
-    stopped = supervisor._idle(supervisor._watcher, 15.0)  # staging poll interval
+    stopped = _bounded(  # staging poll interval
+        lambda: supervisor._idle(supervisor._watcher, 15.0), runtime, supervisor._stop
+    )
     assert stopped is False
     assert polled == ["BTCUSDT", "BTCUSDT"]  # cycle end, then +10 s inside the wait
 
@@ -1521,19 +1544,70 @@ def test_plain_supervisor_wait_reproduces_the_staging_gap(
         poll_seconds=15.0,
     )
     supervisor._stop = _fake_waiting_event(clock)
-    supervisor._idle(supervisor._watcher, 15.0)
+    _bounded(lambda: supervisor._idle(supervisor._watcher, 15.0), runtime, supervisor._stop)
     assert polled == ["BTCUSDT"]  # no hook: nothing between cycles (pre-fix staging)
 
 
 def test_wait_publishing_monitor_honours_an_external_stop(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    runtime, polled, _clock, _, scans = _interim_runtime(session_factory, monkeypatch)
+    runtime._publish_monitor_snapshots(scans)
+    import threading
+
+    stop = threading.Event()
+    stop.set()
+    assert _bounded_wait(runtime, 45.0, stop, limit=2.0) is True
+    assert polled == ["BTCUSDT"]
+
+
+def test_wait_publishing_monitor_returns_true_when_stopped_mid_wait(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """X7: a stop arriving during the wait must be reported as stopped."""
+
     runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
     runtime._publish_monitor_snapshots(scans)
     stop = _fake_waiting_event(clock)
-    stop.set()
-    assert runtime.wait_publishing_monitor(45.0, stop) is True
-    assert polled == ["BTCUSDT"]
+    original = runtime._refresh_monitor_safely
+
+    def refresh_then_stop() -> None:
+        original()
+        stop.set()
+
+    monkeypatch.setattr(runtime, "_refresh_monitor_safely", refresh_then_stop)
+    assert _bounded_wait(runtime, 45.0, stop) is True
+    assert polled == ["BTCUSDT", "BTCUSDT"]
+
+
+def test_wait_publishing_monitor_notices_the_runtime_stop_promptly(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-blocker 1: the runtime's own stop ends a supervisor-driven wait quickly."""
+
+    import threading
+    import time as real_time
+
+    runtime, _polled, _clock, _, _scans = _interim_runtime(session_factory, monkeypatch)
+    import app.workers.watcher_paper as wp
+
+    monkeypatch.setattr(wp.time, "monotonic", real_time.monotonic)
+    external = threading.Event()
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(runtime.wait_publishing_monitor(30.0, external)),
+        daemon=True,
+    )
+    worker.start()
+    real_time.sleep(0.1)
+    started = real_time.monotonic()
+    runtime._stop.set()
+    worker.join(timeout=3.0)
+    alive = worker.is_alive()
+    external.set()  # bound the wait on regression
+    assert not alive
+    assert result == [True]
+    assert real_time.monotonic() - started < 1.0
 
 
 def test_wait_publishing_monitor_keeps_gaps_under_the_stale_cutoff_with_external_stop(
@@ -1542,5 +1616,5 @@ def test_wait_publishing_monitor_keeps_gaps_under_the_stale_cutoff_with_external
     runtime, polled, clock, _, scans = _interim_runtime(session_factory, monkeypatch)
     runtime._publish_monitor_snapshots(scans)
     stop = _fake_waiting_event(clock)
-    assert runtime.wait_publishing_monitor(25.0, stop) is False
+    assert _bounded_wait(runtime, 25.0, stop) is False
     assert polled == ["BTCUSDT", "BTCUSDT", "BTCUSDT"]  # +10, +20
