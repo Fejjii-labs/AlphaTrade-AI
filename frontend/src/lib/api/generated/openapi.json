@@ -61641,7 +61641,7 @@
     },
     "/canonical/evidence": {
       "get": {
-        "description": "Fresh read-only perpetual evidence. Never mints Candidates or live orders.",
+        "description": "Read-only perpetual evidence. Deployed APIs serve the worker row, no upstream I/O.",
         "operationId": "get_canonical_evidence_canonical_evidence_get",
         "parameters": [
           {

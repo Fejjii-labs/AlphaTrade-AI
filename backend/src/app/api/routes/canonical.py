@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import (
-    CanonicalEvidenceServiceDep,
+    CanonicalEvidenceReaderDep,
     CanonicalRuntimeDep,
     PerpetualMarketMonitorServiceDep,
     SessionDep,
@@ -188,10 +188,10 @@ async def get_canonical_paper_evaluation(
 )
 async def get_canonical_evidence(
     tenant: ReaderDep,
-    service: CanonicalEvidenceServiceDep,
+    service: CanonicalEvidenceReaderDep,
     symbol: str = Query(default="BTCUSDT", min_length=3, max_length=16),
 ) -> CanonicalEvidenceRead:
-    """Fresh read-only perpetual evidence. Never mints Candidates or live orders."""
+    """Read-only perpetual evidence. Deployed APIs serve the worker row, no upstream I/O."""
     return service.read(organization_id=tenant.organization_id, symbol=symbol)
 
 

@@ -152,7 +152,16 @@ export function marketQualityFromCanonicalEvidence(
     completeness.cvd === "complete" &&
     completeness.signed_flow === "complete";
   const replay = read.source.is_mock || read.current_price.presentation === "replay_fixture";
-  const grade: MarketQualityGrade = !setup.available || !complete
+  // Deployed APIs serve the worker row; the setup window is not persisted there.
+  // That is "not assessed", not a poor market.
+  const setupNotPersisted = !setup.available && setup.reason === "setup_not_persisted";
+  const sourceNotCurrent =
+    read.unavailable_reason === "monitor_state_missing" ||
+    read.unavailable_reason === "monitor_state_stale";
+  const sourceStale = read.unavailable_reason === "monitor_state_stale";
+  const grade: MarketQualityGrade = setupNotPersisted
+    ? "unknown"
+    : !setup.available || !complete
     ? "poor"
     : replay
       ? "unknown"
@@ -162,10 +171,16 @@ export function marketQualityFromCanonicalEvidence(
     {
       label: "Source",
       detail: `${read.source.venue} · ${read.source.market_type} · ${read.source.provider_symbol} · ${read.source.source_family}`,
-      isLive: read.source.is_live,
+      isLive: read.source.is_live && !sourceNotCurrent,
       fallbackUsed: read.source.fallback_used,
-      stale: false,
-      freshnessState: replay ? "replay" : read.source.is_live ? "live" : "unavailable",
+      stale: sourceStale,
+      freshnessState: replay
+        ? "replay"
+        : sourceStale
+          ? "stale"
+          : read.source.is_live && !sourceNotCurrent
+            ? "live"
+            : "unavailable",
     },
     {
       label: "Current price",

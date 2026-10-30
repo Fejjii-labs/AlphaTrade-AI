@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_session
+from app.evidence_pipeline.persisted import (
+    CanonicalEvidenceReader,
+    PersistedCanonicalEvidenceService,
+)
 from app.evidence_pipeline.service import CanonicalEvidenceService
 from app.market_monitor.factory import build_perpetual_market_monitor
 from app.market_monitor.monitor import PerpetualMarketMonitor
@@ -196,6 +200,30 @@ def get_canonical_evidence_service(
 
 CanonicalEvidenceServiceDep = Annotated[
     CanonicalEvidenceService, Depends(get_canonical_evidence_service)
+]
+
+
+def get_canonical_evidence_reader(
+    request: Request,
+    settings: SettingsDep,
+    session: SessionDep,
+) -> CanonicalEvidenceReader:
+    """``GET /canonical/evidence`` (dashboard page load).
+
+    Deployed (non-replay) APIs read the paper worker's persisted monitor row,
+    with zero request-time upstream I/O. Replay and the LOCAL live opt-in keep
+    the in-process assembler. Chat keeps ``get_canonical_evidence_service``.
+    """
+
+    if not api_monitor_runs_in_process(settings):
+        return PersistedCanonicalEvidenceService(
+            PersistedMarketMonitorReader(session, settings=settings), settings=settings
+        )
+    return get_canonical_evidence_service(request, settings, session)
+
+
+CanonicalEvidenceReaderDep = Annotated[
+    CanonicalEvidenceReader, Depends(get_canonical_evidence_reader)
 ]
 
 

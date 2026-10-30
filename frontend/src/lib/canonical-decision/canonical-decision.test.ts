@@ -337,6 +337,51 @@ const replayEvidence: CanonicalEvidenceRead = {
 };
 
 describe("canonical evidence honesty", () => {
+  const workerRow = (unavailable: string | null): CanonicalEvidenceRead => ({
+    ...replayEvidence,
+    source: {
+      ...replayEvidence.source,
+      is_live: unavailable === null,
+      is_mock: false,
+      source_family: "binance_usdm_futures_public",
+      provider_name: "binance-usdm-perpetual",
+    },
+    current_price: {
+      ...replayEvidence.current_price,
+      usable_as_current_market_price: unavailable === null,
+      presentation: unavailable === null ? "live_mark" : unavailable === "monitor_state_stale" ? "stale" : "unavailable",
+      is_live: unavailable === null,
+      is_mock: false,
+    },
+    setup_evidence: {
+      ...replayEvidence.setup_evidence,
+      available: false,
+      reason: "setup_not_persisted",
+    },
+    unavailable_reason: unavailable,
+  });
+
+  it("grades a not-persisted setup as unknown, not poor", () => {
+    expect(marketQualityFromCanonicalEvidence(workerRow(null)).grade).toBe("unknown");
+    expect(marketQualityFromCanonicalEvidence(workerRow("monitor_state_missing")).grade).toBe("unknown");
+  });
+
+  it("never labels the source live when worker state is missing or stale", () => {
+    const source = (u: string | null) =>
+      marketQualityFromCanonicalEvidence(workerRow(u)).evidence.find((f) => f.label === "Source");
+    expect(source(null)?.freshnessState).toBe("live");
+    // Even if a server still claimed is_live, a missing/stale row is not live.
+    const claimsLive = { ...workerRow("monitor_state_stale"), source: workerRow(null).source };
+    const stale = marketQualityFromCanonicalEvidence(claimsLive).evidence.find((f) => f.label === "Source");
+    expect(stale?.isLive).toBe(false);
+    expect(stale?.stale).toBe(true);
+    expect(stale?.freshnessState).toBe("stale");
+    const missing = { ...workerRow("monitor_state_missing"), source: workerRow(null).source };
+    const gone = marketQualityFromCanonicalEvidence(missing).evidence.find((f) => f.label === "Source");
+    expect(gone?.isLive).toBe(false);
+    expect(gone?.freshnessState).toBe("unavailable");
+  });
+
   it("never treats replay fixture prices as live marks", () => {
     const view = marketQualityFromCanonicalEvidence(replayEvidence);
     expect(view.authority).toBe("canonical");
