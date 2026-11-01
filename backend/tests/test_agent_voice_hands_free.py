@@ -43,6 +43,8 @@ from tests.test_agent_realtime_protocol import (  # noqa: F401
     voice_limits,
 )
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 def _settings(**update: object) -> Settings:
     return Settings(_env_file=None).model_copy(update=update)

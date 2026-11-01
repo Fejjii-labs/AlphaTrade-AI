@@ -33,6 +33,8 @@ from tests.test_agent_realtime_persistence import voice_database as voice_databa
 from tests.test_agent_realtime_protocol import voice_limits as voice_limits
 from tests.test_interactive_agent_foundation import _add_chunk
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 @pytest.fixture(autouse=True)
 def _voice_llm_passthrough_for_synthetic_providers(monkeypatch):
