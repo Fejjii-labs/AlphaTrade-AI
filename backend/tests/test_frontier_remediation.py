@@ -691,7 +691,7 @@ def test_partial_deployment_and_rollback_order_keep_live_trading_impossible() ->
         assert "value: false" in block
         assert "WATCHER_ORCHESTRATION_ENABLED" in block
         assert "TELEGRAM_NETWORK_PERMITTED" in block
-        assert 'value: "off"' in block
+        assert "key: TELEGRAM_INBOUND_MODE\n        sync: false" in block
         assert "AUTH_REFRESH_COOKIE_ENABLED" in block
         assert "CORS_ORIGINS" in block
         assert "AUTH_COOKIE_SECURE" in block

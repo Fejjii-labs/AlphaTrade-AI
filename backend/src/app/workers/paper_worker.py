@@ -972,7 +972,7 @@ def compose_watcher_on_stop(
                     try:
                         release()
                     except Exception:
-                        logger.warning("paper_worker_lease_release_failed")
+                        logger.warning("paper_worker_lease_release_failed", exc_info=True)
         finally:
             for close in closers:
                 close()
