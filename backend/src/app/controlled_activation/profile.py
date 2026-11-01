@@ -5,13 +5,34 @@ from __future__ import annotations
 from app.core.config import Environment, Settings, TelegramInboundMode
 
 
+def _paper_exchange_allowed(settings: Settings) -> bool:
+    """Internal paper, or the governed staging BloFin demo worker gate.
+
+    Demo mode counts only when the governed worker arm is pinned and the full
+    BloFin execution gate holds (paper, real trading off, allowlisted demo host,
+    demo credentials). ``trade_live`` and any other value never qualify.
+    """
+
+    mode = settings.exchange_mode.value
+    if mode == "paper_internal":
+        return True
+    if mode != "paper_exchange_demo":
+        return False
+    from app.core.execution_credentials import (
+        blofin_execution_authorized,
+        governed_demo_worker_access_requested,
+    )
+
+    return governed_demo_worker_access_requested(settings) and blofin_execution_authorized(settings)
+
+
 def _paper_staging_market(settings: Settings) -> bool:
     return (
         settings.environment is Environment.STAGING
         and settings.execution_mode.value == "paper"
         and not settings.enable_real_trading
         and not settings.real_trading_enabled
-        and settings.exchange_mode.value == "paper_internal"
+        and _paper_exchange_allowed(settings)
         and settings.perpetual_evidence_source == "binance_usdm"
         and not settings.telegram_alerts_enabled
         and not settings.automatic_telegram_delivery_enabled
