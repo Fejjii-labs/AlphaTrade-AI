@@ -13,6 +13,8 @@ services:
     healthCheckPath: /health
     preDeployCommand: alembic upgrade head
     envVars:
+      # Operator-controlled flags use sync: false so Blueprint syncs never
+      # reset them; set them in the Render dashboard.
       - key: ENVIRONMENT
         value: staging
       - key: EXECUTION_MODE
@@ -20,7 +22,7 @@ services:
       - key: ENABLE_REAL_TRADING
         value: false
       - key: PROVIDER_MODE
-        value: fallback
+        sync: false
       - key: EXCHANGE_MODE
         value: paper_internal
       - key: LLM_MODEL
@@ -34,23 +36,23 @@ services:
       - key: ALERT_WEBHOOK_ENABLED
         value: false
       - key: TELEGRAM_ALERTS_ENABLED
-        value: false
+        sync: false
       - key: TELEGRAM_INTERACTION_ENABLED
-        value: false
+        sync: false
       - key: AUTOMATIC_TELEGRAM_DELIVERY_ENABLED
-        value: false
+        sync: false
       - key: EMAIL_PROVIDER
         value: mock
       - key: EMAIL_ALERTS_ENABLED
         value: false
       - key: MARKET_WATCHER_ENABLED
-        value: false
+        sync: false
       - key: MARKET_WATCHER_BRIDGE_ENABLED
-        value: false
+        sync: false
       - key: MARKET_WATCHER_BRIDGE_AUTO_TICK
-        value: false
+        sync: false
       - key: WATCHER_ORCHESTRATION_ENABLED
-        value: false
+        sync: false
       - key: ENABLE_PAPER_SCHEDULER
         value: false
       - key: PAPER_SIGNAL_ORCHESTRATION_ENABLED
@@ -131,10 +133,13 @@ services:
     dockerContext: ./backend
     dockerCommand: python -m app.workers.paper_worker
     # SIGTERM grace (Render default 30s): watcher join up to 30s + lease
-    # release wait up to 10s + close, so a mid-cycle deploy still hands the
-    # watcher lease over instead of being SIGKILLed onto the TTL. Staging only.
+    # release wait up to 10s + close. Gives graceful lease release a better
+    # chance on deploy; a cycle that outlasts the wait still falls back to the
+    # lease TTL. Staging only.
     maxShutdownDelaySeconds: 60
     envVars:
+      # Operator-controlled flags use sync: false so Blueprint syncs never
+      # reset them; set them in the Render dashboard.
       - key: ENVIRONMENT
         value: staging
       - key: EXECUTION_MODE
@@ -144,30 +149,30 @@ services:
       - key: EXCHANGE_MODE
         value: paper_internal
       - key: WATCHER_ORCHESTRATION_ENABLED
-        value: false
+        sync: false
       - key: WATCHER_PAPER_STAGING_ACTIVATION
-        value: false
+        sync: false
       # Optional controlled acceptance tenant. Leave unset for normal round-robin.
       - key: WATCHER_PAPER_ORGANIZATION_ID
         sync: false
       - key: MARKET_WATCHER_ENABLED
-        value: false
+        sync: false
       - key: MARKET_WATCHER_BRIDGE_ENABLED
-        value: false
+        sync: false
       - key: TELEGRAM_ALERTS_ENABLED
-        value: false
+        sync: false
       - key: TELEGRAM_INTERACTION_ENABLED
-        value: false
+        sync: false
       - key: AUTOMATIC_TELEGRAM_DELIVERY_ENABLED
-        value: false
+        sync: false
       - key: TELEGRAM_PAPER_ACTIVATION_ARMED
-        value: false
+        sync: false
       - key: TELEGRAM_INBOUND_MODE
-        value: "off"
+        sync: false
       - key: TELEGRAM_NETWORK_PERMITTED
-        value: false
+        sync: false
       - key: PROVIDER_MODE
-        value: fallback
+        sync: false
       - key: MARKET_DATA_ENABLED
         value: true
       - key: PERPETUAL_EVIDENCE_SOURCE

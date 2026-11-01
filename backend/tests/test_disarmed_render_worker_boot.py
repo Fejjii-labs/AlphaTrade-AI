@@ -187,6 +187,24 @@ def blueprint_services() -> dict[str, dict[str, object]]:
     return {str(item["name"]): item for item in services}
 
 
+# Operator-controlled flags are ``sync: false`` in render.yaml so Blueprint
+# syncs never reset them. Tests model an operator who sets them disarmed.
+OPERATOR_DISARMED_DEFAULTS: dict[str, str] = {
+    "PROVIDER_MODE": "fallback",
+    "WATCHER_ORCHESTRATION_ENABLED": "false",
+    "WATCHER_PAPER_STAGING_ACTIVATION": "false",
+    "MARKET_WATCHER_ENABLED": "false",
+    "MARKET_WATCHER_BRIDGE_ENABLED": "false",
+    "MARKET_WATCHER_BRIDGE_AUTO_TICK": "false",
+    "TELEGRAM_ALERTS_ENABLED": "false",
+    "TELEGRAM_INTERACTION_ENABLED": "false",
+    "AUTOMATIC_TELEGRAM_DELIVERY_ENABLED": "false",
+    "TELEGRAM_PAPER_ACTIVATION_ARMED": "false",
+    "TELEGRAM_INBOUND_MODE": "off",
+    "TELEGRAM_NETWORK_PERMITTED": "false",
+}
+
+
 def blueprint_env(service_name: str) -> dict[str, str]:
     service = blueprint_services()[service_name]
     items = service["envVars"]
@@ -196,6 +214,8 @@ def blueprint_env(service_name: str) -> dict[str, str]:
         assert isinstance(item, dict)
         key = str(item["key"])
         if "value" not in item:
+            if item.get("sync") is False and key in OPERATOR_DISARMED_DEFAULTS:
+                env[key] = OPERATOR_DISARMED_DEFAULTS[key]
             continue
         value = item["value"]
         if isinstance(value, bool):
@@ -306,6 +326,14 @@ def test_literal_render_workers_boot_disarmed_without_secrets() -> None:
         assert isinstance(origins, list)
         assert origins
         assert all(str(origin).startswith("https://") for origin in origins)
+
+
+def test_operator_flags_are_not_synced_by_blueprint() -> None:
+    for name, service in blueprint_services().items():
+        for item in service["envVars"]:
+            if item["key"] in OPERATOR_DISARMED_DEFAULTS:
+                assert item.get("sync") is False, (name, item["key"])
+                assert "value" not in item, (name, item["key"])
 
 
 def test_literal_blueprint_without_worker_role_still_fails_closed() -> None:
