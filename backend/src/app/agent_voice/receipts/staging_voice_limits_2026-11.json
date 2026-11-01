@@ -1,0 +1,35 @@
+{
+  "organization_id": "1af2eca6-71f3-4a1f-812d-bcd4f5170c84",
+  "budget_reference": "staging-voice-2026-11-usd10",
+  "budget_as_of": "2026-11-01T19:00:00+00:00",
+  "valid_until": "2026-12-01T00:00:00+00:00",
+  "remaining_budget_usd": "10",
+  "session_ceiling_usd": "1",
+  "realtime": {
+    "model": "gpt-realtime-mini",
+    "source": "https://platform.openai.com/docs/pricing",
+    "valid_until": "2026-12-01T00:00:00+00:00",
+    "maximum_input_tokens": 6000,
+    "input_usd_per_million": "0.60",
+    "output_usd_per_million": "2.40",
+    "audio_input_usd_per_million": "10.00",
+    "audio_output_usd_per_million": "20.00",
+    "maximum_audio_input_tokens_per_second": "20"
+  },
+  "reasoning": {
+    "model": "gpt-6-luna",
+    "source": "https://platform.openai.com/docs/pricing",
+    "valid_until": "2026-12-01T00:00:00+00:00",
+    "maximum_input_tokens": 16000,
+    "input_usd_per_million": "0.10",
+    "output_usd_per_million": "0.50"
+  },
+  "embedding": {
+    "model": "text-embedding-3-small",
+    "source": "https://platform.openai.com/docs/pricing",
+    "valid_until": "2026-12-01T00:00:00+00:00",
+    "maximum_input_tokens": 8192,
+    "input_usd_per_million": "0.02"
+  },
+  "maximum_turns": 4
+}
