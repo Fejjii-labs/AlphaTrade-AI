@@ -24,7 +24,7 @@ services:
       - key: PROVIDER_MODE
         sync: false
       - key: EXCHANGE_MODE
-        value: paper_internal
+        sync: false
       - key: LLM_MODEL
         value: gpt-6-luna
       - key: EMBEDDINGS_MODEL
@@ -147,7 +147,7 @@ services:
       - key: ENABLE_REAL_TRADING
         value: false
       - key: EXCHANGE_MODE
-        value: paper_internal
+        sync: false
       - key: WATCHER_ORCHESTRATION_ENABLED
         sync: false
       - key: WATCHER_PAPER_STAGING_ACTIVATION

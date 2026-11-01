@@ -191,6 +191,7 @@ def blueprint_services() -> dict[str, dict[str, object]]:
 # syncs never reset them. Tests model an operator who sets them disarmed.
 OPERATOR_DISARMED_DEFAULTS: dict[str, str] = {
     "PROVIDER_MODE": "fallback",
+    "EXCHANGE_MODE": "paper_internal",
     "WATCHER_ORCHESTRATION_ENABLED": "false",
     "WATCHER_PAPER_STAGING_ACTIVATION": "false",
     "MARKET_WATCHER_ENABLED": "false",
