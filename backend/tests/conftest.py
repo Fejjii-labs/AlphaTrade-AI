@@ -126,3 +126,18 @@ def client(settings: Settings) -> Iterator[TestClient]:
     app = create_app(settings=settings)
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def _fixture_realtime_model_is_priced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared voice fixtures name "gpt-realtime" with synthetic (non-published) rates.
+
+    Register it with token floors so those fixtures still load; the published table
+    for real receipts (gpt-realtime-mini etc.) is untouched.
+    """
+    from decimal import Decimal
+
+    from app.agent_voice import config as voice_config
+
+    floor = Decimal("0.000001")
+    monkeypatch.setitem(voice_config.KNOWN_REALTIME_PRICES, "gpt-realtime", (floor,) * 4)

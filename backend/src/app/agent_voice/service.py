@@ -51,6 +51,8 @@ from app.providers.llm import (
 )
 from app.services.turn_coordinator import TurnCoordinator
 
+VOICE_SERVICE_TIER = "default"
+
 
 def voice_llm(provider: LLMProvider, settings: Settings) -> LLMProvider:
     """The voice reasoning route, rebuilt fail-closed: no mock fallback, ever."""
@@ -63,6 +65,9 @@ def voice_llm(provider: LLMProvider, settings: Settings) -> LLMProvider:
             base_url=settings.openai_base_url,
             model=settings.agent_voice_reasoning_model,
             fail_closed=True,
+            # Standard processing only: the receipt prices standard tier, so a Fast or
+            # priority project default must never apply to a voice reasoning call.
+            service_tier=VOICE_SERVICE_TIER,
         )
     raise VoiceUnavailableError("voice_reasoning_provider_unknown")
 

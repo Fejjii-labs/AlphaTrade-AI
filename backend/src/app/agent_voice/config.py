@@ -37,6 +37,32 @@ MAXIMUM_HANDS_FREE_AUDIO_SECONDS = 180
 HANDS_FREE_AUDIO_STEP_SECONDS = 10
 
 
+# Published standard-tier prices (USD per million tokens) for the realtime models a
+# receipt may name: text input, text output, audio input, audio output. A receipt that
+# names any other realtime model, or prices a listed one below these figures, is
+# refused, so a mislabelled model can never be reserved at a cheaper model's rates.
+# Source: https://platform.openai.com/docs/pricing (checked 2026-11-01).
+KNOWN_REALTIME_PRICES: dict[str, tuple[Decimal, Decimal, Decimal, Decimal]] = {
+    "gpt-realtime-mini": (Decimal("0.60"), Decimal("2.40"), Decimal("10"), Decimal("20")),
+    "gpt-realtime-2.1-mini": (Decimal("0.60"), Decimal("2.40"), Decimal("10"), Decimal("20")),
+}
+
+
+def realtime_price_refusal(price: RealtimePrice) -> str | None:
+    known = KNOWN_REALTIME_PRICES.get(price.model)
+    if known is None:
+        return "verified_realtime_model_unknown"
+    claimed = (
+        price.input_usd_per_million,
+        price.output_usd_per_million,
+        price.audio_input_usd_per_million,
+        price.audio_output_usd_per_million,
+    )
+    if any(have < floor for have, floor in zip(claimed, known, strict=True)):
+        return "verified_realtime_price_below_published"
+    return None
+
+
 def voice_route_refusal(settings: Settings) -> str | None:
     """Voice-scoped route gate (UI overhaul B7a).
 
@@ -261,4 +287,6 @@ def load_limits(settings: Settings) -> VoiceLimits:
         raise VoiceUnavailableError("verified_realtime_limits_invalid") from exc
     if limits.reservation(settings) > min(limits.session_ceiling_usd, limits.remaining_budget_usd):
         raise VoiceUnavailableError("verified_cap_cannot_cover_session")
+    if refusal := realtime_price_refusal(limits.realtime):
+        raise VoiceUnavailableError(refusal)
     return limits
