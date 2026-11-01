@@ -250,8 +250,12 @@ class OpenAILLMProvider:
         timeout_seconds: float = 60.0,
         fail_closed: bool = False,
         generation_probe_ttl_seconds: float = _GENERATION_PROBE_TTL_SECONDS,
+        service_tier: str | None = None,
     ) -> None:
         self._api_key = api_key
+        # When set, every request pins this processing tier (voice pins "default" so a
+        # project-level Fast/priority default can never exceed the receipt's prices).
+        self._service_tier = service_tier
         self._base_url = base_url.rstrip("/")
         self._default_model = model
         self._fail_closed = fail_closed
@@ -407,6 +411,8 @@ class OpenAILLMProvider:
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
+        if self._service_tier:
+            body["service_tier"] = self._service_tier
         if request.response_format is not None:
             body["response_format"] = request.response_format
         return self._post_json(
@@ -432,6 +438,8 @@ class OpenAILLMProvider:
             "max_output_tokens": request.max_tokens,
             "store": False,
         }
+        if self._service_tier:
+            body["service_tier"] = self._service_tier
         effort = (reasoning_effort or request.reasoning_effort or "low").strip().lower()
         if effort and effort != "none":
             body["reasoning"] = {"effort": effort}
