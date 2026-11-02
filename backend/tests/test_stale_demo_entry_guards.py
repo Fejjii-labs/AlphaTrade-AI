@@ -211,6 +211,18 @@ def test_non_blofin_demo_venue_is_not_selected(native):
                     text(f'ALTER TABLE trade_plan_revisions ADD CONSTRAINT "{name}" {definition}')
                 )
             session.commit()
+    with world[0]() as session:
+        # #407 C3: the restore above, not a later fixture refresh, keeps the CHECK.
+        assert (
+            session.scalar(
+                text(
+                    "SELECT count(*) FROM pg_constraint WHERE conrelid = "
+                    "'trade_plan_revisions'::regclass AND contype = 'c' "
+                    "AND pg_get_constraintdef(oid) LIKE '%execution_venue%'"
+                )
+            )
+            == 1
+        )
 
 
 def test_held_command_excluded_in_sql(native, monkeypatch):
@@ -252,17 +264,4 @@ def test_attempt_history_is_scoped_to_organization(native):
             0,
             None,
             False,
-        )
-
-
-def test_venue_check_restored_after_q4(native):
-    """N1: runs after Q4 in file order; the venue CHECK must still exist."""
-    world, _ = native
-    with world[0]() as session:
-        assert session.scalar(
-            text(
-                "SELECT count(*) FROM pg_constraint WHERE conrelid = "
-                "'trade_plan_revisions'::regclass AND contype = 'c' "
-                "AND pg_get_constraintdef(oid) LIKE '%execution_venue%'"
-            )
         )
