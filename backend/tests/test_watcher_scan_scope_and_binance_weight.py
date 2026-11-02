@@ -109,9 +109,8 @@ def test_projection_covers_every_symbol_and_timeframe_deterministically(tenant_s
     native = [t for t in targets if not t.market_projection]
     assert {(t.symbol, t.timeframe) for t in native} == {("BTCUSDT", "15m")}
     assert {t.strategy_version_id for t in native} == {long_["version_id"], short["version_id"]}
-    # Authored scopes come first per slot; symbol order follows the watchlist.
-    assert [t.market_projection for t in targets[:2]] == [False, False]
-    assert [t.symbol for t in targets[::4]] == WATCHLIST
+    # Exact scopes come first; projections only fill the remaining room.
+    assert [t.market_projection for t in targets] == [False, False] + [True] * 18
     # policy_id binds lineage + symbol + timeframe, is unique and stable across loads.
     assert len({t.policy_id for t in targets}) == 20
     assert [t.policy_id for t in load()] == [t.policy_id for t in targets]
@@ -420,3 +419,42 @@ def test_contract_discovery_honors_and_feeds_the_process_gate() -> None:
     discovery(discovery.book, ["ETHUSDT"])
     assert len(calls) == before
     assert discovery.verdicts[("ETHUSDT", VenueId.BINANCE)].reason == "provider_unreachable"
+
+
+def test_exact_scopes_are_never_starved_by_projections(tenant_store) -> None:
+    """Staging shape: exact per-symbol versions fill the cap; projections only use leftover room."""
+
+    session, org, user = tenant_store
+    exact: set[tuple[str, str]] = set()
+    for symbol in WATCHLIST:
+        for direction in ("long", "short"):
+            approved(session, org, user, NestedContinuationSpec(symbol=symbol, direction=direction))
+        exact.add((symbol, "15m"))
+
+    def load(limit: int):
+        return list_watchlist_scan_targets(
+            session,
+            symbols=WATCHLIST,
+            organization_id=org,
+            limit=limit,
+            project_timeframes=("15m", "1h"),
+        )
+
+    native_count = 2 * len(WATCHLIST)
+    # Cap exactly full of exact scopes: projection adds nothing and drops nothing.
+    capped = load(native_count)
+    assert len(capped) == native_count
+    assert not any(t.market_projection for t in capped)
+    assert {(t.symbol, t.timeframe) for t in capped} == exact
+    # Cap smaller than the exact set: still only exact scopes.
+    assert not any(t.market_projection for t in load(native_count - 3))
+    # Extra room: every exact scope is present and listed before any projection.
+    roomy = load(100)
+    flags = [t.market_projection for t in roomy]
+    assert flags == sorted(flags)
+    assert sum(not f for f in flags) == native_count
+    projected = [t for t in roomy if t.market_projection]
+    # Projection skips markets an exact version of the same family already covers.
+    assert projected
+    assert all(t.timeframe == "1h" for t in projected)
+    assert not any((t.symbol, t.timeframe) in exact for t in projected)
