@@ -31,6 +31,8 @@ from app.agent_voice.service import RealtimeSession
 from app.api.routes.agent_voice import voice_config
 from app.core.config import Settings
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 @pytest.fixture
 def voice_limits():

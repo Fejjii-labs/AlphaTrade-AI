@@ -25,6 +25,8 @@ from app.services.quota_service import QuotaService
 from tests.test_agent_live_integration import live_limits as _live_limits  # noqa: F401
 from tests.test_agent_realtime_persistence import voice_database as _voice_database  # noqa: F401
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 @pytest.fixture
 def voice_limits(request):
