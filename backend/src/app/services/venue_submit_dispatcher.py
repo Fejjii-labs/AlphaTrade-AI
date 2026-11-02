@@ -56,7 +56,6 @@ from app.schemas.execution_protocol import (
     VenueSubmitEffectState,
 )
 from app.schemas.trade_plan import TradePlanRevision
-from app.services.execution_claim import conservative_reservation
 from app.services.execution_dispatch_boundary import (
     commit_barrier3,
     load_committed_dispatch_authorization,
@@ -859,11 +858,16 @@ class VenueSubmitDispatcher:
         plan_row = self._session.get(PlanRow, command.revision_id)
         if plan_row is not None and plan_row.schema_version == "ManualDemoTradePlanV1":
             plan = trade_plan_revision_to_schema(plan_row)
-            from app.services.manual_demo_recovery import verified_entry_notional
+            from app.services.manual_demo_recovery import (
+                claimed_reservation_notional,
+                verified_entry_notional,
+            )
 
             actual = verified_entry_notional(self._session, command, plan)
+            # Same basis as the resolve path: the claim this reservation was
+            # actually written with (legacy execution-price or current formula).
             exact_unused = max(
-                Decimal("0"), conservative_reservation(plan).pending_notional - actual
+                Decimal("0"), claimed_reservation_notional(plan, reservation) - actual
             )
             if abs(exact_unused - unused) > Decimal("0.00000001"):
                 raise TradingPolicyError("Manual reservation remainder conflicts with plan/fills.")

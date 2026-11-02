@@ -318,9 +318,9 @@ manual-demo API arm on) with the JSON body `{"confirm": true}`; without it the
 request is rejected. A successful resolve writes the lifecycle resolution and
 releases the reservation; the hold row is never deleted.
 
-> **Warning:** the operator resolve is not read-only. If the venue is not flat
-> when it runs (open position, pending order or TP/SL, or exit fills outside the
-> plan), the operator path activates the **organization-wide kill switch**, halting
+> **Warning:** the operator resolve is not read-only. If the BloFin demo account
+> still shows an open position (with unprotected or out-of-range entry fills) when
+> it runs, the operator path activates the **organization-wide kill switch**, halting
 > all trading for the org. The flat-venue inspection above is the only thing that
 > prevents this, so do it immediately before calling resolve and do not call it on
 > any doubt.

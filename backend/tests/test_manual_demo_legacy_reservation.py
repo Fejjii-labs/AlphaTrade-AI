@@ -4,7 +4,9 @@ Numbers are the staging 8 Oct manual demo entry (command 80958141): plan
 f49a9fac, reservation c00e37ce, one native fill 0.1 contracts @ 82234.4.
 """
 
+import re
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +15,7 @@ from sqlalchemy import select
 from app.core.errors import TradingPolicyError
 from app.db.models import AccountRiskAccountingState, RiskReservation
 from app.db.models import TradePlanRevision as PlanRow
+from app.schemas.execution_protocol import RiskReservationReleaseReason
 from app.services import manual_demo_recovery as recovery
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.execution_fills import adjust_symbol_map
@@ -150,3 +153,47 @@ def test_claim_matching_neither_formula_is_refused(native):
     with world[0]() as session:
         reservation = session.scalars(select(RiskReservation)).one()
         assert reservation.release_state.value != "RELEASED"
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("extra", "released"), [(Decimal("0"), True), (Decimal("0.00000002"), False)]
+)
+def test_dispatcher_cancel_release_uses_claimed_basis(native, extra, released):
+    """C1: the cancel/expiry release path shares the resolve path's claim basis."""
+    world, _ = native
+    _, first = _submit(native)
+    _legacy_rewrite(world, first.command_id, extra=extra)
+    with world[0]() as session:
+        dispatcher = _service(world, session)._dispatcher()
+        release = lambda: dispatcher._release_unused_reservation(  # noqa: E731
+            command_id=first.command_id,
+            reason=RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_CANCELLATION,
+            now=world[4]._clock(),
+        )
+        if released:
+            release()
+            session.commit()
+        else:
+            with pytest.raises(TradingPolicyError):
+                release()
+            session.rollback()
+    with world[0]() as session:
+        reservation = session.scalars(select(RiskReservation)).one()
+        assert (reservation.release_state.value == "RELEASED") is released
+        if not released:
+            assert reservation.remaining_reserved_notional > 0
+
+
+def test_pending_order_exposure_is_written_only_at_claim():
+    """C2: the stored claim is the write-once basis for remainder checks."""
+    root = Path(recovery.__file__).resolve().parents[1]
+    writers = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if "migrations" not in path.parts
+        and re.search(r"pending_order_exposure\s*(=|\+=|-=)(?!=)", path.read_text())
+    )
+    assert writers == ["services/execution_claim.py"], writers
+    claim = (root / "services/execution_claim.py").read_text()
+    assert len(re.findall(r"pending_order_exposure\s*=(?!=)", claim)) == 2
