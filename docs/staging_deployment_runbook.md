@@ -142,7 +142,7 @@ ENV_FILE=.env.staging ./scripts/check-env.sh
 Voice (optional): set `AGENT_REALTIME_ENABLED=true`, `AGENT_VOICE_REASONING_MODEL=gpt-6-luna`
 and `AGENT_REALTIME_LIMITS_FILE=/app/src/app/agent_voice/receipts/staging_voice_limits_2026-11.json`.
 The receipt prices assume OpenAI's **global endpoint** (`api.openai.com`, standard tier, no
-data-residency uplift); the live socket refuses other endpoints, so a regional/data-residency
+data-residency uplift); the voice sockets refuse other endpoints, so a regional/data-residency
 endpoint would need a new receipt priced for it.
 
 After enabling OpenAI on a cluster that previously used mock embeddings, recreate
@@ -305,6 +305,17 @@ BASE_URL=https://your-api.onrender.com ./scripts/verify-safety.sh
 | Binance rate limit | Public API | Mock fallback; `PROVIDER_MODE=fallback` |
 
 ---
+
+### Stale manual BloFin demo entry on operator hold
+
+The demo worker retries an aged, unresolved manual demo entry with backoff
+(15m doubling to 6h). After 8 attempts it writes one `stale_entry_operator_hold`
+audit event (`operation=stale_manual_demo_entry_reconciliation`) and stops; the
+entry keeps blocking new demo entries. To clear it, the owner inspects the BloFin
+demo account (no position, no pending orders or TP/SL, exit fills present) and
+then calls `POST /execution/manual-demo/{command_id}/resolve` (owner-only,
+manual-demo API arm on). A successful resolve writes the lifecycle resolution and
+releases the reservation; the hold row is never deleted.
 
 ## 13. Rollback
 
