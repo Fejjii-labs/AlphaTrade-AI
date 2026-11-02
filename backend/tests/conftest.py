@@ -128,12 +128,14 @@ def client(settings: Settings) -> Iterator[TestClient]:
         yield test_client
 
 
-@pytest.fixture(autouse=True)
-def _fixture_realtime_model_is_priced(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def fixture_realtime_model_is_priced(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shared voice fixtures name "gpt-realtime" with synthetic (non-published) rates.
 
     Register it with token floors so those fixtures still load; the published table
-    for real receipts (gpt-realtime-mini etc.) is untouched.
+    for real receipts (gpt-realtime-mini etc.) is untouched. Opt-in only: voice test
+    modules request it via ``pytestmark = pytest.mark.usefixtures(...)`` so the
+    synthetic price never leaks into unrelated tests.
     """
     from decimal import Decimal
 

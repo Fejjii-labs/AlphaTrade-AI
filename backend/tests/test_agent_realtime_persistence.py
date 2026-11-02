@@ -47,6 +47,8 @@ from app.services.conversation_service import ConversationService
 from app.services.strategy_versioning import StrategyVersioningService
 from tests.test_agent_realtime_protocol import voice_limits  # noqa: F401
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 @pytest.fixture(autouse=True)
 def _voice_llm_passthrough_for_synthetic_providers(monkeypatch):

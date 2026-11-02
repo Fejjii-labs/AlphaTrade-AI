@@ -25,6 +25,8 @@ from app.schemas.common import DocumentSourceType
 from tests.test_agent_realtime_persistence import voice_database as voice_database
 from tests.test_agent_realtime_protocol import voice_limits as voice_limits
 
+pytestmark = pytest.mark.usefixtures("fixture_realtime_model_is_priced")
+
 
 @pytest.fixture(autouse=True)
 def _voice_llm_passthrough_for_synthetic_providers(monkeypatch):
