@@ -100,6 +100,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         version=__version__,
         **deployment_posture(settings),
     )
+    from app.core.required_env import Role, validate_required_env
+
+    validate_required_env(Role.API)
     run_exchange_demo_startup_check(settings, app.state.provider_registry)
     from app.services.llm_cost_startup import validate_llm_cost_configuration
 
