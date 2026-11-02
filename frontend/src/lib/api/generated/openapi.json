@@ -56464,6 +56464,17 @@
             ],
             "title": "Lease Owner"
           },
+          "projection_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Source"
+          },
           "scan_scope": {
             "title": "Scan Scope",
             "type": "string"
