@@ -149,6 +149,9 @@ class WatcherPaperScanReport:
     sfp_strategy: bool = False
     sfp_alerts: tuple[SfpAlertSummary, ...] = ()
     market_read_completed: bool = False
+    # Observation-only scope of a strategy projected off its authored market.
+    market_projection: bool = False
+    projection_source: str | None = None
 
     @property
     def completed_market_scan(self) -> bool:
@@ -668,6 +671,7 @@ class WatcherPaperRuntime:
                     "lease_owner": s.lease_owner,
                     "last_reason_code": s.reason_code,
                     "candidate_ids": [str(item) for item in s.candidate_ids],
+                    "projection_source": s.projection_source,
                 }
                 for s in scans
             ],
@@ -793,7 +797,12 @@ class WatcherPaperRuntime:
         targets: dict[str, dict[tuple[UUID, str], float]] = {}
         observed = time.monotonic()
         for scan in scans:
-            if scan.kill_switch_active or scan.lease_owner != self._worker_id:
+            # Projected scopes read closed klines only; no monitor (aggTrades) polling.
+            if (
+                scan.kill_switch_active
+                or scan.lease_owner != self._worker_id
+                or scan.market_projection
+            ):
                 continue
             targets.setdefault(scan.symbol, {})[(scan.organization_id, scan.scan_scope)] = observed
             if scan.symbol not in symbols:
@@ -816,7 +825,7 @@ class WatcherPaperRuntime:
 
     def _note_monitor_eligibility(self, scan: WatcherPaperScanReport) -> None:
         key = (scan.organization_id, scan.scan_scope)
-        if scan.kill_switch_active or scan.lease_owner != self._worker_id:
+        if scan.kill_switch_active or scan.lease_owner != self._worker_id or scan.market_projection:
             self._monitor_targets.get(scan.symbol, {}).pop(key, None)
             return
         self._monitor_targets.setdefault(scan.symbol, {})[key] = time.monotonic()
@@ -1063,12 +1072,18 @@ class WatcherPaperRuntime:
                 )
                 managed = managed_assignment_coverage(session, self._organization_id)
                 self._assignment_managed_symbols = {symbol for _, _, symbol in managed}
+            settings = self._settings
             inferred = list_watchlist_scan_targets(
                 session,
                 symbols=symbols,
                 organization_id=self._organization_id,
                 limit=self._max_scopes_per_cycle - len(explicit),
                 excluded_coverage=managed,
+                project_timeframes=(
+                    tuple(settings.watcher_scan_timeframes)
+                    if settings is not None and settings.watcher_apply_strategies_to_watchlist
+                    else ()
+                ),
             )
             if revision is not None:
                 inferred = tuple(
@@ -1271,8 +1286,13 @@ class WatcherPaperRuntime:
             ),
         )
         # Assignments grant observation authority only. Existing unowned execution
-        # paths retain their original approvals and gates.
-        if target.assignment_id is None:
+        # paths retain their original approvals and gates. Projected scopes are
+        # observation-only too: the approval covers the authored market alone.
+        if target.market_projection:
+            report = replace(
+                report, market_projection=True, projection_source=target.projection_source
+            )
+        elif target.assignment_id is None:
             if target.configuration_revision is not None and session is not None:
                 from app.services.watcher_assignment_service import assignment_target_reason
 
@@ -1285,6 +1305,10 @@ class WatcherPaperRuntime:
         nested_alert = record_paper_link(
             session, target=target, report=report, evidence=evidence, now=self._clock.now()
         )
+        if nested_alert is not None and target.market_projection:
+            nested_alert = nested_alert.model_copy(
+                update={"projection_source": target.projection_source or "authored market"}
+            )
         report = replace(
             report,
             nested_alert=nested_alert,
@@ -1303,13 +1327,21 @@ class WatcherPaperRuntime:
                     organization_id=target.organization_id,
                     strategy_version_id=target.strategy_version_id,
                     now=now,
+                    symbol=target.symbol,
+                    timeframe=target.timeframe,
                 )
             )
             approach = () if session is None else self._sfp_approach_alerts(target, evidence, now)
+            alerts = sweep + approach
+            if target.market_projection:
+                source = target.projection_source or "authored market"
+                alerts = tuple(
+                    alert.model_copy(update={"projection_source": source}) for alert in alerts
+                )
             report = replace(
                 report,
                 sfp_strategy=True,
-                sfp_alerts=sweep + approach,
+                sfp_alerts=alerts,
             )
         observe_scan(report.reason_code)
         logger.info(
@@ -1518,6 +1550,13 @@ class WatcherPaperRuntime:
     ) -> WatcherPaperScanReport:
         """Continue a confirmed setup through the selected governed paper venue."""
 
+        if getattr(target, "market_projection", False):
+            # Second guard: a projected scope's market was never approved.
+            return replace(
+                report,
+                paper_loop_stage="blocked",
+                paper_loop_reason="market_projection_observation_only",
+            )
         discussion = report.discussion
         runtime = self._canonical_runtime
         if session is None or discussion is None or runtime is None or self._settings is None:

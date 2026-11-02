@@ -17,6 +17,7 @@ from app.candidate_alerts.contracts import (
     RuleResultSummary,
     TriggerContext,
 )
+from app.candidate_alerts.projection import projection_note, projection_tag
 from app.market_contracts.enums import Finality
 from app.market_contracts.first_slice import FIRST_SLICE_PATTERN_NAME
 from app.signal_fusion.assessment import SetupAssessment
@@ -124,12 +125,22 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
     """Deterministic private-chat text. Not a trade order and not a performance claim."""
     if content.nested is not None:
         nested = content.nested
+        timeframe = content.trigger_context.timeframe.value
+        projected: tuple[str, ...] = ()
+        if nested.projection_source is not None:
+            projected = (
+                f"Source: {projection_tag(nested.projection_source)}",
+                projection_note(
+                    nested.projection_source, symbol=nested.symbol, timeframe=timeframe
+                ),
+            )
         return "\n".join(
             (
                 "AlphaTrade PAPER informational Nested Continuation setup.",
+                *projected,
                 f"Symbol: {nested.symbol}",
                 f"Venue: {content.evidence_provenance.venue.value}",
-                f"Timeframe: {content.trigger_context.timeframe.value}",
+                f"Timeframe: {timeframe}",
                 f"Nested stage: {nested.stage}",
                 f"Direction: {content.direction.value}",
                 f"Entry: {_price_text(nested.entry)}",

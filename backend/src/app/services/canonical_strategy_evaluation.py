@@ -236,6 +236,21 @@ def _fusion_policy_for_compiled(
         kind=SetupIdentityKind.COMPILED_SETUP_DEFINITION,
         content_hash=compiled.content_hash,
     )
+    return _fusion_policy_for_setup(
+        organization_id=organization_id,
+        strategy_version_id=strategy_version_id,
+        setup=setup,
+        spec=spec,
+    )
+
+
+def _fusion_policy_for_setup(
+    *,
+    organization_id: UUID,
+    strategy_version_id: UUID,
+    setup: ExecutableSetupRef,
+    spec: FirstSliceAuthoredPatternSpec | NestedContinuationSpec | SfpSpec | TrendPulseSpec,
+) -> FusionPolicy:
     nested = isinstance(spec, (NestedContinuationSpec, SfpSpec))
     if isinstance(spec, TrendPulseSpec):
         return build_fusion_policy(
@@ -282,7 +297,62 @@ def _fusion_policy_for_compiled(
     )
 
 
+def project_executable_to_market(
+    executable: ExecutableStrategyPolicy,
+    *,
+    symbol: str,
+    timeframe: str,
+) -> ExecutableStrategyPolicy:
+    """Evaluate one approved SFP/Nested lineage on another symbol/timeframe.
+
+    The approved parameters, compiled lineage and lifecycle are unchanged. Only
+    the market binding moves: symbol, trigger timeframe and the fusion role
+    timeframes. Other families are refused because their compiled rules bind
+    the first-slice market. The caller decides whether projection is allowed
+    and must treat the result as observation-only.
+    """
+
+    spec = executable.authored_spec
+    if not isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+        raise StrategyEvaluationPolicyError(
+            "Only SFP and Nested strategies may be projected onto another market.",
+            reason_code="market_projection_unsupported",
+        )
+    token = symbol.strip().upper()
+    if spec.symbol == token and spec.trigger_timeframe.value == timeframe:
+        return executable
+    try:
+        projected = type(spec).model_validate(
+            {**spec.model_dump(mode="json"), "symbol": token, "trigger_timeframe": timeframe}
+        )
+    except ValidationError as exc:
+        raise StrategyEvaluationPolicyError(
+            "The strategy cannot be projected onto this symbol/timeframe.",
+            reason_code="market_projection_unsupported",
+        ) from exc
+    return build_executable_strategy_policy(
+        organization_id=executable.organization_id,
+        strategy_id=executable.strategy_id,
+        strategy_version_id=executable.strategy_version_id,
+        strategy_version_content_hash=executable.strategy_version_content_hash,
+        lifecycle_state=executable.lifecycle_state,
+        compiled_setup_definition_id=executable.compiled_setup_definition_id,
+        compiled_content_hash=executable.compiled_content_hash,
+        compiler_version=executable.compiler_version,
+        grammar_version=executable.grammar_version,
+        fusion_policy=_fusion_policy_for_setup(
+            organization_id=executable.organization_id,
+            strategy_version_id=executable.strategy_version_id,
+            setup=executable.fusion_policy.executable_setup,
+            spec=projected,
+        ),
+        authored_spec=projected,
+        execution_scope=executable.execution_scope,
+    )
+
+
 __all__ = [
     "evaluate_canonical_strategy_for_version",
+    "project_executable_to_market",
     "resolve_executable_strategy_policy",
 ]

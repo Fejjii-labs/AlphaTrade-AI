@@ -7,6 +7,7 @@ hosts, and plain HTTP cannot be labelled as USD-M perpetual evidence.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -688,6 +689,16 @@ def _sanitize_snippet(text: str) -> str:
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Retry-After, or the longer ``-1003 ... banned until <ms>`` body deadline."""
+
+    header = _retry_after_header_seconds(response)
+    banned = _banned_until_seconds(response)
+    if banned is None:
+        return header
+    return banned if header is None else max(header, banned)
+
+
+def _retry_after_header_seconds(response: httpx.Response) -> float | None:
     raw = response.headers.get("Retry-After")
     if raw is None:
         return None
@@ -700,3 +711,18 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return None
     # Non-finite or negative values fall back to backoff; huge ones are clamped.
     return sanitize_retry_after(parsed)
+
+
+_BANNED_UNTIL = re.compile(r"banned until (\d{13})")
+
+
+def _banned_until_seconds(response: httpx.Response) -> float | None:
+    """Binance -1003 bodies carry the ban deadline in epoch milliseconds."""
+
+    try:
+        match = _BANNED_UNTIL.search(bytes(response.content[:512]).decode("utf-8", "replace"))
+    except Exception:
+        return None
+    if match is None:
+        return None
+    return sanitize_retry_after(int(match.group(1)) / 1000.0 - time.time())

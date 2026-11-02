@@ -58,24 +58,35 @@ def sfp_notification_summaries(
     organization_id: UUID,
     strategy_version_id: UUID,
     now: datetime,
+    symbol: str | None = None,
+    timeframe: str | None = None,
 ) -> tuple[SfpAlertSummary, ...]:
-    """Recover fresh journal facts across restarts; outbox owns idempotency."""
+    """Recover fresh journal facts across restarts; outbox owns idempotency.
+
+    ``symbol``/``timeframe`` keep one scan scope to its own market. One version
+    may be scanned on several markets (opt-in watchlist projection).
+    """
     now = aware(now)
+    conditions = [
+        BrainSetupEventRow.organization_id == organization_id,
+        BrainSetupRow.organization_id == organization_id,
+        BrainSetupRow.strategy_version_id == strategy_version_id,
+        BrainSetupEventRow.occurred_at <= now,
+    ]
+    if symbol is not None:
+        conditions.append(BrainSetupRow.symbol == symbol)
     rows = session.execute(
         select(BrainSetupEventRow, BrainSetupRow)
         .join(BrainSetupRow, BrainSetupRow.id == BrainSetupEventRow.setup_id)
-        .where(
-            BrainSetupEventRow.organization_id == organization_id,
-            BrainSetupRow.organization_id == organization_id,
-            BrainSetupRow.strategy_version_id == strategy_version_id,
-            BrainSetupEventRow.occurred_at <= now,
-        )
+        .where(*conditions)
         .order_by(BrainSetupEventRow.occurred_at, BrainSetupEventRow.id)
     )
     summaries = []
     for event, setup in rows:
         payload = event.payload
         if payload.get("family") != "sfp":
+            continue
+        if timeframe is not None and payload.get("timeframe") != timeframe:
             continue
         event_type = notification_type(event.kind, payload)
         if event_type is None:

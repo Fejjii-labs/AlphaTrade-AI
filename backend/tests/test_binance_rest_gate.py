@@ -97,15 +97,20 @@ def test_418_sets_ban_window_and_blocks_every_client_in_process() -> None:
 def test_418_without_retry_after_uses_exponential_backoff_with_jitter() -> None:
     clock = Clock()
     gate = _gate(clock, rng=1.0)
-    first = gate.note_failure("ban", None)
-    second = gate.note_failure("ban", None)
-    third = gate.note_failure("ban", None)
-    assert first == pytest.approx(5.0 * 1.25)
-    assert second == pytest.approx(10.0 * 1.25)
-    assert third == pytest.approx(20.0 * 1.25)
+    # A 418 without a deadline waits at least Binance's 2 minute minimum ban.
+    first = [gate.note_failure("ban", None) for _ in range(5)]
+    assert first == [pytest.approx(120.0 * 1.25)] * 5
+    assert gate.note_failure("ban", None) == pytest.approx(160.0 * 1.25)
+    assert gate.note_failure("ban", None) == pytest.approx(320.0 * 1.25)
     for _ in range(20):
         capped = gate.note_failure("ban", None)
     assert capped == pytest.approx(900.0 * 1.25)
+
+
+def test_429_without_retry_after_keeps_the_short_exponential_backoff() -> None:
+    gate = _gate(Clock(), rng=1.0)
+    assert gate.note_failure("rate_limit", None) == pytest.approx(5.0 * 1.25)
+    assert gate.note_failure("rate_limit", None) == pytest.approx(10.0 * 1.25)
 
 
 def test_429_backs_off_honors_retry_after_and_stops_other_calls() -> None:
@@ -320,8 +325,8 @@ def test_premium_index_success_records_used_weight() -> None:
     assert gate.remaining() is not None
 
 
-@pytest.mark.parametrize("header", ["inf", "1e12", "nan", "-5"])
-def test_retry_after_is_rejected_or_clamped(header: str) -> None:
+@pytest.mark.parametrize("header", ["inf", "nan", "-5"])
+def test_unusable_retry_after_falls_back_to_the_ban_floor(header: str) -> None:
     clock = Clock()
     gate = _gate(clock, rng=1.0)
     rec = Recorder([httpx.Response(418, headers={"Retry-After": header})])
@@ -329,19 +334,33 @@ def test_retry_after_is_rejected_or_clamped(header: str) -> None:
         _client(rec, gate).get_json("/fapi/v1/aggTrades", OPEN)
     closed = gate.remaining()
     assert closed is not None
-    assert closed[1] <= 900.0 * 1.25
-    clock.t += 900.0 * 1.25 + 1
+    assert 120.0 <= closed[1] <= 120.0 * 1.25
+    clock.t += 120.0 * 1.25 + 1
+    assert gate.remaining() is None
+
+
+def test_huge_retry_after_is_clamped_to_three_days() -> None:
+    clock = Clock()
+    gate = _gate(clock, rng=1.0)
+    rec = Recorder([httpx.Response(418, headers={"Retry-After": "1e12"})])
+    with pytest.raises(UpstreamBanError):
+        _client(rec, gate).get_json("/fapi/v1/aggTrades", OPEN)
+    closed = gate.remaining()
+    assert closed is not None
+    # Jitter is bounded by the 900 s backoff cap, not proportional to the deadline.
+    assert 3 * 86_400.0 <= closed[1] <= 3 * 86_400.0 + 900.0 * 0.25
+    clock.t += 3 * 86_400.0 + 900.0 * 0.25 + 1
     assert gate.remaining() is None
 
 
 def test_gate_note_failure_clamps_raw_retry_after() -> None:
     gate = _gate(Clock())
-    # Non-finite is rejected: the exponential backoff applies instead.
-    assert gate.note_failure("ban", float("inf")) == pytest.approx(5.0)
-    assert gate.note_failure("ban", float("nan")) == pytest.approx(10.0)
-    assert gate.note_failure("ban", -1.0) == pytest.approx(20.0)
-    # Finite but huge is clamped to the 900 s ceiling.
-    assert gate.note_failure("ban", 1e12) == pytest.approx(900.0)
+    # Non-finite or negative is rejected: a 418 falls back to the 120 s floor.
+    assert gate.note_failure("ban", float("inf")) == pytest.approx(120.0)
+    assert gate.note_failure("ban", float("nan")) == pytest.approx(120.0)
+    assert gate.note_failure("ban", -1.0) == pytest.approx(120.0)
+    # Finite but huge is clamped to the 3 day ceiling.
+    assert gate.note_failure("ban", 1e12) == pytest.approx(3 * 86_400.0)
 
 
 def test_entry_gate_check_blocks_cached_closed_window_during_ban() -> None:

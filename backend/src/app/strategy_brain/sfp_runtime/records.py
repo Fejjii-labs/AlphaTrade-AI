@@ -166,11 +166,17 @@ def record_sfp_availability(
         .where(
             BrainSetupRow.organization_id == executable.organization_id,
             BrainSetupRow.strategy_version_id == executable.strategy_version_id,
+            # One lineage may be scanned on several symbols (projected scopes).
+            BrainSetupRow.symbol == executable.authored_spec.symbol,
             BrainSetupRow.state.not_in(TERMINAL),
         )
         .with_for_update()
     )
+    timeframe = executable.authored_spec.trigger_timeframe.value
     for row in rows:
+        # ETH 15m and ETH 1h projections of one version keep separate availability.
+        if row.payload.get("timeframe", timeframe) != timeframe:
+            continue
         previous = row.payload.get("last_evaluated_at")
         if previous and datetime.fromisoformat(previous) > evaluated_at:
             continue

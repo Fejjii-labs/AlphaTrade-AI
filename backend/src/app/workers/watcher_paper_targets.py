@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 from app.core.errors import NotFoundError
 from app.db.models import UserStrategy
 from app.schemas.common import Timeframe
-from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
+from app.services.canonical_strategy_evaluation import (
+    project_executable_to_market,
+    resolve_executable_strategy_policy,
+)
 from app.services.strategy_versioning import StrategyVersioningService
 from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
@@ -45,6 +48,11 @@ class PaperScanTarget:
     timeframe: str = FIRST_SLICE_TIMEFRAME
     assignment_id: UUID | None = None
     configuration_revision: int | None = None
+    # True when an SFP/Nested lineage is evaluated off its authored market
+    # (WATCHER_APPLY_STRATEGIES_TO_WATCHLIST). Observation-only: no paper orders.
+    market_projection: bool = False
+    # Authored market whose parameters a projected scope reuses, e.g. "BTCUSDT 15m".
+    projection_source: str | None = None
 
     @property
     def policy_id(self) -> UUID:
@@ -165,12 +173,15 @@ def list_watchlist_scan_targets(
     organization_id: UUID | None = None,
     limit: int,
     excluded_coverage: set[tuple[UUID, UUID, str]] | None = None,
+    project_timeframes: Sequence[str] = (),
 ) -> tuple[PaperScanTarget, ...]:
     """Scan targets for the configured slots.
 
-    BTC is not inserted. A compiled strategy is attached only when its authored
-    symbol is the slot being scanned, so a BTC strategy is not applied to
-    another market.
+    BTC is not inserted. A compiled strategy is attached at its authored
+    symbol/timeframe. With ``project_timeframes`` (opt-in), each SFP/Nested
+    strategy is also projected onto every slot and listed timeframe as an
+    observation-only scope. All exact targets come first; projections only
+    use the remaining cap and skip markets an exact version already covers.
     """
 
     enabled_symbols = ordered_watch_symbols(symbols)
@@ -195,17 +206,55 @@ def list_watchlist_scan_targets(
         except (StrategyEvaluationPolicyError, NotFoundError):
             continue
         strategies.append((strategy, executable))
-    targets: list[PaperScanTarget] = []
+    # Exact approved scopes always come first, across every slot, so the
+    # per-cycle cap can never be consumed by projections. Projections only fill
+    # the remaining room, and are skipped where an exact approved version of the
+    # same family already covers that symbol and timeframe.
+    native: list[PaperScanTarget] = []
+    exact_coverage: set[tuple[str, str, type]] = set()
     for symbol in enabled_symbols:
         for strategy, executable in strategies:
             if excluded_coverage and (strategy.user_id, strategy.id, symbol) in excluded_coverage:
                 continue
-            if executable.authored_spec.symbol.strip().upper() != symbol:
-                continue
-            targets.append(_target_from_executable(strategy, executable, symbol=symbol))
-            if len(targets) >= limit:
-                return tuple(targets)
+            authored = executable.authored_spec
+            if authored.symbol.strip().upper() == symbol:
+                native.append(_target_from_executable(strategy, executable, symbol=symbol))
+                exact_coverage.add((symbol, _tf(authored.trigger_timeframe), type(authored)))
+    if len(native) >= limit:
+        return tuple(native[:limit])
+    targets: list[PaperScanTarget] = list(native)
+    for symbol in enabled_symbols:
+        for timeframe in project_timeframes:
+            for strategy, executable in strategies:
+                if excluded_coverage and (
+                    (strategy.user_id, strategy.id, symbol) in excluded_coverage
+                ):
+                    continue
+                authored = executable.authored_spec
+                if (symbol, _tf(timeframe), type(authored)) in exact_coverage:
+                    continue  # an exact approved version already scans this market
+                try:
+                    projected = project_executable_to_market(
+                        executable, symbol=symbol, timeframe=timeframe
+                    )
+                except StrategyEvaluationPolicyError:
+                    continue
+                if projected is executable:
+                    continue  # the authored market is already a native target
+                targets.append(
+                    replace(
+                        _target_from_executable(strategy, projected, symbol=symbol),
+                        market_projection=True,
+                        projection_source=(f"{authored.symbol} {_tf(authored.trigger_timeframe)}"),
+                    )
+                )
+                if len(targets) >= limit:
+                    return tuple(targets)
     return tuple(targets)
+
+
+def _tf(value: object) -> str:
+    return str(getattr(value, "value", value))
 
 
 def _target_from_executable(

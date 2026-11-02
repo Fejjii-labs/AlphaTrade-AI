@@ -21,6 +21,10 @@ from app.market_contracts.adapters.aggtrades import (
     iter_contiguous_agg_trade_rows,
 )
 from app.market_contracts.adapters.book_sequence import BookSequenceGuard
+from app.market_contracts.adapters.closed_kline_cache import (
+    MAX_CACHEABLE_INTERVAL_MS,
+    ClosedKlineCache,
+)
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient, UpstreamPause
 from app.market_contracts.adapters.observation_cache import CausalObservationCache
 from app.market_contracts.adapters.public_read_cache import (
@@ -145,6 +149,7 @@ class BinanceUsdmPerpetualSource:
         kline_cache: ShortTtlSingleflight | None = None,
         quote_cache: ShortTtlSingleflight | None = None,
         aggtrades_request_cache: ShortTtlSingleflight | None = None,
+        closed_kline_cache: ClosedKlineCache | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http = client or ReadOnlyHttpGetClient(
@@ -184,6 +189,10 @@ class BinanceUsdmPerpetualSource:
         self._kline_cache = kline_cache or ShortTtlSingleflight(
             ttl_seconds=PUBLIC_READ_TTL_SECONDS,
             max_entries=64,
+        )
+        # Not ``or``: an empty shared cache has len 0 but must still be shared.
+        self._closed_klines = (
+            closed_kline_cache if closed_kline_cache is not None else ClosedKlineCache()
         )
         self.public_quote_cache = quote_cache or ShortTtlSingleflight(
             ttl_seconds=PUBLIC_READ_TTL_SECONDS,
@@ -396,11 +405,21 @@ class BinanceUsdmPerpetualSource:
             )
 
         # Probes skip the cache so a changed symbol is not served from a prior read.
-        payload = (
-            self._kline_cache.get_or_load(key, load_payload)
-            if use_public_kline_cache
-            else load_payload()
-        )
+        # Other reads share one payload per symbol/interval until the next close.
+        interval_ms = int(interval_timedelta(timeframe).total_seconds() * 1000)
+        if not use_public_kline_cache:
+            payload = load_payload()
+        elif interval_ms <= MAX_CACHEABLE_INTERVAL_MS:
+            # A payload the closed cache refuses still dedupes inside the 10s cache.
+            payload = self._closed_klines.get_or_load(
+                (instrument.provider_symbol, interval),
+                end_ms=end_ms,
+                interval_ms=interval_ms,
+                limit=limit,
+                loader=lambda: self._kline_cache.get_or_load(key, load_payload),
+            )
+        else:
+            payload = self._kline_cache.get_or_load(key, load_payload)
         final_bars = self._settled_bars(
             payload, instrument=instrument, timeframe=timeframe, evaluated_at=evaluated_at
         )

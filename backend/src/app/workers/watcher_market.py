@@ -20,6 +20,10 @@ from app.core.config import Settings
 from app.evidence_pipeline.assembler import FirstSliceEvidenceAssembler
 from app.evidence_pipeline.setup_lifetime import SetupLifetimeStore
 from app.evidence_pipeline.watcher_port import AssemblingWatcherScanEvidence
+from app.market_contracts.adapters.binance_rest_gate import (
+    BinanceRestGate,
+    process_binance_rest_gate,
+)
 from app.market_contracts.adapters.binance_usdm import (
     BINANCE_REST_SETTLEMENT_GRACE,
     BinanceUsdmPerpetualSource,
@@ -29,6 +33,10 @@ from app.market_contracts.adapters.factory import (
     resolve_perpetual_evidence_source,
 )
 from app.market_contracts.adapters.failover import FailoverPerpetualSource
+from app.market_contracts.adapters.http import (
+    APPROVED_BINANCE_USDM_REST_HOSTS,
+    _retry_after_seconds,
+)
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
 from app.market_contracts.contract_discovery import fetch_binance_usdm_exchange_info
 from app.market_contracts.enums import VenueId
@@ -78,10 +86,12 @@ class WatchlistContractDiscovery:
         *,
         transport: httpx.BaseTransport | None = None,
         clock: Callable[[], float] = monotonic,
+        rest_gate: BinanceRestGate | None = None,
     ) -> None:
         self.settings = settings
         self.transport = transport
         self.clock = clock
+        self._gate = rest_gate
         self.book = ContractBook(())
         self.verdicts: dict[tuple[str, VenueId], ContractVerdict] = {}
         self._cache: OrderedDict[tuple[str, VenueId], tuple[float, ContractVerdict]] = OrderedDict()
@@ -105,6 +115,7 @@ class WatchlistContractDiscovery:
             transport=self.transport,
             timeout=self.settings.perpetual_evidence_timeout_seconds,
             follow_redirects=False,
+            event_hooks={"response": [self._note_binance_rate_limit]},
         ) as http:
             for symbol in symbols[:5]:
                 for venue in venues:
@@ -129,13 +140,20 @@ class WatchlistContractDiscovery:
     ) -> ContractVerdict:
         try:
             if venue is VenueId.BINANCE:
-                if self._binance is None or not 0 <= now - self._binance[0] < 60:
+                gate = self._rest_gate()
+                if gate is not None and gate.remaining() is not None:
+                    # A call during a 418/429 window extends the ban. Keep the
+                    # last listing; evidence reads stay blocked by the gate.
+                    payload = None if self._binance is None else self._binance[1]
+                elif self._binance is None or not 0 <= now - self._binance[0] < 60:
                     try:
                         payload = fetch_binance_usdm_exchange_info(client=http)
                     except ContractProviderUnreachableError:
                         payload = None
                     self._binance = (now, payload)
-                payload = self._binance[1]
+                    payload = self._binance[1]
+                else:
+                    payload = self._binance[1]
                 if payload is None:
                     raise ContractProviderUnreachableError("provider_unreachable")
                 _, verdicts = apply_binance_exchange_info(ContractBook(()), payload, [symbol])
@@ -154,6 +172,25 @@ class WatchlistContractDiscovery:
             return ContractVerdict(symbol, venue, ContractCheck.UNSUPPORTED, "unsupported_contract")
         except (httpx.HTTPError, ValueError, ContractProviderUnreachableError):
             return ContractVerdict(symbol, venue, ContractCheck.UNREACHABLE, "provider_unreachable")
+
+    def _rest_gate(self) -> BinanceRestGate | None:
+        """Real network discovery shares the process Binance gate; injected transports opt in."""
+
+        if self._gate is not None:
+            return self._gate
+        return process_binance_rest_gate() if self.transport is None else None
+
+    def _note_binance_rate_limit(self, response: httpx.Response) -> None:
+        gate = self._rest_gate()
+        if gate is None or response.status_code not in (418, 429):
+            return
+        if (response.request.url.host or "").lower() not in APPROVED_BINANCE_USDM_REST_HOSTS:
+            return
+        response.read()
+        gate.note_failure(
+            "ban" if response.status_code == 418 else "rate_limit",
+            _retry_after_seconds(response),
+        )
 
     def require(self, symbol: str, venue: VenueId) -> None:
         if perpetual_source_is_replay(self.settings):
@@ -367,6 +404,7 @@ class SymbolMarketFactory:
             watcher_store=store,
             symbol=symbol,
             monitor=MarketMonitorWatcherPort(monitor),
+            market_projection=self.settings.watcher_apply_strategies_to_watchlist,
         )
 
     def poll_monitor(self, symbol: str) -> None:

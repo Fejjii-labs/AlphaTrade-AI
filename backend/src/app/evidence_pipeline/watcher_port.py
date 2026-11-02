@@ -36,7 +36,10 @@ from app.market_monitor.monitor import PerpetualMarketMonitor
 from app.market_monitor.types import MarketMode, SymbolMonitorSnapshot
 from app.market_monitor.watcher_gate import watcher_evidence_error_for_monitor
 from app.market_monitor.watcher_port import MarketMonitorWatcherPort
-from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
+from app.services.canonical_strategy_evaluation import (
+    project_executable_to_market,
+    resolve_executable_strategy_policy,
+)
 from app.signal_fusion.enums import EvidenceAdapterKind
 from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.signal_fusion.first_slice_types import ManualResistanceEvidence
@@ -95,8 +98,10 @@ class AssemblingWatcherScanEvidence:
         watcher_store: WatcherStore | None = None,
         symbol: str = "BTCUSDT",
         monitor: MonitorPort | None = None,
+        market_projection: bool = False,
     ) -> None:
         self._assembler = assembler
+        self._market_projection = market_projection
         self._executable_resolver = executable_resolver
         self._session = session
         self._store = watcher_store
@@ -200,7 +205,7 @@ class AssemblingWatcherScanEvidence:
                 "Production Watcher Candidate authority requires a market monitor.",
                 reason_code="missing_monitor",
             )
-        executable = self._resolve_executable(command)
+        executable = self._bind_market(self._resolve_executable(command), command)
         from app.strategy_brain.trendpulse_1r.contracts import TrendPulseSpec
 
         if executable is not None and isinstance(executable.authored_spec, TrendPulseSpec):
@@ -341,6 +346,43 @@ class AssemblingWatcherScanEvidence:
             "Canonical contract failed with an unexpected error.",
             reason_code="canonical_contract_unexpected_error",
         ) from exc
+
+    def _bind_market(
+        self, executable: ExecutableStrategyPolicy | None, command: EvaluationCommand
+    ) -> ExecutableStrategyPolicy | None:
+        """Evaluate SFP/Nested on the scanned symbol/timeframe, or fail closed.
+
+        A scope off the authored market is evaluated only when projection is
+        enabled (WATCHER_APPLY_STRATEGIES_TO_WATCHLIST). Otherwise the scan
+        refuses instead of reading the authored market under another scope.
+        """
+
+        from app.schemas.nested_continuation import NestedContinuationSpec
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        if executable is None:
+            return None
+        spec = executable.authored_spec
+        if not isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+            return executable
+        # A request without a timeframe binds only the symbol.
+        timeframe = command.request.timeframe or spec.trigger_timeframe.value
+        if spec.symbol == self._symbol and spec.trigger_timeframe.value == timeframe:
+            return executable
+        if not self._market_projection:
+            raise WatcherEvidenceUnavailableError(
+                "Strategy market does not match this scan scope.",
+                reason_code="strategy_market_mismatch",
+            )
+        try:
+            return project_executable_to_market(
+                executable, symbol=self._symbol, timeframe=timeframe
+            )
+        except StrategyEvaluationPolicyError as exc:
+            raise WatcherEvidenceUnavailableError(
+                "Strategy cannot be projected onto this scan scope.",
+                reason_code=exc.reason_code,
+            ) from exc
 
     def _resolve_executable(self, command: EvaluationCommand) -> ExecutableStrategyPolicy | None:
         if self._session is not None and self._store is not None:
