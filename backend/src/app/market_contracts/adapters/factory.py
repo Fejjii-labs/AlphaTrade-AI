@@ -194,6 +194,7 @@ def _binance_source(
         kline_cache=None if pool is None else pool.kline_cache,
         quote_cache=None if pool is None else pool.quote_cache,
         aggtrades_request_cache=None if pool is None else pool.aggtrades_requests,
+        closed_kline_cache=None if pool is None else pool.closed_klines,
     )
 
 

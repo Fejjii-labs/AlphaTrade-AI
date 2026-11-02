@@ -166,6 +166,8 @@ def record_sfp_availability(
         .where(
             BrainSetupRow.organization_id == executable.organization_id,
             BrainSetupRow.strategy_version_id == executable.strategy_version_id,
+            # One lineage may be scanned on several symbols (projected scopes).
+            BrainSetupRow.symbol == executable.authored_spec.symbol,
             BrainSetupRow.state.not_in(TERMINAL),
         )
         .with_for_update()

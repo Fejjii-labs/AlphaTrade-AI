@@ -66,6 +66,10 @@ class ExchangeMode(StrEnum):
     TRADE_LIVE = "trade_live"
 
 
+# Projected Watcher scopes may use these. Each is a whole number of 15m bars.
+WATCHER_SCAN_TIMEFRAME_CHOICES = ("15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
+
+
 class Settings(BaseSettings):
     """Validated application configuration.
 
@@ -305,6 +309,17 @@ class Settings(BaseSettings):
     # Seconds between periodic paper_worker_health log lines while serving.
     paper_worker_health_log_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
     watcher_paper_max_scopes_per_cycle: int = Field(default=20, ge=1, le=200)
+    # Opt-in: evaluate approved SFP/Nested strategies on every enabled watchlist
+    # symbol and on each WATCHER_SCAN_TIMEFRAMES entry, not only on the authored
+    # symbol/timeframe. Projected scopes are observation-only: they record
+    # evaluations, Candidates and alerts but never reach paper or demo orders.
+    watcher_apply_strategies_to_watchlist: bool = False
+    # Timeframes for projected scopes. Native strategies keep their authored
+    # trigger timeframe. Only 15m multiples up to 1d (bar-close and kline cache
+    # boundaries are 15m-aligned).
+    watcher_scan_timeframes: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["15m", "1h"]
+    )
     watcher_paper_worker_id: str = Field(default="watcher-paper-1", min_length=1, max_length=80)
 
     # --- Market watcher bridge (Slice 42 — disabled by default, paper scan only) ---
@@ -658,6 +673,21 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [str(item).strip().upper() for item in value if str(item).strip()]
         return value
+
+    @field_validator("watcher_scan_timeframes", mode="before")
+    @classmethod
+    def _split_watcher_scan_timeframes(cls, value: object) -> object:
+        raw = value.split(",") if isinstance(value, str) else value
+        if not isinstance(raw, list):
+            return value
+        tokens = list(dict.fromkeys(str(item).strip().lower() for item in raw if str(item).strip()))
+        unsupported = [token for token in tokens if token not in WATCHER_SCAN_TIMEFRAME_CHOICES]
+        if unsupported:
+            raise ValueError(
+                f"WATCHER_SCAN_TIMEFRAMES has unsupported values {unsupported}; "
+                f"choose from {', '.join(WATCHER_SCAN_TIMEFRAME_CHOICES)}."
+            )
+        return tokens
 
     @field_validator("watcher_paper_organization_id", mode="before")
     @classmethod

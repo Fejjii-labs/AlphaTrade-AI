@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from app.core.config import Settings
 from app.market_contracts.adapters.aggtrade_cache import ClosedAggTradeCache, TtlValueCache
+from app.market_contracts.adapters.closed_kline_cache import ClosedKlineCache
 from app.market_contracts.adapters.http import UpstreamPause
 from app.market_contracts.adapters.observation_cache import CausalObservationCache
 from app.market_contracts.adapters.public_read_cache import (
@@ -55,6 +56,7 @@ class BinanceEvidencePool:
             ttl_seconds=PUBLIC_READ_TTL_SECONDS,
             max_entries=64,
         )
+        self.closed_klines = ClosedKlineCache(max_entries=64)
         # Identical closed-window aggTrades GETs inside one scan cycle share
         # one request. Open windows (live quotes, paper fills) never match.
         self.aggtrades_requests = ShortTtlSingleflight(

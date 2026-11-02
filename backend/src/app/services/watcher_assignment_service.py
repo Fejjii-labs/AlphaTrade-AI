@@ -30,7 +30,10 @@ from app.schemas.watcher_assignments import (
     WatcherAssignmentVersion,
 )
 from app.services.canonical_serialization import canonical_sha256
-from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
+from app.services.canonical_strategy_evaluation import (
+    project_executable_to_market,
+    resolve_executable_strategy_policy,
+)
 from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.watcher.contracts import EvaluationCommand
 from app.watcher.fusion_evaluation import CandidatePersistenceFence
@@ -494,6 +497,14 @@ def assignment_target_reason(session: Session, target: PaperScanTarget) -> str |
             return exc.reason_code
         except NotFoundError:
             return "strategy_binding_unavailable"
+        if target.market_projection:
+            # Opt-in observation-only scope: the same lineage moved to this market.
+            try:
+                executable = project_executable_to_market(
+                    executable, symbol=target.symbol, timeframe=target.timeframe
+                )
+            except StrategyEvaluationPolicyError as exc:
+                return exc.reason_code
         if (
             executable.compiled_setup_definition_id != target.compiled_setup_definition_id
             or executable.compiled_content_hash != target.compiled_content_hash

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 from app.core.errors import NotFoundError
 from app.db.models import UserStrategy
 from app.schemas.common import Timeframe
-from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
+from app.services.canonical_strategy_evaluation import (
+    project_executable_to_market,
+    resolve_executable_strategy_policy,
+)
 from app.services.strategy_versioning import StrategyVersioningService
 from app.signal_fusion.errors import StrategyEvaluationPolicyError
 from app.signal_fusion.strategy_evaluation_policy import ExecutableStrategyPolicy
@@ -45,6 +48,9 @@ class PaperScanTarget:
     timeframe: str = FIRST_SLICE_TIMEFRAME
     assignment_id: UUID | None = None
     configuration_revision: int | None = None
+    # True when an SFP/Nested lineage is evaluated off its authored market
+    # (WATCHER_APPLY_STRATEGIES_TO_WATCHLIST). Observation-only: no paper orders.
+    market_projection: bool = False
 
     @property
     def policy_id(self) -> UUID:
@@ -165,12 +171,14 @@ def list_watchlist_scan_targets(
     organization_id: UUID | None = None,
     limit: int,
     excluded_coverage: set[tuple[UUID, UUID, str]] | None = None,
+    project_timeframes: Sequence[str] = (),
 ) -> tuple[PaperScanTarget, ...]:
     """Scan targets for the configured slots.
 
-    BTC is not inserted. A compiled strategy is attached only when its authored
-    symbol is the slot being scanned, so a BTC strategy is not applied to
-    another market.
+    BTC is not inserted. A compiled strategy is attached at its authored
+    symbol/timeframe. With ``project_timeframes`` (opt-in), each SFP/Nested
+    strategy is also projected onto every slot and listed timeframe as an
+    observation-only scope. Per slot, authored targets come first.
     """
 
     enabled_symbols = ordered_watch_symbols(symbols)
@@ -197,12 +205,34 @@ def list_watchlist_scan_targets(
         strategies.append((strategy, executable))
     targets: list[PaperScanTarget] = []
     for symbol in enabled_symbols:
+        candidates: list[PaperScanTarget] = []
         for strategy, executable in strategies:
             if excluded_coverage and (strategy.user_id, strategy.id, symbol) in excluded_coverage:
                 continue
-            if executable.authored_spec.symbol.strip().upper() != symbol:
-                continue
-            targets.append(_target_from_executable(strategy, executable, symbol=symbol))
+            if executable.authored_spec.symbol.strip().upper() == symbol:
+                candidates.append(_target_from_executable(strategy, executable, symbol=symbol))
+        for timeframe in project_timeframes:
+            for strategy, executable in strategies:
+                if excluded_coverage and (
+                    (strategy.user_id, strategy.id, symbol) in excluded_coverage
+                ):
+                    continue
+                try:
+                    projected = project_executable_to_market(
+                        executable, symbol=symbol, timeframe=timeframe
+                    )
+                except StrategyEvaluationPolicyError:
+                    continue
+                if projected is executable:
+                    continue  # the authored market is already a native target
+                candidates.append(
+                    replace(
+                        _target_from_executable(strategy, projected, symbol=symbol),
+                        market_projection=True,
+                    )
+                )
+        for target in candidates:
+            targets.append(target)
             if len(targets) >= limit:
                 return tuple(targets)
     return tuple(targets)
