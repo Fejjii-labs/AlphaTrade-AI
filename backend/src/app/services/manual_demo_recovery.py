@@ -1,7 +1,7 @@
 """One audited manual resolution under the account epoch; never clear global safety."""
 
 from datetime import datetime
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import uuid5
 
@@ -31,6 +31,7 @@ from app.schemas.trade_plan import AuthorizationState, TradePlanRevision
 from app.services.audit_service import AuditService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_claim import conservative_reservation
+from app.services.execution_exposure import linear_quote_exposure
 from app.services.execution_fills import adjust_symbol_map, fill_content_hash
 from app.services.safety_epoch import SafetyEpochService
 
@@ -79,6 +80,42 @@ def recorded_exit_facts(session: Session, command: ExecutionCommand) -> list[dic
         if prior is None or "fee_currency" in fact:
             by_id[fact["identity"]] = fact
     return list(by_id.values())
+
+
+_STORED_MONEY = Decimal("0.00000001")
+
+
+def claimed_reservation_notional(plan: TradePlanRevision, reservation: Any) -> Decimal:
+    """Unrounded notional this reservation was claimed with, from the immutable plan.
+
+    Market-order reservations claimed before 2026-10-13 (73765026) priced exposure
+    at ``basis_policy.execution_price`` only; later claims use
+    ``max(execution_price, entry_zone.upper)``. Both are deterministic in the
+    immutable plan, so the stored claim (``pending_order_exposure``, written once
+    at claim time, 8 dp) must equal one of them after storage rounding. Anything
+    else fails closed: the remainder cannot be explained by plan and fills.
+    """
+
+    current = conservative_reservation(plan).pending_notional
+    candidates = [current]
+    if plan.limit_price is None:
+        legacy = (
+            linear_quote_exposure(
+                quantity=plan.quantity.value,
+                price=plan.basis_policy.execution_price.value,
+                quantity_unit=plan.quantity.unit,
+                contract_multiplier=plan.instrument_rules.contract_multiplier,
+                contract_type=plan.instrument_rules.contract_type.value,
+            )
+            + plan.risk_and_exits.fee_allowance.value
+            + plan.risk_and_exits.slippage_allowance.value
+        )
+        candidates.append(legacy)
+    stored = reservation.pending_order_exposure
+    for candidate in candidates:
+        if candidate.quantize(_STORED_MONEY, rounding=ROUND_HALF_UP) == stored:
+            return candidate
+    raise TradingPolicyError("Reservation claim differs from its immutable plan.")
 
 
 def verified_entry_notional(
@@ -357,7 +394,7 @@ def resolve_manual_lifecycle(
         if unused:
             exact_notional = verified_entry_notional(session, command, plan)
             exact_unused = max(
-                Decimal("0"), conservative_reservation(plan).pending_notional - exact_notional
+                Decimal("0"), claimed_reservation_notional(plan, reservation) - exact_notional
             )
             if reservation.release_reason in {
                 RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_CANCELLATION,
