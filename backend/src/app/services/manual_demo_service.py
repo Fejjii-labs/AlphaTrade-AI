@@ -17,7 +17,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import ForbiddenError, NotFoundError, TradingPolicyError, ValidationAppError
-from app.core.execution_credentials import blofin_execution_authorized, manual_demo_access_requested
+from app.core.execution_credentials import (
+    blofin_execution_authorized,
+    governed_demo_worker_access_requested,
+    manual_demo_access_requested,
+)
 from app.db.models import (
     AuditLog,
     ExecutionAccount,
@@ -115,8 +119,12 @@ class ManualDemoService:
         *,
         provider: GovernedBloFinDemoProvider | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        worker_recovery: bool = False,
     ) -> None:
         self.session, self.settings, self.clock = session, settings, clock
+        # Worker-side stale-entry recovery uses the governed demo worker arm instead
+        # of the API manual-demo arm. It is still owner-pinned and credential-gated.
+        self.worker_recovery = worker_recovery
         self.provider = provider
         self.audit = AuditService(session, strict_mode=True)
         self.risk_settings = RiskSettingsService(session, self.audit)
@@ -125,9 +133,12 @@ class ManualDemoService:
     def _scope(self, tenant: TenantContext) -> ExecutionAccount:
         if tenant.membership_role is not MembershipRole.OWNER:
             raise ForbiddenError("Only the authenticated owner can run a manual demo test.")
-        if not manual_demo_access_requested(self.settings) or not blofin_execution_authorized(
-            self.settings
-        ):
+        armed = (
+            governed_demo_worker_access_requested(self.settings)
+            if self.worker_recovery
+            else manual_demo_access_requested(self.settings)
+        )
+        if not armed or not blofin_execution_authorized(self.settings):
             raise TradingPolicyError(
                 "Manual demo capability is disarmed or credentials are sealed."
             )

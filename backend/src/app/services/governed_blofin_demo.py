@@ -1609,4 +1609,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         )
         session.commit()
-        return tuple(self.reconcile_command(session, command_id=identity) for identity in ids)
+        governed = tuple(self.reconcile_command(session, command_id=identity) for identity in ids)
+        # Aged manual demo entries are outside governed lineage but still gate
+        # every governed entry via has_demo_entry_history; resolve proven-closed ones.
+        from app.services.stale_demo_entry_reconciliation import (
+            reconcile_stale_manual_demo_entries,
+        )
+
+        try:
+            stale = reconcile_stale_manual_demo_entries(
+                session, self._settings, clock=self._clock.now, provider=self._get_provider()
+            )
+        except Exception:
+            session.rollback()
+            logger.warning("stale_manual_demo_entry_reconciliation_failed", exc_info=True)
+            stale = ()
+        return governed + stale
