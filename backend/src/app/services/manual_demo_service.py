@@ -859,6 +859,12 @@ class ManualDemoService:
                 and observation.account_verified
                 and not observation.account_flat
             ):
+                if self.worker_recovery:
+                    # Worker stale-entry recovery never halts the organization.
+                    raise TradingPolicyError(
+                        "Worker recovery refused: venue position is not flat.",
+                        details={"reason": "stale_entry_venue_mismatch"},
+                    )
                 if not self.epochs.organization_kill_active(tenant.organization_id):
                     KillSwitchService(self.session, self.audit, self.settings).activate(
                         organization_id=tenant.organization_id,
@@ -887,6 +893,16 @@ class ManualDemoService:
                 not plan.entry_zone.lower <= f.price <= plan.entry_zone.upper
                 for f in evidence.fills
             ):
+                if (
+                    self.worker_recovery
+                    and observation is not None
+                    and observation.account_verified
+                    and not observation.account_flat
+                ):
+                    raise TradingPolicyError(
+                        "Worker recovery refused: venue position is not flat.",
+                        details={"reason": "stale_entry_venue_mismatch"},
+                    )
                 if (
                     observation is not None
                     and observation.account_verified

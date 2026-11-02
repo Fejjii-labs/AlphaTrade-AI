@@ -142,7 +142,7 @@ ENV_FILE=.env.staging ./scripts/check-env.sh
 Voice (optional): set `AGENT_REALTIME_ENABLED=true`, `AGENT_VOICE_REASONING_MODEL=gpt-6-luna`
 and `AGENT_REALTIME_LIMITS_FILE=/app/src/app/agent_voice/receipts/staging_voice_limits_2026-11.json`.
 The receipt prices assume OpenAI's **global endpoint** (`api.openai.com`, standard tier, no
-data-residency uplift); the live socket refuses other endpoints, so a regional/data-residency
+data-residency uplift); the voice sockets refuse other endpoints, so a regional/data-residency
 endpoint would need a new receipt priced for it.
 
 After enabling OpenAI on a cluster that previously used mock embeddings, recreate

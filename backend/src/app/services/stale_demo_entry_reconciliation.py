@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid5
 
 import structlog
-from sqlalchemy import String, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, Settings
@@ -53,7 +53,11 @@ logger = structlog.get_logger(__name__)
 STALE_ENTRY_AGE = timedelta(hours=1)
 SNAPSHOT_MAX_AGE = timedelta(minutes=10)
 MAX_PER_PASS = 5
-RETRY_AFTER = timedelta(minutes=15)
+CANDIDATE_SCAN = 50
+RETRY_BASE = timedelta(minutes=15)
+RETRY_CAP = timedelta(hours=6)
+MAX_ATTEMPTS = 8
+OPERATOR_HOLD = "stale_entry_operator_hold"
 OPERATION = "stale_manual_demo_entry_reconciliation"
 
 
@@ -129,21 +133,77 @@ def stale_manual_demo_command_ids(
                 TradePlanRevision.plan_authority == "manual_demo_test",
                 ManualDemoLifecycleResolution.id.is_(None),
                 ExecutionCommand.created_at < now - STALE_ENTRY_AGE,
-                # Bound venue reads and audit volume: one attempt per command per window.
-                ~select(AuditLog.id)
-                .where(
-                    AuditLog.organization_id == ExecutionCommand.organization_id,
-                    AuditLog.resource_type == "manual_demo_test",
-                    AuditLog.resource_id == ExecutionCommand.id.cast(String),
-                    AuditLog.redacted_metadata["operation"].as_string() == OPERATION,
-                    AuditLog.created_at >= now - RETRY_AFTER,
-                )
-                .exists(),
             )
             .order_by(ExecutionCommand.created_at)
-            .limit(MAX_PER_PASS)
+            .limit(CANDIDATE_SCAN)
         )
     )
+
+
+def retry_delay(attempts: int) -> timedelta:
+    """Exponential backoff after ``attempts`` prior tries: 15m, 30m, 1h ... capped at 6h."""
+    if attempts <= 0:
+        return timedelta(0)
+    delay: timedelta = RETRY_BASE * (2 ** (attempts - 1))
+    return min(delay, RETRY_CAP)
+
+
+def attempt_history(session: Session, command_id: UUID) -> tuple[int, datetime | None, bool]:
+    """Prior attempts, last attempt time (injected clock), and whether held."""
+    rows = list(
+        session.scalars(
+            select(AuditLog).where(
+                AuditLog.resource_type == "manual_demo_test",
+                AuditLog.resource_id == str(command_id),
+                AuditLog.redacted_metadata["operation"].as_string() == OPERATION,
+            )
+        )
+    )
+    attempts, last, held = 0, None, False
+    for row in rows:
+        meta = row.redacted_metadata
+        if meta.get("outcome") == OPERATOR_HOLD:
+            held = True
+            continue
+        attempts += 1
+        at = meta.get("attempted_at")
+        if isinstance(at, str):
+            moment = datetime.fromisoformat(at)
+            last = moment if last is None or moment > last else last
+    return attempts, last, held
+
+
+def due_command_ids(
+    session: Session, settings: Settings, *, now: datetime
+) -> list[tuple[UUID, int]]:
+    due: list[tuple[UUID, int]] = []
+    for command_id in stale_manual_demo_command_ids(session, settings, now=now):
+        attempts, last, held = attempt_history(session, command_id)
+        if held:
+            continue
+        if last is not None and now - last < retry_delay(attempts):
+            continue
+        due.append((command_id, attempts))
+        if len(due) >= MAX_PER_PASS:
+            break
+    return due
+
+
+def venue_precheck_refusal(provider: GovernedBloFinDemoProvider) -> str | None:
+    """Read-only venue check: no position, no pending orders, no pending TP/SL."""
+    from app.providers.exchange.manual_demo_lifecycle import (
+        observe_account_idle,
+        observe_positions,
+    )
+
+    try:
+        flat = observe_positions(provider)
+        idle = observe_account_idle(provider)
+    except Exception:
+        return "stale_entry_reconciliation_unavailable"
+    if not (flat and idle):
+        return "stale_entry_venue_mismatch"
+    return None
 
 
 def _audit(
@@ -165,7 +225,12 @@ def _audit(
             organization_id=organization_id,
             user_id=user_id,
             timestamp=now,
-            metadata={"operation": OPERATION, "outcome": outcome, "paper_only": True},
+            metadata={
+                "operation": OPERATION,
+                "outcome": outcome,
+                "attempted_at": now.isoformat(),
+                "paper_only": True,
+            },
         )
     )
 
@@ -178,16 +243,14 @@ def reconcile_stale_manual_demo_entries(
     provider: GovernedBloFinDemoProvider | None = None,
 ) -> tuple[str, ...]:
     """Resolve aged manual demo entries the venue proves closed. Never resubmits."""
-    from app.services.manual_demo_service import ManualDemoService
-
     if stale_entry_refusal(settings) is not None:
         return ()
     now = clock()
     organization_id = UUID(settings.governed_blofin_demo_organization_id)
     user_id = UUID(settings.governed_blofin_demo_user_id)
-    ids = stale_manual_demo_command_ids(session, settings, now=now)
+    due = due_command_ids(session, settings, now=now)
     session.commit()
-    if not ids:
+    if not due:
         return ()
     membership = session.scalar(
         select(Membership).where(
@@ -202,16 +265,21 @@ def reconcile_stale_manual_demo_entries(
         email="",
         membership_role=MembershipRole.OWNER,
     )
+    from app.services.manual_demo_service import ManualDemoService as _Service
+
     outcomes: list[str] = []
-    for command_id in ids:
+    for command_id, attempts in due:
         refusal = snapshot_flat_refusal(
             session, organization_id=organization_id, user_id=user_id, now=now
         )
         if refusal is None:
+            service = _Service(
+                session, settings, provider=provider, clock=clock, worker_recovery=True
+            )
+            refusal = venue_precheck_refusal(service._provider())
+        if refusal is None:
             try:
-                status = ManualDemoService(
-                    session, settings, provider=provider, clock=clock, worker_recovery=True
-                ).resolve(tenant, command_id)
+                status = service.resolve(tenant, command_id)
                 outcome = (
                     "stale_entry_resolved"
                     if status.recovery_status == "resolved"
@@ -219,13 +287,17 @@ def reconcile_stale_manual_demo_entries(
                 )
             except AppError as exc:
                 session.rollback()
+                details = getattr(exc, "details", None) or {}
+                if details.get("reason") == "stale_entry_venue_mismatch":
+                    outcome = "stale_entry_venue_mismatch"
+                else:
+                    outcome = "stale_entry_evidence_incomplete"
                 logger.info(
                     "stale_manual_demo_entry_refused",
                     command_id=str(command_id),
                     error=type(exc).__name__,
                     detail=str(exc)[:200],
                 )
-                outcome = "stale_entry_evidence_incomplete"
             except Exception:
                 session.rollback()
                 outcome = "stale_entry_reconciliation_unavailable"
@@ -239,6 +311,16 @@ def reconcile_stale_manual_demo_entries(
             now=now,
             outcome=outcome,
         )
+        if outcome != "stale_entry_resolved" and attempts + 1 >= MAX_ATTEMPTS:
+            _audit(
+                session,
+                command_id=command_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                now=now,
+                outcome=OPERATOR_HOLD,
+            )
+            outcome = OPERATOR_HOLD
         session.commit()
         logger.info(
             "stale_manual_demo_entry_reconciliation",
