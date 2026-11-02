@@ -27,6 +27,8 @@ class NestedAlertSummary(CanonicalModel):
     target: PositiveCanonicalDecimal | None = None
     paper_mode: Literal[True] = True
     freshness: Literal["AVAILABLE"] = "AVAILABLE"
+    # Opt-in watchlist projection: authored market whose parameters were reused.
+    projection_source: str | None = None
 
 
 def required_evidence_fresh(

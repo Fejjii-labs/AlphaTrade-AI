@@ -31,6 +31,9 @@ class WatcherPaperScopeStatus(BaseModel):
     lease_owner: str | None = None
     last_reason_code: str
     candidate_ids: list[str] = Field(default_factory=list)
+    # Set on opt-in watchlist projections: the authored market whose parameters
+    # are reused, e.g. "BTCUSDT 15m". Observation only.
+    projection_source: str | None = None
 
 
 class WatcherPaperRuntimeStatus(BaseModel):

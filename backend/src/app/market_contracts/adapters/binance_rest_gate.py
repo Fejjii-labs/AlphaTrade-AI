@@ -8,7 +8,11 @@ each call during a ban lengthens it. This gate is the one shared answer to
 
 * HTTP 418 or 429 closes the gate for every client in the process until
   ``max(Retry-After, exponential backoff)`` plus jitter has passed.
-  Consecutive failures double the backoff (capped). A success resets it.
+  Consecutive failures double the backoff (capped at 15 min). A success resets
+  it. A deadline the server sends (Retry-After or a ``banned until`` body) is
+  honoured up to 3 days, because repeat offenders get bans longer than the
+  computed cap. A 418 without a usable deadline waits at least 2 minutes,
+  Binance's shortest ban.
 * ``X-MBX-USED-WEIGHT-1M`` at or above the soft limit closes the gate until
   the next minute window, before Binance has to answer 429.
 * aggTrades requests are spaced out, more widely during the first minutes
@@ -29,16 +33,25 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 
+import structlog
+
 AGGTRADES_PATH = "/fapi/v1/aggTrades"
 # Binance USD-M IP limit is 2400 weight per minute. Pause before reaching it.
 USED_WEIGHT_SOFT_LIMIT = 2000
 BACKOFF_BASE_SECONDS = 5.0
+# Cap for the computed exponential backoff only.
 BACKOFF_CAP_SECONDS = 900.0
+# Server deadlines are honoured up to this bound. A ban once lasted 40 minutes.
+MAX_SERVER_PAUSE_SECONDS = 3 * 86_400.0
+# Binance's shortest IP ban. Used when a 418 carries no usable deadline.
+BAN_FLOOR_SECONDS = 120.0
 JITTER_FRACTION = 0.25
 AGGTRADES_MIN_INTERVAL_SECONDS = 0.25
 BOOT_RAMP_SECONDS = 120.0
 BOOT_AGGTRADES_MIN_INTERVAL_SECONDS = 1.0
 _USED_WEIGHT_HEADER = "x-mbx-used-weight-1m"
+
+logger = structlog.get_logger(__name__)
 
 
 class BinanceRestGate:
@@ -108,9 +121,21 @@ class BinanceRestGate:
         with self._lock:
             self._strikes += 1
             backoff = min(self._base * 2.0 ** (self._strikes - 1), self._cap)
-        floor = sanitize_retry_after(retry_after_seconds, cap=self._cap) or 0.0
-        seconds = max(floor, backoff) * (1.0 + self._jitter * self._rng())
+        server = sanitize_retry_after(retry_after_seconds)
+        if server is None and kind == "ban":
+            server = BAN_FLOOR_SECONDS
+        base = max(server or 0.0, backoff)
+        # Jitter is bounded by the backoff cap so a 3-day ban is not stretched by hours.
+        seconds = base + min(base, self._cap) * self._jitter * self._rng()
         self._close(kind, seconds)
+        if seconds > self._cap:
+            logger.error(
+                "binance_rest_gate_long_pause",
+                kind=kind,
+                pause_seconds=round(seconds, 1),
+                server_deadline_seconds=None if server is None else round(server, 1),
+                strikes=self.strikes,
+            )
         return seconds
 
     def note_success(self, headers: Mapping[str, str] | None = None) -> None:
@@ -149,11 +174,13 @@ class BinanceRestGate:
             return self._strikes
 
 
-def sanitize_retry_after(value: float | None, *, cap: float = BACKOFF_CAP_SECONDS) -> float | None:
-    """Usable Retry-After seconds, or None so the caller falls back to backoff.
+def sanitize_retry_after(
+    value: float | None, *, cap: float = MAX_SERVER_PAUSE_SECONDS
+) -> float | None:
+    """Usable server deadline in seconds, or None so the caller falls back to backoff.
 
     Non-finite (inf, nan) and negative values are rejected. Everything else is
-    clamped to ``cap`` so one bad header cannot close the gate for days.
+    clamped to ``cap`` (3 days) so one bad header cannot close the gate for longer.
     """
 
     if value is None:

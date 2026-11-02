@@ -51,6 +51,8 @@ class PaperScanTarget:
     # True when an SFP/Nested lineage is evaluated off its authored market
     # (WATCHER_APPLY_STRATEGIES_TO_WATCHLIST). Observation-only: no paper orders.
     market_projection: bool = False
+    # Authored market whose parameters a projected scope reuses, e.g. "BTCUSDT 15m".
+    projection_source: str | None = None
 
     @property
     def policy_id(self) -> UUID:
@@ -225,10 +227,12 @@ def list_watchlist_scan_targets(
                     continue
                 if projected is executable:
                     continue  # the authored market is already a native target
+                authored = executable.authored_spec
                 candidates.append(
                     replace(
                         _target_from_executable(strategy, projected, symbol=symbol),
                         market_projection=True,
+                        projection_source=(f"{authored.symbol} {authored.trigger_timeframe.value}"),
                     )
                 )
         for target in candidates:

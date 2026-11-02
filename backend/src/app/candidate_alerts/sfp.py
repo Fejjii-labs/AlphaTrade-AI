@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime
 
+from app.candidate_alerts.projection import projection_note, projection_tag
 from app.market_contracts.models import CanonicalModel
 from app.schemas.telegram_policy import (
     AlertPhase,
@@ -51,6 +52,8 @@ class SfpAlertSummary(CanonicalModel):
     paper_mode: Literal[True] = True
     # Empty salt keeps the historical duplicate key. Approach alerts set a bucket.
     duplicate_salt: str = ""
+    # Opt-in watchlist projection: authored market whose parameters were reused.
+    projection_source: str | None = None
 
     def notification_event(self) -> TelegramNotificationEvent:
         if self.event_type not in SEVERITIES:
@@ -84,11 +87,22 @@ class SfpAlertSummary(CanonicalModel):
             occurred_at=self.occurred_at,
         )
 
+    def _projection_lines(self) -> tuple[str, str]:
+        """Header suffix and note for a projected scope; empty for an approved market."""
+
+        if self.projection_source is None:
+            return "", ""
+        return f" {projection_tag(self.projection_source)}", projection_note(
+            self.projection_source, symbol=self.symbol, timeframe=self.timeframe
+        )
+
     def text(self) -> str:
+        tag, note = self._projection_lines()
         if self.event_type == NotificationEventType.SFP_LEVEL_APPROACH:
             return "\n".join(
                 (
-                    "PAPER MODE — SFP LEVEL APPROACH",
+                    f"PAPER MODE — SFP LEVEL APPROACH{tag}",
+                    *((note,) if note else ()),
                     "Preparation only. Price is near a level and has not swept it.",
                     "Execution is not authorized.",
                     f"{self.symbol} | {self.venue} | {self.timeframe} | {self.direction}",
@@ -110,7 +124,8 @@ class SfpAlertSummary(CanonicalModel):
             )
         return "\n".join(
             (
-                f"PAPER MODE — {self.event_type.value.replace('_', ' ')}",
+                f"PAPER MODE — {self.event_type.value.replace('_', ' ')}{tag}",
+                *((note,) if note else ()),
                 f"{self.symbol} | {self.venue} | {self.timeframe} | {self.direction}",
                 f"Structural level: {self.level_type} {self.structural_level}",
                 f"Sweep extreme: {self.sweep_extreme}",

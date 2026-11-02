@@ -311,35 +311,90 @@ def test_payload_without_the_rolled_forming_candle_is_not_cached() -> None:
 # --- Problem 2: 418/429 process-wide backoff -----------------------------------
 
 
-def test_418_body_ban_deadline_closes_the_gate_for_every_client(monkeypatch) -> None:
+class _LogRecorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, object]]] = []
+
+    def error(self, event: str, **fields: object) -> None:
+        self.events.append(("error", event, fields))
+
+    def warning(self, event: str, **fields: object) -> None:
+        self.events.append(("warning", event, fields))
+
+
+def _ban_client(handler, gate: BinanceRestGate) -> ReadOnlyHttpGetClient:
+    return ReadOnlyHttpGetClient(
+        base_url="https://fapi.binance.com",
+        timeout_seconds=1.0,
+        transport=httpx.MockTransport(handler),
+        rest_gate=gate,
+        sleeper=lambda _s: None,
+    )
+
+
+# 10 min, the 40 min staging ban, and a 3 day repeat-offender ban.
+@pytest.mark.parametrize("ban_seconds", [600, 40 * 60, 3 * 86_400])
+def test_418_body_ban_deadline_closes_the_gate_for_every_client(
+    monkeypatch, ban_seconds: int
+) -> None:
     now = 1_800_000_000.0
     monkeypatch.setattr("app.market_contracts.adapters.http.time.time", lambda: now)
-    gate = BinanceRestGate(rng=lambda: 0.0)
+    log = _LogRecorder()
+    monkeypatch.setattr("app.market_contracts.adapters.binance_rest_gate.logger", log)
+    clock = [1000.0]
+    gate = BinanceRestGate(clock=lambda: clock[0], rng=lambda: 0.0)
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.url.path)
-        until = int(now + 600) * 1000
+        until = int(now + ban_seconds) * 1000
         body = {"code": -1003, "msg": f"Way too many requests; IP banned until {until}."}
         return httpx.Response(418, headers={"Retry-After": "60"}, json=body)
 
-    def client() -> ReadOnlyHttpGetClient:
-        return ReadOnlyHttpGetClient(
-            base_url="https://fapi.binance.com",
-            timeout_seconds=1.0,
-            transport=httpx.MockTransport(handler),
-            rest_gate=gate,
-            sleeper=lambda _s: None,
+    with pytest.raises(UpstreamBanError):
+        _ban_client(handler, gate).get_json("/fapi/v1/ping")
+    closed = gate.remaining()
+    # The longer body deadline wins over Retry-After: 60, and is not cut to 900 s.
+    assert closed is not None and closed[0] == "ban" and closed[1] >= ban_seconds - 1
+    with pytest.raises(UpstreamBanError):
+        _ban_client(handler, gate).get_json(
+            "/fapi/v1/klines", {"symbol": "BTCUSDT", "interval": "15m", "limit": 4}
+        )
+    # One second before the deadline the process is still banned.
+    clock[0] += ban_seconds - 1
+    with pytest.raises(UpstreamBanError):
+        _ban_client(handler, gate).get_json("/fapi/v1/ping")
+    assert calls == ["/fapi/v1/ping"], "no request may be sent while the process is banned"
+    long_pauses = [e for e in log.events if e[1] == "binance_rest_gate_long_pause"]
+    if ban_seconds > 900:
+        assert [level for level, _, _ in long_pauses] == ["error"]
+        assert long_pauses[0][2]["pause_seconds"] >= ban_seconds - 1
+    else:
+        assert long_pauses == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<html>banned</html>",
+        "IP banned until 1799999000000",  # deadline already passed
+        "IP banned until 179999900000",  # 12 digits
+        " " * 600 + "IP banned until 1800000600000",  # beyond the 512 byte scan
+    ],
+)
+def test_418_without_a_usable_deadline_waits_the_minimum_ban(monkeypatch, body: str) -> None:
+    monkeypatch.setattr("app.market_contracts.adapters.http.time.time", lambda: 1_800_000_000.0)
+    gate = BinanceRestGate(rng=lambda: 0.0)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            418, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, text=body
         )
 
     with pytest.raises(UpstreamBanError):
-        client().get_json("/fapi/v1/ping")
+        _ban_client(handler, gate).get_json("/fapi/v1/ping")
     closed = gate.remaining()
-    # The longer body deadline wins over Retry-After: 60.
-    assert closed is not None and closed[0] == "ban" and closed[1] >= 599
-    with pytest.raises(UpstreamBanError):
-        client().get_json("/fapi/v1/klines", {"symbol": "BTCUSDT", "interval": "15m", "limit": 4})
-    assert calls == ["/fapi/v1/ping"], "no request may be sent while the process is banned"
+    assert closed is not None and closed[0] == "ban" and closed[1] >= 119
 
 
 def test_contract_discovery_honors_and_feeds_the_process_gate() -> None:
