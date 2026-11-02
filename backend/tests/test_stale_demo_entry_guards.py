@@ -170,13 +170,14 @@ def test_non_blofin_demo_venue_is_not_selected(native):
         assert module.stale_manual_demo_command_ids(session, settings, now=clock()) == [
             first.command_id
         ]
-        for (name,) in session.execute(
+        dropped = session.execute(
             text(
-                "SELECT conname FROM pg_constraint WHERE conrelid = "
+                "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = "
                 "'trade_plan_revisions'::regclass AND contype = 'c' "
                 "AND pg_get_constraintdef(oid) LIKE '%execution_venue%'"
             )
-        ).all():
+        ).all()
+        for name, _ in dropped:
             session.execute(text(f'ALTER TABLE trade_plan_revisions DROP CONSTRAINT "{name}"'))
         session.execute(text("SET LOCAL session_replication_role = replica"))
         session.execute(
@@ -187,10 +188,29 @@ def test_non_blofin_demo_venue_is_not_selected(native):
             {"c": first.command_id},
         )
         session.commit()
-        assert module.stale_manual_demo_command_ids(session, settings, now=clock()) == []
-        _snapshot(session, world, clock())
-        assert _run(world, session, settings, clock) == ()
-        assert not session.scalar(select(func.count()).select_from(ManualDemoLifecycleResolution))
+        try:
+            assert module.stale_manual_demo_command_ids(session, settings, now=clock()) == []
+            _snapshot(session, world, clock())
+            assert _run(world, session, settings, clock) == ()
+            assert not session.scalar(
+                select(func.count()).select_from(ManualDemoLifecycleResolution)
+            )
+        finally:
+            session.rollback()
+            # N1: leave the disposable clone with its original venue CHECK.
+            session.execute(text("SET LOCAL session_replication_role = replica"))
+            session.execute(
+                text(
+                    "UPDATE trade_plan_revisions SET execution_venue = 'BLOFIN_DEMO' "
+                    "WHERE id = (SELECT revision_id FROM execution_commands WHERE id = :c)"
+                ),
+                {"c": first.command_id},
+            )
+            for name, definition in dropped:
+                session.execute(
+                    text(f'ALTER TABLE trade_plan_revisions ADD CONSTRAINT "{name}" {definition}')
+                )
+            session.commit()
 
 
 def test_held_command_excluded_in_sql(native, monkeypatch):
@@ -232,4 +252,17 @@ def test_attempt_history_is_scoped_to_organization(native):
             0,
             None,
             False,
+        )
+
+
+def test_venue_check_restored_after_q4(native):
+    """N1: runs after Q4 in file order; the venue CHECK must still exist."""
+    world, _ = native
+    with world[0]() as session:
+        assert session.scalar(
+            text(
+                "SELECT count(*) FROM pg_constraint WHERE conrelid = "
+                "'trade_plan_revisions'::regclass AND contype = 'c' "
+                "AND pg_get_constraintdef(oid) LIKE '%execution_venue%'"
+            )
         )
