@@ -4,7 +4,6 @@ Numbers are the staging 8 Oct manual demo entry (command 80958141): plan
 f49a9fac, reservation c00e37ce, one native fill 0.1 contracts @ 82234.4.
 """
 
-import re
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ from app.schemas.execution_protocol import RiskReservationReleaseReason
 from app.services import manual_demo_recovery as recovery
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.execution_fills import adjust_symbol_map
+from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
 from tests.support.postgres_persistence import requires_postgres
 from tests.test_manual_blofin_demo import world as world
 from tests.test_manual_demo_lifecycle_workflow import set_exit
@@ -186,14 +186,75 @@ def test_dispatcher_cancel_release_uses_claimed_basis(native, extra, released):
 
 
 def test_pending_order_exposure_is_written_only_at_claim():
-    """C2: the stored claim is the write-once basis for remainder checks."""
+    """C2: the stored claim is the write-once basis for remainder checks.
+
+    Every mention in app/ (outside migrations) must be on this exact allowlist,
+    so any new write form (attribute, setattr, keyword, dict key, raw SQL
+    UPDATE) is caught, not only the forms a write regex anticipates.
+    """
     root = Path(recovery.__file__).resolve().parents[1]
-    writers = sorted(
-        str(path.relative_to(root))
-        for path in root.rglob("*.py")
-        if "migrations" not in path.parts
-        and re.search(r"pending_order_exposure\s*(=|\+=|-=)(?!=)", path.read_text())
-    )
-    assert writers == ["services/execution_claim.py"], writers
-    claim = (root / "services/execution_claim.py").read_text()
-    assert len(re.findall(r"pending_order_exposure\s*=(?!=)", claim)) == 2
+    allowed = {
+        ("schemas/execution_protocol.py", "pending_order_exposure: NonNegativeCanonicalDecimal"),
+        (
+            "db/models.py",
+            'CheckConstraint("pending_order_exposure >= 0", name="ck_risk_reservation_pending"),',
+        ),
+        (
+            "db/models.py",
+            "pending_order_exposure: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)",
+        ),
+        ("services/execution_claim.py", "pending_order_exposure=intent.pending_notional,"),
+        ("services/execution_claim.py", "pending_order_exposure=row.pending_order_exposure,"),
+        ("services/manual_demo_recovery.py", "stored = reservation.pending_order_exposure"),
+    }
+    found = set()
+    for path in root.rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if "pending_order_exposure" in stripped and not stripped.startswith(
+                ("#", "immutable plan, so the stored claim")
+            ):
+                found.add((str(path.relative_to(root)), stripped))
+    assert found == allowed, sorted(found ^ allowed)
+
+
+@requires_postgres
+def test_dispatcher_own_remainder_check_refuses_matching_claim(native):
+    """#407 C1: claim basis matches, but the stored remainder is off from fills.
+
+    claimed_reservation_notional succeeds, so only the dispatcher's own
+    remainder tolerance (1e-8) can refuse this release.
+    """
+    world, _ = native
+    _, first = _submit(native)
+    off = Decimal("0.00000002")
+    with world[0]() as session:
+        reservation = session.scalars(
+            select(RiskReservation).where(RiskReservation.command_id == first.command_id)
+        ).one()
+        before = reservation.remaining_reserved_notional + off
+        reservation.remaining_reserved_notional = before
+        accounting = session.scalars(select(AccountRiskAccountingState)).one()
+        accounting.reserved_notional += off
+        accounting.symbol_reserved = adjust_symbol_map(
+            accounting.symbol_reserved, reservation.instrument, off
+        )
+        session.commit()
+    with world[0]() as session:
+        dispatcher = _service(world, session)._dispatcher()
+        plan_row = session.get(PlanRow, reservation.plan_revision_id)
+        row = session.scalars(select(RiskReservation)).one()
+        recovery.claimed_reservation_notional(trade_plan_revision_to_schema(plan_row), row)
+        with pytest.raises(TradingPolicyError, match="remainder conflicts"):
+            dispatcher._release_unused_reservation(
+                command_id=first.command_id,
+                reason=RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_CANCELLATION,
+                now=world[4]._clock(),
+            )
+        session.rollback()
+    with world[0]() as session:
+        row = session.scalars(select(RiskReservation)).one()
+        assert row.release_state.value != "RELEASED"
+        assert row.remaining_reserved_notional == before
