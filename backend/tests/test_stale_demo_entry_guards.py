@@ -3,7 +3,7 @@
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
@@ -159,6 +159,9 @@ def test_non_blofin_demo_venue_is_not_selected(native):
     immutability trigger for one raw UPDATE.
     """
     world, _ = native
+    with world[0]() as session:
+        if not session.scalar(text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")):
+            pytest.skip("needs a superuser to set session_replication_role")
     _, first = _submit(native)
     set_exit(native, first)
     clock = world[4]._clock
@@ -207,4 +210,26 @@ def test_held_command_excluded_in_sql(native, monkeypatch):
                 .where(AuditLog.redacted_metadata["outcome"].as_string() == module.OPERATOR_HOLD)
             )
             == 1
+        )
+
+
+def test_attempt_history_is_scoped_to_organization(native):
+    """ORG1: attempt rows from one organization never count for another."""
+    world, _ = native
+    _, first = _submit(native)
+    set_exit(native, first, flat=False)
+    clock = world[4]._clock
+    settings = _armed(world[2])
+    org = UUID(settings.governed_blofin_demo_organization_id)
+    with world[0]() as session:
+        _snapshot(session, world, clock())
+        _run(world, session, settings, clock)
+        attempts, last, held = module.attempt_history(
+            session, first.command_id, organization_id=org
+        )
+        assert attempts == 1 and last is not None and not held
+        assert module.attempt_history(session, first.command_id, organization_id=uuid4()) == (
+            0,
+            None,
+            False,
         )
