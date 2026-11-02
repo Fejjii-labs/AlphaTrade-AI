@@ -306,6 +306,17 @@ BASE_URL=https://your-api.onrender.com ./scripts/verify-safety.sh
 
 ---
 
+### Stale manual BloFin demo entry on operator hold
+
+The demo worker retries an aged, unresolved manual demo entry with backoff
+(15m doubling to 6h). After 8 attempts it writes one `stale_entry_operator_hold`
+audit event (`operation=stale_manual_demo_entry_reconciliation`) and stops; the
+entry keeps blocking new demo entries. To clear it, the owner inspects the BloFin
+demo account (no position, no pending orders or TP/SL, exit fills present) and
+then calls `POST /execution/manual-demo/{command_id}/resolve` (owner-only,
+manual-demo API arm on). A successful resolve writes the lifecycle resolution and
+releases the reservation; the hold row is never deleted.
+
 ## 13. Rollback
 
 Full procedure (triggers, steps, verification, failure handling):

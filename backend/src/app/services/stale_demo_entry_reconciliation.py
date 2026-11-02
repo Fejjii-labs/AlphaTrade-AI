@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid5
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import String, select
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, Settings
@@ -133,6 +133,16 @@ def stale_manual_demo_command_ids(
                 TradePlanRevision.plan_authority == "manual_demo_test",
                 ManualDemoLifecycleResolution.id.is_(None),
                 ExecutionCommand.created_at < now - STALE_ENTRY_AGE,
+                # Held commands are excluded in SQL so they cannot starve newer ones.
+                ~select(AuditLog.id)
+                .where(
+                    AuditLog.organization_id == ExecutionCommand.organization_id,
+                    AuditLog.resource_type == "manual_demo_test",
+                    AuditLog.resource_id == ExecutionCommand.id.cast(String),
+                    AuditLog.redacted_metadata["operation"].as_string() == OPERATION,
+                    AuditLog.redacted_metadata["outcome"].as_string() == OPERATOR_HOLD,
+                )
+                .exists(),
             )
             .order_by(ExecutionCommand.created_at)
             .limit(CANDIDATE_SCAN)
@@ -148,11 +158,14 @@ def retry_delay(attempts: int) -> timedelta:
     return min(delay, RETRY_CAP)
 
 
-def attempt_history(session: Session, command_id: UUID) -> tuple[int, datetime | None, bool]:
+def attempt_history(
+    session: Session, command_id: UUID, *, organization_id: UUID
+) -> tuple[int, datetime | None, bool]:
     """Prior attempts, last attempt time (injected clock), and whether held."""
     rows = list(
         session.scalars(
             select(AuditLog).where(
+                AuditLog.organization_id == organization_id,
                 AuditLog.resource_type == "manual_demo_test",
                 AuditLog.resource_id == str(command_id),
                 AuditLog.redacted_metadata["operation"].as_string() == OPERATION,
@@ -178,7 +191,9 @@ def due_command_ids(
 ) -> list[tuple[UUID, int]]:
     due: list[tuple[UUID, int]] = []
     for command_id in stale_manual_demo_command_ids(session, settings, now=now):
-        attempts, last, held = attempt_history(session, command_id)
+        attempts, last, held = attempt_history(
+            session, command_id, organization_id=UUID(settings.governed_blofin_demo_organization_id)
+        )
         if held:
             continue
         if last is not None and now - last < retry_delay(attempts):
