@@ -354,15 +354,20 @@ def _enum_value(value: object) -> str | None:
 def symbol_key(instrument: str) -> str:
     """Normalize instrument spellings so BTCUSDT and BTC-USDT share one key."""
 
-    return re.sub(r"[^A-Z0-9]", "", str(instrument).upper())
+    key = re.sub(r"[^A-Z0-9]", "", str(instrument).upper())
+    # Venue suffixes (BTC-USDT-SWAP, BTCUSDT-PERP) would split exposure into a
+    # separate bucket. Reject them so callers refuse instead of under-counting.
+    if not key or key.endswith(("SWAP", "PERP")):
+        raise ValueError(f"non-canonical instrument symbol: {instrument!r}")
+    return key
 
 
 def symbol_book_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
     """Sum exposure stored under any spelling of ``instrument``."""
 
+    wanted = symbol_key(instrument)
     if not book:
         return Decimal("0")
-    wanted = symbol_key(instrument)
     total = Decimal("0")
     for key, raw in book.items():
         if symbol_key(key) != wanted:

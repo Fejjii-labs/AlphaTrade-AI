@@ -154,7 +154,8 @@ def _demo_risk_snapshot(
         symbol_actual: dict[str, str] = {}
         daily_locked = False
         max_symbol = max_notional
-        limits_inconsistent = False
+        # Same consistency rule as the stored-row path (Griller C2).
+        limits_inconsistent = max_daily_loss >= max_notional or max_symbol > max_notional
     else:
         max_notional = row.max_notional
         max_daily_loss = row.max_daily_loss

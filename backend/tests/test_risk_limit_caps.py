@@ -125,3 +125,105 @@ def test_exposure_split_across_key_forms_is_summed() -> None:
         symbol_actual={"BTC-USDT": "250"},
     )
     assert _refusal(row, pending="100") == "max_position_size"
+
+
+# --- Griller C1: claim predicate reads exposure under either key form ---
+
+
+def _accounting(book_key: str, amount: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        daily_locked=False,
+        max_notional=Decimal("5000"),
+        reserved_notional=Decimal("0"),
+        actual_notional=Decimal("0"),
+        max_daily_loss=Decimal("200"),
+        reserved_daily_loss=Decimal("0"),
+        actual_daily_loss=Decimal("0"),
+        max_trade_slots=9,
+        reserved_trade_slots=0,
+        actual_trade_count=0,
+        max_symbol_notional=Decimal("600"),
+        symbol_reserved={book_key: amount},
+        symbol_actual={},
+    )
+
+
+@pytest.mark.parametrize(("booked", "claimed"), [("BTC-USDT", "BTCUSDT"), ("BTCUSDT", "BTC-USDT")])
+def test_claim_predicate_counts_exposure_across_key_forms(booked: str, claimed: str) -> None:
+    from app.services.execution_claim import evaluate_claim_predicate
+
+    intent = SimpleNamespace(
+        pending_notional=Decimal("100"), daily_loss=Decimal("1"), trade_slots=1, instrument=claimed
+    )
+    full = _accounting(booked, "550")
+    assert (
+        evaluate_claim_predicate(
+            blocking_epoch=False, kill_active=False, accounting=full, intent=intent
+        )
+        == "insufficient_symbol_exposure"
+    )
+    room = _accounting(booked, "400")
+    assert (
+        evaluate_claim_predicate(
+            blocking_epoch=False, kill_active=False, accounting=room, intent=intent
+        )
+        is None
+    )
+
+
+# --- Griller C2: defaults path runs the same consistency check ---
+
+
+def test_defaults_path_flags_daily_loss_at_or_above_balance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.risk import settings_service
+
+    class _Svc:
+        def __init__(self, *_a: object) -> None:
+            pass
+
+        def get(self, **_k: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                daily_loss_limit=Decimal("750"),
+                default_account_balance=Decimal("700"),
+                max_trades_per_day=4,
+            )
+
+    monkeypatch.setattr(settings_service, "RiskSettingsService", _Svc)
+    assert _refusal(None, pending="1") == "risk_limits_inconsistent"
+
+
+def test_defaults_path_consistent_values_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.risk import settings_service
+
+    class _Svc:
+        def __init__(self, *_a: object) -> None:
+            pass
+
+        def get(self, **_k: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                daily_loss_limit=Decimal("33"),
+                default_account_balance=Decimal("4321"),
+                max_trades_per_day=4,
+            )
+
+    monkeypatch.setattr(settings_service, "RiskSettingsService", _Svc)
+    assert _refusal(None, pending="10") is None
+
+
+# --- Griller C3: venue suffixes are rejected, never a separate bucket ---
+
+
+@pytest.mark.parametrize("bad", ["BTC-USDT-SWAP", "BTCUSDT-PERP", "btcusdtswap", ""])
+def test_symbol_key_rejects_non_canonical(bad: str) -> None:
+    from app.services.autonomous_trading import symbol_key
+
+    with pytest.raises(ValueError):
+        symbol_key(bad)
+
+
+def test_suffixed_book_key_refuses_instead_of_splitting() -> None:
+    row = _row(symbol_reserved={"BTC-USDT-SWAP": "1"})
+    assert _refusal(row, pending="1") == "risk_limits_unverified"
+    assert _refusal(_row(), pending="1", instrument="BTCUSDT-PERP") == "risk_limits_unverified"
