@@ -425,8 +425,8 @@ def test_projected_sfp_alert_names_the_reused_params(event_type) -> None:
     native = _sfp_summary(event_type=event_type)
     projected = native.model_copy(update={"projection_source": "BTCUSDT 15m"})
     lines = projected.text().splitlines()
-    assert lines[0].endswith("(watchlist scan, BTCUSDT 15m params)")
-    assert "approved for BTCUSDT 15m" in lines[1] and "TAOUSDT 1h" in lines[1]
+    assert lines[-2] == "Source: (watchlist scan, BTCUSDT 15m params)"
+    assert "approved for BTCUSDT 15m" in lines[-1] and "TAOUSDT 1h" in lines[-1]
     assert "watchlist scan" not in native.text()
     # Same outbox identity: the label never forks the duplicate key.
     assert projected.notification_event().duplicate_key == native.notification_event().duplicate_key

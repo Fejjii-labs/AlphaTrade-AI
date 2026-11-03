@@ -6,7 +6,7 @@ No profitability claim. No LLM-authored setup truth.
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.candidate_alerts.contracts import (
@@ -37,6 +37,18 @@ _PROFIT_CLAIMS = (
 
 
 NESTED_STRATEGY_NAME = "Nested Continuation"
+SFP_STRATEGY_NAME = "Swing Failure Pattern"
+PAPER_MARKER = "PAPER alert. Not an order."
+
+# Display names for known strategy keys. Any key not listed here (including
+# strategies added later) still renders through the same layout via
+# ``strategy_display_name``'s readable fallback.
+STRATEGY_DISPLAY_NAMES: dict[str, str] = {
+    "nested": NESTED_STRATEGY_NAME,
+    "nested_continuation": NESTED_STRATEGY_NAME,
+    "sfp": SFP_STRATEGY_NAME,
+    "swing_failure_pattern": SFP_STRATEGY_NAME,
+}
 
 
 def _price_text(value: object) -> str:
@@ -125,97 +137,105 @@ def build_candidate_alert_content(
     )
 
 
-def format_candidate_alert_text(content: CandidateAlertContent) -> str:
-    """Deterministic private-chat text. Not a trade order and not a performance claim."""
-    if content.nested is not None:
-        nested = content.nested
-        timeframe = content.trigger_context.timeframe.value
-        # Human-facing heads-up only: symbol, strategy, direction and plan prices first,
-        # then timeframe, nested stage and timestamp. Internal IDs (strategy version,
-        # setup ID), risk state, decision, freshness, venue and reasons stay in the
-        # stored notification payload/audit data and are deliberately not rendered here.
-        # The trailing PAPER line is the minimal demo label required by the
-        # trading-safety rules (mode C: clearly labeled demo).
-        marker = "PAPER alert. Not an order."
-        projected: tuple[str, ...] = ()
-        if nested.projection_source is not None:
-            projected = (
-                f"Source: {projection_tag(nested.projection_source)}",
-                projection_note(
-                    nested.projection_source, symbol=nested.symbol, timeframe=timeframe
-                ),
-            )
-        evidence_utc = nested.evidence_at.astimezone(UTC)
-        return "\n".join(
-            (
-                f"Symbol: {nested.symbol}",
-                f"Strategy: {NESTED_STRATEGY_NAME}",
-                f"Direction: {content.direction.value}",
-                f"Entry: {_price_text(nested.entry)}",
-                f"Stop: {_price_text(nested.stop)}",
-                f"Target: {_price_text(nested.target)}",
-                f"Timeframe: {timeframe}",
-                f"Nested stage: {nested.stage}",
-                f"Time: {evidence_utc.strftime('%Y-%m-%d %H:%M UTC')}",
-                marker,
-                *projected,
-            )
+def strategy_display_name(key: str) -> str:
+    """Readable strategy name for any key: registry first, then a humanized fallback."""
+    raw = key.strip()
+    normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    if normalized in STRATEGY_DISPLAY_NAMES:
+        return STRATEGY_DISPLAY_NAMES[normalized]
+    if normalized.startswith("compiled-setup:".replace("-", "_")) or raw.startswith(
+        "compiled-setup:"
+    ):
+        # The suffix is an internal setup ID and is never rendered.
+        return "Compiled setup"
+    if any(ch.isupper() for ch in raw) and " " in raw:
+        return raw  # already a human display name
+    words = [w for w in normalized.replace(".", "_").split("_") if w]
+    return " ".join(w.upper() if len(w) <= 3 else w.capitalize() for w in words) or "Strategy"
+
+
+def render_strategy_alert_text(
+    *,
+    symbol: str,
+    strategy: str,
+    direction: str,
+    entry: object,
+    stop: object,
+    target: object,
+    timeframe: str,
+    at: datetime,
+    nested_stage: str | None = None,
+    stage: str | None = None,
+    projection_source: str | None = None,
+) -> str:
+    """The one Telegram alert layout shared by every strategy (current and future).
+
+    Order: symbol, strategy, direction, entry, stop, target, timeframe, stage
+    (when present), UTC minute timestamp, PAPER marker, then the Source line for
+    borrowed-parameter scans. Internal IDs, strategy version, risk state and
+    reason text stay in the stored payload/audit data and are never rendered.
+    """
+    stage_lines: tuple[str, ...] = ()
+    if nested_stage:
+        stage_lines = (f"Nested stage: {nested_stage}",)
+    elif stage:
+        stage_lines = (f"Stage: {stage}",)
+    projected: tuple[str, ...] = ()
+    if projection_source is not None:
+        projected = (
+            f"Source: {projection_tag(projection_source)}",
+            projection_note(projection_source, symbol=symbol, timeframe=timeframe),
         )
-    rules = ", ".join(
-        f"{item.rule_id}={'pass' if item.passed else 'fail'}" for item in content.rule_results
+    text = "\n".join(
+        (
+            f"Symbol: {symbol}",
+            f"Strategy: {strategy_display_name(strategy)}",
+            f"Direction: {direction}",
+            f"Entry: {_price_text(entry)}",
+            f"Stop: {_price_text(stop)}",
+            f"Target: {_price_text(target)}",
+            f"Timeframe: {timeframe}",
+            *stage_lines,
+            f"Time: {at.astimezone(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
+            PAPER_MARKER,
+            *projected,
+        )
     )
-    if not rules:
-        rules = "none"
-    freshness_rule = content.evidence_freshness.freshness_rule_passed
-    freshness_bit = "unknown" if freshness_rule is None else ("pass" if freshness_rule else "fail")
-    invalidation = (
-        "invalidated"
-        if content.invalidation.invalidated
-        else "not invalidated; bound to candidate expiry"
-    )
-    lines = (
-        "AlphaTrade paper candidate alert. Not a trade. Not a performance claim.",
-        f"Instrument: {content.instrument}",
-        f"Direction: {content.direction.value}",
-        f"Setup: {content.setup_name}",
-        f"Setup state: {content.setup_state.value}",
-        f"Candidate state: {content.candidate_state.value}",
-        (
-            "Trigger: "
-            f"{content.trigger_context.natural_event_id} "
-            f"rev {content.trigger_context.revision} "
-            f"{content.trigger_context.timeframe.value} "
-            f"[{content.trigger_context.interval_start.isoformat()} , "
-            f"{content.trigger_context.interval_end.isoformat()})"
-        ),
-        f"Expiry: {content.expiry.isoformat()}",
-        f"Invalidation: {invalidation}",
-        f"Rules: {rules}",
-        (
-            "Evidence freshness: "
-            f"policy {content.evidence_freshness.freshness_policy_version}; "
-            f"finality {content.evidence_freshness.finality_policy_version}; "
-            f"selected_final={content.evidence_freshness.all_selected_observations_final}; "
-            f"freshness_rule={freshness_bit}"
-        ),
-        (
-            "Provenance: "
-            f"{content.evidence_provenance.venue.value}/"
-            f"{content.evidence_provenance.market_type.value}/"
-            f"{content.evidence_provenance.instrument}; "
-            f"sources={','.join(content.evidence_provenance.source_families)}"
-        ),
-        f"Candidate: {content.candidate_id} revision {content.candidate_revision}",
-        (
-            "APPROVE records authorization intent only and never executes. "
-            "EXECUTE_PAPER_PLAN remains outside Telegram. CLOSE is unavailable."
-        ),
-    )
-    text = "\n".join(lines)
     lowered = text.lower()
     for claim in _PROFIT_CLAIMS:
         if claim in lowered:
             raise ValueError("Candidate alert text must not contain profitability claims.")
-    if len(text) > MAX_ALERT_TEXT_BYTES_GUARD:
+    if len(text.encode("utf-8")) > MAX_ALERT_TEXT_BYTES_GUARD:
         raise ValueError("Candidate alert text exceeds Telegram outbox bounds.")
     return text
+
+
+def format_candidate_alert_text(content: CandidateAlertContent) -> str:
+    """Deterministic private-chat text via the shared layout. Not an order, not a claim."""
+    timeframe = content.trigger_context.timeframe.value
+    if content.nested is not None:
+        nested = content.nested
+        return render_strategy_alert_text(
+            symbol=nested.symbol,
+            strategy="nested",
+            direction=content.direction.value,
+            entry=nested.entry,
+            stop=nested.stop,
+            target=nested.target,
+            timeframe=timeframe,
+            nested_stage=nested.stage,
+            at=nested.evidence_at,
+            projection_source=nested.projection_source,
+        )
+    # Generic / any other strategy: same layout. Candidate content carries no plan
+    # prices, so those render as "unavailable" rather than inventing values.
+    return render_strategy_alert_text(
+        symbol=content.instrument,
+        strategy=content.setup_name,
+        direction=content.direction.value,
+        entry=None,
+        stop=None,
+        target=None,
+        timeframe=timeframe,
+        at=content.trigger_context.interval_end,
+    )
