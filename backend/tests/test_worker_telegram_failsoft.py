@@ -59,6 +59,13 @@ _CONFLICT = {
     "TELEGRAM_BOT_ID": "123456",
     "TELEGRAM_CHAT_ID": "789",
 }
+# Operator-owned (sync: false once render.yaml split D lands): the staging values.
+_OPERATOR_SOURCES = {
+    "MARKET_DATA_ENABLED": "true",
+    "PERPETUAL_EVIDENCE_SOURCE": "binance_usdm",
+    "PERPETUAL_EVIDENCE_SECONDARY_SOURCE": "bybit_usdt_perpetual",
+    "PERPETUAL_EVIDENCE_TIMEOUT_SECONDS": "10",
+}
 _OPERATIONAL = {
     "DATABASE_URL": "postgresql+psycopg://user:pass@db.example.com:5432/alphatrade",
     "REDIS_URL": "redis://redis.example.com:6379/0",
@@ -203,6 +210,7 @@ def test_settings_outside_scope_restore_env_and_raise_original(
 
 def _boot(role: WorkerBootRole, **extra: str) -> dict[str, object]:
     env = blueprint_env("alphatrade-paper-worker-staging")
+    env.update(_OPERATOR_SOURCES)
     env.update(_CONFLICT)
     env.update(_OPERATIONAL)
     assert "TELEGRAM_BOT_TOKEN" not in env

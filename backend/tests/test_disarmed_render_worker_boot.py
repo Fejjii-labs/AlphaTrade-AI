@@ -416,6 +416,14 @@ def test_armed_telegram_worker_fails_closed_without_bot_token(venue: dict[str, s
     """
 
     env = blueprint_env("alphatrade-paper-worker-staging")
+    # Operator-owned staging sources (sync: false once render.yaml split D lands).
+    env.update(
+        {
+            "MARKET_DATA_ENABLED": "true",
+            "PERPETUAL_EVIDENCE_SOURCE": "binance_usdm",
+            "PERPETUAL_EVIDENCE_SECONDARY_SOURCE": "bybit_usdt_perpetual",
+        }
+    )
     env.update(
         {
             "WATCHER_ORCHESTRATION_ENABLED": "true",
