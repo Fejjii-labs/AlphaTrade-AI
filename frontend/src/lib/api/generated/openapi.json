@@ -66052,7 +66052,7 @@
     },
     "/health/paper-worker": {
       "get": {
-        "description": "Report the worker heartbeat and alert when it is stale or missing.\n\nThis route does not arm the worker, the exit monitor, or real trading.\nA Telegram send uses the existing bot token and chat id. The response\ndoes not include those values. An unsent kill-switch page is retried\nafter the response, in a worker thread, at most once per 60 seconds\nper activation version. No thread is started when no unsent page is\nvisible, or when every visible page is still inside that limit.",
+        "description": "Report the worker heartbeat and alert when it is stale or missing.\n\nThis route does not arm the worker, the exit monitor, or real trading.\nA Telegram send uses the existing bot token and chat id. The response\ndoes not include those values. An unsent kill-switch page is retried\nafter the response, in a worker thread, at most once per 60 seconds\nper activation version. No thread is started when no unsent page is\nvisible, or when every visible page is still inside that limit.\n\nA ``degraded`` or ``disarmed_unexpected`` worker config report returns\nHTTP 503 with the same body, so an uptime check sees it without Telegram.",
         "operationId": "paper_worker_heartbeat_health_paper_worker_get",
         "responses": {
           "200": {
@@ -66064,6 +66064,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperWorkerHeartbeatResponse"
+                }
+              }
+            },
+            "description": "The worker config report is degraded or disarmed_unexpected."
           }
         },
         "summary": "Paper worker heartbeat",

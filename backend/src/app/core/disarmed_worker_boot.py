@@ -48,6 +48,31 @@ _DISARMED_FLAGS = (
 )
 
 
+# Telegram is not on the trade path. When only these flags conflict, the
+# supervised internal-paper worker boots with Telegram off instead of
+# crash-looping. The bot token and chat id stay, so safety alerts can still be
+# sent once a token is set. Scope: staging, PAPER_WORKER role, armed Watcher,
+# EXCHANGE_MODE=paper_internal, governed BloFin demo off. BloFin demo and
+# governed demo configs place venue orders and keep failing closed.
+_TELEGRAM_FAIL_SOFT_ENV: dict[str, str] = {
+    "TELEGRAM_ALERTS_ENABLED": "false",
+    "AUTOMATIC_TELEGRAM_DELIVERY_ENABLED": "false",
+    "TELEGRAM_INTERACTION_ENABLED": "false",
+    "TELEGRAM_PAPER_ACTIVATION_ARMED": "false",
+    "TELEGRAM_INBOUND_MODE": "off",
+    "TELEGRAM_NETWORK_PERMITTED": "false",
+    "TELEGRAM_WEBHOOK_SECRET": "",
+}
+TELEGRAM_CONFIG_CONFLICT = "telegram_disabled_config_conflict"
+_BOOT_DEGRADATIONS: list[str] = []
+
+
+def worker_boot_degradations() -> tuple[str, ...]:
+    """Features this process turned off at boot instead of failing."""
+
+    return tuple(_BOOT_DEGRADATIONS)
+
+
 class WorkerBootRole(StrEnum):
     """Paper processes that may idle while disarmed."""
 
@@ -72,6 +97,7 @@ def reset_disarmed_worker_boot() -> None:
     """Clear the process-local role. Tests use this between cases."""
 
     _ROLE.set(None)
+    _BOOT_DEGRADATIONS.clear()
 
 
 def bind_worker_boot_role(role: WorkerBootRole | None) -> None:
@@ -161,14 +187,88 @@ def load_worker_process_settings(role: WorkerBootRole) -> Settings:
     _ROLE.set(role if disarmed else None)
     try:
         settings = get_settings()
-    except Exception:
+    except Exception as exc:
         _ROLE.set(None)
         get_settings.cache_clear()
-        raise
+        if disarmed or role is not WorkerBootRole.PAPER_WORKER:
+            raise
+        return _settings_with_telegram_disabled(exc)
     if disarmed and not settings_are_disarmed_paper_worker(settings):
         _ROLE.set(None)
         get_settings.cache_clear()
         return get_settings()
+    return settings
+
+
+def _environ_in_telegram_fail_soft_scope() -> bool:
+    """Staging internal paper with an armed Watcher and governed BloFin demo off.
+
+    Unset keys take the Settings default. An invalid value is out of scope.
+    """
+
+    return (
+        _env_text("ENVIRONMENT", default="local") == Environment.STAGING.value
+        and _env_text("EXCHANGE_MODE", default=ExchangeMode.PAPER_INTERNAL.value)
+        == ExchangeMode.PAPER_INTERNAL.value
+        and _env_flag("GOVERNED_BLOFIN_DEMO_ENABLED", default=False) is False
+        and _env_flag("WATCHER_ORCHESTRATION_ENABLED", default=False) is True
+        and _env_flag("WATCHER_PAPER_STAGING_ACTIVATION", default=False) is True
+    )
+
+
+def _settings_in_telegram_fail_soft_scope(settings: Settings) -> bool:
+    """The same scope, checked again on the Settings the retry built."""
+
+    return (
+        settings.environment is Environment.STAGING
+        and settings.execution_mode is ExecutionMode.PAPER
+        and not settings.enable_real_trading
+        and not settings.real_trading_enabled
+        and settings.exchange_mode is ExchangeMode.PAPER_INTERNAL
+        and not settings.governed_blofin_demo_enabled
+        and settings.watcher_orchestration_enabled
+        and settings.watcher_paper_staging_activation
+    )
+
+
+def _settings_with_telegram_disabled(original: Exception) -> Settings:
+    """Retry once with Telegram off. Every validator still runs on the retry.
+
+    Only in the internal-paper scope above. When nothing Telegram-related is
+    set, the scope does not hold, or the retry still fails (a trade-path or
+    dependency error), the env is restored and the original error is raised.
+    """
+
+    from app.core.config import get_settings
+
+    changed = {
+        name: value
+        for name, value in _TELEGRAM_FAIL_SOFT_ENV.items()
+        if _env_text(name, default=value) != value
+    }
+    if not _environ_in_telegram_fail_soft_scope() or not changed:
+        raise original
+    saved = {name: os.environ.get(name) for name in changed}
+    os.environ.update(changed)
+    try:
+        settings = get_settings()
+        if not _settings_in_telegram_fail_soft_scope(settings):
+            raise ValueError("telegram fail-soft scope not met")
+    except Exception:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        get_settings.cache_clear()
+        raise original from None
+    _BOOT_DEGRADATIONS.append(TELEGRAM_CONFIG_CONFLICT)
+    logger.error(
+        "paper_worker_telegram_disabled_config_conflict",
+        disabled=sorted(changed),
+        paper_only=True,
+        exchange_mode=settings.exchange_mode.value,
+    )
     return settings
 
 

@@ -44,6 +44,8 @@ _ORDER = tuple(_EXPECTED)
 # A failing critical check means the Watcher arm is off: disarmed, not degraded.
 _CRITICAL = frozenset(_ORDER[:5]) | {"real_trading_disabled"}
 _ALERTABLE = frozenset({"degraded", "disarmed_unexpected"})
+# ``GET /health/paper-worker`` answers 503 for these, so the signal does not need Telegram.
+WORKER_CONFIG_UNHEALTHY = _ALERTABLE
 
 
 @dataclass(frozen=True, slots=True)

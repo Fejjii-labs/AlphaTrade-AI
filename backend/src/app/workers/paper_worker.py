@@ -799,10 +799,11 @@ def run_paper_worker_process(*, once: bool = False) -> str:
         from app.services.arming_visibility import clear_disarmed_boot_rows
 
         clear_disarmed_boot_rows()
+    from app.core.disarmed_worker_boot import worker_boot_degradations
     from app.services.worker_config_report import publish_worker_config_report
 
     # Never raises: a degraded or disarmed staging boot is reported, not fatal.
-    publish_worker_config_report(settings)
+    publish_worker_config_report(settings, boot_degradations=worker_boot_degradations())
     from app.services.risk.kill_switch import retry_unsent_kill_switch_alert
 
     retry_unsent_kill_switch_alert(settings)

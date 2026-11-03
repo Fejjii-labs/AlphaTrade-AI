@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Request, Response, status
 
 from app import __version__
 from app.core.config import Settings
@@ -245,10 +245,18 @@ async def telegram_paper_activation(settings: SettingsDep, request: Request) -> 
     "/health/paper-worker",
     response_model=PaperWorkerHeartbeatResponse,
     summary="Paper worker heartbeat",
+    responses={
+        503: {
+            "model": PaperWorkerHeartbeatResponse,
+            "description": "The worker config report is degraded or disarmed_unexpected.",
+        }
+    },
 )
 async def paper_worker_heartbeat(
     settings: SettingsDep,
     background_tasks: BackgroundTasks,
+    # FastAPI injects the Response; direct callers (tests) may omit it.
+    response: Response = None,  # type: ignore[assignment]
 ) -> PaperWorkerHeartbeatResponse:
     """Report the worker heartbeat and alert when it is stale or missing.
 
@@ -258,6 +266,9 @@ async def paper_worker_heartbeat(
     after the response, in a worker thread, at most once per 60 seconds
     per activation version. No thread is started when no unsent page is
     visible, or when every visible page is still inside that limit.
+
+    A ``degraded`` or ``disarmed_unexpected`` worker config report returns
+    HTTP 503 with the same body, so an uptime check sees it without Telegram.
     """
 
     from sqlalchemy.orm import Session, sessionmaker
@@ -342,11 +353,15 @@ async def paper_worker_heartbeat(
     )
     from app.services.worker_config_report import (
         WORKER_CONFIG_COMPONENT,
+        WORKER_CONFIG_UNHEALTHY,
         project_worker_config,
     )
 
     if kill_switch_retry_should_schedule(rows, now=observed_at):
         background_tasks.add_task(retry_unsent_kill_switch_alert, settings)
+    worker_config = project_worker_config((rows or {}).get(WORKER_CONFIG_COMPONENT))
+    if response is not None and worker_config.status in WORKER_CONFIG_UNHEALTHY:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return PaperWorkerHeartbeatResponse(
         status=heartbeat_status(observation),
         observation=observation,
@@ -358,7 +373,7 @@ async def paper_worker_heartbeat(
         exit_monitor_alert_raised=exit_alert,
         kill_switch=read_paper_worker_kill_switch(settings),
         worker_effective=_worker_effective(settings, now=observed_at),
-        worker_config=project_worker_config((rows or {}).get(WORKER_CONFIG_COMPONENT)),
+        worker_config=worker_config,
         market_data_ban=project_market_ban(
             (rows or {}).get(MARKET_GATE_COMPONENT), now=observed_at
         ),
