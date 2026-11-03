@@ -27,7 +27,12 @@ from app.services.worker_config_report import (
     publish_worker_config_report,
 )
 from app.workers import paper_worker
-from app.workers.paper_worker import CycleOutcome, PaperWorkerSupervisor, is_transient_db_error
+from app.workers.paper_worker import (
+    ComponentHealth,
+    CycleOutcome,
+    PaperWorkerSupervisor,
+    is_transient_db_error,
+)
 from tests.test_controlled_paper_activation import _STAGING, _package
 
 _TOKEN = "123456789:AAHtestTokenValueForStagingPackage"
@@ -190,7 +195,7 @@ def test_memory_diagnostics_failure_does_not_stop_boot(monkeypatch: pytest.Monke
     assert supervisor.run_round().watcher.status == "running"
 
 
-# --- 3. transient DB errors retry -------------------------------------------------
+# --- 3. transient DB errors retry (allowlisted components only) ----------------
 
 
 def _operational() -> OperationalError:
@@ -208,15 +213,38 @@ def test_transient_db_error_classification() -> None:
     assert not is_transient_db_error(ValueError("bad"))
 
 
-def _supervisor(cycle: object, monkeypatch: pytest.MonkeyPatch) -> PaperWorkerSupervisor:
+def _supervisor(
+    cycle: object, monkeypatch: pytest.MonkeyPatch, *, component: str = "activity"
+) -> PaperWorkerSupervisor:
+    """``cycle`` runs as ``component``; every other component is a no-op."""
+
     monkeypatch.setattr(paper_worker, "_DB_RETRY_BACKOFF_SECONDS", (0.0, 0.0))
-    return PaperWorkerSupervisor(
-        watcher_cycle=cycle,  # type: ignore[arg-type]
-        telegram_cycle=lambda: CycleOutcome("disarmed"),
+    idle = lambda: CycleOutcome("disarmed")  # noqa: E731
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=cycle if component == "watcher" else idle,  # type: ignore[arg-type]
+        telegram_cycle=cycle if component == "telegram" else idle,  # type: ignore[arg-type]
     )
+    if component == "activity":
+        supervisor.attach_activity(cycle, poll_seconds=1.0, request_stop=lambda: None)  # type: ignore[arg-type]
+    elif component == "indexing":
+        supervisor.attach_indexing(cycle, close=lambda: None)  # type: ignore[arg-type]
+    elif component == "exit_monitor":
+        supervisor.attach_exit_monitor(cycle, poll_seconds=1.0, request_stop=lambda: None)  # type: ignore[arg-type]
+    elif component == "demo_snapshot":
+        supervisor.attach_demo_snapshot(cycle, poll_seconds=1.0, request_stop=lambda: None)  # type: ignore[arg-type]
+    return supervisor
 
 
-def test_transient_error_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+def _health(supervisor: PaperWorkerSupervisor, component: str) -> ComponentHealth:
+    health = getattr(supervisor.run_round(), component)
+    assert health is not None
+    return health
+
+
+@pytest.mark.parametrize("component", ["activity", "indexing"])
+def test_allowlisted_component_retries_then_succeeds(
+    component: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[int] = []
 
     def cycle() -> CycleOutcome:
@@ -225,7 +253,7 @@ def test_transient_error_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) 
             raise _operational()
         return CycleOutcome("running")
 
-    health = _supervisor(cycle, monkeypatch).run_round().watcher
+    health = _health(_supervisor(cycle, monkeypatch, component=component), component)
     assert len(calls) == 3
     assert (health.status, health.restart_count) == ("running", 0)
 
@@ -239,7 +267,7 @@ def test_persistent_transient_error_fails_after_bounded_retries(
         calls.append(1)
         raise _operational()
 
-    health = _supervisor(cycle, monkeypatch).run_round().watcher
+    health = _health(_supervisor(cycle, monkeypatch), "activity")
     assert len(calls) == 3
     assert (health.status, health.restart_count) == ("failed", 1)
 
@@ -251,8 +279,44 @@ def test_non_transient_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> 
         calls.append(1)
         raise ValueError("risk refused")
 
-    assert _supervisor(cycle, monkeypatch).run_round().watcher.status == "failed"
+    assert _health(_supervisor(cycle, monkeypatch), "activity").status == "failed"
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("component", ["watcher", "telegram", "exit_monitor", "demo_snapshot"])
+def test_side_effect_component_is_not_retried(
+    component: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order, claim, journal, kill-switch and message paths fail once, as before."""
+
+    calls: list[int] = []
+
+    def cycle() -> CycleOutcome:
+        calls.append(1)
+        raise _operational()
+
+    health = _health(_supervisor(cycle, monkeypatch, component=component), component)
+    assert len(calls) == 1
+    assert (health.status, health.restart_count) == ("failed", 1)
+
+
+def test_unknown_component_defaults_to_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paper_worker, "_DB_RETRY_BACKOFF_SECONDS", (0.0, 0.0))
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome("disarmed"),
+        telegram_cycle=lambda: CycleOutcome("disarmed"),
+    )
+    calls: list[int] = []
+
+    def cycle() -> CycleOutcome:
+        calls.append(1)
+        raise _operational()
+
+    component = paper_worker._Component("new_component", cycle, None)
+    with pytest.raises(OperationalError):
+        supervisor._cycle_with_db_retry(component)
+    assert len(calls) == 1
+    assert component.name not in paper_worker._DB_RETRY_COMPONENTS
 
 
 # --- 5. Binance ban visibility --------------------------------------------------

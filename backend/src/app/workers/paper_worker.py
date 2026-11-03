@@ -70,6 +70,15 @@ _AUTHORITY_FIELDS = (
 # A retry is the next cycle sooner: every gate is evaluated again.
 _DB_RETRY_BACKOFF_SECONDS = (0.5, 2.0)
 
+# Components whose whole cycle was audited as safe to re-run at once after a
+# transient DB error (docs/plans/2026-11-03-worker-resilience.md, audit table):
+# activity writes keyed native facts and its cursor in one commit and only reads
+# BloFin; indexing claims jobs under a lease and upserts vectors by point id.
+# Neither submits orders, reserves notional, writes journal or trade rows,
+# touches the kill switch or sends messages. Every other component, and any
+# name not listed here, fails as before and waits for its next scheduled cycle.
+_DB_RETRY_COMPONENTS: frozenset[str] = frozenset({"activity", "indexing"})
+
 AuthorityProbe = Callable[[], tuple[object, ...]]
 AuthorityRestore = Callable[[], None]
 
@@ -518,12 +527,19 @@ class PaperWorkerSupervisor:
             self._finish_memory_cycle(component, sampler)
 
     def _cycle_with_db_retry(self, component: _Component) -> CycleOutcome:
-        """Run one cycle; retry a transient database error a bounded number of times.
+        """Run one cycle; retry a transient database error only for allowlisted components.
 
-        Runtimes open their sessions per cycle and close them on exit, so a
-        failed attempt has already rolled back and returned its connection.
+        Only names in ``_DB_RETRY_COMPONENTS`` retry (default: no retry). The
+        watcher, Telegram, exit monitor and demo snapshot can submit orders,
+        claim notional, write journal or trade rows, raise the kill switch or
+        send messages before the error, so they fail as before and the next
+        scheduled cycle runs normally. Allowlisted runtimes open their sessions
+        per cycle and close them on exit, so a failed attempt has already
+        rolled back and returned its connection.
         """
 
+        if component.name not in _DB_RETRY_COMPONENTS:
+            return component.cycle()
         for attempt, backoff in enumerate((*_DB_RETRY_BACKOFF_SECONDS, None)):
             try:
                 return component.cycle()
