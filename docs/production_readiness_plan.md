@@ -141,16 +141,54 @@ storm `/auth/refresh`. C2: tests pin the storm guard and logout mid-refresh. Req
 503), so the per-path split is inferred from code + counts; verify after merge
 by watching the daily 401 count drop.
 
-## 8. Steps to go live (after approval)
+## 8. Go-live checklist — each step needs Sofien's explicit go
 
-1. Griller review of this PR → merge (Rule 3).
-2. Sofien: P1 decided (production_demo); approve the monthly cost.
-3. Create prod DB + services from the draft (or dashboard), set secrets by hand.
-4. Run `alembic upgrade head` (pre-deploy), boot API, check `/health`.
-5. Boot worker; check boot settings report (PR #410) shows healthy.
-5a. Run the settings mirror (dry run, then `--apply`); apply the risk proposal in the app; arm the Watcher in the dashboard.
-6. Point Vercel production env at the prod API; smoke-test login, kill switch.
-7. 48 h soak; then decide on staging (keep for option B).
+Nothing below happens without a written "go" from Sofien for **that step**.
+Record who said go and when next to each box.
+
+- [ ] **G0. Merge** PR #411 after Griller GO and green CI (incl. e2e-smoke).
+- [ ] **G1. Create production services** (API, worker, Postgres) from
+      `deploy/render.production.draft.yaml` or the dashboard. Costs money. *Go: ____*
+- [ ] **G2. Secrets.** New `JWT_SECRET`, OpenAI, Qdrant, Redis set by hand.
+- [ ] **G3. BloFin demo keys + Telegram bot for production.** *Go: ____*
+      Decision needed: **separate BloFin demo account (recommended)** vs reusing
+      the staging demo account. The #403 flat-account checks (reconciliation,
+      stale-entry and demo-snapshot pins) assume one runtime owns an account;
+      two environments trading the same demo account would make each see the
+      other's positions as foreign and refuse or reconcile against them. Keys:
+      demo only, trade permission, no withdraw/transfer. Telegram: a separate
+      bot + chat so staging and production alerts can't be confused.
+- [ ] **G4. Boot API + worker disarmed**; `alembic upgrade head` as pre-deploy;
+      `/health` and the #410 boot settings report show healthy.
+- [ ] **G5. Settings mirror.** Staging one-off job: `export`; production
+      one-off job: `import` (dry run) → Sofien reviews the plan → `import --apply`. *Go: ____*
+      Import refuses unless the target is `ENVIRONMENT=production` with
+      `production_demo` active and the bundle came from staging.
+- [ ] **G6. Apply the risk-policy proposal** in the production app (Sofien,
+      step-up). Check leverage/size values match staging. *Go: ____*
+- [ ] **G7. Kill-switch check before arming:** in production, engage the kill
+      switch, confirm the API and worker report it active, release it. Must
+      pass before G8.
+- [ ] **G8. Arm Watcher / autonomous** in the dashboard
+      (`WATCHER_ORCHESTRATION_ENABLED`, `WATCHER_PAPER_STAGING_ACTIVATION`,
+      `AUTONOMOUS_BLOFIN_DEMO_ENABLED`, Telegram flags) and the in-app switch. *Go: ____*
+      Production scan scope stays capped at 20 symbols (same as staging).
+- [ ] **G9. Vercel production domain** → production API (`NEXT_PUBLIC_API_URL`,
+      `CORS_ORIGINS`), smoke-test login and kill switch. *Go: ____*
+- [ ] **G10. 48 h soak**, then decide staging's future.
+
+**Shared Binance IP.** Production workers on Render get the same shared
+outbound IPs as staging's region, so Binance rate limits/bans (23 and 27 Oct)
+can hit both at once, and running both doubles our request weight. Keep the
+production scope ≤20, keep the Bybit fallback on, and watch the #410 ban alert.
+A dedicated egress IP is a separate cost decision.
+
+**Dashboard-only keys are safe from Blueprint syncs.** Render's Blueprint spec:
+"Render preserves existing environment variables, even if you omit them from
+the Blueprint file", and `sync: false` keys are ignored on later syncs. So
+`WATCHER_PAPER_STAGING_ACTIVATION` (not in the file) and every `sync: false`
+key keep their dashboard values. Only keys with a `value:` are overwritten,
+which is why only safety pins have values. Keep Blueprint Auto Sync off.
 
 ## 9. Rollback
 
