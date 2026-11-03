@@ -93,17 +93,19 @@ def _demo_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"code": "0", "data": _POSITIONS})
     if "/account/position-mode" in path:
         return httpx.Response(200, json={"code": "0", "data": {"positionMode": "net_mode"}})
-    if "/account/leverage-info" in path:
+    if "/account/batch-leverage-info" in path:
         return httpx.Response(
             200,
             json={
                 "code": "0",
-                "data": {
-                    "instId": "BTC-USDT",
-                    "marginMode": "cross",
-                    "leverage": "20",
-                    "positionSide": "net",
-                },
+                "data": [
+                    {
+                        "instId": "BTC-USDT",
+                        "marginMode": "cross",
+                        "leverage": "20",
+                        "positionSide": "net",
+                    }
+                ],
             },
         )
     if "/trade/order" in path and request.method == "GET":

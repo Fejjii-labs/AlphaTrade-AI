@@ -116,7 +116,9 @@ class Venue:
                 }
             ]
         elif path.endswith("leverage-info"):
-            data = {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": self.leverage}
+            data = [
+                {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": self.leverage}
+            ]
         elif path.endswith("instruments"):
             data = [
                 {

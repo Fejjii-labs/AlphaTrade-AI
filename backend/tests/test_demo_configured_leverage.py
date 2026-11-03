@@ -78,7 +78,9 @@ class LeverageVenue(Venue):
                 200,
                 json={
                     "code": "0",
-                    "data": {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": "1"},
+                    "data": [
+                        {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": "1"}
+                    ],
                 },
             )
         return super().handle(request)
@@ -424,16 +426,45 @@ def test_apply_returns_previous_and_new_values() -> None:
     assert result["margin_mode_changed"] == "true"
 
 
-def test_leverage_info_accepts_object_or_single_row_list() -> None:
-    from app.providers.exchange.blofin_account import _single_inst_row
+def test_batch_leverage_info_needs_exactly_one_row_for_the_instrument() -> None:
+    from app.providers.exchange.blofin_account import _batch_inst_row
 
     row = {"instId": "BTC-USDT", "leverage": "10", "marginMode": "isolated"}
-    assert _single_inst_row(row, "BTC-USDT") == row
-    assert _single_inst_row([row], "BTC-USDT") == row
-    assert _single_inst_row([row, {**row, "instId": "ETH-USDT"}], "BTC-USDT") == row
-    assert _single_inst_row([row, row], "BTC-USDT") == {}
-    assert _single_inst_row([], "BTC-USDT") == {}
-    assert _single_inst_row("x", "BTC-USDT") == {}
+    assert _batch_inst_row([row], "BTC-USDT") == row
+    assert _batch_inst_row([row, {**row, "instId": "ETH-USDT"}], "BTC-USDT") == row
+    # Fail closed: object (old deprecated shape), duplicates, no match, no instId.
+    assert _batch_inst_row(row, "BTC-USDT") == {}
+    assert _batch_inst_row([row, row], "BTC-USDT") == {}
+    assert _batch_inst_row([{**row, "instId": "ETH-USDT"}], "BTC-USDT") == {}
+    assert _batch_inst_row([{"leverage": "10", "marginMode": "isolated"}], "BTC-USDT") == {}
+    assert _batch_inst_row([], "BTC-USDT") == {}
+    assert _batch_inst_row("x", "BTC-USDT") == {}
+
+
+def test_leverage_read_uses_batch_endpoint_and_refuses_an_unmatched_row() -> None:
+    from app.providers.exchange.blofin_account import BloFinAccountProvider
+
+    paths: list[str] = []
+    rows: list[dict] = [{"instId": "ETH-USDT", "leverage": "10", "marginMode": "isolated"}]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"code": "0", "data": rows})
+
+    client = BloFinClient(
+        base_url=DEMO_URL,
+        api_key="k",
+        api_secret="s",
+        api_passphrase="p",
+        max_retries=0,
+        transport=httpx.MockTransport(handle),
+        sleeper=lambda _: None,
+    )
+    info = BloFinAccountProvider(client).get_leverage_info(
+        inst_id="BTC-USDT", margin_mode="isolated"
+    )
+    assert paths == ["/api/v1/account/batch-leverage-info"]
+    assert info.leverage == 0 and not info.margin_mode_supplied
 
 
 def test_flatten_refuses_live_host_and_posts_close_on_demo() -> None:

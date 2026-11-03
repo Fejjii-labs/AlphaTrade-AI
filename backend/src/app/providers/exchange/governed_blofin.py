@@ -255,7 +255,7 @@ class GovernedBloFinDemoProvider:
                 )
             if margin_mode == "cross" and observed_mode != "cross":
                 raise ValueError("Demo account margin mode is not cross; no margin-mode mutation.")
-        with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
+        with preflight_stage("leverage", "GET /api/v1/account/batch-leverage-info"):
             # Ask with the mode the account endpoint reported. The payload must
             # repeat that mode. A missing field is not replaced by the request.
             leverage = self._account.get_leverage_info(
@@ -373,11 +373,13 @@ class GovernedBloFinDemoProvider:
         exact requested values. Every refusal is a ValueError with fixed copy.
         Returns the previous and new values for the audit journal.
 
-        BloFin docs (response ``data`` may be an object or a list; ``_rows``
-        accepts both and requires exactly one row):
+        BloFin docs:
         - set-margin-mode: https://docs.blofin.com/index.html#set-margin-mode
         - set-leverage: https://docs.blofin.com/index.html#set-leverage
-        - leverage-info: https://docs.blofin.com/index.html#get-leverage
+        - batch-leverage-info (list; exactly one row for the instId):
+          https://docs.blofin.com/index.html#get-multiple-leverage
+          (replaces the deprecated single endpoint,
+          https://docs.blofin.com/index.html#get-leverage-deprecated)
         - margin-mode: https://docs.blofin.com/index.html#get-margin-mode
         """
 
@@ -456,7 +458,7 @@ class GovernedBloFinDemoProvider:
                 confirmed = False
             if not confirmed:
                 raise ValueError("Demo set-leverage was not confirmed.")
-        with preflight_stage("leverage_readback", "GET /api/v1/account/leverage-info"):
+        with preflight_stage("leverage_readback", "GET /api/v1/account/batch-leverage-info"):
             account_mode = self._account.get_account_margin_mode()
             if not account_mode.supplied or account_mode.margin_mode != margin_mode:
                 raise ValueError("Demo margin mode read-back does not match the configured mode.")

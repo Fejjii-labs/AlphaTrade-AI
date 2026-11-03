@@ -129,3 +129,14 @@ demo `_bound` path.
   snapshot, which needs the leverage already set. Left as is (flat-account writes only).
 - **Safety rule:** `20-trading-safety.mdc` amended with a demo-host-only, owner-configured
   exception, **pending Sofien's explicit approval**.
+
+## Deviations after Griller re-review (2026-11-03, @ 7b38902f)
+
+- **C-c (endpoint):** the leverage read now uses `GET /api/v1/account/batch-leverage-info`
+  ([GET Multiple Leverage](https://docs.blofin.com/index.html#get-multiple-leverage)) instead
+  of the deprecated `GET /api/v1/account/leverage-info`
+  ([GET Leverage (Deprecated)](https://docs.blofin.com/index.html#get-leverage-deprecated)).
+  The response must be a list with exactly one row whose `instId` matches; an object, no
+  match, duplicates or a row without `instId` read as unconfirmed (leverage 0), so the caller
+  fails closed. `#get-leverage` is the copy-trading endpoint and is no longer cited. This
+  replaces the "object or single-row list" shape note above.

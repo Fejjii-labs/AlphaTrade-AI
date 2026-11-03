@@ -495,6 +495,7 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
                 data["marginMode"] = "cross" if requested == "isolated" else "isolated"
             else:
                 data["marginMode"] = requested
+            data = [data]
         elif path.endswith("instruments"):
             data = [
                 {
