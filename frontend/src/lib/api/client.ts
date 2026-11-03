@@ -58,9 +58,11 @@ async function requestRefreshedTokens(): Promise<boolean> {
   const payload = (await response.json()) as {
     access_token: string;
     refresh_token?: string;
+    expires_in?: unknown;
   };
   if (generation !== sessionGeneration()) return false;
   setTokens(payload.access_token, payload.refresh_token);
+  noteIssuedAccessToken(payload.access_token, payload.expires_in);
   return true;
 }
 
@@ -101,8 +103,31 @@ export function accessTokenExpiresAtMs(token: string): number | null {
   }
 }
 
-function accessTokenNeedsRefresh(token: string | null, nowMs = Date.now()): boolean {
+// Griller C1: comparing the server's JWT `exp` with the local clock storms
+// /auth/refresh when the client clock runs ahead. For tokens we received from
+// /auth/refresh, schedule from the server's `expires_in` against local receipt
+// time instead (skew-free). A token issued less than MIN_TOKEN_AGE_MS ago is
+// never proactively refreshed again, whatever its `exp` says.
+const MIN_TOKEN_AGE_MS = 60_000;
+let issuedToken: { token: string; receivedAtMs: number; deadlineMs: number | null } | null = null;
+
+export function noteIssuedAccessToken(
+  token: string,
+  expiresIn: unknown,
+  receivedAtMs = Date.now(),
+): void {
+  const seconds = typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null;
+  issuedToken = { token, receivedAtMs, deadlineMs: seconds === null ? null : receivedAtMs + seconds * 1000 };
+}
+
+export function accessTokenNeedsRefresh(token: string | null, nowMs = Date.now()): boolean {
   if (!token) return false;
+  if (issuedToken && issuedToken.token === token) {
+    if (nowMs - issuedToken.receivedAtMs < MIN_TOKEN_AGE_MS) return false;
+    if (issuedToken.deadlineMs !== null) {
+      return issuedToken.deadlineMs - nowMs <= ACCESS_TOKEN_REFRESH_SKEW_MS;
+    }
+  }
   const expiresAt = accessTokenExpiresAtMs(token);
   return expiresAt !== null && expiresAt - nowMs <= ACCESS_TOKEN_REFRESH_SKEW_MS;
 }
