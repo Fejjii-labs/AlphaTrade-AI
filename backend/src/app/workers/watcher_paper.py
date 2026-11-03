@@ -258,7 +258,7 @@ def resolve_runtime_enabled(
 ) -> bool:
     """Local override stays explicit. Staging scans only after preflight clearance."""
 
-    if settings.environment is Environment.STAGING:
+    if settings.paper_runtime_environment:
         if not enabled or not activation_cleared:
             return False
         from app.workers.watcher_activation import staging_static_arm_ok
@@ -2421,7 +2421,7 @@ def run_watcher_paper_process(*, once: bool = False) -> str:
         return "disarmed"
     from app.db.session import get_session_factory
 
-    if settings.environment is Environment.STAGING:
+    if settings.paper_runtime_environment:
         from app.workers.watcher_activation import run_staging_activation
 
         decision = run_staging_activation(settings)

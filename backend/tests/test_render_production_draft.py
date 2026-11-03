@@ -11,7 +11,7 @@ yaml = pytest.importorskip("yaml")
 DRAFT = Path(__file__).resolve().parents[2] / "deploy" / "render.production.draft.yaml"
 SECRET_OR_RUNTIME_KEYS = {
     "DATABASE_URL", "REDIS_URL", "QDRANT_URL", "QDRANT_API_KEY", "JWT_SECRET",
-    "OPENAI_API_KEY", "ENVIRONMENT", "EXCHANGE_MODE", "PROVIDER_MODE",
+    "OPENAI_API_KEY", "ENVIRONMENT", "DEPLOYMENT_PROFILE", "EXCHANGE_MODE", "PROVIDER_MODE",
     "WATCHER_ORCHESTRATION_ENABLED", "TELEGRAM_ALERTS_ENABLED", "CORS_ORIGINS",
 }
 
@@ -48,3 +48,8 @@ def test_production_is_separate_and_manual(service: dict) -> None:
 def test_separate_production_database() -> None:
     names = [d["name"] for d in yaml.safe_load(DRAFT.read_text())["databases"]]
     assert names == ["alphatrade-postgres-production"]
+
+
+@pytest.mark.parametrize("service", _services(), ids=lambda s: s["name"])
+def test_deployment_profile_is_dashboard_owned(service: dict) -> None:
+    assert _env(service)["DEPLOYMENT_PROFILE"].get("sync") is False

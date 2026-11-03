@@ -108,6 +108,7 @@ class WatcherPaperActivationConfig:
     telegram_paper_activation_armed: bool = False
     telegram_inbound_mode: str = "off"
     telegram_network_permitted: bool = False
+    production_demo: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,16 +200,17 @@ def activation_config_from_settings(settings: Settings) -> WatcherPaperActivatio
         telegram_paper_activation_armed=bool(settings.telegram_paper_activation_armed),
         telegram_inbound_mode=settings.telegram_inbound_mode.value,
         telegram_network_permitted=bool(settings.telegram_network_permitted),
+        production_demo=bool(settings.production_demo_active),
     )
 
 
 def staging_static_arm_ok(settings: Settings) -> bool:
     """Settings-level pins only. Preflight still has to pass before a scan."""
 
-    if settings.environment is not Environment.STAGING:
+    if not settings.paper_runtime_environment:
         return False
     config = activation_config_from_settings(settings)
-    if config.environment != "staging" or not config.armed or not config.orchestration_enabled:
+    if not _paper_runtime_config(config) or not config.armed or not config.orchestration_enabled:
         return False
     if config.enable_real_trading or config.real_trading_enabled:
         return False
@@ -917,9 +919,19 @@ def _architecture_pins() -> _ArchitecturePins:
     )
 
 
+def _paper_runtime_config(config: WatcherPaperActivationConfig) -> bool:
+    """Staging, or production under the production_demo profile."""
+
+    if config.environment == Environment.STAGING.value:
+        return True
+    return config.environment == Environment.PRODUCTION.value and config.production_demo
+
+
 def _environment_reasons(config: WatcherPaperActivationConfig) -> set[str]:
     found: set[str] = set()
-    if config.environment == Environment.PRODUCTION.value:
+    if _paper_runtime_config(config):
+        pass
+    elif config.environment == Environment.PRODUCTION.value:
         found.add("production_forbidden")
     elif config.environment != Environment.STAGING.value:
         found.add("staging_only")

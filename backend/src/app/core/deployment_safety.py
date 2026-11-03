@@ -7,7 +7,14 @@ unaffected unless ``ENVIRONMENT`` is set to ``staging`` or ``production``.
 
 from __future__ import annotations
 
-from app.core.config import Environment, ExchangeMode, ExecutionMode, Settings
+from app.core.config import (
+    DeploymentProfile,
+    Environment,
+    ExchangeMode,
+    ExecutionMode,
+    Settings,
+)
+from app.core.exchange_safety import BLOFIN_PRODUCTION_HOSTS, is_allowlisted_demo_host
 from app.market_activation.profile import REPLAY_MODES, perpetual_evidence_health
 
 _LOCALHOST_MARKERS = ("localhost", "127.0.0.1")
@@ -35,10 +42,18 @@ def _cookie_secure_resolved(settings: Settings) -> bool:
 
 def validate_deployment_settings(settings: Settings) -> None:
     """Raise ``ValueError`` when staging/production invariants are violated."""
+    errors: list[str] = []
+    if (
+        settings.deployment_profile is DeploymentProfile.PRODUCTION_DEMO
+        and settings.environment is not Environment.PRODUCTION
+    ):
+        errors.append("deployment_profile=production_demo requires environment=production")
     if settings.environment not in (Environment.STAGING, Environment.PRODUCTION):
+        if errors:
+            raise ValueError(f"deployment safety check failed: {'; '.join(errors)}")
         return
 
-    errors: list[str] = []
+    errors.extend(_production_demo_errors(settings))
 
     if settings.enable_real_trading:
         errors.append("enable_real_trading must be false in staging/production")
@@ -49,7 +64,8 @@ def validate_deployment_settings(settings: Settings) -> None:
     if settings.execution_mode is not ExecutionMode.PAPER:
         errors.append("execution_mode must be paper in staging/production")
 
-    # Legacy scanner, bridge, and Telegram stay off. Production Watcher stays off.
+    # Legacy scanner, bridge, and Telegram stay off. Production Watcher stays off
+    # unless the production_demo profile mirrors staging.
     # Staging may construct an armed paper-monitoring pair; preflight still
     # refuses to scan until live evidence, lineage, and migrations are healthy.
     if settings.market_watcher_enabled:
@@ -61,14 +77,15 @@ def validate_deployment_settings(settings: Settings) -> None:
     errors.extend(_watcher_activation_errors(settings))
     errors.extend(_telegram_activation_errors(settings))
 
-    # The demo exchange is allowed in staging only (for validation), never in
-    # production. ``trade_live`` is rejected globally by exchange_safety.
-    if (
-        settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO
-        and settings.environment is Environment.PRODUCTION
-    ):
+    # The demo exchange is allowed in staging and in production_demo only. A
+    # standard production profile stays API-only. ``trade_live`` is rejected
+    # globally by exchange_safety.
+    strict_production = (
+        settings.environment is Environment.PRODUCTION and not settings.production_demo_active
+    )
+    if settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO and strict_production:
         errors.append("exchange_mode=paper_exchange_demo is not allowed in production")
-    if settings.environment is Environment.PRODUCTION:
+    if strict_production:
         if settings.autonomous_internal_paper_enabled:
             errors.append("autonomous_internal_paper_enabled must be false in production")
         if settings.autonomous_blofin_demo_enabled:
@@ -152,6 +169,36 @@ def validate_deployment_settings(settings: Settings) -> None:
         raise ValueError(f"deployment safety check failed: {joined}")
 
 
+def _production_demo_errors(settings: Settings) -> list[str]:
+    """Extra pins for ``production_demo``. Real money stays blocked.
+
+    The real-money flags are already refused for every deployed environment
+    above; these repeat them with profile-specific text so an operator sees why
+    the profile did not activate, and pin the BloFin host to the demo allowlist.
+    """
+
+    if settings.deployment_profile is not DeploymentProfile.PRODUCTION_DEMO:
+        return []
+    if settings.environment is not Environment.PRODUCTION:
+        return []
+    errors: list[str] = []
+    if settings.enable_real_trading or settings.real_trading_enabled:
+        errors.append("production_demo refuses real trading flags")
+    if settings.execution_mode is not ExecutionMode.PAPER:
+        errors.append("production_demo requires execution_mode=paper")
+    if settings.exchange_mode is ExchangeMode.TRADE_LIVE:
+        errors.append("production_demo refuses exchange_mode=trade_live")
+    if settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO:
+        for attr in ("blofin_demo_rest_base_url", "blofin_demo_ws_url"):
+            url = str(getattr(settings, attr, "") or "").strip()
+            host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+            if host in BLOFIN_PRODUCTION_HOSTS:
+                errors.append(f"production_demo refuses BloFin live host in {attr}")
+            elif attr == "blofin_demo_rest_base_url" and not is_allowlisted_demo_host(url):
+                errors.append(f"production_demo requires an allowlisted BloFin demo host in {attr}")
+    return errors
+
+
 def _operational_dependency_errors(settings: Settings) -> list[str]:
     """PostgreSQL, Redis, provider, and Qdrant requirements for active staging.
 
@@ -185,6 +232,8 @@ def deployment_posture(settings: Settings) -> dict[str, object]:
     """Return a redaction-safe summary for startup logs (no secrets)."""
     return {
         "environment": settings.environment.value,
+        "deployment_profile": settings.deployment_profile.value,
+        "production_demo_active": settings.production_demo_active,
         "execution_mode": settings.execution_mode.value,
         "real_trading_enabled": settings.real_trading_enabled,
         "enable_real_trading": settings.enable_real_trading,
@@ -272,7 +321,7 @@ def _watcher_activation_errors(settings: Settings) -> list[str]:
     errors: list[str] = []
     armed = settings.watcher_paper_staging_activation
     orchestration = settings.watcher_orchestration_enabled
-    if settings.environment is Environment.PRODUCTION:
+    if settings.environment is Environment.PRODUCTION and not settings.production_demo_active:
         if armed:
             errors.append("watcher_paper_staging_activation must be false in production")
         if orchestration:

@@ -30,6 +30,10 @@ services:
       # Operator sets it; sync: false so a sync cannot flip it.
       - key: ENVIRONMENT
         sync: false
+      # production_demo mirrors staging (paper/demo, Watcher, Telegram, live
+      # public data). Set in the dashboard, never synced from this file.
+      - key: DEPLOYMENT_PROFILE
+        sync: false
       - key: EXECUTION_MODE
         value: paper
       - key: ENABLE_REAL_TRADING
@@ -157,6 +161,10 @@ services:
       # watcher, BloFin demo, exit monitor and Telegram (deployment_safety.py).
       # Operator sets it; sync: false so a sync cannot flip it.
       - key: ENVIRONMENT
+        sync: false
+      # production_demo mirrors staging (paper/demo, Watcher, Telegram, live
+      # public data). Set in the dashboard, never synced from this file.
+      - key: DEPLOYMENT_PROFILE
         sync: false
       - key: EXECUTION_MODE
         value: paper
