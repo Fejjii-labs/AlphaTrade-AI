@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -67,10 +67,25 @@ class Venue:
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
     tier_min_size: str = "0"
+    # The demo account starts at the old 1x cross; the app sets the configured value.
+    margin_mode: str = "cross"
+    leverage: str = "1"
+    account_writes: list[tuple[str, dict]] = field(default_factory=list)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         data: object
+        if request.method == "POST" and path == "/api/v1/account/set-margin-mode":
+            body = json.loads(request.content)
+            self.account_writes.append((path, body))
+            self.margin_mode = body["marginMode"]
+            return httpx.Response(200, json={"code": "0", "data": body})
+        if request.method == "POST" and path == "/api/v1/account/set-leverage":
+            body = json.loads(request.content)
+            assert body["positionSide"] == "net"
+            self.account_writes.append((path, body))
+            self.leverage = body["leverage"]
+            return httpx.Response(200, json={"code": "0", "data": body})
         if request.method == "POST":
             assert path == "/api/v1/trade/order", "Unexpected account mutation"
             self.post_count += 1
@@ -88,12 +103,12 @@ class Venue:
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
         elif path.endswith("/margin-mode"):
-            data = {"marginMode": "cross"}
+            data = {"marginMode": self.margin_mode}
         elif path.endswith("position-tiers"):
             data = [
                 {
                     "instId": "BTC-USDT",
-                    "marginMode": "cross",
+                    "marginMode": self.margin_mode,
                     "minSize": self.tier_min_size,
                     "maxSize": "100000",
                     "maintenanceMarginRate": "0.004",
@@ -101,7 +116,7 @@ class Venue:
                 }
             ]
         elif path.endswith("leverage-info"):
-            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": "1"}
+            data = {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": self.leverage}
         elif path.endswith("instruments"):
             data = [
                 {

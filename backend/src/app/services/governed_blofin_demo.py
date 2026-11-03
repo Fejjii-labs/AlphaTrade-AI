@@ -39,7 +39,11 @@ from app.market_contracts.enums import VenueId
 from app.providers.exchange.blofin_activity import BloFinActivityProvider
 from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
-from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBloFinDemoProvider
+from app.providers.exchange.governed_blofin import (
+    CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+    DemoVenueSnapshot,
+    GovernedBloFinDemoProvider,
+)
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
@@ -82,6 +86,7 @@ from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
+from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
 from app.services.paper_alert_service import PaperAlertService
@@ -388,6 +393,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
+        self._leverage_config: DemoLeverageConfig | None = None
 
     def _verified_funding_rate(self) -> Decimal | None:
         rate = self._scan_funding_rate
@@ -519,17 +525,51 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session, account_id=account.id, organization_id=target.organization_id
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
-        session.commit()  # Persist Candidate; no DB transaction held over venue reads.
         from app.services.automated_paper_loop import _load_active_profile
+        from app.services.demo_leverage_config import (
+            DemoLeverageValidationError,
+            load_demo_leverage_config,
+        )
 
         active = _load_active_profile(
             session, target.organization_id, self._risk_policy_kind(), self._clock.now()
         )
-        # A profile sizes leverage later and is compared to the isolated read.
-        # Do not require 1x before that comparison, and do not send a leverage write.
-        # No profile keeps the existing cross 1x read.
-        required_leverage = None if active is not None else Decimal("1")
-        read_margin_mode = "isolated" if active is not None else "cross"
+        try:
+            self._leverage_config = load_demo_leverage_config(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                symbol=target.symbol,
+            )
+        except DemoLeverageValidationError:
+            return _proof(candidate, "blocked", "demo_leverage_config_invalid")
+        config = self._leverage_config
+        session.commit()  # Persist Candidate; no DB transaction held over venue IO.
+        # The profile liquidation buffer is isolated-only; refuse before any write.
+        if active is not None and config.margin_mode != "isolated":
+            return _proof(candidate, "blocked", "demo_margin_mode_not_isolated")
+        profile_max = getattr(getattr(active, "profile", None), "max_leverage", None)
+        if active is not None and (
+            not isinstance(profile_max, Decimal) or config.leverage_decimal > profile_max
+        ):
+            return _proof(candidate, "blocked", "demo_leverage_exceeds_profile_max")
+        # Re-check the kill switch immediately before the only account write.
+        observed_kill_switch = getattr(self, "_observed_kill_switch", None)
+        killed = self._kill_switch_refusal(
+            candidate, kill_switch_active=observed_kill_switch is not False
+        )
+        if killed is not None:
+            return killed
+        try:
+            # Owner-configured leverage and margin mode, demo host only, exact read-back.
+            self._get_provider().apply_configured_leverage(
+                symbol=target.symbol,
+                leverage=config.leverage_decimal,
+                margin_mode=config.margin_mode,
+            )
+        except Exception as exc:
+            diagnostic = failure_diagnostics(exc, stage="leverage_write")
+            return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
         try:
             self._snapshot = self._get_provider().snapshot(
                 symbol=target.symbol,
@@ -537,8 +577,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 side=EntrySide.BUY
                 if candidate.direction is TradeDirection.LONG
                 else EntrySide.SELL,
-                required_leverage=required_leverage,
-                margin_mode=read_margin_mode,
+                required_leverage=config.leverage_decimal,
+                margin_mode=config.margin_mode,
             )
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
@@ -665,10 +705,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         entry = snapshot.price
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
+        config = self._leverage_config
+        if config is None:
+            return "demo_leverage_config_missing"
+        configured_leverage = config.leverage_decimal
+        if snapshot.account_leverage != configured_leverage or (
+            snapshot.margin_mode != config.margin_mode
+        ):
+            return "demo_leverage_readback_mismatch"
         # Reserve fees+slippage conservatively; sizing uses base value per contract.
+        # Leverage changes margin only; the 1% risk and 10% notional caps stand.
         risk_cap = equity * Decimal("0.01")
         notional_cap = equity * Decimal("0.10")
-        margin_assumption = "verified-demo-existing-1x"
+        margin_assumption = CONFIGURED_DEMO_MARGIN_ASSUMPTION
         profile_leverage: Decimal | None = None
         profile_cash_ceiling: Decimal | None = None
         profile_funding_rate: Decimal | None = None
@@ -727,6 +776,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 ),
                 execution_channel="demo",
                 fixed_risk_percent=fixed_risk_percent,
+                leverage=configured_leverage,
             )
             if isinstance(sized, str):
                 return sized
@@ -768,6 +818,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         base = quantity * snapshot.multiplier
         lower, upper = min(entry, worst_entry), max(entry, worst_entry)
         adverse_entry = upper if is_long else lower
+        from app.services.demo_leverage_config import demo_liquidation_refusal
+
+        # Pre-trade gate at the configured leverage. Fail closed.
+        liquidation_block = demo_liquidation_refusal(
+            entry=adverse_entry,
+            stop=stop,
+            direction="long" if is_long else "short",
+            leverage=configured_leverage,
+            notional=base * adverse_entry,
+            maintenance_tiers=snapshot.maintenance_tiers,
+        )
+        if liquidation_block is not None:
+            return liquidation_block
         from app.services.risk_policy.plan_sizing import reserved_maximum_loss
 
         # Profile plans store the same unit costs the sizer reserved. Non-profile
@@ -857,6 +920,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if profile_leverage is not None:
             values["margin_mode"] = "ISOLATED"
             values["risk_and_exits"]["leverage"] = format(profile_leverage, "f")
+        else:
+            values["margin_mode"] = config.margin_mode.upper()
+            values["risk_and_exits"]["leverage"] = format(configured_leverage, "f")
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
         revised = TradePlanRevisionCreate.model_validate(values)
         try:

@@ -159,3 +159,63 @@ def load_demo_leverage_config(
         overrides=None if row is None else row.demo_leverage_overrides,
         symbol=symbol,
     )
+
+
+# Liquidation must sit at least this many stop distances from the entry.
+LIQUIDATION_STOP_DISTANCE_MULTIPLE = Decimal("2")
+
+
+def demo_liquidation_refusal(
+    *,
+    entry: Decimal,
+    stop: Decimal,
+    direction: str,
+    leverage: Decimal,
+    notional: Decimal,
+    maintenance_tiers: tuple[tuple[Decimal, Decimal], ...],
+) -> str | None:
+    """Refuse unless the estimated liquidation is beyond the stop with a buffer.
+
+    The estimate is the isolated maintenance formula at the configured
+    leverage and the venue's maintenance tier for this notional. Cross margin
+    uses the same estimate: free account equity only moves a cross
+    liquidation further away, so this is conservative. Fail closed: missing
+    tiers or an invalid estimate refuse.
+    """
+
+    from app.services.risk_policy.errors import RiskPolicyRejected
+    from app.services.risk_policy.liquidation import (
+        MaintenanceTier,
+        isolated_liquidation_price,
+        liquidation_crosses_stop,
+        select_maintenance_tier,
+    )
+
+    stop_distance = abs(entry - stop)
+    if stop_distance <= 0 or direction not in {"long", "short"}:
+        return "demo_liquidation_estimate_invalid"
+    try:
+        tier = select_maintenance_tier(
+            notional,
+            tuple(
+                MaintenanceTier(notional_floor=floor, maintenance_rate=rate)
+                for floor, rate in maintenance_tiers
+            ),
+        )
+        liquidation = isolated_liquidation_price(
+            entry=entry,
+            leverage=leverage,
+            maintenance_rate=tier.maintenance_rate,
+            direction=direction,
+        )
+    except RiskPolicyRejected as exc:
+        if exc.code == "maintenance_tiers_unavailable":
+            return "demo_maintenance_tiers_unavailable"
+        return "demo_liquidation_estimate_invalid"
+    if liquidation <= 0 or liquidation_crosses_stop(
+        direction=direction, liquidation_price=liquidation, stop=stop
+    ):
+        return "demo_liquidation_inside_stop"
+    if abs(entry - liquidation) < stop_distance * LIQUIDATION_STOP_DISTANCE_MULTIPLE:
+        return "demo_liquidation_inside_stop_buffer"
+    return None

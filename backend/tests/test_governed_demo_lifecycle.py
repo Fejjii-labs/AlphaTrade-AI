@@ -68,7 +68,7 @@ class ClosingVenue(Venue):
                     {
                         "instId": self.order["instId"],
                         "positionSide": "net",
-                        "marginMode": "cross",
+                        "marginMode": self.margin_mode,
                         "positions": str(
                             Decimal(self.filled) * (1 if self.order["side"] == "buy" else -1)
                         ),
@@ -128,7 +128,7 @@ class ClosingVenue(Venue):
                 }
             ]
         else:
-            if request.method == "POST":
+            if request.method == "POST" and endpoint == "order":
                 self.exited = False
             response = super().handle(request)
             payload = response.json()
