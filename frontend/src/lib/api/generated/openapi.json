@@ -3948,6 +3948,7 @@
           "provider_usage_metadata_missing",
           "tradingview_signal_received",
           "tradingview_signal_rejected",
+          "demo_leverage_applied",
           "tradingview_signal_candidate_created",
           "blofin_demo_sync",
           "paper_signal_orchestration_evaluated",
