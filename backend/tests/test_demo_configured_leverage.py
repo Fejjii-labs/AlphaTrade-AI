@@ -511,6 +511,16 @@ def test_post_fill_venue_liquidation_check_for_configured_plans(
     assert mod._demo_post_fill_liquidation(provider, plan, Decimal("100")) == expected
 
 
+class _Session:
+    """Stand-in session that records commits into a shared event list."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def commit(self) -> None:
+        self._events.append("commit")
+
+
 def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
     from uuid import uuid4
@@ -548,7 +558,7 @@ def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.Monk
     effect = SimpleNamespace(reconciliation_disposition=None)
     command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
     loop._hold_profile_liquidation(
-        object(),  # type: ignore[arg-type]
+        _Session([]),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]
         effect=effect,  # type: ignore[arg-type]
         liquidation_reason="demo_post_fill_liquidation_inside_buffer",
@@ -565,20 +575,23 @@ def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.Monk
 
 class _RecordingSwitch:
     activated: list[dict]
+    events: list[str]
 
     def __init__(self, *_a: object, **_k: object) -> None:
         return None
 
     def activate(self, **kwargs: object) -> None:
         type(self).activated.append(dict(kwargs))
+        type(self).events.append("arm")
 
 
-def _hold_loop(monkeypatch: pytest.MonkeyPatch, provider: object):
+def _hold_loop(monkeypatch: pytest.MonkeyPatch, provider: object, events: list[str] | None = None):
     from types import SimpleNamespace
 
     from app.services import governed_blofin_demo as mod
 
     alerts: list[dict] = []
+    events = [] if events is None else events
 
     class _Alerts:
         def __init__(self, *_a: object, **_k: object) -> None:
@@ -586,8 +599,9 @@ def _hold_loop(monkeypatch: pytest.MonkeyPatch, provider: object):
 
         def create(self, **kwargs: object) -> None:
             alerts.append(dict(kwargs))
+            events.append("alert")
 
-    switch = type("_Switch", (_RecordingSwitch,), {"activated": []})
+    switch = type("_Switch", (_RecordingSwitch,), {"activated": [], "events": events})
     monkeypatch.setattr(mod, "KillSwitchService", switch)
     monkeypatch.setattr(mod, "PaperAlertService", _Alerts)
     monkeypatch.setattr(mod, "AuditService", lambda _s: None)
@@ -614,7 +628,7 @@ def test_failed_close_returns_flatten_failed_arms_switch_and_says_close_manually
     effect = SimpleNamespace(reconciliation_disposition=None)
     # Must not raise: the hold still arms the switch and records the alert.
     loop._hold_profile_liquidation(
-        object(),  # type: ignore[arg-type]
+        _Session([]),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]
         effect=effect,  # type: ignore[arg-type]
         liquidation_reason="demo_post_fill_liquidation_inside_stop",
@@ -657,3 +671,32 @@ def test_unreadable_liquidation_on_configured_fill_warns_without_hold_or_flatten
         switch = session.scalar(select(KillSwitchState))
         assert switch is None or not switch.active, switch.reason
     assert venue.close_posts == 0
+
+
+def test_breach_hold_arms_and_commits_switch_before_close_then_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-b: arm the kill switch (durably) first, then the close POST, then the alert."""
+
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    events: list[str] = []
+
+    class _Provider:
+        def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
+            events.append("close")
+            return "flatten_sent"
+
+    loop, alerts, _activated = _hold_loop(monkeypatch, _Provider(), events)
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    loop._hold_profile_liquidation(
+        _Session(events),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=SimpleNamespace(reconciliation_disposition=None),  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+        plan=_configured_plan("long", Decimal("95")),
+    )
+    assert events == ["arm", "commit", "close", "alert"]
+    assert alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"

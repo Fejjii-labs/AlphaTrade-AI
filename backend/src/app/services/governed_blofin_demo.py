@@ -1396,12 +1396,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         protected: bool,
         plan: object | None = None,
     ) -> None:
-        """Arm the existing kill switch, flatten a breached position, then label the read.
+        """Arm the existing kill switch, then flatten a breached position, then alert.
 
         A missing protection hold and a liquidation price through the stop use
         the same switch as the later unprotected fill. An unreadable price is
-        not stored as a price through the stop. This does not close the
-        position and does not write leverage or margin mode.
+        not stored as a price through the stop. Before a demo close-position
+        POST the armed switch is committed, so a slow or hanging close never
+        delays the arm. This does not write leverage or margin mode.
         """
 
         disposition, arm_kill_switch = profile_liquidation_hold(
@@ -1416,17 +1417,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 protected,
                 disposition,
             )
-        flatten_outcome = None
-        if plan is not None and liquidation_reason in {
+        through_stop = liquidation_reason in {
             "demo_post_fill_liquidation_inside_stop",
             "demo_post_fill_liquidation_inside_buffer",
-        }:
-            flatten_outcome = self._flatten_after_liquidation_breach(command=command, plan=plan)
+        }
         if arm_kill_switch:
-            through_stop = liquidation_reason in {
-                "demo_post_fill_liquidation_inside_stop",
-                "demo_post_fill_liquidation_inside_buffer",
-            }
             reason = (
                 "BloFin demo liquidation is through the stop; operator action required"
                 if through_stop
@@ -1438,8 +1433,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 payload=KillSwitchMutationRequest(confirm=True, reason=reason),
                 source="demo_protection",
             )
-            if through_stop:
-                _alert_liquidation_through_stop(session, command, flatten_outcome=flatten_outcome)
+        flatten_outcome = None
+        if plan is not None and through_stop:
+            # Durable arm first: the close below is network IO.
+            session.commit()
+            flatten_outcome = self._flatten_after_liquidation_breach(command=command, plan=plan)
+        if arm_kill_switch and through_stop:
+            _alert_liquidation_through_stop(session, command, flatten_outcome=flatten_outcome)
         effect.reconciliation_disposition = disposition
 
     def _flatten_after_liquidation_breach(self, *, command: ExecutionCommand, plan: object) -> str:
