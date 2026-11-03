@@ -28,12 +28,14 @@ services:
       # Open item P1 (see plan): ENVIRONMENT=production currently forbids
       # watcher, BloFin demo, exit monitor and Telegram (deployment_safety.py).
       # Operator sets it; sync: false so a sync cannot flip it.
+      # Pinned (Griller B1): a blank ENVIRONMENT would boot with no deployment guards.
       - key: ENVIRONMENT
-        sync: false
-      # production_demo mirrors staging (paper/demo, Watcher, Telegram, live
-      # public data). Set in the dashboard, never synced from this file.
+        value: production
+      # Pinned: production mirrors staging (paper/demo, Watcher, Telegram, live
+      # public data). Real money stays blocked by ENABLE_REAL_TRADING/EXECUTION_MODE
+      # pins and the BloFin demo-host allowlist.
       - key: DEPLOYMENT_PROFILE
-        sync: false
+        value: production_demo
       - key: EXECUTION_MODE
         value: paper
       - key: ENABLE_REAL_TRADING
@@ -119,12 +121,14 @@ services:
       - key: TRUSTED_PROXY_HOPS
         value: 1
       - key: REQUIRE_EMAIL_VERIFIED
-        sync: false
+        value: "true"
       # Demo seed is refused in production by demo_seed_service.
       - key: DEMO_SEED_ENABLED
         value: false
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: alphatrade-postgres-production
+          property: connectionString
       - key: REDIS_URL
         sync: false
       - key: QDRANT_URL
@@ -160,12 +164,14 @@ services:
       # Open item P1 (see plan): ENVIRONMENT=production currently forbids
       # watcher, BloFin demo, exit monitor and Telegram (deployment_safety.py).
       # Operator sets it; sync: false so a sync cannot flip it.
+      # Pinned (Griller B1): a blank ENVIRONMENT would boot with no deployment guards.
       - key: ENVIRONMENT
-        sync: false
-      # production_demo mirrors staging (paper/demo, Watcher, Telegram, live
-      # public data). Set in the dashboard, never synced from this file.
+        value: production
+      # Pinned: production mirrors staging (paper/demo, Watcher, Telegram, live
+      # public data). Real money stays blocked by ENABLE_REAL_TRADING/EXECUTION_MODE
+      # pins and the BloFin demo-host allowlist.
       - key: DEPLOYMENT_PROFILE
-        sync: false
+        value: production_demo
       - key: EXECUTION_MODE
         value: paper
       - key: ENABLE_REAL_TRADING
@@ -174,8 +180,10 @@ services:
         sync: false
       - key: WATCHER_ORCHESTRATION_ENABLED
         sync: false
-      - key: WATCHER_PAPER_STAGING_ACTIVATION
-        sync: false
+      # WATCHER_PAPER_STAGING_ACTIVATION is deliberately not in this file (Griller C3):
+      # it defaults false, so a Blueprint apply can never arm the Watcher. The
+      # operator arms it in the dashboard after the first healthy boot and the
+      # staging->production settings import (see production_readiness_plan.md).
       # Optional controlled acceptance tenant. Leave unset for normal round-robin.
       - key: WATCHER_PAPER_ORGANIZATION_ID
         sync: false
@@ -236,7 +244,9 @@ services:
       - key: TRUSTED_PROXY_HOPS
         value: 1
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: alphatrade-postgres-production
+          property: connectionString
       - key: REDIS_URL
         sync: false
       - key: QDRANT_URL

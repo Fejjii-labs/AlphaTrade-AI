@@ -10,9 +10,16 @@ yaml = pytest.importorskip("yaml")
 
 DRAFT = Path(__file__).resolve().parents[2] / "deploy" / "render.production.draft.yaml"
 SECRET_OR_RUNTIME_KEYS = {
-    "DATABASE_URL", "REDIS_URL", "QDRANT_URL", "QDRANT_API_KEY", "JWT_SECRET",
-    "OPENAI_API_KEY", "ENVIRONMENT", "DEPLOYMENT_PROFILE", "EXCHANGE_MODE", "PROVIDER_MODE",
-    "WATCHER_ORCHESTRATION_ENABLED", "TELEGRAM_ALERTS_ENABLED", "CORS_ORIGINS",
+    "REDIS_URL",
+    "QDRANT_URL",
+    "QDRANT_API_KEY",
+    "JWT_SECRET",
+    "OPENAI_API_KEY",
+    "EXCHANGE_MODE",
+    "PROVIDER_MODE",
+    "WATCHER_ORCHESTRATION_ENABLED",
+    "TELEGRAM_ALERTS_ENABLED",
+    "CORS_ORIGINS",
 }
 
 
@@ -51,5 +58,26 @@ def test_separate_production_database() -> None:
 
 
 @pytest.mark.parametrize("service", _services(), ids=lambda s: s["name"])
-def test_deployment_profile_is_dashboard_owned(service: dict) -> None:
-    assert _env(service)["DEPLOYMENT_PROFILE"].get("sync") is False
+def test_environment_and_profile_are_pinned(service: dict) -> None:
+    env = _env(service)
+    assert env["ENVIRONMENT"] == {"key": "ENVIRONMENT", "value": "production"}
+    assert env["DEPLOYMENT_PROFILE"] == {"key": "DEPLOYMENT_PROFILE", "value": "production_demo"}
+
+
+@pytest.mark.parametrize("service", _services(), ids=lambda s: s["name"])
+def test_database_url_from_production_database(service: dict) -> None:
+    ref = _env(service)["DATABASE_URL"]
+    assert ref["fromDatabase"] == {
+        "name": "alphatrade-postgres-production",
+        "property": "connectionString",
+    }
+
+
+@pytest.mark.parametrize("service", _services(), ids=lambda s: s["name"])
+def test_watcher_arm_never_comes_from_blueprint(service: dict) -> None:
+    assert "WATCHER_PAPER_STAGING_ACTIVATION" not in _env(service)
+
+
+def test_api_pins_email_verification() -> None:
+    api = next(s for s in _services() if s["type"] == "web")
+    assert str(_env(api)["REQUIRE_EMAIL_VERIFIED"]["value"]).lower() == "true"
