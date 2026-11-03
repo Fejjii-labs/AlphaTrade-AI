@@ -18,7 +18,7 @@ from typing import Literal
 
 import structlog
 
-from app.core.config import Environment, Settings
+from app.core.config import Settings
 from app.market_activation.profile import (
     LIVE_SOURCE,
     canonicalize_perpetual_evidence_source,
@@ -167,7 +167,7 @@ def candle_mode_for_trade(
     configured = canonicalize_perpetual_evidence_source(settings.perpetual_evidence_source)
     if configured != "replay":
         return configured, "process"
-    if settings.environment is Environment.STAGING:
+    if settings.paper_runtime_environment:
         return LIVE_SOURCE, "staging_live"
     return "replay", "process"
 

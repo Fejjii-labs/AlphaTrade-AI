@@ -32,7 +32,7 @@ from typing import Protocol
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import Environment, Settings
+from app.core.config import Settings
 from app.observability.process_memory import read_process_memory, release_allocator_memory
 from app.observability.worker_memory import CycleMemorySampler, WorkerMemoryDiagnostics
 from app.workers.watcher_paper import (
@@ -865,7 +865,7 @@ def _build_armed_supervisor(
     instance_id = new_worker_instance_id(watcher_settings.watcher_paper_worker_id)
 
     watcher_cycle: Callable[[], CycleOutcome]
-    if watcher_settings.environment is Environment.STAGING:
+    if watcher_settings.paper_runtime_environment:
         decision = run_staging_activation(
             watcher_settings,
             start=lambda: None,

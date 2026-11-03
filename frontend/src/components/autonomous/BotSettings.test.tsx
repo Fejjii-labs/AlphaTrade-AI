@@ -20,6 +20,23 @@ const settings = {
   max_risk_per_trade_percent_ceiling: "5",
 };
 
+const account = {
+  organization_id: "org",
+  user_id: "user",
+  daily_loss_limit: "50",
+  daily_target: null,
+  max_trades_per_day: 20,
+  max_risk_per_trade_percent: "1",
+  default_account_balance: "10000",
+  timezone: "UTC",
+  green_day_protection_enabled: true,
+  one_loss_stop_enabled: false,
+  overtrading_guard_enabled: true,
+  notes: null,
+  using_defaults: false,
+  timezone_fallback: false,
+};
+
 const auth = {
   user: { id: "user", role: "trader" },
   organization: { id: "org" },
@@ -65,6 +82,11 @@ vi.mock("@/lib/api", () => ({
       settings: vi.fn(),
       updateSettings: vi.fn(),
     },
+    risk: {
+      settings: vi.fn(),
+      updateSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    },
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -88,7 +110,7 @@ describe("Autonomous trading settings form", () => {
     auth.membershipRole = "trader";
     appContext.killSwitchStatus = { execution_blocked: false, reason: null };
     useAsyncDataMock.mockReturnValue({
-      data: settings,
+      data: [settings, account],
       loading: false,
       error: null,
       reload: vi.fn(),
@@ -157,19 +179,21 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
   });
 
-  it("enables Save for an owner with no owner-only reason", () => {
+  it("lets an owner edit bot limits with no owner-only reason", () => {
     auth.membershipRole = "owner";
     render(<BotSettings />);
-    expect(screen.getByRole("button", { name: /save bot limits/i })).toBeEnabled();
+    expect(screen.getByTestId("autonomous-max-trades")).toBeEnabled();
     expect(screen.queryByTestId("autonomous-save-owner-reason")).not.toBeInTheDocument();
     expect(screen.queryByTestId("autonomous-switch-owner-reason")).not.toBeInTheDocument();
   });
 
-  it("disables Save for a trader and names their role", () => {
+  it("locks bot limits for a trader, names their role, and keeps account limits editable", () => {
     render(<BotSettings />);
-    expect(screen.getByRole("button", { name: /save bot limits/i })).toBeDisabled();
+    expect(screen.getByTestId("autonomous-max-trades")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-strategy")).toBeDisabled();
+    expect(screen.getByTestId("risk-max-trades")).toBeEnabled();
     expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
-      "Owner only (your role: Trader)",
+      "Bot limits: Owner only (your role: Trader)",
     );
     expect(screen.getByTestId("autonomous-switch-owner-reason")).toHaveTextContent(
       "Owner only (your role: Trader)",
@@ -179,72 +203,22 @@ describe("Autonomous trading settings form", () => {
   it("shows an unknown role when the membership role is missing", () => {
     auth.membershipRole = null;
     render(<BotSettings />);
-    expect(screen.getByRole("button", { name: /save bot limits/i })).toBeDisabled();
+    expect(screen.getByTestId("autonomous-max-trades")).toBeDisabled();
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
     expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
       "Owner only (your role: unknown)",
     );
   });
 
-  it("labels the bot cap and shows the effective cap held by the account limit", () => {
-    useAsyncDataMock.mockReturnValue({
-      data: { ...settings, using_defaults: false, max_trades_per_day: 5, account_max_trades_per_day: 3, effective_max_trades_per_day: 3 },
-      loading: false,
-      error: null,
-      reload: vi.fn(),
-    });
+  it("renders one limits form with account and bot values side by side", () => {
     render(<BotSettings />);
+    const form = screen.getByTestId("trading-limits-card");
+    expect(form).toHaveAttribute("id", "limits");
+    expect(screen.getByTestId("risk-max-trades")).toHaveValue(20);
+    expect(screen.getByTestId("autonomous-max-trades")).toHaveValue("5");
+    expect(screen.getByText("Account: max trades/day (all trades)")).toBeInTheDocument();
     expect(screen.getByText("Bot: max trades/day (≤ account)")).toBeInTheDocument();
-    expect(screen.getByTestId("autonomous-settings-form-card")).toHaveAttribute("id", "bot");
-    expect(screen.getByTestId("autonomous-effective-max-trades")).toHaveTextContent(
-      "Effective 3 (capped by account limit of 3)",
-    );
+    expect(screen.queryByTestId("autonomous-settings-form-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("risk-settings-form-card")).not.toBeInTheDocument();
   });
-
-  it("shows the account cap as effective until bot settings are saved", () => {
-    render(<BotSettings />);
-    expect(screen.getByTestId("autonomous-effective-max-trades")).toHaveTextContent(
-      "Effective 20 · the bot limit applies once saved",
-    );
-  });
-
-  it("explains a bot cap above the account cap", async () => {
-    const { api, ApiError } = await import("@/lib/api");
-    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
-      new ApiError("max_trades_per_day_exceeds_account", 422, null),
-    );
-    auth.membershipRole = "owner";
-    render(<BotSettings />);
-    fireEvent.change(screen.getByTestId("autonomous-max-trades"), { target: { value: "25" } });
-    fireEvent.click(screen.getByRole("button", { name: /save bot limits/i }));
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Bot max trades per day cannot exceed the account limit of 20.",
-      );
-    });
-  });
-
-  it("shows a ceiling validation message from the API", async () => {
-    auth.membershipRole = "owner";
-    const { api, ApiError } = await import("@/lib/api");
-    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
-      new ApiError("daily_loss_limit_exceeds_ceiling", 422, null),
-    );
-    render(<BotSettings />);
-    fireEvent.change(screen.getByTestId("autonomous-daily-loss-percent"), {
-      target: { value: "7" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /save bot limits/i }));
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(/cannot exceed 6%/i);
-    });
-  });
-});
-
-it("renders the account limits slot between the paper bot and bot limits cards", () => {
-  useAsyncDataMock.mockReturnValue({ data: settings, loading: false, error: null, reload: vi.fn() });
-  render(<BotSettings between={<p data-testid="slot">Account limits</p>} />);
-  const order = [...document.querySelectorAll('[data-testid="autonomous-paper-switch"], [data-testid="slot"], [data-testid="autonomous-settings-form-card"]')];
-  expect(order.map((el) => el.getAttribute("data-testid"))).toEqual(["autonomous-paper-switch", "slot", "autonomous-settings-form-card"]);
-  cleanup();
 });

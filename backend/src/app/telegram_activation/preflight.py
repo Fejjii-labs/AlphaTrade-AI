@@ -49,10 +49,10 @@ def configuration_blockers(settings: Settings) -> tuple[str, ...]:
 
     blockers: list[str] = []
     projection = controlled_telegram_projection(settings)
-    if settings.environment is Environment.PRODUCTION:
+    if settings.environment is Environment.PRODUCTION and not settings.production_demo_active:
         blockers.append("environment_forbidden")
     elif settings.environment is not Environment.LOCAL and not projection:
-        if settings.environment is Environment.STAGING:
+        if settings.paper_runtime_environment:
             blockers.append("staging_package_incomplete")
         else:
             blockers.append("environment_not_local")

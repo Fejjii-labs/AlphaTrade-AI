@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.core.config import Environment, Settings, TelegramInboundMode
+from app.core.config import Settings, TelegramInboundMode
 
 
 def _paper_exchange_allowed(settings: Settings) -> bool:
@@ -28,7 +28,7 @@ def _paper_exchange_allowed(settings: Settings) -> bool:
 
 def _paper_staging_market(settings: Settings) -> bool:
     return (
-        settings.environment is Environment.STAGING
+        settings.paper_runtime_environment
         and settings.execution_mode.value == "paper"
         and not settings.enable_real_trading
         and not settings.real_trading_enabled

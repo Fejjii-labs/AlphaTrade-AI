@@ -108,7 +108,8 @@ def resolve_autonomous_mode(
     if enable_real or real_trading or execution_mode == "trade" or exchange_mode == "trade_live":
         return AutonomousModeResolution(AutonomousMode.OFF, "real_trading_blocked")
     environment = _enum_value(getattr(settings, "environment", None))
-    if environment == "production" and (paper_flag or demo_flag):
+    production_demo = getattr(settings, "production_demo_active", False) is True
+    if environment == "production" and not production_demo and (paper_flag or demo_flag):
         return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_production_refused")
     if paper_flag and demo_flag:
         return AutonomousModeResolution(AutonomousMode.OFF, "autonomous_mode_ambiguous")

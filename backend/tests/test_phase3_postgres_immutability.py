@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -22,15 +21,10 @@ from app.schemas.common import MembershipRole, StrategyId
 from app.schemas.strategy_library import StrategyCard, UserStrategyCreate
 from app.schemas.strategy_pattern_spec import FIRST_SLICE_NAME
 from app.services.strategy_library_service import StrategyLibraryService
-from tests.support.postgres_template import refresh_database
+from tests.support.postgres_template import fixture_postgres_url, refresh_database
 
-POSTGRES_URL = os.environ.get(
-    "PHASE1_POSTGRES_URL",
-    os.environ.get(
-        "AT028_POSTGRES_URL",
-        "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
-    ),
-)
+# No localhost default: unset skips locally and fails under CI=true.
+POSTGRES_URL = fixture_postgres_url() or ""
 
 
 def _postgres_available() -> bool:

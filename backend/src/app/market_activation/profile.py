@@ -150,7 +150,7 @@ def controlled_watcher_arm(settings: Settings) -> bool:
     """True for the staging paper-monitoring pair on public USD-M evidence."""
 
     return (
-        settings.environment is Environment.STAGING
+        settings.paper_runtime_environment
         and settings.watcher_paper_staging_activation
         and settings.watcher_orchestration_enabled
         and settings.execution_mode is ExecutionMode.PAPER
@@ -291,7 +291,7 @@ def _live_profile_errors(settings: Settings, environ: Mapping[str, str]) -> list
             )
         if settings.telegram_webhook_secret.strip():
             errors.append("telegram_webhook_secret must be empty while live USD-M evidence is on.")
-    if settings.environment is Environment.PRODUCTION:
+    if settings.environment is Environment.PRODUCTION and not settings.production_demo_active:
         errors.append(
             "live perpetual evidence activation is staging-only; production stays on replay."
         )
