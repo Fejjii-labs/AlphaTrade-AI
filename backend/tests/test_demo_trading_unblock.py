@@ -73,18 +73,41 @@ def test_plan_window_has_a_configurable_maximum() -> None:
 
 def test_leverage_ceiling_defaults_to_20x_and_is_configurable() -> None:
     assert demo_max_leverage(Settings(_env_file=None)) == Decimal("20")
+    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("25"))) == 20  # type: ignore[arg-type]
     assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("5"))) == Decimal(  # type: ignore[arg-type]
         "5"
     )
     for bad in ("NaN", "0", "-3"):
         assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal(bad))) == 1  # type: ignore[arg-type]
-    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("500"))) == 125  # type: ignore[arg-type]
+    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("500"))) == 20  # type: ignore[arg-type]
 
 
-def test_symbol_cap_exempt_only_for_explicit_demo_or_paper_venue() -> None:
-    assert symbol_cap_exempt("BLOFIN_DEMO")
-    assert symbol_cap_exempt("PAPER")
-    for venue in (None, "", "BLOFIN", "BLOFIN_LIVE", "BINANCE", "LIVE", 1):
+def test_symbol_cap_exempt_matches_written_venue_values() -> None:
+    import inspect
+
+    import app.services.governed_blofin_demo as demo
+    import app.services.internal_paper_plan_terms as paper
+    from app.services.safety_epoch import BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE
+
+    # The exemption keys are exactly the venue strings the plan builders write.
+    assert '"execution_venue": "BLOFIN_DEMO"' in inspect.getsource(demo)
+    assert '"execution_venue": "PAPER_INTERNAL"' in inspect.getsource(paper)
+    assert (BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE) == ("BLOFIN_DEMO", "PAPER_INTERNAL")
+    assert symbol_cap_exempt(BLOFIN_DEMO_VENUE)
+    assert symbol_cap_exempt(INTERNAL_PAPER_VENUE)
+    for venue in (
+        None,
+        "",
+        "PAPER",
+        "INTERNAL_PAPER",
+        "blofin_demo",
+        " BLOFIN_DEMO",
+        "BLOFIN",
+        "BLOFIN_LIVE",
+        "BINANCE",
+        "LIVE",
+        1,
+    ):
         assert not symbol_cap_exempt(venue)  # type: ignore[arg-type]
 
 

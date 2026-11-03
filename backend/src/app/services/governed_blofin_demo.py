@@ -1663,12 +1663,13 @@ def _plan_window(settings: Settings) -> timedelta:
     return timedelta(seconds=min(max(10, seconds), ceiling))
 
 
+DEMO_LEVERAGE_HARD_CAP = Decimal("20")
 STOP_LOSS_BAND_FLOOR_PERCENT = Decimal("1")
 STOP_LOSS_BAND_CEILING_PERCENT = Decimal("5")
 
 
 def demo_max_leverage(settings: Settings) -> Decimal:
-    """Configured leverage ceiling for demo plans (default 20x, never above 125x)."""
+    """Configured leverage ceiling for demo plans: hard cap 20x; config may only lower it."""
 
     raw = getattr(settings, "governed_demo_max_leverage", Decimal("20"))
     try:
@@ -1677,7 +1678,7 @@ def demo_max_leverage(settings: Settings) -> Decimal:
         return Decimal("1")
     if not value.is_finite() or value < 1:
         return Decimal("1")
-    return min(value, Decimal("125"))
+    return min(value, DEMO_LEVERAGE_HARD_CAP)
 
 
 def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None, Decimal | None]:

@@ -74,13 +74,18 @@ class RiskLimitSnapshot:
     execution_venue: str | None = None
 
 
-DEMO_PAPER_VENUES = frozenset({"BLOFIN_DEMO", "PAPER", "INTERNAL_PAPER"})
+def demo_paper_venues() -> frozenset[str]:
+    """Exact venue values written on demo/paper plans (safety_epoch constants)."""
+
+    from app.services.safety_epoch import BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE
+
+    return frozenset({BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE})
 
 
 def symbol_cap_exempt(execution_venue: str | None) -> bool:
-    """True only for an explicit demo/paper venue (Sofien 2026-11-03)."""
+    """True only for an exact demo/paper venue value (Sofien 2026-11-03)."""
 
-    return isinstance(execution_venue, str) and execution_venue.strip().upper() in DEMO_PAPER_VENUES
+    return isinstance(execution_venue, str) and execution_venue in demo_paper_venues()
 
 
 def resolve_autonomous_mode(

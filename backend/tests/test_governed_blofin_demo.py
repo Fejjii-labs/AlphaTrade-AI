@@ -285,6 +285,7 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "protection_unrelated_malformed",
         "preflight_kill",
         "preflight_fence",
+        "leverage_above_ceiling",
     ],
 )
 def test_worker_venue_fills_journal_restart_and_protection(
@@ -324,7 +325,11 @@ def test_worker_venue_fills_journal_restart_and_protection(
     from tests.support.phase6_evaluator import build_pattern_15m_bars, build_slice_trades
 
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
-    venue = Venue(price, behavior, account_leverage="10")
+    venue = Venue(
+        price,
+        behavior,
+        account_leverage="25" if behavior == "leverage_above_ceiling" else "10",
+    )
 
     def late_safety_change() -> None:
         with factory() as session:
@@ -365,6 +370,12 @@ def test_worker_venue_fills_journal_restart_and_protection(
     assert cycle.scans
     scan = cycle.scans[0]
     assert scan.candidate_ids, scan.reason_code
+    if behavior == "leverage_above_ceiling":
+        # 25x demo account above the 20x ceiling: refused before any plan or POST.
+        assert scan.paper_loop_reason == "demo_leverage_above_ceiling"
+        assert scan.trade_plan_revision_id is None
+        assert venue.post_count == 0
+        return
     if behavior in {"permissions", "basis", "stale", "expiry", "preflight_kill", "preflight_fence"}:
         assert venue.post_count == 0
         with factory() as session:
