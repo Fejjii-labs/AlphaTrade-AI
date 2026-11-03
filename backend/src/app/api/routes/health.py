@@ -334,10 +334,15 @@ async def paper_worker_heartbeat(
                 component=EXIT_MONITOR_ALERT_COMPONENT,
             ),
         )
+    from app.services.market_ban_visibility import MARKET_GATE_COMPONENT, project_market_ban
     from app.services.risk.kill_switch import (
         kill_switch_retry_should_schedule,
         read_paper_worker_kill_switch,
         retry_unsent_kill_switch_alert,
+    )
+    from app.services.worker_config_report import (
+        WORKER_CONFIG_COMPONENT,
+        project_worker_config,
     )
 
     if kill_switch_retry_should_schedule(rows, now=observed_at):
@@ -353,6 +358,10 @@ async def paper_worker_heartbeat(
         exit_monitor_alert_raised=exit_alert,
         kill_switch=read_paper_worker_kill_switch(settings),
         worker_effective=_worker_effective(settings, now=observed_at),
+        worker_config=project_worker_config((rows or {}).get(WORKER_CONFIG_COMPONENT)),
+        market_data_ban=project_market_ban(
+            (rows or {}).get(MARKET_GATE_COMPONENT), now=observed_at
+        ),
         timestamp=observed_at,
     )
 

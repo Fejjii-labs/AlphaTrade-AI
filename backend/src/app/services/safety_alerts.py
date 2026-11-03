@@ -67,6 +67,7 @@ _SAFE_FIELDS = frozenset(
         "status",
         "threshold_seconds",
         "trusted_source",
+        "until",
     }
 )
 _KILL_SWITCH_SOURCES = frozenset(
@@ -93,6 +94,8 @@ _COOLDOWN_SECONDS = {
     "kill_switch_activated": 900,
     "exit_monitor_heartbeat_missing": 900,
     "exit_monitor_heartbeat_stale": 900,
+    "worker_config_degraded": 6 * 3600,
+    "market_data_banned": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
@@ -108,6 +111,8 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "worker_heartbeat_stale",
         "exit_monitor_heartbeat_missing",
         "exit_monitor_heartbeat_stale",
+        "worker_config_degraded",
+        "market_data_banned",
         "stop_hit",
         "tp_hit",
     }
