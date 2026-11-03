@@ -1242,6 +1242,8 @@ export interface AutonomousStrategyStatsView {
   strategies: StrategyStatsRow[];
   unattributed: StrategyTradeStats;
   excluded_sources: string[];
+  // Allowlist of journal sources counted in the totals.
+  counted_sources: string[];
 }
 
 /** GET /policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */

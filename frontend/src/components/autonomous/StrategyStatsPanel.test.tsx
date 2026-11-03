@@ -51,6 +51,7 @@ describe("StrategyStatsPanel", () => {
         ],
         unattributed: stats({ closed_trades: 1, net_pnl: "-5" }),
         excluded_sources: ["backtest"],
+        counted_sources: ["paper_execution"],
       },
     });
     render(<StrategyStatsPanel />);

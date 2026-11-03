@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, type ReactNode, useState } from "react";
+import { FormEvent, type ReactNode, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,6 +141,9 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
   const [botForm, setBotForm] = useState(() => toBotForm(bot));
   const [accountForm, setAccountForm] = useState(() => toAccountForm(account));
   const [saving, setSaving] = useState(false);
+  // Synchronous guard: state updates are async, so a fast double submit could
+  // otherwise start two save sequences before `saving` re-renders the button.
+  const inFlight = useRef(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -151,6 +154,8 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     setErrors([]);
     setSaved(null);
@@ -163,7 +168,10 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
         onAccountSaved(updated);
         done.push("Account limits saved.");
       } catch (err) {
-        failures.push(err instanceof Error ? `Account limits: ${err.message}` : "Unable to save account limits.");
+        failures.push(
+          `Account limits not saved: ${err instanceof Error ? err.message : "unknown error"}.`,
+        );
+        if (botDirty) failures.push("Bot limits not saved: skipped because the account limits failed.");
       }
     }
     if (botDirty && failures.length === 0) {
@@ -173,17 +181,21 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
         onBotSaved(updated);
         done.push("Bot limits saved.");
       } catch (err) {
+        const reason = err instanceof ApiError ? botValidationMessage(err.message, bot) : "unknown error.";
         failures.push(
-          err instanceof ApiError ? botValidationMessage(err.message, bot) : "Unable to save bot limits.",
+          done.length ? `Bot limits not saved (account limits were saved): ${reason}` : `Bot limits not saved: ${reason}`,
         );
       }
     }
     setErrors(failures);
     setSaved(done.length ? done.join(" ") : null);
     setSaving(false);
+    inFlight.current = false;
   }
 
   async function handleReset() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     setErrors([]);
     setSaved(null);
@@ -196,6 +208,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
       setErrors([err instanceof Error ? err.message : "Unable to reset account limits."]);
     } finally {
       setSaving(false);
+      inFlight.current = false;
     }
   }
 

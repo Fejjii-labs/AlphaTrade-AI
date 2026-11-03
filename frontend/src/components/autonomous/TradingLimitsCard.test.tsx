@@ -180,8 +180,44 @@ describe("TradingLimitsCard", () => {
     change("risk-max-trades", "10");
     change("autonomous-max-trades", "8");
     save();
-    await waitFor(() => expect(screen.getByTestId("limits-error")).toHaveTextContent("Account limits: max_trades_per_day invalid"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("limits-error").map((el) => el.textContent)).toEqual([
+        "Account limits not saved: max_trades_per_day invalid.",
+        "Bot limits not saved: skipped because the account limits failed.",
+      ]),
+    );
     expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("says the account half saved when only the bot half fails", async () => {
+    const { api, ApiError } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(new ApiError("max_trades_per_day_exceeds_account", 422, null));
+    renderCard();
+    change("risk-max-trades", "4");
+    change("autonomous-max-trades", "25");
+    save();
+    await waitFor(() =>
+      expect(screen.getByTestId("limits-error")).toHaveTextContent(
+        "Bot limits not saved (account limits were saved): Bot max trades per day cannot exceed",
+      ),
+    );
+    expect(screen.getByTestId("limits-saved")).toHaveTextContent("Account limits saved.");
+  });
+
+  it("ignores a second submit while a save is in flight", async () => {
+    const { api } = await import("@/lib/api");
+    let release: () => void = () => {};
+    vi.mocked(api.risk.updateSettings).mockImplementation(
+      (body) => new Promise((resolve) => { release = () => resolve({ ...account, ...body } as UserRiskSettings); }),
+    );
+    renderCard();
+    change("risk-default-balance", "25000");
+    const form = screen.getByTestId("limits-save").closest("form")!;
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    release();
+    await waitFor(() => expect(screen.getByTestId("limits-saved")).toHaveTextContent("Account limits saved."));
+    expect(api.risk.updateSettings).toHaveBeenCalledOnce();
   });
 
   it("explains a bot cap above the account cap", async () => {

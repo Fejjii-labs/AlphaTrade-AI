@@ -4235,6 +4235,13 @@
       "AutonomousStrategyStatsView": {
         "additionalProperties": false,
         "properties": {
+          "counted_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Counted Sources",
+            "type": "array"
+          },
           "excluded_sources": {
             "items": {
               "type": "string"
