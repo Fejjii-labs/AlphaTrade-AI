@@ -12,6 +12,7 @@ vi.mock("@/lib/api/blofin-activity", () => ({ readNativeActivity: vi.fn() }));
 vi.mock("@/lib/api/dashboard-demo-account", () => ({ demoAccountApi: { latest: vi.fn(), refresh: vi.fn() } }));
 vi.mock("./AttentionCard", () => ({ AttentionCard: () => null }));
 vi.mock("./DailyReviewCard", () => ({ DailyReviewCard: () => null }));
+vi.mock("./performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
 vi.mock("@/components/settings/ManualDemoTest", () => ({ ManualDemoTest: () => null }));
 
 const unavailable = { available: false, data: null, error: null, fallbackUsed: false };

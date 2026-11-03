@@ -9,6 +9,7 @@ import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { AttentionCard } from "./AttentionCard";
 import { DailyReviewCard } from "./DailyReviewCard";
 import { BloFinDemoAccountCard } from "./BloFinDemoAccountCard";
+import { PerformanceDashboard } from "./performance/PerformanceDashboard";
 
 import {
   closedStrategyRows,
@@ -123,7 +124,7 @@ export function TraderDashboardView({
     <div className="page-sections" data-testid="trader-dashboard">
       <PageHeader
         title="Dashboard"
-        description="BloFin demo account, recent activity, and attention areas."
+        description="Journal performance, BloFin demo account, recent activity, and attention areas."
         actions={
           <>
             <Link
@@ -163,6 +164,8 @@ export function TraderDashboardView({
           Refreshing dashboard; showing the previous snapshot.
         </p>
       ) : null}
+
+      <PerformanceDashboard refreshKey={demoRefreshKey} />
 
       <label className="flex flex-wrap items-center gap-3 text-sm">
         Account

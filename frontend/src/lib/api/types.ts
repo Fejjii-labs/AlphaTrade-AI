@@ -4499,6 +4499,92 @@ export type JournalStatsParams = {
 };
 
 // --------------------------------------------------------------------------
+// Journal performance dashboard — GET /journal/statistics/calendar
+// Monetary values are decimal strings; null means "not computable", never 0.
+// --------------------------------------------------------------------------
+
+export type JournalPerformanceDashboardParams = {
+  date_from?: string;
+  date_to?: string;
+  tz?: string;
+  source?: JournalTradeSource;
+  execution_actor?: ExecutionActor;
+};
+
+export interface JournalDashboardSummary {
+  trade_count: number;
+  pnl_sample_count: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate: number | null;
+  net_pnl: string | null;
+  gross_profit: string | null;
+  gross_loss: string | null;
+  profit_factor: number | null;
+  average_win: string | null;
+  average_loss: string | null;
+  win_loss_ratio: number | null;
+}
+
+export interface JournalDashboardDay {
+  date: string;
+  net_pnl: string | null;
+  trade_count: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate: number | null;
+}
+
+export interface JournalDashboardCurvePoint {
+  date: string;
+  daily_net_pnl: string;
+  cumulative_net_pnl: string;
+}
+
+export interface JournalDashboardRisk {
+  max_drawdown: string | null;
+  recovery_factor: number | null;
+  consistency: number | null;
+  winning_days: number;
+  losing_days: number;
+}
+
+export interface JournalDashboardScoreComponent {
+  key: string;
+  label: string;
+  value: number | null;
+  score: number | null;
+  target: number | null;
+  note: string | null;
+}
+
+export interface JournalPerformanceDashboardResponse {
+  filters: {
+    date_from: string | null;
+    date_to: string | null;
+    timezone: string;
+    source: JournalTradeSource | null;
+    execution_actor: ExecutionActor | null;
+  };
+  summary: JournalDashboardSummary;
+  days: JournalDashboardDay[];
+  cumulative: JournalDashboardCurvePoint[];
+  risk: JournalDashboardRisk;
+  score: {
+    overall: number | null;
+    components: JournalDashboardScoreComponent[];
+    missing_components: string[];
+  };
+  confidence: SampleConfidence;
+  truncated: boolean;
+  max_rows: number;
+  warnings: string[];
+  generated_at: string;
+}
+
+// --------------------------------------------------------------------------
 // Journal bulk import (AT-033) — dedup, dry-run, reconciliation
 // --------------------------------------------------------------------------
 
