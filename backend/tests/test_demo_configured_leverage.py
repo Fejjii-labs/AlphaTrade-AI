@@ -219,13 +219,21 @@ def test_order_margin_mode_follows_the_configured_plan() -> None:
         demo_order_margin_mode(CONFIGURED_DEMO_MARGIN_ASSUMPTION, None)
 
 
-def _run_worker(monkeypatch: pytest.MonkeyPatch, venue: Venue, config: DemoLeverageConfig):
+def _run_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    venue: Venue,
+    config: DemoLeverageConfig,
+    *,
+    auto_write: bool = True,
+):
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
-        settings = demo_settings(str(account.id))
+        settings = demo_settings(str(account.id)).model_copy(
+            update={"governed_demo_auto_leverage_write_enabled": auto_write}
+        )
     source = _live_source()
     client = BloFinClient(
         base_url=settings.blofin_demo_rest_base_url,
@@ -321,3 +329,200 @@ def test_worker_blocks_without_an_order(
     assert venue.post_count == 0
     with factory() as session:
         assert session.scalar(select(func.count()).select_from(JournalTrade)) == 0
+
+
+# --- Griller #412 conditions: C1 staging-only writes, C3 journal, C2 post-fill hold ---
+
+
+@requires_postgres
+def test_auto_write_flag_off_never_writes_and_blocks_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venue = LeverageVenue(_price())
+    _factory, scan = _run_worker(
+        monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default"), auto_write=False
+    )
+    assert venue.account_writes == []
+    assert venue.post_count == 0
+    assert scan.trade_plan_revision_id is None
+
+
+def test_leverage_write_allowed_only_with_flag_in_staging_or_local() -> None:
+    from types import SimpleNamespace
+
+    from app.core.config import Environment
+    from app.services.governed_blofin_demo import demo_leverage_write_allowed
+
+    def ns(flag: bool, env: Environment) -> SimpleNamespace:
+        return SimpleNamespace(governed_demo_auto_leverage_write_enabled=flag, environment=env)
+
+    assert demo_leverage_write_allowed(ns(True, Environment.STAGING))
+    assert demo_leverage_write_allowed(ns(True, Environment.LOCAL))
+    assert not demo_leverage_write_allowed(ns(True, Environment.PRODUCTION))
+    assert not demo_leverage_write_allowed(ns(False, Environment.STAGING))
+
+
+@requires_postgres
+def test_successful_leverage_write_is_journaled_with_old_and_new_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import AuditLog
+
+    venue = LeverageVenue(_price())
+    factory, _scan = _run_worker(monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default"))
+    with factory() as session:
+        rows = session.scalars(
+            select(AuditLog).where(AuditLog.action == "demo_leverage_applied")
+        ).all()
+    assert len(rows) == 1
+    meta = rows[0].redacted_metadata
+    assert meta["leverage"] == "10"
+    assert meta["margin_mode"] == "isolated"
+    assert meta["previous_margin_mode"] == "cross"
+    assert "previous_leverage" in meta
+
+
+def test_apply_returns_previous_and_new_values() -> None:
+    venue = LeverageVenue(_price())
+    result = _provider(venue).apply_configured_leverage(
+        symbol="BTCUSDT", leverage=Decimal("10"), margin_mode="isolated"
+    )
+    assert result["previous_margin_mode"] == "cross"
+    assert result["leverage"] == "10"
+    assert result["margin_mode_changed"] == "true"
+
+
+def test_leverage_info_accepts_object_or_single_row_list() -> None:
+    from app.providers.exchange.blofin_account import _single_inst_row
+
+    row = {"instId": "BTC-USDT", "leverage": "10", "marginMode": "isolated"}
+    assert _single_inst_row(row, "BTC-USDT") == row
+    assert _single_inst_row([row], "BTC-USDT") == row
+    assert _single_inst_row([row, {**row, "instId": "ETH-USDT"}], "BTC-USDT") == row
+    assert _single_inst_row([row, row], "BTC-USDT") == {}
+    assert _single_inst_row([], "BTC-USDT") == {}
+    assert _single_inst_row("x", "BTC-USDT") == {}
+
+
+def test_flatten_refuses_live_host_and_posts_close_on_demo() -> None:
+    sent: list[tuple[str, dict]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        import json
+
+        sent.append((request.url.path, json.loads(request.content or b"{}")))
+        return httpx.Response(200, json={"code": "0", "data": [{"instId": "BTC-USDT"}]})
+
+    demo = BloFinClient(
+        base_url=DEMO_URL,
+        api_key="k",
+        api_secret="s",
+        api_passphrase="p",
+        max_retries=0,
+        transport=httpx.MockTransport(handle),
+        sleeper=lambda _: None,
+    )
+    GovernedBloFinDemoProvider(demo).flatten_position(symbol="BTCUSDT", margin_mode="isolated")
+    assert sent == [
+        (
+            "/api/v1/trade/close-position",
+            {"instId": "BTC-USDT", "marginMode": "isolated", "positionSide": "net"},
+        )
+    ]
+    provider = GovernedBloFinDemoProvider(demo)
+    monkey = type("C", (), {"base_url": "https://openapi.blofin.com"})()
+    provider._client = monkey  # type: ignore[assignment]
+    with pytest.raises(Exception) as refused:
+        provider.flatten_position(symbol="BTCUSDT", margin_mode="isolated")
+    assert _reason(refused.value) == "flatten_host_refused"
+    assert len(sent) == 1
+
+
+def _configured_plan(side: str, stop: Decimal):
+    from types import SimpleNamespace
+
+    from app.schemas.trade_plan import EntrySide
+
+    return SimpleNamespace(
+        execution_instrument="BTC-USDT",
+        side=EntrySide.BUY if side == "long" else EntrySide.SELL,
+        margin_mode="ISOLATED",
+        risk_and_exits=SimpleNamespace(
+            stop=SimpleNamespace(value=stop),
+            leverage=Decimal("10"),
+            margin_assumption_id=CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "liq", "expected"),
+    [
+        ("long", Decimal("99"), Decimal("90"), None),  # 10 away, buffer 2
+        ("long", Decimal("95"), Decimal("92"), "demo_post_fill_liquidation_inside_buffer"),
+        ("long", Decimal("95"), Decimal("96"), "demo_post_fill_liquidation_inside_stop"),
+        ("short", Decimal("101"), Decimal("110"), None),
+        ("short", Decimal("105"), Decimal("108"), "demo_post_fill_liquidation_inside_buffer"),
+        ("short", Decimal("105"), Decimal("104"), "demo_post_fill_liquidation_inside_stop"),
+    ],
+)
+def test_post_fill_venue_liquidation_check_for_configured_plans(
+    monkeypatch: pytest.MonkeyPatch, side: str, stop: Decimal, liq: Decimal, expected: str | None
+) -> None:
+    from app.services import governed_blofin_demo as mod
+
+    provider = object.__new__(GovernedBloFinDemoProvider)
+    provider.read_open_liquidation = lambda **_k: liq  # type: ignore[method-assign]
+    # The SimpleNamespace plan stands in for the schema in this pure check.
+    monkeypatch.setattr("app.schemas.trade_plan.TradePlanRevision", object)
+    plan = _configured_plan(side, stop)
+    assert mod._demo_post_fill_liquidation(provider, plan, Decimal("100")) == expected
+
+
+def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.services import governed_blofin_demo as mod
+
+    alerts: list[dict] = []
+
+    class _Alerts:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            return None
+
+        def create(self, **kwargs: object) -> None:
+            alerts.append(dict(kwargs))
+
+    class _Switch:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            return None
+
+        def activate(self, **_k: object) -> None:
+            return None
+
+    flattened: list[tuple[str, str]] = []
+
+    class _Provider:
+        def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
+            flattened.append((symbol, margin_mode))
+
+    monkeypatch.setattr(mod, "KillSwitchService", _Switch)
+    monkeypatch.setattr(mod, "PaperAlertService", _Alerts)
+    monkeypatch.setattr(mod, "AuditService", lambda _s: None)
+    loop = object.__new__(GovernedBloFinDemoLoop)
+    loop._settings = SimpleNamespace()
+    monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _self: _Provider())
+    effect = SimpleNamespace(reconciliation_disposition=None)
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_buffer",
+        protected=True,
+        plan=_configured_plan("long", Decimal("95")),
+    )
+    assert flattened == [("BTC-USDT", "isolated")]
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_BUFFER"
+    assert alerts and alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"

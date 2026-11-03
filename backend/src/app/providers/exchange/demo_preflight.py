@@ -40,6 +40,7 @@ _VALIDATION_REASONS = {
         "leverage_write_host_refused"
     ),
     "Demo leverage request invalid; no leverage mutation.": "leverage_request_invalid",
+    "Demo flatten refused: client is not the BloFin demo host.": "flatten_host_refused",
     "Demo set-margin-mode failed.": "margin_mode_set_failed",
     "Demo set-margin-mode was not confirmed.": "margin_mode_set_unconfirmed",
     "Demo set-leverage failed.": "leverage_set_failed",

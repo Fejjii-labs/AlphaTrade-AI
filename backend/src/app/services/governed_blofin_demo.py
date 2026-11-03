@@ -247,6 +247,56 @@ def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | No
     return "demo_closed_reconciled"
 
 
+def demo_leverage_write_allowed(settings: object) -> bool:
+    """Automatic demo leverage writes: explicit flag AND a staging/local environment.
+
+    A production environment (including a production demo profile) never
+    writes leverage until the owner approves extending it. Without the write the
+    snapshot still requires the configured leverage, so a mismatch blocks.
+    """
+
+    from app.core.config import Environment
+
+    if getattr(settings, "governed_demo_auto_leverage_write_enabled", False) is not True:
+        return False
+    return getattr(settings, "environment", None) in {Environment.STAGING, Environment.LOCAL}
+
+
+def _journal_leverage_write(
+    session: Session,
+    *,
+    organization_id: object,
+    user_id: object,
+    applied: object,
+) -> None:
+    """Audit a confirmed demo leverage write with previous and new values."""
+
+    from uuid import uuid4
+
+    from app.schemas.audit import AuditRecordCreate
+    from app.schemas.common import AuditEventType
+
+    if not isinstance(applied, dict):
+        return
+    try:
+        AuditService(session).record(
+            AuditRecordCreate(
+                request_id=f"demo-leverage-{uuid4()}",
+                trace_id=f"demo-leverage-{uuid4()}",
+                event_type=AuditEventType.DEMO_LEVERAGE_APPLIED,
+                resource_type="blofin_demo_leverage",
+                resource_id=str(applied.get("inst_id", "")),
+                organization_id=organization_id,
+                user_id=user_id,
+                metadata={str(k): str(v) for k, v in applied.items()},
+            )
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.warning("Demo leverage write succeeded but the audit journal failed.")
+
+
 def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Decimal) -> str | None:
     """Compare the open position's liquidation price with the stop. No order write.
 
@@ -269,6 +319,20 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     if liquidation is None:
         return None
     direction = "long" if plan.side is EntrySide.BUY else "short"
+    from app.services.demo_leverage_config import LIQUIDATION_STOP_DISTANCE_MULTIPLE
+
+    stop_price = plan.risk_and_exits.stop.value
+    stop_distance = abs(fill_price - stop_price)
+    through = (direction == "long" and liquidation >= stop_price) or (
+        direction == "short" and liquidation <= stop_price
+    )
+    if through:
+        return "demo_post_fill_liquidation_inside_stop"
+    if (
+        plan.risk_and_exits.margin_assumption_id == "configured-demo-leverage"
+        and abs(fill_price - liquidation) < stop_distance * LIQUIDATION_STOP_DISTANCE_MULTIPLE
+    ):
+        return "demo_post_fill_liquidation_inside_buffer"
     outcome = post_fill_recheck(
         fill_price=fill_price,
         stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
@@ -305,25 +369,37 @@ def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
     return None
 
 
-def _alert_liquidation_through_stop(session: Session, command: ExecutionCommand) -> None:
-    """Loud alert on the existing notification path. Does not close or reduce.
+def _alert_liquidation_through_stop(
+    session: Session, command: ExecutionCommand, *, flatten_outcome: str | None = None
+) -> None:
+    """Loud alert on the existing notification path, with the flatten outcome.
 
     Telegram stays off unless it was already enabled. This records a critical
     alert and would deliver only through that existing, default-off path.
     """
 
+    if flatten_outcome == "flatten_sent":
+        action = "A demo close-position was sent; verify the account is flat."
+    elif flatten_outcome == "flatten_failed":
+        action = "The automatic demo close FAILED; close the position manually."
+    else:
+        action = "No automatic close or reduction."
     PaperAlertService(session, audit_service=AuditService(session)).create(
         organization_id=command.organization_id,
         user_id=command.user_id,
         alert_type=PaperAlertType.DEMO_LIQUIDATION_THROUGH_STOP,
         severity=PaperAlertSeverity.CRITICAL,
         message=(
-            "LIQUIDATION THROUGH STOP: BloFin demo liquidation price is through "
-            "the stop after a fill. The kill switch is armed. No automatic close "
-            "or reduction. Operator action required."
+            "LIQUIDATION INSIDE STOP OR BUFFER: BloFin demo liquidation price breaches "
+            f"the stop or its 2x buffer after a fill. The kill switch is armed. {action} "
+            "Operator action required."
         ),
         dedup_key=(f"demo_liquidation_through_stop:{command.organization_id}:{command.id}"),
-        metadata={"command_id": str(command.id), "auto_close": False},
+        metadata={
+            "command_id": str(command.id),
+            "auto_close": flatten_outcome == "flatten_sent",
+            "flatten_outcome": flatten_outcome or "none",
+        },
     )
 
 
@@ -369,6 +445,8 @@ def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tup
 
     if liquidation_reason == "demo_post_fill_liquidation_unreadable":
         return "DEMO_LIQUIDATION_UNREADABLE", not protected
+    if liquidation_reason == "demo_post_fill_liquidation_inside_buffer":
+        return "DEMO_LIQUIDATION_INSIDE_BUFFER", True
     if liquidation_reason == "demo_post_fill_liquidation_inside_stop":
         return "DEMO_LIQUIDATION_INSIDE_STOP", True
     raise ValueError("Unknown demo liquidation hold.")
@@ -560,16 +638,23 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         )
         if killed is not None:
             return killed
-        try:
-            # Owner-configured leverage and margin mode, demo host only, exact read-back.
-            self._get_provider().apply_configured_leverage(
-                symbol=target.symbol,
-                leverage=config.leverage_decimal,
-                margin_mode=config.margin_mode,
+        if demo_leverage_write_allowed(self._settings):
+            try:
+                # Owner-configured leverage and margin mode, demo host only, exact read-back.
+                applied = self._get_provider().apply_configured_leverage(
+                    symbol=target.symbol,
+                    leverage=config.leverage_decimal,
+                    margin_mode=config.margin_mode,
+                )
+            except Exception as exc:
+                diagnostic = failure_diagnostics(exc, stage="leverage_write")
+                return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
+            _journal_leverage_write(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                applied=applied,
             )
-        except Exception as exc:
-            diagnostic = failure_diagnostics(exc, stage="leverage_write")
-            return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
         try:
             self._snapshot = self._get_provider().snapshot(
                 symbol=target.symbol,
@@ -1309,8 +1394,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         effect: VenueSubmitEffect,
         liquidation_reason: str,
         protected: bool,
+        plan: object | None = None,
     ) -> None:
-        """Arm the existing kill switch, then label the read.
+        """Arm the existing kill switch, flatten a breached position, then label the read.
 
         A missing protection hold and a liquidation price through the stop use
         the same switch as the later unprotected fill. An unreadable price is
@@ -1330,8 +1416,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 protected,
                 disposition,
             )
+        flatten_outcome = None
+        if plan is not None and liquidation_reason in {
+            "demo_post_fill_liquidation_inside_stop",
+            "demo_post_fill_liquidation_inside_buffer",
+        }:
+            flatten_outcome = self._flatten_after_liquidation_breach(command=command, plan=plan)
         if arm_kill_switch:
-            through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
+            through_stop = liquidation_reason in {
+                "demo_post_fill_liquidation_inside_stop",
+                "demo_post_fill_liquidation_inside_buffer",
+            }
             reason = (
                 "BloFin demo liquidation is through the stop; operator action required"
                 if through_stop
@@ -1344,8 +1439,30 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 source="demo_protection",
             )
             if through_stop:
-                _alert_liquidation_through_stop(session, command)
+                _alert_liquidation_through_stop(session, command, flatten_outcome=flatten_outcome)
         effect.reconciliation_disposition = disposition
+
+    def _flatten_after_liquidation_breach(self, *, command: ExecutionCommand, plan: object) -> str:
+        """Close the demo position whose venue liqPrice breaches the stop or buffer.
+
+        Demo host only (the provider refuses any other host). One attempt, no
+        retry; the result is put on the alert. The kill switch armed by the
+        caller still blocks new entries either way.
+        """
+
+        try:
+            margin_mode = str(getattr(plan, "margin_mode", "isolated")).lower()
+            self._get_provider().flatten_position(
+                symbol=str(plan.execution_instrument),  # type: ignore[attr-defined]
+                margin_mode=margin_mode,
+            )
+            return "flatten_sent"
+        except Exception:
+            logger.warning(
+                "BloFin demo flatten after liquidation breach failed; command_id=%s",
+                command.id,
+            )
+            return "flatten_failed"
 
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:
         """Read-only venue recovery runs despite the kill switch. Never resubmits."""
@@ -1464,16 +1581,26 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
-                profile_fill = (
-                    envelope.plan.risk_and_exits.margin_assumption_id
-                    == "verified-demo-read-leverage"
-                )
-                if profile_fill:
+                assumption = envelope.plan.risk_and_exits.margin_assumption_id
+                profile_fill = assumption == "verified-demo-read-leverage"
+                configured_fill = assumption == "configured-demo-leverage"
+                if profile_fill or configured_fill:
                     liquidation_reason = _demo_post_fill_liquidation(
                         self._get_provider(),
                         envelope.plan,
                         evidence.fills[-1].price,
                     )
+                    # A cross position may omit liqPrice; for non-profile plans an
+                    # unreadable price is logged, not held (unchanged behaviour).
+                    if configured_fill and liquidation_reason == (
+                        "demo_post_fill_liquidation_unreadable"
+                    ):
+                        logger.warning(
+                            "BloFin demo liquidation unreadable after configured fill; "
+                            "command_id=%s",
+                            command.id,
+                        )
+                        liquidation_reason = None
                     if liquidation_reason is not None:
                         self._safety(session).lock_epoch(
                             organization_id=command.organization_id,
@@ -1485,6 +1612,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                             effect=effect,
                             liquidation_reason=liquidation_reason,
                             protected=evidence.protected,
+                            plan=envelope.plan,
                         )
                         session.commit()
                         return liquidation_reason

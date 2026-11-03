@@ -363,7 +363,7 @@ class GovernedBloFinDemoProvider:
 
     def apply_configured_leverage(
         self, *, symbol: str, leverage: Decimal, margin_mode: str
-    ) -> None:
+    ) -> dict[str, str]:
         """Set the owner-configured margin mode and leverage, then read both back.
 
         The only leverage or margin-mode write in this adapter. It refuses a
@@ -371,6 +371,14 @@ class GovernedBloFinDemoProvider:
         non-flat account (a margin-mode change cannot apply to an open
         position), sends no retry, and raises unless the venue reads back the
         exact requested values. Every refusal is a ValueError with fixed copy.
+        Returns the previous and new values for the audit journal.
+
+        BloFin docs (response ``data`` may be an object or a list; ``_rows``
+        accepts both and requires exactly one row):
+        - set-margin-mode: https://docs.blofin.com/index.html#set-margin-mode
+        - set-leverage: https://docs.blofin.com/index.html#set-leverage
+        - leverage-info: https://docs.blofin.com/index.html#get-leverage
+        - margin-mode: https://docs.blofin.com/index.html#get-margin-mode
         """
 
         with preflight_stage("leverage_write_host", "POST /api/v1/account/set-leverage"):
@@ -400,6 +408,14 @@ class GovernedBloFinDemoProvider:
             current = self._account.get_account_margin_mode()
             if not current.supplied:
                 raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
+        try:
+            previous_leverage = str(
+                self._account.get_leverage_info(
+                    inst_id=instrument, margin_mode=current.margin_mode
+                ).leverage
+            )
+        except Exception:
+            previous_leverage = "unknown"
         if current.margin_mode != margin_mode:
             with preflight_stage("margin_mode_write", "POST /api/v1/account/set-margin-mode"):
                 try:
@@ -449,6 +465,44 @@ class GovernedBloFinDemoProvider:
                 raise ValueError("Demo margin mode read-back does not match the configured mode.")
             if info.leverage != leverage:
                 raise ValueError("Demo leverage read-back does not match the configured leverage.")
+        return {
+            "inst_id": instrument,
+            "previous_margin_mode": current.margin_mode,
+            "previous_leverage": previous_leverage,
+            "margin_mode": margin_mode,
+            "leverage": format(leverage.to_integral_value(), "f"),
+            "margin_mode_changed": str(current.margin_mode != margin_mode).lower(),
+        }
+
+    def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
+        """Close the whole NET position for one instrument on the BloFin DEMO host.
+
+        Used only by the post-fill liquidation hold. Same demo-host guard as the
+        leverage write; one POST, never retried; a venue error raises.
+        Docs: https://docs.blofin.com/index.html#close-positions
+        """
+
+        with preflight_stage("flatten_host", "POST /api/v1/trade/close-position"):
+            base_url = getattr(self._client, "base_url", None)
+            if (
+                not isinstance(base_url, str)
+                or not is_allowlisted_demo_host(base_url)
+                or (urlsplit(base_url).hostname or "").lower() in BLOFIN_PRODUCTION_HOSTS
+            ):
+                raise ValueError("Demo flatten refused: client is not the BloFin demo host.")
+            if margin_mode not in {"isolated", "cross"}:
+                raise ValueError("Demo flatten margin mode invalid.")
+        with preflight_stage("flatten", "POST /api/v1/trade/close-position"):
+            self._client.request(
+                "POST",
+                "/api/v1/trade/close-position",
+                body={
+                    "instId": to_blofin_inst_id(symbol),
+                    "marginMode": margin_mode,
+                    "positionSide": "net",
+                },
+                signed=True,
+            )
 
     def verify_permissions(self) -> None:
         with preflight_stage("permissions", "GET /api/v1/user/query-apikey"):

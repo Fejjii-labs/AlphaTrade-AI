@@ -362,7 +362,10 @@ class BloFinAccountProvider:
             params={"instId": inst_id, "marginMode": margin_mode},
             signed=True,
         )
-        row = data if isinstance(data, dict) else {}
+        # Docs: https://docs.blofin.com/index.html#get-leverage — ``data`` may be
+        # an object or a list of rows; a list must hold exactly one row for this
+        # instrument, otherwise nothing is confirmed (leverage reads as 0).
+        row = _single_inst_row(data, inst_id)
         position_side_raw = row.get("positionSide")
         venue_mode = row.get("marginMode")
         supplied = venue_mode not in (None, "")
@@ -419,3 +422,19 @@ class BloFinAccountProvider:
             last_success_at=self._client.last_success_at,
             error_message=self._client.last_error,
         )
+
+
+def _single_inst_row(data: object, inst_id: str) -> dict[str, Any]:
+    """One venue row for ``inst_id`` from an object or list response, else {}."""
+
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        rows = [
+            row
+            for row in data
+            if isinstance(row, dict) and str(row.get("instId", inst_id)) == inst_id
+        ]
+        if len(rows) == 1:
+            return rows[0]
+    return {}

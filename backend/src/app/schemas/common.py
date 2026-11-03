@@ -358,6 +358,7 @@ class AuditEventType(StrEnum):
     PROVIDER_USAGE_METADATA_MISSING = "provider_usage_metadata_missing"
     TRADINGVIEW_SIGNAL_RECEIVED = "tradingview_signal_received"
     TRADINGVIEW_SIGNAL_REJECTED = "tradingview_signal_rejected"
+    DEMO_LEVERAGE_APPLIED = "demo_leverage_applied"
     TRADINGVIEW_SIGNAL_CANDIDATE_CREATED = "tradingview_signal_candidate_created"
     BLOFIN_DEMO_SYNC = "blofin_demo_sync"
     PAPER_SIGNAL_ORCHESTRATION_EVALUATED = "paper_signal_orchestration_evaluated"
