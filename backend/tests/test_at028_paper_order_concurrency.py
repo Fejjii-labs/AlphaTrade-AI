@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 from collections.abc import Iterator
@@ -61,16 +60,14 @@ from app.services.execution_service import LEGACY_PAPER_EXECUTION_REASON, Execut
 from app.services.proposal_service import ProposalService
 from app.services.quota_service import QuotaService
 from app.services.usage_service import UsageService
-from tests.support.postgres_template import refresh_database
+from tests.support.postgres_template import fixture_postgres_url, refresh_database
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000028")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000029")
 _IDEM_KEY = "at028-concurrent-key-001"
 _OTHER_KEY = "at028-concurrent-key-002"
-POSTGRES_URL = os.environ.get(
-    "AT028_POSTGRES_URL",
-    "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
-)
+# No localhost default: unset skips locally and fails under CI=true.
+POSTGRES_URL = fixture_postgres_url() or ""
 _HTTP_PASSWORD = "AT028-Test-Password-123!"
 
 

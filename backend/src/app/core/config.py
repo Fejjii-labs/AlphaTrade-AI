@@ -25,6 +25,20 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+class DeploymentProfile(StrEnum):
+    """Which safety profile a deployed environment runs under.
+
+    ``standard`` keeps the historical posture: staging may run the paper/demo
+    stack, production runs the API only. ``production_demo`` lets
+    ``ENVIRONMENT=production`` mirror staging (paper/demo trading, Watcher,
+    Telegram, live public market data) while every real-money block stays.
+    It is refused outside ``ENVIRONMENT=production``.
+    """
+
+    STANDARD = "standard"
+    PRODUCTION_DEMO = "production_demo"
+
+
 class ExecutionMode(StrEnum):
     """Trading execution mode.
 
@@ -88,6 +102,7 @@ class Settings(BaseSettings):
     # --- Application ---
     app_name: str = "AlphaTrade AI"
     environment: Environment = Environment.LOCAL
+    deployment_profile: DeploymentProfile = DeploymentProfile.STANDARD
     debug: bool = True
     log_level: str = "INFO"
     log_json: bool = True
@@ -937,6 +952,31 @@ class Settings(BaseSettings):
             and self.blofin_api_secret.strip()
             and self.blofin_api_passphrase.strip()
         )
+
+    @property
+    def production_demo_active(self) -> bool:
+        """True for ``ENVIRONMENT=production`` + ``DEPLOYMENT_PROFILE=production_demo``.
+
+        Never true while any real-money flag is set; those still refuse startup.
+        """
+        return (
+            self.environment is Environment.PRODUCTION
+            and self.deployment_profile is DeploymentProfile.PRODUCTION_DEMO
+            and not self.enable_real_trading
+            and not self.real_trading_enabled
+            and self.execution_mode is ExecutionMode.PAPER
+            and self.exchange_mode is not ExchangeMode.TRADE_LIVE
+        )
+
+    @property
+    def paper_runtime_environment(self) -> bool:
+        """Staging, or production under the ``production_demo`` profile.
+
+        Gates that historically read ``environment is STAGING`` for the paper/demo
+        runtime (Watcher, Telegram projection, autonomous demo, live evidence) use
+        this so production can mirror staging without loosening real-money blocks.
+        """
+        return self.environment is Environment.STAGING or self.production_demo_active
 
     @property
     def exchange_demo_active(self) -> bool:

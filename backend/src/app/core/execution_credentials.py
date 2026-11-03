@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.config import Environment, ExchangeMode, ExecutionMode, Settings
+from app.core.config import ExchangeMode, ExecutionMode, Settings
 from app.core.exchange_safety import is_allowlisted_demo_host
 
 _LIVE_USD_M_SOURCES = frozenset(
@@ -79,7 +79,7 @@ def live_evidence_demo_access_requested(settings: Settings) -> bool:
     """Explicit staging API opt-in; does not authorize Watcher venue dispatch."""
     return (
         settings.blofin_live_evidence_demo_enabled
-        and settings.environment is Environment.STAGING
+        and settings.paper_runtime_environment
         and not settings.watcher_orchestration_enabled
         and not settings.watcher_paper_staging_activation
         and not settings.worker_enabled
@@ -92,7 +92,7 @@ def governed_demo_worker_access_requested(settings: Settings) -> bool:
     """Explicit staging worker arm, independently pinned from the API capability."""
     if not (
         settings.governed_blofin_demo_enabled
-        and settings.environment is Environment.STAGING
+        and settings.paper_runtime_environment
         and settings.watcher_orchestration_enabled
         and settings.watcher_paper_staging_activation
     ):
@@ -111,7 +111,7 @@ def governed_demo_worker_access_requested(settings: Settings) -> bool:
 
 def manual_demo_access_requested(settings: Settings) -> bool:
     """Separately armed, owner-pinned staging API capability; no strategy authority."""
-    if not (settings.manual_blofin_demo_enabled and settings.environment is Environment.STAGING):
+    if not (settings.manual_blofin_demo_enabled and settings.paper_runtime_environment):
         return False
     try:
         for value in (

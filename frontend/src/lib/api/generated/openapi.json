@@ -4232,6 +4232,40 @@
         "title": "AutonomousStrategyOption",
         "type": "object"
       },
+      "AutonomousStrategyStatsView": {
+        "additionalProperties": false,
+        "properties": {
+          "counted_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Counted Sources",
+            "type": "array"
+          },
+          "excluded_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Sources",
+            "type": "array"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyStatsRow"
+            },
+            "title": "Strategies",
+            "type": "array"
+          },
+          "unattributed": {
+            "$ref": "#/components/schemas/StrategyTradeStats"
+          }
+        },
+        "required": [
+          "unattributed"
+        ],
+        "title": "AutonomousStrategyStatsView",
+        "type": "object"
+      },
       "AutonomousTradingSettingsUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -48994,6 +49028,62 @@
         "title": "StrategySignalSummary",
         "type": "object"
       },
+      "StrategyStatsRow": {
+        "additionalProperties": false,
+        "properties": {
+          "bot_selected": {
+            "title": "Bot Selected",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_setup_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Setup At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "paper_eligible": {
+            "title": "Paper Eligible",
+            "type": "boolean"
+          },
+          "setup_type": {
+            "title": "Setup Type",
+            "type": "string"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/StrategyTradeStats"
+          },
+          "strategy_id": {
+            "format": "uuid",
+            "title": "Strategy Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_id",
+          "name",
+          "setup_type",
+          "enabled",
+          "paper_eligible",
+          "bot_selected",
+          "stats"
+        ],
+        "title": "StrategyStatsRow",
+        "type": "object"
+      },
       "StrategyTestability": {
         "additionalProperties": false,
         "description": "Whether a strategy can be backtested mechanically.",
@@ -49090,6 +49180,63 @@
           "ready_for_backtest"
         ],
         "title": "StrategyTestability",
+        "type": "object"
+      },
+      "StrategyTradeStats": {
+        "additionalProperties": false,
+        "description": "Journal-trade totals for one strategy (or for trades with no strategy).",
+        "properties": {
+          "closed_trades": {
+            "default": 0,
+            "title": "Closed Trades",
+            "type": "integer"
+          },
+          "last_trade_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Trade At"
+          },
+          "losses": {
+            "default": 0,
+            "title": "Losses",
+            "type": "integer"
+          },
+          "net_pnl": {
+            "default": "0",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Net Pnl",
+            "type": "string"
+          },
+          "open_positions": {
+            "default": 0,
+            "title": "Open Positions",
+            "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "wins": {
+            "default": 0,
+            "title": "Wins",
+            "type": "integer"
+          }
+        },
+        "title": "StrategyTradeStats",
         "type": "object"
       },
       "StrategyValidationStatus": {
@@ -60978,6 +61125,32 @@
           }
         ],
         "summary": "Update autonomous trading settings",
+        "tags": [
+          "autonomous-trading"
+        ]
+      }
+    },
+    "/autonomous/strategy-stats": {
+      "get": {
+        "operationId": "get_autonomous_strategy_stats_autonomous_strategy_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomousStrategyStatsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trades and stats per strategy",
         "tags": [
           "autonomous-trading"
         ]

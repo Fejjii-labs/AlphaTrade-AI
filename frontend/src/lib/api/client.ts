@@ -58,9 +58,11 @@ async function requestRefreshedTokens(): Promise<boolean> {
   const payload = (await response.json()) as {
     access_token: string;
     refresh_token?: string;
+    expires_in?: unknown;
   };
   if (generation !== sessionGeneration()) return false;
   setTokens(payload.access_token, payload.refresh_token);
+  noteIssuedAccessToken(payload.access_token, payload.expires_in);
   return true;
 }
 
@@ -78,6 +80,56 @@ async function refreshAccessToken(): Promise<boolean> {
     refreshInFlight = flight;
   }
   return refreshInFlight.promise;
+}
+
+// Access tokens are short-lived (15 min). Background pollers such as the
+// kill-switch posture refresh used to send the expired token, take a 401 and
+// only then refresh, so every expiry produced one 401 per open tab. Refresh
+// proactively when the JWT `exp` is near. The 401 retry path stays as the
+// fallback. The payload is decoded only to read `exp`; it is never trusted
+// for authorization (the backend verifies the signature).
+const ACCESS_TOKEN_REFRESH_SKEW_MS = 30_000;
+
+export function accessTokenExpiresAtMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { exp?: unknown };
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+// Griller C1: comparing the server's JWT `exp` with the local clock storms
+// /auth/refresh when the client clock runs ahead. For tokens we received from
+// /auth/refresh, schedule from the server's `expires_in` against local receipt
+// time instead (skew-free). A token issued less than MIN_TOKEN_AGE_MS ago is
+// never proactively refreshed again, whatever its `exp` says.
+const MIN_TOKEN_AGE_MS = 60_000;
+let issuedToken: { token: string; receivedAtMs: number; deadlineMs: number | null } | null = null;
+
+export function noteIssuedAccessToken(
+  token: string,
+  expiresIn: unknown,
+  receivedAtMs = Date.now(),
+): void {
+  const seconds = typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null;
+  issuedToken = { token, receivedAtMs, deadlineMs: seconds === null ? null : receivedAtMs + seconds * 1000 };
+}
+
+export function accessTokenNeedsRefresh(token: string | null, nowMs = Date.now()): boolean {
+  if (!token) return false;
+  if (issuedToken && issuedToken.token === token) {
+    if (nowMs - issuedToken.receivedAtMs < MIN_TOKEN_AGE_MS) return false;
+    if (issuedToken.deadlineMs !== null) {
+      return issuedToken.deadlineMs - nowMs <= ACCESS_TOKEN_REFRESH_SKEW_MS;
+    }
+  }
+  const expiresAt = accessTokenExpiresAtMs(token);
+  return expiresAt !== null && expiresAt - nowMs <= ACCESS_TOKEN_REFRESH_SKEW_MS;
 }
 
 function sessionExpiredLoginPath(): string {
@@ -118,6 +170,12 @@ export async function apiFetch<T>(
       : {}),
     ...(headers as Record<string, string> | undefined),
   };
+
+  if (auth && retryOnUnauthorized && accessTokenNeedsRefresh(getAccessToken())) {
+    // Best effort: on failure fall through and let the 401 path decide.
+    await refreshAccessToken();
+    checkContext();
+  }
 
   if (auth) {
     const token = getAccessToken();
