@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from app.core.config import get_settings
 from app.db.session import get_session_factory
 from app.operations.settings_mirror import export_bundle, import_bundle
 
@@ -31,15 +32,23 @@ def main(argv: list[str] | None = None) -> int:
     sub.choices["import"].add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
 
+    settings = get_settings()
     with get_session_factory()() as session:
         if args.command == "export":
-            bundle = export_bundle(session, org_name=args.org, user_email=args.email)
+            bundle = export_bundle(
+                session, settings=settings, org_name=args.org, user_email=args.email
+            )
             json.dump(bundle, sys.stdout, indent=2, sort_keys=True, default=str)
             sys.stdout.write("\n")
             return 0
         bundle = json.loads(args.bundle.read_text())
         report = import_bundle(
-            session, bundle, org_name=args.org, user_email=args.email, apply=args.apply
+            session,
+            bundle,
+            settings=settings,
+            org_name=args.org,
+            user_email=args.email,
+            apply=args.apply,
         )
         if args.apply:
             session.commit()

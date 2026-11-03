@@ -163,6 +163,12 @@ def validate_deployment_settings(settings: Settings) -> None:
 
     if settings.environment is Environment.PRODUCTION and settings.debug:
         errors.append("debug must be false in production")
+    if settings.environment is Environment.PRODUCTION:
+        # Griller #411 C5: the Blueprint pins these; enforce them in code too.
+        if not settings.must_verify_email:
+            errors.append("require_email_verified must be true in production")
+        if settings.demo_seed_enabled:
+            errors.append("demo_seed_enabled must be false in production")
 
     if errors:
         joined = "; ".join(errors)

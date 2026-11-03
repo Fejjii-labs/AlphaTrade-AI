@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.core.config import DeploymentProfile, Environment, ExchangeMode, Settings
 from app.core.deployment_safety import deployment_posture
 from app.core.exchange_safety import BLOFIN_DEMO_HOST_ALLOWLIST
 from app.services.autonomous_trading import resolve_autonomous_mode
@@ -117,6 +117,8 @@ def test_standard_production_keeps_api_only_posture() -> None:
         {"cors_origins": "http://app.example.com"},
         {"auth_cookie_secure": False},
         {"database_url": "postgresql+psycopg://u:p@localhost:5432/db"},
+        {"require_email_verified": False},
+        {"demo_seed_enabled": True},
     ],
     ids=lambda o: next(iter(o)),
 )
@@ -130,3 +132,61 @@ def test_profile_refused_outside_production() -> None:
         Settings(**{**_MIRROR, "environment": "staging"})
     with pytest.raises(ValidationError, match="requires environment=production"):
         Settings(environment="local", deployment_profile="production_demo")
+
+
+@pytest.mark.parametrize(
+    "override", [{"require_email_verified": False}, {"demo_seed_enabled": True}]
+)
+def test_standard_production_enforces_email_verification_and_no_demo_seed(override: dict) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**{**_BASE, "deployment_profile": "standard", **override})
+
+
+def test_profile_property_alone_needs_production_and_paper() -> None:
+    base = Settings()
+    assert base.production_demo_active is False
+    for env, profile, expected in [
+        ("production", "production_demo", True),
+        ("production", "standard", False),
+        ("staging", "standard", False),
+        ("local", "standard", False),
+    ]:
+        probe = base.model_copy(
+            update={
+                "environment": Environment(env),
+                "deployment_profile": DeploymentProfile(profile),
+            }
+        )
+        assert probe.production_demo_active is expected, (env, profile)
+    live = base.model_copy(
+        update={
+            "environment": Environment.PRODUCTION,
+            "deployment_profile": DeploymentProfile.PRODUCTION_DEMO,
+            "enable_real_trading": True,
+        }
+    )
+    assert live.production_demo_active is False
+    assert live.paper_runtime_environment is False
+
+
+@pytest.mark.parametrize(
+    ("attr", "url", "fragment"),
+    [
+        ("blofin_demo_rest_base_url", "https://openapi.blofin.com", "BloFin live host"),
+        ("blofin_demo_ws_url", "wss://openapi.blofin.com/ws/public", "BloFin live host"),
+        ("blofin_demo_rest_base_url", "https://evil.example.com", "allowlisted BloFin demo"),
+    ],
+)
+def test_profile_blofin_host_pins_directly(attr: str, url: str, fragment: str) -> None:
+    from app.core.deployment_safety import _production_demo_errors
+
+    probe = Settings().model_copy(
+        update={
+            "environment": Environment.PRODUCTION,
+            "deployment_profile": DeploymentProfile.PRODUCTION_DEMO,
+            **{k: v for k, v in _DEMO_EXCHANGE.items() if not k.startswith("blofin_api")},
+            "exchange_mode": ExchangeMode.PAPER_EXCHANGE_DEMO,
+            attr: url,
+        }
+    )
+    assert any(fragment in error for error in _production_demo_errors(probe))

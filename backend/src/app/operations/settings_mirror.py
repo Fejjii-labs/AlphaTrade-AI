@@ -17,27 +17,27 @@ Rules:
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import Environment, Settings
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow
 from app.db.models import Organization, User, UserStrategy, UserStrategyVersion
-from app.db.risk_policy import RiskPolicyProposal
+from app.db.risk_policy import RiskPolicyProposal, RiskPolicyVersion
 from app.db.strategy_immutability import strategy_version_content_hash
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
+from app.schemas.autonomous_trading_settings import AutonomousTradingSettingsUpdate
 from app.schemas.common import StrategyChangeSource, StrategyId, StrategyLifecycleState
 from app.services.audit_service import AuditService
-from app.services.autonomous_trading_settings_service import (
-    validate_daily_loss_limit_percent,
-    validate_max_trades_per_day,
-    validate_risk_per_trade_percent,
-)
-from app.services.risk_policy.governance import PolicyActor, PolicyChannel
+from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
+from app.services.risk_policy.governance import PolicyActor, PolicyChannel, proposal_is_expired
 from app.services.risk_policy.persistence import RiskPolicyService
 from app.services.risk_policy.profile import (
     PolicyKind,
@@ -49,7 +49,29 @@ from app.services.strategy_versioning import StrategyVersioningService
 
 BUNDLE_FORMAT = "alphatrade.settings_mirror.v1"
 MIRROR_ACTOR_ID = "ops:settings-mirror"
-_SECRET_MARKERS = ("secret", "token", "password", "passphrase", "api_key", "apikey", "private")
+_SECRET_MARKERS = (
+    "secret",
+    "token",
+    "password",
+    "passphrase",
+    "api_key",
+    "apikey",
+    "private",
+    "key",
+    "credential",
+    "auth",
+    "dsn",
+    "webhook_url",
+    "chat_id",
+)
+# Keys that legitimately contain a marker substring (e.g. "key" in a domain field).
+_ALLOWED_KEYS = frozenset({"setup_type"})
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),  # OpenAI-style API keys
+    re.compile(r"[a-z][a-z0-9+.\-]*://[^/\s:@]+:[^/\s@]+@", re.IGNORECASE),  # URL with password
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),  # JWT
+    re.compile(r"\b\d{6,12}:[A-Za-z0-9_\-]{30,}\b"),  # Telegram bot token
+)
 
 
 class MirrorError(ValueError):
@@ -76,12 +98,31 @@ def assert_no_secrets(value: Any, path: str = "$") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             lowered = str(key).lower()
-            if any(marker in lowered for marker in _SECRET_MARKERS):
+            if lowered not in _ALLOWED_KEYS and any(m in lowered for m in _SECRET_MARKERS):
                 raise MirrorError(f"bundle refused: secret-like key at {path}.{key}")
             assert_no_secrets(child, f"{path}.{key}")
     elif isinstance(value, list):
         for index, child in enumerate(value):
             assert_no_secrets(child, f"{path}[{index}]")
+    elif isinstance(value, str):
+        for pattern in _SECRET_VALUE_PATTERNS:
+            if pattern.search(value):
+                raise MirrorError(f"bundle refused: secret-like value at {path}")
+
+
+def assert_export_allowed(settings: Settings) -> None:
+    if settings.environment is not Environment.STAGING:
+        raise MirrorError("export refused: run against staging (ENVIRONMENT=staging)")
+
+
+def assert_import_allowed(settings: Settings, bundle: dict[str, Any]) -> None:
+    if settings.environment is not Environment.PRODUCTION or not settings.production_demo_active:
+        raise MirrorError(
+            "import refused: target must be ENVIRONMENT=production with "
+            "DEPLOYMENT_PROFILE=production_demo active"
+        )
+    if bundle.get("source_environment") != Environment.STAGING.value:
+        raise MirrorError("import refused: bundle was not exported from staging")
 
 
 def _resolve(session: Session, org_name: str, user_email: str) -> tuple[uuid.UUID, uuid.UUID]:
@@ -101,6 +142,10 @@ def _strategy_hash(entry: dict[str, Any]) -> str:
     )
 
 
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 def _dec(value: Decimal | None) -> str | None:
     return None if value is None else format(value.normalize(), "f")
 
@@ -108,7 +153,10 @@ def _dec(value: Decimal | None) -> str | None:
 # --------------------------------------------------------------------- export
 
 
-def export_bundle(session: Session, *, org_name: str, user_email: str) -> dict[str, Any]:
+def export_bundle(
+    session: Session, *, settings: Settings, org_name: str, user_email: str
+) -> dict[str, Any]:
+    assert_export_allowed(settings)
     org_id, user_id = _resolve(session, org_name, user_email)
     versioning = StrategyVersioningService(session)
     strategies: list[dict[str, Any]] = []
@@ -128,7 +176,6 @@ def export_bundle(session: Session, *, org_name: str, user_email: str) -> dict[s
                 "name": strategy.name,
                 "setup_type": strategy.setup_type.value,
                 "enabled": bool(strategy.enabled),
-                "paper_eligible": bool(strategy.paper_eligible),
                 "notes": strategy.notes,
                 "card": version.card,
                 "structured_rules": version.structured_rules,
@@ -162,6 +209,7 @@ def export_bundle(session: Session, *, org_name: str, user_email: str) -> dict[s
     watchlist = WatcherWatchlistRepository(session).load(org_id)
     bundle = {
         "format": BUNDLE_FORMAT,
+        "source_environment": settings.environment.value,
         "strategies": strategies,
         "risk_policy_profiles": risk_profiles,
         "autonomous_settings": autonomous,
@@ -178,6 +226,7 @@ def import_bundle(
     session: Session,
     bundle: dict[str, Any],
     *,
+    settings: Settings,
     org_name: str,
     user_email: str,
     apply: bool = False,
@@ -186,6 +235,7 @@ def import_bundle(
 
     if bundle.get("format") != BUNDLE_FORMAT:
         raise MirrorError("unknown bundle format")
+    assert_import_allowed(settings, bundle)
     assert_no_secrets(bundle)
     org_id, user_id = _resolve(session, org_name, user_email)
     report = ImportReport(dry_run=not apply)
@@ -230,7 +280,7 @@ def _import_strategies(
                     current_version=1,
                     enabled=bool(entry.get("enabled", True)),
                     notes=entry.get("notes"),
-                    paper_eligible=bool(entry.get("paper_eligible", False)),
+                    paper_eligible=False,  # eligibility is earned in production, not copied
                 )
                 session.add(strategy)
                 session.flush()
@@ -311,14 +361,22 @@ def _import_risk_policy(
         if active is not None and profile_hash(current) == wanted:
             report.add("risk_policy", profile.kind.value, "unchanged")
             continue
-        pending = session.scalar(
-            select(RiskPolicyProposal.id).where(
+        now = datetime.now(UTC)
+        applied = select(RiskPolicyVersion.proposal_id).where(
+            RiskPolicyVersion.organization_id == org_id
+        )
+        candidates = session.scalars(
+            select(RiskPolicyProposal).where(
                 RiskPolicyProposal.organization_id == org_id,
                 RiskPolicyProposal.kind == profile.kind.value,
                 RiskPolicyProposal.content_hash == wanted,
+                RiskPolicyProposal.id.not_in(applied),
             )
-        )
-        if pending is not None:
+        ).all()
+        pending = [
+            row for row in candidates if not proposal_is_expired(_aware(row.created_at), now)
+        ]
+        if pending:
             report.add("risk_policy", profile.kind.value, "unchanged", "proposal already filed")
             continue
         report.add(
@@ -348,46 +406,52 @@ def _import_autonomous(
     if not data:
         return
     risk_raw = data.get("risk_per_trade_percent")
-    values = {
-        "daily_loss_limit_percent": validate_daily_loss_limit_percent(
-            Decimal(str(data["daily_loss_limit_percent"]))
-        ),
-        "max_trades_per_day": validate_max_trades_per_day(int(data["max_trades_per_day"])),
-        "risk_per_trade_percent": validate_risk_per_trade_percent(
-            None if risk_raw is None else Decimal(str(risk_raw))
-        ),
-        "strategy_id": None,
-        "symbol": data.get("symbol"),
-    }
+    daily = Decimal(str(data["daily_loss_limit_percent"]))
+    trades = int(data["max_trades_per_day"])
+    risk = None if risk_raw is None else Decimal(str(risk_raw))
+    symbol = data.get("symbol")
     strategy_name = data.get("strategy_name")
-    if strategy_name:
-        strategy_id = strategy_ids.get(strategy_name)
-        if strategy_id is None and apply:
-            report.add("autonomous_settings", "strategy", "skipped", "strategy missing")
-            return
-        values["strategy_id"] = strategy_id
+    strategy_id = strategy_ids.get(strategy_name) if strategy_name else None
+    if strategy_name and strategy_id is None and apply:
+        report.add("autonomous_settings", "strategy", "skipped", "strategy missing")
+        return
     row = session.scalar(
         select(AutonomousTradingSettingsRow).where(
             AutonomousTradingSettingsRow.organization_id == org_id,
             AutonomousTradingSettingsRow.user_id == user_id,
         )
     )
-    pending_strategy = bool(strategy_name) and values["strategy_id"] is None
+    pending_strategy = bool(strategy_name) and strategy_id is None
     if (
         row is not None
         and not pending_strategy
-        and all(getattr(row, key) == value for key, value in values.items())
+        and row.daily_loss_limit_percent == daily
+        and row.max_trades_per_day == trades
+        and row.risk_per_trade_percent == risk
+        and row.strategy_id == strategy_id
+        and row.symbol == symbol
     ):
         report.add("autonomous_settings", "user", "unchanged")
         return
     report.add("autonomous_settings", "user", "create" if row is None else "update")
     if not apply:
         return
-    if row is None:
-        session.add(AutonomousTradingSettingsRow(organization_id=org_id, user_id=user_id, **values))
+    fields: dict[str, Any] = {
+        "daily_loss_limit_percent": daily,
+        "max_trades_per_day": trades,
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+    }
+    if risk is None:
+        fields["clear_risk_per_trade_percent"] = True
     else:
-        for key, value in values.items():
-            setattr(row, key, value)
+        fields["risk_per_trade_percent"] = risk
+    # Same validations (strategy/symbol ownership, account cap) and audit as the app.
+    AutonomousTradingSettingsService(session, AuditService(session)).update(
+        AutonomousTradingSettingsUpdate(**fields),
+        organization_id=org_id,
+        user_id=user_id,
+    )
 
 
 def _import_watchlist(
