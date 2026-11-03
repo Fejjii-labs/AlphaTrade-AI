@@ -33100,6 +33100,7 @@
           "research_validation_promotion",
           "tradingview_signal",
           "demo_liquidation_through_stop",
+          "demo_liquidation_unreadable",
           "paper_exit_backfill_loss",
           "paper_exit_degraded_repeat",
           "paper_exit_clock_skew",
