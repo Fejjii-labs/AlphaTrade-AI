@@ -6,6 +6,7 @@ No profitability claim. No LLM-authored setup truth.
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
 
 from app.candidate_alerts.contracts import (
@@ -33,6 +34,9 @@ _PROFIT_CLAIMS = (
     "will win",
     "expected return",
 )
+
+
+NESTED_STRATEGY_NAME = "Nested Continuation"
 
 
 def _price_text(value: object) -> str:
@@ -126,6 +130,13 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
     if content.nested is not None:
         nested = content.nested
         timeframe = content.trigger_context.timeframe.value
+        # Human-facing heads-up only: symbol, strategy, direction and plan prices first,
+        # then timeframe, nested stage and timestamp. Internal IDs (strategy version,
+        # setup ID), risk state, decision, freshness, venue and reasons stay in the
+        # stored notification payload/audit data and are deliberately not rendered here.
+        # The trailing PAPER line is the minimal demo label required by the
+        # trading-safety rules (mode C: clearly labeled demo).
+        marker = "PAPER alert. Not an order."
         projected: tuple[str, ...] = ()
         if nested.projection_source is not None:
             projected = (
@@ -134,25 +145,20 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
                     nested.projection_source, symbol=nested.symbol, timeframe=timeframe
                 ),
             )
+        evidence_utc = nested.evidence_at.astimezone(UTC)
         return "\n".join(
             (
-                "AlphaTrade PAPER informational Nested Continuation setup.",
-                *projected,
                 f"Symbol: {nested.symbol}",
-                f"Venue: {content.evidence_provenance.venue.value}",
-                f"Timeframe: {timeframe}",
-                f"Nested stage: {nested.stage}",
+                f"Strategy: {NESTED_STRATEGY_NAME}",
                 f"Direction: {content.direction.value}",
                 f"Entry: {_price_text(nested.entry)}",
                 f"Stop: {_price_text(nested.stop)}",
                 f"Target: {_price_text(nested.target)}",
-                f"Strategy version: {nested.strategy_version_id}",
-                f"Setup ID: {nested.setup_id}",
-                f"Evidence timestamp: {nested.evidence_at.isoformat()}",
-                f"Freshness: {nested.freshness}",
-                f"Decision: {nested.decision}",
-                f"Risk state: {nested.risk_state}",
-                f"Reason summary: {', '.join(nested.reasons)[:500]}",
+                f"Timeframe: {timeframe}",
+                f"Nested stage: {nested.stage}",
+                f"Time: {evidence_utc.strftime('%Y-%m-%d %H:%M UTC')}",
+                marker,
+                *projected,
             )
         )
     rules = ", ".join(
