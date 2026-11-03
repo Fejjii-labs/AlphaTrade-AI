@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import AwareDatetime
 
-from app.candidate_alerts.projection import projection_note, projection_tag
 from app.market_contracts.models import CanonicalModel
 from app.schemas.telegram_policy import (
     AlertPhase,
@@ -87,58 +86,24 @@ class SfpAlertSummary(CanonicalModel):
             occurred_at=self.occurred_at,
         )
 
-    def _projection_lines(self) -> tuple[str, str]:
-        """Header suffix and note for a projected scope; empty for an approved market."""
-
-        if self.projection_source is None:
-            return "", ""
-        return f" {projection_tag(self.projection_source)}", projection_note(
-            self.projection_source, symbol=self.symbol, timeframe=self.timeframe
-        )
-
     def text(self) -> str:
-        tag, note = self._projection_lines()
-        if self.event_type == NotificationEventType.SFP_LEVEL_APPROACH:
-            return "\n".join(
-                (
-                    f"PAPER MODE — SFP LEVEL APPROACH{tag}",
-                    *((note,) if note else ()),
-                    "Preparation only. Price is near a level and has not swept it.",
-                    "Execution is not authorized.",
-                    f"{self.symbol} | {self.venue} | {self.timeframe} | {self.direction}",
-                    f"Structural level: {self.level_type} {self.structural_level}",
-                    f"Live price: {self.sweep_extreme}",
-                    f"Strategy version: {self.strategy_version_id}",
-                    f"Level reference: {self.setup_id}",
-                    f"Evidence timestamp: {self.evidence_at.isoformat()}",
-                    f"Event timestamp: {self.occurred_at.isoformat()}",
-                )
-            )
-        plan: tuple[str, ...] = ()
-        if self.entry is not None and self.stop is not None and self.take_profit is not None:
-            plan = (
-                f"Entry: {self.entry}",
-                f"Stop: {self.stop}",
-                f"Take-profit: {self.take_profit}",
-                "Paper trade plan. Real trading is not authorized.",
-            )
-        return "\n".join(
-            (
-                f"PAPER MODE — {self.event_type.value.replace('_', ' ')}{tag}",
-                *((note,) if note else ()),
-                f"{self.symbol} | {self.venue} | {self.timeframe} | {self.direction}",
-                f"Structural level: {self.level_type} {self.structural_level}",
-                f"Sweep extreme: {self.sweep_extreme}",
-                f"Reclaim state: {self.reclaim_state}",
-                *plan,
-                f"Strategy version: {self.strategy_version_id}",
-                f"Setup ID: {self.setup_id}",
-                f"Evidence timestamp: {self.evidence_at.isoformat()}",
-                f"Event timestamp: {self.occurred_at.isoformat()}",
-                f"Quality coverage: {', '.join(self.quality_coverage) or 'none'}",
-                f"Missing evidence: {', '.join(self.missing_evidence) or 'none'}",
-                "Quality score: unavailable",
-                f"Risk state: {self.risk_state}",
-                f"Risk reasons: {', '.join(self.risk_reasons) or 'none'}",
-            )
+        """Shared strategy layout; IDs, risk and coverage stay in the stored summary."""
+        from app.candidate_alerts.content import render_strategy_alert_text
+
+        approach = self.event_type == NotificationEventType.SFP_LEVEL_APPROACH
+        return render_strategy_alert_text(
+            symbol=self.symbol,
+            strategy="sfp",
+            direction=self.direction,
+            entry=self.entry,
+            stop=self.stop,
+            target=self.take_profit,
+            timeframe=self.timeframe,
+            stage=(
+                "level approach"
+                if approach
+                else self.event_type.value.lower().removeprefix("sfp_").replace("_", " ")
+            ),
+            at=self.evidence_at,
+            projection_source=self.projection_source,
         )
