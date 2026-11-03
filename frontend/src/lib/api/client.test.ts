@@ -151,3 +151,117 @@ describe("api client deployment config", () => {
     expect(sessionStorage.getItem("alphatrade_access_token")).toBe("new-fresh");
   });
 });
+
+describe("api client proactive access-token refresh (kill-switch 401s)", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    vi.unstubAllEnvs();
+  });
+
+  const jwt = (expSeconds: number) =>
+    `h.${btoa(JSON.stringify({ exp: expSeconds })).replace(/=+$/, "")}.s`;
+
+  it("refreshes an expiring token before the kill-switch poll instead of taking a 401", async () => {
+    (await import("@/lib/auth/session")).setTokens(jwt(Math.floor(Date.now() / 1000) - 5));
+    const fresh = jwt(Math.floor(Date.now() / 1000) + 900);
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/auth/refresh")) {
+        return { ok: true, status: 200, json: async () => ({ access_token: fresh }) };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ active: false }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("@/lib/api");
+    await api.risk.killSwitch();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/auth/refresh");
+    const [url, req] = fetchMock.mock.calls[1] as unknown as [string, { headers: Record<string, string> }];
+    expect(url).toContain("/risk/kill-switch");
+    expect(req.headers.Authorization).toBe(`Bearer ${fresh}`);
+  });
+
+  it("does not refresh a token that is still valid", async () => {
+    const valid = jwt(Math.floor(Date.now() / 1000) + 600);
+    (await import("@/lib/auth/session")).setTokens(valid);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => "{}" });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("@/lib/api");
+    await api.risk.killSwitch();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/risk/kill-switch");
+  });
+
+  it("still sends the request (401 fallback) when the proactive refresh fails", async () => {
+    (await import("@/lib/auth/session")).setTokens(jwt(Math.floor(Date.now() / 1000) - 5));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/auth/refresh")) return { ok: false, status: 401, json: async () => ({}) };
+      return { ok: true, status: 200, text: async () => "{}" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("@/lib/api");
+    await api.risk.killSwitch();
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+      expect.stringContaining("/auth/refresh"),
+      expect.stringContaining("/risk/kill-switch"),
+    ]);
+  });
+
+  it("decodes exp only from three-part tokens", async () => {
+    const { accessTokenExpiresAtMs } = await import("@/lib/api/client");
+    expect(accessTokenExpiresAtMs("synthetic-access")).toBeNull();
+    expect(accessTokenExpiresAtMs(jwt(1000))).toBe(1_000_000);
+  });
+
+  it("storm guard: a skewed-clock client refreshes once, then trusts expires_in", async () => {
+    // Server token already "expired" by the local clock (client runs 20 min ahead).
+    const skewed = () => jwt(Math.floor(Date.now() / 1000) - 300);
+    (await import("@/lib/auth/session")).setTokens(skewed());
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/auth/refresh")) {
+        return { ok: true, status: 200, json: async () => ({ access_token: skewed() + "x", expires_in: 900 }) };
+      }
+      return { ok: true, status: 200, text: async () => "{}" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("@/lib/api");
+    await api.risk.killSwitch();
+    await api.risk.killSwitch();
+    await api.risk.killSwitch();
+    const refreshes = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/auth/refresh"));
+    expect(refreshes).toHaveLength(1);
+  });
+
+  it("schedules from expires_in against local receipt time, not exp", async () => {
+    const { noteIssuedAccessToken, accessTokenNeedsRefresh } = await import("@/lib/api/client");
+    const token = jwt(1); // exp far in the past by the local clock
+    noteIssuedAccessToken(token, 900, 1_000_000);
+    expect(accessTokenNeedsRefresh(token, 1_000_000 + 30_000)).toBe(false);
+    expect(accessTokenNeedsRefresh(token, 1_000_000 + 600_000)).toBe(false);
+    expect(accessTokenNeedsRefresh(token, 1_000_000 + 880_000)).toBe(true);
+  });
+
+  it("logout mid-refresh: the late refresh response does not resurrect the session", async () => {
+    const session = await import("@/lib/auth/session");
+    session.setTokens(jwt(Math.floor(Date.now() / 1000) - 5));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/auth/refresh")) {
+        await gate;
+        return { ok: true, status: 200, json: async () => ({ access_token: "late-token", expires_in: 900 }) };
+      }
+      return { ok: true, status: 401, text: async () => "{}" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("@/lib/api");
+    const pending = api.risk.killSwitch().catch(() => undefined);
+    await Promise.resolve();
+    session.clearTokens();
+    release();
+    await pending;
+    expect(session.getAccessToken()).toBeNull();
+    expect(sessionStorage.getItem("alphatrade_access_token")).not.toBe("late-token");
+  });
+});

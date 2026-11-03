@@ -43,7 +43,7 @@ def start_telegram_enrollment(
 ) -> EnrollmentStartResponse:
     """Issue one enrollment token for this tenant. Does not log the token."""
 
-    if settings.environment is Environment.PRODUCTION:
+    if settings.environment is Environment.PRODUCTION and not settings.production_demo_active:
         raise ConflictError(
             "Telegram enrollment is not available in production.",
             code="telegram_enrollment_disabled",
