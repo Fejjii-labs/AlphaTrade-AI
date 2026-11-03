@@ -65,10 +65,15 @@ if [[ "$MODE" == "self-check" ]]; then
     || fail "local example must stay on replay"
   grep -q '^PERPETUAL_EVIDENCE_SOURCE=replay$' "${ROOT_DIR}/.env.production.example" \
     || fail "production example must stay on replay"
-  grep -q 'value: binance_usdm' "${ROOT_DIR}/render.yaml" || fail "render.yaml missing live source"
+  # Sources are operator-owned (sync: false); host pins stay synced literals.
+  grep -A1 -q 'key: PERPETUAL_EVIDENCE_SOURCE$' "${ROOT_DIR}/render.yaml" \
+    || fail "render.yaml missing live source key"
+  grep -A1 'key: PERPETUAL_EVIDENCE_SOURCE$' "${ROOT_DIR}/render.yaml" | grep -q 'sync: false' \
+    || fail "render.yaml live source must be sync: false"
   grep -q 'value: https://fapi.binance.com' "${ROOT_DIR}/render.yaml" || fail "render.yaml missing futures host"
-  grep -q 'value: bybit_usdt_perpetual' "${ROOT_DIR}/render.yaml" \
-    || fail "render.yaml missing Bybit secondary"
+  grep -A1 'key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE$' "${ROOT_DIR}/render.yaml" \
+    | grep -q 'sync: false' \
+    || fail "render.yaml missing Bybit secondary key"
   grep -q 'value: https://api.bybit.com' "${ROOT_DIR}/render.yaml" \
     || fail "render.yaml missing Bybit host"
   if grep -E -q 'okx_usdt_swap|OKX_SWAP_BASE_URL|www\.okx\.com' \

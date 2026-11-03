@@ -507,8 +507,11 @@ def test_declared_config_files_match_the_activation_contract() -> None:
     assert "\nPERPETUAL_EVIDENCE_SOURCE=replay\n" in production
     assert "\nPERPETUAL_EVIDENCE_SOURCE=replay\n" in local
     assert "BINANCE_API_KEY=" not in staging
-    assert render.count("value: binance_usdm") == 2
-    assert render.count("value: bybit_usdt_perpetual") == 2
+    # Sources are operator-owned (sync: false) on both services; hosts stay literal.
+    assert "value: binance_usdm" not in render
+    assert "value: bybit_usdt_perpetual" not in render
+    assert render.count("key: PERPETUAL_EVIDENCE_SOURCE\n        sync: false") == 2
+    assert render.count("key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE\n        sync: false") == 2
     assert render.count("value: https://fapi.binance.com") == 2
     assert render.count("value: https://api.bybit.com") == 2
     assert "www.okx.com" not in render
