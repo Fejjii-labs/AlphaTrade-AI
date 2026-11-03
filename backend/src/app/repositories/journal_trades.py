@@ -66,6 +66,9 @@ class JournalTradeStatsRow:
     entry_price: Decimal | None
     exit_reason: str | None
     strategy_label: str | None
+    # Effective trade time (exit, else entry, else creation) — the clock the date
+    # filters and ordering use. Defaulted so hand-built rows stay valid.
+    effective_time: datetime | None = None
 
 
 _ANNOTATION_EXCLUDED_FROM_STATS = frozenset({"tags", "notes", "grade"})
@@ -99,7 +102,13 @@ def _stats_columns() -> tuple[object, ...]:
         JournalTrade.entry_price,
         JournalTrade.exit_reason,
         JournalTrade.strategy_label,
+        _effective_time().label("effective_time"),
     )
+
+
+def _effective_time() -> ColumnElement[datetime]:
+    """Exit time when recorded, else entry time, else the row creation time."""
+    return func.coalesce(JournalTrade.exit_time, JournalTrade.entry_time, JournalTrade.created_at)
 
 
 def assert_stats_projection_excludes_annotation_grade() -> None:
@@ -304,9 +313,7 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
         The date range applies to the effective trade time — exit time when
         recorded, else entry time, else the row creation time.
         """
-        effective_time = func.coalesce(
-            JournalTrade.exit_time, JournalTrade.entry_time, JournalTrade.created_at
-        )
+        effective_time = _effective_time()
         filters: list[ColumnElement[bool]] = [
             JournalTrade.organization_id == organization_id,
             JournalTrade.user_id == user_id,
@@ -376,9 +383,7 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
             date_from=date_from,
             date_to=date_to,
         )
-        effective_time = func.coalesce(
-            JournalTrade.exit_time, JournalTrade.entry_time, JournalTrade.created_at
-        )
+        effective_time = _effective_time()
         stmt = (
             select(*_stats_columns())
             .where(*filters)

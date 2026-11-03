@@ -18836,6 +18836,434 @@
         "title": "JournalComparisonResponse",
         "type": "object"
       },
+      "JournalDashboardCurvePoint": {
+        "additionalProperties": false,
+        "description": "End-of-day cumulative net PnL (days with recorded PnL only).",
+        "properties": {
+          "cumulative_net_pnl": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Cumulative Net Pnl",
+            "type": "string"
+          },
+          "daily_net_pnl": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Daily Net Pnl",
+            "type": "string"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "daily_net_pnl",
+          "cumulative_net_pnl"
+        ],
+        "title": "JournalDashboardCurvePoint",
+        "type": "object"
+      },
+      "JournalDashboardDay": {
+        "additionalProperties": false,
+        "description": "One local calendar day with at least one closed trade.",
+        "properties": {
+          "breakeven": {
+            "title": "Breakeven",
+            "type": "integer"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "losses": {
+            "title": "Losses",
+            "type": "integer"
+          },
+          "net_pnl": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Pnl"
+          },
+          "trade_count": {
+            "title": "Trade Count",
+            "type": "integer"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "wins": {
+            "title": "Wins",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "trade_count",
+          "wins",
+          "losses",
+          "breakeven"
+        ],
+        "title": "JournalDashboardDay",
+        "type": "object"
+      },
+      "JournalDashboardFilters": {
+        "additionalProperties": false,
+        "description": "Filters echoed back so the response is self-describing.",
+        "properties": {
+          "date_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To"
+          },
+          "execution_actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionActor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JournalTradeSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "title": "JournalDashboardFilters",
+        "type": "object"
+      },
+      "JournalDashboardRisk": {
+        "additionalProperties": false,
+        "description": "Drawdown family over the per-trade cumulative net PnL curve (baseline 0).",
+        "properties": {
+          "consistency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consistency"
+          },
+          "losing_days": {
+            "default": 0,
+            "title": "Losing Days",
+            "type": "integer"
+          },
+          "max_drawdown": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown"
+          },
+          "recovery_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Factor"
+          },
+          "winning_days": {
+            "default": 0,
+            "title": "Winning Days",
+            "type": "integer"
+          }
+        },
+        "title": "JournalDashboardRisk",
+        "type": "object"
+      },
+      "JournalDashboardScore": {
+        "additionalProperties": false,
+        "description": "Equal-weight mean of the computable components; None when none are.",
+        "properties": {
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/JournalDashboardScoreComponent"
+            },
+            "title": "Components",
+            "type": "array"
+          },
+          "missing_components": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Components",
+            "type": "array"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall"
+          }
+        },
+        "required": [
+          "components"
+        ],
+        "title": "JournalDashboardScore",
+        "type": "object"
+      },
+      "JournalDashboardScoreComponent": {
+        "additionalProperties": false,
+        "description": "One radar axis, normalized 0-100 against a configured target.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "JournalDashboardScoreComponent",
+        "type": "object"
+      },
+      "JournalDashboardSummary": {
+        "additionalProperties": false,
+        "description": "Headline KPIs over the filtered closed trades.",
+        "properties": {
+          "average_loss": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Loss"
+          },
+          "average_win": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Win"
+          },
+          "breakeven": {
+            "default": 0,
+            "title": "Breakeven",
+            "type": "integer"
+          },
+          "gross_loss": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gross Loss"
+          },
+          "gross_profit": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gross Profit"
+          },
+          "losses": {
+            "default": 0,
+            "title": "Losses",
+            "type": "integer"
+          },
+          "net_pnl": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Pnl"
+          },
+          "pnl_sample_count": {
+            "default": 0,
+            "title": "Pnl Sample Count",
+            "type": "integer"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "trade_count": {
+            "default": 0,
+            "title": "Trade Count",
+            "type": "integer"
+          },
+          "win_loss_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Loss Ratio"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "wins": {
+            "default": 0,
+            "title": "Wins",
+            "type": "integer"
+          }
+        },
+        "title": "JournalDashboardSummary",
+        "type": "object"
+      },
       "JournalEntry": {
         "properties": {
           "created_at": {
@@ -20084,6 +20512,74 @@
         ],
         "title": "JournalObservationCategory",
         "type": "string"
+      },
+      "JournalPerformanceDashboardResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "$ref": "#/components/schemas/SampleConfidence"
+          },
+          "cumulative": {
+            "items": {
+              "$ref": "#/components/schemas/JournalDashboardCurvePoint"
+            },
+            "title": "Cumulative",
+            "type": "array"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/JournalDashboardDay"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/JournalDashboardFilters"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "max_rows": {
+            "title": "Max Rows",
+            "type": "integer"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/JournalDashboardRisk"
+          },
+          "score": {
+            "$ref": "#/components/schemas/JournalDashboardScore"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/JournalDashboardSummary"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "filters",
+          "summary",
+          "days",
+          "cumulative",
+          "risk",
+          "score",
+          "confidence",
+          "truncated",
+          "max_rows",
+          "generated_at"
+        ],
+        "title": "JournalPerformanceDashboardResponse",
+        "type": "object"
       },
       "JournalProjectionResult": {
         "additionalProperties": false,
@@ -67573,6 +68069,134 @@
           }
         ],
         "summary": "Grouped statistics over canonical journal trades (AT-031)",
+        "tags": [
+          "journal"
+        ]
+      }
+    },
+    "/journal/statistics/calendar": {
+      "get": {
+        "description": "Record-only daily buckets and scores over the caller's closed journal trades.",
+        "operationId": "journal_performance_dashboard_journal_statistics_calendar_get",
+        "parameters": [
+          {
+            "description": "Inclusive local date.",
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive local date.",
+              "title": "Date From"
+            }
+          },
+          {
+            "description": "Inclusive local date.",
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive local date.",
+              "title": "Date To"
+            }
+          },
+          {
+            "description": "IANA timezone.",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "IANA timezone.",
+              "title": "Tz"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JournalTradeSource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "execution_actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ExecutionActor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Execution Actor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalPerformanceDashboardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Daily P&L calendar, cumulative curve, and performance score over journal trades",
         "tags": [
           "journal"
         ]

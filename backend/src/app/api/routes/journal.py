@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Form, Query, Response, UploadFile
 
@@ -13,6 +13,7 @@ from app.core.dependencies import (
     JournalAttachmentServiceDep,
     JournalExcursionReplayServiceDep,
     JournalImportServiceDep,
+    JournalPerformanceDashboardServiceDep,
     JournalServiceDep,
     JournalStatisticsServiceDep,
     JournalTradeServiceDep,
@@ -56,6 +57,7 @@ from app.schemas.journal_import import (
     JournalImportResult,
     PaginatedJournalImportBatches,
 )
+from app.schemas.journal_performance_dashboard import JournalPerformanceDashboardResponse
 from app.schemas.journal_statistics import (
     ExecutionActor,
     JournalStatsFilters,
@@ -383,6 +385,32 @@ async def journal_trade_statistics(
         filters=filters,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/statistics/calendar",
+    response_model=JournalPerformanceDashboardResponse,
+    summary="Daily P&L calendar, cumulative curve, and performance score over journal trades",
+)
+async def journal_performance_dashboard(
+    tenant: ReaderDep,
+    service: JournalPerformanceDashboardServiceDep,
+    date_from: date | None = Query(default=None, description="Inclusive local date."),
+    date_to: date | None = Query(default=None, description="Inclusive local date."),
+    tz: str | None = Query(default=None, max_length=64, description="IANA timezone."),
+    source: JournalTradeSource | None = Query(default=None),
+    execution_actor: ExecutionActor | None = Query(default=None),
+) -> JournalPerformanceDashboardResponse:
+    """Record-only daily buckets and scores over the caller's closed journal trades."""
+    return service.compute(
+        organization_id=tenant.organization_id,
+        user_id=tenant.user_id,
+        date_from=date_from,
+        date_to=date_to,
+        timezone=tz,
+        source=source,
+        execution_actor=execution_actor,
     )
 
 
