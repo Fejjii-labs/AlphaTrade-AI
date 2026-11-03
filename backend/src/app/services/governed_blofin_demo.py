@@ -350,6 +350,33 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     return "demo_post_fill_liquidation_inside_stop"
 
 
+def _alert_liquidation_unreadable(session: Session, command: ExecutionCommand) -> None:
+    """Warning alert: configured-plan fill whose venue liqPrice is unreadable.
+
+    No hold and no close (cross positions may omit liqPrice and the pre-trade
+    liquidation gate already ran). The alert is stored and shown in the UI; an
+    alert failure only logs, it never blocks reconciliation.
+    """
+
+    try:
+        PaperAlertService(session, audit_service=AuditService(session)).create(
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            alert_type=PaperAlertType.DEMO_LIQUIDATION_UNREADABLE,
+            severity=PaperAlertSeverity.WARNING,
+            message=(
+                "BloFin demo liquidation price was missing or unreadable after a fill. "
+                "No hold and no automatic close; check the position on the venue."
+            ),
+            dedup_key=f"demo_liquidation_unreadable:{command.organization_id}:{command.id}",
+            metadata={"command_id": str(command.id), "auto_close": False},
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.warning("BloFin demo liquidation-unreadable alert failed; command_id=%s", command.id)
+
+
 def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
     """Verified funding print, or None so the sizer uses the documented floor.
 
@@ -1591,7 +1618,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         evidence.fills[-1].price,
                     )
                     # A cross position may omit liqPrice; for non-profile plans an
-                    # unreadable price is logged, not held (unchanged behaviour).
+                    # unreadable price raises a warning alert, not a hold or close.
                     if configured_fill and liquidation_reason == (
                         "demo_post_fill_liquidation_unreadable"
                     ):
@@ -1600,6 +1627,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                             "command_id=%s",
                             command.id,
                         )
+                        _alert_liquidation_unreadable(session, command)
                         liquidation_reason = None
                     if liquidation_reason is not None:
                         self._safety(session).lock_epoch(

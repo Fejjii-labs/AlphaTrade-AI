@@ -679,7 +679,12 @@ def test_failed_close_returns_flatten_failed_arms_switch_and_says_close_manually
 def test_unreadable_liquidation_on_configured_fill_warns_without_hold_or_flatten(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.db.models import ExecutionCommand, KillSwitchState, VenueSubmitEffect
+    from app.db.models import (
+        ExecutionCommand,
+        KillSwitchState,
+        PaperValidationAlert,
+        VenueSubmitEffect,
+    )
 
     venue = LeverageVenue(
         _price(),
@@ -701,6 +706,15 @@ def test_unreadable_liquidation_on_configured_fill_warns_without_hold_or_flatten
         assert effect.reconciliation_disposition != "DEMO_LIQUIDATION_UNREADABLE"
         switch = session.scalar(select(KillSwitchState))
         assert switch is None or not switch.active, switch.reason
+        warnings = session.scalars(
+            select(PaperValidationAlert).where(
+                PaperValidationAlert.alert_type == "demo_liquidation_unreadable"
+            )
+        ).all()
+        # Deduplicated per command: the in-cycle and the explicit reconcile share one row.
+        assert len(warnings) == 1
+        assert warnings[0].severity == "warning"
+        assert warnings[0].metadata_json["auto_close"] is False
     assert venue.close_posts == 0
 
 

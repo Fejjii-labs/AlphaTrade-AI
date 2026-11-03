@@ -722,6 +722,7 @@ class PaperAlertType(StrEnum):
     RESEARCH_VALIDATION_PROMOTION = "research_validation_promotion"
     TRADINGVIEW_SIGNAL = "tradingview_signal"
     DEMO_LIQUIDATION_THROUGH_STOP = "demo_liquidation_through_stop"
+    DEMO_LIQUIDATION_UNREADABLE = "demo_liquidation_unreadable"
     PAPER_EXIT_BACKFILL_LOSS = "paper_exit_backfill_loss"
     PAPER_EXIT_DEGRADED_REPEAT = "paper_exit_degraded_repeat"
     PAPER_EXIT_CLOCK_SKEW = "paper_exit_clock_skew"
