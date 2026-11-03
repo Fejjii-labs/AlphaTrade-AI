@@ -107,3 +107,25 @@ demo `_bound` path.
   scope to avoid stalling reconciliation on venues that omit a cross liquidation price).
 - The OpenAPI contract (`frontend/src/lib/api/generated/`) was regenerated with
   `npm run api:generate`; `npm run api:check` passes.
+
+## Griller GO WITH CONDITIONS follow-up (2026-11-03)
+- **C1 (staging only):** writes need `GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED=true` and
+  `ENVIRONMENT` staging/local (`demo_leverage_write_allowed`). Production, including a
+  production demo profile, never writes; the snapshot still requires the configured
+  leverage, so a mismatched account blocks (`demo_leverage_readback_mismatch`-style refusal).
+  Staging must set the flag for the app to set leverage.
+- **C2 (post-fill hold, all configured plans):** after a fill the venue position liqPrice is
+  read. Through the stop -> `demo_post_fill_liquidation_inside_stop`; for configured plans,
+  closer than 2x the stop distance -> `demo_post_fill_liquidation_inside_buffer`. Either one:
+  epoch lock, one `POST /api/v1/trade/close-position` on the demo host (never retried),
+  kill switch armed, critical alert carrying `flatten_outcome`. Profile plans now also
+  flatten on a through-stop breach. An unreadable liqPrice on a non-profile plan is logged
+  only (cross positions may omit it); profile plans keep the existing hold.
+- **C3 (journal):** each confirmed write records audit `demo_leverage_applied` with
+  inst_id, previous/new margin mode and leverage.
+- **Shapes/docs:** leverage-info accepts an object or a list with exactly one row for the
+  instrument; doc URLs cited in `apply_configured_leverage` / `flatten_position`.
+- **Not done (optional):** gate-before-write ordering; the stop is only known after the
+  snapshot, which needs the leverage already set. Left as is (flat-account writes only).
+- **Safety rule:** `20-trading-safety.mdc` amended with a demo-host-only, owner-configured
+  exception, **pending Sofien's explicit approval**.
