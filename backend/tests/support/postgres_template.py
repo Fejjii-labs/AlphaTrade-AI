@@ -171,6 +171,8 @@ def release_ephemeral_clones() -> None:
 def prebuild_fixture_templates() -> None:
     """Build full and persistence templates once, before the first test pays for it."""
     server = _default_server_url()
+    if server is None:
+        return
     _ensure_template(server, "full")
     _ensure_template(server, "persistence")
 
@@ -181,7 +183,11 @@ def cleanup_owned_databases() -> None:
     for name in [name for name, clone in _CLONES.items() if clone.retain]:
         _drop_named(name)
     try:
-        admin = _admin_engine(_default_server_url())
+        server = _default_server_url()
+        if server is None:
+            _READY.clear()
+            return
+        admin = _admin_engine(server)
     except Exception:
         _READY.clear()
         return
@@ -262,15 +268,27 @@ def _server_key(url: URL) -> tuple[object, ...]:
     return (url.host, url.port, url.username)
 
 
-def _default_server_url() -> URL:
-    raw = os.environ.get(
-        "PHASE1_POSTGRES_URL",
-        os.environ.get(
-            "AT028_POSTGRES_URL",
-            "postgresql+psycopg://alphatrade:alphatrade@127.0.0.1:5432/alphatrade_test",
-        ),
-    )
-    return make_url(raw)
+def fixture_postgres_url() -> str | None:
+    """Return the disposable fixture database URL from the environment, or None.
+
+    There is deliberately no default: falling back to ``localhost:5432`` meant a
+    developer run quietly connected to whatever shared server listens there.
+    In CI a missing URL is an error, so Postgres tests cannot skip silently.
+    """
+    raw = os.environ.get("PHASE1_POSTGRES_URL") or os.environ.get("AT028_POSTGRES_URL")
+    if raw:
+        return raw
+    if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}:
+        raise RuntimeError(
+            "CI requires PHASE1_POSTGRES_URL or AT028_POSTGRES_URL for the Postgres "
+            "test fixtures; refusing to skip Postgres tests silently."
+        )
+    return None
+
+
+def _default_server_url() -> URL | None:
+    raw = fixture_postgres_url()
+    return make_url(raw) if raw else None
 
 
 def _admin_engine(url: URL) -> Engine:
