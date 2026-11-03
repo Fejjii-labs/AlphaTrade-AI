@@ -22,6 +22,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 
 from sqlalchemy import select
@@ -49,23 +50,37 @@ from app.services.strategy_versioning import StrategyVersioningService
 
 BUNDLE_FORMAT = "alphatrade.settings_mirror.v1"
 MIRROR_ACTOR_ID = "ops:settings-mirror"
-_SECRET_MARKERS = (
-    "secret",
-    "token",
-    "password",
-    "passphrase",
-    "api_key",
-    "apikey",
-    "private",
-    "key",
-    "credential",
-    "auth",
-    "dsn",
-    "webhook_url",
-    "chat_id",
+# Whole-token matching on keys split at non-alphanumerics (Griller N1), so
+# ``keyword``, ``key_levels``, ``author`` and ``turnkey`` pass.
+_SECRET_TOKENS = frozenset(
+    {
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+        "password",
+        "passwd",
+        "passphrase",
+        "apikey",
+        "credential",
+        "credentials",
+        "dsn",
+    }
 )
-# Keys that legitimately contain a marker substring (e.g. "key" in a domain field).
-_ALLOWED_KEYS = frozenset({"setup_type"})
+# Generic words that only mark a secret as the final token: ``api_key``, ``x_auth``.
+_SECRET_SUFFIX_TOKENS = frozenset({"key", "auth", "private"})
+_SECRET_PAIRS = frozenset({("webhook", "url"), ("chat", "id"), ("private", "key")})
+
+
+def _secret_like_name(name: str) -> bool:
+    tokens = [t for t in re.split(r"[^a-z0-9]+", name.lower()) if t]
+    if not tokens:
+        return False
+    if any(t in _SECRET_TOKENS for t in tokens) or tokens[-1] in _SECRET_SUFFIX_TOKENS:
+        return True
+    return any(pair in _SECRET_PAIRS for pair in pairwise(tokens))
+
+
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),  # OpenAI-style API keys
     re.compile(r"[a-z][a-z0-9+.\-]*://[^/\s:@]+:[^/\s@]+@", re.IGNORECASE),  # URL with password
@@ -97,8 +112,7 @@ class ImportReport:
 def assert_no_secrets(value: Any, path: str = "$") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
-            lowered = str(key).lower()
-            if lowered not in _ALLOWED_KEYS and any(m in lowered for m in _SECRET_MARKERS):
+            if _secret_like_name(str(key)):
                 raise MirrorError(f"bundle refused: secret-like key at {path}.{key}")
             assert_no_secrets(child, f"{path}.{key}")
     elif isinstance(value, list):

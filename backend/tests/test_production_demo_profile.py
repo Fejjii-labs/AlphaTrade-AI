@@ -149,7 +149,9 @@ def test_profile_property_alone_needs_production_and_paper() -> None:
         ("production", "production_demo", True),
         ("production", "standard", False),
         ("staging", "standard", False),
+        ("staging", "production_demo", False),
         ("local", "standard", False),
+        ("local", "production_demo", False),
     ]:
         probe = base.model_copy(
             update={

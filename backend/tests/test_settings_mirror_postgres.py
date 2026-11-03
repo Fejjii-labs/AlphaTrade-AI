@@ -25,7 +25,7 @@ from app.operations.settings_mirror import (
     import_bundle,
 )
 from app.repositories.watcher_watchlist import WatcherWatchlistRepository
-from app.schemas.common import StrategyChangeSource, StrategyId
+from app.schemas.common import AuditEventType, StrategyChangeSource, StrategyId
 from app.services.risk_policy.profile import PolicyKind, canonical_profile, placeholder_profile
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 from tests.test_deployment_safety import _STAGING_BASE
@@ -146,7 +146,18 @@ def test_export_import_dry_run_apply_and_rerun_is_noop(two_databases) -> None:
         )
         session.rollback()
         assert report.dry_run and report.changes == 4, report.actions
-    with production() as session:  # dry run wrote nothing anywhere
+        session.flush()
+        for model in (
+            UserStrategy,
+            UserStrategyVersion,
+            RiskPolicyProposal,
+            AutonomousTradingSettingsRow,
+            WatcherWatchlistRow,
+            AuditLog,
+        ):  # nothing pending in this session before the CLI's rollback
+            assert session.scalar(select(func.count()).select_from(model)) == 0, model
+        session.rollback()
+    with production() as session:  # and nothing visible from a separate session
         for model in (
             UserStrategy,
             UserStrategyVersion,
@@ -166,7 +177,15 @@ def test_export_import_dry_run_apply_and_rerun_is_noop(two_databases) -> None:
     with production() as session:
         assert session.scalar(select(func.count()).select_from(UserStrategy)) == 1
         assert session.scalar(select(UserStrategy)).paper_eligible is False
-        assert session.scalar(select(func.count()).select_from(AuditLog)) >= 1
+        # Written through AutonomousTradingSettingsService: its own audit row.
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(AuditLog.action == AuditEventType.AUTONOMOUS_TRADING_SETTINGS_UPDATED)
+            )
+            == 1
+        )
         settings = session.scalar(select(AutonomousTradingSettingsRow))
         assert settings.max_trades_per_day == 6 and settings.strategy_id is not None
         assert session.scalar(select(func.count()).select_from(RiskPolicyProposal)) == 1
@@ -304,7 +323,7 @@ def test_secret_like_values_are_refused(value: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "key", ["key", "credentials", "auth_header", "sentry_dsn", "webhook_url", "chat_id"]
+    "key", ["key", "credentials", "x_auth", "sentry_dsn", "webhook_url", "chat_id", "api_key"]
 )
 def test_broadened_secret_key_names_are_refused(key: str) -> None:
     with pytest.raises(MirrorError):
@@ -315,3 +334,67 @@ def test_broadened_secret_key_names_are_refused(key: str) -> None:
 def test_secret_like_keys_are_refused(name: str) -> None:
     with pytest.raises(MirrorError):
         assert_no_secrets({"strategies": [{"card": {name: "x"}}]})
+
+
+@requires_postgres
+def test_applied_proposal_does_not_block_refiling(two_databases) -> None:
+    from app.services.audit_service import AuditService
+    from app.services.risk_policy.governance import HumanApplyProof, PolicyActor, PolicyChannel
+    from app.services.risk_policy.persistence import RiskPolicyService
+    from app.services.risk_policy.profile import profile_from_canonical
+
+    _staging, production = two_databases
+    wanted = _risk_payload()
+    tighter = dict(wanted, max_leverage="5", default_leverage="2")
+    human = PolicyActor("sofien", PolicyChannel.HUMAN, True)
+
+    def apply(session: Session, service: RiskPolicyService, org, payload, at) -> None:
+        proposal = service.propose(
+            organization_id=org,
+            actor=human,
+            profile=profile_from_canonical(payload),
+            reason="seed",
+            now=at,
+        )
+        service.apply(
+            organization_id=org,
+            proposal_id=proposal.id,
+            actor=human,
+            proof=HumanApplyProof(
+                method="interactive_step_up",
+                subject_user_id="sofien",
+                proposal_id=str(proposal.id),
+                content_hash=str(proposal.content_hash),
+                expires_at=at + timedelta(minutes=10),
+                session_id="interactive-session",
+                authenticated_at=at - timedelta(minutes=1),
+                step_up_at=at - timedelta(seconds=20),
+            ),
+            owner_user_id="sofien",
+            now=at,
+        )
+        session.flush()
+
+    with production() as session:
+        org, _user = _tenant(session)
+        service = RiskPolicyService(session, AuditService(session))
+        start = datetime.now(UTC) - timedelta(hours=48)
+        apply(session, service, org, wanted, start)  # proposal for `wanted`, applied
+        apply(session, service, org, tighter, start + timedelta(hours=24))  # now active
+        session.commit()
+    bundle = {
+        "format": BUNDLE_FORMAT,
+        "source_environment": "staging",
+        "risk_policy_profiles": [wanted],
+    }
+    with production() as session:
+        report = import_bundle(
+            session, bundle, settings=PRODUCTION, org_name=ORG_NAME, user_email=EMAIL
+        )
+        # The only proposal with this hash was already applied: not "pending".
+        assert [a["action"] for a in report.actions] == ["propose"], report.actions
+
+
+@pytest.mark.parametrize("name", ["keyword", "key_levels", "author", "turnkey", "setup_type"])
+def test_ordinary_names_containing_markers_pass(name: str) -> None:
+    assert_no_secrets({"card": {name: "x"}})

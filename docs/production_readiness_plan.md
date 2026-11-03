@@ -149,7 +149,10 @@ Record who said go and when next to each box.
 - [ ] **G0. Merge** PR #411 after Griller GO and green CI (incl. e2e-smoke).
 - [ ] **G1. Create production services** (API, worker, Postgres) from
       `deploy/render.production.draft.yaml` or the dashboard. Costs money. *Go: ____*
-- [ ] **G2. Secrets.** New `JWT_SECRET`, OpenAI, Qdrant, Redis set by hand.
+- [ ] **G2. Secrets.** New `JWT_SECRET`, OpenAI, Qdrant, Redis set by hand. *Go: ____*
+      Do **not** copy staging's env by hand: staging has `REQUIRE_EMAIL_VERIFIED=false`
+      and `DEMO_SEED_ENABLED=true` (render.yaml), which production refuses at boot
+      (fail-safe, but G4 won't come up). Start from the production draft.
 - [ ] **G3. BloFin demo keys + Telegram bot for production.** *Go: ____*
       Decision needed: **separate BloFin demo account (recommended)** vs reusing
       the staging demo account. The #403 flat-account checks (reconciliation,
@@ -172,15 +175,15 @@ Record who said go and when next to each box.
 - [ ] **G8. Arm Watcher / autonomous** in the dashboard
       (`WATCHER_ORCHESTRATION_ENABLED`, `WATCHER_PAPER_STAGING_ACTIVATION`,
       `AUTONOMOUS_BLOFIN_DEMO_ENABLED`, Telegram flags) and the in-app switch. *Go: ____*
-      Production scan scope stays capped at 20 symbols (same as staging).
+      Production scan stays capped at 20 scopes per cycle (`WATCHER_PAPER_MAX_SCOPES_PER_CYCLE`, same as staging).
 - [ ] **G9. Vercel production domain** → production API (`NEXT_PUBLIC_API_URL`,
       `CORS_ORIGINS`), smoke-test login and kill switch. *Go: ____*
 - [ ] **G10. 48 h soak**, then decide staging's future.
 
 **Shared Binance IP.** Production workers on Render get the same shared
 outbound IPs as staging's region, so Binance rate limits/bans (23 and 27 Oct)
-can hit both at once, and running both doubles our request weight. Keep the
-production scope ≤20, keep the Bybit fallback on, and watch the #410 ban alert.
+can hit both at once, and running both doubles our request weight. Keep
+production at ≤20 scopes per cycle, keep the Bybit fallback on, and watch the #410 ban alert.
 A dedicated egress IP is a separate cost decision.
 
 **Dashboard-only keys are safe from Blueprint syncs.** Render's Blueprint spec:
