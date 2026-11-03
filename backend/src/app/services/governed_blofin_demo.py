@@ -407,6 +407,8 @@ def _alert_liquidation_through_stop(
 
     if flatten_outcome == "flatten_sent":
         action = "A demo close-position was sent; verify the account is flat."
+    elif flatten_outcome == "noop_already_flat":
+        action = "The demo account was already flat for this instrument; no close was sent."
     elif flatten_outcome == "flatten_failed":
         action = "The automatic demo close FAILED; close the position manually."
     else:
@@ -1479,11 +1481,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
         try:
             margin_mode = str(getattr(plan, "margin_mode", "isolated")).lower()
-            self._get_provider().flatten_position(
+            outcome = self._get_provider().flatten_position(
                 symbol=str(plan.execution_instrument),  # type: ignore[attr-defined]
                 margin_mode=margin_mode,
             )
-            return "flatten_sent"
+            return "noop_already_flat" if outcome == "noop_already_flat" else "flatten_sent"
         except Exception:
             logger.warning(
                 "BloFin demo flatten after liquidation breach failed; command_id=%s",

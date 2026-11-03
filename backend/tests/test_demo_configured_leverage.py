@@ -473,6 +473,9 @@ def test_flatten_refuses_live_host_and_posts_close_on_demo() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         import json
 
+        if request.url.path == "/api/v1/account/positions":
+            row = {"instId": "BTC-USDT", "positions": "3", "positionSide": "net"}
+            return httpx.Response(200, json={"code": "0", "data": [row]})
         sent.append((request.url.path, json.loads(request.content or b"{}")))
         return httpx.Response(200, json={"code": "0", "data": [{"instId": "BTC-USDT"}]})
 
@@ -485,7 +488,10 @@ def test_flatten_refuses_live_host_and_posts_close_on_demo() -> None:
         transport=httpx.MockTransport(handle),
         sleeper=lambda _: None,
     )
-    GovernedBloFinDemoProvider(demo).flatten_position(symbol="BTCUSDT", margin_mode="isolated")
+    outcome = GovernedBloFinDemoProvider(demo).flatten_position(
+        symbol="BTCUSDT", margin_mode="isolated"
+    )
+    assert outcome == "flatten_sent"
     assert sent == [
         (
             "/api/v1/trade/close-position",
@@ -745,3 +751,65 @@ def test_breach_hold_arms_and_commits_switch_before_close_then_alerts(
     )
     assert events == ["arm", "commit", "close", "alert"]
     assert alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"
+
+
+@pytest.mark.parametrize(
+    "positions",
+    [
+        [],  # flat account
+        [{"instId": "ETH-USDT", "positions": "2", "positionSide": "net"}],  # other market only
+        [{"instId": "BTC-USDT", "positions": "0", "positionSide": "net"}],  # zero size row
+    ],
+)
+def test_flatten_skips_close_post_when_already_flat(positions: list[dict]) -> None:
+    """Close idempotency: a flat instrument records noop_already_flat and sends no POST."""
+
+    posts: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request.url.path)
+            return httpx.Response(200, json={"code": "0", "data": {"instId": "BTC-USDT"}})
+        assert request.url.path == "/api/v1/account/positions"
+        return httpx.Response(200, json={"code": "0", "data": positions})
+
+    demo = BloFinClient(
+        base_url=DEMO_URL,
+        api_key="k",
+        api_secret="s",
+        api_passphrase="p",
+        max_retries=0,
+        transport=httpx.MockTransport(handle),
+        sleeper=lambda _: None,
+    )
+    outcome = GovernedBloFinDemoProvider(demo).flatten_position(
+        symbol="BTCUSDT", margin_mode="isolated"
+    )
+    assert outcome == "noop_already_flat"
+    assert posts == []
+
+
+def test_breach_hold_records_noop_already_flat_on_the_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    class _FlatProvider:
+        def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
+            return "noop_already_flat"
+
+    loop, alerts, activated = _hold_loop(monkeypatch, _FlatProvider())
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    loop._hold_profile_liquidation(
+        _Session([]),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=SimpleNamespace(reconciliation_disposition=None),  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+        plan=_configured_plan("long", Decimal("95")),
+    )
+    assert len(activated) == 1
+    assert alerts[0]["metadata"]["flatten_outcome"] == "noop_already_flat"
+    assert alerts[0]["metadata"]["auto_close"] is False
+    assert "already flat" in str(alerts[0]["message"])

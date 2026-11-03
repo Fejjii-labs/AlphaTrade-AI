@@ -476,11 +476,15 @@ class GovernedBloFinDemoProvider:
             "margin_mode_changed": str(current.margin_mode != margin_mode).lower(),
         }
 
-    def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
+    def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
         """Close the whole NET position for one instrument on the BloFin DEMO host.
 
         Used only by the post-fill liquidation hold. Same demo-host guard as the
         leverage write; one POST, never retried; a venue error raises.
+        Positions are read first: already flat for this instrument returns
+        ``noop_already_flat`` with no POST (idempotent across a crash between a
+        close and its commit). An unreadable positions read still sends the
+        close, which is harmless on a flat account.
         Docs: https://docs.blofin.com/index.html#close-positions
         """
 
@@ -494,17 +498,25 @@ class GovernedBloFinDemoProvider:
                 raise ValueError("Demo flatten refused: client is not the BloFin demo host.")
             if margin_mode not in {"isolated", "cross"}:
                 raise ValueError("Demo flatten margin mode invalid.")
+        instrument = to_blofin_inst_id(symbol)
+        try:
+            open_here = any(p.inst_id == instrument for p in self._account.get_positions())
+        except Exception:
+            open_here = True
+        if not open_here:
+            return "noop_already_flat"
         with preflight_stage("flatten", "POST /api/v1/trade/close-position"):
             self._client.request(
                 "POST",
                 "/api/v1/trade/close-position",
                 body={
-                    "instId": to_blofin_inst_id(symbol),
+                    "instId": instrument,
                     "marginMode": margin_mode,
                     "positionSide": "net",
                 },
                 signed=True,
             )
+        return "flatten_sent"
 
     def verify_permissions(self) -> None:
         with preflight_stage("permissions", "GET /api/v1/user/query-apikey"):
