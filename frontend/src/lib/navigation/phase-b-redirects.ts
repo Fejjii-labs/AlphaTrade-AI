@@ -22,9 +22,9 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/audit", destination: "/settings/audit", permanent: false },
   { source: "/exchange", destination: "/settings/exchange", permanent: false },
   { source: "/settings/advanced", destination: "/settings/diagnostics", permanent: false },
-  // Risk and bot settings live on Autonomous; the kill switch moved there from /watchlist.
-  { source: "/risk", destination: "/autonomous#account", permanent: false },
-  { source: "/risk/autonomous", destination: "/autonomous#bot", permanent: false },
+  // Account and bot limits share one form on Autonomous Trading; the kill switch moved there from /watchlist.
+  { source: "/risk", destination: "/autonomous#limits", permanent: false },
+  { source: "/risk/autonomous", destination: "/autonomous#limits", permanent: false },
   { source: "/watchlist", destination: "/settings/watcher", permanent: false },
   // Each family card holds its own 7-day history now.
   { source: "/strategies/detections", destination: "/strategies", permanent: false },

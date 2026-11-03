@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -21,17 +19,14 @@ from app.db.watcher_orchestration import WatcherWorkerLeaseRow  # noqa: F401
 from tests.support.postgres_template import (
     FULL_SCHEMA_MARKER,
     PERSISTENCE_SCHEMA_MARKER,
+    fixture_postgres_url,
     refresh_database,
     register_template,
 )
 
-POSTGRES_URL = os.environ.get(
-    "PHASE1_POSTGRES_URL",
-    os.environ.get(
-        "AT028_POSTGRES_URL",
-        "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
-    ),
-)
+# No localhost default: unset means "no fixture database" (tests skip locally),
+# and in CI fixture_postgres_url() raises so the suite fails instead of skipping.
+POSTGRES_URL = fixture_postgres_url() or ""
 
 
 def postgres_available() -> bool:
@@ -42,6 +37,8 @@ def postgres_available() -> bool:
     """
     import time
 
+    if not POSTGRES_URL:
+        return False
     for attempt in range(8):
         try:
             engine = create_engine(
@@ -62,7 +59,11 @@ def postgres_available() -> bool:
 
 requires_postgres = pytest.mark.skipif(
     not postgres_available(),
-    reason=f"PostgreSQL not reachable at {POSTGRES_URL}",
+    reason=(
+        f"PostgreSQL not reachable at {POSTGRES_URL}"
+        if POSTGRES_URL
+        else "Set PHASE1_POSTGRES_URL or AT028_POSTGRES_URL to a disposable PostgreSQL"
+    ),
 )
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 from decimal import Decimal
@@ -35,15 +34,10 @@ from app.schemas.journal_lifecycle import JournalLifecycleEventInput
 from app.schemas.trade_plan import AccountMode, ExecutionMode
 from app.services.audit_service import AuditService
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
-from tests.support.postgres_template import refresh_database
+from tests.support.postgres_template import fixture_postgres_url, refresh_database
 
-POSTGRES_URL = os.environ.get(
-    "PHASE1_POSTGRES_URL",
-    os.environ.get(
-        "AT028_POSTGRES_URL",
-        "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
-    ),
-)
+# No localhost default: unset skips locally and fails under CI=true.
+POSTGRES_URL = fixture_postgres_url() or ""
 
 ORG = uuid.UUID("00000000-0000-0000-0000-00000000f001")
 USER = uuid.UUID("00000000-0000-0000-0000-00000000f011")

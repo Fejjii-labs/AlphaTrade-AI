@@ -6,7 +6,6 @@ not on a timer that hopes one statement finishes first.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 import uuid
@@ -30,14 +29,13 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.proposals import find_proposal
 from app.interactive_agent.service import InteractiveAgentService
 from app.schemas.common import MembershipRole
-from tests.support.postgres_template import refresh_database
+from tests.support.postgres_template import fixture_postgres_url, refresh_database
 
 # CI provides the disposable database as AT028_POSTGRES_URL. Without this
 # fallback the module silently skipped in every CI run.
-_EXPLICIT_URL = os.environ.get("PHASE1_POSTGRES_URL") or os.environ.get("AT028_POSTGRES_URL")
-POSTGRES_URL = _EXPLICIT_URL or (
-    "postgresql+psycopg://alphatrade:alphatrade@127.0.0.1:5432/pr150_journal_fix"
-)
+# No localhost default: unset skips locally and fails under CI=true.
+_EXPLICIT_URL = fixture_postgres_url()
+POSTGRES_URL = _EXPLICIT_URL or ""
 ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000c0a1")
 USER_A = uuid.UUID("00000000-0000-0000-0000-00000000c0a2")
 ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000c0b1")
