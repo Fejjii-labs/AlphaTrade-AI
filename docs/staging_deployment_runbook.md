@@ -145,6 +145,11 @@ The receipt prices assume OpenAI's **global endpoint** (`api.openai.com`, standa
 data-residency uplift); the voice sockets refuse other endpoints, so a regional/data-residency
 endpoint would need a new receipt priced for it.
 
+GPT Live voice (circle UI): set `AGENT_LIVE_ENABLED=true`, `AGENT_VOICE_REASONING_MODEL=gpt-6-luna`
+and `AGENT_LIVE_LIMITS_FILE=/app/src/app/agent_voice/receipts/staging_live_limits_2026-11.json`.
+That committed receipt is secret-free (gpt-live-1 at $0.05/min, gpt-6-luna at $0.10/$0.50 per
+million, $1 session ceiling, $5 budget) and expires 2026-11-25; replace it before then.
+
 After enabling OpenAI on a cluster that previously used mock embeddings, recreate
 `alphatrade_knowledge` and reingest (see [rag_system.md](rag_system.md)).
 
