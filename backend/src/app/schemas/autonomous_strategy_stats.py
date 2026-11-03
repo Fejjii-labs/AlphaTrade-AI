@@ -43,7 +43,10 @@ class AutonomousStrategyStatsView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategies: list[StrategyStatsRow] = Field(default_factory=list)
-    # Journal trades with no linked strategy, so totals still add up.
+    # Journal trades with no linked strategy, or linked to a strategy the caller
+    # does not own in this organization (deleted/foreign), so totals still add up.
     unattributed: StrategyTradeStats
     # Journal sources left out of every total.
     excluded_sources: list[str] = Field(default_factory=list)
+    # Allowlist of journal sources counted in the totals.
+    counted_sources: list[str] = Field(default_factory=list)

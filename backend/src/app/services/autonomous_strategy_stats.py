@@ -1,13 +1,21 @@
 """Per-strategy journal trade stats for the Autonomous Trading page.
 
 Read-only. Counts come from canonical journal trades for the calling user,
-grouped by linked strategy. Backtest rows are left out so totals describe
-paper/demo and manual trades only.
+grouped by linked strategy. Only sources in ``COUNTED_SOURCES`` (an allowlist)
+are counted, so a new trade source is left out until someone opts it in.
+
+Journal rows linked to a strategy the caller does not own in this organization
+(deleted, or foreign) are folded into ``unattributed`` so totals still add up.
+
+Setup detections with a null organization (global scan rows) are deliberately
+not shown: ``last_setup_at`` reflects only detections tagged with the caller's
+organization.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
@@ -23,7 +31,19 @@ from app.schemas.autonomous_strategy_stats import (
 )
 from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeResult
 
-EXCLUDED_SOURCES = (JournalTradeSource.BACKTEST,)
+# Allowlist: every source counted in the per-strategy totals. BACKTEST is left out.
+COUNTED_SOURCES: tuple[JournalTradeSource, ...] = (
+    JournalTradeSource.MANUAL,
+    JournalTradeSource.PAPER_EXECUTION,
+    JournalTradeSource.MANUAL_DEMO_TEST,
+    JournalTradeSource.BLOFIN_DEMO_MANUAL,
+    JournalTradeSource.PAPER_VALIDATION,
+    JournalTradeSource.IMPORTED,
+    JournalTradeSource.SYSTEM,
+)
+EXCLUDED_SOURCES: tuple[JournalTradeSource, ...] = tuple(
+    source for source in JournalTradeSource if source not in COUNTED_SOURCES
+)
 
 
 class AutonomousStrategyStatsService:
@@ -41,7 +61,11 @@ class AutonomousStrategyStatsService:
             )
             .order_by(UserStrategy.enabled.desc(), UserStrategy.name.asc())
         ).all()
-        stats = self._trade_stats(organization_id=organization_id, user_id=user_id)
+        stats = self._trade_stats(
+            organization_id=organization_id,
+            user_id=user_id,
+            owned={row.id for row in strategies},
+        )
         setups = self._last_setups(
             organization_id=organization_id,
             setup_names={row.setup_type.value for row in strategies},
@@ -68,10 +92,11 @@ class AutonomousStrategyStatsService:
             ],
             unattributed=stats.get(None, StrategyTradeStats()),
             excluded_sources=[source.value for source in EXCLUDED_SOURCES],
+            counted_sources=[source.value for source in COUNTED_SOURCES],
         )
 
     def _trade_stats(
-        self, *, organization_id: uuid.UUID, user_id: uuid.UUID
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID, owned: set[uuid.UUID]
     ) -> dict[uuid.UUID | None, StrategyTradeStats]:
         closed = JournalTrade.status == JournalTradeStatus.CLOSED
         rows = self._session.execute(
@@ -87,21 +112,24 @@ class AutonomousStrategyStatsService:
             .where(
                 JournalTrade.organization_id == organization_id,
                 JournalTrade.user_id == user_id,
-                JournalTrade.source.not_in(EXCLUDED_SOURCES),
+                JournalTrade.source.in_(COUNTED_SOURCES),
             )
             .group_by(JournalTrade.user_strategy_id)
         ).all()
-        return {
-            strategy_id: _stats(
-                closed_trades=int(closed_count or 0),
+        totals: dict[uuid.UUID | None, _Totals] = {}
+        for strategy_id, closed_count, wins, losses, net_pnl, open_count, last_at in rows:
+            # Links to a strategy the caller does not own here (deleted/foreign)
+            # are folded into unattributed instead of silently disappearing.
+            key = strategy_id if strategy_id in owned else None
+            totals.setdefault(key, _Totals()).add(
+                closed=int(closed_count or 0),
                 wins=int(wins or 0),
                 losses=int(losses or 0),
                 net_pnl=net_pnl,
                 open_positions=int(open_count or 0),
-                last_trade_at=last_at,
+                last_at=last_at,
             )
-            for strategy_id, closed_count, wins, losses, net_pnl, open_count, last_at in rows
-        }
+        return {key: acc.to_stats() for key, acc in totals.items()}
 
     def _last_setups(
         self, *, organization_id: uuid.UUID, setup_names: set[str]
@@ -117,6 +145,45 @@ class AutonomousStrategyStatsService:
             .group_by(SetupDetectionRecord.setup_name)
         ).all()
         return {name: at for name, at in rows if at is not None}
+
+
+@dataclass
+class _Totals:
+    closed: int = 0
+    wins: int = 0
+    losses: int = 0
+    net_pnl: Decimal | None = None
+    open_positions: int = 0
+    last_at: datetime | None = None
+
+    def add(
+        self,
+        *,
+        closed: int,
+        wins: int,
+        losses: int,
+        net_pnl: Decimal | None,
+        open_positions: int,
+        last_at: datetime | None,
+    ) -> None:
+        self.closed += closed
+        self.wins += wins
+        self.losses += losses
+        if net_pnl is not None:
+            self.net_pnl = (self.net_pnl or Decimal("0")) + Decimal(net_pnl)
+        self.open_positions += open_positions
+        if last_at is not None and (self.last_at is None or last_at > self.last_at):
+            self.last_at = last_at
+
+    def to_stats(self) -> StrategyTradeStats:
+        return _stats(
+            closed_trades=self.closed,
+            wins=self.wins,
+            losses=self.losses,
+            net_pnl=self.net_pnl,
+            open_positions=self.open_positions,
+            last_trade_at=self.last_at,
+        )
 
 
 def _stats(

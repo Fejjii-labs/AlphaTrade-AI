@@ -35,6 +35,11 @@ from app.schemas.common import (
     TradeResult,
 )
 from app.security.passwords import hash_password
+from app.services.autonomous_strategy_stats import (
+    COUNTED_SOURCES,
+    EXCLUDED_SOURCES,
+    AutonomousStrategyStatsService,
+)
 from tests.support.postgres_persistence import (
     phase7_plan_session_factory,
     postgres_available,
@@ -196,6 +201,8 @@ def test_empty_view_lists_no_strategies_and_zero_totals(client: TestClient) -> N
     assert body["unattributed"]["closed_trades"] == 0
     assert body["unattributed"]["win_rate"] is None
     assert body["excluded_sources"] == ["backtest"]
+    assert "backtest" not in body["counted_sources"]
+    assert "paper_execution" in body["counted_sources"]
 
 
 def test_groups_trades_by_strategy_with_win_rate_pnl_and_open_positions(
@@ -363,3 +370,127 @@ def test_strategy_stats_is_read_only(client: TestClient) -> None:
     for method in ("post", "patch", "put", "delete"):
         resp = client.request(method, "/autonomous/strategy-stats", headers=headers)
         assert resp.status_code == 405
+
+
+FOREIGN = uuid.UUID("00000000-0000-0000-0000-00000000c5b4")
+OWNER_OTHER_ORG_STRATEGY = uuid.UUID("00000000-0000-0000-0000-00000000c5b5")
+
+
+def test_trade_sources_are_an_explicit_allowlist() -> None:
+    # A new JournalTradeSource must be classified on purpose; it is not counted by default.
+    assert set(COUNTED_SOURCES) | set(EXCLUDED_SOURCES) == set(JournalTradeSource)
+    assert not set(COUNTED_SOURCES) & set(EXCLUDED_SOURCES)
+    assert JournalTradeSource.BACKTEST in EXCLUDED_SOURCES
+
+
+def test_same_user_trades_tagged_with_another_org_are_not_counted(
+    client: TestClient, db: tuple[sessionmaker[Session], Settings]
+) -> None:
+    """B1: guards the JournalTrade.organization_id filter."""
+    factory, _ = db
+    with factory() as session:
+        session.add(_strategy(NESTED, "Nested BTC", StrategyId.NESTED_CONTINUATION))
+        session.flush()
+        session.add_all(
+            [
+                _trade(
+                    strategy_id=NESTED,
+                    status=JournalTradeStatus.CLOSED,
+                    result=TradeResult.WIN,
+                    net_pnl="10",
+                ),
+                # Same user and strategy link, but the other org: must not leak in.
+                _trade(
+                    strategy_id=NESTED,
+                    status=JournalTradeStatus.CLOSED,
+                    result=TradeResult.LOSS,
+                    net_pnl="-777",
+                    organization_id=OTHER_ORG,
+                ),
+                _trade(
+                    strategy_id=None,
+                    status=JournalTradeStatus.CLOSED,
+                    result=TradeResult.LOSS,
+                    net_pnl="-555",
+                    organization_id=OTHER_ORG,
+                ),
+            ]
+        )
+        session.commit()
+    body = client.get("/autonomous/strategy-stats", headers=_token(client, OWNER_EMAIL)).json()
+    (row,) = body["strategies"]
+    assert row["stats"]["closed_trades"] == 1
+    assert Decimal(row["stats"]["net_pnl"]) == Decimal("10")
+    assert body["unattributed"]["closed_trades"] == 0
+
+
+def test_rows_linked_to_unowned_strategy_show_as_unattributed(
+    client: TestClient, db: tuple[sessionmaker[Session], Settings]
+) -> None:
+    factory, _ = db
+    with factory() as session:
+        session.add(
+            UserStrategy(
+                id=FOREIGN,
+                organization_id=ORG,
+                user_id=TRADER,
+                name="Trader SFP",
+                setup_type=StrategyId.SFP,
+                enabled=True,
+            )
+        )
+        session.flush()
+        session.add(
+            _trade(
+                strategy_id=FOREIGN,
+                status=JournalTradeStatus.CLOSED,
+                result=TradeResult.LOSS,
+                net_pnl="-12.5",
+            )
+        )
+        session.commit()
+    body = client.get("/autonomous/strategy-stats", headers=_token(client, OWNER_EMAIL)).json()
+    assert body["strategies"] == []
+    assert body["unattributed"]["closed_trades"] == 1
+    assert Decimal(body["unattributed"]["net_pnl"]) == Decimal("-12.5")
+
+
+def test_user_in_two_orgs_sees_only_this_orgs_strategies_and_selection(
+    db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """B2: guards the UserStrategy and AutonomousTradingSettingsRow org filters."""
+    factory, _ = db
+    with factory() as session:
+        session.add(Membership(user_id=OWNER, organization_id=OTHER_ORG, role=MembershipRole.OWNER))
+        session.add(_strategy(NESTED, "Nested BTC", StrategyId.NESTED_CONTINUATION))
+        session.add(
+            UserStrategy(
+                id=OWNER_OTHER_ORG_STRATEGY,
+                organization_id=OTHER_ORG,
+                user_id=OWNER,
+                name="Other-org SFP",
+                setup_type=StrategyId.SFP,
+                enabled=True,
+            )
+        )
+        session.flush()
+        # Only the other org has a settings row, and it points at NESTED.
+        session.add(
+            AutonomousTradingSettingsRow(
+                organization_id=OTHER_ORG,
+                user_id=OWNER,
+                daily_loss_limit_percent=Decimal("3"),
+                max_trades_per_day=5,
+                strategy_id=NESTED,
+            )
+        )
+        session.commit()
+    with factory() as session:
+        view = AutonomousStrategyStatsService(session).view(organization_id=ORG, user_id=OWNER)
+        assert [row.name for row in view.strategies] == ["Nested BTC"]
+        assert view.strategies[0].bot_selected is False
+        other = AutonomousStrategyStatsService(session).view(
+            organization_id=OTHER_ORG, user_id=OWNER
+        )
+        assert [row.name for row in other.strategies] == ["Other-org SFP"]
+        assert other.strategies[0].bot_selected is False
