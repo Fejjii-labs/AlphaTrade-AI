@@ -62,7 +62,7 @@ it("forwards the old Strategies risk anchor to Autonomous and has no risk sectio
   window.history.replaceState(null, "", "/strategies#risk");
   router.replace.mockClear();
   render(<StrategiesPage />);
-  expect(router.replace).toHaveBeenCalledExactlyOnceWith("/autonomous#account");
+  expect(router.replace).toHaveBeenCalledExactlyOnceWith("/autonomous#limits");
   expect(screen.queryByText("Risk policy", { selector: "summary" })).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "Configure account limits" })).not.toBeInTheDocument();
   await screen.findByTestId("captured-strategy-note");

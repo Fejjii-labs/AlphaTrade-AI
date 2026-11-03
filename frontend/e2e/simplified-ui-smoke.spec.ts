@@ -10,7 +10,7 @@ const SHOTS =
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 const DESTINATIONS = [
   { route: "/", heading: "Dashboard", file: "dashboard", more: false },
-  { route: "/autonomous", heading: "Autonomous", file: "autonomous", more: true },
+  { route: "/autonomous", heading: "Autonomous Trading", link: "Autonomous", file: "autonomous", more: true },
   { route: "/strategies", heading: "Strategies", file: "strategies", more: false },
   { route: "/journal", heading: "Trades", file: "journal", more: false },
   { route: "/agent", heading: "Agent", file: "agent", more: false },
@@ -84,7 +84,7 @@ test("desktop/mobile five destinations and preview→Send retains a source witho
       const phoneMore = viewport.width < 1024 && destination.more;
       if (phoneMore) await nav.getByRole("button", { name: "More" }).click();
       await (phoneMore ? page.getByRole("dialog", { name: "More" }) : nav)
-        .getByRole("link", { name: destination.heading, exact: true })
+        .getByRole("link", { name: "link" in destination ? destination.link : destination.heading, exact: true })
         .click();
       await expect(
         page.getByRole("heading", {

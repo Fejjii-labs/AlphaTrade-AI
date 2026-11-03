@@ -113,6 +113,8 @@ import type {
   HumanVsSystemComparison,
   UserStrategy,
   AutonomousActivityView,
+  AutonomousStrategyStatsView,
+  RiskPolicyView,
   AutonomousTradingSettingsView,
   UserRiskSettings,
   UserRiskSettingsUpdate,
@@ -1325,12 +1327,18 @@ export const api = {
       apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", { auth: true }),
     activity: () =>
       apiFetch<AutonomousActivityView>("/autonomous/activity", { auth: true }),
+    strategyStats: () =>
+      apiFetch<AutonomousStrategyStatsView>("/autonomous/strategy-stats", { auth: true }),
     updateSettings: (body: Record<string, unknown>) =>
       apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", {
         method: "PATCH",
         body: JSON.stringify(body),
         auth: true,
       }),
+  },
+  riskPolicy: {
+    profile: (kind: "internal_paper" | "demo") =>
+      apiFetch<RiskPolicyView>(`/policy/profiles/${kind}`, { auth: true }),
   },
   risk: {
     settings: () => apiFetch<UserRiskSettings>("/risk/settings", { auth: true }),

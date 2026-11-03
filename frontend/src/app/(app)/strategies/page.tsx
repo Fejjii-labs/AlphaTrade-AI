@@ -70,7 +70,7 @@ function StrategiesWorkspace() {
   const router = useRouter();
   useEffect(() => {
     // Risk policy moved to Autonomous; old `/strategies#risk` links follow it.
-    if (window.location.hash === "#risk") router.replace("/autonomous#account");
+    if (window.location.hash === "#risk") router.replace("/autonomous#limits");
   }, [router]);
   return (
     <div className="page-sections" data-testid="trader-strategies">
