@@ -48,6 +48,28 @@ _DISARMED_FLAGS = (
 )
 
 
+# Telegram is not on the trade path. When only these flags conflict, the
+# supervised paper worker boots with Telegram off instead of crash-looping.
+# The bot token and chat id stay, so safety alerts can still be sent.
+_TELEGRAM_FAIL_SOFT_ENV: dict[str, str] = {
+    "TELEGRAM_ALERTS_ENABLED": "false",
+    "AUTOMATIC_TELEGRAM_DELIVERY_ENABLED": "false",
+    "TELEGRAM_INTERACTION_ENABLED": "false",
+    "TELEGRAM_PAPER_ACTIVATION_ARMED": "false",
+    "TELEGRAM_INBOUND_MODE": "off",
+    "TELEGRAM_NETWORK_PERMITTED": "false",
+    "TELEGRAM_WEBHOOK_SECRET": "",
+}
+TELEGRAM_CONFIG_CONFLICT = "telegram_disabled_config_conflict"
+_BOOT_DEGRADATIONS: list[str] = []
+
+
+def worker_boot_degradations() -> tuple[str, ...]:
+    """Features this process turned off at boot instead of failing."""
+
+    return tuple(_BOOT_DEGRADATIONS)
+
+
 class WorkerBootRole(StrEnum):
     """Paper processes that may idle while disarmed."""
 
@@ -72,6 +94,7 @@ def reset_disarmed_worker_boot() -> None:
     """Clear the process-local role. Tests use this between cases."""
 
     _ROLE.set(None)
+    _BOOT_DEGRADATIONS.clear()
 
 
 def bind_worker_boot_role(role: WorkerBootRole | None) -> None:
@@ -161,14 +184,54 @@ def load_worker_process_settings(role: WorkerBootRole) -> Settings:
     _ROLE.set(role if disarmed else None)
     try:
         settings = get_settings()
-    except Exception:
+    except Exception as exc:
         _ROLE.set(None)
         get_settings.cache_clear()
-        raise
+        if disarmed or role is not WorkerBootRole.PAPER_WORKER:
+            raise
+        return _settings_with_telegram_disabled(exc)
     if disarmed and not settings_are_disarmed_paper_worker(settings):
         _ROLE.set(None)
         get_settings.cache_clear()
         return get_settings()
+    return settings
+
+
+def _settings_with_telegram_disabled(original: Exception) -> Settings:
+    """Retry once with Telegram off. Every validator still runs on the retry.
+
+    Staging only. When nothing Telegram-related is set, or the retry still
+    fails (a trade-path or dependency error), the original error is raised.
+    """
+
+    from app.core.config import get_settings
+
+    staging = _env_text("ENVIRONMENT", default="local") == Environment.STAGING.value
+    changed = {
+        name: value
+        for name, value in _TELEGRAM_FAIL_SOFT_ENV.items()
+        if _env_text(name, default=value) != value
+    }
+    if not staging or not changed:
+        raise original
+    saved = {name: os.environ.get(name) for name in changed}
+    os.environ.update(changed)
+    try:
+        settings = get_settings()
+    except Exception:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        get_settings.cache_clear()
+        raise original from None
+    _BOOT_DEGRADATIONS.append(TELEGRAM_CONFIG_CONFLICT)
+    logger.error(
+        "paper_worker_telegram_disabled_config_conflict",
+        disabled=sorted(changed),
+        paper_only=True,
+    )
     return settings
 
 

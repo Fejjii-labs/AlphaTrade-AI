@@ -66,6 +66,10 @@ _AUTHORITY_FIELDS = (
     "telegram_network_permitted",
 )
 
+# Transient database errors retry the cycle in place before it is marked failed.
+# A retry is the next cycle sooner: every gate is evaluated again.
+_DB_RETRY_BACKOFF_SECONDS = (0.5, 2.0)
+
 AuthorityProbe = Callable[[], tuple[object, ...]]
 AuthorityRestore = Callable[[], None]
 
@@ -220,7 +224,13 @@ class PaperWorkerSupervisor:
         self._demo_snapshot_stop: Callable[[], None] | None = None
         self._exit_monitor: _Component | None = None
         self._exit_monitor_stop: Callable[[], None] | None = None
-        self._memory_diagnostics = WorkerMemoryDiagnostics() if memory_diagnostics_enabled else None
+        self._memory_diagnostics: WorkerMemoryDiagnostics | None = None
+        if memory_diagnostics_enabled:
+            try:
+                self._memory_diagnostics = WorkerMemoryDiagnostics()
+            except Exception as exc:
+                # Diagnostics are opt-in observability. Boot continues without them.
+                logger.error("paper_worker_memory_diagnostics_disabled", error=_safe_error(exc))
 
     def attach_indexing(
         self,
@@ -494,7 +504,7 @@ class PaperWorkerSupervisor:
                 self._mark_stopped(component)
                 return
             try:
-                outcome = component.cycle()
+                outcome = self._cycle_with_db_retry(component)
             except Exception as exc:
                 self._revert(component)
                 self._fail(component, exc)
@@ -506,6 +516,30 @@ class PaperWorkerSupervisor:
             self._succeed(component, outcome)
         finally:
             self._finish_memory_cycle(component, sampler)
+
+    def _cycle_with_db_retry(self, component: _Component) -> CycleOutcome:
+        """Run one cycle; retry a transient database error a bounded number of times.
+
+        Runtimes open their sessions per cycle and close them on exit, so a
+        failed attempt has already rolled back and returned its connection.
+        """
+
+        for attempt, backoff in enumerate((*_DB_RETRY_BACKOFF_SECONDS, None)):
+            try:
+                return component.cycle()
+            except Exception as exc:
+                if backoff is None or not is_transient_db_error(exc):
+                    raise
+                self._revert(component)
+                logger.warning(
+                    "paper_worker_cycle_db_retry",
+                    component=component.name,
+                    attempt=attempt + 1,
+                    error=_safe_error(exc),
+                )
+                if self._stop.wait(backoff):
+                    raise
+        raise AssertionError("unreachable")
 
     def _finish_memory_cycle(
         self, component: _Component, sampler: CycleMemorySampler | None
@@ -764,8 +798,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
     opening Redis or provider clients. It opens PostgreSQL only to delete
-    leftover ``paper_arming`` and ``paper_exit_monitor`` rows and to retry
-    an unsent kill-switch page, at most once per 60 seconds per version.
+    leftover ``paper_arming`` and ``paper_exit_monitor`` rows, to publish
+    the staging config report, and to retry an unsent kill-switch page, at
+    most once per 60 seconds per version.
     A failure of that open is logged and the
     process still returns ``disarmed``. The demo snapshot cycle is not
     attached while its flag is off or the worker is disarmed. The paper
@@ -792,6 +827,11 @@ def run_paper_worker_process(*, once: bool = False) -> str:
         from app.services.arming_visibility import clear_disarmed_boot_rows
 
         clear_disarmed_boot_rows()
+    from app.core.disarmed_worker_boot import worker_boot_degradations
+    from app.services.worker_config_report import publish_worker_config_report
+
+    # Never raises: a degraded or disarmed staging boot is reported, not fatal.
+    publish_worker_config_report(settings, boot_degradations=worker_boot_degradations())
     from app.services.risk.kill_switch import retry_unsent_kill_switch_alert
 
     retry_unsent_kill_switch_alert(settings)
@@ -922,9 +962,18 @@ def _build_armed_supervisor(
         return outcome
 
     on_stop = compose_watcher_on_stop(stops, releases, closers)
+    from app.services.market_ban_visibility import MarketBanPublisher
+
+    ban_publisher = MarketBanPublisher(watcher_settings, factory)
+
+    def published_watcher_cycle() -> CycleOutcome:
+        try:
+            return research_watcher_cycle()
+        finally:
+            ban_publisher.observe()
 
     return PaperWorkerSupervisor(
-        watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
+        watcher_cycle=_with_worker_heartbeat(watcher_settings, published_watcher_cycle),
         watcher_idle_wait=watcher_idle_wait,
         telegram_cycle=telegram_cycle,
         poll_seconds=float(watcher_settings.watcher_paper_poll_interval_seconds),
@@ -1064,6 +1113,23 @@ def _iso(moment: datetime | None) -> str:
     if moment is None:
         return ""
     return moment.astimezone(UTC).isoformat()
+
+
+def is_transient_db_error(exc: BaseException) -> bool:
+    """Lost connection or aborted transaction, including one wrapped by a runtime."""
+
+    from sqlalchemy.exc import DBAPIError, OperationalError, PendingRollbackError
+
+    seen: BaseException | None = exc
+    for _ in range(3):
+        if seen is None:
+            return False
+        if isinstance(seen, PendingRollbackError | OperationalError):
+            return True
+        if isinstance(seen, DBAPIError) and seen.connection_invalidated:
+            return True
+        seen = seen.__cause__
+    return False
 
 
 def _safe_error(exc: BaseException) -> str:

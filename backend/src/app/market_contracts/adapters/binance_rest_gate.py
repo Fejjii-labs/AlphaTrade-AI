@@ -32,6 +32,7 @@ import random
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 import structlog
 
@@ -52,6 +53,18 @@ BOOT_AGGTRADES_MIN_INTERVAL_SECONDS = 1.0
 _USED_WEIGHT_HEADER = "x-mbx-used-weight-1m"
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RestGateState:
+    """Read-only view for health. Epoch seconds; no request data."""
+
+    banned: bool
+    closed_kind: str | None
+    until_epoch: float | None
+    last_status_code: int | None
+    ban_started_epoch: float | None
+    strikes: int
 
 
 class BinanceRestGate:
@@ -88,6 +101,22 @@ class BinanceRestGate:
         self._started_at = clock()
         self._next_aggtrades_at = self._started_at
         self.last_used_weight: int | None = None
+        self._last_status: int | None = None
+        self._ban_started: float | None = None
+
+    def state(self) -> RestGateState:
+        """Current gate posture. Reading it never opens or closes the gate."""
+
+        closed = self.remaining()
+        with self._lock:
+            return RestGateState(
+                banned=closed is not None and closed[0] == "ban",
+                closed_kind=None if closed is None else closed[0],
+                until_epoch=None if closed is None else self._wall_clock() + closed[1],
+                last_status_code=self._last_status,
+                ban_started_epoch=self._ban_started,
+                strikes=self._strikes,
+            )
 
     def remaining(self) -> tuple[str, float] | None:
         """``(ban|rate_limit, seconds_left)`` while the gate is closed."""
@@ -118,8 +147,12 @@ class BinanceRestGate:
         Returns the pause length. It is never shorter than Retry-After.
         """
 
+        already_banned = (self.remaining() or ("",))[0] == "ban"
         with self._lock:
             self._strikes += 1
+            self._last_status = 418 if kind == "ban" else 429
+            if kind == "ban" and not already_banned:
+                self._ban_started = self._wall_clock()
             backoff = min(self._base * 2.0 ** (self._strikes - 1), self._cap)
         server = sanitize_retry_after(retry_after_seconds)
         if server is None and kind == "ban":
@@ -220,6 +253,14 @@ def process_binance_rest_gate() -> BinanceRestGate:
         if _PROCESS_GATE is None:
             _PROCESS_GATE = BinanceRestGate()
         return _PROCESS_GATE
+
+
+def process_binance_rest_gate_state() -> RestGateState | None:
+    """State of the process gate, or None when no Binance client created it."""
+
+    with _PROCESS_GATE_GUARD:
+        gate = _PROCESS_GATE
+    return None if gate is None else gate.state()
 
 
 def reset_process_binance_rest_gate() -> None:
