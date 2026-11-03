@@ -263,6 +263,12 @@ so it does not write that row. `GET /health` reports the row.
 `stale`, or `missing`, and a stale or missing heartbeat raises one deduped
 Telegram alert.
 
+`GET /health/paper-worker` returns HTTP 503 while the worker is degraded
+(for example, booted with Telegram fail-soft off). Any uptime monitor on this
+path will alert for as long as the worker stays degraded; that is intended.
+Render's `healthCheckPath` must stay `/health`: pointing it at
+`/health/paper-worker` would make Render restart every degraded boot in a loop.
+
 The exit-monitor thread writes a separate `paper_exit_monitor` heartbeat.
 `GET /health/paper-worker` reports that thread as `fresh`, `stale`,
 `missing`, or `disabled`. `disabled` means the thread is not attached, and

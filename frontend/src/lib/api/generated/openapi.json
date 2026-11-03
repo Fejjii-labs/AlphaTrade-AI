@@ -26060,6 +26060,59 @@
         "title": "MarketAnalyzeResponse",
         "type": "object"
       },
+      "MarketDataBanObservation": {
+        "additionalProperties": false,
+        "description": "Binance REST gate posture last published by the worker.\n\n``banned`` is true only while a 418 ban has not yet expired.",
+        "properties": {
+          "banned": {
+            "default": false,
+            "title": "Banned",
+            "type": "boolean"
+          },
+          "last_status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status Code"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "state": {
+            "default": "unknown",
+            "title": "State",
+            "type": "string"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "title": "MarketDataBanObservation",
+        "type": "object"
+      },
       "MarketDataMeta": {
         "description": "Transparency metadata for market data provenance.",
         "properties": {
@@ -38218,6 +38271,9 @@
           "kill_switch": {
             "$ref": "#/components/schemas/PaperWorkerKillSwitch"
           },
+          "market_data_ban": {
+            "$ref": "#/components/schemas/MarketDataBanObservation"
+          },
           "observation": {
             "$ref": "#/components/schemas/WorkerComponentObservation"
           },
@@ -38234,6 +38290,9 @@
             "format": "date-time",
             "title": "Timestamp",
             "type": "string"
+          },
+          "worker_config": {
+            "$ref": "#/components/schemas/WorkerConfigObservation"
           },
           "worker_effective": {
             "$ref": "#/components/schemas/WorkerEffectiveObservation"
@@ -57580,6 +57639,75 @@
         "title": "WorkerComponentObservation",
         "type": "object"
       },
+      "WorkerConfigCheck": {
+        "additionalProperties": false,
+        "description": "One staging flag the armed paper posture needs. Never a secret value.",
+        "properties": {
+          "actual": {
+            "title": "Actual",
+            "type": "string"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "expected",
+          "actual",
+          "ok"
+        ],
+        "title": "WorkerConfigCheck",
+        "type": "object"
+      },
+      "WorkerConfigObservation": {
+        "additionalProperties": false,
+        "description": "Boot config report published by the worker.\n\n``status`` is ``unknown`` when no report row exists. ``not_applicable``\noutside staging. ``disarmed_unexpected`` when the Watcher arm is off.\n``degraded`` when an auxiliary feature (Telegram, autonomy) is off.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerConfigCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "ok",
+              "degraded",
+              "disarmed_unexpected",
+              "not_applicable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "WorkerConfigObservation",
+        "type": "object"
+      },
       "WorkerControlResponse": {
         "description": "Result of a pause/resume control action.",
         "properties": {
@@ -66097,7 +66225,7 @@
     },
     "/health/paper-worker": {
       "get": {
-        "description": "Report the worker heartbeat and alert when it is stale or missing.\n\nThis route does not arm the worker, the exit monitor, or real trading.\nA Telegram send uses the existing bot token and chat id. The response\ndoes not include those values. An unsent kill-switch page is retried\nafter the response, in a worker thread, at most once per 60 seconds\nper activation version. No thread is started when no unsent page is\nvisible, or when every visible page is still inside that limit.",
+        "description": "Report the worker heartbeat and alert when it is stale or missing.\n\nThis route does not arm the worker, the exit monitor, or real trading.\nA Telegram send uses the existing bot token and chat id. The response\ndoes not include those values. An unsent kill-switch page is retried\nafter the response, in a worker thread, at most once per 60 seconds\nper activation version. No thread is started when no unsent page is\nvisible, or when every visible page is still inside that limit.\n\nA ``degraded`` or ``disarmed_unexpected`` worker config report returns\nHTTP 503 with the same body, so an uptime check sees it without Telegram.",
         "operationId": "paper_worker_heartbeat_health_paper_worker_get",
         "responses": {
           "200": {
@@ -66109,6 +66237,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperWorkerHeartbeatResponse"
+                }
+              }
+            },
+            "description": "The worker config report is degraded or disarmed_unexpected."
           }
         },
         "summary": "Paper worker heartbeat",
