@@ -13,14 +13,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
 from tests.support.alembic_heads import single_alembic_head
+from tests.support.postgres_template import fixture_postgres_url
 
-POSTGRES_URL = os.environ.get(
-    "PHASE1_POSTGRES_URL",
-    os.environ.get(
-        "AT028_POSTGRES_URL",
-        "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
-    ),
-)
+# No localhost default: unset skips locally and fails under CI=true.
+POSTGRES_URL = fixture_postgres_url() or ""
 
 MAIN_HEAD = "6d4e9f0a12b3"
 PHASE2 = "7e8f1a2b3c4d"

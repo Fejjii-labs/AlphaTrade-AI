@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -27,11 +26,16 @@ from tests.test_interactive_agent_foundation import ORG_A, USER_A, _count, _sett
 
 @pytest.fixture
 def application_postgres():
-    url = os.environ.get(
-        "AT028_POSTGRES_URL",
-        "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade_test",
+    from tests.support.postgres_template import (
+        clone_database,
+        drop_clone,
+        fixture_postgres_url,
     )
-    from tests.support.postgres_template import clone_database, drop_clone
+
+    # No localhost default: unset skips locally and fails under CI=true.
+    url = fixture_postgres_url()
+    if not url:
+        pytest.skip("Set PHASE1_POSTGRES_URL or AT028_POSTGRES_URL to a disposable PostgreSQL")
 
     try:
         engine = clone_database(url)
