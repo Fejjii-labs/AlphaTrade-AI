@@ -159,38 +159,41 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
     setSaving(true);
     setErrors([]);
     setSaved(null);
-    const failures: string[] = [];
-    const done: string[] = [];
-    if (accountDirty) {
-      try {
-        const updated = await api.risk.updateSettings(toAccountPayload(accountForm));
-        setAccountForm(toAccountForm(updated));
-        onAccountSaved(updated);
-        done.push("Account limits saved.");
-      } catch (err) {
-        failures.push(
-          `Account limits not saved: ${err instanceof Error ? err.message : "unknown error"}.`,
-        );
-        if (botDirty) failures.push("Bot limits not saved: skipped because the account limits failed.");
+    try {
+      const failures: string[] = [];
+      const done: string[] = [];
+      if (accountDirty) {
+        try {
+          const updated = await api.risk.updateSettings(toAccountPayload(accountForm));
+          setAccountForm(toAccountForm(updated));
+          onAccountSaved(updated);
+          done.push("Account limits saved.");
+        } catch (err) {
+          failures.push(
+            `Account limits not saved: ${err instanceof Error ? err.message : "unknown error"}.`,
+          );
+          if (botDirty) failures.push("Bot limits not saved: skipped because the account limits failed.");
+        }
       }
-    }
-    if (botDirty && failures.length === 0) {
-      try {
-        const updated = await api.autonomous.updateSettings(toBotPayload(botForm));
-        setBotForm(toBotForm(updated));
-        onBotSaved(updated);
-        done.push("Bot limits saved.");
-      } catch (err) {
-        const reason = err instanceof ApiError ? botValidationMessage(err.message, bot) : "unknown error.";
-        failures.push(
-          done.length ? `Bot limits not saved (account limits were saved): ${reason}` : `Bot limits not saved: ${reason}`,
-        );
+      if (botDirty && failures.length === 0) {
+        try {
+          const updated = await api.autonomous.updateSettings(toBotPayload(botForm));
+          setBotForm(toBotForm(updated));
+          onBotSaved(updated);
+          done.push("Bot limits saved.");
+        } catch (err) {
+          const reason = err instanceof ApiError ? botValidationMessage(err.message, bot) : "unknown error.";
+          failures.push(
+            done.length ? `Bot limits not saved (account limits were saved): ${reason}` : `Bot limits not saved: ${reason}`,
+          );
+        }
       }
+      setErrors(failures);
+      setSaved(done.length ? done.join(" ") : null);
+    } finally {
+      setSaving(false);
+      inFlight.current = false;
     }
-    setErrors(failures);
-    setSaved(done.length ? done.join(" ") : null);
-    setSaving(false);
-    inFlight.current = false;
   }
 
   async function handleReset() {

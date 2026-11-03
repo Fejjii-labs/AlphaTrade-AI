@@ -377,10 +377,20 @@ OWNER_OTHER_ORG_STRATEGY = uuid.UUID("00000000-0000-0000-0000-00000000c5b5")
 
 
 def test_trade_sources_are_an_explicit_allowlist() -> None:
-    # A new JournalTradeSource must be classified on purpose; it is not counted by default.
-    assert set(COUNTED_SOURCES) | set(EXCLUDED_SOURCES) == set(JournalTradeSource)
+    # Hard-coded on purpose: adding a JournalTradeSource fails this test until
+    # someone decides whether the new source is counted.
+    assert {source.value for source in JournalTradeSource} == {
+        "manual",
+        "paper_execution",
+        "manual_demo_test",
+        "blofin_demo_manual",
+        "paper_validation",
+        "backtest",
+        "imported",
+        "system",
+    }
+    assert set(EXCLUDED_SOURCES) == {JournalTradeSource.BACKTEST}
     assert not set(COUNTED_SOURCES) & set(EXCLUDED_SOURCES)
-    assert JournalTradeSource.BACKTEST in EXCLUDED_SOURCES
 
 
 def test_same_user_trades_tagged_with_another_org_are_not_counted(
