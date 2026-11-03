@@ -1216,6 +1216,47 @@ export interface AutonomousActivityView {
   recent_actions: BotAction[];
 }
 
+/** Journal-trade totals for one strategy (GET /autonomous/strategy-stats). */
+export interface StrategyTradeStats {
+  closed_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
+  net_pnl: string;
+  open_positions: number;
+  last_trade_at: string | null;
+}
+
+export interface StrategyStatsRow {
+  strategy_id: string;
+  name: string;
+  setup_type: string;
+  enabled: boolean;
+  paper_eligible: boolean;
+  bot_selected: boolean;
+  last_setup_at: string | null;
+  stats: StrategyTradeStats;
+}
+
+export interface AutonomousStrategyStatsView {
+  strategies: StrategyStatsRow[];
+  unattributed: StrategyTradeStats;
+  excluded_sources: string[];
+}
+
+/** GET /policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */
+export interface RiskPolicyView {
+  kind: string;
+  source: string;
+  version_number: number | null;
+  effective_at: string | null;
+  profile: Record<string, string>;
+  scheduled_version_number: number | null;
+  scheduled_effective_at: string | null;
+  applies_to_new_trades_only: boolean;
+  real_trading_enabled: boolean;
+}
+
 export interface KillSwitchStatus {
   organization_id: string;
   active: boolean;
