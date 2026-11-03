@@ -192,6 +192,7 @@ def _demo_risk_snapshot(
         symbol_actual=symbol_actual,
         daily_locked=daily_locked,
         trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
+        execution_venue=str(getattr(plan, "execution_venue", "") or "") or None,
     )
 
 
@@ -675,11 +676,17 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         account_leverage = snapshot.account_leverage
         if not account_leverage.is_finite() or account_leverage <= 0:
             return "demo_account_leverage_unreadable"
+        if account_leverage > demo_max_leverage(self._settings):
+            return "demo_leverage_above_ceiling"
         notional_cap = equity * account_leverage * Decimal("0.95")
         margin_assumption = (
             "verified-demo-existing-leverage-isolated"
             if snapshot.margin_mode == "isolated"
-            else "verified-demo-existing-1x"
+            else (
+                "verified-demo-existing-1x"
+                if account_leverage == 1
+                else "verified-demo-existing-leverage-cross"
+            )
         )
         profile_leverage: Decimal | None = None
         profile_cash_ceiling: Decimal | None = None
@@ -1650,8 +1657,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 def _plan_window(settings: Settings) -> timedelta:
     """Configurable submit window for a governed demo plan (>= 10s)."""
 
-    seconds = getattr(settings, "governed_demo_plan_valid_seconds", 60)
-    return timedelta(seconds=max(10, int(seconds)))
+    seconds = int(getattr(settings, "governed_demo_plan_valid_seconds", 60))
+    ceiling = int(getattr(settings, "governed_demo_plan_valid_max_seconds", 300))
+    ceiling = min(max(10, ceiling), 3600)
+    return timedelta(seconds=min(max(10, seconds), ceiling))
+
+
+STOP_LOSS_BAND_FLOOR_PERCENT = Decimal("1")
+STOP_LOSS_BAND_CEILING_PERCENT = Decimal("5")
+
+
+def demo_max_leverage(settings: Settings) -> Decimal:
+    """Configured leverage ceiling for demo plans (default 20x, never above 125x)."""
+
+    raw = getattr(settings, "governed_demo_max_leverage", Decimal("20"))
+    try:
+        value = Decimal(str(raw))
+    except Exception:
+        return Decimal("1")
+    if not value.is_finite() or value < 1:
+        return Decimal("1")
+    return min(value, Decimal("125"))
 
 
 def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None, Decimal | None]:
@@ -1665,9 +1691,9 @@ def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None,
         or equity <= 0
         or not low.is_finite()
         or not high.is_finite()
-        or low <= 0
+        or low < STOP_LOSS_BAND_FLOOR_PERCENT
         or high < low
-        or high > 100
+        or high > STOP_LOSS_BAND_CEILING_PERCENT
     ):
         return None, None
     return equity * low / Decimal("100"), equity * high / Decimal("100")

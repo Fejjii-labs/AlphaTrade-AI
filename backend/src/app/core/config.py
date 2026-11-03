@@ -258,6 +258,10 @@ class Settings(BaseSettings):
     # How long a governed demo plan stays submittable. Submit re-reads the
     # live quote and re-checks slippage, so this only bounds staleness.
     governed_demo_plan_valid_seconds: int = 60
+    # Upper bound for governed_demo_plan_valid_seconds; larger values clamp.
+    governed_demo_plan_valid_max_seconds: int = 300
+    # Ceiling on the demo account's existing leverage; above it a plan is refused.
+    governed_demo_max_leverage: Decimal = Decimal("20")
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""

@@ -22,6 +22,7 @@ from app.core.execution_credentials import (
 )
 from app.db.learning_attribution import LearningAttributionRecordRow
 from app.db.models import (
+    AccountRiskAccountingState,
     ConversationMessage,
     ExecutionAccount,
     ExecutionCommand,
@@ -67,6 +68,9 @@ class Venue:
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
     tier_min_size: str = "0"
+    # Existing demo account leverage (read only). The 1-5% stop-loss band needs
+    # enough notional headroom for the fixture setup's stop distance.
+    account_leverage: str = "1"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -101,7 +105,7 @@ class Venue:
                 }
             ]
         elif path.endswith("leverage-info"):
-            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": "1"}
+            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": self.account_leverage}
         elif path.endswith("instruments"):
             data = [
                 {
@@ -292,11 +296,35 @@ def test_worker_venue_fills_journal_restart_and_protection(
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
         settings = demo_settings(str(account.id))
+        # Ledger headroom for a 1-5% stop-loss band at the account's existing
+        # 10x leverage (the default 10k total cap would refuse the sized plan).
+        session.add(
+            AccountRiskAccountingState(
+                organization_id=ORG,
+                account_id=account.id,
+                reserved_notional=Decimal("0"),
+                reserved_daily_loss=Decimal("0"),
+                reserved_trade_slots=0,
+                actual_notional=Decimal("0"),
+                actual_daily_loss=Decimal("0"),
+                actual_trade_count=0,
+                symbol_reserved={},
+                symbol_actual={},
+                max_notional=Decimal("200000"),
+                max_daily_loss=Decimal("5000"),
+                max_trade_slots=20,
+                max_symbol_notional=Decimal("200000"),
+                daily_locked=False,
+                exposure_unit="USDT",
+                version=1,
+            )
+        )
+        session.commit()
     source = _live_source()
     from tests.support.phase6_evaluator import build_pattern_15m_bars, build_slice_trades
 
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
-    venue = Venue(price, behavior)
+    venue = Venue(price, behavior, account_leverage="10")
 
     def late_safety_change() -> None:
         with factory() as session:

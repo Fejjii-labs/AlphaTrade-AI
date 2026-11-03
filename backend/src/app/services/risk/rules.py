@@ -18,6 +18,8 @@ from app.services.risk_policy.ceilings import (
     HARD_MAX_RISK_PER_TRADE_PERCENT,
     PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
 )
+from app.services.risk_policy.errors import RiskPolicyRejected
+from app.services.risk_policy.ledger import ledger_symbol_cap_equals_notional
 
 RuleFn = Callable[[RiskCheckRequest, RiskLimits, "RiskEvaluationContext"], TriggeredRule | None]
 
@@ -330,6 +332,32 @@ def check_risk_percent(
                 RiskAction.BLOCK,
                 RiskSeverity.HIGH,
                 f"Risk percent {req.risk_percent} exceeds the cap {cap}.",
+            )
+    if ledger_supplied:
+        if ctx.ledger_max_symbol_notional is None or ctx.ledger_max_notional is None:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.CRITICAL,
+                "Account ledger caps are incomplete; symbol cap fails closed.",
+            )
+        try:
+            equal = ledger_symbol_cap_equals_notional(
+                ctx.ledger_max_symbol_notional, ctx.ledger_max_notional
+            )
+        except RiskPolicyRejected:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.CRITICAL,
+                "Account ledger caps are unreadable; symbol cap fails closed.",
+            )
+        if equal:
+            return _rule(
+                RiskRuleId.RISK_PERCENT,
+                RiskAction.BLOCK,
+                RiskSeverity.HIGH,
+                "Ledger symbol cap is not independent of total notional.",
             )
     return None
 
