@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
 from sqlalchemy import select
@@ -902,8 +902,13 @@ def evaluate_claim_predicate(
     )
     if remaining_slots < intent.trade_slots:
         return "insufficient_daily_trade_allocation"
-    symbol_reserved = Decimal(str(accounting.symbol_reserved.get(intent.instrument, "0")))
-    symbol_actual = Decimal(str(accounting.symbol_actual.get(intent.instrument, "0")))
+    from app.services.autonomous_trading import symbol_book_amount
+
+    try:
+        symbol_reserved = symbol_book_amount(accounting.symbol_reserved, intent.instrument)
+        symbol_actual = symbol_book_amount(accounting.symbol_actual, intent.instrument)
+    except (InvalidOperation, ValueError, TypeError):
+        return "insufficient_symbol_exposure"
     remaining_symbol = accounting.max_symbol_notional - symbol_reserved - symbol_actual
     if intent.pending_notional > remaining_symbol:
         return "insufficient_symbol_exposure"

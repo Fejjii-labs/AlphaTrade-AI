@@ -154,12 +154,14 @@ def _demo_risk_snapshot(
         symbol_actual: dict[str, str] = {}
         daily_locked = False
         max_symbol = max_notional
+        limits_inconsistent = False
     else:
         max_notional = row.max_notional
         max_daily_loss = row.max_daily_loss
         max_symbol = row.max_symbol_notional
-        if max_daily_loss >= max_notional or max_symbol >= max_notional:
-            return None
+        # Caps are user-adjustable; only contradictory combinations refuse.
+        # A per-symbol cap equal to the total cap is allowed.
+        limits_inconsistent = max_daily_loss >= max_notional or max_symbol > max_notional
         max_slots = int(row.max_trade_slots)
         reserved_notional = row.reserved_notional
         reserved_daily_loss = row.reserved_daily_loss
@@ -192,6 +194,7 @@ def _demo_risk_snapshot(
         symbol_actual=symbol_actual,
         daily_locked=daily_locked,
         trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
+        limits_inconsistent=limits_inconsistent,
     )
 
 

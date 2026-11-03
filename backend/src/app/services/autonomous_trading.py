@@ -16,6 +16,7 @@ claim, reservation, and venue gates.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -68,6 +69,10 @@ class RiskLimitSnapshot:
     symbol_actual: dict[str, str] | None = None
     daily_locked: bool = False
     trade_slots: int = 1
+    # Set by the snapshot builder when the stored caps contradict each other
+    # (for example daily loss at or above total notional). Values come from
+    # user-adjustable settings; nothing here hard-codes a cap.
+    limits_inconsistent: bool = False
 
 
 def resolve_autonomous_mode(
@@ -273,6 +278,10 @@ def configured_risk_refusal(snapshot: RiskLimitSnapshot | None) -> str | None:
         or not snapshot.instrument
     ):
         return "risk_limits_unverified"
+    if snapshot.limits_inconsistent:
+        # Readable but contradictory stored caps (flagged by the snapshot
+        # builder). Missing or unreadable inputs stay risk_limits_unverified.
+        return "risk_limits_inconsistent"
     if snapshot.daily_locked:
         return "daily_loss_limit"
     try:
@@ -342,11 +351,28 @@ def _enum_value(value: object) -> str | None:
     return text or None
 
 
-def _symbol_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
-    if book is None:
+def symbol_key(instrument: str) -> str:
+    """Normalize instrument spellings so BTCUSDT and BTC-USDT share one key."""
+
+    return re.sub(r"[^A-Z0-9]", "", str(instrument).upper())
+
+
+def symbol_book_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
+    """Sum exposure stored under any spelling of ``instrument``."""
+
+    if not book:
         return Decimal("0")
-    raw = book.get(instrument, "0")
-    amount = Decimal(str(raw))
-    if not amount.is_finite() or amount < 0:
-        raise ValueError("symbol exposure is not a usable amount")
-    return amount
+    wanted = symbol_key(instrument)
+    total = Decimal("0")
+    for key, raw in book.items():
+        if symbol_key(key) != wanted:
+            continue
+        amount = Decimal(str(raw))
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("symbol exposure is not a usable amount")
+        total += amount
+    return total
+
+
+def _symbol_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
+    return symbol_book_amount(book, instrument)
