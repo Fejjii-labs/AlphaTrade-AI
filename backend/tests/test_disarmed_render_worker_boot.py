@@ -176,6 +176,9 @@ else:
             "enable_real_trading": settings.enable_real_trading,
             "real_trading_enabled": settings.real_trading_enabled,
             "execution_mode": settings.execution_mode.value,
+            "exchange_mode": settings.exchange_mode.value,
+            "telegram_paper_activation_armed": settings.telegram_paper_activation_armed,
+            "telegram_network_permitted": settings.telegram_network_permitted,
         }))
 """
 
@@ -378,7 +381,40 @@ def test_armed_literal_workers_fail_closed_without_operational_dependencies() ->
         assert "qdrant_url" in error
 
 
-def test_armed_telegram_worker_fails_closed_without_bot_token() -> None:
+_DEMO_EXCHANGE_ENV = {
+    "EXCHANGE_MODE": "paper_exchange_demo",
+    "BLOFIN_DEMO_ENABLED": "true",
+    "BLOFIN_API_KEY": "fake-k",
+    "BLOFIN_API_SECRET": "fake-s",
+    "BLOFIN_API_PASSPHRASE": "fake-p",
+    "BLOFIN_DEMO_REST_BASE_URL": "https://demo-trading-openapi.blofin.com",
+    "BLOFIN_DEMO_WS_URL": "wss://demo-trading-openapi.blofin.com/ws/public",
+}
+_GOVERNED_DEMO_ENV = {
+    "GOVERNED_BLOFIN_DEMO_ENABLED": "true",
+    "GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID": "11111111-1111-1111-1111-111111111111",
+    "GOVERNED_BLOFIN_DEMO_USER_ID": "22222222-2222-2222-2222-222222222222",
+    "GOVERNED_BLOFIN_DEMO_ACCOUNT_ID": "33333333-3333-3333-3333-333333333333",
+}
+
+
+@pytest.mark.parametrize(
+    "venue",
+    [
+        {},
+        _DEMO_EXCHANGE_ENV,
+        {**_DEMO_EXCHANGE_ENV, **_GOVERNED_DEMO_ENV},
+    ],
+    ids=["internal_paper", "paper_exchange_demo", "governed_blofin_demo"],
+)
+def test_armed_telegram_worker_fails_closed_without_bot_token(venue: dict[str, str]) -> None:
+    """An armed worker with no operator channel does not start.
+
+    The one exception is the supervised internal-paper worker (Telegram
+    fail-soft, see tests/test_worker_telegram_failsoft.py). BloFin demo and
+    governed demo configs place venue orders and fail closed for every role.
+    """
+
     env = blueprint_env("alphatrade-paper-worker-staging")
     env.update(
         {
@@ -397,12 +433,16 @@ def test_armed_telegram_worker_fails_closed_without_bot_token() -> None:
             "JWT_SECRET": "j" * 48,
         }
     )
+    env.update(venue)
     assert "TELEGRAM_BOT_TOKEN" not in env
-    for role in (WorkerBootRole.PAPER_WORKER, WorkerBootRole.TELEGRAM_PAPER):
+    roles = [WorkerBootRole.TELEGRAM_PAPER]
+    if venue:
+        roles.append(WorkerBootRole.PAPER_WORKER)
+    for role in roles:
         result = _run_child(_VALIDATE_SCRIPT, env, "worker", role.value)
-        assert result["ok"] is False
+        assert result["ok"] is False, role
         error = str(result["error"])
-        assert "telegram_paper_activation_armed" in error
+        assert "telegram_paper_activation_armed" in error, role
 
 
 @pytest.fixture
