@@ -80,6 +80,33 @@ async function refreshAccessToken(): Promise<boolean> {
   return refreshInFlight.promise;
 }
 
+// Access tokens are short-lived (15 min). Background pollers such as the
+// kill-switch posture refresh used to send the expired token, take a 401 and
+// only then refresh, so every expiry produced one 401 per open tab. Refresh
+// proactively when the JWT `exp` is near. The 401 retry path stays as the
+// fallback. The payload is decoded only to read `exp`; it is never trusted
+// for authorization (the backend verifies the signature).
+const ACCESS_TOKEN_REFRESH_SKEW_MS = 30_000;
+
+export function accessTokenExpiresAtMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded)) as { exp?: unknown };
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function accessTokenNeedsRefresh(token: string | null, nowMs = Date.now()): boolean {
+  if (!token) return false;
+  const expiresAt = accessTokenExpiresAtMs(token);
+  return expiresAt !== null && expiresAt - nowMs <= ACCESS_TOKEN_REFRESH_SKEW_MS;
+}
+
 function sessionExpiredLoginPath(): string {
   const { pathname, search } = window.location;
   if (pathname.startsWith("/login")) return "/login";
@@ -118,6 +145,12 @@ export async function apiFetch<T>(
       : {}),
     ...(headers as Record<string, string> | undefined),
   };
+
+  if (auth && retryOnUnauthorized && accessTokenNeedsRefresh(getAccessToken())) {
+    // Best effort: on failure fall through and let the 401 path decide.
+    await refreshAccessToken();
+    checkContext();
+  }
 
   if (auth) {
     const token = getAccessToken();
