@@ -39,9 +39,23 @@ class LeverageVenue(Venue):
     stale_readback: bool = False
     open_position: bool = False
     maintenance_rate: str | None = None
+    # After the entry POST, positions return this row (e.g. without liqPrice).
+    post_fill_position: dict | None = None
+    close_posts: int = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path == "/api/v1/trade/close-position":
+            self.close_posts += 1
+            return httpx.Response(200, json={"code": "0", "data": []})
+        if path.endswith("/positions") and self.post_fill_position and self.post_count:
+            row = {**self.post_fill_position}
+            if self.order is not None:
+                signed = ("-" if self.order["side"] == "sell" else "") + self.order["size"]
+                row.setdefault("positions", signed)
+                row.setdefault("marginMode", self.order["marginMode"])
+                row.setdefault("averagePrice", str(self.price))
+            return httpx.Response(200, json={"code": "0", "data": [row]})
         if path == "/api/v1/account/set-leverage" and self.set_leverage_status != 200:
             self.account_writes.append((path, {}))
             return httpx.Response(
@@ -226,6 +240,21 @@ def _run_worker(
     *,
     auto_write: bool = True,
 ):
+    factory, scan, _loop = _run_worker_with_loop(monkeypatch, venue, config, auto_write=auto_write)
+    return factory, scan
+
+
+def _run_worker_with_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    venue: Venue,
+    config: DemoLeverageConfig,
+    *,
+    auto_write: bool = True,
+):
+    """Run one worker cycle; also return a demo loop for venue reconciliation."""
+
+    from app.signal_fusion.memory import FrozenClock
+
     factory = phase7_plan_session_factory()
     with factory() as session:
         _seed(session)
@@ -259,7 +288,10 @@ def _run_worker(
     runtime._settings = settings
     cycle = runtime.run_cycle()
     assert cycle.scans and cycle.scans[0].candidate_ids
-    return factory, cycle.scans[0]
+    loop = GovernedBloFinDemoLoop(
+        runtime._canonical_runtime, settings, FrozenClock(EVALUATED_AT), provider=provider
+    )
+    return factory, cycle.scans[0], loop
 
 
 def _price() -> Decimal:
@@ -526,3 +558,102 @@ def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.Monk
     assert flattened == [("BTC-USDT", "isolated")]
     assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_BUFFER"
     assert alerts and alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"
+
+
+# --- Griller #412 re-review C-a: failed close and unreadable liqPrice paths ---
+
+
+class _RecordingSwitch:
+    activated: list[dict]
+
+    def __init__(self, *_a: object, **_k: object) -> None:
+        return None
+
+    def activate(self, **kwargs: object) -> None:
+        type(self).activated.append(dict(kwargs))
+
+
+def _hold_loop(monkeypatch: pytest.MonkeyPatch, provider: object):
+    from types import SimpleNamespace
+
+    from app.services import governed_blofin_demo as mod
+
+    alerts: list[dict] = []
+
+    class _Alerts:
+        def __init__(self, *_a: object, **_k: object) -> None:
+            return None
+
+        def create(self, **kwargs: object) -> None:
+            alerts.append(dict(kwargs))
+
+    switch = type("_Switch", (_RecordingSwitch,), {"activated": []})
+    monkeypatch.setattr(mod, "KillSwitchService", switch)
+    monkeypatch.setattr(mod, "PaperAlertService", _Alerts)
+    monkeypatch.setattr(mod, "AuditService", lambda _s: None)
+    loop = object.__new__(GovernedBloFinDemoLoop)
+    loop._settings = SimpleNamespace()
+    monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _self: provider)
+    return loop, alerts, switch.activated
+
+
+def test_failed_close_returns_flatten_failed_arms_switch_and_says_close_manually(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    class _FailingProvider:
+        def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
+            raise RuntimeError("venue close rejected")
+
+    loop, alerts, activated = _hold_loop(monkeypatch, _FailingProvider())
+    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    plan = _configured_plan("long", Decimal("95"))
+    assert loop._flatten_after_liquidation_breach(command=command, plan=plan) == "flatten_failed"
+    effect = SimpleNamespace(reconciliation_disposition=None)
+    # Must not raise: the hold still arms the switch and records the alert.
+    loop._hold_profile_liquidation(
+        object(),  # type: ignore[arg-type]
+        command=command,  # type: ignore[arg-type]
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        protected=True,
+        plan=plan,
+    )
+    assert len(activated) == 1
+    assert activated[0]["organization_id"] == command.organization_id
+    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
+    assert len(alerts) == 1
+    assert alerts[0]["metadata"]["flatten_outcome"] == "flatten_failed"
+    assert alerts[0]["metadata"]["auto_close"] is False
+    assert "close the position manually" in str(alerts[0]["message"])
+
+
+@requires_postgres
+def test_unreadable_liquidation_on_configured_fill_warns_without_hold_or_flatten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import ExecutionCommand, KillSwitchState, VenueSubmitEffect
+
+    venue = LeverageVenue(
+        _price(),
+        # Open NET position with no liqPrice (cross positions may omit it).
+        post_fill_position={"instId": "BTC-USDT", "positionSide": "net"},
+    )
+    factory, scan, loop = _run_worker_with_loop(
+        monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default")
+    )
+    assert scan.trade_plan_revision_id is not None, scan.paper_loop_reason
+    assert venue.post_count == 1
+    with factory() as session:
+        command = session.scalar(select(ExecutionCommand))
+        assert command is not None
+        result = loop.reconcile_command(session, command_id=command.id)
+        assert not result.startswith("demo_post_fill_liquidation"), result
+        effect = session.scalar(select(VenueSubmitEffect))
+        assert effect is not None
+        assert effect.reconciliation_disposition != "DEMO_LIQUIDATION_UNREADABLE"
+        switch = session.scalar(select(KillSwitchState))
+        assert switch is None or not switch.active, switch.reason
+    assert venue.close_posts == 0
