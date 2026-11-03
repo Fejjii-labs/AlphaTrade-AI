@@ -32,7 +32,7 @@ const COLUMNS: Array<DataTableColumn<StrategyStatsRow>> = [
   },
   { id: "closed", header: "Trades", numeric: true, cell: (row) => formatCount(row.stats.closed_trades) },
   { id: "win", header: "Win rate", numeric: true, cell: (row) => formatPercent(row.stats.win_rate) },
-  { id: "pnl", header: "P&L", numeric: true, cell: (row) => formatMonetary(row.stats.net_pnl) },
+  { id: "pnl", header: "P&L", numeric: true, cell: (row) => (row.stats.closed_trades ? formatMonetary(row.stats.net_pnl) : "—") },
   { id: "open", header: "Open", numeric: true, cell: (row) => formatCount(row.stats.open_positions) },
 ];
 

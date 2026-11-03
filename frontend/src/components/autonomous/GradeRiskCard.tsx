@@ -49,12 +49,12 @@ export function GradeRiskCard({ profiles }: { profiles: RiskPolicyView[] }) {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle font-data">
+              <tbody className="divide-y divide-border-subtle">
                 {GRADES.map(([grade, key]) => (
                   <tr key={key}>
                     <th scope="row" className="py-1.5 pr-3 font-normal text-text-secondary">Grade {grade}</th>
                     {profiles.map((p) => (
-                      <td key={p.kind} className="py-1.5 pr-3 text-end">{show(p.profile[key], "%")}</td>
+                      <td key={p.kind} className="py-1.5 pr-3 text-end font-data">{show(p.profile[key], "%")}</td>
                     ))}
                   </tr>
                 ))}
@@ -62,7 +62,7 @@ export function GradeRiskCard({ profiles }: { profiles: RiskPolicyView[] }) {
                   <tr key={key}>
                     <th scope="row" className="py-1.5 pr-3 font-normal text-text-secondary">{label}</th>
                     {profiles.map((p) => (
-                      <td key={p.kind} className="py-1.5 pr-3 text-end">{show(p.profile[key], unit)}</td>
+                      <td key={p.kind} className="py-1.5 pr-3 text-end font-data">{show(p.profile[key], unit)}</td>
                     ))}
                   </tr>
                 ))}
