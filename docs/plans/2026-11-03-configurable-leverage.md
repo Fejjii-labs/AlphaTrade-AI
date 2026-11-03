@@ -105,5 +105,5 @@ demo `_bound` path.
   only). Rate limits are the client's 5 req/s throttle.
 - Non-profile configured plans do not get the profile post-fill liquidation hold (kept out of
   scope to avoid stalling reconciliation on venues that omit a cross liquidation price).
-- `frontend/src/lib/api/generated/openapi.json` was not regenerated; the hand-written
-  `types.ts` carries the new fields.
+- The OpenAPI contract (`frontend/src/lib/api/generated/`) was regenerated with
+  `npm run api:generate`; `npm run api:check` passes.
