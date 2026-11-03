@@ -10,6 +10,9 @@ services:
     region: frankfurt
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
+    # Keep /health. /health/paper-worker returns 503 while the worker is
+    # degraded; pointing Render here would restart-loop every degraded boot.
+    # Pinned by tests/test_render_health_check_path.py.
     healthCheckPath: /health
     preDeployCommand: alembic upgrade head
     envVars:
