@@ -1,0 +1,249 @@
+# DRAFT — AlphaTrade AI PRODUCTION Blueprint. NOT APPLIED. NOT LINKED.
+# See docs/production_readiness_plan.md before using this file.
+# Rules:
+#  * Do not create a Render Blueprint from this file without Sofien's written go
+#    (it creates paid services). Do not point the staging Blueprint at it.
+#  * Every runtime-managed / operator flag is sync: false so a Blueprint sync
+#    can never reset it (the 30 Oct staging reset). Hard safety values
+#    (ENABLE_REAL_TRADING=false, EXECUTION_MODE=paper) stay pinned in-file.
+#  * Real trading stays off: backend/src/app/core/deployment_safety.py refuses
+#    to boot with enable_real_trading / execution_mode != paper.
+# Docs: docs/staging_deployment_runbook.md
+# Set secret env vars in the Render dashboard; never commit real values.
+
+services:
+  - type: web
+    name: alphatrade-api-production
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    preDeployCommand: alembic upgrade head
+    autoDeploy: false   # production deploys are manual, after staging soak
+    envVars:
+      # Operator-controlled flags use sync: false so Blueprint syncs never
+      # reset them; set them in the Render dashboard.
+      # Open item P1 (see plan): ENVIRONMENT=production currently forbids
+      # watcher, BloFin demo, exit monitor and Telegram (deployment_safety.py).
+      # Operator sets it; sync: false so a sync cannot flip it.
+      - key: ENVIRONMENT
+        sync: false
+      - key: EXECUTION_MODE
+        value: paper
+      - key: ENABLE_REAL_TRADING
+        value: false
+      - key: PROVIDER_MODE
+        sync: false
+      - key: EXCHANGE_MODE
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: EMBEDDINGS_MODEL
+        value: text-embedding-3-small
+      - key: BILLING_ENABLED
+        sync: false
+      - key: ALERT_DELIVERY_ENABLED
+        sync: false
+      - key: ALERT_WEBHOOK_ENABLED
+        sync: false
+      - key: TELEGRAM_ALERTS_ENABLED
+        sync: false
+      - key: TELEGRAM_INTERACTION_ENABLED
+        sync: false
+      - key: AUTOMATIC_TELEGRAM_DELIVERY_ENABLED
+        sync: false
+      - key: EMAIL_PROVIDER
+        sync: false
+      - key: EMAIL_ALERTS_ENABLED
+        sync: false
+      - key: MARKET_WATCHER_ENABLED
+        sync: false
+      - key: MARKET_WATCHER_BRIDGE_ENABLED
+        sync: false
+      - key: MARKET_WATCHER_BRIDGE_AUTO_TICK
+        sync: false
+      - key: WATCHER_ORCHESTRATION_ENABLED
+        sync: false
+      - key: ENABLE_PAPER_SCHEDULER
+        sync: false
+      - key: PAPER_SIGNAL_ORCHESTRATION_ENABLED
+        sync: false
+      - key: TRADINGVIEW_WEBHOOK_ENABLED
+        sync: false
+      - key: METRICS_ENABLED
+        sync: false
+      - key: MARKET_DATA_ENABLED
+        value: true
+      # Controlled public USD-M evidence. No API key. Apply with the runbook;
+      # this blueprint is not a deploy by itself.
+      - key: PERPETUAL_EVIDENCE_SOURCE
+        value: binance_usdm
+      - key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE
+        value: bybit_usdt_perpetual
+      - key: MARKET_DATA_FUTURES_BASE_URL
+        value: https://fapi.binance.com
+      - key: BYBIT_PERPETUAL_BASE_URL
+        value: https://api.bybit.com
+      - key: PERPETUAL_EVIDENCE_TIMEOUT_SECONDS
+        value: "10"
+      - key: DEBUG
+        value: false
+      - key: LOG_JSON
+        value: true
+      - key: AUTH_REFRESH_COOKIE_ENABLED
+        value: true
+      - key: AUTH_OMIT_REFRESH_FROM_BODY
+        value: true
+      - key: AUTH_COOKIE_SECURE
+        value: true
+      - key: AUTH_COOKIE_SAMESITE
+        value: none
+      - key: ACCESS_TOKEN_DENYLIST_ENABLED
+        value: true
+      - key: ACCESS_TOKEN_DENYLIST_USE_REDIS
+        value: true
+      - key: ACCESS_TOKEN_DENYLIST_FAIL_CLOSED
+        value: true
+      - key: RATE_LIMIT_USE_REDIS
+        value: true
+      # AT-018: Redis is required outside local; no in-memory fallback.
+      - key: RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK
+        value: false
+      # AT-018: exactly one trusted reverse proxy (Render) in front of the app.
+      - key: TRUSTED_PROXY_HOPS
+        value: 1
+      - key: REQUIRE_EMAIL_VERIFIED
+        sync: false
+      # Demo seed is refused in production by demo_seed_service.
+      - key: DEMO_SEED_ENABLED
+        value: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # Production paper/demo worker. Same image and plan as staging. Flags are
+  # operator-managed (sync: false). No secrets in this file.
+  - type: worker
+    name: alphatrade-paper-worker-production
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: python -m app.workers.paper_worker
+    # SIGTERM grace (Render default 30s): watcher join up to 30s + lease
+    # release wait up to 10s + close. Gives graceful lease release a better
+    # chance on deploy; a cycle that outlasts the wait still falls back to the
+    # lease TTL.
+    maxShutdownDelaySeconds: 60
+    autoDeploy: false   # production deploys are manual, after staging soak
+    envVars:
+      # Operator-controlled flags use sync: false so Blueprint syncs never
+      # reset them; set them in the Render dashboard.
+      # Open item P1 (see plan): ENVIRONMENT=production currently forbids
+      # watcher, BloFin demo, exit monitor and Telegram (deployment_safety.py).
+      # Operator sets it; sync: false so a sync cannot flip it.
+      - key: ENVIRONMENT
+        sync: false
+      - key: EXECUTION_MODE
+        value: paper
+      - key: ENABLE_REAL_TRADING
+        value: false
+      - key: EXCHANGE_MODE
+        sync: false
+      - key: WATCHER_ORCHESTRATION_ENABLED
+        sync: false
+      - key: WATCHER_PAPER_STAGING_ACTIVATION
+        sync: false
+      # Optional controlled acceptance tenant. Leave unset for normal round-robin.
+      - key: WATCHER_PAPER_ORGANIZATION_ID
+        sync: false
+      - key: MARKET_WATCHER_ENABLED
+        sync: false
+      - key: MARKET_WATCHER_BRIDGE_ENABLED
+        sync: false
+      - key: TELEGRAM_ALERTS_ENABLED
+        sync: false
+      - key: TELEGRAM_INTERACTION_ENABLED
+        sync: false
+      - key: AUTOMATIC_TELEGRAM_DELIVERY_ENABLED
+        sync: false
+      - key: TELEGRAM_PAPER_ACTIVATION_ARMED
+        sync: false
+      - key: TELEGRAM_INBOUND_MODE
+        sync: false
+      - key: TELEGRAM_NETWORK_PERMITTED
+        sync: false
+      - key: PROVIDER_MODE
+        sync: false
+      - key: MARKET_DATA_ENABLED
+        value: true
+      - key: PERPETUAL_EVIDENCE_SOURCE
+        value: binance_usdm
+      - key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE
+        value: bybit_usdt_perpetual
+      - key: MARKET_DATA_FUTURES_BASE_URL
+        value: https://fapi.binance.com
+      - key: BYBIT_PERPETUAL_BASE_URL
+        value: https://api.bybit.com
+      - key: PERPETUAL_EVIDENCE_TIMEOUT_SECONDS
+        value: "10"
+      - key: DEBUG
+        value: false
+      - key: LOG_JSON
+        value: true
+      - key: AUTH_REFRESH_COOKIE_ENABLED
+        value: true
+      - key: AUTH_OMIT_REFRESH_FROM_BODY
+        value: true
+      - key: AUTH_COOKIE_SECURE
+        value: true
+      - key: AUTH_COOKIE_SAMESITE
+        value: none
+      - key: ACCESS_TOKEN_DENYLIST_ENABLED
+        value: true
+      - key: ACCESS_TOKEN_DENYLIST_USE_REDIS
+        value: true
+      - key: ACCESS_TOKEN_DENYLIST_FAIL_CLOSED
+        value: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_USE_REDIS
+        value: true
+      - key: RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK
+        value: false
+      - key: TRUSTED_PROXY_HOPS
+        value: 1
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+# Production database (draft). Separate from alphatrade-postgres-staging so
+# staging tests can never touch production rows. basic_256mb = same as staging.
+databases:
+  - name: alphatrade-postgres-production
+    plan: basic_256mb
+    region: frankfurt
+    databaseName: alphatrade
+    postgresMajorVersion: "18"
+    ipAllowList: []   # internal-only; staging is currently 0.0.0.0/0
