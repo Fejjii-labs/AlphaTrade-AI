@@ -236,7 +236,8 @@ def test_kill_switch_blocks_and_unreadable_state_fails_closed() -> None:
 
 def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
     assert configured_risk_refusal(_limits()) is None
-    assert configured_risk_refusal(_limits(pending_notional=Decimal("251"))) == "max_position_size"
+    # The per-symbol cap is removed: a symbol above its old cap is allowed.
+    assert configured_risk_refusal(_limits(pending_notional=Decimal("251"))) is None
     assert (
         configured_risk_refusal(
             _limits(
@@ -245,7 +246,7 @@ def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
                 pending_notional=Decimal("200"),
             )
         )
-        == "max_position_size"
+        is None
     )
     over_exposure = _limits(max_symbol_notional=Decimal("5000"), pending_notional=Decimal("1001"))
     assert configured_risk_refusal(over_exposure) == "max_exposure"
@@ -273,9 +274,8 @@ def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
     )
     assert configured_risk_refusal(None) == "risk_limits_unverified"
     assert configured_risk_refusal(_limits(max_notional=Decimal("NaN"))) == "risk_limits_unverified"
-    assert configured_risk_refusal(_limits(symbol_reserved={"BTCUSDT": "nope"})) == (
-        "risk_limits_unverified"
-    )
+    # Per-symbol books are no longer read by the refusal (symbol cap removed).
+    assert configured_risk_refusal(_limits(symbol_reserved={"BTCUSDT": "nope"})) is None
 
 
 def test_disarmed_demo_keeps_the_governed_api_approval(

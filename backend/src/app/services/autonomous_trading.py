@@ -17,7 +17,7 @@ claim, reservation, and venue gates.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
@@ -275,16 +275,6 @@ def configured_risk_refusal(snapshot: RiskLimitSnapshot | None) -> str | None:
         return "risk_limits_unverified"
     if snapshot.daily_locked:
         return "daily_loss_limit"
-    try:
-        symbol_reserved = _symbol_amount(snapshot.symbol_reserved, snapshot.instrument)
-        symbol_actual = _symbol_amount(snapshot.symbol_actual, snapshot.instrument)
-    except (InvalidOperation, ValueError, TypeError):
-        return "risk_limits_unverified"
-    if snapshot.pending_notional > snapshot.max_symbol_notional:
-        return "max_position_size"
-    remaining_symbol = snapshot.max_symbol_notional - symbol_reserved - symbol_actual
-    if snapshot.pending_notional > remaining_symbol:
-        return "max_position_size"
     if snapshot.pending_notional > snapshot.max_notional:
         return "max_exposure"
     remaining_notional = (
@@ -340,13 +330,3 @@ def _enum_value(value: object) -> str | None:
         return None
     text = raw.strip().lower()
     return text or None
-
-
-def _symbol_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
-    if book is None:
-        return Decimal("0")
-    raw = book.get(instrument, "0")
-    amount = Decimal(str(raw))
-    if not amount.is_finite() or amount < 0:
-        raise ValueError("symbol exposure is not a usable amount")
-    return amount

@@ -28,9 +28,9 @@ class LedgerCaps:
 
     @property
     def symbol_cap_independent(self) -> bool:
-        return (
-            self.max_symbol_notional < self.max_notional and self.max_daily_loss < self.max_notional
-        )
+        # The per-symbol cap is no longer enforced; only daily loss must sit
+        # below aggregate notional.
+        return self.max_daily_loss < self.max_notional
 
 
 def caps_for_ledger(profile: RiskPolicyProfile, equity: Decimal) -> LedgerCaps:
@@ -52,16 +52,3 @@ def caps_for_ledger(profile: RiskPolicyProfile, equity: Decimal) -> LedgerCaps:
     if not caps.symbol_cap_independent:
         raise RiskPolicyRejected("symbol_cap_not_independent_of_notional")
     return caps
-
-
-def ledger_symbol_cap_equals_notional(max_symbol_notional: Decimal, max_notional: Decimal) -> bool:
-    """True when the 258 row still has the unverified equal-cap fallback."""
-
-    if (
-        not isinstance(max_symbol_notional, Decimal)
-        or not isinstance(max_notional, Decimal)
-        or not max_symbol_notional.is_finite()
-        or not max_notional.is_finite()
-    ):
-        raise RiskPolicyRejected("ledger_caps_unreadable")
-    return max_symbol_notional >= max_notional

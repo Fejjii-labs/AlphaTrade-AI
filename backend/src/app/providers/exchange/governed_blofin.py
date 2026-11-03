@@ -35,6 +35,8 @@ def demo_order_margin_mode(margin_assumption_id: str) -> str:
 
     if margin_assumption_id == "verified-demo-read-leverage":
         return "isolated"
+    if margin_assumption_id == "verified-demo-existing-leverage-isolated":
+        return "isolated"
     return "cross"
 
 
@@ -182,8 +184,8 @@ class GovernedBloFinDemoProvider:
         now: datetime,
         side: EntrySide,
         quantity: Decimal | None = None,
-        required_leverage: Decimal | None = Decimal("1"),
-        margin_mode: str = "cross",
+        required_leverage: Decimal | None = None,
+        margin_mode: str | None = None,
     ) -> DemoVenueSnapshot:
         self.verify_permissions()
         with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
@@ -410,13 +412,15 @@ class GovernedBloFinDemoProvider:
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
         profile_sized = plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage"
+        # Trade at the demo account's existing leverage and margin mode. Read
+        # only: no leverage or margin-mode write is ever sent.
         snapshot = self.snapshot(
             symbol=plan.execution_instrument.replace("-", ""),
             now=self._clock(),
             side=plan.side,
             quantity=plan.quantity.value,
-            required_leverage=plan.risk_and_exits.leverage if profile_sized else Decimal("1"),
-            margin_mode="isolated" if profile_sized else "cross",
+            required_leverage=plan.risk_and_exits.leverage if profile_sized else None,
+            margin_mode=demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id),
         )
         rules = plan.instrument_rules
         if (snapshot.tick, snapshot.lot, snapshot.minimum, snapshot.multiplier) != (

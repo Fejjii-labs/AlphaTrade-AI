@@ -465,7 +465,8 @@ def test_risk_percent_rule_enforces_the_ceiling_and_the_ledger() -> None:
         symbol_cap=Decimal("10000"),
         notional=Decimal("10000"),
     )
-    assert equal.action is RiskAction.BLOCK
+    # Equal symbol and total caps no longer block: the symbol cap is removed.
+    assert equal.action is RiskAction.ALLOW
     independent = check(
         risk_percent=Decimal("1"),
         symbol_cap=Decimal("1000"),
@@ -473,7 +474,7 @@ def test_risk_percent_rule_enforces_the_ceiling_and_the_ledger() -> None:
     )
     assert independent.action is RiskAction.ALLOW
     partial = check(symbol_cap=Decimal("1000"))
-    assert partial.action is RiskAction.BLOCK
+    assert partial.action is RiskAction.ALLOW
 
 
 def test_promotion_report_stays_manual_and_flags_demotion() -> None:

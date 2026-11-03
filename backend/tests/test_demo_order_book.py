@@ -345,7 +345,9 @@ def test_manual_confirmation_conservative_size_bound_survives_balance_drop():
     assert venue.post_count == 0
 
 
-@pytest.mark.parametrize("mode", ["top", "depth", "size", "side"])
+# "size" is gone: the old 10%-of-equity notional cap was replaced by the
+# stop-loss band and the account's existing leverage.
+@pytest.mark.parametrize("mode", ["top", "depth", "side"])
 def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode):
     from app.services import governed_blofin_demo
     from tests.support.phase7_trade_plan import make_world, plan_terms
@@ -401,7 +403,13 @@ def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode
     loop._snapshot = provider(control.handle).snapshot(
         symbol="BTCUSDT", now=EVALUATED_AT, side=terms.side
     )
-    assert not isinstance(evaluate(), str)
+    control_plan = evaluate()
+    assert not isinstance(control_plan, str)
+    # Stop-distance loss lands inside the default 1%-5% equity band.
+    loss = control_plan.risk_and_exits.maximum_loss.value
+    equity = min(Decimal("10000"), loop._snapshot.equity, loop._snapshot.available)
+    assert equity * Decimal("0.01") <= loss <= equity * Decimal("0.05")
+    assert (control_plan.valid_until - loop._snapshot.observed_at).total_seconds() > 3
     venue = Venue(Decimal("99999.9") if mode in {"top", "size"} else Decimal("100000"))
 
     def handle(request):
