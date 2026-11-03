@@ -337,6 +337,85 @@ def test_operator_flags_are_not_synced_by_blueprint() -> None:
                 assert "value" not in item, (name, item["key"])
 
 
+# Data-source toggles and arm flags are operator-owned: declared, never synced.
+OPERATOR_DATA_SOURCE_KEYS = (
+    "MARKET_DATA_ENABLED",
+    "PERPETUAL_EVIDENCE_SOURCE",
+    "PERPETUAL_EVIDENCE_SECONDARY_SOURCE",
+    "PERPETUAL_EVIDENCE_TIMEOUT_SECONDS",
+    "MARKET_WATCHER_BRIDGE_AUTO_TICK",
+)
+OPERATOR_ARM_KEYS = (
+    "AUTONOMOUS_INTERNAL_PAPER_ENABLED",
+    "AUTONOMOUS_BLOFIN_DEMO_ENABLED",
+    "GOVERNED_BLOFIN_DEMO_ENABLED",
+    "GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID",
+    "GOVERNED_BLOFIN_DEMO_USER_ID",
+    "GOVERNED_BLOFIN_DEMO_ACCOUNT_ID",
+)
+# Safety pins and host pins stay synced literals: a sync pulls them back.
+BLUEPRINT_LITERALS: dict[str, str] = {
+    "ENVIRONMENT": "staging",
+    "EXECUTION_MODE": "paper",
+    "ENABLE_REAL_TRADING": "false",
+    "MARKET_DATA_FUTURES_BASE_URL": "https://fapi.binance.com",
+    "BYBIT_PERPETUAL_BASE_URL": "https://api.bybit.com",
+    "BLOFIN_DEMO_REST_BASE_URL": "https://demo-trading-openapi.blofin.com",
+    "BLOFIN_DEMO_WS_URL": "wss://demo-trading-openapi.blofin.com/ws/public",
+    "AUTH_REFRESH_COOKIE_ENABLED": "true",
+    "AUTH_OMIT_REFRESH_FROM_BODY": "true",
+    "AUTH_COOKIE_SECURE": "true",
+    "AUTH_COOKIE_SAMESITE": "none",
+    "ACCESS_TOKEN_DENYLIST_ENABLED": "true",
+    "ACCESS_TOKEN_DENYLIST_USE_REDIS": "true",
+    "ACCESS_TOKEN_DENYLIST_FAIL_CLOSED": "true",
+}
+
+
+def _env_items(service_name: str) -> dict[str, dict[str, object]]:
+    items = blueprint_services()[service_name]["envVars"]
+    assert isinstance(items, list)
+    keys = [str(item["key"]) for item in items]
+    assert len(keys) == len(set(keys)), service_name
+    return {str(item["key"]): item for item in items}
+
+
+def test_operator_data_source_and_arm_keys_are_declared_unsynced() -> None:
+    worker = _env_items("alphatrade-paper-worker-staging")
+    api = _env_items("alphatrade-api-staging")
+    for items, keys in (
+        (worker, OPERATOR_DATA_SOURCE_KEYS + OPERATOR_ARM_KEYS),
+        (api, OPERATOR_DATA_SOURCE_KEYS),
+    ):
+        for key in keys:
+            assert key in items, key
+            assert items[key].get("sync") is False, key
+            assert "value" not in items[key], key
+
+
+def test_declared_arm_keys_default_off_when_unset() -> None:
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    for key in OPERATOR_ARM_KEYS:
+        value = getattr(settings, key.lower())
+        assert value in (False, ""), (key, value)
+
+
+def test_safety_and_host_pins_stay_synced_literals() -> None:
+    from app.core.exchange_safety import is_allowlisted_demo_host
+
+    for name in blueprint_services():
+        items = _env_items(name)
+        for key, expected in BLUEPRINT_LITERALS.items():
+            assert key in items, (name, key)
+            assert "sync" not in items[key], (name, key)
+            value = items[key]["value"]
+            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            assert text == expected, (name, key)
+        assert str(items["CORS_ORIGINS"]["value"]).startswith("https://")
+        assert is_allowlisted_demo_host(str(items["BLOFIN_DEMO_REST_BASE_URL"]["value"]))
+        assert is_allowlisted_demo_host(str(items["BLOFIN_DEMO_WS_URL"]["value"]))
+
+
 def test_literal_blueprint_without_worker_role_still_fails_closed() -> None:
     for name, _role in _WORKERS:
         result = _run_child(_VALIDATE_SCRIPT, blueprint_env(name), "raw", "")
