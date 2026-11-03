@@ -139,8 +139,8 @@ ENV_FILE=.env.staging ./scripts/check-env.sh
 ./scripts/provider-validation-smoke.sh local
 ```
 
-Voice (optional): set `AGENT_REALTIME_ENABLED=true`, `AGENT_VOICE_REASONING_MODEL=gpt-6-luna`
-and `AGENT_REALTIME_LIMITS_FILE=/app/src/app/agent_voice/receipts/staging_voice_limits_2026-11.json`.
+Voice (optional): set `AGENT_REALTIME_ENABLED=true`, `AGENT_VOICE_REASONING_MODEL=gpt-6.1-sol`
+and `AGENT_REALTIME_LIMITS_FILE=/app/src/app/agent_voice/receipts/staging_voice_limits_2026-11.json`. It must equal `reasoning.model` in that limits file, otherwise `/agent/voice/config` reports `verified_reasoning_route_mismatch` and live voice stays hidden.
 The receipt prices assume OpenAI's **global endpoint** (`api.openai.com`, standard tier, no
 data-residency uplift); the voice sockets refuse other endpoints, so a regional/data-residency
 endpoint would need a new receipt priced for it.
