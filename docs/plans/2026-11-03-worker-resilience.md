@@ -148,8 +148,12 @@ Other dashboard-only keys (`PAPER_EXIT_MONITOR_ENABLED`, `TELEGRAM_BOT_TOKEN`, `
 > literal to `sync: false` (does the current value stay?), and (b) dashboard keys that the
 > Blueprint does not declare (are they kept or removed on sync?). Check this against the
 > Render Blueprint docs (`render.yaml` spec, `sync: false`) before relying on it. If Render
-> drops a value, the code default applies: replay evidence and arm flags off, so the worker
-> fails toward disarmed, never toward trading.
+> drops a value, the code default applies: replay evidence and arm flags off. That fails
+> closed, never toward trading, but it is not quiet: with the Watcher arm flags still on,
+> Settings refuses replay evidence and the armed worker does not boot ("watcher paper
+> activation refuses replay evidence"). Before applying D, confirm in the dashboard that
+> `PERPETUAL_EVIDENCE_SOURCE`, `PERPETUAL_EVIDENCE_SECONDARY_SOURCE` and `MARKET_DATA_ENABLED`
+> hold the staging values on both services.
 
 ## Binance fallback proposal
 
