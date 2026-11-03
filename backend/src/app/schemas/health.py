@@ -133,6 +133,49 @@ class WorkerEffectiveObservation(BaseModel):
     real_trading_enabled: Literal[False] = False
 
 
+class WorkerConfigCheck(BaseModel):
+    """One staging flag the armed paper posture needs. Never a secret value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    expected: str
+    actual: str
+    ok: bool
+
+
+class WorkerConfigObservation(BaseModel):
+    """Boot config report published by the worker.
+
+    ``status`` is ``unknown`` when no report row exists. ``not_applicable``
+    outside staging. ``disarmed_unexpected`` when the Watcher arm is off.
+    ``degraded`` when an auxiliary feature (Telegram, autonomy) is off.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["unknown", "ok", "degraded", "disarmed_unexpected", "not_applicable"] = (
+        "unknown"
+    )
+    reported_at: datetime | None = None
+    checks: list[WorkerConfigCheck] = Field(default_factory=list)
+
+
+class MarketDataBanObservation(BaseModel):
+    """Binance REST gate posture last published by the worker.
+
+    ``banned`` is true only while a 418 ban has not yet expired.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    banned: bool = False
+    state: str = "unknown"
+    until: datetime | None = None
+    last_status_code: int | None = None
+    observed_at: datetime | None = None
+
+
 class PaperWorkerHeartbeatResponse(BaseModel):
     """External liveness of the paper worker.
 
@@ -158,6 +201,8 @@ class PaperWorkerHeartbeatResponse(BaseModel):
     exit_monitor_alert_raised: bool = False
     kill_switch: PaperWorkerKillSwitch = Field(default_factory=PaperWorkerKillSwitch)
     worker_effective: WorkerEffectiveObservation = Field(default_factory=WorkerEffectiveObservation)
+    worker_config: WorkerConfigObservation = Field(default_factory=WorkerConfigObservation)
+    market_data_ban: MarketDataBanObservation = Field(default_factory=MarketDataBanObservation)
     timestamp: datetime
 
 

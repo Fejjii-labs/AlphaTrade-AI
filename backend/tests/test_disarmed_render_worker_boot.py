@@ -176,6 +176,8 @@ else:
             "enable_real_trading": settings.enable_real_trading,
             "real_trading_enabled": settings.real_trading_enabled,
             "execution_mode": settings.execution_mode.value,
+            "telegram_paper_activation_armed": settings.telegram_paper_activation_armed,
+            "telegram_network_permitted": settings.telegram_network_permitted,
         }))
 """
 
@@ -398,11 +400,17 @@ def test_armed_telegram_worker_fails_closed_without_bot_token() -> None:
         }
     )
     assert "TELEGRAM_BOT_TOKEN" not in env
-    for role in (WorkerBootRole.PAPER_WORKER, WorkerBootRole.TELEGRAM_PAPER):
-        result = _run_child(_VALIDATE_SCRIPT, env, "worker", role.value)
-        assert result["ok"] is False
-        error = str(result["error"])
-        assert "telegram_paper_activation_armed" in error
+    # The dedicated Telegram worker has nothing else to run: it still fails closed.
+    result = _run_child(_VALIDATE_SCRIPT, env, "worker", WorkerBootRole.TELEGRAM_PAPER.value)
+    assert result["ok"] is False
+    assert "telegram_paper_activation_armed" in str(result["error"])
+    # The supervised paper worker boots with Telegram off instead of crash-looping.
+    result = _run_child(_VALIDATE_SCRIPT, env, "worker", WorkerBootRole.PAPER_WORKER.value)
+    assert result["ok"] is True
+    assert result["telegram_paper_activation_armed"] is False
+    assert result["telegram_network_permitted"] is False
+    assert result["real_trading_enabled"] is False
+    assert result["execution_mode"] == "paper"
 
 
 @pytest.fixture

@@ -26026,6 +26026,59 @@
         "title": "MarketAnalyzeResponse",
         "type": "object"
       },
+      "MarketDataBanObservation": {
+        "additionalProperties": false,
+        "description": "Binance REST gate posture last published by the worker.\n\n``banned`` is true only while a 418 ban has not yet expired.",
+        "properties": {
+          "banned": {
+            "default": false,
+            "title": "Banned",
+            "type": "boolean"
+          },
+          "last_status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status Code"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "state": {
+            "default": "unknown",
+            "title": "State",
+            "type": "string"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "title": "MarketDataBanObservation",
+        "type": "object"
+      },
       "MarketDataMeta": {
         "description": "Transparency metadata for market data provenance.",
         "properties": {
@@ -38184,6 +38237,9 @@
           "kill_switch": {
             "$ref": "#/components/schemas/PaperWorkerKillSwitch"
           },
+          "market_data_ban": {
+            "$ref": "#/components/schemas/MarketDataBanObservation"
+          },
           "observation": {
             "$ref": "#/components/schemas/WorkerComponentObservation"
           },
@@ -38200,6 +38256,9 @@
             "format": "date-time",
             "title": "Timestamp",
             "type": "string"
+          },
+          "worker_config": {
+            "$ref": "#/components/schemas/WorkerConfigObservation"
           },
           "worker_effective": {
             "$ref": "#/components/schemas/WorkerEffectiveObservation"
@@ -57431,6 +57490,75 @@
           }
         },
         "title": "WorkerComponentObservation",
+        "type": "object"
+      },
+      "WorkerConfigCheck": {
+        "additionalProperties": false,
+        "description": "One staging flag the armed paper posture needs. Never a secret value.",
+        "properties": {
+          "actual": {
+            "title": "Actual",
+            "type": "string"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "expected",
+          "actual",
+          "ok"
+        ],
+        "title": "WorkerConfigCheck",
+        "type": "object"
+      },
+      "WorkerConfigObservation": {
+        "additionalProperties": false,
+        "description": "Boot config report published by the worker.\n\n``status`` is ``unknown`` when no report row exists. ``not_applicable``\noutside staging. ``disarmed_unexpected`` when the Watcher arm is off.\n``degraded`` when an auxiliary feature (Telegram, autonomy) is off.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerConfigCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "ok",
+              "degraded",
+              "disarmed_unexpected",
+              "not_applicable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "WorkerConfigObservation",
         "type": "object"
       },
       "WorkerControlResponse": {
