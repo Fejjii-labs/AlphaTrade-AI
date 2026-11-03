@@ -220,7 +220,13 @@ class PaperWorkerSupervisor:
         self._demo_snapshot_stop: Callable[[], None] | None = None
         self._exit_monitor: _Component | None = None
         self._exit_monitor_stop: Callable[[], None] | None = None
-        self._memory_diagnostics = WorkerMemoryDiagnostics() if memory_diagnostics_enabled else None
+        self._memory_diagnostics: WorkerMemoryDiagnostics | None = None
+        if memory_diagnostics_enabled:
+            try:
+                self._memory_diagnostics = WorkerMemoryDiagnostics()
+            except Exception as exc:
+                # Diagnostics are opt-in observability. Boot continues without them.
+                logger.error("paper_worker_memory_diagnostics_disabled", error=_safe_error(exc))
 
     def attach_indexing(
         self,
@@ -764,8 +770,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
 
     Disarmed startup constructs Settings and returns ``disarmed`` without
     opening Redis or provider clients. It opens PostgreSQL only to delete
-    leftover ``paper_arming`` and ``paper_exit_monitor`` rows and to retry
-    an unsent kill-switch page, at most once per 60 seconds per version.
+    leftover ``paper_arming`` and ``paper_exit_monitor`` rows, to publish
+    the staging config report, and to retry an unsent kill-switch page, at
+    most once per 60 seconds per version.
     A failure of that open is logged and the
     process still returns ``disarmed``. The demo snapshot cycle is not
     attached while its flag is off or the worker is disarmed. The paper
@@ -792,6 +799,10 @@ def run_paper_worker_process(*, once: bool = False) -> str:
         from app.services.arming_visibility import clear_disarmed_boot_rows
 
         clear_disarmed_boot_rows()
+    from app.services.worker_config_report import publish_worker_config_report
+
+    # Never raises: a degraded or disarmed staging boot is reported, not fatal.
+    publish_worker_config_report(settings)
     from app.services.risk.kill_switch import retry_unsent_kill_switch_alert
 
     retry_unsent_kill_switch_alert(settings)
@@ -922,9 +933,18 @@ def _build_armed_supervisor(
         return outcome
 
     on_stop = compose_watcher_on_stop(stops, releases, closers)
+    from app.services.market_ban_visibility import MarketBanPublisher
+
+    ban_publisher = MarketBanPublisher(watcher_settings, factory)
+
+    def published_watcher_cycle() -> CycleOutcome:
+        try:
+            return research_watcher_cycle()
+        finally:
+            ban_publisher.observe()
 
     return PaperWorkerSupervisor(
-        watcher_cycle=_with_worker_heartbeat(watcher_settings, research_watcher_cycle),
+        watcher_cycle=_with_worker_heartbeat(watcher_settings, published_watcher_cycle),
         watcher_idle_wait=watcher_idle_wait,
         telegram_cycle=telegram_cycle,
         poll_seconds=float(watcher_settings.watcher_paper_poll_interval_seconds),
