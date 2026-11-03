@@ -239,6 +239,64 @@ describe("Autonomous trading settings form", () => {
       expect(screen.getByRole("alert")).toHaveTextContent(/cannot exceed 6%/i);
     });
   });
+
+  it("shows the demo leverage defaults and saves leverage, margin mode and a per-coin override", async () => {
+    auth.membershipRole = "owner";
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({
+      ...settings,
+      demo_leverage: 5,
+      demo_margin_mode: "cross",
+      demo_leverage_overrides: { ETHUSDT: { leverage: 3 } },
+      demo_leverage_using_default: false,
+    });
+    render(<BotSettings />);
+    expect(screen.getByTestId("demo-leverage")).toHaveValue("10");
+    expect(screen.getByTestId("demo-margin-mode")).toHaveValue("isolated");
+    expect(screen.getByTestId("demo-leverage-settings")).toHaveTextContent("1–20x");
+    fireEvent.change(screen.getByTestId("demo-leverage"), { target: { value: "5" } });
+    fireEvent.change(screen.getByTestId("demo-margin-mode"), { target: { value: "cross" } });
+    fireEvent.click(screen.getByTestId("demo-leverage-add-override"));
+    fireEvent.change(screen.getByLabelText("Override coin"), { target: { value: "ETHUSDT" } });
+    fireEvent.change(screen.getByLabelText("Override leverage"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /save bot limits/i }));
+    await waitFor(() => {
+      expect(api.autonomous.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          demo_leverage: 5,
+          demo_margin_mode: "cross",
+          demo_leverage_overrides: { ETHUSDT: { leverage: 3 } },
+        }),
+      );
+    });
+    expect(screen.getByTestId("demo-leverage")).toHaveValue("5");
+  });
+
+  it("refuses leverage above the 20x ceiling before calling the API", async () => {
+    auth.membershipRole = "owner";
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockClear();
+    render(<BotSettings />);
+    fireEvent.change(screen.getByTestId("demo-leverage"), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: /save bot limits/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Leverage cannot exceed 20x.");
+    });
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("explains a server leverage ceiling rejection", async () => {
+    auth.membershipRole = "owner";
+    const { api, ApiError } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(
+      new ApiError("demo_leverage_exceeds_ceiling", 422, null),
+    );
+    render(<BotSettings />);
+    fireEvent.click(screen.getByRole("button", { name: /save bot limits/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Leverage cannot exceed 20x (code ceiling).");
+    });
+  });
 });
 
 it("renders the account limits slot between the paper bot and bot limits cards", () => {
