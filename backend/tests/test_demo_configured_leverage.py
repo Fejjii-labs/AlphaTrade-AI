@@ -368,6 +368,46 @@ def test_configured_plan_is_sized_within_the_remaining_total_exposure(
 
 
 @requires_postgres
+def test_exposure_cap_leaves_room_for_fee_and_slippage_allowances_at_the_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan sized right at the exposure limit still passes the claim.
+
+    The claim reserves notional plus 0.1% fee and 0.1% slippage allowances, so
+    the cap divides the remaining exposure by 1.002. The limit here is exactly
+    350 contracts of notional at the fixture entry (one level, so the worst
+    price is the entry). With the divisor the plan sizes 349 contracts and fits;
+    without it, 350 contracts plus allowances exceed the limit and the claim
+    refuses with no order.
+    """
+
+    from app.db.models import AccountRiskAccountingState
+
+    multiplier = Decimal("0.001")  # Fixture contractValue, lot size 1.
+    entry = _price()  # The fixture setup sells at the bid.
+    contract = entry * multiplier
+    limit = 350 * contract
+    venue = LeverageVenue(_price())
+    factory, scan = _run_worker(
+        monkeypatch,
+        venue,
+        DemoLeverageConfig(10, "isolated", "default"),
+        ledger_max_notional=limit,
+    )
+    assert scan.trade_plan_revision_id is not None, scan.paper_loop_reason
+    assert venue.post_count == 1, scan.paper_loop_reason
+    assert venue.order is not None and venue.order["side"] == "sell"
+    assert venue.order["size"] == "349"
+    with factory() as session:
+        ledger = session.scalar(select(AccountRiskAccountingState))
+        assert ledger is not None and ledger.max_notional == limit
+        used = ledger.reserved_notional + ledger.actual_notional
+        # At the edge: the claim accepted 349 contracts with allowances, and one
+        # more contract with its allowances would not fit.
+        assert used <= limit < (349 + 1) * contract * Decimal("1.002")
+
+
+@requires_postgres
 def test_configured_plan_refuses_when_the_exposure_limit_cannot_hold_the_loss_floor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
