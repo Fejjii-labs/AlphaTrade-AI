@@ -33,10 +33,6 @@ from app.market_contracts.adapters.factory import (
     resolve_perpetual_evidence_source,
 )
 from app.market_contracts.adapters.failover import FailoverPerpetualSource
-from app.market_contracts.adapters.http import (
-    APPROVED_BINANCE_USDM_REST_HOSTS,
-    _retry_after_seconds,
-)
 from app.market_contracts.catalog import catalog_for_symbols, instrument_for_source
 from app.market_contracts.contract_discovery import fetch_binance_usdm_exchange_info
 from app.market_contracts.enums import VenueId
@@ -115,7 +111,6 @@ class WatchlistContractDiscovery:
             transport=self.transport,
             timeout=self.settings.perpetual_evidence_timeout_seconds,
             follow_redirects=False,
-            event_hooks={"response": [self._note_binance_rate_limit]},
         ) as http:
             for symbol in symbols[:5]:
                 for venue in venues:
@@ -147,7 +142,7 @@ class WatchlistContractDiscovery:
                     payload = None if self._binance is None else self._binance[1]
                 elif self._binance is None or not 0 <= now - self._binance[0] < 60:
                     try:
-                        payload = fetch_binance_usdm_exchange_info(client=http)
+                        payload = fetch_binance_usdm_exchange_info(client=http, rest_gate=gate)
                     except ContractProviderUnreachableError:
                         payload = None
                     self._binance = (now, payload)
@@ -179,18 +174,6 @@ class WatchlistContractDiscovery:
         if self._gate is not None:
             return self._gate
         return process_binance_rest_gate() if self.transport is None else None
-
-    def _note_binance_rate_limit(self, response: httpx.Response) -> None:
-        gate = self._rest_gate()
-        if gate is None or response.status_code not in (418, 429):
-            return
-        if (response.request.url.host or "").lower() not in APPROVED_BINANCE_USDM_REST_HOSTS:
-            return
-        response.read()
-        gate.note_failure(
-            "ban" if response.status_code == 418 else "rate_limit",
-            _retry_after_seconds(response),
-        )
 
     def require(self, symbol: str, venue: VenueId) -> None:
         if perpetual_source_is_replay(self.settings):

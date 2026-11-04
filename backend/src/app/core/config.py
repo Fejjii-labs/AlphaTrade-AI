@@ -530,6 +530,22 @@ class Settings(BaseSettings):
     binance_evidence_cache_ttl_seconds: float = Field(default=120.0, gt=0.0, le=3600.0)
     # Raw aggTrade rows above this count are not cached. Reduced snapshots are.
     binance_evidence_cache_max_rows: int = Field(default=4096, ge=1, le=100_000)
+    # Log a WARNING when X-MBX-USED-WEIGHT-1M exceeds this (at most once per interval).
+    # Every 418/429 is logged regardless.
+    binance_used_weight_warn_threshold: int = Field(default=1500, ge=1, le=2400)
+    binance_used_weight_warn_interval_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
+    # Paper worker only: share the Binance ban/backoff deadline across instances
+    # through PostgreSQL. Off keeps the in-process gate alone.
+    binance_gate_persistence_enabled: bool = True
+    # Paper worker only: a new instance holds Binance market reads until the
+    # previous instance's lease is released or expires, at most max_wait.
+    # Off starts market reads immediately (pre-2026-11-04 behaviour).
+    # Startup standby only, not mutual exclusion: keep the paper worker at scale 1.
+    # Both flags off logs binance_gate_coordination_disabled at boot.
+    binance_market_lease_enabled: bool = True
+    binance_market_lease_ttl_seconds: int = Field(default=90, ge=15, le=900)
+    binance_market_lease_heartbeat_seconds: float = Field(default=20.0, ge=1.0, le=300.0)
+    binance_market_lease_max_wait_seconds: float = Field(default=240.0, ge=0.0, le=1800.0)
     # AT-069 continuous read-only monitor. The paper worker ticks it; no Watcher start.
     perpetual_monitor_poll_seconds: float = Field(default=2.0, ge=0.25, le=60.0)
     perpetual_monitor_backoff_initial_seconds: float = Field(default=0.25, ge=0.05, le=10.0)

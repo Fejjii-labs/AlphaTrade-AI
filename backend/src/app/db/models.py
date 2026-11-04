@@ -55,6 +55,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.autonomous_paper_switch import AutonomousPaperSwitchRow  # noqa: F401
 from app.db.autonomous_trading_settings import AutonomousTradingSettingsRow  # noqa: F401
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.binance_rest_coordination import BinanceRestCoordinationRow  # noqa: F401
 from app.db.blofin_activity import (  # noqa: F401
     BloFinActivityAccount,
     BloFinActivityCursor,

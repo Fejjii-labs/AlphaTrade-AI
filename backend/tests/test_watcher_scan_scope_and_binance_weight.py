@@ -21,10 +21,12 @@ from app.market_contracts.adapters.binance_rest_gate import BinanceRestGate
 from app.market_contracts.adapters.binance_usdm import BinanceUsdmPerpetualSource
 from app.market_contracts.adapters.http import ReadOnlyHttpGetClient
 from app.market_contracts.catalog import catalog_for_symbols
+from app.market_contracts.contract_discovery import fetch_binance_usdm_exchange_info
 from app.market_contracts.enums import VenueId
 from app.market_contracts.errors import UpstreamBanError
 from app.market_contracts.first_slice import first_slice_identity
 from app.market_contracts.identity import binance_usdm_btcusdt
+from app.market_contracts.provider_contracts import ContractProviderUnreachableError
 from app.schemas.common import Timeframe
 from app.schemas.nested_continuation import NestedContinuationSpec
 from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
@@ -408,7 +410,9 @@ def test_contract_discovery_honors_and_feeds_the_process_gate() -> None:
         _settings(), transport=httpx.MockTransport(handler), rest_gate=gate
     )
     discovery(discovery.book, ["ETHUSDT"])
-    assert calls[0] == "fapi.binance.com/fapi/v1/exchangeInfo"
+    # One request, one strike: the fallback host waits out the 429 too.
+    assert calls == ["fapi.binance.com/fapi/v1/exchangeInfo"]
+    assert gate.strikes == 1
     closed = gate.remaining()
     assert closed is not None and closed[0] == "rate_limit" and closed[1] >= 119
     assert discovery.verdicts[("ETHUSDT", VenueId.BINANCE)].reason == "provider_unreachable"
@@ -419,6 +423,57 @@ def test_contract_discovery_honors_and_feeds_the_process_gate() -> None:
     discovery(discovery.book, ["ETHUSDT"])
     assert len(calls) == before
     assert discovery.verdicts[("ETHUSDT", VenueId.BINANCE)].reason == "provider_unreachable"
+
+
+def test_exchange_info_fetch_sends_nothing_while_the_gate_is_closed_or_held() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        return httpx.Response(200, json={"futuresType": "U_MARGINED", "symbols": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    held = BinanceRestGate(rng=lambda: 0.0)
+    held.hold(240.0)
+    with pytest.raises(ContractProviderUnreachableError):
+        fetch_binance_usdm_exchange_info(client=client, rest_gate=held)
+    banned = BinanceRestGate(rng=lambda: 0.0)
+    banned.adopt_deadline("ban", datetime.now(UTC).timestamp() + 600)
+    with pytest.raises(ContractProviderUnreachableError):
+        fetch_binance_usdm_exchange_info(client=client, rest_gate=banned)
+    assert calls == []
+
+
+def test_exchange_info_fetch_records_weight_and_stops_on_418() -> None:
+    calls: list[str] = []
+
+    def ok(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        return httpx.Response(
+            200,
+            headers={"X-MBX-USED-WEIGHT-1M": "41"},
+            json={"futuresType": "U_MARGINED", "symbols": []},
+        )
+
+    gate = BinanceRestGate(rng=lambda: 0.0)
+    ok_client = httpx.Client(transport=httpx.MockTransport(ok))
+    fetch_binance_usdm_exchange_info(client=ok_client, rest_gate=gate)
+    assert gate.last_used_weight == 41
+
+    def banned(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        return httpx.Response(418, headers={"Retry-After": "300"})
+
+    calls.clear()
+    with pytest.raises(ContractProviderUnreachableError):
+        fetch_binance_usdm_exchange_info(
+            client=httpx.Client(transport=httpx.MockTransport(banned)), rest_gate=gate
+        )
+    # One 418, one strike; the fallback host is not tried during the ban.
+    assert calls == ["fapi.binance.com"]
+    assert gate.strikes == 1
+    closed = gate.remaining()
+    assert closed is not None and closed[0] == "ban" and closed[1] >= 299
 
 
 def test_exact_scopes_are_never_starved_by_projections(tenant_store) -> None:

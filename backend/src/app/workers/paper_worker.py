@@ -264,6 +264,19 @@ class PaperWorkerSupervisor:
 
         self._on_stop = stop
 
+    def attach_stop_hook(self, hook: Callable[[], None]) -> None:
+        """Run ``hook`` after the existing stop hook, on clean stop or SIGTERM."""
+        previous = self._on_stop
+
+        def stop() -> None:
+            try:
+                if previous:
+                    previous()
+            finally:
+                hook()
+
+        self._on_stop = stop
+
     def attach_activity(
         self,
         cycle: Callable[[], CycleOutcome],
@@ -784,7 +797,19 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
             health_log_interval_seconds=float(settings.paper_worker_health_log_seconds),
         )
     else:
-        supervisor = _build_armed_supervisor(watcher_settings, telegram_settings)
+        # Before any runtime is built, so the first Binance read already sees a
+        # shared ban deadline and the startup lease (2026-11-04 deploy overlap).
+        from app.workers.binance_gate_coordination import start_binance_gate_coordination
+
+        coordinator = start_binance_gate_coordination(settings)
+        try:
+            supervisor = _build_armed_supervisor(watcher_settings, telegram_settings)
+        except BaseException:
+            if coordinator is not None:
+                coordinator.stop()
+            raise
+        if coordinator is not None:
+            supervisor.attach_stop_hook(coordinator.stop)
     if settings.knowledge_indexing_enabled:
         from app.workers.knowledge_indexing import KnowledgeIndexingCycle
 

@@ -418,3 +418,113 @@ def test_used_weight_header_parse_is_strict(raw: str) -> None:
     gate = _gate(Clock())
     gate.note_used_weight({"x-mbx-used-weight-1m": raw})
     assert gate.last_used_weight is None
+
+
+# --- 2026-11-04 overlap incident: warnings, deadline sharing, standby hold ---
+
+
+def _events(logs: list[dict], name: str) -> list[dict]:
+    return [entry for entry in logs if entry["event"] == name]
+
+
+def test_used_weight_warning_is_strictly_above_threshold_and_rate_limited() -> None:
+    from structlog.testing import capture_logs
+
+    clock = Clock()
+    gate = BinanceRestGate(
+        clock=clock,
+        wall_clock=lambda: NOW_S,
+        used_weight_warn_threshold=1500,
+        used_weight_warn_interval_seconds=60.0,
+    )
+    with capture_logs() as logs:
+        gate.note_success({"x-mbx-used-weight-1m": "1500"})
+        assert _events(logs, "binance_used_weight_high") == []
+        gate.note_success({"x-mbx-used-weight-1m": "1501"})
+        gate.note_used_weight({"x-mbx-used-weight-1m": "1700"})
+        clock.t += 59.0
+        gate.note_success({"x-mbx-used-weight-1m": "1600"})
+        clock.t += 1.0
+        gate.note_used_weight({"x-mbx-used-weight-1m": "1800"})
+    warned = _events(logs, "binance_used_weight_high")
+    assert [entry["used_weight_1m"] for entry in warned] == [1501, 1800]
+    assert all(entry["log_level"] == "warning" for entry in warned)
+    assert warned[0]["warn_threshold"] == 1500
+    assert gate.last_used_weight == 1800
+
+
+def test_every_429_and_418_logs_a_warning_without_rate_limit() -> None:
+    from structlog.testing import capture_logs
+
+    gate = _gate(Clock())
+    with capture_logs() as logs:
+        for _ in range(3):
+            gate.note_failure("rate_limit", 2.0)
+        gate.note_failure("ban", None)
+    throttled = _events(logs, "binance_rest_throttled")
+    assert [entry["status_code"] for entry in throttled] == [429, 429, 429, 418]
+    assert all(entry["log_level"] == "warning" for entry in throttled)
+    assert throttled[-1]["strikes"] == 4
+
+
+def test_failure_listener_gets_wall_clock_deadline_and_errors_are_contained() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    seen: list[tuple[str, float]] = []
+    gate.set_failure_listener(lambda kind, until: seen.append((kind, until)))
+    seconds = gate.note_failure("ban", 600.0)
+    assert seen == [("ban", NOW_S + seconds)]
+
+    def boom(kind: str, until: float) -> None:
+        raise RuntimeError("db down")
+
+    gate.set_failure_listener(boom)
+    gate.note_failure("rate_limit", 1.0)  # does not raise
+    assert gate.remaining() is not None
+
+
+def test_adopt_deadline_keeps_later_deadline_and_counts_no_strike() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    assert gate.adopt_deadline("ban", NOW_S + 300.0) == pytest.approx(300.0)
+    assert gate.remaining() == ("ban", pytest.approx(300.0))
+    # An earlier deadline never shortens the window.
+    gate.adopt_deadline("rate_limit", NOW_S + 10.0)
+    assert gate.remaining() == ("ban", pytest.approx(300.0))
+    assert gate.strikes == 0
+    # Past or nonsense deadlines are ignored.
+    assert gate.adopt_deadline("ban", NOW_S - 1.0) == 0.0
+    assert gate.adopt_deadline("other", NOW_S + 50.0) == 0.0
+    clock.t += 301.0
+    assert gate.remaining() is None
+
+
+def test_hold_reads_as_rate_limit_until_released_or_expired() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    gate.hold(240.0)
+    assert gate.holding
+    assert gate.remaining() == ("rate_limit", pytest.approx(240.0))
+    gate.release_hold()
+    assert not gate.holding
+    assert gate.remaining() is None
+    gate.hold(10.0)
+    clock.t += 10.0
+    assert not gate.holding
+    assert gate.remaining() is None
+
+
+def test_hold_blocks_http_client_before_any_request() -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    gate.hold(60.0)
+    recorder = Recorder([])
+    client = ReadOnlyHttpGetClient(
+        base_url=BASE,
+        timeout_seconds=1.0,
+        transport=httpx.MockTransport(recorder),
+        rest_gate=gate,
+    )
+    with pytest.raises(RateLimitedError):
+        client.get_json("/fapi/v1/time")
+    assert recorder.calls == 0
