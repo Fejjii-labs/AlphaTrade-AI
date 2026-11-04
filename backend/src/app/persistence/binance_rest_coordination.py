@@ -3,6 +3,11 @@
 Each call is one short transaction on the single ``binance_usdm`` row, taken
 with ``SELECT ... FOR UPDATE`` so concurrent instances serialize. Callers in
 the worker catch every exception and fall back to the in-process gate.
+
+The lease is timed by the database clock (``now()``) unless a caller passes
+``now``, so clock skew between instances cannot stretch or shrink the TTL.
+Deadlines keep the writer's wall clock: they come from the process gate, which
+counts in wall-clock epoch seconds.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.binance_rest_coordination import BinanceRestCoordinationRow
@@ -85,15 +91,20 @@ def try_acquire_market_lease(
     session_factory: sessionmaker[Session],
     *,
     owner: str,
-    now: datetime,
     ttl_seconds: float,
+    now: datetime | None = None,
     scope: str = BINANCE_USDM_SCOPE,
 ) -> LeaseClaim:
-    """Claim or renew the market-read lease. A live lease of another owner wins."""
+    """Claim or renew the market-read lease. A live lease of another owner wins.
+
+    ``now`` defaults to the database clock, read in the same transaction.
+    """
 
     owner = owner[:80]
     with session_factory() as session, session.begin():
         row = _locked_row(session, scope)
+        if now is None:
+            now = _database_now(session)
         expires = _aware(row.lease_expires_at)
         held_by_other = row.lease_owner not in ("", owner) and expires is not None and expires > now
         if held_by_other:
@@ -137,6 +148,14 @@ def _locked_row(session: Session, scope: str) -> BinanceRestCoordinationRow:
     row = session.get(BinanceRestCoordinationRow, scope, with_for_update=True)
     assert row is not None
     return row
+
+
+def _database_now(session: Session) -> datetime:
+    """``now()`` of the database: one clock for every instance."""
+
+    moment = _aware(session.execute(select(func.now())).scalar_one())
+    assert moment is not None
+    return moment
 
 
 def _aware(moment: datetime | None) -> datetime | None:

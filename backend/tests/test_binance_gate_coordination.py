@@ -198,6 +198,52 @@ def test_pg_lease_blocks_until_expiry_or_release(pg: sessionmaker[Session]) -> N
 
 
 @requires_postgres
+def _db_now(factory: sessionmaker[Session]) -> datetime:
+    with factory() as session:
+        return session.execute(text("SELECT now()")).scalar_one()
+
+
+@requires_postgres
+def test_pg_lease_without_now_uses_the_database_clock(pg: sessionmaker[Session]) -> None:
+    before = _db_now(pg)
+    claim = try_acquire_market_lease(pg, owner="old", ttl_seconds=90)
+    after = _db_now(pg)
+    assert claim.acquired and claim.expires_at is not None
+    assert before + timedelta(seconds=90) <= claim.expires_at <= after + timedelta(seconds=90)
+    assert not try_acquire_market_lease(pg, owner="new", ttl_seconds=90).acquired
+    # Expired by the database clock: reclaimable without any app clock.
+    with pg() as session, session.begin():
+        session.execute(
+            text(
+                "UPDATE binance_rest_coordination"
+                " SET lease_expires_at = now() - interval '1 second'"
+            )
+        )
+    assert try_acquire_market_lease(pg, owner="new", ttl_seconds=90).acquired
+
+
+@requires_postgres
+def test_pg_coordinator_lease_ignores_a_skewed_process_clock(
+    pg: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.workers import binance_gate_coordination
+
+    # A process clock ten minutes fast must not stretch the lease by ten minutes.
+    skewed = datetime.now(UTC) + timedelta(minutes=10)
+    monkeypatch.setattr(binance_gate_coordination, "_utc_now", lambda: skewed)
+    coordinator = BinanceGateCoordinator(
+        BinanceRestGate(rng=lambda: 0.0), pg, owner="skewed", lease_ttl_seconds=90
+    )
+    coordinator._step_lease(starting=True)
+    assert coordinator.lease_held
+    with pg() as session:
+        row = session.get(BinanceRestCoordinationRow, "binance_usdm")
+        assert row is not None and row.lease_expires_at is not None
+        expires = row.lease_expires_at
+    db_now = _db_now(pg)
+    assert db_now + timedelta(seconds=80) <= expires <= db_now + timedelta(seconds=90)
+
+
 def test_pg_release_is_owner_checked(pg: sessionmaker[Session]) -> None:
     assert try_acquire_market_lease(pg, owner="old", now=T0, ttl_seconds=90).acquired
     assert not release_market_lease(pg, owner="intruder")

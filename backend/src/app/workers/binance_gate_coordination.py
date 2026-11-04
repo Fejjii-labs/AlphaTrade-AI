@@ -80,6 +80,8 @@ class BinanceGateCoordinator:
         self._heartbeat = min(float(heartbeat_seconds), self._ttl / 3.0)
         self._max_wait = max(float(max_wait_seconds), 0.0)
         self._now = now if now is not None else _utc_now
+        # Lease times come from the database clock unless a test injects ``now``.
+        self._lease_now = now
         self._monotonic = monotonic
         self._pending: tuple[float, str] | None = None
         self._pending_lock = threading.Lock()
@@ -208,7 +210,10 @@ class BinanceGateCoordinator:
     def _step_lease(self, *, starting: bool) -> None:
         try:
             claim = try_acquire_market_lease(
-                self._factory, owner=self.owner, now=self._now(), ttl_seconds=self._ttl
+                self._factory,
+                owner=self.owner,
+                ttl_seconds=self._ttl,
+                now=None if self._lease_now is None else self._lease_now(),
             )
         except Exception as exc:
             # Fail open: without the database the process gate alone applies.
