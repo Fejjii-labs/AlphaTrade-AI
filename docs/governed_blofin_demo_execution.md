@@ -31,6 +31,17 @@ lot/minimum/maximum and conservative 1% equity risk / 10% notional caps includin
 fee/slippage allowances. Stops and targets use venue tick precision. Journal
 size uses the corresponding base quantity; immutable fill facts retain contracts.
 
+The quote's `observed_at` is the venue's order-book `ts`, not local receipt
+time. At receipt it must be 0–10 s old on the local clock, so a local clock
+behind the venue is refused as future dated. Right before eligibility the loop
+reads the same GET-only snapshot again when the preflight book was received
+2 s or more earlier by the local monotonic clock. Clock skew alone does not
+trigger the re-read, because a re-read cannot fix it. The action window is the
+demo book's `observed_at` + 10 s and no longer takes the scan quote's expiry;
+the candidate and assessment TTLs still bound it, and the scan quote stays the
+evidence price for the basis check. This loosening is demo-only and needs the
+owner's explicit acceptance before merge.
+
 An entry POST includes its exact approved stop and target as market TP/SL exits.
 Dispatch authorization commits, then an ambiguous marker commits **before** one
 POST. A final safety epoch, fence and plan TTL check runs after read preflight,

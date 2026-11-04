@@ -49,11 +49,13 @@ _SAFE_FIELDS = frozenset(
         "code",
         "command_id",
         "component",
+        "consecutive_trips",
         "cycles",
         "dedup_key",
         "elapsed_seconds",
         "error",
         "exit_origin",
+        "grace_seconds",
         "health_state",
         "heartbeat_age_seconds",
         "net_loss",
@@ -96,6 +98,9 @@ _COOLDOWN_SECONDS = {
     "exit_monitor_heartbeat_stale": 900,
     "worker_config_degraded": 6 * 3600,
     "market_data_banned": 900,
+    "worker_memory_watchdog_repeat": 900,
+    "worker_unclean_exit": 900,
+    "blofin_demo_mirror_page_cap": 6 * 3600,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
@@ -113,6 +118,9 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "exit_monitor_heartbeat_stale",
         "worker_config_degraded",
         "market_data_banned",
+        "worker_memory_watchdog_repeat",
+        "worker_unclean_exit",
+        "blofin_demo_mirror_page_cap",
         "stop_hit",
         "tp_hit",
     }
@@ -142,7 +150,13 @@ _AMOUNT = re.compile(
 )
 
 _LOCK = threading.Lock()
+# Last send per dedup key, shared by every worker thread. Keys include trade
+# and command ids, so entries past the longest cooldown are dropped (they can
+# no longer suppress anything) and the map is capped; dropping a live entry
+# early can only repeat an alert, never hide one.
 _SENT: dict[str, datetime] = {}
+_SENT_MAX = 2048
+_SENT_PRUNE_AT = 256
 
 
 def reset_safety_alert_dedup() -> None:
@@ -527,8 +541,22 @@ def _recently_sent(key: str, now: datetime, cooldown: timedelta) -> bool:
 
 
 def _remember(key: str, now: datetime) -> None:
+    moment = _aware(now)
     with _LOCK:
-        _SENT[key] = _aware(now)
+        _SENT[key] = moment
+        if len(_SENT) > _SENT_PRUNE_AT:
+            _prune_sent(moment)
+
+
+def _prune_sent(moment: datetime) -> None:
+    """Drop expired keys, then the oldest beyond ``_SENT_MAX``. Caller holds ``_LOCK``."""
+    longest = timedelta(seconds=max(_DEFAULT_COOLDOWN_SECONDS, *_COOLDOWN_SECONDS.values()))
+    for key in [key for key, sent in _SENT.items() if moment - sent >= longest]:
+        del _SENT[key]
+    excess = len(_SENT) - _SENT_MAX
+    if excess > 0:
+        for key in sorted(_SENT, key=_SENT.__getitem__)[:excess]:
+            del _SENT[key]
 
 
 def _aware(moment: datetime) -> datetime:

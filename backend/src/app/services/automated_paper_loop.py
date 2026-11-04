@@ -73,7 +73,11 @@ from app.signal_fusion.action_eligibility import (
 )
 from app.signal_fusion.assessment import SetupAssessment
 from app.signal_fusion.candidate import Candidate
-from app.signal_fusion.enums import ActionEligibilityState, SetupAssessmentState
+from app.signal_fusion.enums import (
+    ActionEligibilityState,
+    EligibilityReasonCode,
+    SetupAssessmentState,
+)
 from app.signal_fusion.evaluator import first_slice_short_invalidation_price
 from app.signal_fusion.evidence_window import CanonicalEvidenceWindowV1
 from app.signal_fusion.ports import Clock
@@ -350,6 +354,7 @@ class AutomatedPaperLoop:
         )
         state = eligibility.eligibility.state
         if state is not ActionEligibilityState.ELIGIBLE or not eligibility.paper_actionable:
+            eligibility_reason = _eligibility_reason(eligibility.eligibility.reason_codes, state)
             self._audit(
                 session,
                 target=target,
@@ -360,6 +365,7 @@ class AutomatedPaperLoop:
                     "candidate_id": str(candidate.candidate_id),
                     "eligibility_id": str(eligibility.eligibility.eligibility_id),
                     "eligibility_state": state.value,
+                    "eligibility_reason": eligibility_reason,
                     "trade_plan_revision_id": None,
                     "paper_fill_id": None,
                     "journal_trade_id": None,
@@ -367,7 +373,9 @@ class AutomatedPaperLoop:
             )
             return AutomatedPaperLoopProof(
                 stage="blocked",
-                reason_code="risk_block" if _is_risk_block(state) else state.value,
+                reason_code="risk_block"
+                if _is_risk_block(eligibility_reason)
+                else eligibility_reason,
                 candidate_id=candidate.candidate_id,
                 eligibility_id=eligibility.eligibility.eligibility_id,
                 eligibility_state=state.value,
@@ -1901,8 +1909,30 @@ def _open_journal(
     return trade
 
 
-def _is_risk_block(state: ActionEligibilityState) -> bool:
-    return state is ActionEligibilityState.BLOCKED
+# Only these eligibility reasons are risk limits. Stale data, venue, basis,
+# account, configuration and candidate blocks keep their own reason code.
+_RISK_BLOCK_REASONS = frozenset(
+    {
+        EligibilityReasonCode.BLOCKED_KILL_SWITCH.value,
+        EligibilityReasonCode.BLOCKED_DAILY_LOSS.value,
+        EligibilityReasonCode.BLOCKED_WEEKLY_LOSS.value,
+        EligibilityReasonCode.BLOCKED_COOLDOWN.value,
+        EligibilityReasonCode.BLOCKED_EXPOSURE.value,
+        EligibilityReasonCode.BLOCKED_PORTFOLIO_CONFLICT.value,
+    }
+)
+
+
+def _eligibility_reason(
+    reason_codes: tuple[EligibilityReasonCode, ...], state: ActionEligibilityState
+) -> str:
+    """The dominant eligibility reason, or the state when no specific code is set."""
+    specific = [code.value for code in reason_codes if code is not EligibilityReasonCode.ELIGIBLE]
+    return specific[0] if specific else state.value
+
+
+def _is_risk_block(reason: str) -> bool:
+    return reason in _RISK_BLOCK_REASONS
 
 
 def _audit_ids(

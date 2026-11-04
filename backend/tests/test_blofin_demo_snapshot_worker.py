@@ -249,7 +249,9 @@ def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPa
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, now: object = None) -> None:
+        def __init__(
+            self, client: object, now: object = None, cursor: object = None, **_pace: object
+        ) -> None:
             captured["client"] = client
 
         def apply(self, *_args: object, **_kwargs: object) -> None:
@@ -1051,7 +1053,9 @@ def test_flag_on_runs_the_mirror_after_the_snapshot_commit(
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1103,7 +1107,9 @@ def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1151,7 +1157,9 @@ def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatc
             )
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -2276,3 +2284,360 @@ def test_latest_refuses_before_any_snapshot_read_without_the_account_pin(
         service.latest(organization_id=organization_id)
     assert served == []
     assert refused == [reason]
+
+
+# --- Mirror cursor and cadence (worker memory fix) ---------------------------
+
+
+def _cursor_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    clock: list[datetime],
+    outcomes: list[object],
+    **updates: object,
+) -> tuple[BloFinDemoSnapshotCycle, list[object]]:
+    """Cycle whose fake mirror records the cursor it was given and returns ``outcomes``."""
+    settings = _open_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True, **updates}
+    )
+    session = SimpleNamespace(commit=lambda: None, rollback=lambda: None, close=lambda: None)
+    seen: list[object] = []
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, **_kwargs: object) -> None:
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
+            seen.append(cursor)
+
+        def apply(self, _session: object, **_kwargs: object) -> object:
+            result = outcomes.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client", lambda *_a, **_k: "client"
+    )
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.record_mirror_cycle", lambda *_a, **_k: None
+    )
+    return BloFinDemoSnapshotCycle(settings, clock=lambda: clock[0]), seen
+
+
+def test_mirror_cursor_is_carried_only_after_an_ok_committed_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first),
+        RuntimeError("venue read failed"),
+        SimpleNamespace(next_cursor=None),
+        SimpleNamespace(next_cursor=None),
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    for _ in range(4):
+        cycle()
+        clock[0] += timedelta(hours=1)
+    # First run backfills. A failed or incomplete read keeps the last ok cursor.
+    assert seen == [None, first, first, first]
+
+
+def test_mirror_interval_defaults_to_five_minutes() -> None:
+    assert Settings.model_fields["blofin_demo_manual_mirror_interval_seconds"].default == 300
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_interval_seconds == 300
+
+
+def test_mirror_runs_at_most_once_per_interval_while_the_snapshot_ticks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=None) for _ in range(3)]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    for offset in (0, 45, 90, 299, 300, 345, 600):
+        clock[0] = start + timedelta(seconds=offset)
+        assert cycle().status == "ok"
+    # Ticks at 0, 300 and 600 seconds mirror; the five in between do not.
+    assert len(seen) == 3
+
+
+def test_mirror_interval_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=None) for _ in range(2)]
+    cycle, seen = _cursor_cycle(
+        monkeypatch, clock, outcomes, blofin_demo_manual_mirror_interval_seconds=45
+    )
+    for offset in (0, 45):
+        clock[0] = start + timedelta(seconds=offset)
+        cycle()
+    assert len(seen) == 2
+
+
+def test_mirror_reads_seven_days_again_every_full_reread_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History the venue publishes later than the overlap is caught by the full read."""
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cursors = [{"/api/v1/account/positions-history": start + timedelta(hours=h)} for h in range(8)]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=c) for c in cursors]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_full_reread_seconds == 21600
+    for hours in (0, 1, 5, 6, 7, 11, 12):
+        clock[0] = start + timedelta(hours=hours)
+        cycle()
+    # Full reads (None) at 0h, 6h and 12h; incremental reads use the last ok cursor.
+    assert seen == [None, cursors[0], cursors[1], None, cursors[3], cursors[4], None]
+
+
+def test_failed_full_reread_is_retried_as_a_full_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    later = {"/api/v1/account/positions-history": start + timedelta(hours=1)}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first),
+        RuntimeError("venue read failed"),
+        SimpleNamespace(next_cursor=None),
+        SimpleNamespace(next_cursor=later),
+        SimpleNamespace(next_cursor=None),
+    ]
+    cycle, seen = _cursor_cycle(
+        monkeypatch, clock, outcomes, blofin_demo_manual_mirror_full_reread_seconds=3600
+    )
+    for minutes in (0, 60, 70, 80, 90):
+        clock[0] = start + timedelta(minutes=minutes)
+        cycle()
+    # A failed or incomplete full read keeps the full read due; the next ok one resets it.
+    assert seen == [None, None, None, None, later]
+
+
+def test_mirror_pages_are_paced_from_settings_and_stop_with_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_page_pause_seconds == 1.0
+    captured: dict[str, object] = {}
+
+    class Mirror:
+        def __init__(self, client: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def apply(self, _session: object, **_kwargs: object) -> str:
+            return "report"
+
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
+    settings = Settings(_env_file=None, blofin_demo_manual_mirror_page_pause_seconds=2.5)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: datetime(2026, 11, 4, tzinfo=UTC))
+    assert cycle._run_mirror(object(), uuid4(), uuid4(), None) == "report"
+    assert captured["page_pause_seconds"] == 2.5
+    wait = captured["wait"]
+    assert callable(wait) and wait(0.0) is False
+    cycle.request_stop()
+    assert wait(30.0) is True
+
+
+# --- Hardening: page cap alert -------------------------------------------------
+
+
+def _capture_alerts(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    sent: list[object] = []
+
+    def deliver(_settings: object, alert: object, **_kwargs: object) -> bool:
+        sent.append(alert)
+        return True
+
+    monkeypatch.setattr("app.services.safety_alerts.deliver_safety_alert", deliver)
+    return sent
+
+
+def test_a_capped_mirror_read_alerts_and_keeps_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first, capped_endpoints=()),
+        SimpleNamespace(
+            next_cursor=None,
+            capped_endpoints=("/api/v1/trade/fills-history", "/api/v1/trade/orders-history"),
+        ),
+        MirrorPageCapError("/api/v1/account/positions-history"),
+        SimpleNamespace(next_cursor=None, capped_endpoints=()),
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes, blofin_demo_manual_mirror_max_pages=7)
+    sent = _capture_alerts(monkeypatch)
+    for _ in range(4):
+        cycle()
+        clock[0] += timedelta(minutes=10)
+    assert seen == [None, first, first, first]
+    assert [alert.code for alert in sent] == ["blofin_demo_mirror_page_cap"] * 2  # type: ignore[attr-defined]
+    assert sent[0].fields["reason"] == "fills-history,orders-history"  # type: ignore[attr-defined]
+    assert sent[1].fields["reason"] == "positions-history"  # type: ignore[attr-defined]
+    assert "7 pages" in sent[0].message  # type: ignore[attr-defined]
+
+
+def test_a_failing_page_cap_alert_does_not_break_the_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=None, capped_endpoints=("/api/v1/trade/fills-history",))
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, [start], outcomes)
+
+    def broken(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr("app.services.safety_alerts.deliver_safety_alert", broken)
+    assert cycle().status == "ok"
+    assert seen == [None]
+
+
+def test_page_cap_alert_is_a_default_code_with_a_six_hour_cooldown() -> None:
+    from app.services.safety_alerts import TELEGRAM_SAFETY_DEFAULT_CODES, _cooldown
+
+    assert "blofin_demo_mirror_page_cap" in TELEGRAM_SAFETY_DEFAULT_CODES
+    assert _cooldown("blofin_demo_mirror_page_cap") == timedelta(hours=6)
+
+
+# --- Hardening: one mirror read at a time; failures release page data ----------
+
+
+def _mirror_cycle(clock: list[datetime], **updates: object) -> BloFinDemoSnapshotCycle:
+    settings = _open_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True, **updates}
+    )
+    return BloFinDemoSnapshotCycle(settings, clock=lambda: clock[0])
+
+
+_SESSION = SimpleNamespace(commit=lambda: None, rollback=lambda: None, close=lambda: None)
+
+
+def test_a_second_mirror_call_while_one_reads_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cycle = _mirror_cycle(clock)
+    entered, release = threading.Event(), threading.Event()
+    runs: list[object] = []
+
+    def slow(_session: object, _org: object, _user: object, cursor: object) -> object:
+        runs.append(cursor)
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(next_cursor={"p": start}, capped_endpoints=())
+
+    monkeypatch.setattr(cycle, "_run_mirror", slow)
+    org, user = uuid4(), uuid4()
+    first = threading.Thread(target=cycle._mirror_without_backing_off, args=(_SESSION, org, user))
+    first.start()
+    assert entered.wait(5)
+    # The first read outlasts the interval (pacing, retries); a second must not start.
+    clock[0] = start + timedelta(minutes=30)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, org, user)
+    release.set()
+    first.join(5)
+    assert runs == [None]
+    assert any(entry.get("event") == "blofin_demo_manual_mirror_busy" for entry in logs)  # type: ignore[union-attr]
+    # Once free, the next due tick runs and carries the committed cursor.
+    clock[0] = start + timedelta(hours=1)
+    cycle._mirror_without_backing_off(_SESSION, org, user)
+    assert runs == [None, {"p": start}]
+
+
+def test_mirror_cursor_state_holds_one_owner_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cycle = _mirror_cycle(clock)
+    seen: list[object] = []
+
+    def run(_session: object, _org: object, _user: object, cursor: object) -> object:
+        seen.append(cursor)
+        return SimpleNamespace(next_cursor={"p": clock[0]}, capped_endpoints=())
+
+    monkeypatch.setattr(cycle, "_run_mirror", run)
+    owners = [(uuid4(), uuid4()) for _ in range(50)]
+    for org, user in owners:
+        clock[0] += timedelta(minutes=10)
+        cycle._mirror_without_backing_off(_SESSION, org, user)
+    # Each new owner starts with a full read; only the last owner is remembered.
+    assert seen == [None] * 50
+    assert cycle._mirror_cursor is not None and cycle._mirror_cursor[0] == owners[-1]
+    state = [value for value in vars(cycle).values() if isinstance(value, dict | list | set)]
+    assert state == []
+
+
+class _Row(dict):  # type: ignore[type-arg]
+    pass
+
+
+def test_a_failed_mirror_releases_its_page_data_before_recording_the_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gc
+    import weakref
+
+    clock = [datetime(2026, 10, 18, 12, tzinfo=UTC)]
+    cycle = _mirror_cycle(clock)
+    refs: list[weakref.ref[_Row]] = []
+
+    def failing(_session: object, _org: object, _user: object, _cursor: object) -> object:
+        pages = [_Row(tradeId=str(index)) for index in range(100)]
+        refs.extend(weakref.ref(row) for row in pages)
+        raise MirrorReadError("history page failed after retries: ExchangeRateLimitError")
+
+    alive_at_record: list[int] = []
+
+    def record(*_args: object) -> None:
+        gc.collect()
+        alive_at_record.append(sum(ref() is not None for ref in refs))
+
+    monkeypatch.setattr(cycle, "_run_mirror", failing)
+    monkeypatch.setattr(cycle, "_record_failed_cycle", record)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, uuid4(), uuid4())
+    assert alive_at_record == [0]
+    failed = [e for e in logs if e.get("event") == "blofin_demo_manual_mirror_failed"]  # type: ignore[union-attr]
+    assert failed[0]["error_type"] == "MirrorReadError"  # type: ignore[index]
+    assert failed[0]["detail"] == "history page failed after retries: ExchangeRateLimitError"  # type: ignore[index]
+
+
+def test_a_non_mirror_failure_logs_only_its_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [datetime(2026, 10, 18, 12, tzinfo=UTC)]
+    cycle = _mirror_cycle(clock)
+
+    def failing(*_args: object) -> object:
+        raise RuntimeError("venue said secret-ish things")
+
+    monkeypatch.setattr(cycle, "_run_mirror", failing)
+    monkeypatch.setattr(cycle, "_record_failed_cycle", lambda *_a: None)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, uuid4(), uuid4())
+    failed = [e for e in logs if e.get("event") == "blofin_demo_manual_mirror_failed"]  # type: ignore[union-attr]
+    assert failed[0]["error_type"] == "RuntimeError"  # type: ignore[index]
+    assert "detail" not in failed[0]  # type: ignore[operator]

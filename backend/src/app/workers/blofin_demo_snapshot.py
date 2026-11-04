@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from threading import Event
+from threading import Event, Lock
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
@@ -31,6 +31,7 @@ from app.services.dashboard.demo_account import demo_account_active
 
 if TYPE_CHECKING:
     from app.schemas.blofin_sync import BloFinSyncSnapshotItem
+    from app.services.blofin_demo_manual_mirror import MirrorReport
     from app.workers.paper_worker import CycleOutcome
 
 logger = structlog.get_logger("workers.blofin_demo_snapshot")
@@ -53,6 +54,17 @@ class BloFinDemoSnapshotCycle:
         self._stop = Event()
         self._failures = 0
         self._next_attempt: datetime | None = None
+        # One mirror read at a time. The supervisor runs this cycle on one
+        # thread, but a read can outlast the interval (pacing, retries), and
+        # ``run_round`` or a caller on another thread must not start a second.
+        self._mirror_lock = Lock()
+        # Last ``ok`` mirror read, for the pinned owner only (one entry, never
+        # a growing map). In memory: a restart reads 7 days.
+        self._mirror_cursor: tuple[tuple[uuid.UUID, uuid.UUID], dict[str, datetime]] | None = None
+        # When the last ``ok`` full 7-day read started. A periodic full read
+        # catches history the venue published later than the overlap.
+        self._mirror_full_read_at: datetime | None = None
+        self._mirror_attempted_at: datetime | None = None
 
     def __call__(self) -> CycleOutcome:
         from app.workers.paper_worker import CycleOutcome
@@ -158,23 +170,109 @@ class BloFinDemoSnapshotCycle:
         """Run the journal mirror. A read failure must not delay the snapshot."""
         if not self.settings.blofin_demo_manual_mirror_enabled:
             return
+        if not self._mirror_lock.acquire(blocking=False):
+            logger.warning("blofin_demo_manual_mirror_busy")
+            return
         try:
-            self._run_mirror(session, organization_id, user_id)
+            self._mirror_locked(session, organization_id, user_id)
+        finally:
+            self._mirror_lock.release()
+
+    def _mirror_locked(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        if not self._mirror_due():
+            return
+        started = self._clock()
+        cursor = self._cursor_for(organization_id, user_id, now=started)
+        from app.services.blofin_demo_manual_mirror import MirrorPageCapError, MirrorReadError
+
+        report: object = None
+        failure: dict[str, str] | None = None
+        capped: tuple[str, ...] = ()
+        try:
+            report = self._run_mirror(session, organization_id, user_id, cursor)
             session.commit()
         except Exception as exc:
+            failure = {"error_type": type(exc).__name__}
+            if isinstance(exc, MirrorReadError):
+                failure["detail"] = str(exc)[:200]
+            if isinstance(exc, MirrorPageCapError):
+                capped = (exc.endpoint,)
+        # Recover outside the ``except`` block: the exception, its traceback
+        # and the read's frames (with any page data) are released by now.
+        if failure is not None:
             session.rollback()
-            logger.warning(
-                "blofin_demo_manual_mirror_failed",
-                error_type=type(exc).__name__,
-            )
+            logger.warning("blofin_demo_manual_mirror_failed", **failure)
+            if capped:
+                self._alert_page_cap(capped)
             self._record_failed_cycle(session, organization_id, user_id)
+            return
+        capped = getattr(report, "capped_endpoints", ())
+        if capped:
+            self._alert_page_cap(capped)
+        # Advance only after the journal commit; an incomplete read keeps the cursor.
+        next_cursor = getattr(report, "next_cursor", None)
+        if next_cursor is not None:
+            self._mirror_cursor = ((organization_id, user_id), next_cursor)
+            if cursor is None:
+                self._mirror_full_read_at = started
+
+    def _alert_page_cap(self, endpoints: tuple[str, ...]) -> None:
+        """Page the operator: a capped read can never complete on its own."""
+        from app.services.paper_exit_monitor import ExitMonitorAlert
+        from app.services.safety_alerts import deliver_safety_alert
+
+        names = ",".join(path.rsplit("/", 1)[-1] for path in endpoints)
+        alert = ExitMonitorAlert(
+            code="blofin_demo_mirror_page_cap",
+            severity="warning",
+            message=(
+                "BloFin demo journal mirror stopped at its page cap of "
+                f"{self.settings.blofin_demo_manual_mirror_max_pages} pages. The cursor "
+                "did not advance and verified P&L stays withheld until a read completes. "
+                "Raise BLOFIN_DEMO_MANUAL_MIRROR_MAX_PAGES or check the demo history volume."
+            ),
+            fields={"component": "blofin_demo_mirror", "reason": names[:120]},
+        )
+        try:
+            deliver_safety_alert(self.settings, alert, now=self._clock())
+        except Exception as exc:
+            logger.warning("blofin_demo_mirror_alert_failed", error_type=type(exc).__name__)
+
+    def _mirror_due(self) -> bool:
+        """At most one mirror read per interval, whether it succeeds or fails."""
+        now = self._clock()
+        last = self._mirror_attempted_at
+        interval = self.settings.blofin_demo_manual_mirror_interval_seconds
+        if last is not None and 0 <= (now - last).total_seconds() < interval:
+            return False
+        self._mirror_attempted_at = now
+        return True
+
+    def _cursor_for(
+        self, organization_id: uuid.UUID, user_id: uuid.UUID, *, now: datetime
+    ) -> dict[str, datetime] | None:
+        """The incremental cursor, or None when a full 7-day read is due."""
+        held = self._mirror_cursor
+        if held is None or held[0] != (organization_id, user_id):
+            return None
+        full_at = self._mirror_full_read_at
+        interval = self.settings.blofin_demo_manual_mirror_full_reread_seconds
+        if full_at is None or not 0 <= (now - full_at).total_seconds() < interval:
+            return None
+        return dict(held[1])
 
     def _run_mirror(
         self,
         session: object,
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
-    ) -> None:
+        cursor: dict[str, datetime] | None,
+    ) -> MirrorReport:
         """Journal mirror. The flag stays off unless an operator sets it."""
         from app.core.blofin_readonly_access import get_readonly_client
         from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
@@ -184,7 +282,13 @@ class BloFinDemoSnapshotCycle:
             activity_history=True,
             paper_internal_snapshot=True,
         )
-        BloFinDemoManualMirror(client, now=self._clock()).apply(
+        return BloFinDemoManualMirror(
+            client,
+            now=self._clock(),
+            cursor=cursor,
+            page_pause_seconds=self.settings.blofin_demo_manual_mirror_page_pause_seconds,
+            wait=self._stop.wait,
+        ).apply(
             session,  # type: ignore[arg-type]
             organization_id=organization_id,
             user_id=user_id,

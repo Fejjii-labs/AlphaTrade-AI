@@ -55,6 +55,12 @@ and the main demo key. It does not place orders.
 | `BLOFIN_DEMO_SNAPSHOT_SYNC_ENABLED` | Default false. Required before the worker attaches the cycle. |
 | `BLOFIN_DEMO_SNAPSHOT_INTERNAL_READ_ENABLED` | Default false. Required in `paper_internal` before the main demo key may back the GET snapshot. Does not open orders or `BLOFIN_DEMO_ENABLED`. |
 | `BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS` | Cadence, 30–60. Default 45. Used only after the flag is on. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_INTERVAL_SECONDS` | Hand-trade mirror cadence inside the snapshot tick, 30–3600. Default 300. A failed mirror read also waits one interval. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_OVERLAP_SECONDS` | Overlap before the previous ok mirror read end, 60–86400. Default 600. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_FULL_REREAD_SECONDS` | Full seven-day mirror read at least this often, 600–604800. Default 21600. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_MAX_PAGES` | History pages per endpoint per mirror read, 1–200. Default 40. A capped read keeps its cursor and alerts. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_PAGE_RETRIES` | Retries per mirror read after a 429 or venue/transport failure, 0–10. Default 3. |
+| `BLOFIN_DEMO_MANUAL_MIRROR_PAGE_RETRY_BACKOFF_SECONDS` | First retry wait, doubling, capped at 60 s; 0–60. Default 5. |
 | `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID` | Owner organization pin. |
 | `GOVERNED_BLOFIN_DEMO_USER_ID` | Owner user pin. |
 | `BLOFIN_API_KEY` | Main demo key. Used for GET sync when the read-only set is absent. |
