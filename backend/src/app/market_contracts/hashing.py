@@ -67,15 +67,22 @@ def semantic_content_hash(
 
 
 def _omit_legacy_default_false(value: Any) -> Any:
+    """Drop legacy false defaults. Unchanged containers are returned as-is (no copy)."""
     if isinstance(value, dict):
-        return {
-            key: _omit_legacy_default_false(item)
-            for key, item in value.items()
-            if not _is_legacy_default_false(key, item)
-        }
+        copied: dict[Any, Any] | None = None
+        for index, (key, item) in enumerate(value.items()):
+            omit = _is_legacy_default_false(key, item)
+            mapped = None if omit else _omit_legacy_default_false(item)
+            if copied is None and (omit or mapped is not item):
+                copied = dict(list(value.items())[:index])
+            if copied is not None and not omit:
+                copied[key] = mapped
+        return value if copied is None else copied
     if isinstance(value, list | tuple):
-        mapped = [_omit_legacy_default_false(item) for item in value]
-        return tuple(mapped) if isinstance(value, tuple) else mapped
+        mapped_items = [_omit_legacy_default_false(item) for item in value]
+        if all(new is old for new, old in zip(mapped_items, value, strict=True)):
+            return value
+        return tuple(mapped_items) if isinstance(value, tuple) else mapped_items
     return value
 
 

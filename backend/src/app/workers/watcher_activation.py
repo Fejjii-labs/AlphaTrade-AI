@@ -827,7 +827,12 @@ def _probe_provider(
     if perpetual_source_is_replay(settings) or bool(getattr(monitor, "replay", False)):
         return "replay"
     resolved = monitor if monitor is not None else _build_monitor(settings)
-    snapshot = resolved.latest("BTCUSDT")  # type: ignore[attr-defined]
+    try:
+        snapshot = resolved.latest("BTCUSDT")  # type: ignore[attr-defined]
+    finally:
+        # A probe-only monitor owns HTTP clients; preflight may now repeat.
+        if monitor is None:
+            _close_monitor(resolved)
     last_update = getattr(snapshot, "last_update", None)
     evaluated_at = getattr(snapshot, "evaluated_at", None)
     if freshness_out is not None and last_update is not None and evaluated_at is not None:
@@ -852,9 +857,21 @@ def _close_monitor(monitor: object | None) -> None:
 
 
 def _build_monitor(settings: Settings) -> object:
+    from app.market_contracts.adapters.factory import resolve_perpetual_evidence_source
     from app.market_monitor.factory import build_perpetual_market_monitor
 
-    return build_perpetual_market_monitor(settings)
+    source = resolve_perpetual_evidence_source(settings)
+    try:
+        return build_perpetual_market_monitor(settings, source=source)
+    except BaseException:
+        # The source owns HTTP clients; a half-built monitor must not leak them.
+        close = getattr(source, "close", None)
+        try:
+            if callable(close):
+                close()
+        except Exception:
+            logger.warning("watcher_activation_monitor_close_failed", exc_info=True)
+        raise
 
 
 @dataclass(frozen=True, slots=True)
