@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import type { JournalPerformanceDashboardResponse } from "@/lib/api/types";
 
 import { PerformanceDashboard } from "./PerformanceDashboard";
-import { PerformanceKpiCards } from "./PerformanceKpiCards";
+import { PerformanceKpiCards, dayWinRate, moneyTone, profitFactorTone } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
 import { CumulativePnlChart, curveSummary, zeroOffset } from "./CumulativePnlChart";
 import { buildCalendarWeeks, formatCompactPnl, rangeParams } from "./performance-model";
@@ -127,6 +127,12 @@ describe("PerformanceDashboard", () => {
       "2",
     ]);
     expect(screen.getByTestId("kpi-win-loss")).toHaveTextContent("1.50");
+    // 2 green days, 1 red day → 66.7%.
+    expect(screen.getByTestId("kpi-day-win-rate")).toHaveTextContent("66.7%");
+    expect(screen.getByRole("img", { name: "2 winning, 1 losing days" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "2 winning, 1 breakeven, 2 losing trades" })).toBeInTheDocument();
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "profit");
+    expect(screen.getByTestId("kpi-profit-factor")).toHaveAttribute("data-tone", "profit");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("42.5");
     expect(screen.getByTestId("cumulative-last")).toHaveTextContent("+1100.00");
     expect(screen.getByTestId("calendar-month")).toHaveTextContent("July 2026");
@@ -146,6 +152,8 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("—");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-day-win-rate")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "none");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
     expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
@@ -248,7 +256,8 @@ describe("PerformanceDashboard", () => {
     fireEvent.click(screen.getByRole("radio", { name: "30D" }));
     await waitFor(() => expect(screen.getByTestId("score-overall")).toHaveTextContent("—"));
     expect(screen.getByTestId("cumulative-last")).toHaveTextContent("—");
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
+    expect(screen.queryByTestId("kpi-net-pnl")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading performance figures" })).toBeInTheDocument();
   });
 
   it("sample data is off by default and visibly badged when enabled", async () => {
@@ -271,6 +280,19 @@ describe("PerformanceDashboard", () => {
 });
 
 describe("performance components", () => {
+  it("KPI tones follow the sign and profit factor 1.0, never colour alone", () => {
+    expect(moneyTone("-5")).toBe("loss");
+    expect(moneyTone("0")).toBe("neutral");
+    expect(moneyTone(null)).toBe("none");
+    expect(profitFactorTone(0.8)).toBe("loss");
+    expect(profitFactorTone(1)).toBe("profit");
+    expect(profitFactorTone(null)).toBe("none");
+    expect(dayWinRate({ max_drawdown: null, recovery_factor: null, consistency: null, winning_days: 0, losing_days: 0 })).toBeNull();
+    render(<PerformanceKpiCards summary={{ ...response().summary, net_pnl: "-12.50" }} />);
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "loss");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("−12.50");
+  });
+
   it("KPI cards render dashes without a summary", () => {
     render(<PerformanceKpiCards summary={null} />);
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");

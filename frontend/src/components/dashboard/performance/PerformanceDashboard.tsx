@@ -210,7 +210,11 @@ export function PerformanceDashboard({
               ))}
             </ul>
           ) : null}
-          <PerformanceKpiCards summary={range.loading && !sample ? null : rangeData?.summary ?? null} />
+          <PerformanceKpiCards
+            summary={rangeData?.summary ?? null}
+            risk={rangeData?.risk ?? null}
+            loading={range.loading && !sample}
+          />
           <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <PnlCalendar
               month={month}
