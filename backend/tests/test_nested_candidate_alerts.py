@@ -1,9 +1,10 @@
 """Focused Nested informational alerts; fake transport only."""
 
 from dataclasses import replace
-from datetime import UTC, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -119,7 +120,7 @@ def test_confirmed_paper_event_content_and_duplicate_episode(nested_world):
         w.window.timeframe.value,
         w.summary.stage,
         w.candidate.direction.value,
-        w.summary.evidence_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+        w.summary.evidence_at.astimezone(ZoneInfo("Europe/Berlin")).strftime("%H:%M %Z"),
     ):
         assert value in text
     # Heads-up only: internal IDs, risk/decision state, freshness, venue and reasons

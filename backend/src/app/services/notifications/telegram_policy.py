@@ -30,6 +30,11 @@ class PolicyHistory:
     accepted_at: datetime
 
 
+TERMINAL_SETUP_EVENTS = frozenset(
+    {NotificationEventType.SFP_INVALIDATED, NotificationEventType.SFP_EXPIRED}
+)
+
+
 def cooldown_scope(event: TelegramNotificationEvent) -> tuple:
     return (event.strategy_id, event.symbol, event.event_type, event.setup_stage, event.phase)
 
@@ -58,6 +63,10 @@ def evaluate_telegram_policy(
             return f"POLICY_{field.upper()}"
     if SEVERITY_RANK[event.severity] < SEVERITY_RANK[policy.minimum_severity]:
         return "POLICY_MINIMUM_SEVERITY"
+    if event.event_type in TERMINAL_SETUP_EVENTS and policy.event_types is None:
+        # Cancelled/expired setups are stored and audited but not pushed unless
+        # the recipient explicitly subscribes to these event types.
+        return "POLICY_TERMINAL_EVENT_MUTED"
     toggle = EVENT_TOGGLES.get(event.event_type)
     if toggle is not None and not getattr(policy, toggle):
         return "POLICY_EVENT_DISABLED"

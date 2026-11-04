@@ -86,6 +86,25 @@ class SfpAlertSummary(CanonicalModel):
             occurred_at=self.occurred_at,
         )
 
+    def _plain_reason(self) -> str | None:
+        """One plain-language line for terminal or preparatory events."""
+        side = self.direction.capitalize()
+        back = "above" if self.direction.lower() == "short" else "below"
+        level = self.structural_level
+        reasons = {
+            NotificationEventType.SFP_INVALIDATED: (
+                f"{side} cancelled: price closed back {back} {level}"
+            ),
+            NotificationEventType.SFP_EXPIRED: f"{side} expired: no confirmation in time",
+            NotificationEventType.SFP_LEVEL_APPROACH: (
+                f"Heads-up: price is near {level}, not swept yet"
+            ),
+            NotificationEventType.SFP_SWEEP_DETECTED: f"Sweep of {level}, waiting for reclaim",
+            NotificationEventType.SFP_RECLAIM_FORMING: f"Reclaim of {level} forming",
+            NotificationEventType.SFP_BLOCKED_BY_RISK: f"{side} blocked by risk rules",
+        }
+        return reasons.get(self.event_type)
+
     def text(self) -> str:
         """Shared strategy layout; IDs, risk and coverage stay in the stored summary."""
         from app.candidate_alerts.content import render_strategy_alert_text
@@ -106,4 +125,8 @@ class SfpAlertSummary(CanonicalModel):
             ),
             at=self.evidence_at,
             projection_source=self.projection_source,
+            reason=self._plain_reason(),
+            show_plan=self.event_type
+            not in {NotificationEventType.SFP_INVALIDATED, NotificationEventType.SFP_EXPIRED},
+            key_levels=(f"Level: {self.level_type.replace('_', ' ')} {self.structural_level}",),
         )

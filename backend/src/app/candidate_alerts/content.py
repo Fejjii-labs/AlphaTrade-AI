@@ -6,8 +6,9 @@ No profitability claim. No LLM-authored setup truth.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.candidate_alerts.contracts import (
     MAX_ALERT_TEXT_BYTES_GUARD,
@@ -49,6 +50,14 @@ STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "sfp": SFP_STRATEGY_NAME,
     "swing_failure_pattern": SFP_STRATEGY_NAME,
 }
+
+
+ALERT_TIMEZONE = ZoneInfo("Europe/Berlin")
+
+
+def _local_time_text(at: datetime) -> str:
+    """Minute time in the operator's zone, e.g. '11:34 CET' (CEST in summer)."""
+    return at.astimezone(ALERT_TIMEZONE).strftime("%H:%M %Z")
 
 
 def _price_text(value: object) -> str:
@@ -167,6 +176,9 @@ def render_strategy_alert_text(
     nested_stage: str | None = None,
     stage: str | None = None,
     projection_source: str | None = None,
+    reason: str | None = None,
+    key_levels: tuple[str, ...] = (),
+    show_plan: bool = True,
 ) -> str:
     """The one Telegram alert layout shared by every strategy (current and future).
 
@@ -191,12 +203,16 @@ def render_strategy_alert_text(
             f"Symbol: {symbol}",
             f"Strategy: {strategy_display_name(strategy)}",
             f"Direction: {direction}",
-            f"Entry: {_price_text(entry)}",
-            f"Stop: {_price_text(stop)}",
-            f"Target: {_price_text(target)}",
+            *((reason,) if reason else ()),
+            *key_levels,
+            *(
+                f"{label}: {_price_text(value)}"
+                for label, value in (("Entry", entry), ("Stop", stop), ("Target", target))
+                if show_plan or value is not None
+            ),
             f"Timeframe: {timeframe}",
             *stage_lines,
-            f"Time: {at.astimezone(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
+            f"Time: {_local_time_text(at)}",
             PAPER_MARKER,
             *projected,
         )
