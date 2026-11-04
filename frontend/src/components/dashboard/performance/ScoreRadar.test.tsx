@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JournalDashboardScoreComponent } from "@/lib/api/types";
 
-import { ScoreRadar } from "./ScoreRadar";
+import { ScoreRadar, scoreBand } from "./ScoreRadar";
 
 const plotted = vi.hoisted(() => ({ data: [] as Array<{ axis: string; score: number | null }> }));
 
@@ -81,5 +81,12 @@ describe("ScoreRadar", () => {
     );
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByTestId("score-small-sample")).toHaveTextContent("Small sample");
+  });
+
+  it("tones the overall score by band", () => {
+    expect(scoreBand(75)?.label).toBe("Strong");
+    expect(scoreBand(40)?.label).toBe("Fair");
+    expect(scoreBand(39.9)?.label).toBe("Weak");
+    expect(scoreBand(null)).toBeNull();
   });
 });

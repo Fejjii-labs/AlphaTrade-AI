@@ -5,10 +5,10 @@ import { api } from "@/lib/api";
 import type { JournalPerformanceDashboardResponse } from "@/lib/api/types";
 
 import { PerformanceDashboard } from "./PerformanceDashboard";
-import { PerformanceKpiCards } from "./PerformanceKpiCards";
+import { PerformanceKpiCards, dayWinRate, moneyTone, profitFactorTone } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
 import { CumulativePnlChart, curveSummary, zeroOffset } from "./CumulativePnlChart";
-import { buildCalendarWeeks, formatCompactPnl, rangeParams } from "./performance-model";
+import { buildCalendarWeeks, customRangeError, formatCompactPnl, rangeParams } from "./performance-model";
 
 vi.mock("@/lib/api", () => ({ api: { journal: { performanceCalendar: vi.fn() } } }));
 
@@ -127,6 +127,12 @@ describe("PerformanceDashboard", () => {
       "2",
     ]);
     expect(screen.getByTestId("kpi-win-loss")).toHaveTextContent("1.50");
+    // 2 green days, 1 red day → 66.7%.
+    expect(screen.getByTestId("kpi-day-win-rate")).toHaveTextContent("66.7%");
+    expect(screen.getByRole("img", { name: "2 winning, 1 losing days" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "2 winning, 1 breakeven, 2 losing trades" })).toBeInTheDocument();
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "profit");
+    expect(screen.getByTestId("kpi-profit-factor")).toHaveAttribute("data-tone", "profit");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("42.5");
     expect(screen.getByTestId("cumulative-last")).toHaveTextContent("+1100.00");
     expect(screen.getByTestId("calendar-month")).toHaveTextContent("July 2026");
@@ -146,6 +152,8 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("—");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-day-win-rate")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "none");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
     expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
@@ -248,7 +256,8 @@ describe("PerformanceDashboard", () => {
     fireEvent.click(screen.getByRole("radio", { name: "30D" }));
     await waitFor(() => expect(screen.getByTestId("score-overall")).toHaveTextContent("—"));
     expect(screen.getByTestId("cumulative-last")).toHaveTextContent("—");
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
+    expect(screen.queryByTestId("kpi-net-pnl")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading performance figures" })).toBeInTheDocument();
   });
 
   it("sample data is off by default and visibly badged when enabled", async () => {
@@ -263,14 +272,97 @@ describe("PerformanceDashboard", () => {
     expect(screen.queryByTestId("performance-empty")).not.toBeInTheDocument();
   });
 
-  it("shows unavailable state when the request fails", async () => {
+  it("narrows to one source inside the scope and resets with the scope", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    const select = await screen.findByRole("combobox", { name: "Source" });
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toContain("Manually logged");
+    fireEvent.change(select, { target: { value: "blofin_demo_manual" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-scope")).toHaveTextContent("BloFin demo (manual) only"),
+    );
+    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls).toContainEqual(
+      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-07-01" }),
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-04-17" }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ scope: "paper" }),
+      ),
+    );
+    expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).not.toHaveProperty("source");
+    expect(screen.getByTestId("performance-scope")).not.toHaveTextContent("BloFin demo (manual) only");
+  });
+
+  it("custom range sends the picked dates and blocks an inverted range", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    const from = screen.getByLabelText("From");
+    const to = screen.getByLabelText("To");
+    expect(from).toHaveValue("2026-06-16");
+    fireEvent.change(from, { target: { value: "2026-05-01" } });
+    fireEvent.change(to, { target: { value: "2026-05-31" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.map(([p]) => p)).toContainEqual(
+        expect.objectContaining({ date_from: "2026-05-01", date_to: "2026-05-31" }),
+      ),
+    );
+    const before = vi.mocked(api.journal.performanceCalendar).mock.calls.length;
+    fireEvent.change(from, { target: { value: "2026-06-10" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Start date must be on or before the end date.");
+    expect(from).toHaveAttribute("aria-invalid", "true");
+    expect(vi.mocked(api.journal.performanceCalendar).mock.calls.length).toBe(before);
+    expect(screen.getByTestId("performance-range-pending")).toBeInTheDocument();
+    expect(screen.queryByTestId("kpi-net-pnl")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not enough closed trades to score/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(screen.getByRole("radio", { name: "90D" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByLabelText("From")).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable state when the request fails, and Retry refetches", async () => {
     vi.mocked(api.journal.performanceCalendar).mockRejectedValue(new Error("boom"));
     render(<PerformanceDashboard now={NOW} />);
     expect(await screen.findByText("Journal performance unavailable")).toBeInTheDocument();
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.getByTestId("cumulative-drawdown")).toHaveTextContent("Max drawdown −150.00");
+  });
+
+  it("shows skeletons for every panel while loading, never empty-state copy", () => {
+    vi.mocked(api.journal.performanceCalendar).mockReturnValue(new Promise(() => {}));
+    render(<PerformanceDashboard now={NOW} />);
+    expect(screen.getByTestId("performance-kpis-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("score-radar-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("cumulative-loading")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Daily net P&L, July 2026" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText(/Not enough closed trades to score/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No closed trades with recorded P&L/)).not.toBeInTheDocument();
   });
 });
 
 describe("performance components", () => {
+  it("KPI tones follow the sign and profit factor 1.0, never colour alone", () => {
+    expect(moneyTone("-5")).toBe("loss");
+    expect(moneyTone("0")).toBe("neutral");
+    expect(moneyTone(null)).toBe("none");
+    expect(profitFactorTone(0.8)).toBe("loss");
+    expect(profitFactorTone(1)).toBe("profit");
+    expect(profitFactorTone(null)).toBe("none");
+    expect(dayWinRate({ max_drawdown: null, recovery_factor: null, consistency: null, winning_days: 0, losing_days: 0 })).toBeNull();
+    render(<PerformanceKpiCards summary={{ ...response().summary, net_pnl: "-12.50" }} />);
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "loss");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("−12.50");
+  });
+
   it("KPI cards render dashes without a summary", () => {
     render(<PerformanceKpiCards summary={null} />);
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
@@ -300,6 +392,27 @@ describe("performance components", () => {
     expect(within(table).getByRole("cell", { name: /^2026-07-02: \+1200\.00 net, 1 trade/ })).toBeInTheDocument();
   });
 
+  it("calendar marks today and offers Retry on error", () => {
+    const onRetry = vi.fn();
+    render(
+      <PnlCalendar
+        month={{ year: 2026, month: 6 }}
+        days={response().days}
+        summary={null}
+        error
+        todayIso="2026-07-02"
+        onPrev={() => {}}
+        onNext={() => {}}
+        onToday={() => {}}
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByTestId("calendar-day-2026-07-02")).toHaveAttribute("aria-current", "date");
+    expect(screen.getByRole("cell", { name: /^2026-07-02 \(today\)/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it("curve has a text alternative", () => {
     const { cumulative } = response();
     render(<CumulativePnlChart points={cumulative} />);
@@ -324,9 +437,14 @@ describe("performance model", () => {
     expect(formatCompactPnl("-37.5")).toBe("−37.5");
     expect(formatCompactPnl("600")).toBe("+600");
     expect(formatCompactPnl(null)).toBe("—");
+    expect(formatCompactPnl("-140.5", { whole: true })).toBe("−141");
+    expect(formatCompactPnl("1250", { whole: true })).toBe("+1.3K");
     expect(rangeParams("all", NOW)).toEqual({});
     expect(rangeParams("ytd", NOW)).toEqual({ date_from: "2026-01-01", date_to: "2026-07-15" });
     expect(rangeParams("30d", NOW)).toEqual({ date_from: "2026-06-16", date_to: "2026-07-15" });
+    expect(customRangeError("2026-07-01", "2026-07-01")).toBeNull();
+    expect(customRangeError("2026-07-02", "2026-07-01")).toMatch(/on or before/);
+    expect(customRangeError("", "2026-07-01")).toMatch(/both/);
   });
 
   it("splits the area gradient at zero", () => {
