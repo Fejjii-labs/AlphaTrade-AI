@@ -106,6 +106,18 @@ economics from the read that first saw them. With no new rows, fills, funding,
 and orders are not read. A failed, capped, or incomplete read keeps the
 previous cursor. A restart reads seven days again.
 
+A full seven-day read also runs at least every
+`BLOFIN_DEMO_MANUAL_MIRROR_FULL_REREAD_SECONDS` (default 21600, six hours;
+600–604800). The timer restarts only after a full read ends `ok` and commits;
+a failed or incomplete full read stays due. A full read is the same read a
+restart does.
+
+Residual risk: a history row that the venue publishes more than the overlap
+after its `createTime` is missed by the incremental reads. It reaches the
+journal at the next full read, so up to about six hours plus one mirror
+interval later, or sooner on a restart. A row published more than seven days
+late is never mirrored, as before this change.
+
 `fillPnl` is "Last filled profit and loss, applicable to orders which have a
 trade and aim to close position." The page does not say whether that number
 is gross or net of fees or funding. The published examples are `0`. This
