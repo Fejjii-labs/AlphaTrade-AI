@@ -45,6 +45,7 @@ from app.providers.exchange.governed_blofin import (
     CONFIGURED_DEMO_MARGIN_ASSUMPTION,
     DemoVenueSnapshot,
     GovernedBloFinDemoProvider,
+    demo_plan_leverage,
 )
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
@@ -584,6 +585,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._scan_funding_rate: Decimal | None = None
         self._leverage_config: DemoLeverageConfig | None = None
         self._remaining_exposure: Decimal | None = None
+        # True when the configured leverage is written only after the plan passes.
+        self._leverage_write_pending = False
 
     def _verified_funding_rate(self) -> Decimal | None:
         rate = self._scan_funding_rate
@@ -738,6 +741,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # existing leverage and margin mode (read only); a profile still reads isolated.
         write_allowed = demo_leverage_write_allowed(self._settings)
         self._leverage_config = binding_demo_leverage_config(config, self._settings)
+        self._leverage_write_pending = self._leverage_config is not None and write_allowed
         required_leverage: Decimal | None = None
         read_margin_mode: str | None = "isolated" if active is not None else None
         if self._leverage_config is not None:
@@ -749,45 +753,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 not isinstance(profile_max, Decimal) or config.leverage_decimal > profile_max
             ):
                 return _proof(candidate, "blocked", "demo_leverage_exceeds_profile_max")
-            # Re-check the kill switch immediately before the only account write:
-            # the cycle's observation (unknown counts as on), the global flag, and
-            # a fresh read of the org switch (unreadable counts as on).
-            from app.services.autonomous_trading import kill_switch_refusal
-
-            observed_kill_switch = getattr(self, "_observed_kill_switch", None)
-            killed = self._kill_switch_refusal(
-                candidate, kill_switch_active=observed_kill_switch is not False
-            )
-            if killed is not None:
-                return killed
-            fresh = kill_switch_refusal(
-                self._settings, session, target.organization_id, observed=False
-            )
-            if fresh is not None:
-                session.rollback()  # A failed read leaves the transaction unusable.
-                return _proof(candidate, "blocked", fresh)
-            session.commit()  # End the read; no DB transaction held over venue IO.
-            if write_allowed:
-                try:
-                    # Owner-configured leverage and margin mode, demo host only, exact read-back.
-                    applied = self._get_provider().apply_configured_leverage(
-                        symbol=target.symbol,
-                        leverage=config.leverage_decimal,
-                        margin_mode=config.margin_mode,
-                    )
-                except Exception as exc:
-                    diagnostic = failure_diagnostics(exc, stage="leverage_write")
-                    return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
-                _journal_leverage_write(
-                    session,
-                    organization_id=target.organization_id,
-                    user_id=target.user_id,
-                    applied=applied,
-                )
-            # The snapshot (and the action-time re-read) requires the configured
-            # leverage and margin mode to read back exactly.
-            required_leverage = config.leverage_decimal
-            read_margin_mode = config.margin_mode
+            if not write_allowed:
+                # No write: the snapshot (and the action-time re-read) requires the
+                # configured leverage and margin mode to read back exactly.
+                required_leverage = config.leverage_decimal
+                read_margin_mode = config.margin_mode
+            else:
+                # The write happens only once the plan has passed sizing, band,
+                # exposure and approval, right before the claim and the entry
+                # (_apply_planned_leverage). Read the account as it is until then.
+                read_margin_mode = None
         self._snapshot_request = {
             "symbol": target.symbol,
             "side": EntrySide.BUY if candidate.direction is TradeDirection.LONG else EntrySide.SELL,
@@ -919,11 +894,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         entry = snapshot.price
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
-        # A binding configured leverage must read back exactly; otherwise the
-        # plan trades at the account's existing leverage.
+        # A binding configured leverage is either written after this plan passes
+        # (sized at the configured values; the write reads them back exactly) or,
+        # without the write, must already read back exactly. Otherwise the plan
+        # trades at the account's existing leverage.
         config = self._leverage_config
         configured_leverage = None if config is None else config.leverage_decimal
-        if config is not None and (
+        account_leverage = snapshot.account_leverage
+        account_margin_mode = snapshot.margin_mode
+        if config is not None and self._leverage_write_pending:
+            account_leverage = config.leverage_decimal
+            account_margin_mode = config.margin_mode
+        elif config is not None and (
             snapshot.account_leverage != configured_leverage
             or snapshot.margin_mode != config.margin_mode
         ):
@@ -936,7 +918,6 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if loss_floor is None or loss_ceiling is None:
             return "stop_loss_band_invalid"
         risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
-        account_leverage = snapshot.account_leverage
         if not account_leverage.is_finite() or account_leverage <= 0:
             return "demo_account_leverage_unreadable"
         if account_leverage > demo_max_leverage(self._settings):
@@ -944,7 +925,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         notional_cap = equity * account_leverage * Decimal("0.95")
         if config is not None:
             margin_assumption = CONFIGURED_DEMO_MARGIN_ASSUMPTION
-        elif snapshot.margin_mode == "isolated":
+        elif account_margin_mode == "isolated":
             margin_assumption = "verified-demo-existing-leverage-isolated"
         elif account_leverage == 1:
             margin_assumption = "verified-demo-existing-1x"
@@ -1024,10 +1005,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
             if isinstance(sized, str):
                 return sized
-            mismatch = demo_leverage_block(snapshot.account_leverage, sized.leverage)
+            mismatch = demo_leverage_block(account_leverage, sized.leverage)
             if mismatch is not None:
                 return mismatch
-            margin_block = demo_margin_mode_block(snapshot.margin_mode)
+            margin_block = demo_margin_mode_block(account_margin_mode)
             if margin_block is not None:
                 return margin_block
             if risk_records is not None:
@@ -1180,7 +1161,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
         else:
             values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
-            if snapshot.margin_mode == "isolated":
+            if account_margin_mode == "isolated":
                 values["margin_mode"] = "ISOLATED"
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
         revised = TradePlanRevisionCreate.model_validate(values)
@@ -1485,6 +1466,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 reason=blocked,
             )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        blocked = self._apply_planned_leverage(session, target, candidate, plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            session.commit()
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(
@@ -1586,6 +1577,80 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             journal_trade_id=trade.id if trade is not None else None,
             journal_status=trade.status.value if trade is not None else None,
         )
+
+    def _apply_planned_leverage(
+        self,
+        session: Session,
+        target: PaperScanTarget,
+        candidate: Candidate,
+        plan: object,
+    ) -> str | None:
+        """Write a configured plan's leverage once the plan has passed, before the entry.
+
+        Called only after sizing, the stop-loss band, the exposure cap and
+        approval accepted the stored plan, so a refused plan never writes. No-op
+        for every other plan, or when the write is not allowed (the plan was then
+        built on an exact read-back). The kill switch is re-read immediately
+        before the write: the cycle's observation (unknown counts as on), the
+        global flag, and a fresh read of the org switch (unreadable counts as on).
+        Returns a block reason, or None to continue to the claim and the entry.
+        """
+
+        from app.schemas.trade_plan import TradePlanRevision as PlanSchema
+        from app.services.autonomous_trading import kill_switch_refusal
+        from app.services.demo_leverage_config import (
+            DemoLeverageValidationError,
+            load_demo_leverage_config,
+        )
+
+        assumption = getattr(getattr(plan, "risk_and_exits", None), "margin_assumption_id", None)
+        if assumption != CONFIGURED_DEMO_MARGIN_ASSUMPTION:
+            return None
+        if not demo_leverage_write_allowed(self._settings):
+            return None
+        if not isinstance(plan, PlanSchema):
+            return "demo_leverage_config_invalid"
+        leverage, margin_mode = demo_plan_leverage(plan)
+        if leverage is None:
+            return "demo_leverage_config_invalid"
+        # The owner's setting must still be what the plan was sized for.
+        try:
+            config = load_demo_leverage_config(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                symbol=target.symbol,
+            )
+        except DemoLeverageValidationError:
+            return "demo_leverage_config_invalid"
+        if config.leverage_decimal != leverage or config.margin_mode != margin_mode:
+            return "demo_leverage_config_changed"
+        observed_kill_switch = getattr(self, "_observed_kill_switch", None)
+        killed = self._kill_switch_refusal(
+            candidate, kill_switch_active=observed_kill_switch is not False
+        )
+        if killed is not None:
+            return killed.reason_code
+        fresh = kill_switch_refusal(self._settings, session, target.organization_id, observed=False)
+        if fresh is not None:
+            session.rollback()  # A failed read leaves the transaction unusable.
+            return fresh
+        session.commit()  # End the read; no DB transaction held over venue IO.
+        try:
+            # Owner-configured leverage and margin mode, demo host only, exact read-back.
+            applied = self._get_provider().apply_configured_leverage(
+                symbol=target.symbol, leverage=leverage, margin_mode=margin_mode
+            )
+        except Exception as exc:
+            diagnostic = failure_diagnostics(exc, stage="leverage_write")
+            return f"demo_{diagnostic['reason_code']}"
+        _journal_leverage_write(
+            session,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            applied=applied,
+        )
+        return None
 
     def _dispatcher(self, session: Session) -> VenueSubmitDispatcher:
         return VenueSubmitDispatcher(session, self._safety(session), clock=self._clock.now)

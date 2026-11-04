@@ -1,4 +1,8 @@
-"""The app sets the owner-configured leverage on BloFin DEMO before an entry."""
+"""The app sets the owner-configured leverage on BloFin DEMO before an entry.
+
+The write happens only after the plan has passed sizing, the stop-loss band,
+the exposure cap and approval, immediately before the claim and the entry.
+"""
 
 from __future__ import annotations
 
@@ -378,26 +382,96 @@ def test_configured_plan_refuses_when_the_exposure_limit_cannot_hold_the_loss_fl
     )
     assert scan.paper_loop_reason == "stop_loss_below_band"
     assert venue.post_count == 0
+    # A refused plan never writes leverage.
+    assert venue.account_writes == []
+
+
+@pytest.mark.parametrize(
+    ("venue_kwargs", "reason"),
+    [
+        ({"set_leverage_status": 400}, "demo_leverage_set_failed"),
+        ({"stale_readback": True}, "demo_leverage_readback_mismatch"),
+        ({"set_margin_status": 400}, "demo_margin_mode_set_failed"),
+    ],
+)
+@requires_postgres
+def test_failed_write_after_a_passing_plan_blocks_before_the_claim(
+    monkeypatch: pytest.MonkeyPatch, venue_kwargs: dict[str, object], reason: str
+) -> None:
+    from app.db.models import ExecutionCommand
+
+    venue = LeverageVenue(_price(), **venue_kwargs)  # type: ignore[arg-type]
+    factory, scan = _run_worker(monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default"))
+    assert scan.paper_loop_reason == reason
+    # The plan passed, the write was attempted, and nothing was claimed or sent.
+    assert scan.trade_plan_revision_id is not None
+    assert venue.account_writes
+    assert venue.post_count == 0
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(ExecutionCommand)) == 0
+        assert session.scalar(select(func.count()).select_from(JournalTrade)) == 0
+
+
+@requires_postgres
+def test_passing_plan_reads_kill_switch_commits_writes_then_enters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy.orm import Session
+
+    from app.services import autonomous_trading
+    from app.services.execution_service import ExecutionService
+
+    events: list[str] = []
+    venue = LeverageVenue(_price())
+    handle = venue.handle
+
+    def recording_handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/v1/trade/order":
+            events.append("entry")
+        return handle(request)
+
+    venue.handle = recording_handle  # type: ignore[method-assign]
+    kill_read = autonomous_trading.kill_switch_refusal
+
+    def recording_kill_read(*args: object, **kwargs: object) -> str | None:
+        events.append("kill_read")
+        return kill_read(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(autonomous_trading, "kill_switch_refusal", recording_kill_read)
+    commit = Session.commit
+
+    def recording_commit(self: Session) -> None:
+        events.append("commit")
+        commit(self)
+
+    monkeypatch.setattr(Session, "commit", recording_commit)
+    apply = GovernedBloFinDemoProvider.apply_configured_leverage
+
+    def recording_apply(self: GovernedBloFinDemoProvider, **kwargs: object) -> dict[str, str]:
+        events.append("write")
+        return apply(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(GovernedBloFinDemoProvider, "apply_configured_leverage", recording_apply)
+    claim = ExecutionService.execute_paper_plan
+
+    def recording_claim(self: ExecutionService, *args: object, **kwargs: object) -> object:
+        events.append("claim")
+        return claim(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ExecutionService, "execute_paper_plan", recording_claim)
+    _factory, scan = _run_worker(monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default"))
+    assert scan.trade_plan_revision_id is not None, scan.paper_loop_reason
+    assert venue.post_count == 1
+    assert events.count("write") == 1 and events.count("entry") == 1
+    write = events.index("write")
+    # Fresh kill-switch read, commit, then the write; the claim and entry follow.
+    assert events[write - 2 : write + 1] == ["kill_read", "commit", "write"]
+    assert write < events.index("claim") < events.index("entry")
 
 
 @pytest.mark.parametrize(
     ("venue_kwargs", "config", "reason"),
     [
-        (
-            {"set_leverage_status": 400},
-            DemoLeverageConfig(10, "isolated", "default"),
-            "demo_leverage_set_failed",
-        ),
-        (
-            {"stale_readback": True},
-            DemoLeverageConfig(10, "isolated", "default"),
-            "demo_leverage_readback_mismatch",
-        ),
-        (
-            {"set_margin_status": 400},
-            DemoLeverageConfig(10, "isolated", "default"),
-            "demo_margin_mode_set_failed",
-        ),
         # The fixture stop is ~0.145% away. 20x with a 4.9% maintenance tier puts
         # liquidation 0.1% away, inside the stop: refused before any order.
         (
@@ -414,7 +488,7 @@ def test_configured_plan_refuses_when_the_exposure_limit_cannot_hold_the_loss_fl
     ],
 )
 @requires_postgres
-def test_worker_blocks_without_an_order(
+def test_refused_plan_writes_no_leverage_and_sends_no_order(
     monkeypatch: pytest.MonkeyPatch,
     venue_kwargs: dict[str, object],
     config: DemoLeverageConfig,
@@ -425,6 +499,8 @@ def test_worker_blocks_without_an_order(
     assert scan.paper_loop_reason == reason
     assert scan.trade_plan_revision_id is None
     assert venue.post_count == 0
+    # Refused at planning: leverage is never written.
+    assert venue.account_writes == []
     with factory() as session:
         assert session.scalar(select(func.count()).select_from(JournalTrade)) == 0
 
@@ -993,6 +1069,58 @@ class _KillReadSession:
         self._events.append("rollback")
 
 
+def _write_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[str],
+    *,
+    config: DemoLeverageConfig = DemoLeverageConfig(10, "isolated", "default"),
+    write_enabled: bool = True,
+) -> GovernedBloFinDemoLoop:
+    from types import SimpleNamespace
+
+    from app.core.config import Settings
+    from app.signal_fusion.memory import FrozenClock
+
+    class _Provider:
+        def apply_configured_leverage(self, **_kwargs: object) -> None:
+            events.append("write")
+            raise ValueError("Demo set-leverage failed.")
+
+    monkeypatch.setattr(demo_leverage_config, "load_demo_leverage_config", lambda *_a, **_k: config)
+    # SimpleNamespace plans stand in for the schema in this unit check.
+    monkeypatch.setattr("app.schemas.trade_plan.TradePlanRevision", SimpleNamespace)
+    settings = Settings(
+        _env_file=None, environment="local", governed_demo_auto_leverage_write_enabled=write_enabled
+    )
+    return GovernedBloFinDemoLoop(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        settings,
+        FrozenClock(EVALUATED_AT),
+        provider=_Provider(),  # type: ignore[arg-type]
+    )
+
+
+def _stored_plan(assumption: str = CONFIGURED_DEMO_MARGIN_ASSUMPTION) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        risk_and_exits=SimpleNamespace(margin_assumption_id=assumption, leverage=Decimal("10")),
+        margin_mode=SimpleNamespace(value="ISOLATED"),
+    )
+
+
+def _apply(loop: GovernedBloFinDemoLoop, session: object, plan: object) -> str | None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    return loop._apply_planned_leverage(
+        session,  # type: ignore[arg-type]
+        SimpleNamespace(organization_id=uuid4(), user_id=uuid4(), symbol="BTCUSDT"),  # type: ignore[arg-type]
+        SimpleNamespace(candidate_id=uuid4()),  # type: ignore[arg-type]
+        plan,
+    )
+
+
 @pytest.mark.parametrize(
     ("observed", "row_active", "fail", "reason"),
     [
@@ -1016,53 +1144,54 @@ def test_kill_switch_rechecked_immediately_before_leverage_write(
     fail: bool,
     reason: str,
 ) -> None:
-    from types import SimpleNamespace
-    from uuid import uuid4
-
-    from app.core.config import Settings
-    from app.schemas.common import TradeDirection
-    from app.services import automated_paper_loop
-    from app.services import governed_blofin_demo as mod
-    from app.signal_fusion.memory import FrozenClock
-
     events: list[str] = []
-
-    class _Provider:
-        def apply_configured_leverage(self, **_kwargs: object) -> None:
-            events.append("write")
-            raise ValueError("Demo set-leverage failed.")
-
-    monkeypatch.setattr(mod, "has_demo_entry_history", lambda *_a, **_k: False)
-    monkeypatch.setattr(automated_paper_loop, "_load_active_profile", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        demo_leverage_config,
-        "load_demo_leverage_config",
-        lambda *_a, **_k: DemoLeverageConfig(10, "isolated", "default"),
-    )
-    settings = Settings(
-        _env_file=None, environment="local", governed_demo_auto_leverage_write_enabled=True
-    )
-    runtime = SimpleNamespace(plan_store=SimpleNamespace(get_by_candidate_scope=lambda **_k: None))
-    loop = GovernedBloFinDemoLoop(
-        runtime,  # type: ignore[arg-type]
-        settings,
-        FrozenClock(EVALUATED_AT),
-        provider=_Provider(),  # type: ignore[arg-type]
-    )
+    loop = _write_loop(monkeypatch, events)
     loop._observed_kill_switch = observed  # type: ignore[assignment]
-    proof = loop._bound(
-        _KillReadSession(events, row_active=row_active, fail=fail),  # type: ignore[arg-type]
-        target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4(), symbol="BTCUSDT"),  # type: ignore[arg-type]
-        candidate=SimpleNamespace(candidate_id=uuid4(), direction=TradeDirection.SHORT),  # type: ignore[arg-type]
-        assessment=None,  # type: ignore[arg-type]
-        window=None,  # type: ignore[arg-type]
-        assembled=None,  # type: ignore[arg-type]
-        policy=SimpleNamespace(),  # type: ignore[arg-type]
-        account=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
-    )
-    assert proof.reason_code == reason
+    session = _KillReadSession(events, row_active=row_active, fail=fail)
+    assert _apply(loop, session, _stored_plan()) == reason
     if reason == "demo_leverage_set_failed":
         # The fresh read is the last step before the write.
         assert events[-3:] == ["kill_read", "commit", "write"]
     else:
         assert "write" not in events
+
+
+@pytest.mark.parametrize(
+    ("assumption", "config", "write_enabled", "reason"),
+    [
+        # Not a configured plan, or no write allowed: nothing is read or written.
+        ("verified-demo-existing-1x", DemoLeverageConfig(10, "isolated", "default"), True, None),
+        (
+            CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+            DemoLeverageConfig(10, "isolated", "account"),
+            False,
+            None,
+        ),
+        # The owner changed the setting after the plan was sized: no write.
+        (
+            CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+            DemoLeverageConfig(5, "isolated", "account"),
+            True,
+            "demo_leverage_config_changed",
+        ),
+        (
+            CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+            DemoLeverageConfig(10, "cross", "account"),
+            True,
+            "demo_leverage_config_changed",
+        ),
+    ],
+)
+def test_planned_leverage_write_only_for_a_matching_configured_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    assumption: str,
+    config: DemoLeverageConfig,
+    write_enabled: bool,
+    reason: str | None,
+) -> None:
+    events: list[str] = []
+    loop = _write_loop(monkeypatch, events, config=config, write_enabled=write_enabled)
+    loop._observed_kill_switch = False  # type: ignore[assignment]
+    session = _KillReadSession(events, row_active=None, fail=False)
+    assert _apply(loop, session, _stored_plan(assumption)) == reason
+    assert events == []

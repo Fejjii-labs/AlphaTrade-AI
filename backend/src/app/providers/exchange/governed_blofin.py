@@ -32,7 +32,8 @@ if TYPE_CHECKING:
 
 
 # Autonomous demo plans sized without a risk profile, at the owner-configured
-# leverage and margin mode that the app set and read back before planning.
+# leverage and margin mode. The app sets and reads them back after the plan
+# passes and before the entry (or, without the write, they already read back).
 CONFIGURED_DEMO_MARGIN_ASSUMPTION = "configured-demo-leverage"
 _DEMO_LEVERAGE_CEILING = Decimal("20")
 
@@ -89,7 +90,7 @@ class DemoVenueSnapshot:
     account_observed_at: datetime
     native_account_uid: str | None = None
     # Read from the margin-mode endpoint and leverage-info. Written only by
-    # apply_configured_leverage, before this read.
+    # apply_configured_leverage, after the plan passes and before the entry.
     account_leverage: Decimal = Decimal("1")
     margin_mode: str = "cross"
     # (notional floor, maintenance rate) from public position tiers. Empty refuses a profile plan.
@@ -250,7 +251,7 @@ class GovernedBloFinDemoProvider:
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
         with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
-            # Read only. The only write is apply_configured_leverage, called earlier.
+            # Read only. The only write is apply_configured_leverage, called separately.
             account_mode = self._account.get_account_margin_mode()
             if not account_mode.supplied or account_mode.margin_mode not in {"cross", "isolated"}:
                 raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
@@ -561,8 +562,8 @@ class GovernedBloFinDemoProvider:
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
         # Read only: no leverage or margin-mode write here. A configured leverage
-        # was set before planning, so any drift refuses; other plans trade at the
-        # account's existing leverage.
+        # was set and read back just before the claim, so any drift refuses; other
+        # plans trade at the account's existing leverage.
         required_leverage, required_mode = demo_plan_leverage(plan)
         snapshot = self.snapshot(
             symbol=plan.execution_instrument.replace("-", ""),

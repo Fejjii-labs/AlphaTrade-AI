@@ -52,9 +52,11 @@ buffer (`liquidation_inside_buffer`) still applies on top.
 
 ### 3. App-set leverage on BloFin DEMO
 `GovernedBloFinDemoProvider.apply_configured_leverage` is the **only** leverage or
-margin-mode write in the codebase. In `GovernedBloFinDemoLoop._bound`, after the kill switch,
-posture, autonomous pre-checks and prior-entry reconciliation have passed, and after a fresh
-kill-switch re-check, it:
+margin-mode write in the codebase. Since Griller #430 round 2 it runs in
+`GovernedBloFinDemoLoop._apply_planned_leverage`, only after the plan has passed sizing,
+the stop-loss band, the exposure cap, approval and the post-approval re-checks, after a
+fresh kill-switch re-check, and immediately before the claim and the entry (see "Griller
+#430 round 2" below). It:
 1. refuses unless the client `base_url` is an allowlisted demo host and not a production
    host (`leverage_write_host_refused`); the `BloFinClient` constructor and every request
    also assert the demo host;
@@ -69,9 +71,9 @@ kill-switch re-check, it:
 6. reads back `GET /account/margin-mode` and `GET /account/leverage-info` and requires an
    exact match (`margin_mode_readback_mismatch`, `leverage_readback_mismatch`).
 POSTs are never retried (client policy). Every refusal is surfaced as
-`demo_<reason>` on the loop proof; no order is sent. The subsequent snapshot reads leverage
-again with `required_leverage = configured`, and `submit()` re-reads it immediately before
-the order POST, so drift between planning and dispatch also refuses.
+`demo_<reason>` on the loop proof; the authorization is revoked and nothing is claimed or
+sent. `submit()` re-reads leverage and margin mode with the plan's stored values immediately
+before the order POST, so drift between the write and dispatch also refuses.
 
 Plans sized without a profile now carry `margin_assumption_id = "configured-demo-leverage"`,
 the configured `leverage` and `margin_mode`, and the order body sends that margin mode.
@@ -227,3 +229,27 @@ reconciliation above:
   (an unreadable switch counts as on), then ends the read transaction before venue IO.
 - **Safety rule marker:** APPROVED by Sofien on 2026-11-04 — demo only, leverage/margin-mode
   writes only (automatic close-position NOT approved).
+
+## Griller #430 round 2 follow-up (2026-11-04, @ 18dcd537 GO WITH CONDITIONS)
+
+- **Leverage write after the plan passes:** the write moved out of planning. With the write
+  allowed, the pre-plan snapshot reads the account as it is (no required leverage or margin
+  mode) and the plan is sized at the configured leverage and margin mode. After approval
+  and the post-approval re-checks, `_apply_planned_leverage` re-loads the setting (a changed
+  setting refuses `demo_leverage_config_changed`), re-checks the kill switch (cycle
+  observation, global flag, fresh org read), commits, writes and reads back, journals the
+  write, and only then runs the claim and the entry. A plan refused by sizing, the band, the
+  exposure cap, the liquidation gate or approval never writes. A failed write revokes the
+  authorization; nothing is claimed or sent. Without the write (flag off or production), a
+  saved setting still has to read back exactly at planning
+  (`demo_leverage_readback_mismatch`), as before.
+- **Residual:** the claim runs after the write. If the claim refuses (for example a
+  concurrent reservation used the headroom between auto-approval and the claim), the
+  leverage stays written without an order. That is harmless on demo, audited, and the next
+  plan re-checks it. Position tiers for the liquidation gate are read in the account's
+  pre-write margin mode.
+- **Configured leverage vs trade size:** the account's total-exposure limit (by default the
+  risk settings' `default_account_balance`, 10,000 USDT, about 1x a 10k demo equity) caps
+  notional before leverage does. Higher leverage then only lowers the margin used and moves liquidation closer.
+  It does not increase trade size. Size grows with leverage only if the owner raises the
+  total-exposure limit. The Autonomous Trading leverage editor shows the same hint.
