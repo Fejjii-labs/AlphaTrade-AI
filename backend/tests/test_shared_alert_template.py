@@ -31,7 +31,10 @@ def _assert_layout(text: str, *, stage_label: str | None) -> None:
     assert labels[: len(expected)] == expected
     lines = text.splitlines()
     time_index = next(i for i, line in enumerate(lines) if line.startswith("Time: "))
-    assert lines[time_index + 1] == "PAPER alert. Not an order."
+    assert lines[time_index + 1] == "PAPER alert. Not an order." or (
+        lines[time_index + 1].startswith("Ref: ")
+        and lines[time_index + 2] == "PAPER alert. Not an order."
+    )
     for dropped in DROPPED:
         assert dropped not in text
 
@@ -157,3 +160,30 @@ def test_sfp_invalidated_reads_plainly_without_ids_or_iso() -> None:
     assert NotificationSeverity  # imported for parity with the policy schema
     assert TelegramNotificationPolicyV2().event_types is None
     assert NotificationEventType.SFP_INVALIDATED in TERMINAL_SETUP_EVENTS
+
+
+@pytest.mark.parametrize(
+    "instant,expected",
+    [
+        (datetime(2026, 7, 1, 9, 30, tzinfo=UTC), "Time: 11:30 CEST"),
+        (datetime(2026, 3, 29, 0, 59, tzinfo=UTC), "Time: 01:59 CET"),
+        (datetime(2026, 3, 29, 1, 0, tzinfo=UTC), "Time: 03:00 CEST"),
+        (datetime(2026, 10, 25, 0, 59, tzinfo=UTC), "Time: 02:59 CEST"),
+        (datetime(2026, 10, 25, 1, 0, tzinfo=UTC), "Time: 02:00 CET"),
+    ],
+)
+def test_time_uses_berlin_zone_abbreviation_across_dst(instant, expected) -> None:
+    text = render_strategy_alert_text(
+        symbol="BTCUSDT",
+        strategy="sfp",
+        direction="long",
+        entry=None,
+        stop=None,
+        target=None,
+        timeframe="1h",
+        at=instant,
+        reference="abcdef12-3456",
+    )
+    assert expected in text
+    assert "Ref: abcdef12" in text
+    assert "UTC" not in text

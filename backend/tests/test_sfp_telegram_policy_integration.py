@@ -168,6 +168,7 @@ def test_closed_reclaim_projects_sweep_forming_and_confirmation_without_actions(
             "Setup ID:",
         ):
             assert dropped not in row.text
+        assert f"Ref: {str(setup_id)[:8]}" in row.text
     confirmed_text = next(
         row.text for row in rows if row.notification_event.event_type is EventType.SFP_CONFIRMED
     )

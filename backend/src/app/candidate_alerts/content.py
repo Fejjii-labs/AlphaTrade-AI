@@ -179,13 +179,16 @@ def render_strategy_alert_text(
     reason: str | None = None,
     key_levels: tuple[str, ...] = (),
     show_plan: bool = True,
+    reference: object | None = None,
 ) -> str:
     """The one Telegram alert layout shared by every strategy (current and future).
 
     Order: symbol, strategy, direction, entry, stop, target, timeframe, stage
-    (when present), UTC minute timestamp, PAPER marker, then the Source line for
-    borrowed-parameter scans. Internal IDs, strategy version, risk state and
-    reason text stay in the stored payload/audit data and are never rendered.
+    (when present), HH:MM Europe/Berlin time labelled CET/CEST, a short
+    audit reference (first 8 chars of the setup/candidate id), PAPER marker,
+    then the Source line for borrowed-parameter scans. Full internal IDs,
+    strategy version, risk state and coverage stay in the stored payload/audit
+    data and are never rendered.
     """
     stage_lines: tuple[str, ...] = ()
     if nested_stage:
@@ -213,6 +216,7 @@ def render_strategy_alert_text(
             f"Timeframe: {timeframe}",
             *stage_lines,
             f"Time: {_local_time_text(at)}",
+            *((f"Ref: {str(reference)[:8]}",) if reference is not None else ()),
             PAPER_MARKER,
             *projected,
         )
@@ -242,6 +246,7 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
             nested_stage=nested.stage,
             at=nested.evidence_at,
             projection_source=nested.projection_source,
+            reference=getattr(content, "candidate_id", None),
         )
     # Generic / any other strategy: same layout. Candidate content carries no plan
     # prices, so those render as "unavailable" rather than inventing values.
@@ -254,4 +259,5 @@ def format_candidate_alert_text(content: CandidateAlertContent) -> str:
         target=None,
         timeframe=timeframe,
         at=content.trigger_context.interval_end,
+        reference=content.candidate_id,
     )

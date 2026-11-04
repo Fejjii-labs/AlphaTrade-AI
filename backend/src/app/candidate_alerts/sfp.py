@@ -97,7 +97,7 @@ class SfpAlertSummary(CanonicalModel):
             ),
             NotificationEventType.SFP_EXPIRED: f"{side} expired: no confirmation in time",
             NotificationEventType.SFP_LEVEL_APPROACH: (
-                f"Heads-up: price is near {level}, not swept yet"
+                f"Heads-up: price is near {level} and has not swept it"
             ),
             NotificationEventType.SFP_SWEEP_DETECTED: f"Sweep of {level}, waiting for reclaim",
             NotificationEventType.SFP_RECLAIM_FORMING: f"Reclaim of {level} forming",
@@ -126,6 +126,7 @@ class SfpAlertSummary(CanonicalModel):
             at=self.evidence_at,
             projection_source=self.projection_source,
             reason=self._plain_reason(),
+            reference=self.setup_id,
             show_plan=self.event_type
             not in {NotificationEventType.SFP_INVALIDATED, NotificationEventType.SFP_EXPIRED},
             key_levels=(f"Level: {self.level_type.replace('_', ' ')} {self.structural_level}",),
