@@ -123,16 +123,19 @@ demo `_bound` path.
   closer than 2x the stop distance -> `demo_post_fill_liquidation_inside_buffer`. Either one:
   epoch lock, one `POST /api/v1/trade/close-position` on the demo host (never retried),
   kill switch armed, critical alert carrying `flatten_outcome`. Profile plans now also
-  flatten on a through-stop breach. An unreadable liqPrice on a non-profile plan is logged
+  flatten on a through-stop breach. *(Superseded 2026-11-04: the automatic close was
+  removed; see "Griller #430 follow-up" below.)* An unreadable liqPrice on a non-profile plan is logged
   only (cross positions may omit it); profile plans keep the existing hold.
 - **C3 (journal):** each confirmed write records audit `demo_leverage_applied` with
   inst_id, previous/new margin mode and leverage.
 - **Shapes/docs:** leverage-info accepts an object or a list with exactly one row for the
-  instrument; doc URLs cited in `apply_configured_leverage` / `flatten_position`.
+  instrument; doc URLs cited in `apply_configured_leverage` (`flatten_position` since
+  removed).
 - **Not done (optional):** gate-before-write ordering; the stop is only known after the
   snapshot, which needs the leverage already set. Left as is (flat-account writes only).
 - **Safety rule:** `20-trading-safety.mdc` amended with a demo-host-only, owner-configured
-  exception, **pending Sofien's explicit approval**.
+  exception. Marker now: **APPROVED by Sofien on 2026-11-04 — demo only, leverage/margin-mode
+  writes only (automatic close-position NOT approved)**.
 
 ## Deviations after Griller re-review (2026-11-03, @ 7b38902f)
 
@@ -202,3 +205,25 @@ reconciliation above:
   write off so #424's 25x refusal stays covered. #424's `account_leverage` fixture field is
   now #412's `leverage`. The preflight `leverage_not_one` / `margin_mode_not_cross` cases
   are dropped because the default snapshot no longer requires 1x cross (as on main).
+
+## Griller #430 follow-up (2026-11-04, @ 7aaecb35 NO-GO)
+
+- **Exposure-aware sizing:** non-profile demo plans (configured and existing leverage) now
+  also bound notional by the account's remaining total exposure, read before planning from
+  the same source as the claim (`AccountRiskAccountingState`, else the risk-settings
+  default): `notional_cap = min(equity x leverage x 0.95, remaining / (1 + fee rate +
+  slippage rate))`. Unread or non-finite headroom refuses `risk_limits_unverified`; none left
+  refuses `insufficient_total_exposure`. When the limit cannot hold a 1%-floor loss for the
+  stop, the plan refuses `stop_loss_below_band` before any order instead of being planned
+  and refused at the claim. The 60s window, 1-5% band, 1% floor and 20x ceiling are
+  unchanged. The worker tests seed ledger headroom like #424's tests; the fixture's default
+  limit (1x equity) cannot hold a 1% loss on its 0.145% stop at any leverage.
+- **No automatic close:** `flatten_position` and `_flatten_after_liquidation_breach` are
+  removed. A post-fill liquidation breach only warns and alerts (`auto_close: false`). A
+  liquidation through the stop arms the kill switch, as on main. A liquidation only inside
+  the 2x buffer arms nothing.
+- **Kill-switch re-check:** right before the leverage write, the loop checks the cycle's
+  observation (unknown counts as on), the global flag, and a fresh read of the org switch
+  (an unreadable switch counts as on), then ends the read transaction before venue IO.
+- **Safety rule marker:** APPROVED by Sofien on 2026-11-04 — demo only, leverage/margin-mode
+  writes only (automatic close-position NOT approved).
