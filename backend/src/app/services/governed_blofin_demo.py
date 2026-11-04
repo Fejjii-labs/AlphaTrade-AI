@@ -749,13 +749,24 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 not isinstance(profile_max, Decimal) or config.leverage_decimal > profile_max
             ):
                 return _proof(candidate, "blocked", "demo_leverage_exceeds_profile_max")
-            # Re-check the kill switch immediately before the only account write.
+            # Re-check the kill switch immediately before the only account write:
+            # the cycle's observation (unknown counts as on), the global flag, and
+            # a fresh read of the org switch (unreadable counts as on).
+            from app.services.autonomous_trading import kill_switch_refusal
+
             observed_kill_switch = getattr(self, "_observed_kill_switch", None)
             killed = self._kill_switch_refusal(
                 candidate, kill_switch_active=observed_kill_switch is not False
             )
             if killed is not None:
                 return killed
+            fresh = kill_switch_refusal(
+                self._settings, session, target.organization_id, observed=False
+            )
+            if fresh is not None:
+                session.rollback()  # A failed read leaves the transaction unusable.
+                return _proof(candidate, "blocked", fresh)
+            session.commit()  # End the read; no DB transaction held over venue IO.
             if write_allowed:
                 try:
                     # Owner-configured leverage and margin mode, demo host only, exact read-back.

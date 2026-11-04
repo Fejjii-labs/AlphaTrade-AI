@@ -963,3 +963,106 @@ def test_configured_plan_uses_the_stop_loss_band_bounded_by_configured_leverage(
         )
         == "stop_loss_above_band"
     )
+
+
+# --- Griller #430 risk 2: kill switch re-checked immediately before the leverage write ---
+
+
+class _KillReadSession:
+    """Session stand-in: the org kill-switch read is the only query before the write."""
+
+    def __init__(self, events: list[str], *, row_active: bool | None, fail: bool) -> None:
+        self._events = events
+        self._row_active = row_active
+        self._fail = fail
+
+    def scalar(self, _statement: object) -> object:
+        self._events.append("kill_read")
+        if self._fail:
+            raise RuntimeError("kill switch table unreadable")
+        if self._row_active is None:
+            return None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(active=self._row_active)
+
+    def commit(self) -> None:
+        self._events.append("commit")
+
+    def rollback(self) -> None:
+        self._events.append("rollback")
+
+
+@pytest.mark.parametrize(
+    ("observed", "row_active", "fail", "reason"),
+    [
+        # Clean: observed off, org switch off -> the write is attempted.
+        (False, None, False, "demo_leverage_set_failed"),
+        (False, False, False, "demo_leverage_set_failed"),
+        # Armed after the cycle observed it off: the fresh read blocks.
+        (False, True, False, "kill_switch_active"),
+        # Unreadable org switch counts as on.
+        (False, None, True, "kill_switch_unverified"),
+        # Unknown cycle observation counts as on.
+        (None, None, False, "kill_switch_active"),
+        ("unknown", None, False, "kill_switch_active"),
+        (True, None, False, "kill_switch_active"),
+    ],
+)
+def test_kill_switch_rechecked_immediately_before_leverage_write(
+    monkeypatch: pytest.MonkeyPatch,
+    observed: object,
+    row_active: bool | None,
+    fail: bool,
+    reason: str,
+) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.core.config import Settings
+    from app.schemas.common import TradeDirection
+    from app.services import automated_paper_loop
+    from app.services import governed_blofin_demo as mod
+    from app.signal_fusion.memory import FrozenClock
+
+    events: list[str] = []
+
+    class _Provider:
+        def apply_configured_leverage(self, **_kwargs: object) -> None:
+            events.append("write")
+            raise ValueError("Demo set-leverage failed.")
+
+    monkeypatch.setattr(mod, "has_demo_entry_history", lambda *_a, **_k: False)
+    monkeypatch.setattr(automated_paper_loop, "_load_active_profile", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        demo_leverage_config,
+        "load_demo_leverage_config",
+        lambda *_a, **_k: DemoLeverageConfig(10, "isolated", "default"),
+    )
+    settings = Settings(
+        _env_file=None, environment="local", governed_demo_auto_leverage_write_enabled=True
+    )
+    runtime = SimpleNamespace(plan_store=SimpleNamespace(get_by_candidate_scope=lambda **_k: None))
+    loop = GovernedBloFinDemoLoop(
+        runtime,  # type: ignore[arg-type]
+        settings,
+        FrozenClock(EVALUATED_AT),
+        provider=_Provider(),  # type: ignore[arg-type]
+    )
+    loop._observed_kill_switch = observed  # type: ignore[assignment]
+    proof = loop._bound(
+        _KillReadSession(events, row_active=row_active, fail=fail),  # type: ignore[arg-type]
+        target=SimpleNamespace(organization_id=uuid4(), user_id=uuid4(), symbol="BTCUSDT"),  # type: ignore[arg-type]
+        candidate=SimpleNamespace(candidate_id=uuid4(), direction=TradeDirection.SHORT),  # type: ignore[arg-type]
+        assessment=None,  # type: ignore[arg-type]
+        window=None,  # type: ignore[arg-type]
+        assembled=None,  # type: ignore[arg-type]
+        policy=SimpleNamespace(),  # type: ignore[arg-type]
+        account=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
+    )
+    assert proof.reason_code == reason
+    if reason == "demo_leverage_set_failed":
+        # The fresh read is the last step before the write.
+        assert events[-3:] == ["kill_read", "commit", "write"]
+    else:
+        assert "write" not in events
