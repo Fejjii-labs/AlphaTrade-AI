@@ -62,6 +62,7 @@ from sqlalchemy.orm import Session
 from app.core.config import ExecutionMode, Settings
 from app.core.errors import ExchangeDemoInactiveError
 from app.db.models import JournalTrade
+from app.providers.exchange.errors import ExchangeRateLimitError, ExchangeUnavailableError
 from app.schemas.common import (
     JournalEntryMethod,
     JournalTradeSource,
@@ -81,6 +82,7 @@ _Q = Decimal("0.00000001")
 _RATE = Decimal("0.0001")
 _WINDOW = timedelta(days=7) - timedelta(seconds=1)
 _MAX_PAGES = 40
+_RETRY_BACKOFF_CAP_SECONDS = 60.0
 _CYCLE_REF = "blofin-demo-mirror-cycle"
 _CYCLE_OK = "mirror-cycle:ok"
 _CYCLE_FAILED = "mirror-cycle:failed"
@@ -161,6 +163,41 @@ class _PagePacer:
             return
         if self._seconds > 0 and self._wait(self._seconds):
             raise MirrorReadError("mirror read stopped")
+
+
+class _PageRetry:
+    """Bounded retries of one history page after a 429 or a venue/transport failure.
+
+    The budget is per mirror read, not per page, so a struggling venue costs
+    at most ``attempts`` waits in total (base, 2x base, 4x base ..., each
+    capped at 60 s). The same page is asked again, so no row is skipped. An
+    exhausted budget or a stopping worker fails the read; the caller then
+    keeps its cursor. Auth and request errors are never retried.
+    """
+
+    def __init__(
+        self, attempts: int, backoff_seconds: float, wait: Callable[[float], bool]
+    ) -> None:
+        self._attempts = attempts
+        self._backoff = backoff_seconds
+        self._wait = wait
+        self.used = 0
+
+    def __call__(self, fetch: Callable[[], Any]) -> Any:
+        while True:
+            try:
+                return fetch()
+            except (ExchangeRateLimitError, ExchangeUnavailableError) as exc:
+                if self.used >= self._attempts:
+                    kind = type(exc).__name__
+                    raise MirrorReadError(f"history page failed after retries: {kind}") from None
+            delay = min(self._backoff * 2**self.used, _RETRY_BACKOFF_CAP_SECONDS)
+            self.used += 1
+            logger.warning(
+                "blofin_demo_manual_mirror_page_retry", retry=self.used, delay_seconds=delay
+            )
+            if delay > 0 and self._wait(delay):
+                raise MirrorReadError("mirror read stopped")
 
 
 @dataclass(frozen=True, slots=True)
@@ -903,9 +940,30 @@ def _history_pages(
     begin: str,
     end: str,
     pace: Callable[[], None] | None = None,
+    retry: _PageRetry | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Return rows and whether the safety cap stopped the cursor."""
+    """Return rows and whether the safety cap stopped the cursor.
+
+    A failure clears the rows read so far before it propagates, so a
+    traceback that outlives the read does not keep its pages alive.
+    """
     rows: list[dict[str, Any]] = []
+    try:
+        return _read_pages(client, path, begin, end, pace, retry, rows)
+    except BaseException:
+        rows.clear()
+        raise
+
+
+def _read_pages(
+    client: _HistoryClient,
+    path: str,
+    begin: str,
+    end: str,
+    pace: Callable[[], None] | None,
+    retry: _PageRetry | None,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
     after: str | None = None
     seen: set[str] = set()
     cursor_key = _CURSOR[path]
@@ -915,27 +973,43 @@ def _history_pages(
             params["after"] = after
         if pace is not None:
             pace()
-        page = client.request("GET", path, params=params, signed=True)
-        if not isinstance(page, list):
-            raise MirrorReadError("history page was not a list")
-        if not page:
-            return rows, False
-        last = page[-1]
-        if not isinstance(last, dict):
-            raise MirrorReadError("history row was not an object")
-        cursor = last.get(cursor_key)
-        if not isinstance(cursor, str) or not cursor or cursor in seen:
-            raise MirrorReadError("history cursor did not advance")
-        seen.add(cursor)
-        for item in page:
-            if isinstance(item, dict):
-                rows.append(item)
-            else:
-                raise MirrorReadError("history row was not an object")
-        if len(page) < 100:
+
+        def fetch(params: dict[str, str] = params) -> Any:
+            return client.request("GET", path, params=params, signed=True)
+
+        page = fetch() if retry is None else retry(fetch)
+        # The page is dropped before any error is raised, so no traceback
+        # frame keeps it alive.
+        error, cursor, size = _take_page(page, cursor_key, seen, rows)
+        del page
+        if error is not None:
+            raise MirrorReadError(error)
+        if size < 100:
             return rows, False
         after = cursor
     return rows, True
+
+
+def _take_page(
+    page: object, cursor_key: str, seen: set[str], rows: list[dict[str, Any]]
+) -> tuple[str | None, str, int]:
+    """Append one page's rows. Returns (error, next cursor, page size); never raises."""
+    if not isinstance(page, list):
+        return "history page was not a list", "", 0
+    if not page:
+        return None, "", 0
+    last = page[-1]
+    if not isinstance(last, dict):
+        return "history row was not an object", "", 0
+    cursor = last.get(cursor_key)
+    if not isinstance(cursor, str) or not cursor or cursor in seen:
+        return "history cursor did not advance", "", 0
+    seen.add(cursor)
+    for item in page:
+        if not isinstance(item, dict):
+            return "history row was not an object", "", 0
+        rows.append(item)
+    return None, cursor, len(page)
 
 
 def _window(now: datetime) -> tuple[datetime, datetime, str, str]:
@@ -1121,7 +1195,9 @@ class BloFinDemoManualMirror:
         self._now = now
         # Previous ``ok`` read ends. None (first run, restart) reads seven days.
         self._cursor = cursor
+        self._wait = wait
         self._pace = _PagePacer(page_pause_seconds, wait)
+        self._retry: _PageRetry | None = None
 
     def apply(
         self,
@@ -1137,6 +1213,11 @@ class BloFinDemoManualMirror:
         if not settings.blofin_demo_manual_mirror_enabled:
             return MirrorReport(True, 0, 0, 0, 0, 0)
         self._require_internal_read_pin(organization_id=organization_id, settings=settings)
+        self._retry = _PageRetry(
+            settings.blofin_demo_manual_mirror_page_retries,
+            settings.blofin_demo_manual_mirror_page_retry_backoff_seconds,
+            self._wait,
+        )
         begin, end, _begin_ms, end_ms = _window(self._now)
         overlap = timedelta(seconds=settings.blofin_demo_manual_mirror_overlap_seconds)
         instruments = self._client.request("GET", _INSTRUMENTS, params=None, signed=False)
@@ -1233,7 +1314,9 @@ class BloFinDemoManualMirror:
     def _read(
         self, path: str, since: datetime, end_ms: str, *, capped_error: bool
     ) -> list[dict[str, Any]]:
-        rows, capped = _history_pages(self._client, path, _ms(since), end_ms, self._pace)
+        rows, capped = _history_pages(
+            self._client, path, _ms(since), end_ms, self._pace, self._retry
+        )
         if capped and capped_error:
             raise MirrorReadError("positions-history page cap reached")
         return rows
@@ -1242,7 +1325,7 @@ class BloFinDemoManualMirror:
         self, path: str, deps_begin: datetime, overlap: timedelta, end_ms: str
     ) -> tuple[list[dict[str, Any]], bool]:
         since = min(deps_begin, _since(self._cursor, path, deps_begin, overlap))
-        return _history_pages(self._client, path, _ms(since), end_ms, self._pace)
+        return _history_pages(self._client, path, _ms(since), end_ms, self._pace, self._retry)
 
     def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
         """Run the #304 org pin and UID check before any account read.

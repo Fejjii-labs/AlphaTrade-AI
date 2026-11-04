@@ -21,6 +21,13 @@ from app.core.config import ExecutionMode, Settings
 from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
 from app.db.base import Base
 from app.db.models import JournalTrade, Organization, PaperTrade, User, UserRiskSettings
+from app.providers.exchange.errors import (
+    ExchangeAuthError,
+    ExchangeError,
+    ExchangeRateLimitError,
+    ExchangeRequestError,
+    ExchangeUnavailableError,
+)
 from app.repositories.journal_trades import assert_stats_projection_excludes_annotation_grade
 from app.schemas.common import (
     JournalTradeSource,
@@ -49,6 +56,7 @@ from app.services.blofin_demo_manual_mirror import (
     _opening_side,
     _opening_side_reason,
     _PagePacer,
+    _PageRetry,
     drafts_from_raw,
     publish_mirror_performance,
     record_mirror_cycle,
@@ -1912,3 +1920,153 @@ def test_mirror_read_paces_every_history_page_across_endpoints(session: Session)
     paged = [path for _method, path in client.calls if path in _PAGED_PATHS]
     assert set(paged) == _PAGED_PATHS
     assert waits == [1.0] * (len(paged) - 1)
+
+
+# --- Hardening: retries, partial reads (worker memory hardening) --------------
+
+
+class _Row(dict):  # type: ignore[type-arg]
+    """A history row that a test can hold a weak reference to."""
+
+
+class _FlakyClient:
+    """Serves ``pages`` in order; an exception instance in the list is raised."""
+
+    def __init__(self, pages: list[object]) -> None:
+        self.pages = pages
+        self.afters: list[object] = []
+
+    def request(self, method: str, path: str, **kwargs: object) -> object:
+        params = kwargs.get("params")
+        self.afters.append(params.get("after") if isinstance(params, dict) else None)
+        item = self.pages.pop(0) if self.pages else []
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def _rate_limited() -> ExchangeRateLimitError:
+    return ExchangeRateLimitError("BloFin rate limit exceeded.")
+
+
+def test_a_rate_limited_page_is_asked_again_with_doubling_backoff() -> None:
+    waits: list[float] = []
+    client = _FlakyClient(
+        [_full_page(0), _rate_limited(), ExchangeUnavailableError("503"), [{"tradeId": "x"}]]
+    )
+    retry = _PageRetry(3, 5.0, _recorder(waits))
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", None, retry)
+    assert len(rows) == 101 and capped is False
+    assert waits == [5.0, 10.0]
+    # The failed page is asked again from the same cursor, so no row is skipped.
+    assert client.afters == [None, "99", "99", "99"]
+
+
+def test_the_retry_budget_is_per_read_and_an_exhausted_budget_fails_the_read() -> None:
+    waits: list[float] = []
+    retry = _PageRetry(2, 1.0, _recorder(waits))
+    first = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    _history_pages(first, _FILLS_PATH, "1", "2", None, retry)
+    second = _FlakyClient([_rate_limited(), _rate_limited(), [{"tradeId": "b"}]])
+    with pytest.raises(MirrorReadError, match="after retries: ExchangeRateLimitError"):
+        _history_pages(second, _FILLS_PATH, "1", "2", None, retry)
+    assert waits == [1.0, 2.0]
+    assert len(second.afters) == 2
+
+
+def test_zero_retries_fail_on_the_first_rate_limit() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    with pytest.raises(MirrorReadError):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(0, 5.0, _recorder(waits)))
+    assert waits == [] and len(client.afters) == 1
+
+
+def test_retry_backoff_is_capped_at_sixty_seconds() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([*(_rate_limited() for _ in range(4)), [{"tradeId": "a"}]])
+    _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(4, 20.0, _recorder(waits)))
+    assert waits == [20.0, 40.0, 60.0, 60.0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ExchangeAuthError("denied"), ExchangeRequestError("bad request"), ValueError("parse")],
+)
+def test_auth_request_and_parse_errors_are_not_retried(error: Exception) -> None:
+    waits: list[float] = []
+    client = _FlakyClient([error, [{"tradeId": "a"}]])
+    with pytest.raises(type(error)):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(3, 1.0, _recorder(waits)))
+    assert waits == [] and len(client.afters) == 1
+
+
+def test_a_stopping_worker_ends_the_retry_backoff() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    retry = _PageRetry(3, 5.0, _recorder(waits, stop=True))
+    with pytest.raises(MirrorReadError, match="stopped"):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, retry)
+    assert waits == [5.0] and len(client.afters) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ExchangeAuthError("denied"),
+        "not a list",
+        [_Row(tradeId="900"), "not a row"],
+        [_Row(tradeId="0")],
+    ],
+    ids=["error", "bad-page", "bad-row", "cursor-repeat"],
+)
+def test_a_failed_read_releases_the_pages_it_already_read(failure: object) -> None:
+    import gc
+    import weakref
+
+    first = [_Row(tradeId=str(index)) for index in range(99)] + [_Row(tradeId="0")]
+    refs = [weakref.ref(row) for row in first]
+    client = _FlakyClient([first, failure])
+    del first
+    with pytest.raises((ExchangeError, MirrorReadError)) as caught:
+        _history_pages(client, _FILLS_PATH, "1", "2")
+    # The exception (and its traceback frames) is still alive here.
+    assert caught.value.__traceback__ is not None
+    gc.collect()
+    assert all(ref() is None for ref in refs)
+
+
+def test_mirror_retries_from_settings_and_an_exhausted_read_writes_nothing(
+    session: Session,
+) -> None:
+    waits: list[float] = []
+
+    class _Limited(_Client):
+        def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+            if path == _FILLS_PATH:
+                raise _rate_limited()
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+    client = _Limited(_paths(_FIXTURE["long"]))  # type: ignore[arg-type]
+    settings = _settings(
+        blofin_demo_manual_mirror_page_retries=2,
+        blofin_demo_manual_mirror_page_retry_backoff_seconds=3.0,
+    )
+    mirror = BloFinDemoManualMirror(client, now=NOW, wait=_recorder(waits))
+    with pytest.raises(MirrorReadError):
+        mirror.apply(session, organization_id=ORG, user_id=USER, settings=settings)
+    session.rollback()
+    assert waits == [3.0, 6.0]
+    assert _rows(session) == []
+
+
+def test_mirror_page_retry_settings_default_and_bounds() -> None:
+    from pydantic import ValidationError
+
+    settings = Settings(_env_file=None)
+    assert settings.blofin_demo_manual_mirror_page_retries == 3
+    assert settings.blofin_demo_manual_mirror_page_retry_backoff_seconds == 5.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, blofin_demo_manual_mirror_page_retries=11)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, blofin_demo_manual_mirror_page_retry_backoff_seconds=61)

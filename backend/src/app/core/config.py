@@ -407,6 +407,14 @@ class Settings(BaseSettings):
     # Minimum gap between mirror history pages. BloFin allows 30 "trading-related"
     # calls per 10 s per user id; 1 s keeps the mirror at 10 pages per 10 s or less.
     blofin_demo_manual_mirror_page_pause_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
+    # Retries per mirror read (not per page) after a 429 or a venue/transport
+    # failure, on top of the client's own short retries. Backoff doubles from
+    # the base and is capped at 60 s; an exhausted budget fails the read and
+    # keeps the cursor. 0 fails on the first such error.
+    blofin_demo_manual_mirror_page_retries: int = Field(default=3, ge=0, le=10)
+    blofin_demo_manual_mirror_page_retry_backoff_seconds: float = Field(
+        default=5.0, ge=0.0, le=60.0
+    )
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.
