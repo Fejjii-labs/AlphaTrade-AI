@@ -71,7 +71,7 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
   const last = points.at(-1);
   return (
     <section
-      className="rounded-card border border-border-subtle bg-surface-1 p-4"
+      className="relative rounded-card border border-border-subtle bg-surface-1 p-4"
       aria-label="Daily net cumulative P&L"
       data-testid="cumulative-pnl"
     >
@@ -137,7 +137,8 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
           <p className="sr-only" data-testid="cumulative-summary">
             {curveSummary(points)}
           </p>
-          <table className="sr-only">
+          <div className="sr-only">
+            <table>
             <caption>Daily and cumulative net P&amp;L</caption>
             <thead>
               <tr>
@@ -156,6 +157,7 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
               ))}
             </tbody>
           </table>
+          </div>
         </>
       ) : null}
     </section>

@@ -59,7 +59,7 @@ export function ScoreRadar({
   const marker = overall === null || smallSample ? null : Math.max(0, Math.min(100, overall));
   return (
     <section
-      className="flex flex-col rounded-card border border-border-subtle bg-surface-1 p-4"
+      className="relative flex flex-col rounded-card border border-border-subtle bg-surface-1 p-4"
       aria-label="Performance score"
       data-testid="score-radar"
     >
@@ -99,7 +99,8 @@ export function ScoreRadar({
           ))}
         </ul>
       ) : null}
-      <table className="sr-only">
+      <div className="sr-only">
+        <table>
         <caption>Score components (0–100)</caption>
         <tbody>
           {rows.map((datum) => (
@@ -111,6 +112,7 @@ export function ScoreRadar({
           ))}
         </tbody>
       </table>
+      </div>
       <div className="mt-auto flex items-end gap-4 border-t border-border-subtle pt-3">
         <div>
           <p className="text-[11px] text-text-muted">Overall score</p>
