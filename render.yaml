@@ -142,6 +142,9 @@ services:
       # reset them; set them in the Render dashboard.
       - key: ENVIRONMENT
         value: staging
+      # Also set in the Dockerfile. Caps glibc arenas so freed memory is reused.
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: EXECUTION_MODE
         value: paper
       - key: ENABLE_REAL_TRADING
