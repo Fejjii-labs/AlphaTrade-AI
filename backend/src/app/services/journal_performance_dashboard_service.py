@@ -14,6 +14,12 @@ Rules (documented so every number can be re-derived by hand):
   validation plus canonical paper executions without BloFin-demo evidence;
   real = manually logged trades without BloFin-demo evidence. Backtest,
   imported and system trades are read only when their scope is selected.
+- Partial closes: only CLOSED rows count. BloFin demo partial closes are
+  journaled by the manual mirror as separate CLOSED slices (exit reason
+  ``partially_closed``) and are included. ``journal_trades`` records no
+  realised P&L for partial exits on an OPEN row (canonical paper closes are
+  whole-position), so that P&L is excluded until the trade closes; the
+  response counts those open trades and warns. Nothing is estimated.
 - Trades are bucketed by the local calendar date of their effective time
   (exit, else entry, else creation) in the requested IANA timezone.
 - Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
@@ -140,6 +146,16 @@ class _StatsRowSource(Protocol):
         max_rows: int,
     ) -> tuple[list[JournalTradeStatsRow], bool]: ...
 
+    def count_dashboard_open_trades(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rules: Sequence[SourceVenueRule],
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> int: ...
+
 
 def resolve_timezone(name: str) -> ZoneInfo:
     try:
@@ -235,6 +251,13 @@ class JournalPerformanceDashboardService:
             date_to=end,
             max_rows=self._max_rows,
         )
+        open_trades = self._trades.count_dashboard_open_trades(
+            organization_id=organization_id,
+            user_id=user_id,
+            rules=rules,
+            date_from=start,
+            date_to=end,
+        )
         return build_dashboard(
             rows,
             filters=filters,
@@ -242,6 +265,7 @@ class JournalPerformanceDashboardService:
             targets=self._targets,
             truncated=truncated,
             max_rows=self._max_rows,
+            open_trades_excluded=open_trades,
         )
 
 
@@ -532,6 +556,7 @@ def build_dashboard(
     targets: ScoreTargets,
     truncated: bool,
     max_rows: int,
+    open_trades_excluded: int = 0,
     now: datetime | None = None,
 ) -> JournalPerformanceDashboardResponse:
     summary = summarize(rows)
@@ -555,6 +580,12 @@ def build_dashboard(
     if rows and confidence == SampleConfidence.INSUFFICIENT:
         dashboard_score = dashboard_score.model_copy(update={"overall": None})
         warnings.append("Overall score withheld until at least 5 closed trades.")
+    if open_trades_excluded:
+        warnings.append(
+            f"{open_trades_excluded} open trade(s) in scope are not counted. Realised P&L "
+            "from partial exits on open trades is not recorded in the journal, so it "
+            "appears only once the trade closes."
+        )
     if truncated:
         since = f" from {oldest_covered.isoformat()}" if oldest_covered else ""
         warnings.append(
@@ -572,6 +603,7 @@ def build_dashboard(
         truncated=truncated,
         max_rows=max_rows,
         oldest_covered_date=oldest_covered,
+        open_trades_excluded=open_trades_excluded,
         warnings=warnings,
         generated_at=now or datetime.now(UTC),
     )

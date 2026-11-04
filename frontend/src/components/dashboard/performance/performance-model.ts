@@ -271,6 +271,7 @@ export function buildSampleDashboard(ref: MonthRef): JournalPerformanceDashboard
     truncated: false,
     max_rows: 0,
     oldest_covered_date: null,
+    open_trades_excluded: 0,
     warnings: ["Sample data — illustrative only, not your trades."],
     generated_at: new Date(Date.UTC(ref.year, ref.month, 1)).toISOString(),
   };

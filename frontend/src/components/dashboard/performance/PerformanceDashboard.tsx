@@ -168,8 +168,15 @@ export function PerformanceDashboard({
         <p className="text-sm font-medium text-text-primary" data-testid="performance-scope">
           Showing: {scopeLabel}
           <span className="ml-2 text-xs font-normal text-text-muted">
-            Closed trades only; scopes are never mixed.
+            Closed trades only; scopes are never mixed. Partial exits on open trades count only
+            once the trade closes.
           </span>
+          {rangeData?.open_trades_excluded ? (
+            <span className="ml-2 text-xs font-normal text-text-muted" data-testid="performance-open-excluded">
+              ({rangeData.open_trades_excluded} open trade{rangeData.open_trades_excluded === 1 ? "" : "s"} not
+              counted)
+            </span>
+          ) : null}
         </p>
       ) : null}
 

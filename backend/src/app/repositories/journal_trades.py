@@ -496,6 +496,34 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
         rows = [JournalTradeStatsRow(*row) for row in reversed(raw[:max_rows])]
         return rows, truncated
 
+    def count_dashboard_open_trades(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rules: Sequence[SourceVenueRule],
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> int:
+        """OPEN trades in the same scope and range (not part of any figure).
+
+        ``journal_trades`` holds no realised P&L for partial exits on an open
+        row, so the dashboard reports how many open trades it leaves out.
+        """
+        effective_time = _effective_time()
+        filters: list[ColumnElement[bool]] = [
+            JournalTrade.organization_id == organization_id,
+            JournalTrade.user_id == user_id,
+            JournalTrade.status == JournalTradeStatus.OPEN,
+            scope_rules_clause(rules),
+        ]
+        if date_from is not None:
+            filters.append(effective_time >= date_from)
+        if date_to is not None:
+            filters.append(effective_time <= date_to)
+        stmt = select(func.count()).select_from(JournalTrade).where(*filters)
+        return int(self._session.scalar(stmt) or 0)
+
     def fetch_rule_check_status_pairs(
         self,
         *,

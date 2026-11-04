@@ -69,6 +69,7 @@ function response(
     truncated: false,
     max_rows: 5000,
     oldest_covered_date: null,
+    open_trades_excluded: 0,
     warnings: [],
     generated_at: "2026-07-15T12:00:00Z",
     ...overrides,
@@ -156,6 +157,16 @@ describe("PerformanceDashboard", () => {
     render(<PerformanceDashboard now={NOW} />);
     expect(await screen.findByTestId("performance-truncated")).toHaveTextContent("Newest 5000 trades since 2026-05-02");
     expect(screen.getByTestId("performance-warnings")).toHaveTextContent("most recent closed trades from 2026-05-02");
+  });
+
+  it("states that partial exits on open trades are not counted", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response({ open_trades_excluded: 3 }));
+    render(<PerformanceDashboard now={NOW} />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.getByTestId("performance-scope")).toHaveTextContent(
+      "Partial exits on open trades count only once the trade closes",
+    );
+    expect(screen.getByTestId("performance-open-excluded")).toHaveTextContent("3 open trades not counted");
   });
 
   it("navigates months and refetches the calendar range", async () => {

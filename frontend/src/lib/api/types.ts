@@ -4589,6 +4589,8 @@ export interface JournalPerformanceDashboardResponse {
   max_rows: number;
   /** Local date of the oldest trade in the capped newest-first window; set only when truncated. */
   oldest_covered_date: string | null;
+  /** Open trades in scope/range; realised P&L from their partial exits is not recorded until close. */
+  open_trades_excluded: number;
   warnings: string[];
   generated_at: string;
 }

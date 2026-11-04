@@ -135,5 +135,8 @@ class JournalPerformanceDashboardResponse(StrictModel):
     # Local date of the oldest trade in the capped (newest-first) window; set
     # only when truncated, so earlier trades in range are not counted.
     oldest_covered_date: date | None = None
+    # OPEN trades in scope and range. Realised P&L from their partial exits is
+    # not recorded on journal_trades, so it is not in any figure until close.
+    open_trades_excluded: int = 0
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime

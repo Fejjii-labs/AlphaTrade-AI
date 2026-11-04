@@ -20579,6 +20579,11 @@
             ],
             "title": "Oldest Covered Date"
           },
+          "open_trades_excluded": {
+            "default": 0,
+            "title": "Open Trades Excluded",
+            "type": "integer"
+          },
           "risk": {
             "$ref": "#/components/schemas/JournalDashboardRisk"
           },

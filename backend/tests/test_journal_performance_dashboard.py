@@ -292,6 +292,9 @@ class _FakeTrades:
         self.calls.append(kwargs)
         return self.rows, False
 
+    def count_dashboard_open_trades(self, **kwargs: Any) -> int:
+        return 0
+
 
 def _service(trades: _FakeTrades, **overrides: object) -> JournalPerformanceDashboardService:
     settings = Settings(**{**_BASE, **overrides})  # type: ignore[arg-type]
@@ -569,6 +572,59 @@ def test_calendar_endpoint_scopes_never_mix(
         ).status_code
         == 422
     )
+
+
+def test_open_trades_are_counted_and_warned_not_summed() -> None:
+    rows = [_row("5", datetime(2026, 7, 2, tzinfo=UTC))]
+    result = build_dashboard(
+        rows,
+        filters=JournalDashboardFilters(
+            scope=JournalDashboardScope.DEMO,
+            scope_label="Demo trades (BloFin demo)",
+            timezone="UTC",
+        ),
+        tz=UTC_TZ,
+        targets=TARGETS,
+        truncated=False,
+        max_rows=5000,
+        open_trades_excluded=2,
+    )
+    assert result.open_trades_excluded == 2
+    assert result.summary.net_pnl == Decimal("5")
+    assert any("2 open trade(s) in scope are not counted" in w for w in result.warnings)
+    assert not any("open trade" in w for w in _build(rows).warnings)
+
+
+def test_calendar_endpoint_partial_close_slices_count_open_remainder_does_not(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    # BloFin demo mirror: each partial close is its own CLOSED slice.
+    for pnl in ("30", "-12"):
+        slice_id = _closed_trade(factory, net_pnl=pnl, source=JournalTradeSource.BLOFIN_DEMO_MANUAL)
+        _set_columns(factory, slice_id, exit_reason="partially_closed")
+    # Open demo trade; its partial-exit P&L is not recorded on the row.
+    _closed_trade(
+        factory, net_pnl=None, source=DEMO, status=JournalTradeStatus.OPEN, exit_time=None
+    )
+    # Open trade in another scope is not reported for demo.
+    _closed_trade(
+        factory,
+        source=JournalTradeSource.MANUAL,
+        status=JournalTradeStatus.OPEN,
+        exit_time=None,
+    )
+    body = test_client.get("/journal/statistics/calendar", headers=headers).json()
+    assert body["summary"]["trade_count"] == 2
+    assert Decimal(body["summary"]["net_pnl"]) == Decimal("18")
+    assert body["open_trades_excluded"] == 1
+    assert any("partial exits" in w for w in body["warnings"])
+    real = test_client.get(
+        "/journal/statistics/calendar", headers=headers, params={"scope": "real"}
+    ).json()
+    assert real["open_trades_excluded"] == 1
+    assert real["summary"]["trade_count"] == 0
 
 
 def test_calendar_endpoint_keeps_the_newest_window_when_capped() -> None:
