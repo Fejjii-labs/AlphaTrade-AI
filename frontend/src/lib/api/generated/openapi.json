@@ -3948,6 +3948,7 @@
           "provider_usage_metadata_missing",
           "tradingview_signal_received",
           "tradingview_signal_rejected",
+          "demo_leverage_applied",
           "tradingview_signal_candidate_created",
           "blofin_demo_sync",
           "paper_signal_orchestration_evaluated",
@@ -4269,6 +4270,11 @@
       "AutonomousTradingSettingsUpdate": {
         "additionalProperties": false,
         "properties": {
+          "clear_demo_leverage_overrides": {
+            "default": false,
+            "title": "Clear Demo Leverage Overrides",
+            "type": "boolean"
+          },
           "clear_risk_per_trade_percent": {
             "default": false,
             "title": "Clear Risk Per Trade Percent",
@@ -4288,6 +4294,55 @@
               }
             ],
             "title": "Daily Loss Limit Percent"
+          },
+          "demo_leverage": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demo Leverage"
+          },
+          "demo_leverage_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demo Leverage Overrides"
+          },
+          "demo_margin_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Demo Margin Mode"
           },
           "internal_paper_enabled": {
             "anyOf": [
@@ -4376,6 +4431,32 @@
             "title": "Daily Loss Limit Percent",
             "type": "string"
           },
+          "demo_leverage": {
+            "default": 10,
+            "title": "Demo Leverage",
+            "type": "integer"
+          },
+          "demo_leverage_overrides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DemoLeverageOverride"
+            },
+            "title": "Demo Leverage Overrides",
+            "type": "object"
+          },
+          "demo_leverage_using_default": {
+            "default": true,
+            "title": "Demo Leverage Using Default",
+            "type": "boolean"
+          },
+          "demo_margin_mode": {
+            "default": "isolated",
+            "enum": [
+              "isolated",
+              "cross"
+            ],
+            "title": "Demo Margin Mode",
+            "type": "string"
+          },
           "effective_max_trades_per_day": {
             "title": "Effective Max Trades Per Day",
             "type": "integer"
@@ -4406,6 +4487,11 @@
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Max Daily Loss Percent Ceiling",
             "type": "string"
+          },
+          "max_demo_leverage_ceiling": {
+            "default": 20,
+            "title": "Max Demo Leverage Ceiling",
+            "type": "integer"
           },
           "max_risk_per_trade_percent_ceiling": {
             "default": "5",
@@ -10867,6 +10953,41 @@
           "contracts"
         ],
         "title": "DemoAccountPosition",
+        "type": "object"
+      },
+      "DemoLeverageOverride": {
+        "additionalProperties": false,
+        "properties": {
+          "leverage": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leverage"
+          },
+          "margin_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "isolated",
+                  "cross"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Mode"
+          }
+        },
+        "title": "DemoLeverageOverride",
         "type": "object"
       },
       "DemoReconciliationDiagnostic": {
@@ -33613,6 +33734,7 @@
           "research_validation_promotion",
           "tradingview_signal",
           "demo_liquidation_through_stop",
+          "demo_liquidation_unreadable",
           "paper_exit_backfill_loss",
           "paper_exit_degraded_repeat",
           "paper_exit_clock_skew",

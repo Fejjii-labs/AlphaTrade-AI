@@ -42,6 +42,7 @@ from app.services.autonomous_trading_settings_service import (
     validate_max_trades_per_day,
     validate_risk_per_trade_percent,
 )
+from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.risk.daily_risk_accounting import AuthoritativeDailySnapshot
 from app.services.risk_policy.grader import Grade, GradeDecision
 from app.services.risk_policy.plan_sizing import (
@@ -712,6 +713,8 @@ def test_demo_plan_terms_risk_override(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     loop = GovernedBloFinDemoLoop(None, None, None)  # type: ignore[arg-type]
     loop._snapshot = replace_dc(snapshot, account_leverage=Decimal("1"), margin_mode="isolated")
+    # Owner-configured 1x isolated, matching the read-back above.
+    loop._leverage_config = DemoLeverageConfig(1, "isolated", "account")
     common = {
         "candidate": world.candidate,
         "assembled": None,

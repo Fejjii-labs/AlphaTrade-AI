@@ -35,7 +35,11 @@ from app.workers.binance_gate_coordination import (
     BinanceGateCoordinator,
     start_binance_gate_coordination,
 )
-from tests.support.alembic_heads import alembic_script_directory, single_alembic_head
+from tests.support.alembic_heads import (
+    alembic_ancestry,
+    alembic_script_directory,
+    single_alembic_head,
+)
 from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 
 T0 = datetime(2026, 11, 4, 11, 17, tzinfo=UTC)
@@ -89,9 +93,9 @@ def lite() -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def test_a24_is_the_single_head_and_revises_a23() -> None:
+def test_a24_is_on_the_single_head_and_revises_a23() -> None:
     script = alembic_script_directory()
-    assert single_alembic_head(script) == _A24
+    assert _A24 in alembic_ancestry(single_alembic_head(script))
     assert script.get_revision(_A24).down_revision == _A23
 
 

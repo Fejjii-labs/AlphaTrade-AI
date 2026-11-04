@@ -106,7 +106,9 @@ def reconcile_demo_exit(
     entry: DemoOrderEvidence,
     clock: Callable[[], datetime],
 ) -> VerifiedDemoExit | None:
-    expected_margin = demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id)
+    expected_margin = demo_order_margin_mode(
+        plan.risk_and_exits.margin_assumption_id, str(plan.margin_mode.value)
+    )
     if not entry.fills or entry.status not in {"filled", "canceled", "cancelled", "expired"}:
         return None  # A live entry remainder can still add exposure.
     positions = _account_rows(client.request("GET", "/api/v1/account/positions", signed=True))
