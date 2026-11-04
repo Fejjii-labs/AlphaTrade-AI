@@ -2,6 +2,7 @@ import type {
   JournalDashboardDay,
   JournalDashboardScope,
   JournalPerformanceDashboardResponse,
+  JournalTradeSource,
 } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
 
@@ -13,14 +14,18 @@ export function toNumber(value: string | number | null | undefined): number | nu
 }
 
 /** Signed, compact PnL ("+1.05K", "−37.5", "+600"); no currency symbol. */
-export function formatCompactPnl(value: string | number | null | undefined): string {
+export function formatCompactPnl(
+  value: string | number | null | undefined,
+  { whole = false }: { whole?: boolean } = {},
+): string {
   const numeric = toNumber(value);
   if (numeric === null) return UNAVAILABLE;
   const sign = numeric >= 0 ? "+" : "−";
   const magnitude = Math.abs(numeric);
-  if (magnitude >= 1_000_000) return `${sign}${(magnitude / 1_000_000).toFixed(2)}M`;
-  if (magnitude >= 1_000) return `${sign}${(magnitude / 1_000).toFixed(2)}K`;
-  return `${sign}${Number(magnitude.toFixed(2))}`;
+  const digits = whole ? 1 : 2;
+  if (magnitude >= 1_000_000) return `${sign}${(magnitude / 1_000_000).toFixed(digits)}M`;
+  if (magnitude >= 1_000) return `${sign}${(magnitude / 1_000).toFixed(digits)}K`;
+  return `${sign}${whole ? Math.round(magnitude) : Number(magnitude.toFixed(2))}`;
 }
 
 export function pnlTone(value: string | number | null | undefined): "profit" | "loss" | "flat" | "none" {
@@ -105,7 +110,7 @@ export function buildCalendarWeeks(
   return weeks;
 }
 
-export type RangePreset = "30d" | "90d" | "ytd" | "all";
+export type RangePreset = "30d" | "90d" | "ytd" | "all" | "custom";
 
 /** One account scope per view; the server never mixes scopes. Default: Demo. */
 export const DEFAULT_SCOPE: JournalDashboardScope = "demo";
@@ -142,7 +147,30 @@ export const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
   { value: "90d", label: "90D" },
   { value: "ytd", label: "YTD" },
   { value: "all", label: "All" },
+  { value: "custom", label: "Custom" },
 ];
+
+/** Plain labels for the optional single-source narrowing inside a scope. */
+export const SOURCE_LABELS: Record<JournalTradeSource, string> = {
+  manual_demo_test: "Manual demo test",
+  blofin_demo_manual: "BloFin demo (manual)",
+  paper_execution: "Paper execution (bot)",
+  paper_validation: "Paper validation",
+  manual: "Manually logged",
+  backtest: "Backtest",
+  imported: "Imported",
+  system: "System",
+};
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Inline validation for the custom range; null when it can be sent. */
+export function customRangeError(from: string, to: string): string | null {
+  if (!from || !to) return "Pick both a start and an end date.";
+  if (!ISO_DAY.test(from) || !ISO_DAY.test(to)) return "Dates must be YYYY-MM-DD.";
+  if (from > to) return "Start date must be on or before the end date.";
+  return null;
+}
 
 function localIso(date: Date): string {
   return isoDate(date.getFullYear(), date.getMonth(), date.getDate());
@@ -152,7 +180,7 @@ export function rangeParams(
   preset: RangePreset,
   today: Date,
 ): { date_from?: string; date_to?: string } {
-  if (preset === "all") return {};
+  if (preset === "all" || preset === "custom") return {};
   const to = localIso(today);
   if (preset === "ytd") return { date_from: isoDate(today.getFullYear(), 0, 1), date_to: to };
   const from = new Date(today);

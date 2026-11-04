@@ -13,10 +13,19 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import type { JournalDashboardCurvePoint } from "@/lib/api/types";
 import { formatMonetary } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-import { formatCompactPnl, toNumber } from "./performance-model";
+import { formatCompactPnl, pnlTone, toNumber } from "./performance-model";
+
+const lastTone = {
+  profit: "text-success",
+  loss: "text-danger",
+  flat: "text-text-primary",
+  none: "text-text-muted",
+} as const;
 
 type CurveDatum = { date: string; cumulative: number; daily: number };
 
@@ -60,7 +69,16 @@ function CurveTooltip({ active, payload }: TooltipProps<number, string>) {
   );
 }
 
-export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePoint[] }) {
+export function CumulativePnlChart({
+  points,
+  maxDrawdown = null,
+  loading = false,
+}: {
+  points: JournalDashboardCurvePoint[];
+  /** Peak-to-trough drop (positive magnitude) from the response's risk block. */
+  maxDrawdown?: string | null;
+  loading?: boolean;
+}) {
   const gradientId = useId().replace(/:/g, "");
   const data: CurveDatum[] = points.map((point) => ({
     date: point.date,
@@ -74,14 +92,27 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
       className="relative rounded-card border border-border-subtle bg-surface-1 p-4"
       aria-label="Daily net cumulative P&L"
       data-testid="cumulative-pnl"
+      aria-busy={loading || undefined}
     >
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-start justify-between gap-2">
         <h3 className="text-sm font-semibold text-text-primary">Daily net cumulative P&amp;L</h3>
-        <span className="font-data text-xs text-text-secondary" data-testid="cumulative-last">
-          {last ? formatMonetary(last.cumulative_net_pnl) : "—"}
-        </span>
+        <div className="text-right">
+          <span
+            className={cn("block font-data text-base font-semibold", lastTone[pnlTone(last?.cumulative_net_pnl)])}
+            data-testid="cumulative-last"
+          >
+            {last ? formatMonetary(last.cumulative_net_pnl) : "—"}
+          </span>
+          {toNumber(maxDrawdown) !== null && !loading ? (
+            <span className="block text-[11px] text-text-muted" data-testid="cumulative-drawdown">
+              Max drawdown <span className="font-data text-danger">−{Math.abs(toNumber(maxDrawdown) ?? 0).toFixed(2)}</span>
+            </span>
+          ) : null}
+        </div>
       </div>
-      {data.length ? (
+      {loading ? (
+        <Skeleton className="mt-2 h-56 w-full" data-testid="cumulative-loading" />
+      ) : data.length ? (
         <div className="mt-2 h-56 w-full" aria-hidden="true">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
