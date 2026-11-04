@@ -68,6 +68,26 @@ _SKIP_CLOSE_REASONS = frozenset(
         "demo_synthetic_close_forbidden",
     }
 )
+# A failed close waits before the next attempt on that trade, doubling per
+# consecutive failure. The wait skips the candle read as well as the close.
+CLOSE_FAILURE_BACKOFF_BASE = timedelta(minutes=1)
+CLOSE_FAILURE_BACKOFF_MAX = timedelta(hours=1)
+# Attribution identity conflicts do not heal on retry. The trade waits the
+# maximum at once and is retried hourly so a code or data repair still lands.
+_QUARANTINE_CLOSE_REASONS = frozenset(
+    {
+        "learning_venue_mode_conflict",
+        "candidate_lifecycle_conflict",
+        "lifecycle_candidate_conflict",
+        "assessment_identity_conflict",
+        "evidence_window_conflict",
+        "uniqueness_tuple_conflict",
+        "candidate_identity_conflict",
+        "cross_tenant_attribution",
+        "attribution_store_inconsistent",
+        "reject_skip_cannot_execute",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +191,42 @@ class MonitorReport:
     alerts: tuple[ExitMonitorAlert, ...] = ()
     settling: int = 0
     organization_ids: tuple[UUID, ...] = ()
+    backed_off: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CloseFailureBackoff:
+    """Consecutive close failures for one trade and when it may be retried."""
+
+    failures: int
+    retry_at: datetime
+    reason: str
+    quarantined: bool = False
+
+
+def next_close_backoff(
+    previous: CloseFailureBackoff | None,
+    *,
+    failed_at: datetime,
+    reason: str,
+) -> CloseFailureBackoff:
+    """Exponential wait after a failed close. Identity conflicts wait the maximum."""
+
+    failures = 1 if previous is None else previous.failures + 1
+    quarantined = reason in _QUARANTINE_CLOSE_REASONS
+    if quarantined:
+        delay = CLOSE_FAILURE_BACKOFF_MAX
+    else:
+        delay = min(
+            CLOSE_FAILURE_BACKOFF_BASE * (2 ** min(failures - 1, 16)),
+            CLOSE_FAILURE_BACKOFF_MAX,
+        )
+    return CloseFailureBackoff(
+        failures=failures,
+        retry_at=failed_at + delay,
+        reason=reason,
+        quarantined=quarantined,
+    )
 
 
 class PaperExitCloser:
@@ -906,11 +962,14 @@ def run_paper_exit_monitor(
     rejected: int = 0,
     shutdown: Callable[[], bool] | None = None,
     settling_streaks: dict[UUID, int] | None = None,
+    close_failures: dict[UUID, CloseFailureBackoff] | None = None,
 ) -> MonitorReport:
     """Examine open trades once. Flag off does not load candles or close.
 
     ``settling_streaks`` carries consecutive settling deferrals per trade across
     cycles. After ``MAX_SETTLING_DEFERRALS`` the read is refused instead.
+    ``close_failures`` carries the per-trade backoff after a failed close. A
+    trade inside its wait is not read or closed and keeps the pass degraded.
     """
 
     if not enabled:
@@ -922,8 +981,10 @@ def run_paper_exit_monitor(
     refused = 0
     errors = 0
     settling = 0
+    backed_off = 0
     error = ""
     streaks = settling_streaks if settling_streaks is not None else {}
+    failures = close_failures if close_failures is not None else {}
     ordered = sorted(
         trades,
         key=lambda trade: (trade.symbol, trade.timeframe.value, trade.entry_time),
@@ -931,6 +992,10 @@ def run_paper_exit_monitor(
     for trade in ordered:
         if shutdown is not None and shutdown():
             break
+        backoff = failures.get(trade.journal_trade_id)
+        if backoff is not None and evaluated_at < backoff.retry_at:
+            backed_off += 1
+            continue
         try:
             fetched = candles(trade)
         except Exception as exc:
@@ -998,6 +1063,7 @@ def run_paper_exit_monitor(
         except Exception as exc:
             reason = _close_skip_reason(exc)
             if reason is not None:
+                failures.pop(trade.journal_trade_id, None)
                 skipped += 1
                 logger.info(
                     "paper_exit_monitor_close_skipped",
@@ -1007,12 +1073,32 @@ def run_paper_exit_monitor(
                 continue
             errors += 1
             error = error or "close_failed"
+            previous = failures.get(trade.journal_trade_id)
+            backoff = next_close_backoff(
+                previous,
+                failed_at=evaluated_at,
+                reason=_close_failure_reason(exc),
+            )
+            failures[trade.journal_trade_id] = backoff
             logger.warning(
                 "paper_exit_monitor_close_failed",
                 journal_trade_id=str(trade.journal_trade_id),
                 error=redact_text(str(exc))[:200],
+                reason=backoff.reason,
+                failures=backoff.failures,
+                retry_at=backoff.retry_at.isoformat(),
             )
+            if backoff.quarantined and (previous is None or not previous.quarantined):
+                logger.error(
+                    "paper_exit_monitor_close_quarantined",
+                    journal_trade_id=str(trade.journal_trade_id),
+                    organization_id=str(trade.organization_id),
+                    command_id=str(trade.command_id),
+                    reason=backoff.reason,
+                    retry_at=backoff.retry_at.isoformat(),
+                )
             continue
+        failures.pop(trade.journal_trade_id, None)
         if bool(getattr(result, "replayed", False)):
             replayed += 1
         else:
@@ -1025,10 +1111,14 @@ def run_paper_exit_monitor(
     open_ids = {trade.journal_trade_id for trade in ordered}
     for stale in [key for key in streaks if key not in open_ids]:
         del streaks[stale]
-    if errors or refused:
+    for stale in [key for key in failures if key not in open_ids]:
+        del failures[stale]
+    if errors or refused or backed_off:
         status = "degraded"
         if not error and refused:
             error = "candles_unusable"
+        if not error:
+            error = "close_backoff"
     elif dry_run:
         status = "dry_run"
     elif closed or replayed:
@@ -1049,6 +1139,7 @@ def run_paper_exit_monitor(
         error=error,
         settling=settling,
         organization_ids=tuple(dict.fromkeys(trade.organization_id for trade in ordered)),
+        backed_off=backed_off,
     )
 
 
@@ -1203,3 +1294,12 @@ def _close_skip_reason(exc: Exception) -> str | None:
     if name == "JournalProjectionConflictError":
         return "close_conflict"
     return None
+
+
+def _close_failure_reason(exc: Exception) -> str:
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        reason = details.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason[:80]
+    return type(exc).__name__[:80]

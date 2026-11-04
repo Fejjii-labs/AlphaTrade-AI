@@ -24,6 +24,7 @@ from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
 from app.services.paper_exit_candles import PaperExitCandleLoader
 from app.services.paper_exit_monitor import (
+    CloseFailureBackoff,
     DegradationStreak,
     ExitMonitorAlert,
     FetchedBars,
@@ -100,6 +101,7 @@ def run_configured_exit_monitor(
     exchange_time: Callable[[], datetime | None] | None = None,
     alert_sink: Callable[[ExitMonitorAlert], None] | None = None,
     settling_streaks: dict[UUID, int] | None = None,
+    close_failures: dict[UUID, CloseFailureBackoff] | None = None,
 ) -> MonitorReport:
     """One monitor pass. The flag off returns before any database or market read.
 
@@ -186,6 +188,7 @@ def run_configured_exit_monitor(
         rejected=rejected,
         shutdown=shutdown,
         settling_streaks=settling_streaks,
+        close_failures=close_failures,
     )
 
 
@@ -208,6 +211,7 @@ class PaperExitMonitorCycle:
         self._streak_loaded = False
         self._streak: DegradationStreak | None = None
         self._settling_streaks: dict[UUID, int] = {}
+        self._close_failures: dict[UUID, CloseFailureBackoff] = {}
 
     def __call__(self) -> CycleOutcome:
         from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
@@ -225,6 +229,7 @@ class PaperExitMonitorCycle:
                 shutdown=self._stop.is_set,
                 clock=self._clock,
                 settling_streaks=self._settling_streaks,
+                close_failures=self._close_failures,
             )
         except Exception as exc:
             self._note_repetition("degraded", error="paper_exit_monitor_failed", refused=0)
@@ -265,6 +270,7 @@ class PaperExitMonitorCycle:
                 errors=report.errors,
                 refused=report.refused,
                 skipped=report.skipped,
+                backed_off=report.backed_off,
                 failed=report.errors > 0,
             )
             return self._beat_outcome(
