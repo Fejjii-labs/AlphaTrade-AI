@@ -754,7 +754,6 @@ def test_governed_demo_loop_refuses_sfp_before_planning() -> None:
     from types import SimpleNamespace
     from uuid import uuid4
 
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
     from tests.test_sfp_detector import spec as sfp_spec
 
     loop = GovernedBloFinDemoLoop(None, None, SimpleNamespace(now=lambda: EVALUATED_AT))
@@ -830,7 +829,6 @@ def _refresh_loop(
     provider: _RefreshingProvider, observed_at: object, *, received: float | None = 0.0
 ) -> tuple[object, list[float]]:
     """Loop holding a preflight book received at monotonic ``received``."""
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 
     mono = [0.0]
     loop = GovernedBloFinDemoLoop(
@@ -904,9 +902,67 @@ def test_unknown_receipt_time_reads_the_quote_again() -> None:
 def test_preflight_snapshot_records_local_monotonic_receipt_time() -> None:
     import inspect
 
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
     source = inspect.getsource(GovernedBloFinDemoLoop._bound)
     read = source.index("self._snapshot = self._get_provider().snapshot(")
     stamp = source.index("self._snapshot_received_at = self._monotonic()")
     assert read < stamp < source.index("except Exception", read)
+
+
+def test_loop_eligibility_uses_the_sixty_second_default_window(monkeypatch) -> None:
+    """Sofien's choice (2026-11-04): the governed demo action window defaults to 60s.
+
+    Drives GovernedBloFinDemoLoop._eligibility_command with default Settings, so a
+    default of 10s or 3600s (clamped to the 300s ceiling) fails here.
+    """
+    import app.services.governed_blofin_demo as demo_module
+    from app.providers.exchange.demo_quote import DemoQuoteTimingError, quote_time_at_receipt
+    from app.signal_fusion.action_eligibility import ActionEligibilityService
+
+    settings = Settings(_env_file=None)
+    assert settings.governed_demo_plan_valid_seconds == 60
+    now = EVALUATED_AT + timedelta(seconds=1)
+    market = _scan_market(EVALUATED_AT + timedelta(seconds=10))
+
+    class _Command(SimpleNamespace):
+        def model_copy(self, *, update: dict[str, object]) -> SimpleNamespace:
+            return SimpleNamespace(**{**vars(self), **update})
+
+    monkeypatch.setattr(
+        demo_module, "_eligibility_command", lambda *a, **k: _Command(market_action=market)
+    )
+    provider = _RefreshingProvider()
+    loop, mono = _refresh_loop(provider, now)
+    loop._snapshot = SimpleNamespace(  # type: ignore[attr-defined]
+        instrument="BTC-USDT", observed_at=now, price=Decimal("100")
+    )
+    mono[0] = 0.5  # recent receipt, no re-read
+    command = loop._eligibility_command(  # type: ignore[attr-defined]
+        None,
+        settings=settings,
+        target=None,
+        candidate=None,
+        assessment=None,
+        window=None,
+        assembled=None,
+        account=None,
+        now=now,
+    )
+    evidence = command.market_action
+    assert evidence.action_evidence_valid_until == now + timedelta(seconds=60)
+    assert provider.calls == []
+    stale = ActionEligibilityService._action_evidence_stale
+    assert stale(command, now + timedelta(seconds=59)) is False  # type: ignore[arg-type]
+    assert stale(command, now + timedelta(seconds=60)) is True  # type: ignore[arg-type]
+
+    # Orders still need a demo quote under 10s old at receipt.
+    base_ms = 1_800_000_000_000
+    received = datetime_from_ms(base_ms)
+    assert quote_time_at_receipt(base_ms - 9_999, received) == datetime_from_ms(base_ms - 9_999)
+    with pytest.raises(DemoQuoteTimingError):
+        quote_time_at_receipt(base_ms - 10_000, received)
+
+
+def datetime_from_ms(ms: int):
+    from datetime import UTC, datetime
+
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=ms)
