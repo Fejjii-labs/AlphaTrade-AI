@@ -5,10 +5,11 @@ from __future__ import annotations
 import copy
 import json
 import uuid
-from collections.abc import Iterator
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import ClassVar
 
 import httpx
 import pytest
@@ -21,6 +22,13 @@ from app.core.config import ExecutionMode, Settings
 from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
 from app.db.base import Base
 from app.db.models import JournalTrade, Organization, PaperTrade, User, UserRiskSettings
+from app.providers.exchange.errors import (
+    ExchangeAuthError,
+    ExchangeError,
+    ExchangeRateLimitError,
+    ExchangeRequestError,
+    ExchangeUnavailableError,
+)
 from app.repositories.journal_trades import assert_stats_projection_excludes_annotation_grade
 from app.schemas.common import (
     JournalTradeSource,
@@ -45,8 +53,11 @@ from app.services.blofin_demo_manual_mirror import (
     METHOD,
     BloFinDemoManualMirror,
     MirrorReadError,
+    _history_pages,
     _opening_side,
     _opening_side_reason,
+    _PagePacer,
+    _PageRetry,
     drafts_from_raw,
     publish_mirror_performance,
     record_mirror_cycle,
@@ -1222,10 +1233,7 @@ def test_failed_cycle_withholds_even_when_older_rows_match(session: Session) -> 
     assert "page cap" in held.performance.manual_mirror_reason
 
 
-def test_capped_fills_keep_positions_history_and_withhold(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("app.services.blofin_demo_manual_mirror._MAX_PAGES", 1)
+def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle["/api/v1/trade/fills-history"] = [
         {
@@ -1238,13 +1246,15 @@ def test_capped_fills_keep_positions_history_and_withhold(
         for index in range(100)
     ]
     client = _Client(bundle)
-    BloFinDemoManualMirror(client, now=NOW).apply(
+    report = BloFinDemoManualMirror(client, now=NOW).apply(
         session,
         organization_id=ORG,
         user_id=USER,
-        settings=_settings(),
+        settings=_settings(blofin_demo_manual_mirror_max_pages=1),
     )
     session.commit()
+    assert report.capped_endpoints == ("/api/v1/trade/fills-history",)
+    assert report.next_cursor is None
     row = _rows(session)[0]
     assert row.external_ref == "blofin-demo-history:h-long"
     assert row.net_pnl is None
@@ -1709,3 +1719,574 @@ def test_mirror_apply_warns_with_skip_count_and_reason_codes(session: Session) -
     with structlog.testing.capture_logs() as clean:
         _apply(session, _FIXTURE["long"])
     assert not [e for e in clean if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]
+
+
+# --- Incremental cursor (worker memory fix) ---------------------------------
+
+_HISTORY_PATH = "/api/v1/account/positions-history"
+_DEPENDENT_PATHS = (
+    "/api/v1/trade/fills-history",
+    "/api/v1/account/funding-fees",
+    "/api/v1/trade/orders-history",
+)
+_TIME_FIELD = {
+    _HISTORY_PATH: "updateTime",
+    "/api/v1/trade/fills-history": "ts",
+    "/api/v1/account/funding-fees": "fundingTime",
+    "/api/v1/trade/orders-history": "createTime",
+}
+
+
+def _ms(when: datetime) -> str:
+    return str(int(when.timestamp() * 1000))
+
+
+class _WindowClient(_Client):
+    """Honours ``begin``/``end`` like the venue and records each history read."""
+
+    def __init__(self, bundle: dict[str, list[dict[str, object]]]) -> None:
+        super().__init__(bundle)
+        self.reads: list[tuple[str, str]] = []
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        params = kwargs.get("params")
+        if path in _TIME_FIELD and isinstance(params, dict) and not params.get("after"):
+            self.reads.append((path, str(params["begin"])))
+            rows = super().request(method, path, **kwargs)  # type: ignore[arg-type]
+            begin, end = int(params["begin"]), int(params["end"])
+            return [row for row in rows if begin <= int(str(row[_TIME_FIELD[path]])) <= end]
+        return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+
+_OLD_ETH = {
+    "historyId": "h-eth-old",
+    "positionId": "p-eth-old",
+    "instId": "ETH-USDT",
+    "side": "buy",
+    "positionSide": "long",
+    "closePositions": "1",
+    "maxPositions": "1",
+    "openAveragePrice": "100",
+    "closeAveragePrice": "101",
+    "createTime": _ms(datetime(2026, 10, 16, 20, tzinfo=UTC)),
+    "updateTime": _ms(datetime(2026, 10, 17, 2, tzinfo=UTC)),
+    "leverage": "2",
+    "realizedPnl": "1",
+    "fee": "0.01",
+}
+
+
+def _mirror(
+    session: Session,
+    client: _Client,
+    now: datetime,
+    cursor: dict[str, datetime] | None = None,
+    **settings: object,
+) -> object:
+    report = BloFinDemoManualMirror(client, now=now, cursor=cursor).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings(**settings)
+    )
+    session.commit()
+    return report
+
+
+def test_ok_read_returns_a_cursor_and_the_next_read_starts_at_it_minus_overlap(
+    session: Session,
+) -> None:
+    client = _WindowClient(_paths(_FIXTURE["long"]))
+    first = _mirror(session, client, NOW)
+    expected = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW)
+    assert first.next_cursor == expected  # type: ignore[attr-defined]
+    assert client.reads[0] == (_HISTORY_PATH, _ms(WINDOW_BEGIN))
+    later = NOW + timedelta(minutes=5)
+    client.reads.clear()
+    second = _mirror(session, client, later, first.next_cursor)  # type: ignore[attr-defined]
+    # 600s default overlap. Nothing new closed, so no dependent endpoint is read.
+    assert client.reads == [(_HISTORY_PATH, _ms(NOW - timedelta(seconds=600)))]
+    assert second.next_cursor == dict.fromkeys(first.next_cursor, later)  # type: ignore[attr-defined]
+    assert second.created == 0 and second.updated == 0  # type: ignore[attr-defined]
+    assert _money(_rows(session)[0].net_pnl) == Decimal("0.18600000")
+
+
+def test_a_cursor_older_than_seven_days_still_reads_only_seven_days(session: Session) -> None:
+    client = _WindowClient(_paths(_FIXTURE["long"]))
+    stale = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW - timedelta(days=30))
+    _mirror(session, client, NOW, stale)
+    assert {begin for _path, begin in client.reads} == {_ms(WINDOW_BEGIN)}
+
+
+def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
+    session: Session,
+) -> None:
+    bundle = _paths(_FIXTURE["long"])
+    bundle[_HISTORY_PATH] = [*bundle[_HISTORY_PATH], _OLD_ETH]
+    client = _WindowClient(bundle)
+    before_close = datetime(2026, 10, 17, 11, tzinfo=UTC)
+    first = _mirror(session, client, before_close)
+    assert [row.external_ref for row in _rows(session)] == ["blofin-demo-history:h-eth-old"]
+    eth_net = _rows(session)[0].net_pnl
+    assert eth_net is not None
+    client.reads.clear()
+    after_close = datetime(2026, 10, 17, 12, 5, tzinfo=UTC)
+    report = _mirror(session, client, after_close, first.next_cursor)  # type: ignore[attr-defined]
+    opened = datetime(2026, 10, 17, tzinfo=UTC)
+    deps_begin = _ms(opened - timedelta(seconds=600))
+    assert client.reads == [
+        (_HISTORY_PATH, _ms(before_close - timedelta(seconds=600))),
+        (_HISTORY_PATH, deps_begin),
+        *((path, deps_begin) for path in _DEPENDENT_PATHS),
+    ]
+    # Same economics as a full seven-day read: fee and paid funding included.
+    assert report.created == 1 and report.updated == 0  # type: ignore[attr-defined]
+    rows = {row.external_ref: row for row in _rows(session)}
+    assert _money(rows["blofin-demo-history:h-long"].net_pnl) == Decimal("0.18600000")
+    # The older slice opened before this read's window; it is not rewritten.
+    assert rows["blofin-demo-history:h-eth-old"].net_pnl == eth_net
+    assert "pnl-verified" in (rows["blofin-demo-history:h-eth-old"].tags or [])
+
+
+def test_capped_read_returns_no_cursor(session: Session) -> None:
+    bundle = _paths(_FIXTURE["long"])
+    bundle["/api/v1/trade/fills-history"] = [
+        {"tradeId": f"t{index}", "instId": "BTC-USDT", "ts": "1792195205000", "orderId": "o"}
+        for index in range(100)
+    ]
+    report = _mirror(session, _Client(bundle), NOW, blofin_demo_manual_mirror_max_pages=1)
+    assert report.next_cursor is None  # type: ignore[attr-defined]
+
+
+# --- Page pacing (BloFin rate limits) -----------------------------------------
+
+_FILLS_PATH = "/api/v1/trade/fills-history"
+_PAGED_PATHS = {
+    "/api/v1/account/positions-history",
+    _FILLS_PATH,
+    "/api/v1/account/funding-fees",
+    "/api/v1/trade/orders-history",
+}
+
+
+class _PagedClient:
+    def __init__(self, pages: list[list[dict[str, object]]]) -> None:
+        self.pages = pages
+        self.calls = 0
+
+    def request(self, method: str, path: str, **_kwargs: object) -> list[dict[str, object]]:
+        self.calls += 1
+        return self.pages.pop(0) if self.pages else []
+
+
+def _full_page(start: int) -> list[dict[str, object]]:
+    return [{"tradeId": str(start + index)} for index in range(100)]
+
+
+def _recorder(waits: list[float], *, stop: bool = False) -> Callable[[float], bool]:
+    def _wait(seconds: float) -> bool:
+        waits.append(seconds)
+        return stop
+
+    return _wait
+
+
+def test_history_pages_wait_the_configured_pause_between_pages() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), _full_page(100), [{"tradeId": "999"}]])
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(1.5, _recorder(waits)))
+    assert len(rows) == 201 and capped is False and client.calls == 3
+    assert waits == [1.5, 1.5]
+
+
+def test_zero_pause_never_waits() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), [{"tradeId": "999"}]])
+    _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(0.0, _recorder(waits)))
+    assert client.calls == 2 and waits == []
+
+
+def test_a_stopping_worker_fails_the_paced_read_without_another_request() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), _full_page(100)])
+    with pytest.raises(MirrorReadError, match="stopped"):
+        _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(1.0, _recorder(waits, stop=True)))
+    assert client.calls == 1 and waits == [1.0]
+
+
+def test_mirror_read_paces_every_history_page_across_endpoints(session: Session) -> None:
+    waits: list[float] = []
+    client = _Client(_paths(_FIXTURE["long"]))  # type: ignore[arg-type]
+    BloFinDemoManualMirror(client, now=NOW, page_pause_seconds=1.0, wait=_recorder(waits)).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings()
+    )
+    paged = [path for _method, path in client.calls if path in _PAGED_PATHS]
+    assert set(paged) == _PAGED_PATHS
+    assert waits == [1.0] * (len(paged) - 1)
+
+
+# --- Hardening: retries, partial reads (worker memory hardening) --------------
+
+
+class _Row(dict):  # type: ignore[type-arg]
+    """A history row that a test can hold a weak reference to."""
+
+
+class _FlakyClient:
+    """Serves ``pages`` in order; an exception instance in the list is raised."""
+
+    def __init__(self, pages: list[object]) -> None:
+        self.pages = pages
+        self.afters: list[object] = []
+
+    def request(self, method: str, path: str, **kwargs: object) -> object:
+        params = kwargs.get("params")
+        self.afters.append(params.get("after") if isinstance(params, dict) else None)
+        item = self.pages.pop(0) if self.pages else []
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def _rate_limited() -> ExchangeRateLimitError:
+    return ExchangeRateLimitError("BloFin rate limit exceeded.")
+
+
+def test_a_rate_limited_page_is_asked_again_with_doubling_backoff() -> None:
+    waits: list[float] = []
+    client = _FlakyClient(
+        [_full_page(0), _rate_limited(), ExchangeUnavailableError("503"), [{"tradeId": "x"}]]
+    )
+    retry = _PageRetry(3, 5.0, _recorder(waits))
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", None, retry)
+    assert len(rows) == 101 and capped is False
+    assert waits == [5.0, 10.0]
+    # The failed page is asked again from the same cursor, so no row is skipped.
+    assert client.afters == [None, "99", "99", "99"]
+
+
+def test_the_retry_budget_is_per_read_and_an_exhausted_budget_fails_the_read() -> None:
+    waits: list[float] = []
+    retry = _PageRetry(2, 1.0, _recorder(waits))
+    first = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    _history_pages(first, _FILLS_PATH, "1", "2", None, retry)
+    second = _FlakyClient([_rate_limited(), _rate_limited(), [{"tradeId": "b"}]])
+    with pytest.raises(MirrorReadError, match="after retries: ExchangeRateLimitError"):
+        _history_pages(second, _FILLS_PATH, "1", "2", None, retry)
+    assert waits == [1.0, 2.0]
+    assert len(second.afters) == 2
+
+
+def test_zero_retries_fail_on_the_first_rate_limit() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    with pytest.raises(MirrorReadError):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(0, 5.0, _recorder(waits)))
+    assert waits == [] and len(client.afters) == 1
+
+
+def test_retry_backoff_is_capped_at_sixty_seconds() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([*(_rate_limited() for _ in range(4)), [{"tradeId": "a"}]])
+    _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(4, 20.0, _recorder(waits)))
+    assert waits == [20.0, 40.0, 60.0, 60.0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ExchangeAuthError("denied"), ExchangeRequestError("bad request"), ValueError("parse")],
+)
+def test_auth_request_and_parse_errors_are_not_retried(error: Exception) -> None:
+    waits: list[float] = []
+    client = _FlakyClient([error, [{"tradeId": "a"}]])
+    with pytest.raises(type(error)):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, _PageRetry(3, 1.0, _recorder(waits)))
+    assert waits == [] and len(client.afters) == 1
+
+
+def test_a_stopping_worker_ends_the_retry_backoff() -> None:
+    waits: list[float] = []
+    client = _FlakyClient([_rate_limited(), [{"tradeId": "a"}]])
+    retry = _PageRetry(3, 5.0, _recorder(waits, stop=True))
+    with pytest.raises(MirrorReadError, match="stopped"):
+        _history_pages(client, _FILLS_PATH, "1", "2", None, retry)
+    assert waits == [5.0] and len(client.afters) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ExchangeAuthError("denied"),
+        "not a list",
+        [_Row(tradeId="900"), "not a row"],
+        [_Row(tradeId="0")],
+    ],
+    ids=["error", "bad-page", "bad-row", "cursor-repeat"],
+)
+def test_a_failed_read_releases_the_pages_it_already_read(failure: object) -> None:
+    import gc
+    import weakref
+
+    first = [_Row(tradeId=str(index)) for index in range(99)] + [_Row(tradeId="0")]
+    refs = [weakref.ref(row) for row in first]
+    client = _FlakyClient([first, failure])
+    del first
+    with pytest.raises((ExchangeError, MirrorReadError)) as caught:
+        _history_pages(client, _FILLS_PATH, "1", "2")
+    # The exception (and its traceback frames) is still alive here.
+    assert caught.value.__traceback__ is not None
+    gc.collect()
+    assert all(ref() is None for ref in refs)
+
+
+def test_mirror_retries_from_settings_and_an_exhausted_read_writes_nothing(
+    session: Session,
+) -> None:
+    waits: list[float] = []
+
+    class _Limited(_Client):
+        def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+            if path == _FILLS_PATH:
+                raise _rate_limited()
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+    client = _Limited(_paths(_FIXTURE["long"]))  # type: ignore[arg-type]
+    settings = _settings(
+        blofin_demo_manual_mirror_page_retries=2,
+        blofin_demo_manual_mirror_page_retry_backoff_seconds=3.0,
+    )
+    mirror = BloFinDemoManualMirror(client, now=NOW, wait=_recorder(waits))
+    with pytest.raises(MirrorReadError):
+        mirror.apply(session, organization_id=ORG, user_id=USER, settings=settings)
+    session.rollback()
+    assert waits == [3.0, 6.0]
+    assert _rows(session) == []
+
+
+def test_mirror_page_retry_settings_default_and_bounds() -> None:
+    from pydantic import ValidationError
+
+    settings = Settings(_env_file=None)
+    assert settings.blofin_demo_manual_mirror_page_retries == 3
+    assert settings.blofin_demo_manual_mirror_page_retry_backoff_seconds == 5.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, blofin_demo_manual_mirror_page_retries=11)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, blofin_demo_manual_mirror_page_retry_backoff_seconds=61)
+
+
+# --- Hardening: page cap -------------------------------------------------------
+
+
+class _EndlessClient(_Client):
+    """Full pages with fresh cursors for ``endless`` paths; the venue never runs dry."""
+
+    def __init__(self, bundle: dict[str, list[dict[str, object]]], endless: str) -> None:
+        super().__init__(bundle)
+        self.endless = endless
+        self.served = 0
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        if path != self.endless:
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+        self.calls.append((method, path))
+        key = {_HISTORY_PATH: "historyId", _FILLS_PATH: "tradeId"}[path]
+        start = self.served
+        self.served += 100
+        return [{key: f"c{start + index}", "instId": "BTC-USDT"} for index in range(100)]
+
+
+def test_history_pages_stop_at_max_pages_and_report_the_cap() -> None:
+    client = _PagedClient([_full_page(index * 100) for index in range(10)])
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", max_pages=3)
+    assert capped is True and client.calls == 3 and len(rows) == 300
+
+
+def test_positions_history_page_cap_writes_nothing_and_logs_the_endpoint(
+    session: Session,
+) -> None:
+    import structlog
+
+    from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+
+    client = _EndlessClient(_paths(_FIXTURE["long"]), _HISTORY_PATH)
+    settings = _settings(blofin_demo_manual_mirror_max_pages=2)
+    with structlog.testing.capture_logs() as logs, pytest.raises(MirrorPageCapError) as caught:
+        BloFinDemoManualMirror(client, now=NOW).apply(
+            session, organization_id=ORG, user_id=USER, settings=settings
+        )
+    session.rollback()
+    assert caught.value.endpoint == _HISTORY_PATH
+    assert [path for _m, path in client.calls].count(_HISTORY_PATH) == 2
+    capped = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_page_cap"]
+    assert len(capped) == 1
+    assert capped[0]["log_level"] == "error"
+    assert capped[0]["endpoint"] == _HISTORY_PATH
+    assert capped[0]["max_pages"] == 2 and capped[0]["rows"] == 200
+    assert capped[0]["mode"] == "backfill"
+    assert _rows(session) == []
+
+
+def test_incremental_dependency_cap_keeps_the_cursor_and_logs_incremental(
+    session: Session,
+) -> None:
+    import structlog
+
+    client = _EndlessClient(_paths(_FIXTURE["long"]), _FILLS_PATH)
+    cursor = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW - timedelta(days=2))
+    with structlog.testing.capture_logs() as logs:
+        report = _mirror(session, client, NOW, cursor, blofin_demo_manual_mirror_max_pages=3)
+    assert report.next_cursor is None  # type: ignore[attr-defined]
+    assert report.capped_endpoints == (_FILLS_PATH,)  # type: ignore[attr-defined]
+    assert client.served == 300
+    capped = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_page_cap"]
+    assert [(e["endpoint"], e["mode"]) for e in capped] == [(_FILLS_PATH, "incremental")]
+    assert "pnl-unverified" in (_rows(session)[0].tags or [])
+
+
+def test_an_uncapped_read_reports_no_capped_endpoint(session: Session) -> None:
+    report = _mirror(session, _Client(_paths(_FIXTURE["long"])), NOW)
+    assert report.capped_endpoints == ()  # type: ignore[attr-defined]
+    assert report.next_cursor is not None  # type: ignore[attr-defined]
+
+
+def test_mirror_max_pages_setting_default_and_bounds() -> None:
+    from pydantic import ValidationError
+
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_max_pages == 40
+    for bad in (0, 201):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, blofin_demo_manual_mirror_max_pages=bad)
+
+
+# --- Hardening: bounded peak of a full read --------------------------------------
+
+
+def test_row_fields_cover_every_field_the_parsers_read() -> None:
+    import re
+
+    from app.services import blofin_demo_manual_mirror as mirror
+
+    source = Path(mirror.__file__).read_text()
+    read = set(re.findall(r'\.get\("(\w+)"', source)) | set(re.findall(r'\["(\w+)"\]', source))
+    read.discard("after")  # the request parameter, not a row field
+    assert read, "parser field scan found nothing"
+    assert read <= set(mirror._ROW_FIELDS), read - set(mirror._ROW_FIELDS)
+    assert set(mirror._CURSOR.values()) <= set(mirror._ROW_FIELDS)
+
+
+def test_projected_pages_keep_only_parser_fields_and_raw_pages_stay_as_read() -> None:
+    raw = [{"tradeId": "1", "instId": "BTC-USDT", "ts": "5", "junk": "x" * 100, "uid": "u"}]
+    projected, _capped = _history_pages(
+        _PagedClient([copy.deepcopy(raw)]), _FILLS_PATH, "1", "2", project=True
+    )
+    assert projected == [{"instId": "BTC-USDT", "tradeId": "1", "ts": "5"}]
+    # The operator backfill keeps whole rows for its replay capture.
+    unprojected, _capped = _history_pages(_PagedClient([copy.deepcopy(raw)]), _FILLS_PATH, "1", "2")
+    assert unprojected == raw
+
+
+def _with_extra_fields(bundle: dict[str, object]) -> dict[str, object]:
+    fat = copy.deepcopy(bundle)
+    for key in ("history", "fills", "funding", "orders"):
+        for row in fat[key]:  # type: ignore[attr-defined]
+            row.update({f"extra{index}": "z" * 40 for index in range(20)})
+    return fat
+
+
+def test_unread_venue_fields_do_not_change_the_mirrored_economics(session: Session) -> None:
+    _apply(session, _with_extra_fields(_FIXTURE["long"]))
+    rows = _rows(session)
+    assert [row.external_ref for row in rows] == ["blofin-demo-history:h-long"]
+    assert _money(rows[0].net_pnl) == Decimal("0.18600000")
+    assert "pnl-verified" in (rows[0].tags or [])
+
+
+def test_the_applied_log_carries_a_bounded_sample_of_skipped_rows(session: Session) -> None:
+    import structlog
+
+    history = [
+        {"historyId": f"h{index}", "instId": "BTC-USDT", "positionId": ""} for index in range(50)
+    ]
+    bundle = {**_FIXTURE["long"], "history": history}
+    with structlog.testing.capture_logs() as logs:
+        _apply(session, bundle)
+    applied = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_applied"]
+    warned = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]
+    assert len(applied[0]["skipped_rows"]) == 20
+    assert warned[0]["skipped_rows"] == 50
+
+
+class _BulkClient(_Client):
+    """Fills, funding and orders as ``pages`` full pages built on demand.
+
+    ``extra`` adds that many unread 64-byte fields per row, as a venue that
+    sends far more than the parsers read. Pages are not kept by the client.
+    """
+
+    _KEYS: ClassVar[dict[str, str]] = {
+        "/api/v1/trade/fills-history": "tradeId",
+        "/api/v1/account/funding-fees": "billId",
+        "/api/v1/trade/orders-history": "orderId",
+    }
+
+    def __init__(self, pages: int, extra: int) -> None:
+        super().__init__(_paths(_FIXTURE["long"]))
+        self.pages = pages
+        self.extra = extra
+        self.served: dict[str, int] = dict.fromkeys(self._KEYS, 0)
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        key = self._KEYS.get(path)
+        if key is None:
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+        start = self.served[path]
+        if start >= self.pages * 100:
+            return []
+        self.served[path] = start + 100
+        return [self._row(key, start + index) for index in range(100)]
+
+    def _row(self, key: str, number: int) -> dict[str, object]:
+        row: dict[str, object] = {key: f"{key}-{number}", "instId": "BTC-USDT", "ts": "1"}
+        for index in range(self.extra):
+            row[f"extra{index}"] = f"{number:032d}{index:032d}"
+        return row
+
+
+def _full_read_peak(pages: int, extra: int) -> tuple[int, int]:
+    """Peak traced bytes of one full (restart) read, and pages served."""
+    import gc
+    import tracemalloc
+
+    maker = _engine()
+    with maker() as current:
+        current.add(Organization(id=ORG, name="Mirror Org"))
+        current.add(User(id=USER, email="mirror@test.example", hashed_password="not-a-real-hash"))
+        current.commit()
+        client = _BulkClient(pages, extra)
+        settings = _settings(blofin_demo_manual_mirror_max_pages=pages + 2)
+        gc.collect()
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        BloFinDemoManualMirror(client, now=NOW).apply(
+            current, organization_id=ORG, user_id=USER, settings=settings
+        )
+        peak = tracemalloc.get_traced_memory()[1] - before
+        current.commit()
+    served = sum(client.served.values()) // 100
+    return peak, served
+
+
+def test_full_read_peak_holds_one_raw_page_not_every_page() -> None:
+    import tracemalloc
+
+    pages, extra = 10, 30
+    page_extra = 100 * extra * 113  # 30 unread 64-char strings (~113 bytes each) per row
+    tracemalloc.start()
+    try:
+        _full_read_peak(2, 0)  # warm imports and statement caches
+        lean, served = _full_read_peak(pages, 0)
+        fat, _served = _full_read_peak(pages, extra)
+    finally:
+        tracemalloc.stop()
+    assert served == 3 * pages
+    # Holding every raw page would add served * page_extra (~10 MB) to the peak.
+    # Projection per page keeps at most a page or two of unread fields alive.
+    assert fat - lean < 3 * page_extra, (fat, lean, page_extra)

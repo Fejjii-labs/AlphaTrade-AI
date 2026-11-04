@@ -94,6 +94,125 @@ paid." The funding route requires `begin` and `end` and covers at most seven
 days. The mirror looks back seven days minus one second so that call stays
 inside the documented window.
 
+Only the first read after a worker start looks back the whole seven days.
+After a read that ends `mirror-cycle:ok`, the worker keeps that read's end in
+memory per history endpoint. The next positions-history read starts
+`BLOFIN_DEMO_MANUAL_MIRROR_OVERLAP_SECONDS` (default 600) before it, never
+earlier than seven days. When that read returns rows, fills, funding, and
+orders are read from the earliest returned `createTime` minus the overlap, and
+positions history is read again from there so overlapping older slices still
+mark shared funding. Only the returned rows are written; older slices keep the
+economics from the read that first saw them. With no new rows, fills, funding,
+and orders are not read. A failed, capped, or incomplete read keeps the
+previous cursor. A restart reads seven days again.
+
+A full seven-day read also runs at least every
+`BLOFIN_DEMO_MANUAL_MIRROR_FULL_REREAD_SECONDS` (default 21600, six hours;
+600–604800). The timer restarts only after a full read ends `ok` and commits;
+a failed or incomplete full read stays due. A full read is the same read a
+restart does.
+
+Residual risk: a history row that the venue publishes more than the overlap
+after its `createTime` is missed by the incremental reads. It reaches the
+journal at the next full read, so up to about six hours plus one mirror
+interval later, or sooner on a restart. A row published more than seven days
+late is never mirrored, as before this change.
+
+### Retries, page cap and memory
+
+- **Retries.** A history page that still fails with a 429, a 5xx or a
+  transport error after the client's own retries is asked again from the
+  same cursor, so no row is skipped. The budget is
+  `BLOFIN_DEMO_MANUAL_MIRROR_PAGE_RETRIES` (default 3, 0–10) per mirror read,
+  not per page. Waits double from
+  `BLOFIN_DEMO_MANUAL_MIRROR_PAGE_RETRY_BACKOFF_SECONDS` (default 5, 0–60) and
+  are capped at 60 s, so the default waits at most 5 + 10 + 20 = 35 s per read.
+  A stopping worker ends the wait. An exhausted budget fails the read: nothing
+  is written, the cursor stays, and the next try is one mirror interval later.
+  The default 300 s interval also outlasts BloFin's 5-minute IP suspension.
+  Auth, request and parse errors are not retried. Each retry costs up to 3
+  requests (the client retries too), so the default adds at most 12 requests
+  to one read.
+- **Page cap.** `BLOFIN_DEMO_MANUAL_MIRROR_MAX_PAGES` (default 40, 1–200)
+  pages of 100 rows per endpoint per read. BloFin pages newest first, so a
+  capped read has missed the oldest rows, and the cursor never moves past
+  them. A capped positions-history read writes nothing. Capped fills, funding
+  or orders keep their history rows unverified and record
+  `mirror-cycle:page-cap`. Both log `blofin_demo_manual_mirror_page_cap` at
+  error (endpoint, max_pages, rows, mode, since) and send the
+  `blofin_demo_mirror_page_cap` Telegram safety alert (default allowlist, at
+  most once per 6 h). A capped read never completes on its own. Raising the
+  cap costs more requests (see the budget below) and more memory per read.
+- **Not done: reading forward from the cursor.** BloFin's `before` parameter
+  returns rows newer than an id, but the docs do not say which of those rows a
+  page holds or in what order. Splitting the full read into time windows would
+  lose the cross-window shared-funding check that the six-hour full read is
+  for. So a cap is surfaced and alerted, not worked around.
+- **Memory.** Each page is cut down to the fields the parsers read as it
+  arrives, and the raw page is dropped. The funding and order matching needs
+  all four endpoints at once, so a read still holds those compact rows until
+  the journal write. Its peak is bounded by the page cap times the compact
+  row size, not by how wide the venue's rows are. In the test, 30 pages of
+  rows with 30 unread fields peak about 1.5 raw pages above lean rows;
+  without the projection the gap is about 46 pages. The incremental read
+  drops its first positions-history read before the wider re-read. A failed
+  read clears its rows before the error propagates, and the worker rolls back
+  and records the failure only after the exception is gone, so no traceback
+  keeps pages alive. The applied log line carries at most 20 skipped rows.
+  The operator backfill still reads whole rows for its replay capture.
+- **Concurrency.** The snapshot cycle runs one mirror read at a time. A read
+  that outlasts the interval makes the next due tick log
+  `blofin_demo_manual_mirror_busy` and skip. The cursor is a single entry for
+  the pinned owner.
+- **Residual.** BloFin signals the end of the data with a page of fewer than
+  100 rows. A venue that sent a short page before the end would end the read
+  early, and the mirror cannot tell.
+
+### Rate-limit budget
+
+BloFin's documented limits (<https://docs.blofin.com/index.html#rate-limits>,
+fetched 2026-11-04): REST calls are limited per IP to 500 per minute (a breach
+suspends the IP for 5 minutes) and 1500 per 5 minutes (a breach suspends it
+for 1 hour). "Trading-related APIs" are limited to 30 requests per 10 seconds
+per user id. The docs do not say whether the `/api/v1/trade/fills-history`
+and `/api/v1/trade/orders-history` reads count as trading-related, so this
+budget assumes they do.
+
+The client throttle is per client instance: at most
+`BLOFIN_RATE_LIMIT_REQUESTS_PER_SECOND` (default 5) request attempts per
+second, and up to `BLOFIN_MAX_RETRIES` (default 2) retries of a GET after a
+429, a 5xx or a transport error. Each mirror run builds its own client.
+
+A full read is the API-key check, instruments, open positions, and up to 40
+(`BLOFIN_DEMO_MANUAL_MIRROR_MAX_PAGES`) pages each of positions history, fills, funding and orders: at most 163
+requests. Unpaced at 5 per second, it finishes in about 33 s. That is up to
+50 requests per 10 s on the same user id as the demo loop's orders, and it
+would also hit the trading limit on its own.
+
+Since this change, history pages are at least
+`BLOFIN_DEMO_MANUAL_MIRROR_PAGE_PAUSE_SECONDS` apart (default 1.0, range
+0–10; 0 turns pacing off), across all four endpoints. A full read therefore
+takes at least about 160 s on the snapshot thread, once per six hours or once
+per restart. The pause wakes up when the worker stops, and the read then fails
+rather than delaying shutdown. Worst case for this worker, retries excluded
+(each request can be tried up to 3 times only while BloFin is already
+refusing it):
+
+| Window | Mirror | Snapshot sync (4 per 45 s tick) | Total | Limit |
+| --- | --- | --- | --- | --- |
+| 10 s, per user id (trading calls) | ≤ 11 history pages | 0 (none are `/trade` calls) | ≤ 11 | 30 |
+| 1 min, per IP | ≤ 61 pages + 3 setup = 64 | ≤ 2 ticks = 8 | ≤ 72 | 500 |
+| 5 min, per IP | ≤ 163 for one full read; paced ceiling 301 pages + 6 setup = 307 | ≤ 7 ticks = 28 | ≤ 191; ceiling ≤ 335 | 1500 |
+
+Even if every request were tried three times, the ceilings stay under the IP
+limits (216 per minute, 1005 per 5 minutes).
+
+An incremental read every 300 s is usually 4–8 requests. Its worst case
+(203 requests: history read twice plus three dependent endpoints, all at the
+page cap) is paced the same way. Not counted: the governed demo loop's
+order-book reads and orders, the market-data reads, and any other service
+that shares the egress IP.
+
 `fillPnl` is "Last filled profit and loss, applicable to orders which have a
 trade and aim to close position." The page does not say whether that number
 is gross or net of fees or funding. The published examples are `0`. This

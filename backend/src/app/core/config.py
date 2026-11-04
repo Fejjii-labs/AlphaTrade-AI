@@ -321,6 +321,34 @@ class Settings(BaseSettings):
     # the normal round-robin tenant scheduler.
     watcher_paper_organization_id: str = ""
     paper_worker_memory_diagnostics_enabled: bool = False
+    # Soft RSS watchdog: above the limit the worker stops cleanly and exits
+    # nonzero so Render restarts it before the plan's hard OOM kill.
+    paper_worker_memory_watchdog_enabled: bool = True
+    paper_worker_memory_watchdog_limit_mb: int = Field(default=440, ge=64, le=65536)
+    paper_worker_memory_watchdog_check_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
+    # No check this long after start. Each early trip doubles it for the next
+    # start, up to the max, so a baseline above the limit cannot exit-loop.
+    paper_worker_memory_watchdog_startup_grace_seconds: float = Field(
+        default=300.0, ge=0.0, le=3600.0
+    )
+    paper_worker_memory_watchdog_backoff_max_seconds: float = Field(
+        default=3600.0, ge=0.0, le=86400.0
+    )
+    # A trip this soon after the grace ends continues the streak; a later trip
+    # is a leak and resets it to one, so it does not lengthen the next grace.
+    paper_worker_memory_watchdog_early_trip_window_seconds: float = Field(
+        default=900.0, ge=0.0, le=86400.0
+    )
+    # Telegram ops alert once the watchdog trips this many times in a row; 0 = off.
+    paper_worker_memory_watchdog_alert_after_trips: int = Field(default=2, ge=0, le=100)
+    # Written at boot, removed after a clean stop. Left behind = the previous run
+    # was OOM-killed, SIGKILLed or crashed: log + alert. Empty disables it.
+    # Render's filesystem is ephemeral, so /tmp may not survive a restart there.
+    paper_worker_run_marker_path: str = "/tmp/alphatrade-paper-worker.running"
+    # Trip count and time only; nothing secret. Empty disables the backoff state.
+    paper_worker_memory_watchdog_state_path: str = (
+        "/tmp/alphatrade-paper-worker-memory-watchdog.json"
+    )
     # Seconds between periodic paper_worker_health log lines while serving.
     paper_worker_health_log_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
     watcher_paper_max_scopes_per_cycle: int = Field(default=20, ge=1, le=200)
@@ -367,6 +395,29 @@ class Settings(BaseSettings):
     # Read-only journal mirror for hand trades on the BloFin demo account.
     # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
     blofin_demo_manual_mirror_enabled: bool = False
+    # After one successful read, the next mirror read starts this many seconds
+    # before the previous read's end instead of re-reading seven days.
+    blofin_demo_manual_mirror_overlap_seconds: int = Field(default=600, ge=60, le=86400)
+    # Mirror cadence. The snapshot tick stays at BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS;
+    # the history mirror inside it runs at most once per this interval.
+    blofin_demo_manual_mirror_interval_seconds: int = Field(default=300, ge=30, le=3600)
+    # Full 7-day mirror read at least this often, so history published later
+    # than the overlap is still mirrored. Incremental reads run in between.
+    blofin_demo_manual_mirror_full_reread_seconds: int = Field(default=21600, ge=600, le=604800)
+    # Minimum gap between mirror history pages. BloFin allows 30 "trading-related"
+    # calls per 10 s per user id; 1 s keeps the mirror at 10 pages per 10 s or less.
+    blofin_demo_manual_mirror_page_pause_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
+    # Retries per mirror read (not per page) after a 429 or a venue/transport
+    # failure, on top of the client's own short retries. Backoff doubles from
+    # the base and is capped at 60 s; an exhausted budget fails the read and
+    # keeps the cursor. 0 fails on the first such error.
+    # History pages per endpoint per mirror read (100 rows each). A read that
+    # reaches it keeps its cursor, withholds verified economics and alerts.
+    blofin_demo_manual_mirror_max_pages: int = Field(default=40, ge=1, le=200)
+    blofin_demo_manual_mirror_page_retries: int = Field(default=3, ge=0, le=10)
+    blofin_demo_manual_mirror_page_retry_backoff_seconds: float = Field(
+        default=5.0, ge=0.0, le=60.0
+    )
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.

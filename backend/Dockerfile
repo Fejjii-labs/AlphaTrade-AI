@@ -27,8 +27,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Two glibc malloc arenas: threaded workers otherwise keep per-thread arenas
+# that do not return freed memory to the OS.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    MALLOC_ARENA_MAX=2 \
     PATH="/app/.venv/bin:$PATH"
 
 COPY --from=builder --chown=alphatrade:alphatrade /app/.venv /app/.venv

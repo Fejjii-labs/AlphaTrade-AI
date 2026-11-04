@@ -8,6 +8,8 @@ principal pins never grant real execution. SFP keeps its existing refusal.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
@@ -105,6 +107,11 @@ from app.workers.watcher_paper_targets import PaperScanTarget
 logger = logging.getLogger(__name__)
 DEMO_POLICY = "governed-blofin-demo/v1"
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
+# Demo book quotes are action evidence for 10 seconds.
+_DEMO_QUOTE_TTL = timedelta(seconds=10)
+# A preflight book received longer ago than this (local monotonic seconds) is
+# read again right before eligibility.
+_DEMO_QUOTE_REFRESH_AFTER_SECONDS = 2.0
 
 
 def _demo_risk_snapshot(
@@ -352,6 +359,32 @@ def _demo_calculation_inputs(
     return inputs
 
 
+def demo_action_evidence(
+    market: MarketActionEvidence, snapshot: DemoVenueSnapshot
+) -> MarketActionEvidence:
+    """Action-time evidence from the demo book.
+
+    The scan quote passed its own freshness gate before preflight and stays the
+    evidence price for the basis check. The executable price and the 10s
+    action window come from the demo book read just before eligibility, so a
+    scan quote that aged during preflight does not block a fresh demo quote.
+    """
+    return MarketActionEvidence(
+        venue_state_id=uuid5(
+            _NAMESPACE,
+            f"demo:{snapshot.instrument}:{snapshot.price}:{snapshot.observed_at.isoformat()}",
+        ),
+        evidence_venue=market.evidence_venue,
+        execution_venue=VenueId.BLOFIN,
+        evidence_price=market.evidence_price,
+        execution_price=snapshot.price,
+        required_action_evidence_fresh=True,
+        basis_fresh=True,
+        action_evidence_valid_until=snapshot.observed_at + _DEMO_QUOTE_TTL,
+        symbol=market.symbol,
+    )
+
+
 def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tuple[str, bool]:
     """Disposition, and whether the existing kill switch must run.
 
@@ -385,6 +418,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         super().__init__(runtime, settings, clock)
         self._provider = provider
         self._snapshot: DemoVenueSnapshot | None = None
+        self._snapshot_request: dict[str, object] | None = None
+        # Local monotonic receipt time of ``_snapshot``. Its observed_at is venue time.
+        self._snapshot_received_at: float | None = None
+        self._monotonic: Callable[[], float] = time.monotonic
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
@@ -530,16 +567,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # No profile keeps the existing cross 1x read.
         required_leverage = None if active is not None else Decimal("1")
         read_margin_mode = "isolated" if active is not None else "cross"
+        self._snapshot_request = {
+            "symbol": target.symbol,
+            "side": EntrySide.BUY if candidate.direction is TradeDirection.LONG else EntrySide.SELL,
+            "required_leverage": required_leverage,
+            "margin_mode": read_margin_mode,
+        }
         try:
             self._snapshot = self._get_provider().snapshot(
-                symbol=target.symbol,
                 now=self._clock.now(),
-                side=EntrySide.BUY
-                if candidate.direction is TradeDirection.LONG
-                else EntrySide.SELL,
-                required_leverage=required_leverage,
-                margin_mode=read_margin_mode,
+                **self._snapshot_request,  # type: ignore[arg-type]
             )
+            self._snapshot_received_at = self._monotonic()
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
@@ -579,27 +618,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             account=account,
             now=now,
         )
-        snapshot = self._require_snapshot()
-        market = command.market_action
+        snapshot = self._action_time_snapshot(now)
         return command.model_copy(
             update={
-                "market_action": MarketActionEvidence(
-                    venue_state_id=uuid5(
-                        _NAMESPACE,
-                        f"demo:{snapshot.instrument}:{snapshot.price}:{snapshot.observed_at.isoformat()}",
-                    ),
-                    evidence_venue=market.evidence_venue,
-                    execution_venue=VenueId.BLOFIN,
-                    evidence_price=market.evidence_price,
-                    execution_price=snapshot.price,
-                    required_action_evidence_fresh=True,
-                    basis_fresh=True,
-                    action_evidence_valid_until=min(
-                        market.action_evidence_valid_until,
-                        snapshot.observed_at + timedelta(seconds=10),
-                    ),
-                    symbol=market.symbol,
-                ),
+                "market_action": demo_action_evidence(command.market_action, snapshot),
                 "configuration": PaperExecutionConfiguration(
                     execution_mode=ExecutionMode.PAPER,
                     enable_real_trading=False,
@@ -865,6 +887,41 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             # Executable bid/ask can invalidate an otherwise exactly 1R setup.
             return exc.reason
         return revised
+
+    def _action_time_snapshot(self, now: datetime) -> DemoVenueSnapshot:
+        """Re-read the demo book when the preflight quote has aged.
+
+        Funding and database work run between preflight and eligibility. The
+        same read-only snapshot is taken again so the 10s demo quote is fresh
+        at the eligibility check and for planning. A failed re-read keeps the
+        earlier snapshot; eligibility then blocks it as stale.
+
+        observed_at is the venue's book ``ts``, so its age on the local wall
+        clock includes clock skew, which a re-read cannot fix. The re-read
+        decision uses the local monotonic receipt time instead. An unknown
+        receipt time re-reads.
+        """
+        snapshot = self._require_snapshot()
+        request = self._snapshot_request
+        if request is None:
+            return snapshot
+        received_at = self._snapshot_received_at
+        if (
+            received_at is not None
+            and self._monotonic() - received_at < _DEMO_QUOTE_REFRESH_AFTER_SECONDS
+        ):
+            return snapshot
+        try:
+            fresh = self._get_provider().snapshot(now=now, **request)  # type: ignore[arg-type]
+        except Exception as exc:
+            diagnostic = failure_diagnostics(exc, stage="snapshot_refresh")
+            logger.warning(
+                "governed_demo_quote_refresh_failed reason=%s", diagnostic["reason_code"]
+            )
+            return snapshot
+        self._snapshot = fresh
+        self._snapshot_received_at = self._monotonic()
+        return fresh
 
     def _require_snapshot(self) -> DemoVenueSnapshot:
         if self._snapshot is None:
