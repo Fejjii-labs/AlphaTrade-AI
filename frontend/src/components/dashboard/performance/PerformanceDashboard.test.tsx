@@ -190,8 +190,8 @@ describe("PerformanceDashboard", () => {
       const scope = params?.scope ?? "demo";
       const labels: Record<string, string> = {
         demo: "Demo trades (BloFin demo)",
-        paper: "Paper trades (paper execution and validation)",
-        real: "Real trades (manually logged)",
+        paper: "Paper trades (paper execution, validation, and manual trades without a real venue)",
+        real: "Real trades (manually logged, real exchange recorded)",
         backtest: "Backtest trades (simulated history)",
       };
       const base = response();

@@ -119,6 +119,10 @@ class VenueRequirement(StrEnum):
     ANY = "any"
     BLOFIN_DEMO = "blofin_demo"
     NOT_BLOFIN_DEMO = "not_blofin_demo"
+    # No BloFin-demo evidence, no paper evidence, and a recorded exchange.
+    REAL_VENUE = "real_venue"
+    # No BloFin-demo evidence and not REAL_VENUE: paper evidence or no exchange.
+    NOT_REAL_VENUE = "not_real_venue"
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +160,45 @@ def blofin_demo_venue_clause() -> ColumnElement[bool]:
     )
 
 
+PAPER_VENUE = "PAPER_INTERNAL"
+PAPER_EXCHANGE_PREFIX = "PAPER"
+
+
+def paper_venue_clause() -> ColumnElement[bool]:
+    """Recorded evidence that a trade is simulated (paper). Never NULL.
+
+    Any of: an exchange starting with ``PAPER`` (e.g. ``paper``,
+    ``PAPER_INTERNAL``), a linked paper trade or paper-validation run, or a
+    linked plan revision on the ``PAPER_INTERNAL`` venue.
+    """
+    plan_on_paper = (
+        select(TradePlanRevision.id)
+        .where(
+            TradePlanRevision.id == JournalTrade.trade_plan_revision_id,
+            TradePlanRevision.organization_id == JournalTrade.organization_id,
+            TradePlanRevision.execution_venue == PAPER_VENUE,
+        )
+        .exists()
+    )
+    return or_(
+        func.upper(func.trim(func.coalesce(JournalTrade.exchange, ""))).like(
+            f"{PAPER_EXCHANGE_PREFIX}%"
+        ),
+        JournalTrade.linked_paper_trade_id.is_not(None),
+        JournalTrade.linked_paper_validation_run_id.is_not(None),
+        plan_on_paper,
+    )
+
+
+def real_venue_clause() -> ColumnElement[bool]:
+    """A named exchange with no BloFin-demo and no paper evidence. Never NULL."""
+    return and_(
+        func.trim(func.coalesce(JournalTrade.exchange, "")) != "",
+        ~blofin_demo_venue_clause(),
+        ~paper_venue_clause(),
+    )
+
+
 def scope_rules_clause(rules: Sequence[SourceVenueRule]) -> ColumnElement[bool]:
     """OR of source/venue rules; an empty rule set matches nothing."""
     clauses: list[ColumnElement[bool]] = []
@@ -167,6 +210,10 @@ def scope_rules_clause(rules: Sequence[SourceVenueRule]) -> ColumnElement[bool]:
             clauses.append(and_(source_match, blofin_demo_venue_clause()))
         elif rule.venue is VenueRequirement.NOT_BLOFIN_DEMO:
             clauses.append(and_(source_match, ~blofin_demo_venue_clause()))
+        elif rule.venue is VenueRequirement.REAL_VENUE:
+            clauses.append(and_(source_match, real_venue_clause()))
+        elif rule.venue is VenueRequirement.NOT_REAL_VENUE:
+            clauses.append(and_(source_match, ~blofin_demo_venue_clause(), ~real_venue_clause()))
         else:
             clauses.append(source_match)
     return or_(*clauses) if clauses else false()

@@ -185,6 +185,30 @@ def test_summary_days_curve_drawdown_exact_values() -> None:
     assert (result.risk.winning_days, result.risk.losing_days) == (2, 1)
 
 
+def test_expectancy_divides_by_pnl_sample_not_closed_trades() -> None:
+    """A closed trade with no recorded net PnL must not dilute expectancy."""
+    rows = [
+        _row("100", datetime(2026, 7, 1, 10, tzinfo=UTC)),
+        _row("-50", datetime(2026, 7, 1, 15, tzinfo=UTC)),
+        _row("200", datetime(2026, 7, 2, 9, tzinfo=UTC)),
+        _row("-150", datetime(2026, 7, 3, 9, tzinfo=UTC)),
+        _row("0", datetime(2026, 7, 3, 11, tzinfo=UTC)),
+        # Closed, labelled WIN, but no recorded net PnL.
+        _row(None, datetime(2026, 7, 4, 9, tzinfo=UTC), result=TradeResult.WIN),
+    ]
+    s = _build(rows).summary
+    assert (s.trade_count, s.pnl_sample_count) == (6, 5)
+    # The label still counts toward win/loss counts (one classifier) ...
+    assert (s.wins, s.losses, s.breakeven) == (3, 2, 1)
+    # ... but expectancy is over the 5 trades with PnL: 100 / 5 = 20, not 100 / 6.
+    assert s.net_pnl == Decimal("100")
+    assert s.expectancy == Decimal("20")
+    assert s.expectancy != Decimal("100") / 6
+    # (2/5 x 150) - (2/5 x |-100|): win%/loss% over the PnL sample too.
+    assert s.average_win == Decimal("150") and s.average_loss == Decimal("-100")
+    assert s.expectancy == Decimal(2) / 5 * Decimal("150") - Decimal(2) / 5 * Decimal("100")
+
+
 def test_scores_normalize_against_targets() -> None:
     rows = [
         _row("100", datetime(2026, 7, 1, 10, tzinfo=UTC)),
@@ -403,14 +427,25 @@ def _service(trades: _FakeTrades, **overrides: object) -> JournalPerformanceDash
     return JournalPerformanceDashboardService(None, settings=settings, trades=trades)
 
 
-def test_scope_rules_partition_every_source_and_venue() -> None:
-    venues = (VenueRequirement.BLOFIN_DEMO, VenueRequirement.NOT_BLOFIN_DEMO)
+# Venue evidence classes a row can fall in, and the requirements covering each.
+_ON_DEMO, _REAL_VENUE, _NOT_REAL = "on_demo", "real_venue", "not_real"
+_COVERS: dict[VenueRequirement, frozenset[str]] = {
+    VenueRequirement.ANY: frozenset({_ON_DEMO, _REAL_VENUE, _NOT_REAL}),
+    VenueRequirement.BLOFIN_DEMO: frozenset({_ON_DEMO}),
+    VenueRequirement.NOT_BLOFIN_DEMO: frozenset({_REAL_VENUE, _NOT_REAL}),
+    VenueRequirement.REAL_VENUE: frozenset({_REAL_VENUE}),
+    VenueRequirement.NOT_REAL_VENUE: frozenset({_NOT_REAL}),
+}
 
-    def covers(rule: SourceVenueRule, venue: VenueRequirement) -> bool:
-        return rule.venue in (VenueRequirement.ANY, venue)
+
+def test_scope_rules_partition_every_source_and_venue() -> None:
+    assert set(_COVERS) == set(VenueRequirement)
+
+    def covers(rule: SourceVenueRule, venue: str) -> bool:
+        return venue in _COVERS[rule.venue]
 
     for source in JournalTradeSource:
-        for venue in venues:
+        for venue in (_ON_DEMO, _REAL_VENUE, _NOT_REAL):
             owners = [
                 scope
                 for scope, rules in SCOPE_RULES.items()
@@ -422,15 +457,15 @@ def test_scope_rules_partition_every_source_and_venue() -> None:
 
 
 def test_scope_rules_match_the_brief() -> None:
-    def owner(source: JournalTradeSource, venue: VenueRequirement) -> JournalDashboardScope:
+    def owner(source: JournalTradeSource, venue: str) -> JournalDashboardScope:
         return next(
             scope
             for scope, rules in SCOPE_RULES.items()
             for rule in rules
-            if source in rule.sources and rule.venue in (VenueRequirement.ANY, venue)
+            if source in rule.sources and venue in _COVERS[rule.venue]
         )
 
-    on, off = VenueRequirement.BLOFIN_DEMO, VenueRequirement.NOT_BLOFIN_DEMO
+    on, off, not_real = _ON_DEMO, _REAL_VENUE, _NOT_REAL
     demo, paper, real = (
         JournalDashboardScope.DEMO,
         JournalDashboardScope.PAPER,
@@ -441,11 +476,19 @@ def test_scope_rules_match_the_brief() -> None:
     assert owner(JournalTradeSource.PAPER_EXECUTION, on) == demo
     assert owner(JournalTradeSource.MANUAL, on) == demo
     assert owner(JournalTradeSource.PAPER_EXECUTION, off) == paper
+    assert owner(JournalTradeSource.PAPER_EXECUTION, not_real) == paper
     assert owner(JournalTradeSource.PAPER_VALIDATION, on) == paper
     assert owner(JournalTradeSource.MANUAL, off) == real
+    # Manual paper trades and manual trades with no exchange are never real.
+    assert owner(JournalTradeSource.MANUAL, not_real) == paper
     for hidden in ("backtest", "imported", "system"):
         source = JournalTradeSource(hidden)
-        assert owner(source, on) == owner(source, off) == JournalDashboardScope(hidden)
+        assert (
+            owner(source, on)
+            == owner(source, off)
+            == owner(source, not_real)
+            == JournalDashboardScope(hidden)
+        )
 
 
 def test_service_defaults_to_demo_scope_and_utc_bounds() -> None:
@@ -607,6 +650,62 @@ def _plan_revision(factory: sessionmaker[Session], *, venue: str) -> uuid.UUID:
     return revision_id
 
 
+def _set_columns_unchecked(
+    factory: sessionmaker[Session], trade_id: uuid.UUID, **values: object
+) -> None:
+    """Set link columns without their parent rows (FKs off: test-only)."""
+    with factory() as session:
+        session.execute(text("PRAGMA foreign_keys=OFF"))
+        row = session.get(JournalTrade, trade_id)
+        assert row is not None
+        for key, value in values.items():
+            setattr(row, key, value)
+        session.commit()
+        session.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def test_calendar_endpoint_manual_paper_or_venueless_trades_are_never_real(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    paper_plan = _plan_revision(factory, venue="PAPER_INTERNAL")
+    manual = JournalTradeSource.MANUAL
+
+    def logged(pnl: str, **columns: object) -> None:
+        trade_id = _closed_trade(factory, net_pnl=pnl, source=manual)
+        if columns:
+            _set_columns_unchecked(factory, trade_id, **columns)
+
+    # Real: a named exchange and no demo or paper evidence (1 + 2 = 3).
+    logged("1", exchange="BLOFIN")
+    logged("2", exchange="binance")
+    # Not real (paper): 10 + 20 + 40 + 80 + 160 + 320 + 640 = 1270.
+    logged("10")  # no exchange recorded
+    logged("20", exchange="   ")  # blank exchange
+    logged("40", exchange="paper")
+    logged("80", exchange="BLOFIN", linked_paper_trade_id=uuid.uuid4())
+    logged("160", exchange="BLOFIN", linked_paper_validation_run_id=uuid.uuid4())
+    logged("320", exchange="BLOFIN", trade_plan_revision_id=paper_plan)
+    logged("640", exchange="Paper_Internal")
+    # Demo evidence still wins over a missing exchange (5000).
+    logged("5000", external_ref="blofin-demo-history:7")
+
+    def net(scope: str) -> tuple[int, Decimal]:
+        response = test_client.get(
+            "/journal/statistics/calendar",
+            headers=headers,
+            params={"scope": scope, "source": "manual"},
+        )
+        assert response.status_code == 200, response.text
+        summary = response.json()["summary"]
+        return summary["trade_count"], Decimal(summary["net_pnl"])
+
+    assert net("real") == (2, Decimal("3"))
+    assert net("paper") == (7, Decimal("1270"))
+    assert net("demo") == (1, Decimal("5000"))
+
+
 def test_calendar_endpoint_scopes_never_mix(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
@@ -628,8 +727,9 @@ def test_calendar_endpoint_scopes_never_mix(
     _closed_trade(factory, net_pnl="200", source=JournalTradeSource.PAPER_EXECUTION)
     internal = _closed_trade(factory, net_pnl="400", source=JournalTradeSource.PAPER_EXECUTION)
     _set_columns(factory, internal, trade_plan_revision_id=paper_plan)
-    # Real: 1000 + 2000
+    # Manual with no exchange is not provably real: paper (1000).
     _closed_trade(factory, net_pnl="1000", source=JournalTradeSource.MANUAL)
+    # Real: 2000
     real_elsewhere = _closed_trade(factory, net_pnl="2000", source=JournalTradeSource.MANUAL)
     _set_columns(factory, real_elsewhere, exchange="BLOFIN")
     # Opt-in only.
@@ -655,13 +755,14 @@ def test_calendar_endpoint_scopes_never_mix(
         Decimal("31"),
     )
     assert net({"scope": "demo"}) == (5, Decimal("31"))
-    assert net({"scope": "paper"}) == (3, Decimal("700"))
-    assert net({"scope": "real"}) == (2, Decimal("3000"))
+    assert net({"scope": "paper"}) == (4, Decimal("1700"))
+    assert net({"scope": "real"}) == (1, Decimal("2000"))
     assert net({"scope": "backtest"}) == (1, Decimal("10000"))
     assert net({"scope": "imported"}) == (1, Decimal("20000"))
     assert net({"scope": "system"}) == (1, Decimal("40000"))
     assert net({"scope": "demo", "source": "paper_execution"}) == (1, Decimal("4"))
     assert net({"scope": "paper", "source": "paper_execution"}) == (2, Decimal("600"))
+    assert net({"scope": "paper", "source": "manual"}) == (1, Decimal("1000"))
     bad = test_client.get(
         "/journal/statistics/calendar",
         headers=headers,
@@ -710,13 +811,14 @@ def test_calendar_endpoint_partial_close_slices_count_open_remainder_does_not(
     _closed_trade(
         factory, net_pnl=None, source=DEMO, status=JournalTradeStatus.OPEN, exit_time=None
     )
-    # Open trade in another scope is not reported for demo.
-    _closed_trade(
+    # Open real trade (named exchange) is not reported for demo.
+    real_open = _closed_trade(
         factory,
         source=JournalTradeSource.MANUAL,
         status=JournalTradeStatus.OPEN,
         exit_time=None,
     )
+    _set_columns(factory, real_open, exchange="BLOFIN")
     body = test_client.get("/journal/statistics/calendar", headers=headers).json()
     assert body["summary"]["trade_count"] == 2
     assert Decimal(body["summary"]["net_pnl"]) == Decimal("18")

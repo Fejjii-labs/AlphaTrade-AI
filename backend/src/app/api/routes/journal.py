@@ -405,7 +405,8 @@ async def journal_performance_dashboard(
     scope: JournalDashboardScope = Query(
         default=JournalDashboardScope.DEMO,
         description=(
-            "Account scope: demo (BloFin demo), paper, or real (manually logged). "
+            "Account scope: demo (BloFin demo), paper, or real (manually logged with a "
+            "real exchange recorded; manual paper or venue-less trades are paper). "
             "backtest, imported and system are read only when selected here. "
             "Scopes are never mixed."
         ),

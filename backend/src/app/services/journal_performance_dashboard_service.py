@@ -15,8 +15,12 @@ Rules (documented so every number can be re-derived by hand):
 - Exactly one account scope per response (``SCOPE_RULES``, default ``demo``):
   demo = BloFin demo (manual demo, mirrored BloFin demo manual, and canonical
   executions / manual rows with BloFin-demo venue evidence); paper = paper
-  validation plus canonical paper executions without BloFin-demo evidence;
-  real = manually logged trades without BloFin-demo evidence. Backtest,
+  validation, canonical paper executions without BloFin-demo evidence, and
+  manually logged trades that are not provably real; real = manually logged
+  trades with a recorded exchange and neither BloFin-demo nor paper evidence
+  (``real_venue_clause``). A manual trade with paper evidence (paper exchange,
+  linked paper trade / validation run, ``PAPER_INTERNAL`` plan) or with no
+  exchange recorded is never real. Backtest,
   imported and system trades are read only when their scope is selected.
 - Partial closes: only CLOSED rows count. BloFin demo partial closes are
   journaled by the manual mirror as separate CLOSED slices (exit reason
@@ -29,7 +33,9 @@ Rules (documented so every number can be re-derived by hand):
 - Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
   net PnL curve, starting from a 0 baseline, in effective-time order.
 - Expectancy = (win% x avg win) - (loss% x |avg loss|) over trades with
-  recorded net PnL, which equals net PnL / that trade count.
+  recorded net PnL, which equals net PnL / that trade count
+  (``pnl_sample_count``). Closed trades without recorded net PnL are not in
+  the divisor.
 - Recovery factor = net PnL / max drawdown (None when there is no drawdown).
 - Consistency = 1 - (largest winning day / sum of winning days), defined only
   with at least two winning days.
@@ -81,6 +87,8 @@ _S = JournalTradeSource
 _ANY = VenueRequirement.ANY
 _ON_DEMO = VenueRequirement.BLOFIN_DEMO
 _OFF_DEMO = VenueRequirement.NOT_BLOFIN_DEMO
+_REAL = VenueRequirement.REAL_VENUE
+_NOT_REAL = VenueRequirement.NOT_REAL_VENUE
 
 # The single source → scope mapping. Every (source, venue) pair lands in exactly
 # one scope (enforced by tests). Writers, for the record:
@@ -90,7 +98,8 @@ _OFF_DEMO = VenueRequirement.NOT_BLOFIN_DEMO
 #   BLOFIN_DEMO on the linked plan revision) and position-linked paper rows.
 # - PAPER_VALIDATION: paper-validation trades (internal simulation).
 # - MANUAL: hand-logged trades; the mirror may reconcile one with a BloFin demo
-#   close (external ref ``blofin-demo-…``), which makes it demo.
+#   close (external ref ``blofin-demo-…``), which makes it demo. Otherwise it is
+#   real only with a recorded exchange and no paper evidence; else paper.
 # - BACKTEST / IMPORTED / SYSTEM: backtest journal, CSV/backfill import, system.
 SCOPE_RULES: Final[Mapping[JournalDashboardScope, tuple[SourceVenueRule, ...]]] = {
     JournalDashboardScope.DEMO: (
@@ -100,8 +109,9 @@ SCOPE_RULES: Final[Mapping[JournalDashboardScope, tuple[SourceVenueRule, ...]]] 
     JournalDashboardScope.PAPER: (
         SourceVenueRule(frozenset({_S.PAPER_VALIDATION}), _ANY),
         SourceVenueRule(frozenset({_S.PAPER_EXECUTION}), _OFF_DEMO),
+        SourceVenueRule(frozenset({_S.MANUAL}), _NOT_REAL),
     ),
-    JournalDashboardScope.REAL: (SourceVenueRule(frozenset({_S.MANUAL}), _OFF_DEMO),),
+    JournalDashboardScope.REAL: (SourceVenueRule(frozenset({_S.MANUAL}), _REAL),),
     JournalDashboardScope.BACKTEST: (SourceVenueRule(frozenset({_S.BACKTEST}), _ANY),),
     JournalDashboardScope.IMPORTED: (SourceVenueRule(frozenset({_S.IMPORTED}), _ANY),),
     JournalDashboardScope.SYSTEM: (SourceVenueRule(frozenset({_S.SYSTEM}), _ANY),),
@@ -109,8 +119,10 @@ SCOPE_RULES: Final[Mapping[JournalDashboardScope, tuple[SourceVenueRule, ...]]] 
 
 SCOPE_LABELS: Final[Mapping[JournalDashboardScope, str]] = {
     JournalDashboardScope.DEMO: "Demo trades (BloFin demo)",
-    JournalDashboardScope.PAPER: "Paper trades (paper execution and validation)",
-    JournalDashboardScope.REAL: "Real trades (manually logged)",
+    JournalDashboardScope.PAPER: (
+        "Paper trades (paper execution, validation, and manual trades without a real venue)"
+    ),
+    JournalDashboardScope.REAL: "Real trades (manually logged, real exchange recorded)",
     JournalDashboardScope.BACKTEST: "Backtest trades (simulated history)",
     JournalDashboardScope.IMPORTED: "Imported trades",
     JournalDashboardScope.SYSTEM: "System trades",

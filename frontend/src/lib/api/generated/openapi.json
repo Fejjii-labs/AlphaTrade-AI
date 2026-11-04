@@ -68188,14 +68188,14 @@
             }
           },
           {
-            "description": "Account scope: demo (BloFin demo), paper, or real (manually logged). backtest, imported and system are read only when selected here. Scopes are never mixed.",
+            "description": "Account scope: demo (BloFin demo), paper, or real (manually logged with a real exchange recorded; manual paper or venue-less trades are paper). backtest, imported and system are read only when selected here. Scopes are never mixed.",
             "in": "query",
             "name": "scope",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/JournalDashboardScope",
               "default": "demo",
-              "description": "Account scope: demo (BloFin demo), paper, or real (manually logged). backtest, imported and system are read only when selected here. Scopes are never mixed."
+              "description": "Account scope: demo (BloFin demo), paper, or real (manually logged with a real exchange recorded; manual paper or venue-less trades are paper). backtest, imported and system are read only when selected here. Scopes are never mixed."
             }
           },
           {

@@ -130,8 +130,8 @@ export const EXTRA_SCOPE_OPTIONS: Array<{ value: JournalDashboardScope; label: s
 /** Fallback label while loading; the server echoes the authoritative one. */
 export const SCOPE_LABELS: Record<JournalDashboardScope, string> = {
   demo: "Demo trades (BloFin demo)",
-  paper: "Paper trades (paper execution and validation)",
-  real: "Real trades (manually logged)",
+  paper: "Paper trades (paper execution, validation, and manual trades without a real venue)",
+  real: "Real trades (manually logged, real exchange recorded)",
   backtest: "Backtest trades (simulated history)",
   imported: "Imported trades",
   system: "System trades",
