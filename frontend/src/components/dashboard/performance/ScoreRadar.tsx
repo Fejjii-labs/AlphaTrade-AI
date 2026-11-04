@@ -14,7 +14,8 @@ import type { TooltipProps } from "recharts";
 import type { JournalDashboardScoreComponent } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
 
-type RadarDatum = { axis: string; score: number; known: boolean; raw: string };
+type RadarDatum = { axis: string; score: number | null; raw: string };
+type ScoredDatum = RadarDatum & { score: number };
 
 function rawValue(component: JournalDashboardScoreComponent): string {
   if (component.value === null) return component.note ?? UNAVAILABLE;
@@ -26,12 +27,12 @@ function rawValue(component: JournalDashboardScoreComponent): string {
 
 function RadarTooltip({ active, payload }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
-  const datum = payload[0].payload as RadarDatum;
+  const datum = payload[0].payload as ScoredDatum;
   return (
     <div className="rounded-control border border-border-subtle bg-surface-2 px-3 py-2 text-xs text-text-primary shadow-elevation2">
       <p className="font-medium text-text-secondary">{datum.axis}</p>
       <p className="font-data">
-        Score {datum.known ? datum.score.toFixed(0) : UNAVAILABLE} · {datum.raw}
+        Score {datum.score.toFixed(0)} · {datum.raw}
       </p>
     </div>
   );
@@ -44,13 +45,14 @@ export function ScoreRadar({
   overall: number | null;
   components: JournalDashboardScoreComponent[];
 }) {
-  const known = components.filter((component) => component.score !== null);
-  const data: RadarDatum[] = components.map((component) => ({
+  const rows: RadarDatum[] = components.map((component) => ({
     axis: component.label,
-    score: component.score ?? 0,
-    known: component.score !== null,
+    score: component.score,
     raw: rawValue(component),
   }));
+  // Unscored axes are left off the polygon (never drawn as 0) and listed as n/a.
+  const scored = rows.filter((row): row is ScoredDatum => row.score !== null);
+  const unscored = rows.filter((row) => row.score === null);
   const marker = overall === null ? null : Math.max(0, Math.min(100, overall));
   return (
     <section
@@ -59,10 +61,10 @@ export function ScoreRadar({
       data-testid="score-radar"
     >
       <h3 className="text-sm font-semibold text-text-primary">Performance score</h3>
-      {known.length >= 3 ? (
-        <div className="h-56 w-full" aria-hidden="true">
+      {scored.length >= 3 ? (
+        <div className="h-56 w-full" aria-hidden="true" data-testid="score-radar-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <RadarChart data={data} outerRadius="70%">
+            <RadarChart data={scored} outerRadius="70%">
               <PolarGrid stroke="var(--color-border-subtle)" />
               <PolarAngleAxis dataKey="axis" tick={{ fill: "var(--color-text-secondary)", fontSize: 11 }} />
               <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
@@ -84,13 +86,23 @@ export function ScoreRadar({
           Not enough closed trades to score yet.
         </p>
       )}
+      {unscored.length && scored.length >= 3 ? (
+        <ul className="mb-2 space-y-0.5 text-[11px] text-text-muted" data-testid="score-radar-unscored">
+          {unscored.map((row) => (
+            <li key={row.axis}>
+              <span className="font-medium text-text-secondary">{row.axis}: n/a</span> · {row.raw}{" "}
+              (not plotted)
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <table className="sr-only">
         <caption>Score components (0–100)</caption>
         <tbody>
-          {data.map((datum) => (
+          {rows.map((datum) => (
             <tr key={datum.axis}>
               <th scope="row">{datum.axis}</th>
-              <td>{datum.known ? datum.score.toFixed(0) : UNAVAILABLE}</td>
+              <td>{datum.score === null ? UNAVAILABLE : datum.score.toFixed(0)}</td>
               <td>{datum.raw}</td>
             </tr>
           ))}
