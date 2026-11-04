@@ -7,7 +7,7 @@ import type { JournalPerformanceDashboardResponse } from "@/lib/api/types";
 import { PerformanceDashboard } from "./PerformanceDashboard";
 import { PerformanceKpiCards } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
-import { zeroOffset } from "./CumulativePnlChart";
+import { CumulativePnlChart, curveSummary, zeroOffset } from "./CumulativePnlChart";
 import { buildCalendarWeeks, formatCompactPnl, rangeParams } from "./performance-model";
 
 vi.mock("@/lib/api", () => ({ api: { journal: { performanceCalendar: vi.fn() } } }));
@@ -247,6 +247,19 @@ describe("performance components", () => {
     expect(screen.getByTestId("calendar-week-2")).toHaveTextContent("—");
     expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveTextContent("2 trades");
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("+100.00");
+    const table = screen.getByRole("table", { name: "Daily net P&L, July 2026" });
+    expect(within(table).getAllByRole("columnheader")[0]).toHaveTextContent("Sun");
+    expect(within(table).getByRole("cell", { name: /^2026-07-02: \+1200\.00 net, 1 trade/ })).toBeInTheDocument();
+  });
+
+  it("curve has a text alternative", () => {
+    const { cumulative } = response();
+    render(<CumulativePnlChart points={cumulative} />);
+    expect(screen.getByTestId("cumulative-summary")).toHaveTextContent(
+      "Cumulative net P&L over 3 trading days, from +50.00 on 2026-07-01 to +1100.00 on 2026-07-03; high +1250.00, low +50.00.",
+    );
+    expect(screen.getByRole("table", { name: "Daily and cumulative net P&L" })).toBeInTheDocument();
+    expect(curveSummary([])).toBe("");
   });
 });
 

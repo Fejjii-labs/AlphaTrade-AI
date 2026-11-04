@@ -34,6 +34,20 @@ export function zeroOffset(values: number[]): number {
   return max / (max - min);
 }
 
+/** One-sentence text alternative for the curve. */
+export function curveSummary(points: JournalDashboardCurvePoint[]): string {
+  const first = points[0];
+  const last = points.at(-1);
+  if (!first || !last) return "";
+  const values = points.map((point) => toNumber(point.cumulative_net_pnl) ?? 0);
+  return (
+    `Cumulative net P&L over ${points.length} trading day${points.length === 1 ? "" : "s"}, ` +
+    `from ${formatMonetary(first.cumulative_net_pnl)} on ${first.date} ` +
+    `to ${formatMonetary(last.cumulative_net_pnl)} on ${last.date}; ` +
+    `high ${formatMonetary(Math.max(...values))}, low ${formatMonetary(Math.min(...values))}.`
+  );
+}
+
 function CurveTooltip({ active, payload }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
   const datum = payload[0].payload as CurveDatum;
@@ -68,7 +82,7 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
         </span>
       </div>
       {data.length ? (
-        <div className="mt-2 h-56 w-full">
+        <div className="mt-2 h-56 w-full" aria-hidden="true">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <defs>
@@ -118,6 +132,32 @@ export function CumulativePnlChart({ points }: { points: JournalDashboardCurvePo
           No closed trades with recorded P&amp;L in this range.
         </p>
       )}
+      {points.length ? (
+        <>
+          <p className="sr-only" data-testid="cumulative-summary">
+            {curveSummary(points)}
+          </p>
+          <table className="sr-only">
+            <caption>Daily and cumulative net P&amp;L</caption>
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Day net</th>
+                <th scope="col">Cumulative net</th>
+              </tr>
+            </thead>
+            <tbody>
+              {points.map((point) => (
+                <tr key={point.date}>
+                  <th scope="row">{point.date}</th>
+                  <td>{formatMonetary(point.daily_net_pnl)}</td>
+                  <td>{formatMonetary(point.cumulative_net_pnl)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
     </section>
   );
 }

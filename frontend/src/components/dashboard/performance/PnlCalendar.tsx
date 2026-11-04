@@ -32,7 +32,11 @@ function DayCell({ date, day }: { date: string; day: JournalDashboardDay | undef
   const dayNumber = Number(date.slice(8));
   if (!day) {
     return (
-      <div className="min-h-[64px] rounded-control border border-transparent p-1.5 sm:min-h-[84px]">
+      <div
+        role="cell"
+        aria-label={`${date}: no closed trades`}
+        className="min-h-[64px] rounded-control border border-transparent p-1.5 sm:min-h-[84px]"
+      >
         <span className="block text-right text-[11px] text-text-muted">{dayNumber}</span>
       </div>
     );
@@ -43,6 +47,7 @@ function DayCell({ date, day }: { date: string; day: JournalDashboardDay | undef
   }, win ${formatPercent(day.win_rate, 0)}`;
   return (
     <div
+      role="cell"
       className={cn(
         "flex min-h-[64px] min-w-0 flex-col overflow-hidden rounded-control border p-1 text-center sm:min-h-[84px] sm:p-1.5",
         cellTone[tone],
@@ -148,25 +153,39 @@ export function PnlCalendar({
         </p>
       ) : null}
 
-      <div className="grid grid-cols-7 gap-1 md:grid-cols-[repeat(7,minmax(0,1fr))_minmax(84px,0.9fr)]">
-        {WEEKDAYS.map((name) => (
-          <div key={name} className="pb-1 text-center text-[11px] font-medium text-text-muted">
-            {name}
+      <div
+        role="table"
+        aria-label={`Daily net P&L, ${monthLabel(month)}`}
+        className="grid grid-cols-7 gap-1 md:grid-cols-[repeat(7,minmax(0,1fr))_minmax(84px,0.9fr)]"
+      >
+        <div role="row" className="contents">
+          {WEEKDAYS.map((name) => (
+            <div
+              key={name}
+              role="columnheader"
+              className="pb-1 text-center text-[11px] font-medium text-text-muted"
+            >
+              {name}
+            </div>
+          ))}
+          <div
+            role="columnheader"
+            className="hidden pb-1 text-center text-[11px] font-medium text-text-muted md:block"
+          >
+            Week
           </div>
-        ))}
-        <div className="hidden pb-1 text-center text-[11px] font-medium text-text-muted md:block">
-          Week
         </div>
         {weeks.map((week) => (
-          <div key={week.index} className="contents">
+          <div key={week.index} role="row" className="contents">
             {week.cells.map((date, index) =>
               date ? (
                 <DayCell key={date} date={date} day={byDate.get(date)} />
               ) : (
-                <div key={`blank-${week.index}-${index}`} aria-hidden="true" />
+                <div key={`blank-${week.index}-${index}`} role="cell" />
               ),
             )}
             <div
+              role="cell"
               className="hidden flex-col justify-center rounded-control bg-surface-2 px-2 py-1.5 md:flex"
               data-testid={`calendar-week-${week.index}`}
             >
