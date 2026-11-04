@@ -780,27 +780,35 @@ class _RefreshingProvider:
         return SimpleNamespace(observed_at=kwargs["now"], price=Decimal("101"))
 
 
-def _refresh_loop(provider: _RefreshingProvider, observed_at: object) -> object:
+def _refresh_loop(
+    provider: _RefreshingProvider, observed_at: object, *, received: float | None = 0.0
+) -> tuple[object, list[float]]:
+    """Loop holding a preflight book received at monotonic ``received``."""
     from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 
+    mono = [0.0]
     loop = GovernedBloFinDemoLoop(
         None,  # type: ignore[arg-type]
         None,  # type: ignore[arg-type]
         SimpleNamespace(now=lambda: EVALUATED_AT),  # type: ignore[arg-type]
         provider=provider,  # type: ignore[arg-type]
     )
+    loop._monotonic = lambda: mono[0]  # type: ignore[method-assign]
     loop._snapshot = SimpleNamespace(observed_at=observed_at, price=Decimal("100"))  # type: ignore[assignment]
+    loop._snapshot_received_at = received
     loop._snapshot_request = {"symbol": "BTCUSDT", "side": "BUY", "margin_mode": "cross"}
-    return loop
+    return loop, mono
 
 
 def test_aged_preflight_quote_is_read_again_right_before_eligibility() -> None:
     provider = _RefreshingProvider()
     now = EVALUATED_AT + timedelta(seconds=6)
-    loop = _refresh_loop(provider, EVALUATED_AT)
+    loop, mono = _refresh_loop(provider, EVALUATED_AT)
+    mono[0] = 6.0
     fresh = loop._action_time_snapshot(now)  # type: ignore[attr-defined]
     assert fresh.observed_at == now and fresh.price == Decimal("101")
     assert loop._snapshot is fresh  # type: ignore[attr-defined]
+    assert loop._snapshot_received_at == 6.0  # type: ignore[attr-defined]
     assert provider.calls == [
         {"now": now, "symbol": "BTCUSDT", "side": "BUY", "margin_mode": "cross"}
     ]
@@ -808,7 +816,8 @@ def test_aged_preflight_quote_is_read_again_right_before_eligibility() -> None:
 
 def test_recent_preflight_quote_is_not_read_again() -> None:
     provider = _RefreshingProvider()
-    loop = _refresh_loop(provider, EVALUATED_AT)
+    loop, mono = _refresh_loop(provider, EVALUATED_AT)
+    mono[0] = 1.9
     kept = loop._action_time_snapshot(EVALUATED_AT + timedelta(seconds=1))  # type: ignore[attr-defined]
     assert kept.price == Decimal("100")
     assert provider.calls == []
@@ -816,7 +825,42 @@ def test_recent_preflight_quote_is_not_read_again() -> None:
 
 def test_failed_quote_refresh_keeps_the_old_quote_so_eligibility_blocks_it() -> None:
     provider = _RefreshingProvider(fail=True)
-    loop = _refresh_loop(provider, EVALUATED_AT)
+    loop, mono = _refresh_loop(provider, EVALUATED_AT)
+    mono[0] = 11.0
     kept = loop._action_time_snapshot(EVALUATED_AT + timedelta(seconds=11))  # type: ignore[attr-defined]
     assert kept.observed_at == EVALUATED_AT
     assert len(provider.calls) == 1
+
+
+def test_quote_refresh_uses_local_receipt_time_not_skewed_venue_time() -> None:
+    # Local wall clock 5s ahead of the venue: the book looks 5s old on arrival.
+    provider = _RefreshingProvider()
+    loop, mono = _refresh_loop(provider, EVALUATED_AT - timedelta(seconds=5), received=100.0)
+    mono[0] = 100.5
+    kept = loop._action_time_snapshot(EVALUATED_AT)  # type: ignore[attr-defined]
+    assert kept.price == Decimal("100")
+    assert provider.calls == []
+    # Venue clock ahead of local (book stamped after local now), but received 3s ago.
+    ahead, mono = _refresh_loop(provider, EVALUATED_AT + timedelta(seconds=1), received=100.0)
+    mono[0] = 103.0
+    fresh = ahead._action_time_snapshot(EVALUATED_AT)  # type: ignore[attr-defined]
+    assert fresh.price == Decimal("101")
+    assert len(provider.calls) == 1
+
+
+def test_unknown_receipt_time_reads_the_quote_again() -> None:
+    provider = _RefreshingProvider()
+    loop, _mono = _refresh_loop(provider, EVALUATED_AT, received=None)
+    loop._action_time_snapshot(EVALUATED_AT)  # type: ignore[attr-defined]
+    assert len(provider.calls) == 1
+
+
+def test_preflight_snapshot_records_local_monotonic_receipt_time() -> None:
+    import inspect
+
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+    source = inspect.getsource(GovernedBloFinDemoLoop._bound)
+    read = source.index("self._snapshot = self._get_provider().snapshot(")
+    stamp = source.index("self._snapshot_received_at = self._monotonic()")
+    assert read < stamp < source.index("except Exception", read)

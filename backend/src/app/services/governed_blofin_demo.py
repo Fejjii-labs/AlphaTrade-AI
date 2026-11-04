@@ -8,6 +8,8 @@ principal pins never grant real execution. SFP keeps its existing refusal.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from uuid import UUID, uuid5
@@ -107,8 +109,9 @@ DEMO_POLICY = "governed-blofin-demo/v1"
 _NAMESPACE = UUID("c44ea7de-0008-4000-8000-a070e1100001")
 # Demo book quotes are action evidence for 10 seconds.
 _DEMO_QUOTE_TTL = timedelta(seconds=10)
-# A preflight book older than this is read again right before eligibility.
-_DEMO_QUOTE_REFRESH_AFTER = timedelta(seconds=2)
+# A preflight book received longer ago than this (local monotonic seconds) is
+# read again right before eligibility.
+_DEMO_QUOTE_REFRESH_AFTER_SECONDS = 2.0
 
 
 def _demo_risk_snapshot(
@@ -416,6 +419,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._provider = provider
         self._snapshot: DemoVenueSnapshot | None = None
         self._snapshot_request: dict[str, object] | None = None
+        # Local monotonic receipt time of ``_snapshot``. Its observed_at is venue time.
+        self._snapshot_received_at: float | None = None
+        self._monotonic: Callable[[], float] = time.monotonic
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
@@ -572,6 +578,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 now=self._clock.now(),
                 **self._snapshot_request,  # type: ignore[arg-type]
             )
+            self._snapshot_received_at = self._monotonic()
         except Exception as exc:
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
@@ -888,10 +895,21 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         same read-only snapshot is taken again so the 10s demo quote is fresh
         at the eligibility check and for planning. A failed re-read keeps the
         earlier snapshot; eligibility then blocks it as stale.
+
+        observed_at is the venue's book ``ts``, so its age on the local wall
+        clock includes clock skew, which a re-read cannot fix. The re-read
+        decision uses the local monotonic receipt time instead. An unknown
+        receipt time re-reads.
         """
         snapshot = self._require_snapshot()
         request = self._snapshot_request
-        if request is None or now - snapshot.observed_at < _DEMO_QUOTE_REFRESH_AFTER:
+        if request is None:
+            return snapshot
+        received_at = self._snapshot_received_at
+        if (
+            received_at is not None
+            and self._monotonic() - received_at < _DEMO_QUOTE_REFRESH_AFTER_SECONDS
+        ):
             return snapshot
         try:
             fresh = self._get_provider().snapshot(now=now, **request)  # type: ignore[arg-type]
@@ -902,6 +920,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
             return snapshot
         self._snapshot = fresh
+        self._snapshot_received_at = self._monotonic()
         return fresh
 
     def _require_snapshot(self) -> DemoVenueSnapshot:
