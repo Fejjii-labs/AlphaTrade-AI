@@ -175,8 +175,9 @@ def test_supervisor_does_not_stop_during_the_startup_grace() -> None:
             limit_bytes=1000, check_seconds=0.05, startup_grace_seconds=60.0, read_rss=lambda: 2000
         )
     )
-    threading.Timer(0.6, lambda: setattr(supervisor, "_signaled", True)).start()
-    supervisor.serve_until_signal(ready=lambda: None)
+    stop = threading.Timer(0.5, lambda: setattr(supervisor, "_signaled", True))
+    # Timed from ready, so the serve loop runs (and would check) before the stop.
+    supervisor.serve_until_signal(ready=stop.start)
     assert supervisor.memory_watchdog_tripped is False
     exit_if_memory_watchdog_tripped(supervisor)
 
