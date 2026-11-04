@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { BotActivityPanel } from "@/components/autonomous/BotActivityPanel";
+import { GuardrailsCard } from "@/components/autonomous/GuardrailsCard";
+import { RiskProfileSections } from "@/components/autonomous/RiskProfileSections";
 import { TradingLimitsCard } from "@/components/autonomous/TradingLimitsCard";
 import { ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +12,7 @@ import { StatusTile, type StatusTone } from "@/components/ui/status-tile";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { AutonomousTradingSettingsView, UserRiskSettings } from "@/lib/api/types";
+import type { AutonomousSettingsBounds, AutonomousTradingSettingsView, UserRiskSettings } from "@/lib/api/types";
 import { humanizeToken } from "@/lib/format";
 import { describedWorkerHealth } from "@/lib/worker-runtime";
 
@@ -31,13 +33,21 @@ function workerTone(state: string): StatusTone {
 }
 
 /**
- * The paper bot and every limit it trades under: owner switch and status
- * tiles, one limits form (account + bot, side by side), and what the bot did.
+ * The paper bot and every setting it trades under: owner switch and status
+ * tiles, one limits form (account + bot, side by side), the stop-loss band and
+ * hard ceilings, grade risk, leverage, and what the bot did. Settings and
+ * bounds load once here and are passed down.
  */
 export function BotSettings() {
   const { membershipRole } = useAuth();
   const loader = useCallback(
-    () => Promise.all([api.autonomous.settings(), api.risk.settings()]),
+    () =>
+      Promise.all([
+        api.autonomous.settings(),
+        api.risk.settings(),
+        // Bounds only drive hints; the page still works (and the server still validates) without them.
+        api.autonomous.bounds().catch((): AutonomousSettingsBounds | null => null),
+      ]),
     [],
   );
   const { data, loading, error, reload } = useAsyncData(loader, []);
@@ -54,9 +64,14 @@ export function BotSettings() {
   }, [data]);
 
   if (loading) return <LoadingState label="Loading autonomous trading settings…" />;
-  if (error) return <ErrorState message={error} onRetry={() => void reload()} />;
-  if (!view || !account)
-    return <ErrorState message="Autonomous trading settings unavailable." onRetry={() => void reload()} />;
+  if (error || !view || !account)
+    return (
+      <>
+        <ErrorState message={error ?? "Autonomous trading settings unavailable."} onRetry={() => void reload()} />
+        <RiskProfileSections />
+      </>
+    );
+  const bounds = data?.[2] ?? null;
 
   async function handlePaperSwitch(enabled: boolean) {
     setSwitching(true);
@@ -129,7 +144,10 @@ export function BotSettings() {
         ownerReason={ownerReason}
         onBotSaved={setView}
         onAccountSaved={(settings) => void handleAccountSaved(settings)}
+        bounds={bounds}
       />
+      <GuardrailsCard bounds={bounds} />
+      <RiskProfileSections settings={view} bounds={bounds} />
       <BotActivityPanel view={view} />
     </>
   );

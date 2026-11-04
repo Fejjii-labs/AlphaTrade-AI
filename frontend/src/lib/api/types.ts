@@ -1259,7 +1259,7 @@ export interface AutonomousStrategyStatsView {
   counted_sources: string[];
 }
 
-/** GET /policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */
+/** GET /risk/policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */
 export interface RiskPolicyView {
   kind: string;
   source: string;
@@ -1270,6 +1270,49 @@ export interface RiskPolicyView {
   scheduled_effective_at: string | null;
   applies_to_new_trades_only: boolean;
   real_trading_enabled: boolean;
+}
+
+/** GET /autonomous/settings/bounds: what the server enforces, for the settings page. */
+export interface NumericBound {
+  min: string | null;
+  /** When true, `min` itself is refused (value must be greater than `min`). */
+  min_exclusive: boolean;
+  max: string | null;
+  editable: boolean;
+  source: "code_ceiling" | "request_schema" | "environment" | "risk_policy_profile";
+}
+
+export interface StopLossBandBounds {
+  configured_min_percent: string;
+  configured_max_percent: string;
+  floor_percent: string;
+  ceiling_percent: string;
+  configured_valid: boolean;
+  editable: boolean;
+  source: NumericBound["source"];
+}
+
+export interface ProfileCapBounds {
+  kind: string;
+  risk_per_trade_percent_ceiling: string;
+  notional_percent_ceiling: string;
+  aggregate_open_risk_percent_ceiling: string;
+  daily_loss_percent_ceiling: string;
+  max_leverage_ceiling: string;
+  editable: boolean;
+  source: NumericBound["source"];
+}
+
+export interface AutonomousSettingsBounds {
+  bot_risk_per_trade_percent: NumericBound;
+  bot_daily_loss_limit_percent: NumericBound;
+  bot_max_trades_per_day: NumericBound;
+  account_max_risk_per_trade_percent: NumericBound;
+  account_max_trades_per_day: NumericBound;
+  stop_loss_band: StopLossBandBounds;
+  leverage: { profile_max_leverage_ceiling: string; demo_hard_cap: string; demo_effective_max: string };
+  profiles: ProfileCapBounds[];
+  real_trading_enabled: false;
 }
 
 export interface KillSwitchStatus {

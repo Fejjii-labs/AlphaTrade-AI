@@ -29,15 +29,10 @@ vi.mock("@/components/autonomous/BotSettings", () => ({
     <>
       <section aria-label="Paper bot" />
       <section id="limits" aria-label="Trading limits" />
-      <section aria-label="What the bot is doing" />
-    </>
-  ),
-}));
-vi.mock("@/components/autonomous/RiskProfileSections", () => ({
-  RiskProfileSections: () => (
-    <>
+      <section id="guardrails" aria-label="Stop-loss band and hard ceilings" />
       <section id="grade-risk" aria-label="Grade risk" />
       <section id="leverage" aria-label="Leverage" />
+      <section aria-label="What the bot is doing" />
     </>
   ),
 }));
@@ -59,9 +54,10 @@ describe("Autonomous page", () => {
     expect(screen.getAllByRole("region").map((region) => region.getAttribute("aria-label"))).toEqual([
       "Paper bot",
       "Trading limits",
-      "What the bot is doing",
+      "Stop-loss band and hard ceilings",
       "Grade risk",
       "Leverage",
+      "What the bot is doing",
       "Per strategy",
     ]);
     const nav = screen.getByRole("navigation", { name: "Autonomous Trading sections" });

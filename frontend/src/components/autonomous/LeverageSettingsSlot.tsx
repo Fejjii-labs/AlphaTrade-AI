@@ -267,7 +267,7 @@ function DemoLeverageEditor() {
 /**
  * Leverage on the Autonomous Trading page (`#leverage`): the BloFin demo
  * leverage editor, plus the leverage the active risk profiles carry
- * (read-only, from GET /policy/profiles).
+ * (read-only, from GET /risk/policy/profiles).
  */
 export function LeverageSettingsSlot({ profiles }: { profiles: RiskPolicyView[] }) {
   return (

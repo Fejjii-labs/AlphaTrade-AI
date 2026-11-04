@@ -4213,6 +4213,57 @@
         "title": "AutonomousActivityView",
         "type": "object"
       },
+      "AutonomousSettingsBoundsView": {
+        "additionalProperties": false,
+        "properties": {
+          "account_max_risk_per_trade_percent": {
+            "$ref": "#/components/schemas/NumericBound"
+          },
+          "account_max_trades_per_day": {
+            "$ref": "#/components/schemas/NumericBound"
+          },
+          "bot_daily_loss_limit_percent": {
+            "$ref": "#/components/schemas/NumericBound"
+          },
+          "bot_max_trades_per_day": {
+            "$ref": "#/components/schemas/NumericBound"
+          },
+          "bot_risk_per_trade_percent": {
+            "$ref": "#/components/schemas/NumericBound"
+          },
+          "leverage": {
+            "$ref": "#/components/schemas/LeverageBounds"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileCapBounds"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "real_trading_enabled": {
+            "const": false,
+            "default": false,
+            "title": "Real Trading Enabled",
+            "type": "boolean"
+          },
+          "stop_loss_band": {
+            "$ref": "#/components/schemas/StopLossBandBounds"
+          }
+        },
+        "required": [
+          "bot_risk_per_trade_percent",
+          "bot_daily_loss_limit_percent",
+          "bot_max_trades_per_day",
+          "account_max_risk_per_trade_percent",
+          "account_max_trades_per_day",
+          "stop_loss_band",
+          "leverage",
+          "profiles"
+        ],
+        "title": "AutonomousSettingsBoundsView",
+        "type": "object"
+      },
       "AutonomousStrategyOption": {
         "additionalProperties": false,
         "properties": {
@@ -25168,6 +25219,33 @@
         "title": "LevelSignificance",
         "type": "object"
       },
+      "LeverageBounds": {
+        "additionalProperties": false,
+        "properties": {
+          "demo_effective_max": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Demo Effective Max",
+            "type": "string"
+          },
+          "demo_hard_cap": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Demo Hard Cap",
+            "type": "string"
+          },
+          "profile_max_leverage_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Profile Max Leverage Ceiling",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_max_leverage_ceiling",
+          "demo_hard_cap",
+          "demo_effective_max"
+        ],
+        "title": "LeverageBounds",
+        "type": "object"
+      },
       "LifecycleRequest": {
         "additionalProperties": false,
         "properties": {
@@ -30331,6 +30409,61 @@
           "message"
         ],
         "title": "NotificationTestResult",
+        "type": "object"
+      },
+      "NumericBound": {
+        "additionalProperties": false,
+        "description": "Inclusive ``max``; ``min`` is exclusive when ``min_exclusive`` is true.",
+        "properties": {
+          "editable": {
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "min_exclusive": {
+            "default": false,
+            "title": "Min Exclusive",
+            "type": "boolean"
+          },
+          "source": {
+            "enum": [
+              "code_ceiling",
+              "request_schema",
+              "environment",
+              "risk_policy_profile"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "editable",
+          "source"
+        ],
+        "title": "NumericBound",
         "type": "object"
       },
       "OHLCVBarSchema": {
@@ -40884,6 +41017,67 @@
         "title": "ProductFamily",
         "type": "string"
       },
+      "ProfileCapBounds": {
+        "additionalProperties": false,
+        "description": "Code ceilings that a governed risk-policy profile is validated against.",
+        "properties": {
+          "aggregate_open_risk_percent_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Aggregate Open Risk Percent Ceiling",
+            "type": "string"
+          },
+          "daily_loss_percent_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Daily Loss Percent Ceiling",
+            "type": "string"
+          },
+          "editable": {
+            "default": false,
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "max_leverage_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Max Leverage Ceiling",
+            "type": "string"
+          },
+          "notional_percent_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Notional Percent Ceiling",
+            "type": "string"
+          },
+          "risk_per_trade_percent_ceiling": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Risk Per Trade Percent Ceiling",
+            "type": "string"
+          },
+          "source": {
+            "default": "risk_policy_profile",
+            "enum": [
+              "code_ceiling",
+              "request_schema",
+              "environment",
+              "risk_policy_profile"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "risk_per_trade_percent_ceiling",
+          "notional_percent_ceiling",
+          "aggregate_open_risk_percent_ceiling",
+          "daily_loss_percent_ceiling",
+          "max_leverage_ceiling"
+        ],
+        "title": "ProfileCapBounds",
+        "type": "object"
+      },
       "PromotionSource": {
         "description": "Origin of a paper validation candidate (AT-035 / AT-037).",
         "enum": [
@@ -47078,6 +47272,61 @@
           }
         },
         "title": "StopLossAnalysis",
+        "type": "object"
+      },
+      "StopLossBandBounds": {
+        "additionalProperties": false,
+        "description": "Per-trade stop-distance loss as a percent of equity (BloFin demo plans).",
+        "properties": {
+          "ceiling_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Ceiling Percent",
+            "type": "string"
+          },
+          "configured_max_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Configured Max Percent",
+            "type": "string"
+          },
+          "configured_min_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Configured Min Percent",
+            "type": "string"
+          },
+          "configured_valid": {
+            "title": "Configured Valid",
+            "type": "boolean"
+          },
+          "editable": {
+            "default": false,
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "floor_percent": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Floor Percent",
+            "type": "string"
+          },
+          "source": {
+            "default": "environment",
+            "enum": [
+              "code_ceiling",
+              "request_schema",
+              "environment",
+              "risk_policy_profile"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured_min_percent",
+          "configured_max_percent",
+          "floor_percent",
+          "ceiling_percent",
+          "configured_valid"
+        ],
+        "title": "StopLossBandBounds",
         "type": "object"
       },
       "StrategyActionItem": {
@@ -61794,6 +62043,32 @@
           }
         ],
         "summary": "Update autonomous trading settings",
+        "tags": [
+          "autonomous-trading"
+        ]
+      }
+    },
+    "/autonomous/settings/bounds": {
+      "get": {
+        "operationId": "get_autonomous_settings_bounds_autonomous_settings_bounds_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomousSettingsBoundsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ceilings and configured bands the settings page renders (read-only)",
         "tags": [
           "autonomous-trading"
         ]

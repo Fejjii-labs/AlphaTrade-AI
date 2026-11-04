@@ -16,7 +16,8 @@ const GRADES = [
 ] as const;
 
 const CAPS = [
-  ["Max notional per trade", "max_notional_per_trade_percent", "%"],
+  ["Max notional per trade (per coin)", "max_notional_per_trade_percent", "%"],
+  ["Max total exposure (notional)", "max_aggregate_notional_percent", "%"],
   ["Max open risk (all positions)", "max_aggregate_open_risk_percent", "%"],
   ["Max open positions", "max_open_positions", ""],
 ] as const;

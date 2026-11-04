@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.config import Settings, get_settings
 from app.core.dependencies import AutonomousTradingSettingsServiceDep, SessionDep
 from app.schemas.autonomous_activity import AutonomousActivityView
+from app.schemas.autonomous_settings_bounds import AutonomousSettingsBoundsView
 from app.schemas.autonomous_trading_settings import (
     AutonomousTradingSettingsUpdate,
     AutonomousTradingSettingsView,
@@ -13,6 +15,7 @@ from app.schemas.autonomous_trading_settings import (
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep
 from app.services.autonomous_activity import AutonomousActivityService
+from app.services.autonomous_settings_bounds import autonomous_settings_bounds
 from app.services.autonomous_trading_settings_service import AutonomousSettingsValidationError
 
 router = APIRouter(prefix="/autonomous", tags=["autonomous-trading"])
@@ -27,6 +30,12 @@ _READ = Depends(
 _ACTIVITY_READ = Depends(
     tenant_rate_limit_dependency(
         "autonomous:activity:read", limit=120, window_seconds=3600, user_limit=120
+    )
+)
+# Own bucket so loading the page's bounds never throttles settings reads.
+_BOUNDS_READ = Depends(
+    tenant_rate_limit_dependency(
+        "autonomous:settings:bounds", limit=120, window_seconds=3600, user_limit=120
     )
 )
 _WRITE = Depends(
@@ -47,6 +56,20 @@ async def get_autonomous_trading_settings(
     service: AutonomousTradingSettingsServiceDep,
 ) -> AutonomousTradingSettingsView:
     return service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
+
+
+@router.get(
+    "/settings/bounds",
+    response_model=AutonomousSettingsBoundsView,
+    summary="Ceilings and configured bands the settings page renders (read-only)",
+    dependencies=[_BOUNDS_READ],
+)
+async def get_autonomous_settings_bounds(
+    tenant: ReaderDep,
+    settings: Settings = Depends(get_settings),
+) -> AutonomousSettingsBoundsView:
+    del tenant
+    return autonomous_settings_bounds(settings)
 
 
 @router.get(

@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { autonomousBounds } from "@/test/autonomous-bounds-fixtures";
+
 import { BotSettings } from "./BotSettings";
 
 const settings = {
@@ -58,6 +60,15 @@ const safetyPosture = {
 
 const useAsyncDataMock = vi.fn();
 
+const riskProfileProps = vi.fn();
+// Grade risk and leverage have their own load and tests (RiskProfileSections / LeverageSection).
+vi.mock("@/components/autonomous/RiskProfileSections", () => ({
+  RiskProfileSections: (props: Record<string, unknown>) => {
+    riskProfileProps(props);
+    return <section aria-label="Grade risk and leverage" />;
+  },
+}));
+
 // The activity panel has its own load and tests (BotActivityPanel.test.tsx).
 vi.mock("@/components/autonomous/BotActivityPanel", () => ({
   BotActivityPanel: () => <section aria-label="What the bot is doing" />,
@@ -80,6 +91,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     autonomous: {
       settings: vi.fn(),
+      bounds: vi.fn(),
       updateSettings: vi.fn(),
     },
     risk: {
@@ -115,6 +127,24 @@ describe("Autonomous trading settings form", () => {
       error: null,
       reload: vi.fn(),
     });
+  });
+
+  it("loads settings once and passes them and the bounds to the guardrails, grade risk and leverage", () => {
+    useAsyncDataMock.mockReturnValue({ data: [settings, account, autonomousBounds], loading: false, error: null, reload: vi.fn() });
+    render(<BotSettings />);
+    expect(screen.getByTestId("guardrails-stop-loss-band")).toHaveTextContent("1%–5% of equity per trade");
+    expect(riskProfileProps).toHaveBeenLastCalledWith({ settings, bounds: autonomousBounds });
+    expect(screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Grade risk and leverage",
+      "What the bot is doing",
+    ]);
+  });
+
+  it("still shows grade risk and leverage when the settings fail to load", () => {
+    useAsyncDataMock.mockReturnValue({ data: null, loading: false, error: "403", reload: vi.fn() });
+    render(<BotSettings />);
+    expect(screen.getByRole("region", { name: "Grade risk and leverage" })).toBeInTheDocument();
+    expect(riskProfileProps).toHaveBeenLastCalledWith({});
   });
 
   it("renders typed fields and selectors", () => {
