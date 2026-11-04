@@ -10,6 +10,7 @@ from app.observability.worker_memory import (
     CycleMemorySampler,
     WorkerMemoryDiagnostics,
     container_memory_fields,
+    container_oom_kill_count,
 )
 from app.workers.paper_worker import CycleOutcome, PaperWorkerSupervisor
 
@@ -278,3 +279,24 @@ def test_sampler_read_failure_stays_on_the_sampler(monkeypatch):
             {"component": "sampler", "error": "RuntimeError: sample_failed"},
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("low 0\nhigh 0\nmax 4\noom 2\noom_kill 1\noom_group_kill 0\n", 1),
+        ("low 0\nhigh 0\n", None),
+        ("oom_kill x\n", None),
+    ],
+)
+def test_container_oom_kill_count_reads_cgroup_events(text, expected, monkeypatch):
+    monkeypatch.setattr("app.observability.worker_memory.Path.read_text", lambda _path: text)
+    assert container_oom_kill_count() == expected
+
+
+def test_container_oom_kill_count_is_none_without_cgroup_v2(monkeypatch):
+    def missing(_path):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("app.observability.worker_memory.Path.read_text", missing)
+    assert container_oom_kill_count() is None

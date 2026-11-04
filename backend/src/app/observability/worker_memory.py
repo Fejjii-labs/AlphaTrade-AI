@@ -29,6 +29,7 @@ class WorkerMemoryDiagnostics:
             rss_peak_bytes=memory.peak_rss_bytes,
             threads=threading.active_count(),
             **container_memory_fields(),
+            container_oom_kills=container_oom_kill_count(),
         )
 
     def finish(self, component: str, sampler: CycleMemorySampler, after: ProcessMemory) -> None:
@@ -51,6 +52,7 @@ class WorkerMemoryDiagnostics:
             growth_bytes_per_hour=growth * 3600 / elapsed if elapsed > 0 else 0.0,
             threads=threading.active_count(),
             **container_memory_fields(),
+            container_oom_kills=container_oom_kill_count(),
         )
 
 
@@ -75,6 +77,29 @@ def container_memory_fields() -> dict[str, int | None]:
             maximum = None
         return {"container_memory_bytes": usage, "container_memory_limit_bytes": maximum}
     return {"container_memory_bytes": None, "container_memory_limit_bytes": None}
+
+
+def container_oom_kill_count() -> int | None:
+    """Cgroup v2 ``oom_kill`` total for this container, or None when unavailable.
+
+    The kernel may kill a short-lived second process in the container (a shell
+    session, a one-off script) while this worker keeps running. Process RSS and
+    the RSS watchdog never see that process. A rising count pins the kill to a
+    cycle in the worker's own log.
+    """
+
+    try:
+        text = Path("/sys/fs/cgroup/memory.events").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        name, _, value = line.partition(" ")
+        if name == "oom_kill":
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+    return None
 
 
 class CycleMemorySampler:
