@@ -358,6 +358,43 @@ def live_monitor_loss_needs_clock(
     return _counts_as_monitor_loss(net_pnl)
 
 
+def monitor_loss_needs_clock(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    net_pnl: Decimal | None,
+) -> bool:
+    """Whether a monitor loss, live or backfill, has to be aged on ``now()``."""
+
+    if live_monitor_loss_needs_clock(request, replayed=replayed, net_pnl=net_pnl):
+        return True
+    return backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl)
+
+
+def loss_is_true_backfill(
+    request: ClosePaperPlanRequest,
+    *,
+    evaluated_at: datetime | None,
+    candle_period: timedelta | None,
+    min_age: timedelta,
+) -> bool:
+    """True only when the close time is measurably at least ``min_age`` old.
+
+    The age is database ``now()`` minus the close's ``occurred_at``. This is
+    the only case that may skip the kill switch (AT-ADR-151). A late loss
+    younger than ``min_age`` is not a backfill, whatever its label. A missing
+    or naive clock, a naive close time, or an unreadable candle period fails
+    closed and returns false, so the switch still arms.
+    """
+
+    if candle_period is None or evaluated_at is None or evaluated_at.tzinfo is None:
+        return False
+    if request.occurred_at.tzinfo is None:
+        return False
+    age = evaluated_at.astimezone(UTC) - request.occurred_at.astimezone(UTC)
+    return age >= min_age
+
+
 def _older_than(age: timedelta, window: timedelta) -> bool:
     """Strictly older than a positive window. Zero and negative windows do not match."""
 

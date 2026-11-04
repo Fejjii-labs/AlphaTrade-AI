@@ -399,26 +399,36 @@ class CanonicalPaperExecutionService:
             self._session.refresh(trade)
             # A fresh live profile close feeds the consecutive streak and the
             # daily lock from the bar clock. A labelled backfill does not.
-            # A stale live loss does not either: that bar clock is already
-            # too old. Both are alerted; the kill switch arms for them only
-            # when paper_exit_kill_switch_on_stale_loss is set.
+            # A stale live loss and a backfill loss are alerted and arm the
+            # kill switch, except a true backfill (AT-ADR-151). A stale live
+            # loss that is not a true backfill is also noted at the close
+            # time (database now()), so the pause and the lock still bite.
             # No calibration sample is written: a backfill is ineligible, and
             # a live close has no walk-forward fold on this path.
+            margin_assumption_id = envelope.plan.risk_and_exits.margin_assumption_id
+            evaluated_at = _monitor_loss_clock(
+                self._session,
+                request,
+                replayed=projection.replayed,
+                net_pnl=trade.net_pnl,
+            )
+            candle_period = _candle_period(trade.timeframe)
             action = monitor_close_protection(
                 request,
                 replayed=projection.replayed,
-                margin_assumption_id=envelope.plan.risk_and_exits.margin_assumption_id,
+                margin_assumption_id=margin_assumption_id,
                 net_pnl=trade.net_pnl,
-                evaluated_at=_live_loss_clock(
-                    self._session,
-                    request,
-                    replayed=projection.replayed,
-                    net_pnl=trade.net_pnl,
-                ),
+                evaluated_at=evaluated_at,
                 pause_window=timedelta(
                     seconds=int(self._settings.paper_signal_cooldown_after_loss_seconds)
                 ),
-                candle_period=_candle_period(trade.timeframe),
+                candle_period=candle_period,
+            )
+            arm_kill_switch = _loss_arms_kill_switch(
+                request,
+                evaluated_at=evaluated_at,
+                candle_period=candle_period,
+                settings=self._settings,
             )
             if action == "note":
                 assert trade.net_pnl is not None
@@ -443,6 +453,7 @@ class CanonicalPaperExecutionService:
                     self._session,
                     request=request,
                     net_pnl=trade.net_pnl,
+                    arm_kill_switch=arm_kill_switch,
                     settings=self._settings,
                 )
             elif action == "stale_kill_switch":
@@ -451,8 +462,34 @@ class CanonicalPaperExecutionService:
                     self._session,
                     request=request,
                     net_pnl=trade.net_pnl,
+                    arm_kill_switch=arm_kill_switch,
                     settings=self._settings,
                 )
+                if stale_loss_notes_at_close_time(
+                    request,
+                    replayed=projection.replayed,
+                    margin_assumption_id=margin_assumption_id,
+                    net_pnl=trade.net_pnl,
+                    evaluated_at=evaluated_at,
+                    candle_period=candle_period,
+                    settings=self._settings,
+                ):
+                    assert evaluated_at is not None
+                    _consecutive, refused_new_trades = _note_profile_close(
+                        self._session,
+                        organization_id=request.organization_id,
+                        user_id=request.user_id,
+                        account_id=request.account_id,
+                        net_pnl=trade.net_pnl,
+                        now=evaluated_at,
+                    )
+                    logger.info(
+                        "stale_loss_noted_at_close_time",
+                        organization_id=str(request.organization_id),
+                        account_id=str(request.account_id),
+                        consecutive_losses=_consecutive,
+                        refused_new_trades=refused_new_trades,
+                    )
             if (
                 trade.entry_price is None
                 or trade.exit_price is None
@@ -742,8 +779,8 @@ def monitor_close_protection(
     """Choose the breaker write for one paper close.
 
     The labelled ``>=24h`` backfill path is first and is unchanged. A stale
-    live loss is alerted, and arms the kill switch only when
-    ``paper_exit_kill_switch_on_stale_loss`` is set. A fresh live profile
+    live loss is alerted and protected. Whether either arms the kill switch
+    is :func:`_loss_arms_kill_switch` (AT-ADR-151). A fresh live profile
     close, a human close, and a stale win still note at the bar time.
     """
 
@@ -770,20 +807,73 @@ def monitor_close_protection(
     return "skip"
 
 
-def _live_loss_clock(
+def stale_loss_notes_at_close_time(
+    request: ClosePaperPlanRequest,
+    *,
+    replayed: bool,
+    margin_assumption_id: str,
+    net_pnl: Decimal | None,
+    evaluated_at: datetime | None,
+    candle_period: timedelta | None,
+    settings: Settings,
+) -> bool:
+    """Whether a stale live loss also feeds the streak and the daily lock.
+
+    Only for a profile close that is not a true backfill, and only with an
+    aware database clock to key the note on. Without that clock the kill
+    switch is armed instead (fail closed); the old bar clock is not written.
+    """
+
+    from app.services.paper_exit_monitor import loss_is_true_backfill
+
+    if evaluated_at is None or evaluated_at.tzinfo is None:
+        return False
+    if not profile_close_should_note(
+        request,
+        replayed=replayed,
+        margin_assumption_id=margin_assumption_id,
+        net_pnl=net_pnl,
+    ):
+        return False
+    return not loss_is_true_backfill(
+        request,
+        evaluated_at=evaluated_at,
+        candle_period=candle_period,
+        min_age=timedelta(seconds=int(settings.paper_exit_backfill_loss_min_age_seconds)),
+    )
+
+
+def _monitor_loss_clock(
     session: Session,
     request: ClosePaperPlanRequest,
     *,
     replayed: bool,
     net_pnl: Decimal | None,
 ) -> datetime | None:
-    """Database ``now()`` when a live monitor loss has to be aged. Otherwise None."""
+    """Database ``now()`` when a monitor loss has to be aged. Otherwise None."""
 
-    from app.services.paper_exit_monitor import database_now, live_monitor_loss_needs_clock
+    from app.services.paper_exit_monitor import database_now, monitor_loss_needs_clock
 
-    if not live_monitor_loss_needs_clock(request, replayed=replayed, net_pnl=net_pnl):
+    if not monitor_loss_needs_clock(request, replayed=replayed, net_pnl=net_pnl):
         return None
     return database_now(session)
+
+
+def _loss_arms_kill_switch(
+    request: ClosePaperPlanRequest,
+    *,
+    evaluated_at: datetime | None,
+    candle_period: timedelta | None,
+    settings: Settings,
+) -> bool:
+    from app.services.paper_exit_protection import loss_arms_kill_switch
+
+    return loss_arms_kill_switch(
+        request,
+        evaluated_at=evaluated_at,
+        candle_period=candle_period,
+        settings=settings,
+    )
 
 
 def _candle_period(timeframe: object) -> timedelta | None:
@@ -815,6 +905,7 @@ def _protect_backfill_loss(
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
+    arm_kill_switch: bool,
     settings: Settings,
 ) -> None:
     from app.services.paper_exit_protection import protect_account_from_backfill_loss
@@ -823,6 +914,7 @@ def _protect_backfill_loss(
         session,
         request=request,
         net_pnl=net_pnl,
+        arm_kill_switch=arm_kill_switch,
         settings=settings,
     )
 
@@ -832,6 +924,7 @@ def _protect_stale_live_loss(
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
+    arm_kill_switch: bool,
     settings: Settings,
 ) -> None:
     from app.services.paper_exit_protection import protect_account_from_stale_live_loss
@@ -840,6 +933,7 @@ def _protect_stale_live_loss(
         session,
         request=request,
         net_pnl=net_pnl,
+        arm_kill_switch=arm_kill_switch,
         settings=settings,
     )
 

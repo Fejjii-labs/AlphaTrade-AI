@@ -292,12 +292,16 @@ class Settings(BaseSettings):
     # time when that source is supplied. A larger gap refuses the cycle.
     # Default 15 seconds. This does not arm the monitor.
     paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
-    # A losing paper close whose bar is already too old for the live loss
-    # pause (stale live), or a historical backfill, is journaled and alerted.
-    # It arms the organization kill switch only when this is true. Default
-    # false: the trade is already closed, so it is not a current risk. Fresh
-    # live closes still feed the streak, the daily lock and the drawdown latch.
-    paper_exit_kill_switch_on_stale_loss: bool = False
+    # A losing paper close is a true backfill when its close time is at least
+    # this old on the database clock (default 24h). Only a true backfill may
+    # skip arming the organization kill switch. It can only be raised: a
+    # lower bound would let a late current loss skip the switch.
+    paper_exit_backfill_loss_min_age_seconds: int = Field(default=86400, ge=86400, le=30 * 86400)
+    # When true, a true-backfill loss arms the kill switch too (AT-ADR-127).
+    # Default false: that trade closed a day or more ago, so it is journaled
+    # and alerted only. A stale live loss younger than the bound always arms,
+    # and a missing database clock or candle period always arms (AT-ADR-151).
+    paper_exit_kill_switch_on_backfill_loss: bool = False
     # Adverse fraction applied when a paper quote has no bid and ask.
     # This is the non-major default (5bp). BTC and ETH use the major haircut.
     # Longs pay mid * (1 + haircut). Shorts receive mid * (1 - haircut).

@@ -2,6 +2,52 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-151 — Only a true backfill loss may skip the kill switch (amends AT-ADR-127/128)
+
+- Date: 2026-11-04
+- Context: Staging trade eb76b033 (a stop hit journaled about a day late with
+  a live label) armed the kill switch through the AT-ADR-128 stale path and
+  blocked all scans. The first fix in PR #433 stopped arming for every stale
+  or backfill loss by default. Griller found that too wide: a 15m trade closed
+  more than one candle late after an OOM restart, a monitor outage, the #432
+  close backoff, or a late bar was classed stale and left no blocking effect.
+  The fail-closed branches (missing clock, unreadable timeframe) also became
+  fail-open.
+- Decision:
+  - A true backfill is a losing close whose `occurred_at` is at least
+    `paper_exit_backfill_loss_min_age_seconds` old on database `now()`
+    (default 86400, minimum 86400, maximum 30 days), whatever its
+    `exit_origin` label. Only a true backfill may skip arming the kill
+    switch. It does so while `paper_exit_kill_switch_on_backfill_loss` is
+    false (the default). It is still journaled and alerted with
+    `refusal=none`, and it still does not move the streak or the daily lock
+    (AT-ADR-127 unchanged there).
+  - Every other AT-ADR-127/128 loss arms as before, including a labelled
+    backfill whose database age is under the bound.
+  - Amends AT-ADR-128: a stale live loss that is not a true backfill also
+    feeds the consecutive-loss streak and the daily lock, keyed by the close
+    time (database `now()` when the close is recorded), not by the old bar.
+    The journal `exit_time` stays the bar end. AT-ADR-128 rejected restamping
+    because it makes outage losses look current; the kill switch is armed
+    for them anyway, so the extra pause and lock only add protection. Known
+    limit: the daily lock's realized PnL still sums by journal time, so a
+    loss whose bar ended on the previous UTC day may not count toward
+    today's figure. The streak and the kill switch still bite.
+  - Fail closed, whatever the flag: a missing or naive database clock, a
+    naive close time, or an unreadable candle period cannot prove a close
+    old, so it is never a true backfill and always arms. Without a database
+    clock the stale note is not written (no trusted close time), and the
+    kill switch covers it.
+  - Audit: the alert audit row is `risk_block`/`blocked` only when the
+    switch was armed. A true backfill that was not armed records
+    `risk_warning`/`warning`.
+- Not chosen: relaxing every stale loss behind a default-off flag (the first
+  PR #433 head); lowering the bound below a day.
+- Safety: Paper only. No live order path, environment, or blueprint change.
+  The flag defaults keep every non-backfill loss blocking.
+- Reference: AT-ADR-127; AT-ADR-128; PR #433; Griller review 2026-11-04;
+  `docs/paper_exit_monitor.md`.
+
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped
 
 - Date: 2026-10-22

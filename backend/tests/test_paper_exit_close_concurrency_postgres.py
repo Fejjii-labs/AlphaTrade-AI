@@ -28,12 +28,14 @@ from app.db.risk_policy import RiskPolicyBreakerState
 from app.schemas.common import (
     ActorType,
     AuditEventType,
+    AuditResult,
     JournalLifecycleEventType,
     JournalTradeStatus,
     PaperAlertType,
     TradeDirection,
 )
 from app.schemas.execution_protocol import ClosePaperPlanRequest
+from app.services import canonical_paper_execution
 from app.workers.paper_exit_monitor import read_database_now
 from tests.support.phase8_runtime import (
     EXECUTE_AT,
@@ -225,8 +227,8 @@ def _close_labeled(
         session.close()
 
 
-def _arm_on_stale_loss(monkeypatch: pytest.MonkeyPatch, arm: bool) -> None:
-    monkeypatch.setenv("PAPER_EXIT_KILL_SWITCH_ON_STALE_LOSS", "true" if arm else "false")
+def _arm_on_backfill_loss(monkeypatch: pytest.MonkeyPatch, arm: bool) -> None:
+    monkeypatch.setenv("PAPER_EXIT_KILL_SWITCH_ON_BACKFILL_LOSS", "true" if arm else "false")
 
 
 def _assert_not_armed(session: Session, organization_id: object) -> None:
@@ -243,14 +245,51 @@ def _assert_not_armed(session: Session, organization_id: object) -> None:
     assert audit is None
 
 
+def _assert_armed(session: Session, organization_id: object, reason_part: str) -> None:
+    switch = session.scalar(
+        select(KillSwitchState).where(KillSwitchState.organization_id == organization_id)
+    )
+    assert switch is not None
+    assert switch.active is True
+    assert switch.activated_by is None
+    assert reason_part in (switch.reason or "")
+    audit = session.scalar(
+        select(AuditLog).where(
+            AuditLog.organization_id == organization_id,
+            AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+        )
+    )
+    assert audit is not None
+    assert audit.actor_type is ActorType.SYSTEM
+    assert audit.user_id is None
+
+
+def _assert_alert_audit(session: Session, organization_id: object, *, blocked: bool) -> None:
+    """The alert audit row says BLOCKED only when the kill switch was armed."""
+
+    rows = session.scalars(
+        select(AuditLog).where(
+            AuditLog.organization_id == organization_id,
+            AuditLog.resource_type == "paper_exit_monitor",
+        )
+    ).all()
+    assert len(rows) == 1
+    if blocked:
+        assert rows[0].action == AuditEventType.RISK_BLOCK
+        assert rows[0].result == AuditResult.BLOCKED
+    else:
+        assert rows[0].action == AuditEventType.RISK_WARNING
+        assert rows[0].result == AuditResult.WARNING
+
+
 @requires_postgres
 @pytest.mark.parametrize("arm", [False, True], ids=["default_alert_only", "opt_in_arms"])
 def test_losing_backfill_alerts_and_arms_only_when_configured(
     monkeypatch: pytest.MonkeyPatch, arm: bool
 ) -> None:
-    """A closed historical loss is not a current risk unless the flag opts in."""
+    """A loss closed a day or more ago is a true backfill: arming is opt-in."""
 
-    _arm_on_stale_loss(monkeypatch, arm)
+    _arm_on_backfill_loss(monkeypatch, arm)
     factory = _factory()
     envelope, command_id = _open_fill(factory, key=f"exit-backfill-loss-{arm}")
     plan = envelope.plan  # type: ignore[attr-defined]
@@ -315,6 +354,7 @@ def test_losing_backfill_alerts_and_arms_only_when_configured(
         assert metadata.get("net_loss") == "true"
         assert metadata.get("refusal") == ("kill_switch" if arm else "none")
         assert metadata.get("exit_origin") == "backfill"
+        _assert_alert_audit(session, plan.organization_id, blocked=arm)
         breaker = session.scalar(
             select(RiskPolicyBreakerState).where(
                 RiskPolicyBreakerState.organization_id == plan.organization_id,
@@ -390,17 +430,16 @@ def _assert_breakers_untouched(
     assert locked == []
 
 
-@requires_postgres
-@pytest.mark.parametrize("arm", [False, True], ids=["default_alert_only", "opt_in_arms"])
-def test_six_hour_live_loss_arms_only_when_configured_without_moving_breakers(
-    monkeypatch: pytest.MonkeyPatch, arm: bool
-) -> None:
-    """A loss about 6h old is labelled live. It is alerted; arming is opt-in."""
+def _losing_close(
+    factory: sessionmaker[Session],
+    key: str,
+    *,
+    origin: str,
+    age: timedelta | None,
+) -> tuple[object, object, datetime | None]:
+    """Close one losing trade ``age`` before database now(). None keeps the fixture bar."""
 
-    _arm_on_stale_loss(monkeypatch, arm)
-    factory = _factory()
-    envelope, command_id = _open_fill(factory, key=f"exit-stale-live-loss-{arm}")
-    plan = envelope.plan  # type: ignore[attr-defined]
+    envelope, command_id = _open_fill(factory, key=key)
     with factory() as session:
         trusted = read_database_now(session)
         trade = session.scalar(
@@ -410,16 +449,46 @@ def test_six_hour_live_loss_arms_only_when_configured_without_moving_breakers(
         assert trade is not None
         assert trade.entry_price is not None
         exit_price = _loss_exit(trade.direction, trade.entry_price)
-    occurred = trusted - timedelta(hours=6)
+    occurred = None if age is None else trusted - age
     result = _close_labeled(
         factory,
         envelope,
         command_id,
         exit_price=exit_price,
-        origin="live",
+        origin=origin,
         occurred_at=occurred,
     )
     assert result.net_pnl < 0  # type: ignore[attr-defined]
+    return envelope.plan, command_id, occurred  # type: ignore[attr-defined]
+
+
+def _stale_alert_refusal(session: Session, organization_id: object) -> str | None:
+    alert = session.scalar(
+        select(PaperValidationAlert).where(
+            PaperValidationAlert.organization_id == organization_id,
+            PaperValidationAlert.alert_type == PaperAlertType.PAPER_EXIT_STALE_LOSS,
+        )
+    )
+    assert alert is not None
+    metadata = alert.metadata_json or {}
+    assert metadata.get("exit_origin") == "live"
+    assert "net_pnl" not in metadata
+    return metadata.get("refusal")
+
+
+@requires_postgres
+@pytest.mark.parametrize("arm", [False, True], ids=["flag_off", "flag_on"])
+def test_six_hour_live_loss_always_arms_the_kill_switch(
+    monkeypatch: pytest.MonkeyPatch, arm: bool
+) -> None:
+    """A loss about 6h late is current risk, not a backfill: it arms whatever the flag."""
+
+    _arm_on_backfill_loss(monkeypatch, arm)
+    factory = _factory()
+    plan, command_id, occurred = _losing_close(
+        factory, f"exit-stale-live-loss-{arm}", origin="live", age=timedelta(hours=6)
+    )
+    assert occurred is not None
     with factory() as session:
         trade = session.scalar(
             select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command_id)
@@ -427,40 +496,124 @@ def test_six_hour_live_loss_arms_only_when_configured_without_moving_breakers(
         assert trade is not None
         assert trade.exit_time is not None
         assert abs(trade.exit_time - occurred) < timedelta(seconds=1)
+        _assert_armed(session, plan.organization_id, "too old")
+        assert _stale_alert_refusal(session, plan.organization_id) == "kill_switch"
+        _assert_alert_audit(session, plan.organization_id, blocked=True)
+
+
+@requires_postgres
+def test_late_loss_under_a_day_arms_even_with_a_backfill_label() -> None:
+    """The age on the database clock decides, not the label: 2h late still arms."""
+
+    factory = _factory()
+    plan, _command_id, _occurred = _losing_close(
+        factory, "exit-backfill-label-2h", origin="backfill", age=timedelta(hours=2)
+    )
+    with factory() as session:
+        _assert_armed(session, plan.organization_id, "historical backfill")
+        _assert_alert_audit(session, plan.organization_id, blocked=True)
+        _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
+
+
+@requires_postgres
+@pytest.mark.parametrize("arm", [False, True], ids=["default_alert_only", "opt_in_arms"])
+def test_live_labelled_loss_a_day_old_is_a_true_backfill(
+    monkeypatch: pytest.MonkeyPatch, arm: bool
+) -> None:
+    """The eb76b033 shape: labelled live, closed 25h ago. Alert only by default."""
+
+    _arm_on_backfill_loss(monkeypatch, arm)
+    noted: list[datetime] = []
+    monkeypatch.setattr(
+        canonical_paper_execution,
+        "_note_profile_close",
+        lambda *_a, **kw: noted.append(kw["now"]) or (1, False),
+    )
+    monkeypatch.setattr(
+        canonical_paper_execution, "profile_close_should_note", lambda *_a, **_k: True
+    )
+    factory = _factory()
+    plan, _command_id, _occurred = _losing_close(
+        factory, f"exit-live-25h-{arm}", origin="live", age=timedelta(hours=25)
+    )
+    assert noted == []
+    with factory() as session:
         if arm:
-            switch = session.scalar(
-                select(KillSwitchState).where(
-                    KillSwitchState.organization_id == plan.organization_id
-                )
-            )
-            assert switch is not None
-            assert switch.active is True
-            assert switch.activated_by is None
-            assert "too old" in (switch.reason or "")
+            _assert_armed(session, plan.organization_id, "too old")
         else:
             _assert_not_armed(session, plan.organization_id)
-        alert = session.scalar(
-            select(PaperValidationAlert).where(
-                PaperValidationAlert.organization_id == plan.organization_id,
-                PaperValidationAlert.alert_type == PaperAlertType.PAPER_EXIT_STALE_LOSS,
-            )
-        )
-        assert alert is not None
-        metadata = alert.metadata_json or {}
-        assert metadata.get("refusal") == ("kill_switch" if arm else "none")
-        assert metadata.get("exit_origin") == "live"
-        assert "net_pnl" not in metadata
-        if arm:
-            audit = session.scalar(
-                select(AuditLog).where(
-                    AuditLog.organization_id == plan.organization_id,
-                    AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
-                )
-            )
-            assert audit is not None
-            assert audit.actor_type is ActorType.SYSTEM
-            assert audit.user_id is None
+        refusal = _stale_alert_refusal(session, plan.organization_id)
+        assert refusal == ("kill_switch" if arm else "none")
+        _assert_alert_audit(session, plan.organization_id, blocked=arm)
         _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
+
+
+@requires_postgres
+def test_stale_live_loss_feeds_streak_and_daily_lock_at_close_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 2h-late profile loss is noted at database now(), not at the old bar."""
+
+    noted: list[datetime] = []
+    monkeypatch.setattr(
+        canonical_paper_execution,
+        "_note_profile_close",
+        lambda *_a, **kw: noted.append(kw["now"]) or (1, False),
+    )
+    # The Postgres plan fixture is cross-margin. Treat it as a profile close.
+    monkeypatch.setattr(
+        canonical_paper_execution, "profile_close_should_note", lambda *_a, **_k: True
+    )
+    factory = _factory()
+    plan, _command_id, occurred = _losing_close(
+        factory, "exit-stale-live-note", origin="live", age=timedelta(hours=2)
+    )
+    assert occurred is not None
+    assert len(noted) == 1
+    assert noted[0] - occurred >= timedelta(hours=2)
+    with factory() as session:
+        trusted = read_database_now(session)
+        assert trusted is not None
+        assert abs(trusted - noted[0]) < timedelta(minutes=1)
+        _assert_armed(session, plan.organization_id, "noted on the live streak")
+
+
+@requires_postgres
+def test_missing_database_clock_fails_closed_and_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No database clock: a day-old backfill cannot be proven old, so it arms."""
+
+    _arm_on_backfill_loss(monkeypatch, False)
+    noted: list[datetime] = []
+    monkeypatch.setattr(canonical_paper_execution, "_monitor_loss_clock", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        canonical_paper_execution,
+        "_note_profile_close",
+        lambda *_a, **kw: noted.append(kw["now"]) or (1, False),
+    )
+    factory = _factory()
+    plan, _command_id, _occurred = _losing_close(
+        factory, "exit-backfill-no-clock", origin="backfill", age=None
+    )
+    assert noted == []
+    with factory() as session:
+        _assert_armed(session, plan.organization_id, "historical backfill")
+        _assert_alert_audit(session, plan.organization_id, blocked=True)
+
+
+@requires_postgres
+def test_missing_candle_period_fails_closed_and_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreadable timeframe on a 25h-old live loss arms even with the flag off."""
+
+    _arm_on_backfill_loss(monkeypatch, False)
+    monkeypatch.setattr(canonical_paper_execution, "_candle_period", lambda _timeframe: None)
+    factory = _factory()
+    plan, _command_id, _occurred = _losing_close(
+        factory, "exit-live-no-candle", origin="live", age=timedelta(hours=25)
+    )
+    with factory() as session:
+        _assert_armed(session, plan.organization_id, "too old")
+        assert _stale_alert_refusal(session, plan.organization_id) == "kill_switch"
+        _assert_alert_audit(session, plan.organization_id, blocked=True)
 
 
 @requires_postgres

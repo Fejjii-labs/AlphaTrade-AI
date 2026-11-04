@@ -173,29 +173,40 @@ Equality with either bound still notes. A winning close still notes at the
 bar's end, including one processed after midnight.
 
 A losing close that is labelled live, and that is older than the cooldown
-or older than one candle, does not call that note. The bar clock would
-write a pause that has already expired, or a daily lock on the previous
-UTC day. The close stays journaled with `exit_origin=live`. The path raises
-`paper_exit_stale_loss`. It arms the organization kill switch (AT-ADR-128)
-only when `paper_exit_kill_switch_on_stale_loss` is true. The default is
-false: the trade is already closed, so it is not a current risk, and the
-path logs `paper_exit_stale_loss_kill_switch_skipped` with alert
-`refusal=none` instead.
-Writing the breakers at the current database time was the other option and
-is not used. A replay does not ask again. A zero result does not arm the
-switch.
+or older than one candle, does not call the note at the bar's end. The bar
+clock would write a pause that has already expired, or a daily lock on the
+previous UTC day. The close stays journaled with `exit_origin=live`. The
+path raises `paper_exit_stale_loss` and arms the organization kill switch
+(AT-ADR-128). Unless it is a true backfill (below), the same loss is also
+noted on the consecutive-loss streak and the daily lock at the close time,
+which is database `now()` when the close is recorded (AT-ADR-151). A late
+close from a worker restart, a monitor outage, the close backoff, or a late
+bar is therefore still current risk. A replay does not ask again. A zero
+result does not arm the switch.
 
 A backfill is journaled and does not call that note, so it does not move
 the streak or the daily lock, and it is not an ADR-109 calibration sample.
 A backfill with a net loss raises the structured alert
-`paper_exit_backfill_loss`. Under the same flag it arms the organization
-kill switch, which refuses new entries until a human deactivates it
-(AT-ADR-127); by default it only logs and alerts. A winning or zero backfill does not. Noting the loss onto the
-live streak or the daily lock was the other option and is not used, because
-those figures are dated from the old bar and do not block today's entries.
+`paper_exit_backfill_loss` and arms the organization kill switch, which
+refuses new entries until a human deactivates it (AT-ADR-127). A winning or
+zero backfill does not. Noting the loss onto the live streak or the daily
+lock was the other option and is not used, because those figures are dated
+from the old bar and do not block today's entries.
+
+Only a true backfill may skip the kill switch (AT-ADR-151). A true backfill
+is a losing close whose `occurred_at` is at least
+`paper_exit_backfill_loss_min_age_seconds` old (default 86400, minimum
+86400) on the database clock, whatever its label. It is journaled and
+alerted with `refusal=none`, its audit row is `risk_warning`/`warning`
+rather than `risk_block`/`blocked`, and the path logs
+`paper_exit_backfill_loss_kill_switch_skipped`. Setting
+`paper_exit_kill_switch_on_backfill_loss=true` arms it too. A missing or
+naive database clock, a naive close time, or an unreadable candle period
+can never prove a close old, so those paths always arm, whatever the flag.
 This path does not insert a calibration row for a live close either: the
-walk-forward fold is not known here. Both opt-in kill-switch armings are
-audited as the system. The trade owner is not stored as the person who armed it.
+walk-forward fold is not known here. Every kill-switch arming here is
+audited as the system. The trade owner is not stored as the person who
+armed it.
 
 A human close leaves those fields unset.
 
