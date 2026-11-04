@@ -249,14 +249,16 @@ def test_expired_dedup_keys_are_dropped_and_live_ones_still_suppress() -> None:
     for index in range(300):
         safety_alerts._remember(f"stop_hit:{index}", start)
     later = start + timedelta(days=1)
+    # Two hours old: past the 900 s codes, still inside the one-day ones.
+    safety_alerts._remember("backfill_loss:org:cmd", later - timedelta(hours=2))
     safety_alerts._remember("stop_hit:new", later)
     # One day is the longest cooldown, so the 300 old keys can no longer dedup.
-    assert set(safety_alerts._SENT) == {"stop_hit:new"}
+    assert set(safety_alerts._SENT) == {"stop_hit:new", "backfill_loss:org:cmd"}
     assert safety_alerts._recently_sent("stop_hit:new", later, timedelta(seconds=900))
 
     for index in range(300):
         safety_alerts._remember(f"live:{index}", later + timedelta(seconds=index))
-    assert len(safety_alerts._SENT) == 301
+    assert len(safety_alerts._SENT) == 302
     assert safety_alerts._recently_sent(
         "live:0", later + timedelta(seconds=300), timedelta(hours=1)
     )
