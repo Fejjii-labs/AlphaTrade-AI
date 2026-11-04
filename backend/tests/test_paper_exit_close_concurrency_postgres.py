@@ -11,6 +11,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -224,10 +225,34 @@ def _close_labeled(
         session.close()
 
 
+def _arm_on_stale_loss(monkeypatch: pytest.MonkeyPatch, arm: bool) -> None:
+    monkeypatch.setenv("PAPER_EXIT_KILL_SWITCH_ON_STALE_LOSS", "true" if arm else "false")
+
+
+def _assert_not_armed(session: Session, organization_id: object) -> None:
+    switch = session.scalar(
+        select(KillSwitchState).where(KillSwitchState.organization_id == organization_id)
+    )
+    assert switch is None or switch.active is False
+    audit = session.scalar(
+        select(AuditLog).where(
+            AuditLog.organization_id == organization_id,
+            AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+        )
+    )
+    assert audit is None
+
+
 @requires_postgres
-def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
+@pytest.mark.parametrize("arm", [False, True], ids=["default_alert_only", "opt_in_arms"])
+def test_losing_backfill_alerts_and_arms_only_when_configured(
+    monkeypatch: pytest.MonkeyPatch, arm: bool
+) -> None:
+    """A closed historical loss is not a current risk unless the flag opts in."""
+
+    _arm_on_stale_loss(monkeypatch, arm)
     factory = _factory()
-    envelope, command_id = _open_fill(factory, key="exit-backfill-loss")
+    envelope, command_id = _open_fill(factory, key=f"exit-backfill-loss-{arm}")
     plan = envelope.plan  # type: ignore[attr-defined]
     with factory() as session:
         trade = session.scalar(
@@ -256,23 +281,28 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         assert isinstance(evidence, dict)
         assert evidence.get("candle_venue") == "bybit"
     with factory() as session:
-        switch = session.scalar(
-            select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
-        )
-        assert switch is not None
-        assert switch.active is True
-        assert switch.activated_by is None
-        assert "not folded into the live streak" in (switch.reason or "")
-        audit = session.scalar(
-            select(AuditLog).where(
-                AuditLog.organization_id == plan.organization_id,
-                AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+        if arm:
+            switch = session.scalar(
+                select(KillSwitchState).where(
+                    KillSwitchState.organization_id == plan.organization_id
+                )
             )
-        )
-        assert audit is not None
-        assert audit.actor_type is ActorType.SYSTEM
-        assert audit.user_id is None
-        assert audit.actor == "system"
+            assert switch is not None
+            assert switch.active is True
+            assert switch.activated_by is None
+            assert "not folded into the live streak" in (switch.reason or "")
+            audit = session.scalar(
+                select(AuditLog).where(
+                    AuditLog.organization_id == plan.organization_id,
+                    AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+                )
+            )
+            assert audit is not None
+            assert audit.actor_type is ActorType.SYSTEM
+            assert audit.user_id is None
+            assert audit.actor == "system"
+        else:
+            _assert_not_armed(session, plan.organization_id)
         alert = session.scalar(
             select(PaperValidationAlert).where(
                 PaperValidationAlert.organization_id == plan.organization_id,
@@ -283,7 +313,7 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         assert alert.severity.value == "critical"
         metadata = alert.metadata_json or {}
         assert metadata.get("net_loss") == "true"
-        assert metadata.get("refusal") == "kill_switch"
+        assert metadata.get("refusal") == ("kill_switch" if arm else "none")
         assert metadata.get("exit_origin") == "backfill"
         breaker = session.scalar(
             select(RiskPolicyBreakerState).where(
@@ -361,11 +391,15 @@ def _assert_breakers_untouched(
 
 
 @requires_postgres
-def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> None:
-    """A loss about 6h old is labelled live and still gets working protection."""
+@pytest.mark.parametrize("arm", [False, True], ids=["default_alert_only", "opt_in_arms"])
+def test_six_hour_live_loss_arms_only_when_configured_without_moving_breakers(
+    monkeypatch: pytest.MonkeyPatch, arm: bool
+) -> None:
+    """A loss about 6h old is labelled live. It is alerted; arming is opt-in."""
 
+    _arm_on_stale_loss(monkeypatch, arm)
     factory = _factory()
-    envelope, command_id = _open_fill(factory, key="exit-stale-live-loss")
+    envelope, command_id = _open_fill(factory, key=f"exit-stale-live-loss-{arm}")
     plan = envelope.plan  # type: ignore[attr-defined]
     with factory() as session:
         trusted = read_database_now(session)
@@ -393,13 +427,18 @@ def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> No
         assert trade is not None
         assert trade.exit_time is not None
         assert abs(trade.exit_time - occurred) < timedelta(seconds=1)
-        switch = session.scalar(
-            select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
-        )
-        assert switch is not None
-        assert switch.active is True
-        assert switch.activated_by is None
-        assert "too old" in (switch.reason or "")
+        if arm:
+            switch = session.scalar(
+                select(KillSwitchState).where(
+                    KillSwitchState.organization_id == plan.organization_id
+                )
+            )
+            assert switch is not None
+            assert switch.active is True
+            assert switch.activated_by is None
+            assert "too old" in (switch.reason or "")
+        else:
+            _assert_not_armed(session, plan.organization_id)
         alert = session.scalar(
             select(PaperValidationAlert).where(
                 PaperValidationAlert.organization_id == plan.organization_id,
@@ -408,18 +447,19 @@ def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> No
         )
         assert alert is not None
         metadata = alert.metadata_json or {}
-        assert metadata.get("refusal") == "kill_switch"
+        assert metadata.get("refusal") == ("kill_switch" if arm else "none")
         assert metadata.get("exit_origin") == "live"
         assert "net_pnl" not in metadata
-        audit = session.scalar(
-            select(AuditLog).where(
-                AuditLog.organization_id == plan.organization_id,
-                AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+        if arm:
+            audit = session.scalar(
+                select(AuditLog).where(
+                    AuditLog.organization_id == plan.organization_id,
+                    AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
+                )
             )
-        )
-        assert audit is not None
-        assert audit.actor_type is ActorType.SYSTEM
-        assert audit.user_id is None
+            assert audit is not None
+            assert audit.actor_type is ActorType.SYSTEM
+            assert audit.user_id is None
         _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
 
 

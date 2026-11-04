@@ -286,6 +286,12 @@ class Settings(BaseSettings):
     # time when that source is supplied. A larger gap refuses the cycle.
     # Default 15 seconds. This does not arm the monitor.
     paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # A losing paper close whose bar is already too old for the live loss
+    # pause (stale live), or a historical backfill, is journaled and alerted.
+    # It arms the organization kill switch only when this is true. Default
+    # false: the trade is already closed, so it is not a current risk. Fresh
+    # live closes still feed the streak, the daily lock and the drawdown latch.
+    paper_exit_kill_switch_on_stale_loss: bool = False
     # Adverse fraction applied when a paper quote has no bid and ask.
     # This is the non-major default (5bp). BTC and ETH use the major haircut.
     # Longs pay mid * (1 + haircut). Shorts receive mid * (1 - haircut).

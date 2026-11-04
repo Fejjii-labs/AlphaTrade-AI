@@ -1,10 +1,11 @@
 """Protect the account after a paper-exit loss the live breakers cannot cover.
 
 The close stays journaled. The live consecutive-loss streak and the daily
-lock are not rewritten from a backfill or from a stale bar clock. New entries
-are refused by the organization kill switch until a human deactivates it.
-The arming is audited as the system. A paper alert and an audit row record
-that refusal. This module does not place an order.
+lock are not rewritten from a backfill or from a stale bar clock. A paper
+alert and an audit row record the loss. The trade is already closed, so it is
+not a current risk: the organization kill switch is armed only when
+``Settings.paper_exit_kill_switch_on_stale_loss`` is true (default false).
+An arming is audited as the system. This module does not place an order.
 """
 
 from __future__ import annotations
@@ -57,46 +58,48 @@ _ALERT_TYPES = {
 }
 
 
-def build_backfill_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAlert:
+def build_backfill_loss_alert(
+    request: ClosePaperPlanRequest, *, arm_kill_switch: bool = True
+) -> ExitMonitorAlert:
     """Structured alert for one losing backfill. The PnL amount is not included."""
 
+    message = "A historical backfill close recorded a net loss."
     return ExitMonitorAlert(
         code="backfill_loss",
         severity="critical",
-        message=(
-            "A historical backfill close recorded a net loss. "
-            "New entries are refused until a human deactivates the kill switch."
-        ),
+        message=message + _refusal_text(arm_kill_switch),
         fields={
             "exit_origin": "backfill",
             "net_loss": "true",
             "command_id": str(request.command_id),
             "organization_id": str(request.organization_id),
             "account_id": str(request.account_id),
-            "refusal": "kill_switch",
+            "refusal": _refusal(arm_kill_switch),
             "dedup_key": f"backfill_loss:{request.organization_id}:{request.command_id}",
         },
     )
 
 
-def build_stale_live_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAlert:
+def build_stale_live_loss_alert(
+    request: ClosePaperPlanRequest, *, arm_kill_switch: bool = True
+) -> ExitMonitorAlert:
     """Structured alert for one stale live loss. The PnL amount is not included."""
 
+    message = (
+        "A losing close is older than the loss pause or one candle, "
+        "and younger than a historical backfill."
+    )
     return ExitMonitorAlert(
         code="stale_live_loss",
         severity="critical",
-        message=(
-            "A losing close is older than the loss pause or one candle, "
-            "and younger than a historical backfill. "
-            "New entries are refused until a human deactivates the kill switch."
-        ),
+        message=message + _refusal_text(arm_kill_switch),
         fields={
             "exit_origin": "live",
             "net_loss": "true",
             "command_id": str(request.command_id),
             "organization_id": str(request.organization_id),
             "account_id": str(request.account_id),
-            "refusal": "kill_switch",
+            "refusal": _refusal(arm_kill_switch),
             "dedup_key": f"stale_live_loss:{request.organization_id}:{request.command_id}",
         },
     )
@@ -109,7 +112,9 @@ def protect_account_from_backfill_loss(
     net_pnl: Decimal,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Alert and arm the kill switch. Does not move the streak or the daily lock.
+    """Alert, and arm the kill switch only when configured.
+
+    Does not move the streak or the daily lock.
 
     ``net_pnl`` is accepted so the caller has already required a real loss.
     The amount is not stored on the alert. The kill switch and the alert
@@ -118,10 +123,12 @@ def protect_account_from_backfill_loss(
 
     if not isinstance(net_pnl, Decimal):
         raise TypeError("backfill loss protection requires a decimal net pnl")
+    arm = _arm_on_stale_loss(settings)
     return _protect(
         session,
         request=request,
-        alert=build_backfill_loss_alert(request),
+        alert=build_backfill_loss_alert(request, arm_kill_switch=arm),
+        arm_kill_switch=arm,
         reason=BACKFILL_LOSS_KILL_REASON,
         settings=settings,
     )
@@ -134,7 +141,7 @@ def protect_account_from_stale_live_loss(
     net_pnl: Decimal,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Alert and arm the kill switch for a stale live loss.
+    """Alert for a stale live loss; arm the kill switch only when configured.
 
     Does not move the streak or the daily lock. ``net_pnl`` is accepted so
     the caller has already required a loss. The amount is not stored. The
@@ -143,10 +150,12 @@ def protect_account_from_stale_live_loss(
 
     if not isinstance(net_pnl, Decimal):
         raise TypeError("stale live loss protection requires a decimal net pnl")
+    arm = _arm_on_stale_loss(settings)
     return _protect(
         session,
         request=request,
-        alert=build_stale_live_loss_alert(request),
+        alert=build_stale_live_loss_alert(request, arm_kill_switch=arm),
+        arm_kill_switch=arm,
         reason=STALE_LIVE_LOSS_KILL_REASON,
         settings=settings,
     )
@@ -157,10 +166,11 @@ def _protect(
     *,
     request: ClosePaperPlanRequest,
     alert: ExitMonitorAlert,
+    arm_kill_switch: bool,
     reason: str,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Persist the alert and arm the switch as the system, not the trade owner."""
+    """Persist the alert. Arm the switch as the system only when asked."""
 
     record_exit_monitor_alert(
         session,
@@ -169,6 +179,13 @@ def _protect(
         user_id=request.user_id,
         settings=settings,
     )
+    if not arm_kill_switch:
+        logger.warning(
+            "paper_exit_stale_loss_kill_switch_skipped",
+            reason="closed_trade_not_current_risk",
+            **alert.as_log(),
+        )
+        return alert
     KillSwitchService(session, AuditService(session), settings).activate(
         organization_id=request.organization_id,
         actor_user_id=request.user_id,
@@ -178,6 +195,20 @@ def _protect(
     )
     logger.warning("paper_exit_monitor_alert", **alert.as_log())
     return alert
+
+
+def _arm_on_stale_loss(settings: Settings) -> bool:
+    return bool(settings.paper_exit_kill_switch_on_stale_loss)
+
+
+def _refusal(arm_kill_switch: bool) -> str:
+    return "kill_switch" if arm_kill_switch else "none"
+
+
+def _refusal_text(arm_kill_switch: bool) -> str:
+    if arm_kill_switch:
+        return " New entries are refused until a human deactivates the kill switch."
+    return " The trade is already closed. The kill switch is not armed for it."
 
 
 def record_exit_monitor_alert(

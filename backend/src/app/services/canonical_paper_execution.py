@@ -400,7 +400,8 @@ class CanonicalPaperExecutionService:
             # A fresh live profile close feeds the consecutive streak and the
             # daily lock from the bar clock. A labelled backfill does not.
             # A stale live loss does not either: that bar clock is already
-            # too old, so the kill switch refuses new entries instead.
+            # too old. Both are alerted; the kill switch arms for them only
+            # when paper_exit_kill_switch_on_stale_loss is set.
             # No calibration sample is written: a backfill is ineligible, and
             # a live close has no walk-forward fold on this path.
             action = monitor_close_protection(
@@ -741,8 +742,9 @@ def monitor_close_protection(
     """Choose the breaker write for one paper close.
 
     The labelled ``>=24h`` backfill path is first and is unchanged. A stale
-    live loss arms the kill switch. A fresh live profile close, a human
-    close, and a stale win still note at the bar time.
+    live loss is alerted, and arms the kill switch only when
+    ``paper_exit_kill_switch_on_stale_loss`` is set. A fresh live profile
+    close, a human close, and a stale win still note at the bar time.
     """
 
     if _backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl):
