@@ -24,10 +24,12 @@ from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from tests.support.phase5_market import EVALUATED_AT
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
 from tests.test_automated_paper_loop import _live_source, _monitor, _runtime_for, _seed
-from tests.test_governed_blofin_demo import Venue, demo_settings
+from tests.test_governed_blofin_demo import Venue, demo_settings, seed_band_ledger_headroom
 
 DEMO_URL = "https://demo-trading-openapi.blofin.com"
 TIERS = ((Decimal("0"), Decimal("0.004")),)
+# Total-exposure limit with room for a 1-5% band plan at 10x (as in #424's tests).
+BAND_LEDGER_MAX_NOTIONAL = Decimal("200000")
 
 
 @dataclass
@@ -241,8 +243,15 @@ def _run_worker(
     config: DemoLeverageConfig,
     *,
     auto_write: bool = True,
+    ledger_max_notional: Decimal | None = BAND_LEDGER_MAX_NOTIONAL,
 ):
-    factory, scan, _loop = _run_worker_with_loop(monkeypatch, venue, config, auto_write=auto_write)
+    factory, scan, _loop = _run_worker_with_loop(
+        monkeypatch,
+        venue,
+        config,
+        auto_write=auto_write,
+        ledger_max_notional=ledger_max_notional,
+    )
     return factory, scan
 
 
@@ -252,8 +261,13 @@ def _run_worker_with_loop(
     config: DemoLeverageConfig,
     *,
     auto_write: bool = True,
+    ledger_max_notional: Decimal | None = BAND_LEDGER_MAX_NOTIONAL,
 ):
-    """Run one worker cycle; also return a demo loop for venue reconciliation."""
+    """Run one worker cycle; also return a demo loop for venue reconciliation.
+
+    ``ledger_max_notional`` seeds the account's total-exposure limit (None keeps
+    the risk-settings default, 1x the fixture equity).
+    """
 
     from app.signal_fusion.memory import FrozenClock
 
@@ -262,6 +276,9 @@ def _run_worker_with_loop(
         _seed(session)
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
+        if ledger_max_notional is not None:
+            seed_band_ledger_headroom(session, account.id, max_notional=ledger_max_notional)
+            session.commit()
         settings = demo_settings(str(account.id)).model_copy(
             update={"governed_demo_auto_leverage_write_enabled": auto_write}
         )
@@ -314,6 +331,53 @@ def test_happy_path_sets_leverage_then_enters_at_configured_value(
     assert paths == ["/api/v1/account/set-margin-mode", "/api/v1/account/set-leverage"]
     assert venue.account_writes[-1][1]["leverage"] == "10"
     assert venue.order is not None and venue.order["marginMode"] == "isolated"
+
+
+@requires_postgres
+def test_configured_plan_is_sized_within_the_remaining_total_exposure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#424 band sizing at 10x would exceed this limit; the plan is sized to fit it.
+
+    The limit sits between the notional a 1%-floor loss needs on the fixture
+    stop and the notional the band's sizing target would take, so only the
+    exposure cap lets the plan both clear the floor and pass the claim.
+    """
+
+    from app.db.models import AccountRiskAccountingState
+
+    limit = Decimal("35000")
+    venue = LeverageVenue(_price())
+    factory, scan = _run_worker(
+        monkeypatch,
+        venue,
+        DemoLeverageConfig(10, "isolated", "default"),
+        ledger_max_notional=limit,
+    )
+    assert scan.trade_plan_revision_id is not None, scan.paper_loop_reason
+    assert venue.post_count == 1, scan.paper_loop_reason
+    with factory() as session:
+        ledger = session.scalar(select(AccountRiskAccountingState))
+        assert ledger is not None and ledger.max_notional == limit
+        used = ledger.reserved_notional + ledger.actual_notional
+        assert 0 < used <= limit
+
+
+@requires_postgres
+def test_configured_plan_refuses_when_the_exposure_limit_cannot_hold_the_loss_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default limit (1x equity): no 1%-floor plan fits, so no order and no exposure block."""
+
+    venue = LeverageVenue(_price())
+    _factory, scan = _run_worker(
+        monkeypatch,
+        venue,
+        DemoLeverageConfig(10, "isolated", "default"),
+        ledger_max_notional=None,
+    )
+    assert scan.paper_loop_reason == "stop_loss_below_band"
+    assert venue.post_count == 0
 
 
 @pytest.mark.parametrize(
@@ -890,8 +954,12 @@ def _configured_band_plan(
     margin_mode: str,
     stop: str,
     worst: str,
+    remaining_exposure: Decimal | None = Decimal("1000000"),
 ) -> object:
-    """Drive GovernedBloFinDemoLoop._plan_terms (unprofiled) with a binding config."""
+    """Drive GovernedBloFinDemoLoop._plan_terms (unprofiled) with a binding config.
+
+    ``remaining_exposure`` stands in for the ledger headroom read before planning.
+    """
 
     from datetime import UTC, datetime
     from types import SimpleNamespace
@@ -934,6 +1002,7 @@ def _configured_band_plan(
     )
     loop = GovernedBloFinDemoLoop(None, Settings(_env_file=None), SimpleNamespace())  # type: ignore[arg-type]
     loop._leverage_config = config
+    loop._remaining_exposure = remaining_exposure
     monkeypatch.setattr(loop, "_require_snapshot", lambda: snapshot)
     return loop._plan_terms(
         candidate=SimpleNamespace(),  # type: ignore[arg-type]
@@ -944,6 +1013,35 @@ def _configured_band_plan(
         now=now,
         eligibility_valid_until=now,
         eligibility_id=uuid4(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("remaining", "reason"),
+    [
+        # Headroom never read (or unreadable): fail closed.
+        (None, "risk_limits_unverified"),
+        (Decimal("NaN"), "risk_limits_unverified"),
+        (Decimal("0"), "insufficient_total_exposure"),
+        # 10x would size ~11.6k notional for this 1% stop; 5k headroom caps it
+        # below the 1% loss floor instead of planning a claim-refused trade.
+        (Decimal("5000"), "stop_loss_below_band"),
+    ],
+)
+def test_configured_plan_is_bounded_by_the_remaining_total_exposure(
+    monkeypatch: pytest.MonkeyPatch, remaining: Decimal | None, reason: str
+) -> None:
+    assert (
+        _configured_band_plan(
+            monkeypatch,
+            config=DemoLeverageConfig(10, "isolated", "account"),
+            leverage="10",
+            margin_mode="isolated",
+            stop="99",
+            worst="100",
+            remaining_exposure=remaining,
+        )
+        == reason
     )
 
 

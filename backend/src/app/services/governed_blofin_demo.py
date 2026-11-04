@@ -117,6 +117,10 @@ _DEMO_QUOTE_TTL = timedelta(seconds=10)
 # A preflight book received longer ago than this (local monotonic seconds) is
 # read again right before eligibility.
 _DEMO_QUOTE_REFRESH_AFTER_SECONDS = 2.0
+# Fee and slippage allowances, each a fraction of the worse-price notional. The
+# claim reserves notional plus both, so sizing keeps the sum within headroom.
+_DEMO_FEE_ALLOWANCE_RATE = Decimal("0.001")
+_DEMO_SLIPPAGE_ALLOWANCE_RATE = Decimal("0.001")
 
 
 def _demo_risk_snapshot(
@@ -206,6 +210,38 @@ def _demo_risk_snapshot(
         trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
         execution_venue=str(getattr(plan, "execution_venue", "") or "") or None,
     )
+
+
+def demo_remaining_total_exposure(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    account_id: UUID,
+) -> Decimal:
+    """Total-exposure headroom the claim predicate will allow for this account.
+
+    Same source as the claim: the account's risk-accounting row, or the risk
+    settings default when no row exists yet (the claim creates it from those).
+    """
+
+    from app.db.models import AccountRiskAccountingState
+    from app.services.audit_service import AuditService
+    from app.services.risk.settings_service import RiskSettingsService
+
+    row = session.scalar(
+        select(AccountRiskAccountingState).where(
+            AccountRiskAccountingState.organization_id == organization_id,
+            AccountRiskAccountingState.account_id == account_id,
+        )
+    )
+    if row is None:
+        return (
+            RiskSettingsService(session, AuditService(session))
+            .get(organization_id=organization_id, user_id=user_id)
+            .default_account_balance
+        )
+    return row.max_notional - row.reserved_notional - row.actual_notional
 
 
 def demo_posture_refusal(settings: Settings) -> str | None:
@@ -557,6 +593,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
         self._leverage_config: DemoLeverageConfig | None = None
+        self._remaining_exposure: Decimal | None = None
 
     def _verified_funding_rate(self) -> Decimal | None:
         rate = self._scan_funding_rate
@@ -766,6 +803,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
         self._scan_funding_rate = _read_demo_funding(self._get_provider(), target.symbol)
+        try:
+            self._remaining_exposure = demo_remaining_total_exposure(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                account_id=account.id,
+            )
+        except Exception:
+            return _proof(candidate, "blocked", "risk_limits_unverified")
         return super()._bound(
             session,
             target=target,
@@ -910,6 +956,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         profile_grade = None
         profile_grade_cap: Decimal | None = None
         if active_profile is None:
+            # The claim also caps notional plus fee and slippage allowances at the
+            # account's remaining total exposure; size within it rather than plan a
+            # trade the claim will refuse (e.g. 10x leverage on a 1x exposure limit).
+            remaining_exposure = self._remaining_exposure
+            if remaining_exposure is None or not remaining_exposure.is_finite():
+                return "risk_limits_unverified"
+            if remaining_exposure <= 0:
+                return "insufficient_total_exposure"
+            notional_cap = min(
+                notional_cap,
+                remaining_exposure / (1 + _DEMO_FEE_ALLOWANCE_RATE + _DEMO_SLIPPAGE_ALLOWANCE_RATE),
+            )
             cost_per_base = entry * Decimal("0.002")
             raw = (
                 min(
@@ -1100,8 +1158,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "value": maximum_loss,
                     "unit": "USDT",
                 },
-                "fee_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
-                "slippage_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
+                "fee_allowance": {
+                    "value": base * upper * _DEMO_FEE_ALLOWANCE_RATE,
+                    "unit": "USDT",
+                },
+                "slippage_allowance": {
+                    "value": base * upper * _DEMO_SLIPPAGE_ALLOWANCE_RATE,
+                    "unit": "USDT",
+                },
                 "stop": {"value": stop, "unit": "USDT"},
                 "margin_assumption_id": margin_assumption,
                 "margin_assumption_version": "1",

@@ -233,7 +233,7 @@ class Venue:
         return httpx.Response(200, json={"code": "0", "data": data})
 
 
-def seed_band_ledger_headroom(session, account_id) -> None:
+def seed_band_ledger_headroom(session, account_id, *, max_notional=Decimal("200000")) -> None:
     """Ledger headroom for a 1-5% stop-loss band at the fixture's 10x leverage.
 
     The default 10k total cap would refuse the band-sized plan.
@@ -251,10 +251,10 @@ def seed_band_ledger_headroom(session, account_id) -> None:
             actual_trade_count=0,
             symbol_reserved={},
             symbol_actual={},
-            max_notional=Decimal("200000"),
+            max_notional=max_notional,
             max_daily_loss=Decimal("5000"),
             max_trade_slots=20,
-            max_symbol_notional=Decimal("200000"),
+            max_symbol_notional=max_notional,
             daily_locked=False,
             exposure_unit="USDT",
             version=1,
