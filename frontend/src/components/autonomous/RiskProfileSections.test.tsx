@@ -4,7 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RiskProfileSections } from "./RiskProfileSections";
 
 const profile = vi.fn();
-vi.mock("@/lib/api", () => ({ api: { riskPolicy: { profile: (kind: string) => profile(kind) } } }));
+vi.mock("@/lib/api", () => ({
+  api: {
+    riskPolicy: { profile: (kind: string) => profile(kind) },
+    autonomous: { settings: () => Promise.reject(new Error("403")) },
+  },
+  ApiError: class ApiError extends Error {},
+}));
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ membershipRole: "trader" }) }));
 
 const view = (kind: string, a: string, maxLeverage: string) => ({
   kind,
@@ -35,7 +42,7 @@ afterEach(() => {
 });
 
 describe("RiskProfileSections", () => {
-  it("shows grade risk per profile and the read-only leverage slot", async () => {
+  it("shows grade risk per profile and the profile leverage in the leverage slot", async () => {
     profile.mockImplementation(async (kind: string) => view(kind, kind === "demo" ? "0.5" : "0.75", kind === "demo" ? "5" : "3"));
     render(<RiskProfileSections />);
     const table = await screen.findByTestId("grade-risk-table");
@@ -48,8 +55,7 @@ describe("RiskProfileSections", () => {
     expect(slot).toHaveAttribute("id", "leverage");
     expect(slot).toHaveTextContent("Default 2× · max 3×");
     expect(slot).toHaveTextContent("Default 2× · max 5×");
-    expect(screen.getByTestId("leverage-coming-soon")).toHaveTextContent("coming soon");
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await waitFor(() => expect(slot).toHaveTextContent("Demo leverage settings unavailable."));
   });
 
   it("keeps the leverage slot when profiles cannot load", async () => {

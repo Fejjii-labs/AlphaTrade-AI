@@ -355,14 +355,21 @@ class BloFinAccountProvider:
         )
 
     def get_leverage_info(self, *, inst_id: str, margin_mode: str) -> AccountLeverageInfo:
-        """Return configured leverage for an instrument under a margin mode."""
+        """Return configured leverage for an instrument under a margin mode.
+
+        Uses GET Multiple Leverage (https://docs.blofin.com/index.html#get-multiple-leverage);
+        the single-instrument ``/account/leverage-info`` is deprecated
+        (https://docs.blofin.com/index.html#get-leverage-deprecated). ``data`` is a
+        list; exactly one row must carry this ``instId``, otherwise nothing is
+        confirmed (leverage reads as 0, so the caller fails closed).
+        """
         data = self._client.request(
             "GET",
-            "/api/v1/account/leverage-info",
+            "/api/v1/account/batch-leverage-info",
             params={"instId": inst_id, "marginMode": margin_mode},
             signed=True,
         )
-        row = data if isinstance(data, dict) else {}
+        row = _batch_inst_row(data, inst_id)
         position_side_raw = row.get("positionSide")
         venue_mode = row.get("marginMode")
         supplied = venue_mode not in (None, "")
@@ -419,3 +426,15 @@ class BloFinAccountProvider:
             last_success_at=self._client.last_success_at,
             error_message=self._client.last_error,
         )
+
+
+def _batch_inst_row(data: object, inst_id: str) -> dict[str, Any]:
+    """The one batch-leverage row whose ``instId`` is ``inst_id``, else {}.
+
+    Anything but a list, no matching row, or more than one is unconfirmed.
+    """
+
+    if not isinstance(data, list):
+        return {}
+    rows = [row for row in data if isinstance(row, dict) and row.get("instId") == inst_id]
+    return rows[0] if len(rows) == 1 else {}

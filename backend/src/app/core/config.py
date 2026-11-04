@@ -265,6 +265,12 @@ class Settings(BaseSettings):
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""
+    # Automatic leverage / margin-mode writes on the BloFin DEMO host. Default
+    # off, and honoured only when ``environment`` is staging or local: a
+    # production environment (including a production demo profile) never
+    # writes leverage until the owner approves extending it. With this off the
+    # loop only reads leverage and blocks unless it already matches the setting.
+    governed_demo_auto_leverage_write_enabled: bool = False
     # Autonomous continuation (AT-ADR-106). Both default off. Neither flag
     # authorizes real-money trading. Setting both fails closed.
     autonomous_internal_paper_enabled: bool = False

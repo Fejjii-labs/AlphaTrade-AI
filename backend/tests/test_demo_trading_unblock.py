@@ -223,6 +223,7 @@ def _band_plan(monkeypatch, *, leverage: str, stop: str, worst: str) -> object:
         instrument="BTC-USDT",
     )
     loop = GovernedBloFinDemoLoop(None, Settings(_env_file=None), SimpleNamespace())  # type: ignore[arg-type]
+    loop._remaining_exposure = Decimal("1000000")  # ledger headroom that does not bind
     monkeypatch.setattr(loop, "_require_snapshot", lambda: snapshot)
     return loop._plan_terms(
         candidate=SimpleNamespace(),  # type: ignore[arg-type]

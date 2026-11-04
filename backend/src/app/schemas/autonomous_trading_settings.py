@@ -16,6 +16,11 @@ class AutonomousStrategyOption(StrictModel):
     name: str
 
 
+class DemoLeverageOverride(StrictModel):
+    leverage: int | None = Field(default=None, ge=1, le=20)
+    margin_mode: Literal["isolated", "cross"] | None = None
+
+
 class AutonomousTradingSettingsView(StrictModel):
     organization_id: UUID
     user_id: UUID
@@ -39,6 +44,12 @@ class AutonomousTradingSettingsView(StrictModel):
     worker_heartbeat_age_seconds: float | None = None
     worker_flags_stale: bool = True
     autonomy_mode: str = ""
+    # BloFin demo only: the app sets this on the demo venue before an entry.
+    demo_leverage: int = 10
+    demo_margin_mode: Literal["isolated", "cross"] = "isolated"
+    demo_leverage_overrides: dict[str, DemoLeverageOverride] = Field(default_factory=dict)
+    demo_leverage_using_default: bool = True
+    max_demo_leverage_ceiling: int = 20
 
 
 class AutonomousTradingSettingsUpdate(StrictModel):
@@ -50,3 +61,8 @@ class AutonomousTradingSettingsUpdate(StrictModel):
     symbol: str | None = Field(default=None, min_length=3, max_length=32)
     # Strict: only JSON true/false, never "yes"/1 (Griller #356 review).
     internal_paper_enabled: StrictBool | None = None
+    # Range checks run in the service so the API returns stable 422 codes.
+    demo_leverage: int | None = None
+    demo_margin_mode: str | None = None
+    demo_leverage_overrides: dict[str, dict[str, int | str | None]] | None = None
+    clear_demo_leverage_overrides: bool = False
