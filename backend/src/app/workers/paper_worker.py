@@ -313,6 +313,10 @@ class PaperWorkerSupervisor:
         self._memory_watchdog = watchdog
 
     @property
+    def memory_watchdog(self) -> MemoryWatchdog | None:
+        return self._memory_watchdog
+
+    @property
     def memory_watchdog_tripped(self) -> bool:
         watchdog = self._memory_watchdog
         return watchdog is not None and watchdog.tripped
@@ -880,6 +884,14 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     configure_logging(log_level=settings.log_level, json_logs=settings.log_json)
     assert_execution_capable_composition_root(settings)
     disarmed = settings_are_disarmed_paper_worker(settings)
+    from app.observability.run_marker import claim_run_marker, clear_run_marker
+    from app.services.worker_restart_alerts import (
+        alert_memory_watchdog_repeat,
+        alert_unclean_previous_exit,
+    )
+
+    marker_path = settings.paper_worker_run_marker_path or None
+    alert_unclean_previous_exit(settings, claim_run_marker(marker_path, now=time.time()))
     supervisor = build_paper_worker_supervisor(settings)
     if disarmed:
         from app.services.arming_visibility import clear_disarmed_boot_rows
@@ -917,6 +929,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
             supervisor.serve_until_signal()
     finally:
         supervisor.close()
+    # Reached only after a clean stop; an exception leaves the marker behind.
+    clear_run_marker(marker_path)
+    alert_memory_watchdog_repeat(settings, supervisor.memory_watchdog)
     exit_if_memory_watchdog_tripped(supervisor)
     return "disarmed" if disarmed else "armed"
 

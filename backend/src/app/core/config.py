@@ -339,6 +339,12 @@ class Settings(BaseSettings):
     paper_worker_memory_watchdog_early_trip_window_seconds: float = Field(
         default=900.0, ge=0.0, le=86400.0
     )
+    # Telegram ops alert once the watchdog trips this many times in a row; 0 = off.
+    paper_worker_memory_watchdog_alert_after_trips: int = Field(default=2, ge=0, le=100)
+    # Written at boot, removed after a clean stop. Left behind = the previous run
+    # was OOM-killed, SIGKILLed or crashed: log + alert. Empty disables it.
+    # Render's filesystem is ephemeral, so /tmp may not survive a restart there.
+    paper_worker_run_marker_path: str = "/tmp/alphatrade-paper-worker.running"
     # Trip count and time only; nothing secret. Empty disables the backoff state.
     paper_worker_memory_watchdog_state_path: str = (
         "/tmp/alphatrade-paper-worker-memory-watchdog.json"

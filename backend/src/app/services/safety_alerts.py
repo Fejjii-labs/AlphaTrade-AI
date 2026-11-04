@@ -49,11 +49,13 @@ _SAFE_FIELDS = frozenset(
         "code",
         "command_id",
         "component",
+        "consecutive_trips",
         "cycles",
         "dedup_key",
         "elapsed_seconds",
         "error",
         "exit_origin",
+        "grace_seconds",
         "health_state",
         "heartbeat_age_seconds",
         "net_loss",
@@ -96,6 +98,8 @@ _COOLDOWN_SECONDS = {
     "exit_monitor_heartbeat_stale": 900,
     "worker_config_degraded": 6 * 3600,
     "market_data_banned": 900,
+    "worker_memory_watchdog_repeat": 900,
+    "worker_unclean_exit": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
@@ -113,6 +117,8 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "exit_monitor_heartbeat_stale",
         "worker_config_degraded",
         "market_data_banned",
+        "worker_memory_watchdog_repeat",
+        "worker_unclean_exit",
         "stop_hit",
         "tp_hit",
     }

@@ -26,7 +26,10 @@ Render restarts it. A failed memory read is logged and never trips.
 | `PAPER_WORKER_MEMORY_WATCHDOG_CHECK_SECONDS` | Check interval, 1–3600. Default 30. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_STARTUP_GRACE_SECONDS` | No check this long after start, 0–3600. Default 300. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_BACKOFF_MAX_SECONDS` | Cap on the backed-off grace, 0–86400. Default 3600. |
+| `PAPER_WORKER_MEMORY_WATCHDOG_EARLY_TRIP_WINDOW_SECONDS` | A trip this soon after the grace ends continues the streak, 0–86400. Default 900. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_STATE_PATH` | Backoff state file. Default `/tmp/alphatrade-paper-worker-memory-watchdog.json`; empty disables it. |
+| `PAPER_WORKER_MEMORY_WATCHDOG_ALERT_AFTER_TRIPS` | Telegram alert once the streak reaches this, 0–100; 0 = off. Default 2. |
+| `PAPER_WORKER_RUN_MARKER_PATH` | Unclean-exit marker. Default `/tmp/alphatrade-paper-worker.running`; empty disables it. |
 
 ### Start at or above the limit
 
@@ -40,8 +43,10 @@ exit every check interval. Two rules prevent that loop:
    `{"consecutive_trips": n, "tripped_at": <unix seconds>}` to the state file
    (nothing else). At the next start, a state younger than the backoff cap sets
    the grace to `grace * 2**n`, capped at the backoff max: 300, 600, 1200, 2400,
-   3600, 3600 s. A trip later than grace + backoff max after start is a normal
-   leak and starts a new streak of one. A missing, stale, corrupt or unwritable
+   3600, 3600 s. Only a trip within the early-trip window (default 900 s)
+   after the grace ends continues the streak. A later trip is a normal leak
+   and starts a new streak of one, so a leak that trips 1–2 h after start does
+   not double the next grace. A missing, stale, corrupt or unwritable
    file falls back to the plain grace and never blocks the trip.
 
 The state lives in `/tmp`. If Render restarts the service in a fresh
@@ -52,6 +57,45 @@ five minutes; `paper_worker_memory_watchdog_tripped` logs `uptime_seconds` and
 `consecutive_trips`, and `paper_worker_memory_watchdog_armed` logs the grace in
 effect, so the loop is visible. Raise the limit or disable the watchdog if it
 shows up.
+
+## Alerts
+
+Both alerts use the existing safety-alert Telegram path
+(`services/safety_alerts.deliver_safety_alert`, `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID`; no new secret). Both codes are in the default Telegram
+allowlist and carry counts and times only. Without a token and chat id they
+are logged as `safety_alert_telegram_unconfigured` and not sent.
+
+- `worker_memory_watchdog_repeat`: after the clean stop, before exit 75, when
+  `consecutive_trips >= PAPER_WORKER_MEMORY_WATCHDOG_ALERT_AFTER_TRIPS`.
+- `worker_unclean_exit`: at boot, the worker writes `{"started_at": <unix
+  seconds>}` to the run marker and removes it after a clean stop (a SIGTERM or
+  SIGINT shutdown, a `--once` round, or a watchdog exit). A marker still there
+  at the next boot means the previous run was OOM-killed, SIGKILLed after the
+  shutdown deadline, or crashed. The worker logs
+  `paper_worker_previous_exit_unclean` at error and sends the alert. A Python
+  exception that escapes the run also leaves the marker, on purpose.
+
+### Limit: the files may not survive a Render restart
+
+Render's documentation (<https://render.com/docs/disks>, fetched 2026-11-04)
+says: "By default, Render services have an ephemeral filesystem. This means
+that without a persistent disk, any changes you make to a service's local
+files are lost every time the service redeploys or restarts." This branch does
+not attach a disk, and the behavior on staging has not been checked. If `/tmp`
+is wiped on every restart:
+
+- the backoff state is lost, so the streak never passes one and the grace
+  never grows (the plain grace still limits restarts to one per grace period);
+- the repeat alert therefore never fires at the default of 2. Set
+  `PAPER_WORKER_MEMORY_WATCHDOG_ALERT_AFTER_TRIPS=1` to page on every trip;
+- the unclean-exit marker is lost, so an OOM kill is not reported by the
+  worker. Render's own service events still show it.
+
+Pointing both paths at a persistent disk mount would make them survive. That
+adds a paid disk and a Render change, so it needs the owner's approval. A
+database-backed marker would avoid the disk, but it must not mistake the old
+instance of a zero-downtime deploy for an unclean exit.
 
 `--once` rounds do not check memory. This change does not set these variables
 in Render.
