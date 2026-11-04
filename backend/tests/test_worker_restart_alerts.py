@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -231,3 +231,62 @@ def test_watchdog_exit_is_clean_and_alerts_on_a_streak(
     # The restart after the watchdog exit is not reported as unclean.
     _boot(monkeypatch, settings, _FakeSupervisor(None))
     assert [alert.code for alert in sent] == ["worker_memory_watchdog_repeat"]
+
+
+# --- Hardening: the shared dedup map stays bounded ------------------------------
+
+
+@pytest.fixture
+def _fresh_dedup() -> Any:
+    safety_alerts.reset_safety_alert_dedup()
+    yield
+    safety_alerts.reset_safety_alert_dedup()
+
+
+@pytest.mark.usefixtures("_fresh_dedup")
+def test_expired_dedup_keys_are_dropped_and_live_ones_still_suppress() -> None:
+    start = datetime(2026, 11, 4, tzinfo=UTC)
+    for index in range(300):
+        safety_alerts._remember(f"stop_hit:{index}", start)
+    later = start + timedelta(days=1)
+    safety_alerts._remember("stop_hit:new", later)
+    # One day is the longest cooldown, so the 300 old keys can no longer dedup.
+    assert set(safety_alerts._SENT) == {"stop_hit:new"}
+    assert safety_alerts._recently_sent("stop_hit:new", later, timedelta(seconds=900))
+
+    for index in range(300):
+        safety_alerts._remember(f"live:{index}", later + timedelta(seconds=index))
+    assert len(safety_alerts._SENT) == 301
+    assert safety_alerts._recently_sent(
+        "live:0", later + timedelta(seconds=300), timedelta(hours=1)
+    )
+
+
+@pytest.mark.usefixtures("_fresh_dedup")
+def test_dedup_map_is_capped_and_drops_the_oldest_first() -> None:
+    start = datetime(2026, 11, 4, tzinfo=UTC)
+    for index in range(5000):
+        safety_alerts._remember(f"degraded_repeat:{index}", start + timedelta(seconds=index))
+    assert len(safety_alerts._SENT) == safety_alerts._SENT_MAX
+    assert "degraded_repeat:0" not in safety_alerts._SENT
+    assert "degraded_repeat:4999" in safety_alerts._SENT
+
+
+@pytest.mark.usefixtures("_fresh_dedup")
+def test_concurrent_alert_bookkeeping_stays_bounded() -> None:
+    import threading
+
+    start = datetime(2026, 11, 4, tzinfo=UTC)
+
+    def send(worker: int) -> None:
+        for index in range(1000):
+            moment = start + timedelta(seconds=index)
+            safety_alerts._remember(f"w{worker}:{index}", moment)
+            safety_alerts._recently_sent(f"w{worker}:{index}", moment, timedelta(seconds=900))
+
+    threads = [threading.Thread(target=send, args=(worker,)) for worker in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert len(safety_alerts._SENT) <= safety_alerts._SENT_MAX
