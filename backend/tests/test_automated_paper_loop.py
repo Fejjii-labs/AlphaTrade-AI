@@ -453,6 +453,74 @@ def test_risk_block_creates_no_plan_or_fill() -> None:
         assert AuditEventType.RISK_BLOCK in actions
 
 
+def test_only_risk_limit_reasons_are_labelled_risk_block() -> None:
+    from app.services.automated_paper_loop import _eligibility_reason, _is_risk_block
+    from app.signal_fusion.enums import EligibilityReasonCode as Code
+
+    blocked = ActionEligibilityState.BLOCKED
+    assert _eligibility_reason((Code.BLOCKED_DATA_QUALITY,), blocked) == "blocked_data_quality"
+    assert _eligibility_reason((Code.EXPIRED,), ActionEligibilityState.EXPIRED) == "expired"
+    assert _eligibility_reason((Code.ELIGIBLE,), ActionEligibilityState.ELIGIBLE) == "eligible"
+    for risk in (
+        Code.BLOCKED_KILL_SWITCH,
+        Code.BLOCKED_DAILY_LOSS,
+        Code.BLOCKED_WEEKLY_LOSS,
+        Code.BLOCKED_COOLDOWN,
+        Code.BLOCKED_EXPOSURE,
+        Code.BLOCKED_PORTFOLIO_CONFLICT,
+    ):
+        assert _is_risk_block(risk.value), risk
+    for other in (
+        Code.BLOCKED_DATA_QUALITY,
+        Code.BLOCKED_VENUE_STATE,
+        Code.BLOCKED_BASIS,
+        Code.BLOCKED_ACCOUNT_STATE,
+        Code.BLOCKED_CONFIGURATION,
+        Code.BLOCKED_CANDIDATE_STATE,
+        Code.BLOCKED_SETUP_NOT_CONFIRMED,
+        Code.EXPIRED,
+    ):
+        assert not _is_risk_block(other.value), other
+
+
+@requires_postgres
+def test_stale_action_quote_reports_blocked_data_quality_not_risk_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_persistence_firewall()
+    factory = phase7_plan_session_factory()
+    with factory() as session:
+        _seed(session)
+    build = AutomatedPaperLoop._eligibility_command
+
+    def stale(self: AutomatedPaperLoop, *args: object, **kwargs: object) -> object:
+        command = build(self, *args, **kwargs)  # type: ignore[arg-type]
+        market = command.market_action.model_copy(update={"required_action_evidence_fresh": False})
+        return command.model_copy(update={"market_action": market})
+
+    monkeypatch.setattr(AutomatedPaperLoop, "_eligibility_command", stale)
+    source = _live_source()
+    monitor = _monitor(source, replay=False, clock=lambda: EVALUATED_AT)
+    runtime = _runtime_for(factory, source, monitor, replay=False, held=[])
+    scan = runtime.run_cycle().scans[0]
+    assert scan.paper_loop_stage == "blocked"
+    assert scan.paper_loop_reason == "blocked_data_quality"
+    assert scan.eligibility_state == ActionEligibilityState.BLOCKED.value
+    assert scan.trade_plan_revision_id is None
+    with factory() as session:
+        reasons = [
+            row.get("eligibility_reason")
+            for row in session.scalars(
+                select(AuditLog.redacted_metadata).where(
+                    AuditLog.organization_id == ORG,
+                    AuditLog.action == AuditEventType.RISK_BLOCK,
+                )
+            )
+        ]
+        assert reasons == ["blocked_data_quality"]
+        assert _count(session, TradePlanRevision) == 0
+
+
 @requires_postgres
 def test_kill_switch_blocks_execution_and_keeps_monitoring() -> None:
     install_persistence_firewall()
