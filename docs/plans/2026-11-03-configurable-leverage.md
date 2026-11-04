@@ -75,7 +75,8 @@ the order POST, so drift between planning and dispatch also refuses.
 
 Plans sized without a profile now carry `margin_assumption_id = "configured-demo-leverage"`,
 the configured `leverage` and `margin_mode`, and the order body sends that margin mode.
-Sizing for those plans is unchanged (1% risk, 10% notional of equity). Profile plans pass the
+Sizing for those plans was unchanged (1% risk, 10% notional of equity); since the v3 port it
+uses #424's stop-loss band (see "Port v3" below). Profile plans pass the
 configured leverage to `size_for_profile`; a configured leverage above the profile's
 `max_leverage`, or a cross mode with a profile (isolated-only buffer), refuses before any
 write. Manual demo plans keep 1x cross and never trigger a write.
@@ -166,3 +167,38 @@ PR #412 was based on `e7962d8a`; main has since landed #411, #413, #414, #416, #
   configured-leverage read-back, 1% risk / 10% notional; #424: existing leverage, 20x
   ceiling, 1-5% stop-loss band), the `margin_assumption_id` values, the `snapshot()`
   defaults in `governed_blofin.py`, and the plan valid-until window (10s here, 60s in #424).
+
+## Port v3 onto main with #424 and #429 (2026-11-04, `claude/demo-configured-leverage-v3`)
+
+Re-ported onto `9175f939` (#424 `d40e46e0`, #429 `9175f939`). This settles the open #424
+reconciliation above:
+
+- **When the configured leverage applies:** when the app may write it
+  (`demo_leverage_write_allowed`: flag on and staging/local) or the owner saved a
+  setting (`source != "default"`). Then the loop applies it if writing is allowed, and the
+  snapshot, the action-time re-read and `submit()` all require the exact configured leverage
+  and margin mode (`demo_leverage_readback_mismatch` otherwise). With no saved setting and no
+  allowed write, the loop keeps #424's read-only path: existing leverage, any margin mode,
+  no write.
+- **Sizing (`_plan_terms`):** configured plans use #424's sizing: the 1-5% stop-loss band
+  (`stop_loss_below_band` / `stop_loss_above_band`), notional
+  `equity x leverage x 0.95`, and the `demo_max_leverage` 20x ceiling. Here the leverage is
+  the configured value that was read back. The 1% risk / 10% notional caps from #412 are
+  dropped. The pre-trade liquidation gate runs only for configured plans.
+- **`margin_assumption_id`:** `configured-demo-leverage` for configured plans; #424's
+  `verified-demo-existing-1x`, `verified-demo-existing-leverage-cross` and
+  `verified-demo-existing-leverage-isolated` otherwise; `verified-demo-read-leverage` for
+  profile plans.
+- **Provider defaults:** `snapshot()` keeps #424's `required_leverage=None`,
+  `margin_mode=None`. In `submit()`, `demo_plan_leverage` requires the stored leverage only
+  for profile and configured plans. Every other plan sends `None` with the margin mode from
+  `demo_order_margin_mode`, as on main. Manual demo and #424 plans therefore do not need
+  1x.
+- **Plan window:** #424's `_plan_window` (default 60s) for every demo plan, including
+  configured ones.
+- **Migration:** #429 added `a24binancegate001` (revises `a23marketmonitor001`), so
+  `a24demoleverage001` now revises `a24binancegate001`. That keeps a single head.
+- **Tests:** in `test_governed_blofin_demo`, the `leverage_above_ceiling` case turns the
+  write off so #424's 25x refusal stays covered. #424's `account_leverage` fixture field is
+  now #412's `leverage`. The preflight `leverage_not_one` / `margin_mode_not_cross` cases
+  are dropped because the default snapshot no longer requires 1x cross (as on main).

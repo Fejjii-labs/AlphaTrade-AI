@@ -11,7 +11,7 @@ alwaysApply: true
   Mode D real execution remains disabled. Never weaken these.
 - No automatic live orders, withdrawals, transfers, leverage changes, or exchange account
   mutations. `real_trading_enabled` stays false unless a separate task explicitly enables it.
-  - **Exception — BloFin DEMO leverage, owner-configured (PENDING SOFIEN'S APPROVAL, PR #412 / `claude/demo-configured-leverage-v2`):**
+  - **Exception — BloFin DEMO leverage, owner-configured (PENDING SOFIEN'S APPROVAL, PR #412 / `claude/demo-configured-leverage-v3`):**
     the governed demo loop may set margin mode and leverage on the allowlisted BloFin
     **demo host only**, to the value the org owner configured (1–20x, default 10x isolated),
     only when `GOVERNED_DEMO_AUTO_LEVERAGE_WRITE_ENABLED=true` in a staging/local
