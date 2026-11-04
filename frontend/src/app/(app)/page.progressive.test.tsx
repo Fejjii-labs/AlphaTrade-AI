@@ -15,6 +15,7 @@ vi.mock("@/contexts/AppContext", () => ({
 }));
 vi.mock("@/components/dashboard/AttentionCard", () => ({ AttentionCard: () => null }));
 vi.mock("@/components/dashboard/DailyReviewCard", () => ({ DailyReviewCard: () => null }));
+vi.mock("@/components/dashboard/performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
 vi.mock("@/components/dashboard/BloFinDemoAccountCard", () => ({
   BloFinDemoAccountCard: () => <section data-testid="demo-card">demo</section>,
 }));

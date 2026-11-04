@@ -41,6 +41,9 @@ from app.services.journal_attachment_service import JournalAttachmentService
 from app.services.journal_attachment_storage import get_attachment_storage
 from app.services.journal_excursion_replay_service import JournalExcursionReplayService
 from app.services.journal_import_service import JournalImportService
+from app.services.journal_performance_dashboard_service import (
+    JournalPerformanceDashboardService,
+)
 from app.services.journal_rag_sync_service import JournalRagSyncService
 from app.services.journal_service import JournalService
 from app.services.journal_statistics_service import JournalStatisticsService
@@ -345,6 +348,13 @@ def get_journal_statistics_service(
     return JournalStatisticsService(session, max_rows=settings.journal_stats_max_rows)
 
 
+def get_journal_performance_dashboard_service(
+    session: SessionDep,
+    settings: SettingsDep,
+) -> JournalPerformanceDashboardService:
+    return JournalPerformanceDashboardService(session, settings=settings)
+
+
 def get_strategy_analytics_service(
     session: SessionDep,
     settings: SettingsDep,
@@ -406,6 +416,9 @@ JournalServiceDep = Annotated[JournalService, Depends(get_journal_service)]
 JournalTradeServiceDep = Annotated[JournalTradeService, Depends(get_journal_trade_service)]
 JournalStatisticsServiceDep = Annotated[
     JournalStatisticsService, Depends(get_journal_statistics_service)
+]
+JournalPerformanceDashboardServiceDep = Annotated[
+    JournalPerformanceDashboardService, Depends(get_journal_performance_dashboard_service)
 ]
 StrategyAnalyticsServiceDep = Annotated[
     StrategyAnalyticsService, Depends(get_strategy_analytics_service)
