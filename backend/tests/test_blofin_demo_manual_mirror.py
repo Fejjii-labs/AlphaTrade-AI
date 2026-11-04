@@ -6,7 +6,7 @@ import copy
 import json
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -1709,3 +1709,137 @@ def test_mirror_apply_warns_with_skip_count_and_reason_codes(session: Session) -
     with structlog.testing.capture_logs() as clean:
         _apply(session, _FIXTURE["long"])
     assert not [e for e in clean if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]
+
+
+# --- Incremental cursor (worker memory fix) ---------------------------------
+
+_HISTORY_PATH = "/api/v1/account/positions-history"
+_DEPENDENT_PATHS = (
+    "/api/v1/trade/fills-history",
+    "/api/v1/account/funding-fees",
+    "/api/v1/trade/orders-history",
+)
+_TIME_FIELD = {
+    _HISTORY_PATH: "updateTime",
+    "/api/v1/trade/fills-history": "ts",
+    "/api/v1/account/funding-fees": "fundingTime",
+    "/api/v1/trade/orders-history": "createTime",
+}
+
+
+def _ms(when: datetime) -> str:
+    return str(int(when.timestamp() * 1000))
+
+
+class _WindowClient(_Client):
+    """Honours ``begin``/``end`` like the venue and records each history read."""
+
+    def __init__(self, bundle: dict[str, list[dict[str, object]]]) -> None:
+        super().__init__(bundle)
+        self.reads: list[tuple[str, str]] = []
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        params = kwargs.get("params")
+        if path in _TIME_FIELD and isinstance(params, dict) and not params.get("after"):
+            self.reads.append((path, str(params["begin"])))
+            rows = super().request(method, path, **kwargs)  # type: ignore[arg-type]
+            begin, end = int(params["begin"]), int(params["end"])
+            return [row for row in rows if begin <= int(str(row[_TIME_FIELD[path]])) <= end]
+        return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+
+
+_OLD_ETH = {
+    "historyId": "h-eth-old",
+    "positionId": "p-eth-old",
+    "instId": "ETH-USDT",
+    "side": "buy",
+    "positionSide": "long",
+    "closePositions": "1",
+    "maxPositions": "1",
+    "openAveragePrice": "100",
+    "closeAveragePrice": "101",
+    "createTime": _ms(datetime(2026, 10, 16, 20, tzinfo=UTC)),
+    "updateTime": _ms(datetime(2026, 10, 17, 2, tzinfo=UTC)),
+    "leverage": "2",
+    "realizedPnl": "1",
+    "fee": "0.01",
+}
+
+
+def _mirror(
+    session: Session,
+    client: _Client,
+    now: datetime,
+    cursor: dict[str, datetime] | None = None,
+) -> object:
+    report = BloFinDemoManualMirror(client, now=now, cursor=cursor).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings()
+    )
+    session.commit()
+    return report
+
+
+def test_ok_read_returns_a_cursor_and_the_next_read_starts_at_it_minus_overlap(
+    session: Session,
+) -> None:
+    client = _WindowClient(_paths(_FIXTURE["long"]))
+    first = _mirror(session, client, NOW)
+    expected = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW)
+    assert first.next_cursor == expected  # type: ignore[attr-defined]
+    assert client.reads[0] == (_HISTORY_PATH, _ms(WINDOW_BEGIN))
+    later = NOW + timedelta(minutes=5)
+    client.reads.clear()
+    second = _mirror(session, client, later, first.next_cursor)  # type: ignore[attr-defined]
+    # 600s default overlap. Nothing new closed, so no dependent endpoint is read.
+    assert client.reads == [(_HISTORY_PATH, _ms(NOW - timedelta(seconds=600)))]
+    assert second.next_cursor == dict.fromkeys(first.next_cursor, later)  # type: ignore[attr-defined]
+    assert second.created == 0 and second.updated == 0  # type: ignore[attr-defined]
+    assert _money(_rows(session)[0].net_pnl) == Decimal("0.18600000")
+
+
+def test_a_cursor_older_than_seven_days_still_reads_only_seven_days(session: Session) -> None:
+    client = _WindowClient(_paths(_FIXTURE["long"]))
+    stale = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW - timedelta(days=30))
+    _mirror(session, client, NOW, stale)
+    assert {begin for _path, begin in client.reads} == {_ms(WINDOW_BEGIN)}
+
+
+def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
+    session: Session,
+) -> None:
+    bundle = _paths(_FIXTURE["long"])
+    bundle[_HISTORY_PATH] = [*bundle[_HISTORY_PATH], _OLD_ETH]
+    client = _WindowClient(bundle)
+    before_close = datetime(2026, 10, 17, 11, tzinfo=UTC)
+    first = _mirror(session, client, before_close)
+    assert [row.external_ref for row in _rows(session)] == ["blofin-demo-history:h-eth-old"]
+    eth_net = _rows(session)[0].net_pnl
+    assert eth_net is not None
+    client.reads.clear()
+    after_close = datetime(2026, 10, 17, 12, 5, tzinfo=UTC)
+    report = _mirror(session, client, after_close, first.next_cursor)  # type: ignore[attr-defined]
+    opened = datetime(2026, 10, 17, tzinfo=UTC)
+    deps_begin = _ms(opened - timedelta(seconds=600))
+    assert client.reads == [
+        (_HISTORY_PATH, _ms(before_close - timedelta(seconds=600))),
+        (_HISTORY_PATH, deps_begin),
+        *((path, deps_begin) for path in _DEPENDENT_PATHS),
+    ]
+    # Same economics as a full seven-day read: fee and paid funding included.
+    assert report.created == 1 and report.updated == 0  # type: ignore[attr-defined]
+    rows = {row.external_ref: row for row in _rows(session)}
+    assert _money(rows["blofin-demo-history:h-long"].net_pnl) == Decimal("0.18600000")
+    # The older slice opened before this read's window; it is not rewritten.
+    assert rows["blofin-demo-history:h-eth-old"].net_pnl == eth_net
+    assert "pnl-verified" in (rows["blofin-demo-history:h-eth-old"].tags or [])
+
+
+def test_capped_read_returns_no_cursor(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror._MAX_PAGES", 1)
+    bundle = _paths(_FIXTURE["long"])
+    bundle["/api/v1/trade/fills-history"] = [
+        {"tradeId": f"t{index}", "instId": "BTC-USDT", "ts": "1792195205000", "orderId": "o"}
+        for index in range(100)
+    ]
+    report = _mirror(session, _Client(bundle), NOW)
+    assert report.next_cursor is None  # type: ignore[attr-defined]

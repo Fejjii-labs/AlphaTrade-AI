@@ -367,6 +367,9 @@ class Settings(BaseSettings):
     # Read-only journal mirror for hand trades on the BloFin demo account.
     # Env name: BLOFIN_DEMO_MANUAL_MIRROR_ENABLED. Default off. No orders.
     blofin_demo_manual_mirror_enabled: bool = False
+    # After one successful read, the next mirror read starts this many seconds
+    # before the previous read's end instead of re-reading seven days.
+    blofin_demo_manual_mirror_overlap_seconds: int = Field(default=600, ge=60, le=86400)
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.

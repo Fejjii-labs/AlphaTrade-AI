@@ -94,6 +94,18 @@ paid." The funding route requires `begin` and `end` and covers at most seven
 days. The mirror looks back seven days minus one second so that call stays
 inside the documented window.
 
+Only the first read after a worker start looks back the whole seven days.
+After a read that ends `mirror-cycle:ok`, the worker keeps that read's end in
+memory per history endpoint. The next positions-history read starts
+`BLOFIN_DEMO_MANUAL_MIRROR_OVERLAP_SECONDS` (default 600) before it, never
+earlier than seven days. When that read returns rows, fills, funding, and
+orders are read from the earliest returned `createTime` minus the overlap, and
+positions history is read again from there so overlapping older slices still
+mark shared funding. Only the returned rows are written; older slices keep the
+economics from the read that first saw them. With no new rows, fills, funding,
+and orders are not read. A failed, capped, or incomplete read keeps the
+previous cursor. A restart reads seven days again.
+
 `fillPnl` is "Last filled profit and loss, applicable to orders which have a
 trade and aim to close position." The page does not say whether that number
 is gross or net of fees or funding. The published examples are `0`. This

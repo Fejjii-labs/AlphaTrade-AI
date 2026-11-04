@@ -31,6 +31,7 @@ from app.services.dashboard.demo_account import demo_account_active
 
 if TYPE_CHECKING:
     from app.schemas.blofin_sync import BloFinSyncSnapshotItem
+    from app.services.blofin_demo_manual_mirror import MirrorReport
     from app.workers.paper_worker import CycleOutcome
 
 logger = structlog.get_logger("workers.blofin_demo_snapshot")
@@ -53,6 +54,8 @@ class BloFinDemoSnapshotCycle:
         self._stop = Event()
         self._failures = 0
         self._next_attempt: datetime | None = None
+        # Last ``ok`` mirror read per owner. In memory: a restart reads 7 days.
+        self._mirror_cursor: tuple[tuple[uuid.UUID, uuid.UUID], dict[str, datetime]] | None = None
 
     def __call__(self) -> CycleOutcome:
         from app.workers.paper_worker import CycleOutcome
@@ -159,7 +162,7 @@ class BloFinDemoSnapshotCycle:
         if not self.settings.blofin_demo_manual_mirror_enabled:
             return
         try:
-            self._run_mirror(session, organization_id, user_id)
+            report = self._run_mirror(session, organization_id, user_id)
             session.commit()
         except Exception as exc:
             session.rollback()
@@ -168,13 +171,26 @@ class BloFinDemoSnapshotCycle:
                 error_type=type(exc).__name__,
             )
             self._record_failed_cycle(session, organization_id, user_id)
+            return
+        # Advance only after the journal commit; an incomplete read keeps the cursor.
+        next_cursor = getattr(report, "next_cursor", None)
+        if next_cursor is not None:
+            self._mirror_cursor = ((organization_id, user_id), next_cursor)
+
+    def _cursor_for(
+        self, organization_id: uuid.UUID, user_id: uuid.UUID
+    ) -> dict[str, datetime] | None:
+        held = self._mirror_cursor
+        if held is None or held[0] != (organization_id, user_id):
+            return None
+        return dict(held[1])
 
     def _run_mirror(
         self,
         session: object,
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
-    ) -> None:
+    ) -> MirrorReport:
         """Journal mirror. The flag stays off unless an operator sets it."""
         from app.core.blofin_readonly_access import get_readonly_client
         from app.services.blofin_demo_manual_mirror import BloFinDemoManualMirror
@@ -184,7 +200,11 @@ class BloFinDemoSnapshotCycle:
             activity_history=True,
             paper_internal_snapshot=True,
         )
-        BloFinDemoManualMirror(client, now=self._clock()).apply(
+        return BloFinDemoManualMirror(
+            client,
+            now=self._clock(),
+            cursor=self._cursor_for(organization_id, user_id),
+        ).apply(
             session,  # type: ignore[arg-type]
             organization_id=organization_id,
             user_id=user_id,

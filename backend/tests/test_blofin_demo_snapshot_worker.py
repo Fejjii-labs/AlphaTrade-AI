@@ -249,7 +249,7 @@ def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPa
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, now: object = None) -> None:
+        def __init__(self, client: object, now: object = None, cursor: object = None) -> None:
             captured["client"] = client
 
         def apply(self, *_args: object, **_kwargs: object) -> None:
@@ -1051,7 +1051,7 @@ def test_flag_on_runs_the_mirror_after_the_snapshot_commit(
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1103,7 +1103,7 @@ def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1151,7 +1151,7 @@ def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatc
             )
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime) -> None:
+        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -2276,3 +2276,72 @@ def test_latest_refuses_before_any_snapshot_read_without_the_account_pin(
         service.latest(organization_id=organization_id)
     assert served == []
     assert refused == [reason]
+
+
+# --- Mirror cursor and cadence (worker memory fix) ---------------------------
+
+
+def _cursor_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    clock: list[datetime],
+    outcomes: list[object],
+    **updates: object,
+) -> tuple[BloFinDemoSnapshotCycle, list[object]]:
+    """Cycle whose fake mirror records the cursor it was given and returns ``outcomes``."""
+    settings = _open_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True, **updates}
+    )
+    session = SimpleNamespace(commit=lambda: None, rollback=lambda: None, close=lambda: None)
+    seen: list[object] = []
+
+    class Service:
+        def __init__(self, _session: object, _settings: object) -> None:
+            pass
+
+        def latest(self, **_kwargs: object) -> None:
+            raise NotFoundError("none")
+
+        def sync(self, **_kwargs: object) -> SimpleNamespace:
+            health = BloFinSyncHealthStatus.OK
+            return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
+
+    class Mirror:
+        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
+            seen.append(cursor)
+
+        def apply(self, _session: object, **_kwargs: object) -> object:
+            result = outcomes.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.services.blofin_sync_service.BloFinSyncService", Service)
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client", lambda *_a, **_k: "client"
+    )
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
+    monkeypatch.setattr(
+        "app.services.blofin_demo_manual_mirror.record_mirror_cycle", lambda *_a, **_k: None
+    )
+    return BloFinDemoSnapshotCycle(settings, clock=lambda: clock[0]), seen
+
+
+def test_mirror_cursor_is_carried_only_after_an_ok_committed_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first),
+        RuntimeError("venue read failed"),
+        SimpleNamespace(next_cursor=None),
+        SimpleNamespace(next_cursor=None),
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    for _ in range(4):
+        cycle()
+        clock[0] += timedelta(hours=1)
+    # First run backfills. A failed or incomplete read keeps the last ok cursor.
+    assert seen == [None, first, first, first]

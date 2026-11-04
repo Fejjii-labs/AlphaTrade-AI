@@ -207,6 +207,8 @@ class MirrorReport:
     opens: int
     ambiguous: int = 0
     skipped_rows: tuple[SkippedRow, ...] = ()
+    # Read end per history endpoint. Set only after an ``ok`` cycle.
+    next_cursor: dict[str, datetime] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -905,6 +907,32 @@ def _window(now: datetime) -> tuple[datetime, datetime, str, str]:
     return begin, end, str(int(begin.timestamp() * 1000)), str(int(end.timestamp() * 1000))
 
 
+def _ms(when: datetime) -> str:
+    return str(int(when.timestamp() * 1000))
+
+
+def _since(
+    cursor: dict[str, datetime] | None, path: str, begin: datetime, overlap: timedelta
+) -> datetime:
+    """Read start for one endpoint: the cursor minus overlap, never before ``begin``."""
+    last = None if cursor is None else cursor.get(path)
+    if last is None:
+        return begin
+    return max(begin, last - overlap)
+
+
+def _earliest_open(history: list[dict[str, Any]], *, fallback: datetime) -> datetime:
+    """Oldest ``createTime`` in the rows; an unreadable time widens to ``fallback``."""
+    earliest: datetime | None = None
+    for row in history:
+        opened = _time(row.get("createTime"))
+        if opened is None:
+            return fallback
+        if earliest is None or opened < earliest:
+            earliest = opened
+    return fallback if earliest is None else earliest
+
+
 def _tags(draft: MirrorDraft, existing: list[str], *, reconciled: bool) -> list[str]:
     kept = [
         tag
@@ -1043,9 +1071,17 @@ def try_lock_journal_mirror(session: Session, organization_id: uuid.UUID) -> boo
 class BloFinDemoManualMirror:
     """Upsert journal rows from one read-only account snapshot of history."""
 
-    def __init__(self, client: _HistoryClient, *, now: datetime) -> None:
+    def __init__(
+        self,
+        client: _HistoryClient,
+        *,
+        now: datetime,
+        cursor: dict[str, datetime] | None = None,
+    ) -> None:
         self._client = client
         self._now = now
+        # Previous ``ok`` read ends. None (first run, restart) reads seven days.
+        self._cursor = cursor
 
     def apply(
         self,
@@ -1061,19 +1097,45 @@ class BloFinDemoManualMirror:
         if not settings.blofin_demo_manual_mirror_enabled:
             return MirrorReport(True, 0, 0, 0, 0, 0)
         self._require_internal_read_pin(organization_id=organization_id, settings=settings)
-        begin, end, begin_ms, end_ms = _window(self._now)
+        begin, end, _begin_ms, end_ms = _window(self._now)
+        overlap = timedelta(seconds=settings.blofin_demo_manual_mirror_overlap_seconds)
         instruments = self._client.request("GET", _INSTRUMENTS, params=None, signed=False)
         positions = self._client.request("GET", _POSITIONS, params=None, signed=True)
         if not isinstance(instruments, list) or not isinstance(positions, list):
             raise MirrorReadError("instrument or position payload was not a list")
         instrument_rows = [row for row in instruments if isinstance(row, dict)]
         position_rows = [row for row in positions if isinstance(row, dict)]
-        history, history_capped = _history_pages(self._client, _HISTORY, begin_ms, end_ms)
-        if history_capped:
-            raise MirrorReadError("positions-history page cap reached")
-        fills, fills_capped = _history_pages(self._client, _FILLS, begin_ms, end_ms)
-        funding, funding_capped = _history_pages(self._client, _FUNDING, begin_ms, end_ms)
-        orders, orders_capped = _history_pages(self._client, _ORDERS, begin_ms, end_ms)
+        instruments_dropped = len(instrument_rows) != len(instruments)
+        positions_dropped = len(position_rows) != len(positions)
+        del instruments, positions
+        history_begin = _since(self._cursor, _HISTORY, begin, overlap)
+        history = self._read(_HISTORY, history_begin, end_ms, capped_error=True)
+        delta_ids: set[str] | None = None
+        deps_begin = begin
+        if history_begin > begin:
+            # Incremental: only history rows closed since the cursor are new.
+            # Their fills, funding and orders reach back to their open, and an
+            # older slice that overlaps them must be seen for shared funding.
+            delta_ids = {str(row.get("historyId")) for row in history}
+            opened = _earliest_open(history, fallback=begin)
+            deps_begin = max(begin, min(opened, history_begin) - overlap)
+            if delta_ids and deps_begin < history_begin:
+                history = self._read(_HISTORY, deps_begin, end_ms, capped_error=True)
+        fills_capped = funding_capped = orders_capped = False
+        fills: list[dict[str, Any]] = []
+        funding: list[dict[str, Any]] = []
+        orders: list[dict[str, Any]] = []
+        if delta_ids is None or delta_ids:
+            fills, fills_capped = self._read_capped(_FILLS, deps_begin, overlap, end_ms)
+            funding, funding_capped = self._read_capped(_FUNDING, deps_begin, overlap, end_ms)
+            orders, orders_capped = self._read_capped(_ORDERS, deps_begin, overlap, end_ms)
+        logger.info(
+            "blofin_demo_manual_mirror_read",
+            mode="backfill" if delta_ids is None else "incremental",
+            since=history_begin.isoformat(),
+            history_rows=len(history),
+            new_history_rows=None if delta_ids is None else len(delta_ids),
+        )
         built = drafts_from_raw(
             instruments=instrument_rows,
             positions=position_rows,
@@ -1081,10 +1143,21 @@ class BloFinDemoManualMirror:
             fills=fills,
             funding=funding,
             orders=orders,
-            window_begin=begin,
+            window_begin=deps_begin,
             window_end=end,
         )
-        if len(position_rows) != len(positions):
+        # Raw pages are not needed after parsing; drop them before the writes.
+        del instrument_rows, position_rows, history, fills, funding, orders
+        if delta_ids is not None:
+            # Older slices were written by the read that first saw them, with
+            # their whole window. Re-reading them here would see a shorter one.
+            built = replace(
+                built,
+                closed=tuple(
+                    draft for draft in built.closed if set(draft.history_ids) <= delta_ids
+                ),
+            )
+        if positions_dropped:
             built = replace(built, positions_complete=False)
         page_capped = fills_capped or funding_capped or orders_capped
         incomplete = (
@@ -1093,7 +1166,7 @@ class BloFinDemoManualMirror:
             or built.funding_incomplete
             or not built.positions_complete
             or built.instruments_incomplete
-            or len(instrument_rows) != len(instruments)
+            or instruments_dropped
         )
         if incomplete:
             built = _without_verified_economics(built)
@@ -1113,7 +1186,23 @@ class BloFinDemoManualMirror:
             user_id=user_id,
             outcome=outcome,
         )
+        if outcome == "ok":
+            report = replace(report, next_cursor=dict.fromkeys(_CURSOR, end))
         return report
+
+    def _read(
+        self, path: str, since: datetime, end_ms: str, *, capped_error: bool
+    ) -> list[dict[str, Any]]:
+        rows, capped = _history_pages(self._client, path, _ms(since), end_ms)
+        if capped and capped_error:
+            raise MirrorReadError("positions-history page cap reached")
+        return rows
+
+    def _read_capped(
+        self, path: str, deps_begin: datetime, overlap: timedelta, end_ms: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        since = min(deps_begin, _since(self._cursor, path, deps_begin, overlap))
+        return _history_pages(self._client, path, _ms(since), end_ms)
 
     def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
         """Run the #304 org pin and UID check before any account read.
