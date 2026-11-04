@@ -510,3 +510,18 @@ def test_failed_armed_boot_still_releases_coordination(monkeypatch: pytest.Monke
     with pytest.raises(RuntimeError):
         build_paper_worker_supervisor(readonly_settings())
     assert fake.stops == 1
+
+
+def test_start_adopts_a_stored_ban_before_any_read(lite: sessionmaker[Session]) -> None:
+    """The real ``start`` path: a ban stored by the old instance closes the new gate."""
+
+    wall = Wall()
+    record_gate_deadline(lite, kind="ban", until=T0 + timedelta(minutes=18), writer="old", now=T0)
+    coordinator, gate = _coordinator(lite, "new", Mono(), wall)
+    coordinator.start()
+    try:
+        closed = gate.remaining()
+        assert closed is not None and closed[0] == "ban"
+        assert closed[1] == pytest.approx(18 * 60, abs=1.0)
+    finally:
+        coordinator.stop()
