@@ -411,6 +411,9 @@ class Settings(BaseSettings):
     # failure, on top of the client's own short retries. Backoff doubles from
     # the base and is capped at 60 s; an exhausted budget fails the read and
     # keeps the cursor. 0 fails on the first such error.
+    # History pages per endpoint per mirror read (100 rows each). A read that
+    # reaches it keeps its cursor, withholds verified economics and alerts.
+    blofin_demo_manual_mirror_max_pages: int = Field(default=40, ge=1, le=200)
     blofin_demo_manual_mirror_page_retries: int = Field(default=3, ge=0, le=10)
     blofin_demo_manual_mirror_page_retry_backoff_seconds: float = Field(
         default=5.0, ge=0.0, le=60.0

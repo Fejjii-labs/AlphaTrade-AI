@@ -169,6 +169,8 @@ class BloFinDemoSnapshotCycle:
             return
         started = self._clock()
         cursor = self._cursor_for(organization_id, user_id, now=started)
+        from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+
         try:
             report = self._run_mirror(session, organization_id, user_id, cursor)
             session.commit()
@@ -178,14 +180,41 @@ class BloFinDemoSnapshotCycle:
                 "blofin_demo_manual_mirror_failed",
                 error_type=type(exc).__name__,
             )
+            if isinstance(exc, MirrorPageCapError):
+                self._alert_page_cap((exc.endpoint,))
             self._record_failed_cycle(session, organization_id, user_id)
             return
+        capped = getattr(report, "capped_endpoints", ())
+        if capped:
+            self._alert_page_cap(capped)
         # Advance only after the journal commit; an incomplete read keeps the cursor.
         next_cursor = getattr(report, "next_cursor", None)
         if next_cursor is not None:
             self._mirror_cursor = ((organization_id, user_id), next_cursor)
             if cursor is None:
                 self._mirror_full_read_at = started
+
+    def _alert_page_cap(self, endpoints: tuple[str, ...]) -> None:
+        """Page the operator: a capped read can never complete on its own."""
+        from app.services.paper_exit_monitor import ExitMonitorAlert
+        from app.services.safety_alerts import deliver_safety_alert
+
+        names = ",".join(path.rsplit("/", 1)[-1] for path in endpoints)
+        alert = ExitMonitorAlert(
+            code="blofin_demo_mirror_page_cap",
+            severity="warning",
+            message=(
+                "BloFin demo journal mirror stopped at its page cap of "
+                f"{self.settings.blofin_demo_manual_mirror_max_pages} pages. The cursor "
+                "did not advance and verified P&L stays withheld until a read completes. "
+                "Raise BLOFIN_DEMO_MANUAL_MIRROR_MAX_PAGES or check the demo history volume."
+            ),
+            fields={"component": "blofin_demo_mirror", "reason": names[:120]},
+        )
+        try:
+            deliver_safety_alert(self.settings, alert, now=self._clock())
+        except Exception as exc:
+            logger.warning("blofin_demo_mirror_alert_failed", error_type=type(exc).__name__)
 
     def _mirror_due(self) -> bool:
         """At most one mirror read per interval, whether it succeeds or fails."""

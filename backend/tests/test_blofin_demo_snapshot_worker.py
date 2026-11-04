@@ -2454,3 +2454,70 @@ def test_mirror_pages_are_paced_from_settings_and_stop_with_the_worker(
     assert callable(wait) and wait(0.0) is False
     cycle.request_stop()
     assert wait(30.0) is True
+
+
+# --- Hardening: page cap alert -------------------------------------------------
+
+
+def _capture_alerts(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    sent: list[object] = []
+
+    def deliver(_settings: object, alert: object, **_kwargs: object) -> bool:
+        sent.append(alert)
+        return True
+
+    monkeypatch.setattr("app.services.safety_alerts.deliver_safety_alert", deliver)
+    return sent
+
+
+def test_a_capped_mirror_read_alerts_and_keeps_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first, capped_endpoints=()),
+        SimpleNamespace(
+            next_cursor=None,
+            capped_endpoints=("/api/v1/trade/fills-history", "/api/v1/trade/orders-history"),
+        ),
+        MirrorPageCapError("/api/v1/account/positions-history"),
+        SimpleNamespace(next_cursor=None, capped_endpoints=()),
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes, blofin_demo_manual_mirror_max_pages=7)
+    sent = _capture_alerts(monkeypatch)
+    for _ in range(4):
+        cycle()
+        clock[0] += timedelta(minutes=10)
+    assert seen == [None, first, first, first]
+    assert [alert.code for alert in sent] == ["blofin_demo_mirror_page_cap"] * 2  # type: ignore[attr-defined]
+    assert sent[0].fields["reason"] == "fills-history,orders-history"  # type: ignore[attr-defined]
+    assert sent[1].fields["reason"] == "positions-history"  # type: ignore[attr-defined]
+    assert "7 pages" in sent[0].message  # type: ignore[attr-defined]
+
+
+def test_a_failing_page_cap_alert_does_not_break_the_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=None, capped_endpoints=("/api/v1/trade/fills-history",))
+    ]
+    cycle, seen = _cursor_cycle(monkeypatch, [start], outcomes)
+
+    def broken(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr("app.services.safety_alerts.deliver_safety_alert", broken)
+    assert cycle().status == "ok"
+    assert seen == [None]
+
+
+def test_page_cap_alert_is_a_default_code_with_a_six_hour_cooldown() -> None:
+    from app.services.safety_alerts import TELEGRAM_SAFETY_DEFAULT_CODES, _cooldown
+
+    assert "blofin_demo_mirror_page_cap" in TELEGRAM_SAFETY_DEFAULT_CODES
+    assert _cooldown("blofin_demo_mirror_page_cap") == timedelta(hours=6)

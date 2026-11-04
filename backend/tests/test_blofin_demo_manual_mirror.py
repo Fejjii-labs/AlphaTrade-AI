@@ -1232,10 +1232,7 @@ def test_failed_cycle_withholds_even_when_older_rows_match(session: Session) -> 
     assert "page cap" in held.performance.manual_mirror_reason
 
 
-def test_capped_fills_keep_positions_history_and_withhold(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("app.services.blofin_demo_manual_mirror._MAX_PAGES", 1)
+def test_capped_fills_keep_positions_history_and_withhold(session: Session) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle["/api/v1/trade/fills-history"] = [
         {
@@ -1248,13 +1245,15 @@ def test_capped_fills_keep_positions_history_and_withhold(
         for index in range(100)
     ]
     client = _Client(bundle)
-    BloFinDemoManualMirror(client, now=NOW).apply(
+    report = BloFinDemoManualMirror(client, now=NOW).apply(
         session,
         organization_id=ORG,
         user_id=USER,
-        settings=_settings(),
+        settings=_settings(blofin_demo_manual_mirror_max_pages=1),
     )
     session.commit()
+    assert report.capped_endpoints == ("/api/v1/trade/fills-history",)
+    assert report.next_cursor is None
     row = _rows(session)[0]
     assert row.external_ref == "blofin-demo-history:h-long"
     assert row.net_pnl is None
@@ -1781,9 +1780,10 @@ def _mirror(
     client: _Client,
     now: datetime,
     cursor: dict[str, datetime] | None = None,
+    **settings: object,
 ) -> object:
     report = BloFinDemoManualMirror(client, now=now, cursor=cursor).apply(
-        session, organization_id=ORG, user_id=USER, settings=_settings()
+        session, organization_id=ORG, user_id=USER, settings=_settings(**settings)
     )
     session.commit()
     return report
@@ -1844,14 +1844,13 @@ def test_new_close_reads_its_dependencies_from_its_open_and_keeps_older_rows(
     assert "pnl-verified" in (rows["blofin-demo-history:h-eth-old"].tags or [])
 
 
-def test_capped_read_returns_no_cursor(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.services.blofin_demo_manual_mirror._MAX_PAGES", 1)
+def test_capped_read_returns_no_cursor(session: Session) -> None:
     bundle = _paths(_FIXTURE["long"])
     bundle["/api/v1/trade/fills-history"] = [
         {"tradeId": f"t{index}", "instId": "BTC-USDT", "ts": "1792195205000", "orderId": "o"}
         for index in range(100)
     ]
-    report = _mirror(session, _Client(bundle), NOW)
+    report = _mirror(session, _Client(bundle), NOW, blofin_demo_manual_mirror_max_pages=1)
     assert report.next_cursor is None  # type: ignore[attr-defined]
 
 
@@ -2070,3 +2069,87 @@ def test_mirror_page_retry_settings_default_and_bounds() -> None:
         Settings(_env_file=None, blofin_demo_manual_mirror_page_retries=11)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, blofin_demo_manual_mirror_page_retry_backoff_seconds=61)
+
+
+# --- Hardening: page cap -------------------------------------------------------
+
+
+class _EndlessClient(_Client):
+    """Full pages with fresh cursors for ``endless`` paths; the venue never runs dry."""
+
+    def __init__(self, bundle: dict[str, list[dict[str, object]]], endless: str) -> None:
+        super().__init__(bundle)
+        self.endless = endless
+        self.served = 0
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        if path != self.endless:
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+        self.calls.append((method, path))
+        key = {_HISTORY_PATH: "historyId", _FILLS_PATH: "tradeId"}[path]
+        start = self.served
+        self.served += 100
+        return [{key: f"c{start + index}", "instId": "BTC-USDT"} for index in range(100)]
+
+
+def test_history_pages_stop_at_max_pages_and_report_the_cap() -> None:
+    client = _PagedClient([_full_page(index * 100) for index in range(10)])
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", max_pages=3)
+    assert capped is True and client.calls == 3 and len(rows) == 300
+
+
+def test_positions_history_page_cap_writes_nothing_and_logs_the_endpoint(
+    session: Session,
+) -> None:
+    import structlog
+
+    from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+
+    client = _EndlessClient(_paths(_FIXTURE["long"]), _HISTORY_PATH)
+    settings = _settings(blofin_demo_manual_mirror_max_pages=2)
+    with structlog.testing.capture_logs() as logs, pytest.raises(MirrorPageCapError) as caught:
+        BloFinDemoManualMirror(client, now=NOW).apply(
+            session, organization_id=ORG, user_id=USER, settings=settings
+        )
+    session.rollback()
+    assert caught.value.endpoint == _HISTORY_PATH
+    assert [path for _m, path in client.calls].count(_HISTORY_PATH) == 2
+    capped = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_page_cap"]
+    assert len(capped) == 1
+    assert capped[0]["log_level"] == "error"
+    assert capped[0]["endpoint"] == _HISTORY_PATH
+    assert capped[0]["max_pages"] == 2 and capped[0]["rows"] == 200
+    assert capped[0]["mode"] == "backfill"
+    assert _rows(session) == []
+
+
+def test_incremental_dependency_cap_keeps_the_cursor_and_logs_incremental(
+    session: Session,
+) -> None:
+    import structlog
+
+    client = _EndlessClient(_paths(_FIXTURE["long"]), _FILLS_PATH)
+    cursor = dict.fromkeys((_HISTORY_PATH, *_DEPENDENT_PATHS), NOW - timedelta(days=2))
+    with structlog.testing.capture_logs() as logs:
+        report = _mirror(session, client, NOW, cursor, blofin_demo_manual_mirror_max_pages=3)
+    assert report.next_cursor is None  # type: ignore[attr-defined]
+    assert report.capped_endpoints == (_FILLS_PATH,)  # type: ignore[attr-defined]
+    assert client.served == 300
+    capped = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_page_cap"]
+    assert [(e["endpoint"], e["mode"]) for e in capped] == [(_FILLS_PATH, "incremental")]
+    assert "pnl-unverified" in (_rows(session)[0].tags or [])
+
+
+def test_an_uncapped_read_reports_no_capped_endpoint(session: Session) -> None:
+    report = _mirror(session, _Client(_paths(_FIXTURE["long"])), NOW)
+    assert report.capped_endpoints == ()  # type: ignore[attr-defined]
+    assert report.next_cursor is not None  # type: ignore[attr-defined]
+
+
+def test_mirror_max_pages_setting_default_and_bounds() -> None:
+    from pydantic import ValidationError
+
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_max_pages == 40
+    for bad in (0, 201):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, blofin_demo_manual_mirror_max_pages=bad)

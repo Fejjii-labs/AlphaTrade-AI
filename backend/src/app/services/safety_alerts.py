@@ -100,6 +100,7 @@ _COOLDOWN_SECONDS = {
     "market_data_banned": 900,
     "worker_memory_watchdog_repeat": 900,
     "worker_unclean_exit": 900,
+    "blofin_demo_mirror_page_cap": 6 * 3600,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
@@ -119,6 +120,7 @@ TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
         "market_data_banned",
         "worker_memory_watchdog_repeat",
         "worker_unclean_exit",
+        "blofin_demo_mirror_page_cap",
         "stop_hit",
         "tp_hit",
     }

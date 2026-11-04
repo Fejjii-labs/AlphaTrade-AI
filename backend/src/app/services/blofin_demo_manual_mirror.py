@@ -135,6 +135,14 @@ class MirrorReadError(Exception):
     """A read-only history page was incomplete or malformed."""
 
 
+class MirrorPageCapError(MirrorReadError):
+    """Positions history reached the page cap; nothing was written."""
+
+    def __init__(self, endpoint: str) -> None:
+        super().__init__("positions-history page cap reached")
+        self.endpoint = endpoint
+
+
 def _sleep(seconds: float) -> bool:
     time.sleep(seconds)
     return False
@@ -277,6 +285,8 @@ class MirrorReport:
     skipped_rows: tuple[SkippedRow, ...] = ()
     # Read end per history endpoint. Set only after an ``ok`` cycle.
     next_cursor: dict[str, datetime] | None = None
+    # Endpoints whose read stopped at the page cap (oldest rows unread).
+    capped_endpoints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -941,6 +951,7 @@ def _history_pages(
     end: str,
     pace: Callable[[], None] | None = None,
     retry: _PageRetry | None = None,
+    max_pages: int | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return rows and whether the safety cap stopped the cursor.
 
@@ -949,7 +960,8 @@ def _history_pages(
     """
     rows: list[dict[str, Any]] = []
     try:
-        return _read_pages(client, path, begin, end, pace, retry, rows)
+        pages = _MAX_PAGES if max_pages is None else max_pages
+        return _read_pages(client, path, begin, end, pace, retry, rows, pages)
     except BaseException:
         rows.clear()
         raise
@@ -963,11 +975,12 @@ def _read_pages(
     pace: Callable[[], None] | None,
     retry: _PageRetry | None,
     rows: list[dict[str, Any]],
+    max_pages: int,
 ) -> tuple[list[dict[str, Any]], bool]:
     after: str | None = None
     seen: set[str] = set()
     cursor_key = _CURSOR[path]
-    for _page in range(_MAX_PAGES):
+    for _page in range(max_pages):
         params = {"begin": begin, "end": end, "limit": "100"}
         if after is not None:
             params["after"] = after
@@ -1198,6 +1211,8 @@ class BloFinDemoManualMirror:
         self._wait = wait
         self._pace = _PagePacer(page_pause_seconds, wait)
         self._retry: _PageRetry | None = None
+        self._max_pages: int | None = None
+        self._mode = "backfill" if cursor is None else "incremental"
 
     def apply(
         self,
@@ -1218,6 +1233,7 @@ class BloFinDemoManualMirror:
             settings.blofin_demo_manual_mirror_page_retry_backoff_seconds,
             self._wait,
         )
+        self._max_pages = settings.blofin_demo_manual_mirror_max_pages
         begin, end, _begin_ms, end_ms = _window(self._now)
         overlap = timedelta(seconds=settings.blofin_demo_manual_mirror_overlap_seconds)
         instruments = self._client.request("GET", _INSTRUMENTS, params=None, signed=False)
@@ -1280,7 +1296,16 @@ class BloFinDemoManualMirror:
             )
         if positions_dropped:
             built = replace(built, positions_complete=False)
-        page_capped = fills_capped or funding_capped or orders_capped
+        capped_endpoints = tuple(
+            path
+            for path, capped in (
+                (_FILLS, fills_capped),
+                (_FUNDING, funding_capped),
+                (_ORDERS, orders_capped),
+            )
+            if capped
+        )
+        page_capped = bool(capped_endpoints)
         incomplete = (
             page_capped
             or built.history_incomplete
@@ -1309,23 +1334,44 @@ class BloFinDemoManualMirror:
         )
         if outcome == "ok":
             report = replace(report, next_cursor=dict.fromkeys(_CURSOR, end))
+        elif capped_endpoints:
+            report = replace(report, capped_endpoints=capped_endpoints)
         return report
 
     def _read(
         self, path: str, since: datetime, end_ms: str, *, capped_error: bool
     ) -> list[dict[str, Any]]:
         rows, capped = _history_pages(
-            self._client, path, _ms(since), end_ms, self._pace, self._retry
+            self._client, path, _ms(since), end_ms, self._pace, self._retry, self._max_pages
         )
+        if capped:
+            self._log_page_cap(path, since, len(rows))
         if capped and capped_error:
-            raise MirrorReadError("positions-history page cap reached")
+            rows.clear()
+            raise MirrorPageCapError(path)
         return rows
 
     def _read_capped(
         self, path: str, deps_begin: datetime, overlap: timedelta, end_ms: str
     ) -> tuple[list[dict[str, Any]], bool]:
         since = min(deps_begin, _since(self._cursor, path, deps_begin, overlap))
-        return _history_pages(self._client, path, _ms(since), end_ms, self._pace, self._retry)
+        rows, capped = _history_pages(
+            self._client, path, _ms(since), end_ms, self._pace, self._retry, self._max_pages
+        )
+        if capped:
+            self._log_page_cap(path, since, len(rows))
+        return rows, capped
+
+    def _log_page_cap(self, path: str, since: datetime, rows: int) -> None:
+        # BloFin pages newest first, so the unread rows are the oldest ones.
+        logger.error(
+            "blofin_demo_manual_mirror_page_cap",
+            endpoint=path,
+            max_pages=self._max_pages,
+            rows=rows,
+            mode=self._mode,
+            since=since.isoformat(),
+        )
 
     def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
         """Run the #304 org pin and UID check before any account read.
