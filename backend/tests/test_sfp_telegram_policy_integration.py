@@ -150,20 +150,25 @@ def test_closed_reclaim_projects_sweep_forming_and_confirmation_without_actions(
         assert row.notification_event.quality is None
         assert row.notification_event.severity == SEVERITIES[row.notification_event.event_type]
         for text in (
-            "PAPER MODE",
-            "BTCUSDT",
-            "15m",
-            "Structural level:",
-            "Sweep extreme:",
-            "Reclaim state:",
-            str(policy.strategy_version_id),
-            str(setup_id),
-            "Evidence timestamp:",
-            "Quality coverage:",
-            "Missing evidence:",
-            "Risk state:",
+            "Symbol: BTCUSDT",
+            "Strategy: Swing Failure Pattern",
+            "Timeframe: 15m",
+            "Stage:",
+            "Time:",
+            "PAPER alert. Not an order.",
         ):
             assert text in row.text
+        # IDs, risk state and coverage are stored, never rendered.
+        for dropped in (
+            str(policy.strategy_version_id),
+            str(setup_id),
+            "Risk state:",
+            "Quality coverage:",
+            "Missing evidence:",
+            "Setup ID:",
+        ):
+            assert dropped not in row.text
+        assert f"Ref: {str(setup_id)[:8]}" in row.text
     confirmed_text = next(
         row.text for row in rows if row.notification_event.event_type is EventType.SFP_CONFIRMED
     )
@@ -176,12 +181,11 @@ def test_closed_reclaim_projects_sweep_forming_and_confirmation_without_actions(
     for label, price in (
         ("Entry:", confirmed_fact.entry),
         ("Stop:", confirmed_fact.stop),
-        ("Take-profit:", confirmed_fact.take_profit),
+        ("Target:", confirmed_fact.take_profit),
     ):
         assert f"{label} {price}" in confirmed_text
-    assert "Real trading is not authorized." in confirmed_text
     assert all(
-        "Entry:" not in row.text
+        "Entry: unavailable" in row.text
         for row in rows
         if row.notification_event.event_type is not EventType.SFP_CONFIRMED
     )

@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -115,19 +116,42 @@ def test_confirmed_paper_event_content_and_duplicate_episode(nested_world):
     for value in (
         "PAPER",
         "BTCUSDT",
-        w.window.evidence_venue.value,
+        "Strategy: Nested Continuation",
         w.window.timeframe.value,
         w.summary.stage,
         w.candidate.direction.value,
-        str(w.candidate.strategy_version_id),
-        str(w.summary.setup_id),
-        w.summary.evidence_at.isoformat(),
-        "AVAILABLE",
-        "risk_block",
-        "blocked",
+        w.summary.evidence_at.astimezone(ZoneInfo("Europe/Berlin")).strftime("%H:%M %Z"),
     ):
         assert value in text
-    assert "Reason summary:" in text
+    # Heads-up only: internal IDs, risk/decision state, freshness, venue and reasons
+    # stay in the stored payload and are not rendered.
+    for dropped in (
+        str(w.candidate.strategy_version_id),
+        str(w.summary.setup_id),
+        "Strategy version:",
+        "Setup ID:",
+        "Venue:",
+        "Freshness:",
+        "Decision:",
+        "Risk state:",
+        "Reason summary:",
+        "risk_block",
+    ):
+        assert dropped not in text
+    labels = [line.split(":", 1)[0] for line in text.splitlines()[:9]]
+    assert labels == [
+        "Symbol",
+        "Strategy",
+        "Direction",
+        "Entry",
+        "Stop",
+        "Target",
+        "Timeframe",
+        "Nested stage",
+        "Time",
+    ]
+    assert text.splitlines()[9].startswith("Ref: ") and len(text.splitlines()[9]) == 13
+    assert text.splitlines()[10] == "PAPER alert. Not an order."
     assert w.summary.entry is not None and w.summary.stop is not None
     assert w.summary.target is not None
     assert format(w.summary.entry, "f") in text
