@@ -76,6 +76,9 @@ def _row(
     *,
     result: TradeResult = TradeResult.OPEN,
     source: JournalTradeSource = JournalTradeSource.MANUAL,
+    gross: str | None = None,
+    fees: str | None = None,
+    funding: str | None = None,
 ) -> JournalTradeStatsRow:
     return JournalTradeStatsRow(
         id=uuid.uuid4(),
@@ -89,9 +92,9 @@ def _row(
         strategy_version_id=None,
         result=result,
         net_pnl=Decimal(pnl) if pnl is not None else None,
-        gross_pnl=None,
-        fees=None,
-        funding=None,
+        gross_pnl=Decimal(gross) if gross is not None else None,
+        fees=Decimal(fees) if fees is not None else None,
+        funding=Decimal(funding) if funding is not None else None,
         slippage=None,
         planned_risk_amount=None,
         mfe_amount=None,
@@ -269,6 +272,56 @@ def test_classifier_counts_match_average_buckets() -> None:
     assert s.average_win == sum((r.net_pnl or Decimal(0)) for r in winners) / len(winners)
     assert s.average_loss == sum((r.net_pnl or Decimal(0)) for r in losers) / len(losers)
     assert (s.wins, s.losses, s.breakeven) == (1, 2, 1)
+
+
+# Fee/funding fixtures. Convention (BloFin demo mirror, canonical close):
+# net = gross - fees - funding, with funding > 0 paid and < 0 received.
+# Hand-computed:
+#   A: 120.00 - 4.50 - 1.25    = 114.25  (win)
+#   B: -80.00 - 3.20 - (-0.40) = -82.80  (loss; funding received)
+#   C:  10.00 - 6.00 - 4.00    =   0.00  (breakeven: gross win eaten by costs)
+#   D:   2.00 - 2.50 - 0.00    =  -0.50  (loss: gross win, net loss)
+FEE_FUNDING_FIXTURE = (
+    ("120.00", "4.50", "1.25", "114.25"),
+    ("-80.00", "3.20", "-0.40", "-82.80"),
+    ("10.00", "6.00", "4.00", "0.00"),
+    ("2.00", "2.50", "0.00", "-0.50"),
+)
+
+
+def test_fee_funding_fixture_is_hand_consistent() -> None:
+    for gross, fees, funding, net in FEE_FUNDING_FIXTURE:
+        assert Decimal(gross) - Decimal(fees) - Decimal(funding) == Decimal(net)
+
+
+def test_figures_use_net_after_fees_and_funding() -> None:
+    rows = [
+        _row(net, datetime(2026, 7, 1, hour, tzinfo=UTC), gross=gross, fees=fees, funding=funding)
+        for hour, (gross, fees, funding, net) in enumerate(FEE_FUNDING_FIXTURE)
+    ]
+    result = _build(rows)
+    s = result.summary
+    assert s.net_pnl == Decimal("30.95")  # not the gross sum 52.00
+    assert (s.wins, s.losses, s.breakeven) == (1, 2, 1)
+    assert s.win_rate == pytest.approx(1 / 3)
+    assert s.gross_profit == Decimal("114.25")
+    assert s.gross_loss == Decimal("-83.30")
+    assert s.profit_factor == pytest.approx(114.25 / 83.30)
+    assert s.average_win == Decimal("114.25")
+    assert s.average_loss == Decimal("-41.65")
+    assert s.expectancy == Decimal("7.7375")  # 30.95 / 4
+    # Curve 114.25 → 31.45 → 31.45 → 30.95: drawdown from the 114.25 peak.
+    assert result.risk.max_drawdown == Decimal("83.30")
+    assert result.days[0].net_pnl == Decimal("30.95")
+    assert result.cumulative[-1].cumulative_net_pnl == Decimal("30.95")
+
+
+def test_gross_and_costs_without_net_are_not_turned_into_pnl() -> None:
+    rows = [_row(None, datetime(2026, 7, 1, tzinfo=UTC), gross="50", fees="1", funding="0.5")]
+    s = _build(rows).summary
+    assert s.pnl_sample_count == 0
+    assert s.net_pnl is None
+    assert s.expectancy is None
 
 
 def test_missing_pnl_is_counted_but_not_summed() -> None:
@@ -674,6 +727,39 @@ def test_calendar_endpoint_partial_close_slices_count_open_remainder_does_not(
     ).json()
     assert real["open_trades_excluded"] == 1
     assert real["summary"]["trade_count"] == 0
+
+
+def test_calendar_endpoint_reads_net_after_fees_and_funding(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    for day, (gross, fees, funding, net) in enumerate(FEE_FUNDING_FIXTURE, start=1):
+        _closed_trade(
+            factory,
+            source=DEMO,
+            gross_pnl=gross,
+            fees=fees,
+            funding=funding,
+            net_pnl=net,
+            exit_time=datetime(2026, 7, day, 12, tzinfo=UTC),
+        )
+    body = test_client.get(
+        "/journal/statistics/calendar",
+        headers=headers,
+        params={"date_from": "2026-07-01", "date_to": "2026-07-31", "tz": "UTC"},
+    ).json()
+    summary = body["summary"]
+    assert Decimal(summary["net_pnl"]) == Decimal("30.95")
+    assert (summary["wins"], summary["losses"], summary["breakeven"]) == (1, 2, 1)
+    assert Decimal(summary["expectancy"]) == Decimal("7.7375")
+    assert Decimal(body["risk"]["max_drawdown"]) == Decimal("83.30")
+    assert [Decimal(d["net_pnl"]) for d in body["days"]] == [
+        Decimal("114.25"),
+        Decimal("-82.80"),
+        Decimal("0.00"),
+        Decimal("-0.50"),
+    ]
 
 
 def test_calendar_endpoint_keeps_the_newest_window_when_capped() -> None:
