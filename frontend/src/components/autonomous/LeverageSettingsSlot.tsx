@@ -152,9 +152,13 @@ function DemoLeverageEditor() {
   return (
     <form className="space-y-3" onSubmit={(event) => void handleSubmit(event)} data-testid="demo-leverage-settings">
       <p className="text-xs text-text-muted">
-        BloFin demo only. Before each demo entry the app sets this leverage and margin mode on BloFin demo and checks
-        it back; a mismatch or a liquidation price too close to the stop blocks the trade. Position size still comes
-        from risk per trade and the limits above.
+        BloFin demo only. Once a demo trade passes its checks, right before entry the app sets this leverage and margin
+        mode on BloFin demo and checks it back; a mismatch or a liquidation price too close to the stop blocks the
+        trade. Position size still comes from risk per trade and the limits above.
+      </p>
+      <p className="text-xs text-text-muted" data-testid="demo-leverage-size-hint">
+        At the current total-exposure limit, higher leverage only lowers the margin used and moves liquidation closer.
+        It does not increase trade size.
       </p>
       <fieldset disabled={!owner || saving} className="space-y-3">
         <div className="grid gap-4 md:grid-cols-3">

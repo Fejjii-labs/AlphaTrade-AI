@@ -85,6 +85,13 @@ describe("LeverageSettingsSlot demo leverage editor", () => {
     expect(screen.getByTestId("demo-leverage")).toHaveValue("5");
   });
 
+  it("explains that higher leverage does not increase trade size at the exposure limit", async () => {
+    render(<LeverageSettingsSlot profiles={[]} />);
+    const hint = await screen.findByTestId("demo-leverage-size-hint");
+    expect(hint).toHaveTextContent("higher leverage only lowers the margin used and moves liquidation closer");
+    expect(hint).toHaveTextContent("It does not increase trade size.");
+  });
+
   it("clears overrides when none are set and sends only leverage fields", async () => {
     const { api } = await import("@/lib/api");
     vi.mocked(api.autonomous.updateSettings).mockResolvedValue(settings);
