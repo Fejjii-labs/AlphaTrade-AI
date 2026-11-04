@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import ClassVar
 
 import httpx
 import pytest
@@ -2153,3 +2154,139 @@ def test_mirror_max_pages_setting_default_and_bounds() -> None:
     for bad in (0, 201):
         with pytest.raises(ValidationError):
             Settings(_env_file=None, blofin_demo_manual_mirror_max_pages=bad)
+
+
+# --- Hardening: bounded peak of a full read --------------------------------------
+
+
+def test_row_fields_cover_every_field_the_parsers_read() -> None:
+    import re
+
+    from app.services import blofin_demo_manual_mirror as mirror
+
+    source = Path(mirror.__file__).read_text()
+    read = set(re.findall(r'\.get\("(\w+)"', source)) | set(re.findall(r'\["(\w+)"\]', source))
+    read.discard("after")  # the request parameter, not a row field
+    assert read, "parser field scan found nothing"
+    assert read <= set(mirror._ROW_FIELDS), read - set(mirror._ROW_FIELDS)
+    assert set(mirror._CURSOR.values()) <= set(mirror._ROW_FIELDS)
+
+
+def test_projected_pages_keep_only_parser_fields_and_raw_pages_stay_as_read() -> None:
+    raw = [{"tradeId": "1", "instId": "BTC-USDT", "ts": "5", "junk": "x" * 100, "uid": "u"}]
+    projected, _capped = _history_pages(
+        _PagedClient([copy.deepcopy(raw)]), _FILLS_PATH, "1", "2", project=True
+    )
+    assert projected == [{"instId": "BTC-USDT", "tradeId": "1", "ts": "5"}]
+    # The operator backfill keeps whole rows for its replay capture.
+    unprojected, _capped = _history_pages(_PagedClient([copy.deepcopy(raw)]), _FILLS_PATH, "1", "2")
+    assert unprojected == raw
+
+
+def _with_extra_fields(bundle: dict[str, object]) -> dict[str, object]:
+    fat = copy.deepcopy(bundle)
+    for key in ("history", "fills", "funding", "orders"):
+        for row in fat[key]:  # type: ignore[attr-defined]
+            row.update({f"extra{index}": "z" * 40 for index in range(20)})
+    return fat
+
+
+def test_unread_venue_fields_do_not_change_the_mirrored_economics(session: Session) -> None:
+    _apply(session, _with_extra_fields(_FIXTURE["long"]))
+    rows = _rows(session)
+    assert [row.external_ref for row in rows] == ["blofin-demo-history:h-long"]
+    assert _money(rows[0].net_pnl) == Decimal("0.18600000")
+    assert "pnl-verified" in (rows[0].tags or [])
+
+
+def test_the_applied_log_carries_a_bounded_sample_of_skipped_rows(session: Session) -> None:
+    import structlog
+
+    history = [
+        {"historyId": f"h{index}", "instId": "BTC-USDT", "positionId": ""} for index in range(50)
+    ]
+    bundle = {**_FIXTURE["long"], "history": history}
+    with structlog.testing.capture_logs() as logs:
+        _apply(session, bundle)
+    applied = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_applied"]
+    warned = [e for e in logs if e["event"] == "blofin_demo_manual_mirror_rows_skipped"]
+    assert len(applied[0]["skipped_rows"]) == 20
+    assert warned[0]["skipped_rows"] == 50
+
+
+class _BulkClient(_Client):
+    """Fills, funding and orders as ``pages`` full pages built on demand.
+
+    ``extra`` adds that many unread 64-byte fields per row, as a venue that
+    sends far more than the parsers read. Pages are not kept by the client.
+    """
+
+    _KEYS: ClassVar[dict[str, str]] = {
+        "/api/v1/trade/fills-history": "tradeId",
+        "/api/v1/account/funding-fees": "billId",
+        "/api/v1/trade/orders-history": "orderId",
+    }
+
+    def __init__(self, pages: int, extra: int) -> None:
+        super().__init__(_paths(_FIXTURE["long"]))
+        self.pages = pages
+        self.extra = extra
+        self.served: dict[str, int] = dict.fromkeys(self._KEYS, 0)
+
+    def request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
+        key = self._KEYS.get(path)
+        if key is None:
+            return super().request(method, path, **kwargs)  # type: ignore[arg-type]
+        start = self.served[path]
+        if start >= self.pages * 100:
+            return []
+        self.served[path] = start + 100
+        return [self._row(key, start + index) for index in range(100)]
+
+    def _row(self, key: str, number: int) -> dict[str, object]:
+        row: dict[str, object] = {key: f"{key}-{number}", "instId": "BTC-USDT", "ts": "1"}
+        for index in range(self.extra):
+            row[f"extra{index}"] = f"{number:032d}{index:032d}"
+        return row
+
+
+def _full_read_peak(pages: int, extra: int) -> tuple[int, int]:
+    """Peak traced bytes of one full (restart) read, and pages served."""
+    import gc
+    import tracemalloc
+
+    maker = _engine()
+    with maker() as current:
+        current.add(Organization(id=ORG, name="Mirror Org"))
+        current.add(User(id=USER, email="mirror@test.example", hashed_password="not-a-real-hash"))
+        current.commit()
+        client = _BulkClient(pages, extra)
+        settings = _settings(blofin_demo_manual_mirror_max_pages=pages + 2)
+        gc.collect()
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        BloFinDemoManualMirror(client, now=NOW).apply(
+            current, organization_id=ORG, user_id=USER, settings=settings
+        )
+        peak = tracemalloc.get_traced_memory()[1] - before
+        current.commit()
+    served = sum(client.served.values()) // 100
+    return peak, served
+
+
+def test_full_read_peak_holds_one_raw_page_not_every_page() -> None:
+    import tracemalloc
+
+    pages, extra = 10, 30
+    page_extra = 100 * extra * 113  # 30 unread 64-char strings (~113 bytes each) per row
+    tracemalloc.start()
+    try:
+        _full_read_peak(2, 0)  # warm imports and statement caches
+        lean, served = _full_read_peak(pages, 0)
+        fat, _served = _full_read_peak(pages, extra)
+    finally:
+        tracemalloc.stop()
+    assert served == 3 * pages
+    # Holding every raw page would add served * page_extra (~10 MB) to the peak.
+    # Projection per page keeps at most a page or two of unread fields alive.
+    assert fat - lean < 3 * page_extra, (fat, lean, page_extra)

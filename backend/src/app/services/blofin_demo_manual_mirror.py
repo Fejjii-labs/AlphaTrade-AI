@@ -99,6 +99,40 @@ _CURSOR = {
     _FUNDING: "billId",
     _ORDERS: "orderId",
 }
+# Every venue field the parsers read. The worker keeps only these per row as
+# each page arrives and drops the raw page, so a full read holds projected
+# rows, never whole pages.
+_ROW_FIELDS = (
+    "averagePrice",
+    "billId",
+    "closeAveragePrice",
+    "closePositions",
+    "contractValue",
+    "createTime",
+    "fee",
+    "fillPnl",
+    "fundingFee",
+    "fundingTime",
+    "historyId",
+    "instId",
+    "leverage",
+    "maxPositions",
+    "openAveragePrice",
+    "orderId",
+    "positionId",
+    "positionSide",
+    "positions",
+    "realizedPnl",
+    "reduceOnly",
+    "settleCurrency",
+    "side",
+    "slTriggerPrice",
+    "tpTriggerPrice",
+    "tradeId",
+    "ts",
+    "updateTime",
+)
+_LOGGED_SKIPS = 20
 _VERIFIED = "pnl-verified"
 _UNVERIFIED = "pnl-unverified"
 _MIRROR_SOURCES = (
@@ -952,16 +986,18 @@ def _history_pages(
     pace: Callable[[], None] | None = None,
     retry: _PageRetry | None = None,
     max_pages: int | None = None,
+    project: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return rows and whether the safety cap stopped the cursor.
 
     A failure clears the rows read so far before it propagates, so a
     traceback that outlives the read does not keep its pages alive.
+    ``project`` keeps only the fields the parsers read (``_ROW_FIELDS``).
     """
     rows: list[dict[str, Any]] = []
     try:
         pages = _MAX_PAGES if max_pages is None else max_pages
-        return _read_pages(client, path, begin, end, pace, retry, rows, pages)
+        return _read_pages(client, path, begin, end, pace, retry, rows, pages, project)
     except BaseException:
         rows.clear()
         raise
@@ -976,6 +1012,7 @@ def _read_pages(
     retry: _PageRetry | None,
     rows: list[dict[str, Any]],
     max_pages: int,
+    project: bool,
 ) -> tuple[list[dict[str, Any]], bool]:
     after: str | None = None
     seen: set[str] = set()
@@ -993,7 +1030,7 @@ def _read_pages(
         page = fetch() if retry is None else retry(fetch)
         # The page is dropped before any error is raised, so no traceback
         # frame keeps it alive.
-        error, cursor, size = _take_page(page, cursor_key, seen, rows)
+        error, cursor, size = _take_page(page, cursor_key, seen, rows, project)
         del page
         if error is not None:
             raise MirrorReadError(error)
@@ -1004,7 +1041,11 @@ def _read_pages(
 
 
 def _take_page(
-    page: object, cursor_key: str, seen: set[str], rows: list[dict[str, Any]]
+    page: object,
+    cursor_key: str,
+    seen: set[str],
+    rows: list[dict[str, Any]],
+    project: bool = False,
 ) -> tuple[str | None, str, int]:
     """Append one page's rows. Returns (error, next cursor, page size); never raises."""
     if not isinstance(page, list):
@@ -1021,7 +1062,7 @@ def _take_page(
     for item in page:
         if not isinstance(item, dict):
             return "history row was not an object", "", 0
-        rows.append(item)
+        rows.append({key: item[key] for key in _ROW_FIELDS if key in item} if project else item)
     return None, cursor, len(page)
 
 
@@ -1257,6 +1298,8 @@ class BloFinDemoManualMirror:
             opened = _earliest_open(history, fallback=begin)
             deps_begin = max(begin, min(opened, history_begin) - overlap)
             if delta_ids and deps_begin < history_begin:
+                # Drop the first read before the wider one, not after it.
+                del history
                 history = self._read(_HISTORY, deps_begin, end_ms, capped_error=True)
         fills_capped = funding_capped = orders_capped = False
         fills: list[dict[str, Any]] = []
@@ -1342,7 +1385,14 @@ class BloFinDemoManualMirror:
         self, path: str, since: datetime, end_ms: str, *, capped_error: bool
     ) -> list[dict[str, Any]]:
         rows, capped = _history_pages(
-            self._client, path, _ms(since), end_ms, self._pace, self._retry, self._max_pages
+            self._client,
+            path,
+            _ms(since),
+            end_ms,
+            self._pace,
+            self._retry,
+            self._max_pages,
+            project=True,
         )
         if capped:
             self._log_page_cap(path, since, len(rows))
@@ -1356,7 +1406,14 @@ class BloFinDemoManualMirror:
     ) -> tuple[list[dict[str, Any]], bool]:
         since = min(deps_begin, _since(self._cursor, path, deps_begin, overlap))
         rows, capped = _history_pages(
-            self._client, path, _ms(since), end_ms, self._pace, self._retry, self._max_pages
+            self._client,
+            path,
+            _ms(since),
+            end_ms,
+            self._pace,
+            self._retry,
+            self._max_pages,
+            project=True,
         )
         if capped:
             self._log_page_cap(path, since, len(rows))
@@ -1508,7 +1565,8 @@ class BloFinDemoManualMirror:
             updated=updated,
             reconciled=reconciled,
             skipped=built.skipped,
-            skipped_rows=[row.as_dict() for row in built.skipped_rows],
+            # A bounded sample: one line must not grow with the history size.
+            skipped_rows=[row.as_dict() for row in built.skipped_rows[:_LOGGED_SKIPS]],
         )
         return MirrorReport(
             skipped_flag=False,
