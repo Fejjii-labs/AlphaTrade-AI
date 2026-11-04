@@ -2521,3 +2521,123 @@ def test_page_cap_alert_is_a_default_code_with_a_six_hour_cooldown() -> None:
 
     assert "blofin_demo_mirror_page_cap" in TELEGRAM_SAFETY_DEFAULT_CODES
     assert _cooldown("blofin_demo_mirror_page_cap") == timedelta(hours=6)
+
+
+# --- Hardening: one mirror read at a time; failures release page data ----------
+
+
+def _mirror_cycle(clock: list[datetime], **updates: object) -> BloFinDemoSnapshotCycle:
+    settings = _open_settings().model_copy(
+        update={"blofin_demo_manual_mirror_enabled": True, **updates}
+    )
+    return BloFinDemoSnapshotCycle(settings, clock=lambda: clock[0])
+
+
+_SESSION = SimpleNamespace(commit=lambda: None, rollback=lambda: None, close=lambda: None)
+
+
+def test_a_second_mirror_call_while_one_reads_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cycle = _mirror_cycle(clock)
+    entered, release = threading.Event(), threading.Event()
+    runs: list[object] = []
+
+    def slow(_session: object, _org: object, _user: object, cursor: object) -> object:
+        runs.append(cursor)
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(next_cursor={"p": start}, capped_endpoints=())
+
+    monkeypatch.setattr(cycle, "_run_mirror", slow)
+    org, user = uuid4(), uuid4()
+    first = threading.Thread(target=cycle._mirror_without_backing_off, args=(_SESSION, org, user))
+    first.start()
+    assert entered.wait(5)
+    # The first read outlasts the interval (pacing, retries); a second must not start.
+    clock[0] = start + timedelta(minutes=30)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, org, user)
+    release.set()
+    first.join(5)
+    assert runs == [None]
+    assert any(entry.get("event") == "blofin_demo_manual_mirror_busy" for entry in logs)  # type: ignore[union-attr]
+    # Once free, the next due tick runs and carries the committed cursor.
+    clock[0] = start + timedelta(hours=1)
+    cycle._mirror_without_backing_off(_SESSION, org, user)
+    assert runs == [None, {"p": start}]
+
+
+def test_mirror_cursor_state_holds_one_owner_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cycle = _mirror_cycle(clock)
+    seen: list[object] = []
+
+    def run(_session: object, _org: object, _user: object, cursor: object) -> object:
+        seen.append(cursor)
+        return SimpleNamespace(next_cursor={"p": clock[0]}, capped_endpoints=())
+
+    monkeypatch.setattr(cycle, "_run_mirror", run)
+    owners = [(uuid4(), uuid4()) for _ in range(50)]
+    for org, user in owners:
+        clock[0] += timedelta(minutes=10)
+        cycle._mirror_without_backing_off(_SESSION, org, user)
+    # Each new owner starts with a full read; only the last owner is remembered.
+    assert seen == [None] * 50
+    assert cycle._mirror_cursor is not None and cycle._mirror_cursor[0] == owners[-1]
+    state = [value for value in vars(cycle).values() if isinstance(value, dict | list | set)]
+    assert state == []
+
+
+class _Row(dict):  # type: ignore[type-arg]
+    pass
+
+
+def test_a_failed_mirror_releases_its_page_data_before_recording_the_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gc
+    import weakref
+
+    clock = [datetime(2026, 10, 18, 12, tzinfo=UTC)]
+    cycle = _mirror_cycle(clock)
+    refs: list[weakref.ref[_Row]] = []
+
+    def failing(_session: object, _org: object, _user: object, _cursor: object) -> object:
+        pages = [_Row(tradeId=str(index)) for index in range(100)]
+        refs.extend(weakref.ref(row) for row in pages)
+        raise MirrorReadError("history page failed after retries: ExchangeRateLimitError")
+
+    alive_at_record: list[int] = []
+
+    def record(*_args: object) -> None:
+        gc.collect()
+        alive_at_record.append(sum(ref() is not None for ref in refs))
+
+    monkeypatch.setattr(cycle, "_run_mirror", failing)
+    monkeypatch.setattr(cycle, "_record_failed_cycle", record)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, uuid4(), uuid4())
+    assert alive_at_record == [0]
+    failed = [e for e in logs if e.get("event") == "blofin_demo_manual_mirror_failed"]  # type: ignore[union-attr]
+    assert failed[0]["error_type"] == "MirrorReadError"  # type: ignore[index]
+    assert failed[0]["detail"] == "history page failed after retries: ExchangeRateLimitError"  # type: ignore[index]
+
+
+def test_a_non_mirror_failure_logs_only_its_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [datetime(2026, 10, 18, 12, tzinfo=UTC)]
+    cycle = _mirror_cycle(clock)
+
+    def failing(*_args: object) -> object:
+        raise RuntimeError("venue said secret-ish things")
+
+    monkeypatch.setattr(cycle, "_run_mirror", failing)
+    monkeypatch.setattr(cycle, "_record_failed_cycle", lambda *_a: None)
+    with _capture_blofin_logs() as logs:
+        cycle._mirror_without_backing_off(_SESSION, uuid4(), uuid4())
+    failed = [e for e in logs if e.get("event") == "blofin_demo_manual_mirror_failed"]  # type: ignore[union-attr]
+    assert failed[0]["error_type"] == "RuntimeError"  # type: ignore[index]
+    assert "detail" not in failed[0]  # type: ignore[operator]

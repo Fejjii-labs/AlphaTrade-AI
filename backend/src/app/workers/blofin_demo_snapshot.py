@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from threading import Event
+from threading import Event, Lock
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
@@ -54,7 +54,12 @@ class BloFinDemoSnapshotCycle:
         self._stop = Event()
         self._failures = 0
         self._next_attempt: datetime | None = None
-        # Last ``ok`` mirror read per owner. In memory: a restart reads 7 days.
+        # One mirror read at a time. The supervisor runs this cycle on one
+        # thread, but a read can outlast the interval (pacing, retries), and
+        # ``run_round`` or a caller on another thread must not start a second.
+        self._mirror_lock = Lock()
+        # Last ``ok`` mirror read, for the pinned owner only (one entry, never
+        # a growing map). In memory: a restart reads 7 days.
         self._mirror_cursor: tuple[tuple[uuid.UUID, uuid.UUID], dict[str, datetime]] | None = None
         # When the last ``ok`` full 7-day read started. A periodic full read
         # catches history the venue published later than the overlap.
@@ -165,23 +170,45 @@ class BloFinDemoSnapshotCycle:
         """Run the journal mirror. A read failure must not delay the snapshot."""
         if not self.settings.blofin_demo_manual_mirror_enabled:
             return
+        if not self._mirror_lock.acquire(blocking=False):
+            logger.warning("blofin_demo_manual_mirror_busy")
+            return
+        try:
+            self._mirror_locked(session, organization_id, user_id)
+        finally:
+            self._mirror_lock.release()
+
+    def _mirror_locked(
+        self,
+        session: _UnitOfWork,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
         if not self._mirror_due():
             return
         started = self._clock()
         cursor = self._cursor_for(organization_id, user_id, now=started)
-        from app.services.blofin_demo_manual_mirror import MirrorPageCapError
+        from app.services.blofin_demo_manual_mirror import MirrorPageCapError, MirrorReadError
 
+        report: object = None
+        failure: dict[str, str] | None = None
+        capped: tuple[str, ...] = ()
         try:
             report = self._run_mirror(session, organization_id, user_id, cursor)
             session.commit()
         except Exception as exc:
-            session.rollback()
-            logger.warning(
-                "blofin_demo_manual_mirror_failed",
-                error_type=type(exc).__name__,
-            )
+            failure = {"error_type": type(exc).__name__}
+            if isinstance(exc, MirrorReadError):
+                failure["detail"] = str(exc)[:200]
             if isinstance(exc, MirrorPageCapError):
-                self._alert_page_cap((exc.endpoint,))
+                capped = (exc.endpoint,)
+        # Recover outside the ``except`` block: the exception, its traceback
+        # and the read's frames (with any page data) are released by now.
+        if failure is not None:
+            session.rollback()
+            logger.warning("blofin_demo_manual_mirror_failed", **failure)
+            if capped:
+                self._alert_page_cap(capped)
             self._record_failed_cycle(session, organization_id, user_id)
             return
         capped = getattr(report, "capped_endpoints", ())
