@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+import structlog
 from sqlalchemy.orm import Session
 
 from app.core.config import ExchangeMode, Settings
@@ -30,6 +31,8 @@ from app.services.journal_lifecycle_projector import JournalLifecycleProjector
 from app.signal_fusion.action_eligibility import ActionEligibilityEvaluation
 from app.signal_fusion.candidate import Candidate
 
+logger = structlog.get_logger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class CanonicalAttributionLineage:
@@ -43,6 +46,23 @@ def learning_venue_mode_from_settings(settings: Settings) -> LearningVenueMode:
     if settings.exchange_mode is ExchangeMode.PAPER_EXCHANGE_DEMO:
         return LearningVenueMode.PAPER_EXCHANGE_DEMO
     return LearningVenueMode.PAPER_INTERNAL
+
+
+def resolve_learning_venue_mode(
+    settings: Settings, recorded: LearningVenueMode | None
+) -> LearningVenueMode:
+    """The venue mode for the next event on one attribution aggregate.
+
+    The first attribution of a Candidate fixes its venue mode. Later events
+    (FILL, CLOSE, RECONCILE) keep that mode even if ``EXCHANGE_MODE`` changed
+    since, so a trade opened under ``paper_internal`` still closes after the
+    deployment switches to ``paper_exchange_demo``. Only a Candidate with no
+    attribution yet takes the current setting.
+    """
+
+    if recorded is not None:
+        return recorded
+    return learning_venue_mode_from_settings(settings)
 
 
 def require_canonical_attribution_lineage(
@@ -98,6 +118,20 @@ def attribute_canonical_paper_event(
         envelope=envelope,
     )
     store = PostgresAttributionStore(session)
+    previous = store.get(
+        organization_id=organization_id,
+        candidate_id=resolved.candidate.candidate_id,
+    )
+    recorded = None if previous is None else previous.facts.learning_venue_mode
+    venue_mode = resolve_learning_venue_mode(settings, recorded)
+    if venue_mode is not learning_venue_mode_from_settings(settings):
+        logger.info(
+            "learning_venue_mode_kept_from_aggregate",
+            candidate_id=str(resolved.candidate.candidate_id),
+            event_type=event.event_type.value,
+            learning_venue_mode=venue_mode.value,
+            exchange_mode=settings.exchange_mode.value,
+        )
     service = LearningAttributionService(session, projector, store)
     service.apply_projected(
         organization_id=organization_id,
@@ -117,5 +151,5 @@ def attribute_canonical_paper_event(
         ),
         event=event,
         projection=projection,
-        learning_venue_mode=learning_venue_mode_from_settings(settings),
+        learning_venue_mode=venue_mode,
     )
