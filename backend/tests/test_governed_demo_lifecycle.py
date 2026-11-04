@@ -73,7 +73,7 @@ class ClosingVenue(Venue):
                     {
                         "instId": self.order["instId"],
                         "positionSide": "net",
-                        "marginMode": "cross",
+                        "marginMode": self.margin_mode,
                         "positions": str(
                             Decimal(self.filled) * (1 if self.order["side"] == "buy" else -1)
                         ),
@@ -133,7 +133,7 @@ class ClosingVenue(Venue):
                 }
             ]
         else:
-            if request.method == "POST":
+            if request.method == "POST" and endpoint == "order":
                 self.exited = False
             response = super().handle(request)
             payload = response.json()
@@ -196,7 +196,7 @@ def open_world(
         exit_fee=exit_fee,
         exit_fee_currency=exit_fee_currency,
         child_tpsl_id=child_tpsl_id,
-        account_leverage="10",
+        leverage="10",
     )
     client = BloFinClient(
         base_url=settings.blofin_demo_rest_base_url,

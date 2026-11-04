@@ -13,6 +13,7 @@ from app.providers.exchange.demo_order_book import parse_demo_book
 from app.providers.exchange.demo_preflight import DemoPreflightError
 from app.schemas.manual_demo import ManualDemoPreviewRequest
 from app.schemas.trade_plan import EntrySide
+from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.manual_demo_plan import build_manual_plan
 from app.services.planned_reward_risk import PlannedRewardRiskError, execution_reward_risk
 from tests.support.phase5_market import EVALUATED_AT
@@ -386,6 +387,9 @@ def test_governed_executable_price_below_one_r_returns_refusal(monkeypatch, mode
     )
     monkeypatch.setattr(governed_blofin_demo, "_plan_terms", lambda **kwargs: terms)
     loop = governed_blofin_demo.GovernedBloFinDemoLoop(None, None, None)
+    # Owner-configured demo leverage matching the fixture venue's 1x cross read.
+    loop._leverage_config = DemoLeverageConfig(1, "cross", "account")
+    loop._remaining_exposure = Decimal("1000000")  # ledger headroom that does not bind
 
     def evaluate():
         return loop._plan_terms(

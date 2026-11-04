@@ -18,6 +18,7 @@ from app.schemas.common import RiskRuleId, TradeDirection
 from app.schemas.risk import RiskCheckRequest
 from app.schemas.trade_plan import EntrySide
 from app.services.automated_paper_loop import _quantity
+from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.execution_claim import (
     ReservationIntent,
     conservative_reservation,
@@ -495,6 +496,7 @@ def test_demo_leverage_and_margin_blocks_do_not_describe_a_write() -> None:
                 data["marginMode"] = "cross" if requested == "isolated" else "isolated"
             else:
                 data["marginMode"] = requested
+            data = [data]
         elif path.endswith("instruments"):
             data = [
                 {
@@ -1310,6 +1312,8 @@ def test_demo_profile_does_not_stop_on_the_unprofiled_minimum(monkeypatch) -> No
     )
     loop = GovernedBloFinDemoLoop(None, None, None)  # type: ignore[arg-type]
     loop._snapshot = snapshot
+    # The owner-configured demo leverage (default 10x isolated) the snapshot must read back.
+    loop._leverage_config = DemoLeverageConfig(10, "isolated", "default")
     common = {
         "candidate": world.candidate,
         "assembled": None,
@@ -1328,7 +1332,7 @@ def test_demo_profile_does_not_stop_on_the_unprofiled_minimum(monkeypatch) -> No
     }
     assert paper_terms(accept_unprofiled_minimum=False) == "size_below_minimum"
     blocked = loop._plan_terms(**common)  # type: ignore[arg-type]
-    assert blocked == "demo_account_leverage_mismatch"
+    assert blocked == "demo_leverage_readback_mismatch"
     assert True in accepted
     loop._snapshot = replace(snapshot, account_leverage=Decimal("10"), margin_mode="isolated")
     planned = loop._plan_terms(**common)  # type: ignore[arg-type]

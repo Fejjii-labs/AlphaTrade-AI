@@ -19,6 +19,7 @@ from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
 from app.schemas.common import JournalTradeStatus, TradeDirection
 from app.schemas.nested_continuation import NestedContinuationSpec
+from app.services import demo_leverage_config
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from app.signal_fusion.memory import FrozenClock
 from tests import test_strategy_brain_nested as nested
@@ -60,6 +61,13 @@ def test_approved_nested_produces_protected_actual_demo_entry_and_verified_exit(
         )
         account = session.scalar(select(ExecutionAccount))
         settings = demo_settings(str(account.id))
+        # The Nested fixture stop is wide (~10%); 10x would correctly refuse with
+        # demo_liquidation_inside_stop_buffer, so the owner configures 2x isolated.
+        monkeypatch.setattr(
+            demo_leverage_config,
+            "load_demo_leverage_config",
+            lambda *_a, **_k: demo_leverage_config.DemoLeverageConfig(2, "isolated", "account"),
+        )
         price = Decimal(186 if direction is TradeDirection.SHORT else 114)
         venue = ClosingVenue(price, category="tp", quote_ts=str(int(now.timestamp() * 1000)))
         client = BloFinClient(
@@ -75,6 +83,8 @@ def test_approved_nested_produces_protected_actual_demo_entry_and_verified_exit(
         runtime._settings = settings
         report = runtime.run_cycle()
         assert report.scans and venue.post_count == 1, report
+        assert venue.account_writes[-1][1]["leverage"] == "2"
+        assert venue.order["marginMode"] == "isolated"
         assert venue.order["side"] == ("sell" if direction is TradeDirection.SHORT else "buy")
         assert venue.order["slOrderPrice"] == venue.order["tpOrderPrice"] == "-1"
         assert session.scalar(select(JournalTrade)).strategy_version_id == template["version_id"]
