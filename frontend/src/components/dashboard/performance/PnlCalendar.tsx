@@ -90,7 +90,11 @@ function DayCell({
       data-tone={tone}
     >
       <span className="block text-right text-[11px] text-text-secondary">{dayNumber}</span>
-      <span className={cn("truncate font-data text-[10px] font-semibold sm:text-sm", valueTone[tone])}>
+      {/* Phones get whole units so a 7-column cell never truncates the sign or digits. */}
+      <span className={cn("truncate font-data text-[10px] font-semibold sm:hidden", valueTone[tone])}>
+        {formatCompactPnl(day.net_pnl, { whole: true })}
+      </span>
+      <span className={cn("hidden truncate font-data text-sm font-semibold sm:block", valueTone[tone])}>
         {formatCompactPnl(day.net_pnl)}
       </span>
       <span className="hidden text-[11px] text-text-secondary sm:block">
@@ -248,14 +252,20 @@ export function PnlCalendar({
               data-testid={`calendar-week-${week.index}`}
             >
               <span className="text-[11px] text-text-muted">Week {week.index}</span>
-              <span
-                className={cn("font-data text-sm font-semibold", valueTone[pnlTone(week.netPnl)])}
-              >
-                {formatCompactPnl(week.netPnl)}
-              </span>
-              <span className="text-[11px] text-text-secondary">
-                {week.tradingDays} day{week.tradingDays === 1 ? "" : "s"}
-              </span>
+              {loading ? (
+                <Skeleton className="mt-1 h-4 w-14" />
+              ) : (
+                <>
+                  <span
+                    className={cn("font-data text-sm font-semibold", valueTone[pnlTone(week.netPnl)])}
+                  >
+                    {formatCompactPnl(week.netPnl)}
+                  </span>
+                  <span className="text-[11px] text-text-secondary">
+                    {week.tradingDays} day{week.tradingDays === 1 ? "" : "s"}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         ))}

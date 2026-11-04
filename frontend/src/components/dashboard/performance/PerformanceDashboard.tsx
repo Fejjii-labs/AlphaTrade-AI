@@ -213,7 +213,7 @@ export function PerformanceDashboard({
 
       {!sample && (preset === "custom" || sourceOptions.length > 1 || filtersChanged) ? (
         <div
-          className="flex flex-wrap items-end gap-3 rounded-control border border-border-subtle bg-surface-1 px-3 py-2"
+          className="flex w-fit max-w-full flex-wrap items-end gap-3 rounded-control border border-border-subtle bg-surface-1 px-3 py-2"
           data-testid="performance-filters"
         >
           {preset === "custom" ? (
@@ -328,11 +328,21 @@ export function PerformanceDashboard({
               ))}
             </ul>
           ) : null}
-          <PerformanceKpiCards
-            summary={rangeData?.summary ?? null}
-            risk={rangeData?.risk ?? null}
-            loading={rangeLoading}
-          />
+          {rangeBlocked ? (
+            <p
+              role="status"
+              className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
+              data-testid="performance-range-pending"
+            >
+              Range figures appear once the custom dates are valid. The calendar below is unaffected.
+            </p>
+          ) : (
+            <PerformanceKpiCards
+              summary={rangeData?.summary ?? null}
+              risk={rangeData?.risk ?? null}
+              loading={rangeLoading}
+            />
+          )}
           <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <PnlCalendar
               month={month}
@@ -346,6 +356,7 @@ export function PerformanceDashboard({
               onRetry={retry}
               todayIso={todayIso}
             />
+            {rangeBlocked ? null : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               <ScoreRadar
                 overall={rangeData?.score.overall ?? null}
@@ -359,6 +370,7 @@ export function PerformanceDashboard({
                 loading={rangeLoading}
               />
             </div>
+            )}
           </div>
         </>
       )}

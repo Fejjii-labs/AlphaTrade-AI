@@ -20,9 +20,9 @@ const toneText: Record<KpiTone, string> = {
 };
 
 const toneCard: Record<KpiTone, string> = {
-  profit: "border-success-border bg-gradient-to-br from-success-muted to-surface-1 to-70%",
-  loss: "border-danger-border bg-gradient-to-br from-danger-muted to-surface-1 to-70%",
-  neutral: "border-accent-border bg-gradient-to-br from-accent-muted to-surface-1 to-70%",
+  profit: "border-success-border bg-surface-1 bg-gradient-to-br from-success-muted to-surface-1 to-70%",
+  loss: "border-danger-border bg-surface-1 bg-gradient-to-br from-danger-muted to-surface-1 to-70%",
+  neutral: "border-accent-border bg-surface-1 bg-gradient-to-br from-accent-muted to-surface-1 to-70%",
   none: "border-border-subtle bg-surface-1",
 };
 

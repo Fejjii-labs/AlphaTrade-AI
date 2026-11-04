@@ -318,7 +318,9 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Start date must be on or before the end date.");
     expect(from).toHaveAttribute("aria-invalid", "true");
     expect(vi.mocked(api.journal.performanceCalendar).mock.calls.length).toBe(before);
-    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
+    expect(screen.getByTestId("performance-range-pending")).toBeInTheDocument();
+    expect(screen.queryByTestId("kpi-net-pnl")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not enough closed trades to score/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
     expect(screen.getByRole("radio", { name: "90D" })).toHaveAttribute("aria-checked", "true");
@@ -435,6 +437,8 @@ describe("performance model", () => {
     expect(formatCompactPnl("-37.5")).toBe("−37.5");
     expect(formatCompactPnl("600")).toBe("+600");
     expect(formatCompactPnl(null)).toBe("—");
+    expect(formatCompactPnl("-140.5", { whole: true })).toBe("−141");
+    expect(formatCompactPnl("1250", { whole: true })).toBe("+1.3K");
     expect(rangeParams("all", NOW)).toEqual({});
     expect(rangeParams("ytd", NOW)).toEqual({ date_from: "2026-01-01", date_to: "2026-07-15" });
     expect(rangeParams("30d", NOW)).toEqual({ date_from: "2026-06-16", date_to: "2026-07-15" });

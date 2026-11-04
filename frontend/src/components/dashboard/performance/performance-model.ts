@@ -14,14 +14,18 @@ export function toNumber(value: string | number | null | undefined): number | nu
 }
 
 /** Signed, compact PnL ("+1.05K", "−37.5", "+600"); no currency symbol. */
-export function formatCompactPnl(value: string | number | null | undefined): string {
+export function formatCompactPnl(
+  value: string | number | null | undefined,
+  { whole = false }: { whole?: boolean } = {},
+): string {
   const numeric = toNumber(value);
   if (numeric === null) return UNAVAILABLE;
   const sign = numeric >= 0 ? "+" : "−";
   const magnitude = Math.abs(numeric);
-  if (magnitude >= 1_000_000) return `${sign}${(magnitude / 1_000_000).toFixed(2)}M`;
-  if (magnitude >= 1_000) return `${sign}${(magnitude / 1_000).toFixed(2)}K`;
-  return `${sign}${Number(magnitude.toFixed(2))}`;
+  const digits = whole ? 1 : 2;
+  if (magnitude >= 1_000_000) return `${sign}${(magnitude / 1_000_000).toFixed(digits)}M`;
+  if (magnitude >= 1_000) return `${sign}${(magnitude / 1_000).toFixed(digits)}K`;
+  return `${sign}${whole ? Math.round(magnitude) : Number(magnitude.toFixed(2))}`;
 }
 
 export function pnlTone(value: string | number | null | undefined): "profit" | "loss" | "flat" | "none" {
