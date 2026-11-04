@@ -2345,3 +2345,35 @@ def test_mirror_cursor_is_carried_only_after_an_ok_committed_read(
         clock[0] += timedelta(hours=1)
     # First run backfills. A failed or incomplete read keeps the last ok cursor.
     assert seen == [None, first, first, first]
+
+
+def test_mirror_interval_defaults_to_five_minutes() -> None:
+    assert Settings.model_fields["blofin_demo_manual_mirror_interval_seconds"].default == 300
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_interval_seconds == 300
+
+
+def test_mirror_runs_at_most_once_per_interval_while_the_snapshot_ticks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=None) for _ in range(3)]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    for offset in (0, 45, 90, 299, 300, 345, 600):
+        clock[0] = start + timedelta(seconds=offset)
+        assert cycle().status == "ok"
+    # Ticks at 0, 300 and 600 seconds mirror; the five in between do not.
+    assert len(seen) == 3
+
+
+def test_mirror_interval_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=None) for _ in range(2)]
+    cycle, seen = _cursor_cycle(
+        monkeypatch, clock, outcomes, blofin_demo_manual_mirror_interval_seconds=45
+    )
+    for offset in (0, 45):
+        clock[0] = start + timedelta(seconds=offset)
+        cycle()
+    assert len(seen) == 2

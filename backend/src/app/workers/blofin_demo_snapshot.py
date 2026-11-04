@@ -56,6 +56,7 @@ class BloFinDemoSnapshotCycle:
         self._next_attempt: datetime | None = None
         # Last ``ok`` mirror read per owner. In memory: a restart reads 7 days.
         self._mirror_cursor: tuple[tuple[uuid.UUID, uuid.UUID], dict[str, datetime]] | None = None
+        self._mirror_attempted_at: datetime | None = None
 
     def __call__(self) -> CycleOutcome:
         from app.workers.paper_worker import CycleOutcome
@@ -161,6 +162,8 @@ class BloFinDemoSnapshotCycle:
         """Run the journal mirror. A read failure must not delay the snapshot."""
         if not self.settings.blofin_demo_manual_mirror_enabled:
             return
+        if not self._mirror_due():
+            return
         try:
             report = self._run_mirror(session, organization_id, user_id)
             session.commit()
@@ -176,6 +179,16 @@ class BloFinDemoSnapshotCycle:
         next_cursor = getattr(report, "next_cursor", None)
         if next_cursor is not None:
             self._mirror_cursor = ((organization_id, user_id), next_cursor)
+
+    def _mirror_due(self) -> bool:
+        """At most one mirror read per interval, whether it succeeds or fails."""
+        now = self._clock()
+        last = self._mirror_attempted_at
+        interval = self.settings.blofin_demo_manual_mirror_interval_seconds
+        if last is not None and 0 <= (now - last).total_seconds() < interval:
+            return False
+        self._mirror_attempted_at = now
+        return True
 
     def _cursor_for(
         self, organization_id: uuid.UUID, user_id: uuid.UUID

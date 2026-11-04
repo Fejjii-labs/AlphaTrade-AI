@@ -370,6 +370,9 @@ class Settings(BaseSettings):
     # After one successful read, the next mirror read starts this many seconds
     # before the previous read's end instead of re-reading seven days.
     blofin_demo_manual_mirror_overlap_seconds: int = Field(default=600, ge=60, le=86400)
+    # Mirror cadence. The snapshot tick stays at BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS;
+    # the history mirror inside it runs at most once per this interval.
+    blofin_demo_manual_mirror_interval_seconds: int = Field(default=300, ge=30, le=3600)
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.
