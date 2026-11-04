@@ -442,3 +442,71 @@ def test_factory_starts_for_live_source(
         assert coordinator is not None
         coordinator.stop()
         binance_rest_gate.reset_process_binance_rest_gate()
+
+
+# --- paper worker wiring -------------------------------------------------------------
+
+
+class FakeCoordinator:
+    def __init__(self) -> None:
+        self.stops = 0
+
+    def stop(self) -> None:
+        self.stops += 1
+
+
+def _stub_supervisor():  # type: ignore[no-untyped-def]
+    from app.workers.paper_worker import CycleOutcome, PaperWorkerSupervisor
+
+    return PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome("running"),
+        telegram_cycle=lambda: CycleOutcome("disarmed"),
+        poll_seconds=0.01,
+    )
+
+
+def test_armed_boot_starts_coordination_first_and_close_releases_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers.paper_worker import build_paper_worker_supervisor
+    from tests.test_blofin_activity_provider import readonly_settings
+
+    order: list[str] = []
+    fake = FakeCoordinator()
+
+    def start(settings: Settings) -> FakeCoordinator:
+        order.append("coordination")
+        return fake
+
+    def armed(*_: object):  # type: ignore[no-untyped-def]
+        order.append("runtimes")
+        return _stub_supervisor()
+
+    monkeypatch.setattr(
+        "app.workers.binance_gate_coordination.start_binance_gate_coordination", start
+    )
+    monkeypatch.setattr("app.workers.paper_worker._build_armed_supervisor", armed)
+    worker = build_paper_worker_supervisor(readonly_settings())
+    assert order == ["coordination", "runtimes"]
+    assert fake.stops == 0
+    worker.close()
+    assert fake.stops == 1
+
+
+def test_failed_armed_boot_still_releases_coordination(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.workers.paper_worker import build_paper_worker_supervisor
+    from tests.test_blofin_activity_provider import readonly_settings
+
+    fake = FakeCoordinator()
+    monkeypatch.setattr(
+        "app.workers.binance_gate_coordination.start_binance_gate_coordination",
+        lambda settings: fake,
+    )
+
+    def broken(*_: object) -> None:
+        raise RuntimeError("boot failed")
+
+    monkeypatch.setattr("app.workers.paper_worker._build_armed_supervisor", broken)
+    with pytest.raises(RuntimeError):
+        build_paper_worker_supervisor(readonly_settings())
+    assert fake.stops == 1
