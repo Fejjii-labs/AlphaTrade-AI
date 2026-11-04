@@ -66,6 +66,10 @@ class JournalDashboardSummary(StrictModel):
     average_win: Decimal | None = None
     average_loss: Decimal | None = None  # negative
     win_loss_ratio: float | None = None  # avg win / |avg loss|
+    # Net PnL per closed trade with recorded PnL:
+    # (win% x avg win) - (loss% x |avg loss|) = net PnL / pnl_sample_count,
+    # with win%/loss% over the PnL sample (breakevens count in the denominator).
+    expectancy: Decimal | None = None
 
 
 class JournalDashboardDay(StrictModel):

@@ -4529,6 +4529,8 @@ export interface JournalDashboardSummary {
   average_win: string | null;
   average_loss: string | null;
   win_loss_ratio: number | null;
+  /** (win% × avg win) − (loss% × |avg loss|) = net P&L ÷ closed trades with P&L. */
+  expectancy: string | null;
 }
 
 export interface JournalDashboardDay {

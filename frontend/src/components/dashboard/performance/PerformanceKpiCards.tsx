@@ -167,13 +167,20 @@ export function PerformanceKpiCards({ summary }: { summary: JournalDashboardSumm
   const s = summary;
   const tone = pnlTone(s?.net_pnl);
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="performance-kpis">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5" data-testid="performance-kpis">
       <KpiCard
         testId="kpi-net-pnl"
         label="Net P&L"
         value={formatMonetary(s?.net_pnl)}
         valueClassName={toneText[tone]}
         detail={s ? `${formatCount(s.trade_count)} closed trades` : "No data"}
+      />
+      <KpiCard
+        testId="kpi-expectancy"
+        label="Expectancy"
+        value={formatMonetary(s?.expectancy)}
+        valueClassName={toneText[pnlTone(s?.expectancy)]}
+        detail="Net P&L per closed trade"
       />
       <KpiCard
         testId="kpi-profit-factor"

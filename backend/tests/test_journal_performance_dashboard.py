@@ -126,6 +126,7 @@ def test_empty_rows_return_nulls_not_zeros() -> None:
     assert result.summary.net_pnl is None
     assert result.summary.profit_factor is None
     assert result.summary.win_rate is None
+    assert result.summary.expectancy is None
     assert result.days == []
     assert result.cumulative == []
     assert result.risk.max_drawdown is None
@@ -155,6 +156,10 @@ def test_summary_days_curve_drawdown_exact_values() -> None:
     assert s.average_win == Decimal("150")
     assert s.average_loss == Decimal("-100")
     assert s.win_loss_ratio == 1.5
+    # (2/5 x 150) - (2/5 x |-100|) = 60 - 40 = 20 = 100 / 5
+    assert s.expectancy == Decimal("20")
+    assert s.average_win is not None and s.average_loss is not None
+    assert s.expectancy == (Decimal(2) / 5 * s.average_win - Decimal(2) / 5 * abs(s.average_loss))
 
     assert [(d.date, d.net_pnl, d.trade_count, d.wins, d.losses) for d in result.days] == [
         (date(2026, 7, 1), Decimal("50"), 2, 1, 1),
@@ -232,6 +237,7 @@ def test_missing_pnl_is_counted_but_not_summed() -> None:
     assert result.summary.trade_count == 2
     assert result.summary.pnl_sample_count == 0
     assert result.summary.net_pnl is None
+    assert result.summary.expectancy is None
     assert result.summary.wins == 1
     assert result.days[0].net_pnl is None
     assert result.cumulative == []

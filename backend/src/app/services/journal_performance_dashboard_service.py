@@ -24,6 +24,8 @@ Rules (documented so every number can be re-derived by hand):
   (exit, else entry, else creation) in the requested IANA timezone.
 - Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
   net PnL curve, starting from a 0 baseline, in effective-time order.
+- Expectancy = (win% x avg win) - (loss% x |avg loss|) over trades with
+  recorded net PnL, which equals net PnL / that trade count.
 - Recovery factor = net PnL / max drawdown (None when there is no drawdown).
 - Consistency = 1 - (largest winning day / sum of winning days), defined only
   with at least two winning days.
@@ -304,6 +306,7 @@ def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
     gross_loss = sum(losers, _ZERO)
     average_win = gross_profit / len(winners) if winners else None
     average_loss = gross_loss / len(losers) if losers else None
+    net_pnl = sum(pnls, _ZERO)
     return JournalDashboardSummary(
         trade_count=len(rows),
         pnl_sample_count=len(pnls),
@@ -311,7 +314,7 @@ def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
         losses=losses,
         breakeven=breakeven,
         win_rate=_ratio(wins, wins + losses),
-        net_pnl=sum(pnls, _ZERO),
+        net_pnl=net_pnl,
         gross_profit=gross_profit,
         gross_loss=gross_loss,
         profit_factor=float(gross_profit / -gross_loss) if gross_loss < 0 else None,
@@ -322,6 +325,7 @@ def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
             if average_win is not None and average_loss is not None
             else None
         ),
+        expectancy=net_pnl / len(pnls),
     )
 
 

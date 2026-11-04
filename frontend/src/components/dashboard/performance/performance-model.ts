@@ -252,6 +252,7 @@ export function buildSampleDashboard(ref: MonthRef): JournalPerformanceDashboard
       average_win: avgWin === null ? null : avgWin.toFixed(2),
       average_loss: avgLoss === null ? null : avgLoss.toFixed(2),
       win_loss_ratio: ratio,
+      expectancy: tradeCount ? (running / tradeCount).toFixed(2) : null,
     },
     days,
     cumulative,

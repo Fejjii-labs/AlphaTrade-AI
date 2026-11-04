@@ -41,6 +41,7 @@ function response(
       average_win: "150.00",
       average_loss: "-100.00",
       win_loss_ratio: 1.5,
+      expectancy: "20.00",
     },
     days: [
       { date: "2026-07-01", net_pnl: "50.00", trade_count: 2, wins: 1, losses: 1, breakeven: 0, win_rate: 0.5 },
@@ -91,6 +92,7 @@ const EMPTY = response({
     average_win: null,
     average_loss: null,
     win_loss_ratio: null,
+    expectancy: null,
   },
   days: [],
   cumulative: [],
@@ -115,6 +117,8 @@ describe("PerformanceDashboard", () => {
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 closed trades");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("1.50");
+    expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("+20.00");
+    expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("Net P&L per closed trade");
     expect(screen.getByTestId("kpi-win-rate")).toHaveTextContent("50.0%");
     expect(within(screen.getByTestId("win-rate-counts")).getAllByText(/\d/).map((n) => n.textContent)).toEqual([
       "2",
@@ -140,6 +144,7 @@ describe("PerformanceDashboard", () => {
     expect(await screen.findByTestId("performance-empty")).toBeInTheDocument();
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("—");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
     expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
