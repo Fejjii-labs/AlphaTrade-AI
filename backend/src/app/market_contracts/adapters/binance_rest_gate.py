@@ -21,6 +21,15 @@ each call during a ban lengthens it. This gate is the one shared answer to
 A closed gate raises before any request is sent. Callers fail closed: no data
 means no paper decision, never a fabricated one.
 
+Every 418/429 logs ``binance_rest_throttled`` (WARNING), and a used weight above
+``USED_WEIGHT_WARN_THRESHOLD`` logs ``binance_used_weight_high`` at most once per
+warn interval, so a climb toward a ban is visible before it happens.
+
+On 2026-11-04 a deploy overlapped three worker instances behind one egress IP;
+each had its own gate. ``binance_gate_coordination`` shares the ban deadline
+and a startup lease through PostgreSQL. This module stays database-free: it
+exposes a failure listener, ``adopt_deadline`` and a standby ``hold``.
+
 Websocket market streams would remove most aggTrades REST polling; that is a
 separate follow-up and out of scope here.
 """
@@ -39,6 +48,9 @@ import structlog
 AGGTRADES_PATH = "/fapi/v1/aggTrades"
 # Binance USD-M IP limit is 2400 weight per minute. Pause before reaching it.
 USED_WEIGHT_SOFT_LIMIT = 2000
+# Warn (rate-limited) above this used weight, well before the soft limit pauses.
+USED_WEIGHT_WARN_THRESHOLD = 1500
+USED_WEIGHT_WARN_INTERVAL_SECONDS = 60.0
 BACKOFF_BASE_SECONDS = 5.0
 # Cap for the computed exponential backoff only.
 BACKOFF_CAP_SECONDS = 900.0
@@ -53,6 +65,9 @@ BOOT_AGGTRADES_MIN_INTERVAL_SECONDS = 1.0
 _USED_WEIGHT_HEADER = "x-mbx-used-weight-1m"
 
 logger = structlog.get_logger(__name__)
+
+# ``(kind, until_epoch)`` after a 418/429 closed the gate. Must not raise or block.
+FailureListener = Callable[[str, float], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +98,8 @@ class BinanceRestGate:
         aggtrades_min_interval_seconds: float = AGGTRADES_MIN_INTERVAL_SECONDS,
         boot_ramp_seconds: float = BOOT_RAMP_SECONDS,
         boot_aggtrades_min_interval_seconds: float = BOOT_AGGTRADES_MIN_INTERVAL_SECONDS,
+        used_weight_warn_threshold: int = USED_WEIGHT_WARN_THRESHOLD,
+        used_weight_warn_interval_seconds: float = USED_WEIGHT_WARN_INTERVAL_SECONDS,
     ) -> None:
         self._clock = clock
         self._wall_clock = wall_clock
@@ -103,6 +120,11 @@ class BinanceRestGate:
         self.last_used_weight: int | None = None
         self._last_status: int | None = None
         self._ban_started: float | None = None
+        self._warn_threshold = used_weight_warn_threshold
+        self._warn_interval = used_weight_warn_interval_seconds
+        self._next_weight_warn_at: float | None = None
+        self._failure_listener: FailureListener | None = None
+        self._hold_until: float | None = None
 
     def state(self) -> RestGateState:
         """Current gate posture. Reading it never opens or closes the gate."""
@@ -127,14 +149,20 @@ class BinanceRestGate:
     def _remaining_locked(self) -> tuple[str, float] | None:
         """``remaining`` body. The caller holds ``self._lock``."""
 
-        if self._until is None or self._kind is None:
-            return None
-        left = self._until - self._clock()
-        if left <= 0:
+        now = self._clock()
+        if self._until is not None and self._kind is not None:
+            left = self._until - now
+            if left > 0:
+                return self._kind, left
             self._until = None
             self._kind = None
-            return None
-        return self._kind, left
+        if self._hold_until is not None:
+            # Startup standby reads like a rate-limit pause: callers fail closed.
+            left = self._hold_until - now
+            if left > 0:
+                return "rate_limit", left
+            self._hold_until = None
+        return None
 
     def _close(self, kind: str, seconds: float) -> None:
         """Extend the closed window. A shorter new pause never shortens it."""
@@ -173,13 +201,31 @@ class BinanceRestGate:
             # Jitter is bounded by the backoff cap so a 3-day ban is not stretched by hours.
             seconds = base + min(base, self._cap) * self._jitter * self._rng()
             self._close_locked(kind, seconds)
+            strikes = self._strikes
+            listener = self._failure_listener
+            until_epoch = 0.0 if listener is None else self._wall_clock() + seconds
+        # Every 418/429 is logged; they are rare and each one matters.
+        logger.warning(
+            "binance_rest_throttled",
+            status_code=418 if kind == "ban" else 429,
+            kind=kind,
+            retry_after_seconds=None if server is None else round(server, 1),
+            pause_seconds=round(seconds, 1),
+            strikes=strikes,
+            used_weight_1m=self.last_used_weight,
+        )
+        if listener is not None:
+            try:
+                listener(kind, until_epoch)
+            except Exception:
+                logger.warning("binance_rest_gate_listener_failed")
         if seconds > self._cap:
             logger.error(
                 "binance_rest_gate_long_pause",
                 kind=kind,
                 pause_seconds=round(seconds, 1),
                 server_deadline_seconds=None if server is None else round(server, 1),
-                strikes=self.strikes,
+                strikes=strikes,
             )
         return seconds
 
@@ -189,7 +235,7 @@ class BinanceRestGate:
         used = _used_weight(headers)
         if used is None:
             return
-        self.last_used_weight = used
+        self._record_used_weight(used)
         if used >= self._soft_limit:
             into_minute = self._wall_clock() % 60.0
             seconds = (60.0 - into_minute) + 1.0 + self._jitter * self._rng()
@@ -198,7 +244,61 @@ class BinanceRestGate:
     def note_used_weight(self, headers: Mapping[str, str] | None) -> None:
         used = _used_weight(headers)
         if used is not None:
-            self.last_used_weight = used
+            self._record_used_weight(used)
+
+    def _record_used_weight(self, used: int) -> None:
+        """Remember the header and warn above the threshold, once per warn interval."""
+
+        self.last_used_weight = used
+        if used <= self._warn_threshold:
+            return
+        with self._lock:
+            now = self._clock()
+            if self._next_weight_warn_at is not None and now < self._next_weight_warn_at:
+                return
+            self._next_weight_warn_at = now + self._warn_interval
+        logger.warning(
+            "binance_used_weight_high",
+            used_weight_1m=used,
+            warn_threshold=self._warn_threshold,
+            soft_limit=self._soft_limit,
+        )
+
+    def set_failure_listener(self, listener: FailureListener | None) -> None:
+        """Called after each 418/429 with the new deadline (wall clock)."""
+
+        with self._lock:
+            self._failure_listener = listener
+
+    def adopt_deadline(self, kind: str, until_epoch: float) -> float:
+        """Close the gate until a deadline another instance recorded.
+
+        Keeps the later deadline, counts no strike and calls no listener.
+        Returns the seconds adopted (0 when the deadline already passed).
+        """
+
+        if kind not in ("ban", "rate_limit"):
+            return 0.0
+        seconds = sanitize_retry_after(until_epoch - self._wall_clock())
+        if not seconds:
+            return 0.0
+        self._close(kind, seconds)
+        return seconds
+
+    def hold(self, seconds: float) -> None:
+        """Start a standby: the gate reads closed for ``seconds`` unless released."""
+
+        with self._lock:
+            self._hold_until = self._clock() + max(seconds, 0.0)
+
+    def release_hold(self) -> None:
+        with self._lock:
+            self._hold_until = None
+
+    @property
+    def holding(self) -> bool:
+        with self._lock:
+            return self._hold_until is not None and self._hold_until > self._clock()
 
     def reserve_spacing(self, path: str) -> float:
         """Reserve the next aggTrades slot. Returns seconds to wait first."""
@@ -263,8 +363,25 @@ def process_binance_rest_gate() -> BinanceRestGate:
     global _PROCESS_GATE
     with _PROCESS_GATE_GUARD:
         if _PROCESS_GATE is None:
-            _PROCESS_GATE = BinanceRestGate()
+            _PROCESS_GATE = BinanceRestGate(**_gate_settings())
         return _PROCESS_GATE
+
+
+def _gate_settings() -> dict[str, float]:
+    """Warn settings from config. Unreadable settings keep the module defaults."""
+
+    try:
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        return {
+            "used_weight_warn_threshold": settings.binance_used_weight_warn_threshold,
+            "used_weight_warn_interval_seconds": (
+                settings.binance_used_weight_warn_interval_seconds
+            ),
+        }
+    except Exception:
+        return {}
 
 
 def process_binance_rest_gate_state() -> RestGateState | None:
