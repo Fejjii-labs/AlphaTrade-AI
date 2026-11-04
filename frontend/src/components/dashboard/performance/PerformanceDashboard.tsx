@@ -1,5 +1,6 @@
 "use client";
 
+import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { UnavailableState } from "@/components/states";
@@ -10,6 +11,7 @@ import type {
   JournalDashboardScope,
   JournalPerformanceDashboardParams,
   JournalPerformanceDashboardResponse,
+  JournalTradeSource,
 } from "@/lib/api/types";
 import { humanizeToken } from "@/lib/format";
 
@@ -23,8 +25,10 @@ import {
   RANGE_OPTIONS,
   SCOPE_LABELS,
   SCOPE_OPTIONS,
+  SOURCE_LABELS,
   browserTimezone,
   buildSampleDashboard,
+  customRangeError,
   monthRange,
   rangeParams,
   shiftMonth,
@@ -37,6 +41,9 @@ type Loadable = {
   loading: boolean;
   error: boolean;
 };
+
+const FIELD =
+  "min-h-9 rounded-control border border-border bg-surface-2 px-2 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-[invalid=true]:border-danger";
 
 const IDLE: Loadable = { data: null, loading: true, error: false };
 
@@ -79,23 +86,59 @@ export function PerformanceDashboard({
   const [scope, setScope] = useState<JournalDashboardScope>(DEFAULT_SCOPE);
   const [month, setMonth] = useState<MonthRef>(thisMonth);
   const [sample, setSample] = useState(false);
+  const [source, setSource] = useState<JournalTradeSource | "">("");
+  const [sourceOptions, setSourceOptions] = useState<JournalTradeSource[]>([]);
+  const defaultCustom = useMemo(() => rangeParams("30d", today), [today]);
+  const [customFrom, setCustomFrom] = useState(defaultCustom.date_from ?? "");
+  const [customTo, setCustomTo] = useState(defaultCustom.date_to ?? "");
   const tz = useMemo(() => browserTimezone(), []);
 
+  const customError = preset === "custom" ? customRangeError(customFrom, customTo) : null;
+  const rangeBlocked = !sample && customError !== null;
   const rangeQuery = useMemo(
-    () => ({ ...rangeParams(preset, today), scope, tz }),
-    [preset, scope, today, tz],
+    () => ({
+      ...(preset === "custom" ? { date_from: customFrom, date_to: customTo } : rangeParams(preset, today)),
+      scope,
+      tz,
+      ...(source ? { source } : {}),
+    }),
+    [preset, customFrom, customTo, scope, source, today, tz],
   );
   const monthQuery = useMemo(
-    () => ({ ...monthRange(month), scope, tz }),
-    [month, scope, tz],
+    () => ({ ...monthRange(month), scope, tz, ...(source ? { source } : {}) }),
+    [month, scope, source, tz],
   );
-  const range = useDashboardRequest(rangeQuery, !sample, refreshKey);
+  const range = useDashboardRequest(rangeQuery, !sample && !rangeBlocked, refreshKey);
   const calendar = useDashboardRequest(monthQuery, !sample, refreshKey);
 
+  // Remember the scope's sources so the picker survives the next reload.
+  const loadedFilters = range.data?.filters;
+  useEffect(() => {
+    if (loadedFilters && loadedFilters.scope === scope) setSourceOptions(loadedFilters.included_sources);
+  }, [loadedFilters, scope]);
+
+  const changeScope = (next: JournalDashboardScope) => {
+    setScope(next);
+    setSource("");
+    setSourceOptions([]);
+  };
+  const filtersChanged = preset !== "90d" || scope !== DEFAULT_SCOPE || source !== "";
+  const resetFilters = () => {
+    setPreset("90d");
+    changeScope(DEFAULT_SCOPE);
+  };
+
   const sampleData = useMemo(() => (sample ? buildSampleDashboard(month) : null), [sample, month]);
-  const rangeData = sample ? sampleData : range.data;
+  const rangeData = sample ? sampleData : rangeBlocked ? null : range.data;
+  const rangeLoading = !sample && !rangeBlocked && range.loading;
   const monthData = sample ? sampleData : calendar.data;
-  const empty = !sample && !range.loading && rangeData?.summary.trade_count === 0;
+  const empty = !sample && !rangeLoading && rangeData?.summary.trade_count === 0;
+  const echoed = rangeData?.filters;
+  const rangeText = echoed
+    ? echoed.date_from || echoed.date_to
+      ? `${echoed.date_from ?? "start"} → ${echoed.date_to ?? "today"}`
+      : "all time"
+    : null;
   const scopeLabel = range.data?.filters.scope_label ?? SCOPE_LABELS[scope];
   const extraScope = EXTRA_SCOPE_OPTIONS.some((option) => option.value === scope);
 
@@ -124,7 +167,7 @@ export function PerformanceDashboard({
           <SegmentedControl
             aria-label="Account scope"
             value={extraScope ? ("" as JournalDashboardScope) : scope}
-            onChange={setScope}
+            onChange={changeScope}
             options={SCOPE_OPTIONS.map((option) => ({ ...option, disabled: sample }))}
           />
           <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
@@ -134,7 +177,7 @@ export function PerformanceDashboard({
               value={extraScope ? scope : ""}
               disabled={sample}
               onChange={(event) =>
-                setScope((event.target.value || DEFAULT_SCOPE) as JournalDashboardScope)
+                changeScope((event.target.value || DEFAULT_SCOPE) as JournalDashboardScope)
               }
               className="min-h-9 rounded-control border border-border bg-surface-1 px-2 text-xs text-text-primary"
             >
@@ -164,9 +207,80 @@ export function PerformanceDashboard({
         </div>
       </div>
 
+      {!sample && (preset === "custom" || sourceOptions.length > 1 || filtersChanged) ? (
+        <div
+          className="flex flex-wrap items-end gap-3 rounded-control border border-border-subtle bg-surface-1 px-3 py-2"
+          data-testid="performance-filters"
+        >
+          {preset === "custom" ? (
+            <fieldset className="flex flex-wrap items-end gap-2">
+              <legend className="sr-only">Custom date range</legend>
+              <label className="flex flex-col gap-1 text-xs text-text-secondary">
+                From
+                <input
+                  type="date"
+                  value={customFrom}
+                  max={customTo || undefined}
+                  onChange={(event) => setCustomFrom(event.target.value)}
+                  aria-invalid={customError ? true : undefined}
+                  aria-describedby={customError ? "performance-range-error" : undefined}
+                  className={FIELD}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-text-secondary">
+                To
+                <input
+                  type="date"
+                  value={customTo}
+                  min={customFrom || undefined}
+                  onChange={(event) => setCustomTo(event.target.value)}
+                  aria-invalid={customError ? true : undefined}
+                  aria-describedby={customError ? "performance-range-error" : undefined}
+                  className={FIELD}
+                />
+              </label>
+            </fieldset>
+          ) : null}
+          {sourceOptions.length > 1 || source ? (
+            <label className="flex flex-col gap-1 text-xs text-text-secondary">
+              Source
+              <select
+                value={source}
+                onChange={(event) => setSource(event.target.value as JournalTradeSource | "")}
+                className={FIELD}
+              >
+                <option value="">All sources in this scope</option>
+                {sourceOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {SOURCE_LABELS[option] ?? humanizeToken(option)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {filtersChanged ? (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-control px-2 text-xs text-text-secondary hover:bg-surface-2 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              Reset filters
+            </button>
+          ) : null}
+          {customError ? (
+            <p id="performance-range-error" role="alert" className="basis-full text-xs text-danger">
+              {customError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {!sample ? (
         <p className="text-sm font-medium text-text-primary" data-testid="performance-scope">
           Showing: {scopeLabel}
+          {source ? ` · ${SOURCE_LABELS[source] ?? humanizeToken(source)} only` : ""}
+          {rangeText ? <span className="font-data text-xs font-normal text-text-secondary"> · {rangeText}</span> : null}
           <span className="ml-2 text-xs font-normal text-text-muted">
             Closed trades only; scopes are never mixed. Partial exits on open trades count only
             once the trade closes.
@@ -213,7 +327,7 @@ export function PerformanceDashboard({
           <PerformanceKpiCards
             summary={rangeData?.summary ?? null}
             risk={rangeData?.risk ?? null}
-            loading={range.loading && !sample}
+            loading={rangeLoading}
           />
           <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <PnlCalendar

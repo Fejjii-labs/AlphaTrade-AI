@@ -8,7 +8,7 @@ import { PerformanceDashboard } from "./PerformanceDashboard";
 import { PerformanceKpiCards, dayWinRate, moneyTone, profitFactorTone } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
 import { CumulativePnlChart, curveSummary, zeroOffset } from "./CumulativePnlChart";
-import { buildCalendarWeeks, formatCompactPnl, rangeParams } from "./performance-model";
+import { buildCalendarWeeks, customRangeError, formatCompactPnl, rangeParams } from "./performance-model";
 
 vi.mock("@/lib/api", () => ({ api: { journal: { performanceCalendar: vi.fn() } } }));
 
@@ -272,6 +272,59 @@ describe("PerformanceDashboard", () => {
     expect(screen.queryByTestId("performance-empty")).not.toBeInTheDocument();
   });
 
+  it("narrows to one source inside the scope and resets with the scope", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    const select = await screen.findByRole("combobox", { name: "Source" });
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toContain("Manually logged");
+    fireEvent.change(select, { target: { value: "blofin_demo_manual" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-scope")).toHaveTextContent("BloFin demo (manual) only"),
+    );
+    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls).toContainEqual(
+      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-07-01" }),
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({ scope: "demo", source: "blofin_demo_manual", date_from: "2026-04-17" }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ scope: "paper" }),
+      ),
+    );
+    expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).not.toHaveProperty("source");
+    expect(screen.getByTestId("performance-scope")).not.toHaveTextContent("BloFin demo (manual) only");
+  });
+
+  it("custom range sends the picked dates and blocks an inverted range", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    const from = screen.getByLabelText("From");
+    const to = screen.getByLabelText("To");
+    expect(from).toHaveValue("2026-06-16");
+    fireEvent.change(from, { target: { value: "2026-05-01" } });
+    fireEvent.change(to, { target: { value: "2026-05-31" } });
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.map(([p]) => p)).toContainEqual(
+        expect.objectContaining({ date_from: "2026-05-01", date_to: "2026-05-31" }),
+      ),
+    );
+    const before = vi.mocked(api.journal.performanceCalendar).mock.calls.length;
+    fireEvent.change(from, { target: { value: "2026-06-10" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Start date must be on or before the end date.");
+    expect(from).toHaveAttribute("aria-invalid", "true");
+    expect(vi.mocked(api.journal.performanceCalendar).mock.calls.length).toBe(before);
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
+    expect(screen.getByRole("radio", { name: "90D" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByLabelText("From")).not.toBeInTheDocument();
+  });
+
   it("shows unavailable state when the request fails", async () => {
     vi.mocked(api.journal.performanceCalendar).mockRejectedValue(new Error("boom"));
     render(<PerformanceDashboard now={NOW} />);
@@ -349,6 +402,9 @@ describe("performance model", () => {
     expect(rangeParams("all", NOW)).toEqual({});
     expect(rangeParams("ytd", NOW)).toEqual({ date_from: "2026-01-01", date_to: "2026-07-15" });
     expect(rangeParams("30d", NOW)).toEqual({ date_from: "2026-06-16", date_to: "2026-07-15" });
+    expect(customRangeError("2026-07-01", "2026-07-01")).toBeNull();
+    expect(customRangeError("2026-07-02", "2026-07-01")).toMatch(/on or before/);
+    expect(customRangeError("", "2026-07-01")).toMatch(/both/);
   });
 
   it("splits the area gradient at zero", () => {
