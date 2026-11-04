@@ -57,7 +57,8 @@ class JournalDashboardSummary(StrictModel):
     wins: int = 0
     losses: int = 0
     breakeven: int = 0
-    # Over decided trades (wins + losses); breakeven excluded — same rule as AT-031.
+    # wins / (wins + losses); breakevens excluded. Counts and average win/loss share
+    # one classifier (net-PnL sign when recorded, else the recorded result).
     win_rate: float | None = None
     net_pnl: Decimal | None = None
     gross_profit: Decimal | None = None

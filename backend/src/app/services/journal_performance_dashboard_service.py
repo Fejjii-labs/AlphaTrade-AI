@@ -6,8 +6,12 @@ market I/O, no execution authority, no mutation.
 
 Rules (documented so every number can be re-derived by hand):
 
-- Win/loss/breakeven uses the recorded ``result`` with the AT-031 net-PnL sign
-  fallback; win rate is wins / (wins + losses).
+- One classifier (``classify``) drives win/loss/breakeven counts AND the
+  average win/loss, so they cannot disagree: the recorded net-PnL sign when
+  net PnL is recorded, else the recorded ``result``, else undecided. A row
+  marked WIN with negative net PnL is a loss (warned). This differs from
+  AT-031, which prefers the recorded label. Win rate is wins / (wins +
+  losses) and excludes breakevens.
 - Exactly one account scope per response (``SCOPE_RULES``, default ``demo``):
   demo = BloFin demo (manual demo, mirrored BloFin demo manual, and canonical
   executions / manual rows with BloFin-demo venue evidence); paper = paper
@@ -69,7 +73,7 @@ from app.schemas.journal_performance_dashboard import (
     JournalPerformanceDashboardResponse,
 )
 from app.schemas.journal_statistics import SampleConfidence
-from app.services.journal_statistics_service import _confidence, _decide_result
+from app.services.journal_statistics_service import _confidence
 
 _ZERO = Decimal("0")
 
@@ -286,8 +290,30 @@ def _ratio(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
+def classify(row: JournalTradeStatsRow) -> TradeResult | None:
+    """Net-PnL sign when recorded, else the recorded result, else undecided."""
+    if row.net_pnl is not None:
+        if row.net_pnl > 0:
+            return TradeResult.WIN
+        if row.net_pnl < 0:
+            return TradeResult.LOSS
+        return TradeResult.BREAKEVEN
+    return row.result if row.result != TradeResult.OPEN else None
+
+
+def label_conflicts(rows: list[JournalTradeStatsRow]) -> int:
+    """Rows whose recorded result disagrees with their recorded net-PnL sign."""
+    return sum(
+        1
+        for row in rows
+        if row.net_pnl is not None
+        and row.result != TradeResult.OPEN
+        and row.result != classify(row)
+    )
+
+
 def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
-    results = [_decide_result(row) for row in rows]
+    results = [classify(row) for row in rows]
     wins = sum(1 for r in results if r == TradeResult.WIN)
     losses = sum(1 for r in results if r == TradeResult.LOSS)
     breakeven = sum(1 for r in results if r == TradeResult.BREAKEVEN)
@@ -300,8 +326,17 @@ def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
             breakeven=breakeven,
             win_rate=_ratio(wins, wins + losses),
         )
-    winners = [p for p in pnls if p > 0]
-    losers = [p for p in pnls if p < 0]
+    # Same classifier as the counts above (for rows with PnL it is the sign).
+    winners = [
+        row.net_pnl
+        for row, r in zip(rows, results, strict=True)
+        if r == TradeResult.WIN and row.net_pnl is not None
+    ]
+    losers = [
+        row.net_pnl
+        for row, r in zip(rows, results, strict=True)
+        if r == TradeResult.LOSS and row.net_pnl is not None
+    ]
     gross_profit = sum(winners, _ZERO)
     gross_loss = sum(losers, _ZERO)
     average_win = gross_profit / len(winners) if winners else None
@@ -337,7 +372,7 @@ def bucket_days(rows: list[JournalTradeStatsRow], tz: ZoneInfo) -> list[JournalD
     days: list[JournalDashboardDay] = []
     for day in sorted(grouped):
         day_rows = grouped[day]
-        results = [_decide_result(row) for row in day_rows]
+        results = [classify(row) for row in day_rows]
         wins = sum(1 for r in results if r == TradeResult.WIN)
         losses = sum(1 for r in results if r == TradeResult.LOSS)
         pnls = [row.net_pnl for row in day_rows if row.net_pnl is not None]
@@ -580,6 +615,12 @@ def build_dashboard(
     oldest_covered: date | None = None
     if truncated and rows and rows[0].effective_time is not None:
         oldest_covered = _local_date(rows[0].effective_time, tz)
+    conflicts = label_conflicts(rows)
+    if conflicts:
+        warnings.append(
+            f"{conflicts} trade(s) have a recorded result that disagrees with their net "
+            "P&L; they are classified by net P&L."
+        )
     dashboard_score = score(summary, risk, targets)
     if rows and confidence == SampleConfidence.INSUFFICIENT:
         dashboard_score = dashboard_score.model_copy(update={"overall": None})

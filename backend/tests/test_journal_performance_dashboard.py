@@ -47,6 +47,7 @@ from app.services.journal_performance_dashboard_service import (
     ScoreTargets,
     _local_date,
     build_dashboard,
+    classify,
     local_day_bounds,
 )
 from tests.test_at031_journal_statistics import (
@@ -226,6 +227,48 @@ def test_no_losses_keeps_profit_factor_null_but_caps_score() -> None:
     assert by_key["profit_factor"].value is None
     assert by_key["recovery_factor"].score == 100.0
     assert by_key["max_drawdown"].score == 100.0
+
+
+def test_win_marked_trade_with_negative_net_pnl_is_a_loss_everywhere() -> None:
+    rows = [
+        _row("-40", datetime(2026, 7, 1, tzinfo=UTC), result=TradeResult.WIN),
+        _row("100", datetime(2026, 7, 1, 1, tzinfo=UTC), result=TradeResult.WIN),
+        _row("-10", datetime(2026, 7, 2, tzinfo=UTC), result=TradeResult.LOSS),
+    ]
+    result = _build(rows)
+    s = result.summary
+    # Counts and averages agree: two losers (-40, -10), one winner (100).
+    assert (s.wins, s.losses, s.breakeven) == (1, 2, 0)
+    assert s.win_rate == pytest.approx(1 / 3)
+    assert s.average_win == Decimal("100")
+    assert s.average_loss == Decimal("-25")
+    assert s.gross_loss == Decimal("-50")
+    assert s.expectancy == Decimal("50") / 3
+    day = result.days[0]
+    assert (day.wins, day.losses) == (1, 1)
+    assert any("1 trade(s) have a recorded result that disagrees" in w for w in result.warnings)
+
+
+def test_classifier_counts_match_average_buckets() -> None:
+    rows = [
+        _row("5", datetime(2026, 7, 1, tzinfo=UTC), result=TradeResult.LOSS),
+        _row("0", datetime(2026, 7, 1, 1, tzinfo=UTC), result=TradeResult.WIN),
+        _row(None, datetime(2026, 7, 1, 2, tzinfo=UTC), result=TradeResult.LOSS),
+        _row("-3", datetime(2026, 7, 1, 3, tzinfo=UTC)),
+    ]
+    rows_with_pnl = [r for r in rows if r.net_pnl is not None]
+    assert [classify(r) for r in rows] == [
+        TradeResult.WIN,
+        TradeResult.BREAKEVEN,
+        TradeResult.LOSS,  # no PnL: recorded label
+        TradeResult.LOSS,
+    ]
+    s = _build(rows).summary
+    winners = [r for r in rows_with_pnl if classify(r) == TradeResult.WIN]
+    losers = [r for r in rows_with_pnl if classify(r) == TradeResult.LOSS]
+    assert s.average_win == sum((r.net_pnl or Decimal(0)) for r in winners) / len(winners)
+    assert s.average_loss == sum((r.net_pnl or Decimal(0)) for r in losers) / len(losers)
+    assert (s.wins, s.losses, s.breakeven) == (1, 2, 1)
 
 
 def test_missing_pnl_is_counted_but_not_summed() -> None:

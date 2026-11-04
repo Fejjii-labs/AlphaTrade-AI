@@ -202,7 +202,7 @@ export function PerformanceKpiCards({ summary }: { summary: JournalDashboardSumm
         testId="kpi-win-rate"
         label="Trade win %"
         value={formatPercent(s?.win_rate, 1)}
-        detail="Wins ÷ (wins + losses)"
+        detail="Wins ÷ (wins + losses) · excludes breakevens"
         visual={
           <WinRateGauge
             wins={s?.wins ?? 0}
