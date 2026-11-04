@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AutonomousTradingSettingsView, UserRiskSettings } from "@/lib/api/types";
+import { autonomousBounds } from "@/test/autonomous-bounds-fixtures";
 
 import { TradingLimitsCard } from "./TradingLimitsCard";
 
@@ -239,6 +240,40 @@ describe("TradingLimitsCard", () => {
     save();
     await waitFor(() => expect(api.risk.updateSettings).toHaveBeenCalledOnce());
     expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads every limit hint from the server bounds, not the client", () => {
+    render(
+      <TradingLimitsCard
+        bot={bot}
+        account={account}
+        owner
+        ownerReason={null}
+        onBotSaved={onBotSaved}
+        onAccountSaved={onAccountSaved}
+        bounds={{
+          ...autonomousBounds,
+          bot_daily_loss_limit_percent: { ...autonomousBounds.bot_daily_loss_limit_percent, max: "4" },
+          bot_risk_per_trade_percent: { ...autonomousBounds.bot_risk_per_trade_percent, max: "3" },
+          account_max_trades_per_day: { ...autonomousBounds.account_max_trades_per_day, max: "50" },
+        }}
+      />,
+    );
+    const card = screen.getByTestId("trading-limits-card");
+    expect(card).toHaveTextContent("Max 4% of equity");
+    expect(card).toHaveTextContent("Max 3% of portfolio");
+    expect(card).toHaveTextContent("Allowed Max 10%");
+    expect(screen.getByTestId("autonomous-effective-max-trades")).toHaveTextContent("allowed 1–1000");
+    expect(screen.getByTestId("risk-max-trades")).toHaveAttribute("min", "1");
+    expect(screen.getByTestId("risk-max-trades")).toHaveAttribute("max", "50");
+  });
+
+  it("falls back to the ceilings on the bot view without bounds and links the watchlist", () => {
+    renderCard();
+    const card = screen.getByTestId("trading-limits-card");
+    expect(card).toHaveTextContent("Max 6% of equity");
+    expect(card).toHaveTextContent("Max 5% of portfolio");
+    expect(screen.getByRole("link", { name: "Edit watchlist" })).toHaveAttribute("href", "/settings/watcher");
   });
 
   it("resets account limits to defaults", async () => {

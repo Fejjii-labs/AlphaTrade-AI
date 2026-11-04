@@ -1,7 +1,6 @@
 "use client";
 
 import { BotSettings } from "@/components/autonomous/BotSettings";
-import { RiskProfileSections } from "@/components/autonomous/RiskProfileSections";
 import { StrategyStatsPanel } from "@/components/autonomous/StrategyStatsPanel";
 import { KillSwitchButton } from "@/components/KillSwitchButton";
 import { killSwitchBlockNotice, PortfolioHubChrome } from "@/components/portfolio";
@@ -15,15 +14,18 @@ import { formatDateTime } from "@/lib/format";
 const JUMP_LINKS = [
   ["#kill-switch", "Kill switch"],
   ["#limits", "Limits"],
+  ["#guardrails", "Stop-loss band"],
   ["#grade-risk", "Grade risk"],
   ["#leverage", "Leverage"],
   ["#strategies", "Per strategy"],
 ] as const;
 
 /**
- * Autonomous Trading: the paper bot, every limit it trades under, grade risk,
- * leverage and per-strategy results on one page. `/risk` and `/risk/autonomous`
- * redirect here (next.config).
+ * Autonomous Trading: the one settings page for the paper/demo bot. Every
+ * limit it trades under (account + bot), the stop-loss band and hard ceilings,
+ * grade risk, leverage, strategy and coin, and per-strategy results. `/risk`
+ * and `/risk/autonomous` redirect here (next.config). Kill switch and the
+ * real-money block are status only.
  */
 export default function AutonomousPage() {
   return (
@@ -88,7 +90,6 @@ function AutonomousWorkspace() {
       </nav>
       <KillSwitchStatusCard />
       <BotSettings />
-      <RiskProfileSections />
       <StrategyStatsPanel />
       <p className="text-xs text-zinc-500" data-testid="autonomous-real-trading-footer">
         Real trading remains disabled. Risk settings affect paper discipline snapshots, dashboard guidance, and agent

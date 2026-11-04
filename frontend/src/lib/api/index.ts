@@ -115,6 +115,7 @@ import type {
   HumanVsSystemComparison,
   UserStrategy,
   AutonomousActivityView,
+  AutonomousSettingsBounds,
   AutonomousStrategyStatsView,
   RiskPolicyView,
   AutonomousTradingSettingsView,
@@ -1335,6 +1336,8 @@ export const api = {
   autonomous: {
     settings: () =>
       apiFetch<AutonomousTradingSettingsView>("/autonomous/settings", { auth: true }),
+    bounds: () =>
+      apiFetch<AutonomousSettingsBounds>("/autonomous/settings/bounds", { auth: true }),
     activity: () =>
       apiFetch<AutonomousActivityView>("/autonomous/activity", { auth: true }),
     strategyStats: () =>

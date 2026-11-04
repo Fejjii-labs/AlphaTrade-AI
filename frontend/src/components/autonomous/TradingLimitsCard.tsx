@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, type ReactNode, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import type { AutonomousTradingSettingsView, UserRiskSettings, UserRiskSettingsUpdate } from "@/lib/api/types";
+
+import { type Bounds, boundHint, inputLimits } from "./bounds";
 
 type BotForm = {
   daily_loss_limit_percent: string;
@@ -129,6 +132,8 @@ type Props = {
   ownerReason: string | null;
   onBotSaved: (view: AutonomousTradingSettingsView) => void;
   onAccountSaved: (settings: UserRiskSettings) => void;
+  /** GET /autonomous/settings/bounds; null falls back to the ceilings on the bot view. */
+  bounds?: Bounds;
 };
 
 /**
@@ -137,7 +142,7 @@ type Props = {
  * save writes whichever side changed, account first so a raised account cap
  * is in place before the bot cap is checked against it.
  */
-export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved, onAccountSaved }: Props) {
+export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved, onAccountSaved, bounds = null }: Props) {
   const [botForm, setBotForm] = useState(() => toBotForm(bot));
   const [accountForm, setAccountForm] = useState(() => toAccountForm(account));
   const [saving, setSaving] = useState(false);
@@ -215,6 +220,12 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
     }
   }
 
+  // Every hint below is read from the server; nothing here is a client-side limit.
+  const botDailyMax = bounds?.bot_daily_loss_limit_percent.max ?? bot.max_daily_loss_percent_ceiling;
+  const botRiskMax = bounds?.bot_risk_per_trade_percent.max ?? bot.max_risk_per_trade_percent_ceiling;
+  const accountTradesLimits = bounds ? inputLimits(bounds.account_max_trades_per_day) : { min: "1" };
+  const botTradesHint = boundHint(bounds?.bot_max_trades_per_day);
+  const accountRiskHint = boundHint(bounds?.account_max_risk_per_trade_percent, "%");
   const effectiveNote = bot.using_defaults
     ? "the bot limit applies once saved"
     : bot.effective_max_trades_per_day < bot.max_trades_per_day
@@ -249,12 +260,20 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                 <Input
                   data-testid="risk-max-trades"
                   type="number"
-                  min={1}
+                  {...accountTradesLimits}
                   value={accountForm.max_trades_per_day}
                   onChange={(e) => setAccount({ max_trades_per_day: e.target.value })}
                 />
               </Field>
-              <Field label="Bot: max trades/day (≤ account)" hint={<span data-testid="autonomous-effective-max-trades">Effective {bot.effective_max_trades_per_day} · {effectiveNote}</span>}>
+              <Field
+                label="Bot: max trades/day (≤ account)"
+                hint={
+                  <span data-testid="autonomous-effective-max-trades">
+                    Effective {bot.effective_max_trades_per_day} · {effectiveNote}
+                    {botTradesHint ? ` · allowed ${botTradesHint}` : ""}
+                  </span>
+                }
+              >
                 <Input
                   data-testid="autonomous-max-trades"
                   inputMode="numeric"
@@ -271,7 +290,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                   onChange={(e) => setAccount({ daily_loss_limit: e.target.value })}
                 />
               </Field>
-              <Field label="Bot: daily loss limit (%)" hint={`Max ${bot.max_daily_loss_percent_ceiling}%`}>
+              <Field label="Bot: daily loss limit (%)" hint={`Max ${botDailyMax}% of equity`}>
                 <Input
                   data-testid="autonomous-daily-loss-percent"
                   inputMode="decimal"
@@ -284,7 +303,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
           </Section>
           <Section id="sizing" title="Risk per trade and position size">
             <div className="grid gap-4 md:grid-cols-3">
-              <Field label="Account: max risk per trade (%)">
+              <Field label="Account: max risk per trade (%)" hint={accountRiskHint ? `Allowed ${accountRiskHint}` : undefined}>
                 <Input
                   data-testid="risk-max-risk-percent"
                   value={accountForm.max_risk_per_trade_percent}
@@ -293,7 +312,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
               </Field>
               <Field
                 label="Bot: risk per trade (%)"
-                hint={`Max ${bot.max_risk_per_trade_percent_ceiling}%. Empty uses grade risk (below).`}
+                hint={`Max ${botRiskMax}% of portfolio. Empty uses grade risk (below).`}
               >
                 <Input
                   data-testid="autonomous-risk-per-trade"
@@ -315,7 +334,10 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
           </Section>
           <Section id="target" title="Strategy and coin">
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Strategy">
+              <Field
+                label="Strategy"
+                hint={bot.strategy_options.length === 0 ? "No enabled strategies yet. Enable one under Strategies." : undefined}
+              >
                 <select
                   data-testid="autonomous-strategy"
                   className={selectClass}
@@ -331,7 +353,17 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                   ))}
                 </select>
               </Field>
-              <Field label="Coin (from watchlist)">
+              <Field
+                label="Coin (from watchlist)"
+                hint={
+                  <span data-testid="autonomous-symbol-hint">
+                    {bot.symbol_options.length === 0 ? "No enabled coins on the watchlist. " : null}
+                    <Link href="/settings/watcher" className="underline">
+                      Edit watchlist
+                    </Link>
+                  </span>
+                }
+              >
                 <select
                   data-testid="autonomous-symbol"
                   className={selectClass}
