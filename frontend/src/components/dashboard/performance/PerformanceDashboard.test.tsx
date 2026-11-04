@@ -179,6 +179,30 @@ describe("PerformanceDashboard", () => {
     );
   });
 
+  it("renders a calendar error instead of zeros when only the month request fails", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockImplementation((params) =>
+      params?.date_from === "2026-07-01" && params?.date_to === "2026-07-31"
+        ? Promise.reject(new Error("boom"))
+        : Promise.resolve(response()),
+    );
+    render(<PerformanceDashboard now={NOW} />);
+    expect(await screen.findByTestId("calendar-error")).toHaveTextContent("Calendar unavailable for July 2026");
+    expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("Monthly: —");
+    expect(screen.getByTestId("calendar-month-total")).not.toHaveTextContent("trading day");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00");
+  });
+
+  it("clears the previous range while a new one loads", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    await waitFor(() => expect(screen.getByTestId("score-overall")).toHaveTextContent("42.5"));
+    vi.mocked(api.journal.performanceCalendar).mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByRole("radio", { name: "30D" }));
+    await waitFor(() => expect(screen.getByTestId("score-overall")).toHaveTextContent("—"));
+    expect(screen.getByTestId("cumulative-last")).toHaveTextContent("—");
+    expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("—");
+  });
+
   it("sample data is off by default and visibly badged when enabled", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(EMPTY);
     render(<PerformanceDashboard now={NOW} />);

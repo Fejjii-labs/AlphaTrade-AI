@@ -71,6 +71,7 @@ export function PnlCalendar({
   days,
   summary,
   loading = false,
+  error = false,
   onPrev,
   onNext,
   onToday,
@@ -79,6 +80,7 @@ export function PnlCalendar({
   days: JournalDashboardDay[];
   summary: JournalDashboardSummary | null;
   loading?: boolean;
+  error?: boolean;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -124,12 +126,27 @@ export function PnlCalendar({
         <p className="text-xs text-text-secondary" data-testid="calendar-month-total">
           Monthly:{" "}
           <span className={cn("font-data font-semibold", valueTone[monthTone])}>
-            {loading ? "…" : formatMonetary(summary?.net_pnl)}
-          </span>{" "}
-          · <span className="font-data">{formatCount(days.length)}</span> trading day
-          {days.length === 1 ? "" : "s"}
+            {loading ? "…" : formatMonetary(error ? null : summary?.net_pnl)}
+          </span>
+          {loading || error ? null : (
+            <>
+              {" "}
+              · <span className="font-data">{formatCount(days.length)}</span> trading day
+              {days.length === 1 ? "" : "s"}
+            </>
+          )}
         </p>
       </div>
+      {error ? (
+        <p
+          role="alert"
+          className="mb-3 rounded-control border border-danger-border bg-danger-muted px-3 py-2 text-xs text-danger"
+          data-testid="calendar-error"
+        >
+          Calendar unavailable for {monthLabel(month)}. Daily figures for this month could not be
+          loaded; this is not a zero-P&amp;L month.
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-7 gap-1 md:grid-cols-[repeat(7,minmax(0,1fr))_minmax(84px,0.9fr)]">
         {WEEKDAYS.map((name) => (

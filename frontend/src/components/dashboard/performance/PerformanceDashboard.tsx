@@ -48,7 +48,8 @@ function useDashboardRequest(
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
-    setState((previous) => ({ ...previous, loading: true, error: false }));
+    // Drop the previous response so no panel shows another range/month as current.
+    setState(IDLE);
     api.journal
       .performanceCalendar(JSON.parse(key) as JournalPerformanceDashboardParams, {
         signal: controller.signal,
@@ -177,6 +178,7 @@ export function PerformanceDashboard({
               days={monthData?.days ?? []}
               summary={monthData?.summary ?? null}
               loading={!sample && calendar.loading}
+              error={!sample && calendar.error}
               onPrev={() => setMonth((current) => shiftMonth(current, -1))}
               onNext={() => setMonth((current) => shiftMonth(current, 1))}
               onToday={() => setMonth(thisMonth)}
