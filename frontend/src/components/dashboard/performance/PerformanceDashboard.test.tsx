@@ -325,10 +325,25 @@ describe("PerformanceDashboard", () => {
     expect(screen.queryByLabelText("From")).not.toBeInTheDocument();
   });
 
-  it("shows unavailable state when the request fails", async () => {
+  it("shows unavailable state when the request fails, and Retry refetches", async () => {
     vi.mocked(api.journal.performanceCalendar).mockRejectedValue(new Error("boom"));
     render(<PerformanceDashboard now={NOW} />);
     expect(await screen.findByText("Journal performance unavailable")).toBeInTheDocument();
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.getByTestId("cumulative-drawdown")).toHaveTextContent("Max drawdown −150.00");
+  });
+
+  it("shows skeletons for every panel while loading, never empty-state copy", () => {
+    vi.mocked(api.journal.performanceCalendar).mockReturnValue(new Promise(() => {}));
+    render(<PerformanceDashboard now={NOW} />);
+    expect(screen.getByTestId("performance-kpis-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("score-radar-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("cumulative-loading")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Daily net P&L, July 2026" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText(/Not enough closed trades to score/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No closed trades with recorded P&L/)).not.toBeInTheDocument();
   });
 });
 
@@ -373,6 +388,27 @@ describe("performance components", () => {
     const table = screen.getByRole("table", { name: "Daily net P&L, July 2026" });
     expect(within(table).getAllByRole("columnheader")[0]).toHaveTextContent("Sun");
     expect(within(table).getByRole("cell", { name: /^2026-07-02: \+1200\.00 net, 1 trade/ })).toBeInTheDocument();
+  });
+
+  it("calendar marks today and offers Retry on error", () => {
+    const onRetry = vi.fn();
+    render(
+      <PnlCalendar
+        month={{ year: 2026, month: 6 }}
+        days={response().days}
+        summary={null}
+        error
+        todayIso="2026-07-02"
+        onPrev={() => {}}
+        onNext={() => {}}
+        onToday={() => {}}
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByTestId("calendar-day-2026-07-02")).toHaveAttribute("aria-current", "date");
+    expect(screen.getByRole("cell", { name: /^2026-07-02 \(today\)/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("curve has a text alternative", () => {

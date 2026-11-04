@@ -50,7 +50,7 @@ const IDLE: Loadable = { data: null, loading: true, error: false };
 function useDashboardRequest(
   params: JournalPerformanceDashboardParams,
   enabled: boolean,
-  reloadKey: number,
+  reloadKey: string,
 ): Loadable {
   const [state, setState] = useState<Loadable>(IDLE);
   const key = JSON.stringify(params);
@@ -89,8 +89,11 @@ export function PerformanceDashboard({
   const [source, setSource] = useState<JournalTradeSource | "">("");
   const [sourceOptions, setSourceOptions] = useState<JournalTradeSource[]>([]);
   const defaultCustom = useMemo(() => rangeParams("30d", today), [today]);
+  const todayIso = defaultCustom.date_to ?? null;
   const [customFrom, setCustomFrom] = useState(defaultCustom.date_from ?? "");
   const [customTo, setCustomTo] = useState(defaultCustom.date_to ?? "");
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = () => setRetryKey((key) => key + 1);
   const tz = useMemo(() => browserTimezone(), []);
 
   const customError = preset === "custom" ? customRangeError(customFrom, customTo) : null;
@@ -108,8 +111,9 @@ export function PerformanceDashboard({
     () => ({ ...monthRange(month), scope, tz, ...(source ? { source } : {}) }),
     [month, scope, source, tz],
   );
-  const range = useDashboardRequest(rangeQuery, !sample && !rangeBlocked, refreshKey);
-  const calendar = useDashboardRequest(monthQuery, !sample, refreshKey);
+  const reloadKey = `${refreshKey}:${retryKey}`;
+  const range = useDashboardRequest(rangeQuery, !sample && !rangeBlocked, reloadKey);
+  const calendar = useDashboardRequest(monthQuery, !sample, reloadKey);
 
   // Remember the scope's sources so the picker survives the next reload.
   const loadedFilters = range.data?.filters;
@@ -305,7 +309,7 @@ export function PerformanceDashboard({
       ) : null}
 
       {!sample && range.error ? (
-        <UnavailableState message="Journal performance unavailable" className="py-4" />
+        <UnavailableState message="Journal performance unavailable" className="py-4" onRetry={retry} />
       ) : (
         <>
           {empty ? (
@@ -339,14 +343,21 @@ export function PerformanceDashboard({
               onPrev={() => setMonth((current) => shiftMonth(current, -1))}
               onNext={() => setMonth((current) => shiftMonth(current, 1))}
               onToday={() => setMonth(thisMonth)}
+              onRetry={retry}
+              todayIso={todayIso}
             />
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               <ScoreRadar
                 overall={rangeData?.score.overall ?? null}
                 components={rangeData?.score.components ?? []}
                 confidence={rangeData?.confidence ?? null}
+                loading={rangeLoading}
               />
-              <CumulativePnlChart points={rangeData?.cumulative ?? []} />
+              <CumulativePnlChart
+                points={rangeData?.cumulative ?? []}
+                maxDrawdown={rangeData?.risk.max_drawdown ?? null}
+                loading={rangeLoading}
+              />
             </div>
           </div>
         </>

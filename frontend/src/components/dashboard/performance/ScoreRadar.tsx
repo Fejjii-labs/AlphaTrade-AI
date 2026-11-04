@@ -11,8 +11,20 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import type { JournalDashboardScoreComponent, SampleConfidence } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+export type ScoreBand = { label: "Strong" | "Fair" | "Weak"; text: string; color: string };
+
+/** Display bands for the 0–100 score (presentation only; the server owns the score). */
+export function scoreBand(score: number | null): ScoreBand | null {
+  if (score === null || !Number.isFinite(score)) return null;
+  if (score >= 70) return { label: "Strong", text: "text-success", color: "var(--color-success)" };
+  if (score >= 40) return { label: "Fair", text: "text-warning", color: "var(--color-warning)" };
+  return { label: "Weak", text: "text-danger", color: "var(--color-danger)" };
+}
 
 type RadarDatum = { axis: string; score: number | null; raw: string };
 type ScoredDatum = RadarDatum & { score: number };
@@ -42,10 +54,12 @@ export function ScoreRadar({
   overall,
   components,
   confidence = null,
+  loading = false,
 }: {
   overall: number | null;
   components: JournalDashboardScoreComponent[];
   confidence?: SampleConfidence | null;
+  loading?: boolean;
 }) {
   const smallSample = confidence === "insufficient" && components.some((c) => c.score !== null);
   const rows: RadarDatum[] = components.map((component) => ({
@@ -57,14 +71,21 @@ export function ScoreRadar({
   const scored = rows.filter((row): row is ScoredDatum => row.score !== null);
   const unscored = rows.filter((row) => row.score === null);
   const marker = overall === null || smallSample ? null : Math.max(0, Math.min(100, overall));
+  const band = scoreBand(marker);
+  const polygon = band?.color ?? "var(--color-accent)";
   return (
     <section
       className="relative flex flex-col rounded-card border border-border-subtle bg-surface-1 p-4"
       aria-label="Performance score"
       data-testid="score-radar"
+      aria-busy={loading || undefined}
     >
       <h3 className="text-sm font-semibold text-text-primary">Performance score</h3>
-      {scored.length >= 3 ? (
+      {loading ? (
+        <div className="flex h-56 items-center justify-center" data-testid="score-radar-loading">
+          <Skeleton className="h-40 w-40 rounded-full" />
+        </div>
+      ) : scored.length >= 3 ? (
         <div className="h-56 w-full" aria-hidden="true" data-testid="score-radar-chart">
           <ResponsiveContainer width="100%" height="100%">
             <RadarChart data={scored} outerRadius="70%">
@@ -73,11 +94,11 @@ export function ScoreRadar({
               <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
               <Radar
                 dataKey="score"
-                stroke="var(--color-accent)"
+                stroke={polygon}
                 strokeWidth={2}
-                fill="var(--color-accent)"
+                fill={polygon}
                 fillOpacity={0.25}
-                dot={{ r: 3, fill: "var(--color-accent)" }}
+                dot={{ r: 3, fill: polygon }}
                 isAnimationActive={false}
               />
               <Tooltip content={<RadarTooltip />} />
@@ -116,8 +137,16 @@ export function ScoreRadar({
       <div className="mt-auto flex items-end gap-4 border-t border-border-subtle pt-3">
         <div>
           <p className="text-[11px] text-text-muted">Overall score</p>
-          <p className="font-data text-2xl font-semibold text-text-primary" data-testid="score-overall">
+          <p
+            className={cn("font-data text-2xl font-semibold", band?.text ?? "text-text-primary")}
+            data-testid="score-overall"
+          >
             {overall === null || smallSample ? UNAVAILABLE : overall.toFixed(1)}
+            {band ? (
+              <span className="ml-2 align-middle font-sans text-xs font-medium" data-testid="score-band">
+                {band.label}
+              </span>
+            ) : null}
           </p>
           {smallSample ? (
             <p className="text-[11px] text-warning" data-testid="score-small-sample">
