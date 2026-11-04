@@ -525,6 +525,17 @@ class Settings(BaseSettings):
     # --- Journal statistics (AT-031) — bounded aggregate scans ---
     journal_stats_max_rows: int = Field(default=5000, ge=100, le=50_000)
 
+    # --- Journal performance dashboard — calendar/score read model ---
+    # Default IANA timezone for daily buckets when the client sends none.
+    journal_dashboard_default_timezone: str = "UTC"
+    # Radar score normalization: a metric at (or beyond) its target scores 100.
+    journal_dashboard_target_win_rate: float = Field(default=0.6, gt=0, le=1)
+    journal_dashboard_target_profit_factor: float = Field(default=2.5, gt=0, le=100)
+    journal_dashboard_target_win_loss_ratio: float = Field(default=2.5, gt=0, le=100)
+    journal_dashboard_target_recovery_factor: float = Field(default=3.0, gt=0, le=100)
+    # Max drawdown as a fraction of gross profit that scores 0 (no drawdown scores 100).
+    journal_dashboard_drawdown_tolerance: float = Field(default=0.5, gt=0, le=10)
+
     # --- Journal excursion replay (AT-032) — bounded HistoricalCandle reads ---
     journal_replay_max_candles: int = Field(default=5000, ge=10, le=50_000)
     journal_replay_batch_max: int = Field(default=100, ge=1, le=1000)
@@ -630,6 +641,17 @@ class Settings(BaseSettings):
         """Allow a comma-separated string for ``CORS_ORIGINS`` in env files."""
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("journal_dashboard_default_timezone")
+    @classmethod
+    def _validate_journal_dashboard_timezone(cls, value: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
         return value
 
     @field_validator("journal_attachment_allowed_types", mode="before")

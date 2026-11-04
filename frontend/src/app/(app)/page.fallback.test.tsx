@@ -1,3 +1,4 @@
+vi.mock("@/components/dashboard/performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
 vi.mock("@/components/settings/ManualDemoActivity", () => ({
   ManualDemoActivity: () => <div>Manual history fixture</div>,
 }));

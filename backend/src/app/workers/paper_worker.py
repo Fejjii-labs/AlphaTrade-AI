@@ -66,6 +66,19 @@ _AUTHORITY_FIELDS = (
     "telegram_network_permitted",
 )
 
+# Transient database errors retry the cycle in place before it is marked failed.
+# A retry is the next cycle sooner: every gate is evaluated again.
+_DB_RETRY_BACKOFF_SECONDS = (0.5, 2.0)
+
+# Components whose whole cycle was audited as safe to re-run at once after a
+# transient DB error (docs/plans/2026-11-03-worker-resilience.md, audit table):
+# activity writes keyed native facts and its cursor in one commit and only reads
+# BloFin; indexing claims jobs under a lease and upserts vectors by point id.
+# Neither submits orders, reserves notional, writes journal or trade rows,
+# touches the kill switch or sends messages. Every other component, and any
+# name not listed here, fails as before and waits for its next scheduled cycle.
+_DB_RETRY_COMPONENTS: frozenset[str] = frozenset({"activity", "indexing"})
+
 AuthorityProbe = Callable[[], tuple[object, ...]]
 AuthorityRestore = Callable[[], None]
 
@@ -500,7 +513,7 @@ class PaperWorkerSupervisor:
                 self._mark_stopped(component)
                 return
             try:
-                outcome = component.cycle()
+                outcome = self._cycle_with_db_retry(component)
             except Exception as exc:
                 self._revert(component)
                 self._fail(component, exc)
@@ -512,6 +525,38 @@ class PaperWorkerSupervisor:
             self._succeed(component, outcome)
         finally:
             self._finish_memory_cycle(component, sampler)
+
+    def _cycle_with_db_retry(self, component: _Component) -> CycleOutcome:
+        """Run one cycle; retry a transient database error only for allowlisted components.
+
+        Only names in ``_DB_RETRY_COMPONENTS`` retry (default: no retry). The
+        watcher, Telegram, exit monitor and demo snapshot can submit orders,
+        claim notional, write journal or trade rows, raise the kill switch or
+        send messages before the error, so they fail as before and the next
+        scheduled cycle runs normally. Allowlisted runtimes open their sessions
+        per cycle and close them on exit, so a failed attempt has already
+        rolled back and returned its connection. Authority is reverted before
+        each retry, and a stop request during the backoff ends the retries.
+        """
+
+        if component.name not in _DB_RETRY_COMPONENTS:
+            return component.cycle()
+        for attempt, backoff in enumerate((*_DB_RETRY_BACKOFF_SECONDS, None)):
+            try:
+                return component.cycle()
+            except Exception as exc:
+                if backoff is None or not is_transient_db_error(exc):
+                    raise
+                self._revert(component)
+                logger.warning(
+                    "paper_worker_cycle_db_retry",
+                    component=component.name,
+                    attempt=attempt + 1,
+                    error=_safe_error(exc),
+                )
+                if self._stop.wait(backoff):
+                    raise
+        raise AssertionError("unreachable")
 
     def _finish_memory_cycle(
         self, component: _Component, sampler: CycleMemorySampler | None
@@ -1084,6 +1129,23 @@ def _iso(moment: datetime | None) -> str:
     if moment is None:
         return ""
     return moment.astimezone(UTC).isoformat()
+
+
+def is_transient_db_error(exc: BaseException) -> bool:
+    """Lost connection or aborted transaction, including one wrapped by a runtime."""
+
+    from sqlalchemy.exc import DBAPIError, OperationalError, PendingRollbackError
+
+    seen: BaseException | None = exc
+    for _ in range(3):
+        if seen is None:
+            return False
+        if isinstance(seen, PendingRollbackError | OperationalError):
+            return True
+        if isinstance(seen, DBAPIError) and seen.connection_invalidated:
+            return True
+        seen = seen.__cause__
+    return False
 
 
 def _safe_error(exc: BaseException) -> str:

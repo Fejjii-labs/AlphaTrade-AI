@@ -290,7 +290,8 @@ jobs:
         run: docker build -t alphatrade-backend:ci ./backend
 
   e2e-smoke:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04 (2026-11-04); Playwright chromium install is unsupported there.
+    runs-on: ubuntu-24.04
     needs: [backend, frontend]
     defaults:
       run:
