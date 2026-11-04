@@ -150,6 +150,24 @@ def test_backoff_doubles_per_failure_and_caps() -> None:
     assert state.retry_at == EVALUATED + CLOSE_FAILURE_BACKOFF_MAX
 
 
+def test_backoff_cap_is_exactly_one_hour() -> None:
+    # Literal values, not the constant, so a changed cap fails here.
+    cap = CLOSE_FAILURE_BACKOFF_MAX
+    assert cap == timedelta(hours=1)
+    assert cap.total_seconds() == 3600
+    state = None
+    for _ in range(50):
+        state = next_close_backoff(state, failed_at=EVALUATED, reason="OperationalError")
+        assert state.retry_at - EVALUATED <= timedelta(seconds=3600)
+    assert state is not None
+    assert state.retry_at == EVALUATED + timedelta(hours=1)
+    assert (state.retry_at - EVALUATED).total_seconds() == 3600
+    quarantined = next_close_backoff(
+        None, failed_at=EVALUATED, reason="learning_venue_mode_conflict"
+    )
+    assert quarantined.retry_at == EVALUATED + timedelta(hours=1)
+
+
 def test_identity_conflict_quarantines_for_the_maximum_wait() -> None:
     state = next_close_backoff(None, failed_at=EVALUATED, reason="learning_venue_mode_conflict")
     assert state.quarantined
