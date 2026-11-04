@@ -471,6 +471,10 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
         Dashboard-only: same bounded projection as ``fetch_stats_rows`` but the
         scope is expressed as source/venue rules so venue-split sources (e.g.
         ``paper_execution`` on BloFin demo vs. internal paper) never mix.
+
+        Keeps the NEWEST ``max_rows`` trades: the query reads newest-first with
+        a limit, and the result is returned in ascending effective-time order
+        for computation. ``fetch_stats_rows`` keeps its oldest-window order.
         """
         assert_stats_projection_excludes_annotation_grade()
         filters = self._stats_filters(
@@ -484,12 +488,12 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
         stmt = (
             select(*_stats_columns())  # type: ignore[call-overload]  # same as fetch_stats_rows
             .where(*filters)
-            .order_by(effective_time.asc(), JournalTrade.id.asc())
+            .order_by(effective_time.desc(), JournalTrade.id.desc())
             .limit(max_rows + 1)
         )
         raw = self._session.execute(stmt).all()
         truncated = len(raw) > max_rows
-        rows = [JournalTradeStatsRow(*row) for row in raw[:max_rows]]
+        rows = [JournalTradeStatsRow(*row) for row in reversed(raw[:max_rows])]
         return rows, truncated
 
     def fetch_rule_check_status_pairs(

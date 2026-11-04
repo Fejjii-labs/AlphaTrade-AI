@@ -4587,6 +4587,8 @@ export interface JournalPerformanceDashboardResponse {
   confidence: SampleConfidence;
   truncated: boolean;
   max_rows: number;
+  /** Local date of the oldest trade in the capped newest-first window; set only when truncated. */
+  oldest_covered_date: string | null;
   warnings: string[];
   generated_at: string;
 }

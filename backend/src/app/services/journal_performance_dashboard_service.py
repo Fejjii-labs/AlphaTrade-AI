@@ -548,14 +548,18 @@ def build_dashboard(
             f"{summary.trade_count - summary.pnl_sample_count} closed trade(s) have no "
             "recorded net PnL and are excluded from PnL figures."
         )
+    oldest_covered: date | None = None
+    if truncated and rows and rows[0].effective_time is not None:
+        oldest_covered = _local_date(rows[0].effective_time, tz)
     dashboard_score = score(summary, risk, targets)
     if rows and confidence == SampleConfidence.INSUFFICIENT:
         dashboard_score = dashboard_score.model_copy(update={"overall": None})
         warnings.append("Overall score withheld until at least 5 closed trades.")
     if truncated:
+        since = f" from {oldest_covered.isoformat()}" if oldest_covered else ""
         warnings.append(
-            f"Capped at {max_rows} closed trades; figures cover only the oldest trades "
-            "in range. Narrow the date range."
+            f"Capped at the {max_rows} most recent closed trades{since}; older trades "
+            "in range are not counted. Narrow the date range for full coverage."
         )
     return JournalPerformanceDashboardResponse(
         filters=filters,
@@ -567,6 +571,7 @@ def build_dashboard(
         confidence=confidence,
         truncated=truncated,
         max_rows=max_rows,
+        oldest_covered_date=oldest_covered,
         warnings=warnings,
         generated_at=now or datetime.now(UTC),
     )

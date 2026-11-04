@@ -22,6 +22,7 @@ from app.core.config import Settings
 from app.core.errors import ValidationAppError
 from app.db.models import JournalTrade, TradePlanRevision
 from app.repositories.journal_trades import (
+    JournalTradeRepository,
     JournalTradeStatsRow,
     SourceVenueRule,
     VenueRequirement,
@@ -248,10 +249,18 @@ def test_naive_effective_time_is_treated_as_utc() -> None:
     assert _build(rows, tz="Asia/Tokyo").days[0].date == date(2026, 7, 2)
 
 
-def test_truncation_is_flagged() -> None:
-    result = _build([_row("5", datetime(2026, 7, 2, tzinfo=UTC))], truncated=True)
+def test_truncation_is_flagged_with_oldest_covered_date() -> None:
+    rows = [
+        _row("5", datetime(2026, 7, 1, 23, 30, tzinfo=UTC)),
+        _row("6", datetime(2026, 7, 3, tzinfo=UTC)),
+    ]
+    result = _build(rows, tz="Europe/Berlin", truncated=True)
     assert result.truncated is True
-    assert any("Capped at 5000" in w for w in result.warnings)
+    assert result.oldest_covered_date == date(2026, 7, 2)  # 01:30 local
+    assert any(
+        "Capped at the 5000 most recent closed trades from 2026-07-02" in w for w in result.warnings
+    )
+    assert _build(rows).oldest_covered_date is None
 
 
 def test_local_day_bounds_cover_whole_local_days() -> None:
@@ -560,6 +569,47 @@ def test_calendar_endpoint_scopes_never_mix(
         ).status_code
         == 422
     )
+
+
+def test_calendar_endpoint_keeps_the_newest_window_when_capped() -> None:
+    test_client, factory = _build_env({"journal_stats_max_rows": 100})
+    with test_client:
+        headers = _auth(test_client, "stats-a@test.example")
+        base = datetime(2026, 1, 1, 12, tzinfo=UTC)
+        # 103 trades, one per day; net PnL = day index so the window is checkable.
+        for index in range(103):
+            _closed_trade(
+                factory,
+                source=DEMO,
+                net_pnl=str(index),
+                exit_time=base + timedelta(days=index),
+            )
+        body = test_client.get(
+            "/journal/statistics/calendar", headers=headers, params={"tz": "UTC"}
+        ).json()
+        assert body["truncated"] is True
+        assert body["summary"]["trade_count"] == 100
+        # Newest 100 = indexes 3..102 → sum 5250 (not 0..99 = 4950).
+        assert Decimal(body["summary"]["net_pnl"]) == Decimal(sum(range(3, 103)))
+        assert body["oldest_covered_date"] == "2026-01-04"
+        assert body["days"][0]["date"] == "2026-01-04"
+        assert body["days"][-1]["date"] == "2026-04-13"
+        # Ascending order for computation: the curve ends at the full sum.
+        assert Decimal(body["cumulative"][-1]["cumulative_net_pnl"]) == Decimal(5250)
+
+
+def test_fetch_stats_rows_keeps_its_existing_oldest_window() -> None:
+    _, factory = _build_env()
+    base = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    for index in range(103):
+        _closed_trade(factory, net_pnl=str(index), exit_time=base + timedelta(days=index))
+    with factory() as session:
+        rows, truncated = JournalTradeRepository(session).fetch_stats_rows(
+            organization_id=ORG_A, user_id=USER_A, max_rows=100
+        )
+    assert truncated is True
+    assert [row.net_pnl for row in rows[:2]] == [Decimal("0"), Decimal("1")]
+    assert rows[-1].net_pnl == Decimal("99")
 
 
 def test_calendar_endpoint_dst_fall_back_trade_lands_in_its_local_day(

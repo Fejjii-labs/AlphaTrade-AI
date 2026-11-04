@@ -20567,6 +20567,18 @@
             "title": "Max Rows",
             "type": "integer"
           },
+          "oldest_covered_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Covered Date"
+          },
           "risk": {
             "$ref": "#/components/schemas/JournalDashboardRisk"
           },

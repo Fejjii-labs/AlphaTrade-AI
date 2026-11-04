@@ -113,6 +113,12 @@ export function PerformanceDashboard({
               {humanizeToken(rangeData.confidence)} confidence
             </Badge>
           ) : null}
+          {!sample && rangeData?.truncated ? (
+            <Badge variant="warning" data-testid="performance-truncated">
+              Newest {rangeData.max_rows} trades
+              {rangeData.oldest_covered_date ? ` since ${rangeData.oldest_covered_date}` : ""}
+            </Badge>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SegmentedControl

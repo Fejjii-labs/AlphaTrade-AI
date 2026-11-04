@@ -68,6 +68,7 @@ function response(
     confidence: "low",
     truncated: false,
     max_rows: 5000,
+    oldest_covered_date: null,
     warnings: [],
     generated_at: "2026-07-15T12:00:00Z",
     ...overrides,
@@ -142,6 +143,19 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
     expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("—");
+  });
+
+  it("flags a capped newest-first window with its oldest covered date", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(
+      response({
+        truncated: true,
+        oldest_covered_date: "2026-05-02",
+        warnings: ["Capped at the 5000 most recent closed trades from 2026-05-02; older trades in range are not counted. Narrow the date range for full coverage."],
+      }),
+    );
+    render(<PerformanceDashboard now={NOW} />);
+    expect(await screen.findByTestId("performance-truncated")).toHaveTextContent("Newest 5000 trades since 2026-05-02");
+    expect(screen.getByTestId("performance-warnings")).toHaveTextContent("most recent closed trades from 2026-05-02");
   });
 
   it("navigates months and refetches the calendar range", async () => {

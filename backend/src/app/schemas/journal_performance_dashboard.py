@@ -132,5 +132,8 @@ class JournalPerformanceDashboardResponse(StrictModel):
     confidence: SampleConfidence
     truncated: bool
     max_rows: int
+    # Local date of the oldest trade in the capped (newest-first) window; set
+    # only when truncated, so earlier trades in range are not counted.
+    oldest_covered_date: date | None = None
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime
