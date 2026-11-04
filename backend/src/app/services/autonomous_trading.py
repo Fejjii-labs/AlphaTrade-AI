@@ -16,6 +16,7 @@ claim, reservation, and venue gates.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -68,6 +69,23 @@ class RiskLimitSnapshot:
     symbol_actual: dict[str, str] | None = None
     daily_locked: bool = False
     trade_slots: int = 1
+    # Venue the plan executes on. The per-symbol cap is skipped only for an
+    # explicit demo/paper venue; anything else (including None) keeps it.
+    execution_venue: str | None = None
+
+
+def demo_paper_venues() -> frozenset[str]:
+    """Exact venue values written on demo/paper plans (safety_epoch constants)."""
+
+    from app.services.safety_epoch import BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE
+
+    return frozenset({BLOFIN_DEMO_VENUE, INTERNAL_PAPER_VENUE})
+
+
+def symbol_cap_exempt(execution_venue: str | None) -> bool:
+    """True only for an exact demo/paper venue value (Sofien 2026-11-03)."""
+
+    return isinstance(execution_venue, str) and execution_venue in demo_paper_venues()
 
 
 def resolve_autonomous_mode(
@@ -275,16 +293,17 @@ def configured_risk_refusal(snapshot: RiskLimitSnapshot | None) -> str | None:
         return "risk_limits_unverified"
     if snapshot.daily_locked:
         return "daily_loss_limit"
-    try:
-        symbol_reserved = _symbol_amount(snapshot.symbol_reserved, snapshot.instrument)
-        symbol_actual = _symbol_amount(snapshot.symbol_actual, snapshot.instrument)
-    except (InvalidOperation, ValueError, TypeError):
-        return "risk_limits_unverified"
-    if snapshot.pending_notional > snapshot.max_symbol_notional:
-        return "max_position_size"
-    remaining_symbol = snapshot.max_symbol_notional - symbol_reserved - symbol_actual
-    if snapshot.pending_notional > remaining_symbol:
-        return "max_position_size"
+    if not symbol_cap_exempt(snapshot.execution_venue):
+        try:
+            symbol_reserved = _symbol_amount(snapshot.symbol_reserved, snapshot.instrument)
+            symbol_actual = _symbol_amount(snapshot.symbol_actual, snapshot.instrument)
+        except (InvalidOperation, ValueError, TypeError):
+            return "risk_limits_unverified"
+        if snapshot.pending_notional > snapshot.max_symbol_notional:
+            return "max_position_size"
+        remaining_symbol = snapshot.max_symbol_notional - symbol_reserved - symbol_actual
+        if snapshot.pending_notional > remaining_symbol:
+            return "max_position_size"
     if snapshot.pending_notional > snapshot.max_notional:
         return "max_exposure"
     remaining_notional = (
@@ -342,11 +361,30 @@ def _enum_value(value: object) -> str | None:
     return text or None
 
 
-def _symbol_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
-    if book is None:
+def symbol_key(instrument: str) -> str:
+    """Normalize instrument spellings so BTCUSDT and BTC-USDT share one key."""
+
+    key = re.sub(r"[^A-Z0-9]", "", str(instrument).upper())
+    if not key or key.endswith(("SWAP", "PERP")):
+        raise ValueError(f"non-canonical instrument symbol: {instrument!r}")
+    return key
+
+
+def symbol_book_amount(book: dict[str, str] | None, instrument: str) -> Decimal:
+    """Sum exposure stored under any spelling of ``instrument``."""
+
+    wanted = symbol_key(instrument)
+    if not book:
         return Decimal("0")
-    raw = book.get(instrument, "0")
-    amount = Decimal(str(raw))
-    if not amount.is_finite() or amount < 0:
-        raise ValueError("symbol exposure is not a usable amount")
-    return amount
+    total = Decimal("0")
+    for key, raw in book.items():
+        if symbol_key(key) != wanted:
+            continue
+        amount = Decimal(str(raw))
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("symbol exposure is not a usable amount")
+        total += amount
+    return total
+
+
+_symbol_amount = symbol_book_amount

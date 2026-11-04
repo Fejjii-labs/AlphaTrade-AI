@@ -165,7 +165,7 @@ def _demo_risk_snapshot(
         max_notional = row.max_notional
         max_daily_loss = row.max_daily_loss
         max_symbol = row.max_symbol_notional
-        if max_daily_loss >= max_notional or max_symbol >= max_notional:
+        if max_daily_loss >= max_notional:
             return None
         max_slots = int(row.max_trade_slots)
         reserved_notional = row.reserved_notional
@@ -199,6 +199,7 @@ def _demo_risk_snapshot(
         symbol_actual=symbol_actual,
         daily_locked=daily_locked,
         trade_slots=int(intent.trade_slots),  # type: ignore[attr-defined]
+        execution_venue=str(getattr(plan, "execution_venue", "") or "") or None,
     )
 
 
@@ -360,7 +361,10 @@ def _demo_calculation_inputs(
 
 
 def demo_action_evidence(
-    market: MarketActionEvidence, snapshot: DemoVenueSnapshot
+    market: MarketActionEvidence,
+    snapshot: DemoVenueSnapshot,
+    *,
+    window: timedelta = _DEMO_QUOTE_TTL,
 ) -> MarketActionEvidence:
     """Action-time evidence from the demo book.
 
@@ -380,7 +384,7 @@ def demo_action_evidence(
         execution_price=snapshot.price,
         required_action_evidence_fresh=True,
         basis_fresh=True,
-        action_evidence_valid_until=snapshot.observed_at + _DEMO_QUOTE_TTL,
+        action_evidence_valid_until=snapshot.observed_at + window,
         symbol=market.symbol,
     )
 
@@ -562,11 +566,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         active = _load_active_profile(
             session, target.organization_id, self._risk_policy_kind(), self._clock.now()
         )
-        # A profile sizes leverage later and is compared to the isolated read.
-        # Do not require 1x before that comparison, and do not send a leverage write.
-        # No profile keeps the existing cross 1x read.
-        required_leverage = None if active is not None else Decimal("1")
-        read_margin_mode = "isolated" if active is not None else "cross"
+        # Trade at the demo account's existing leverage and margin mode (read
+        # only, never written). A profile still reads the isolated mode it sizes for.
+        required_leverage = None
+        read_margin_mode = "isolated" if active is not None else None
         self._snapshot_request = {
             "symbol": target.symbol,
             "side": EntrySide.BUY if candidate.direction is TradeDirection.LONG else EntrySide.SELL,
@@ -621,7 +624,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         snapshot = self._action_time_snapshot(now)
         return command.model_copy(
             update={
-                "market_action": demo_action_evidence(command.market_action, snapshot),
+                "market_action": demo_action_evidence(
+                    command.market_action, snapshot, window=_plan_window(settings)
+                ),
                 "configuration": PaperExecutionConfiguration(
                     execution_mode=ExecutionMode.PAPER,
                     enable_real_trading=False,
@@ -688,9 +693,28 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
         # Reserve fees+slippage conservatively; sizing uses base value per contract.
-        risk_cap = equity * Decimal("0.01")
-        notional_cap = equity * Decimal("0.10")
-        margin_assumption = "verified-demo-existing-1x"
+        # Stop-loss band: the stop-distance loss must land in [min%, max%] of
+        # equity (configurable). Size just above the floor; notional is bounded
+        # by what the account's existing leverage can margin.
+        loss_floor, loss_ceiling = stop_loss_band(self._settings, equity)
+        if loss_floor is None or loss_ceiling is None:
+            return "stop_loss_band_invalid"
+        risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
+        account_leverage = snapshot.account_leverage
+        if not account_leverage.is_finite() or account_leverage <= 0:
+            return "demo_account_leverage_unreadable"
+        if account_leverage > demo_max_leverage(self._settings):
+            return "demo_leverage_above_ceiling"
+        notional_cap = equity * account_leverage * Decimal("0.95")
+        margin_assumption = (
+            "verified-demo-existing-leverage-isolated"
+            if snapshot.margin_mode == "isolated"
+            else (
+                "verified-demo-existing-1x"
+                if account_leverage == 1
+                else "verified-demo-existing-leverage-cross"
+            )
+        )
         profile_leverage: Decimal | None = None
         profile_cash_ceiling: Decimal | None = None
         profile_funding_rate: Decimal | None = None
@@ -809,8 +833,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if profile_leverage is not None:
             if profile_cash_ceiling is None or maximum_loss > profile_cash_ceiling:
                 return "demo_depth_exceeds_risk_limit"
-        elif maximum_loss > risk_cap:
-            return "demo_depth_exceeds_risk_limit"
+        elif maximum_loss > loss_ceiling:
+            return "stop_loss_above_band"
+        elif maximum_loss < loss_floor:
+            return "stop_loss_below_band"
         values = terms.model_dump(mode="python")
         values.update(
             {
@@ -853,7 +879,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "tolerance_bps": "20",
                     "freshness_seconds": 10,
                 },
-                "valid_until": min(terms.valid_until, snapshot.observed_at + timedelta(seconds=10)),
+                "valid_until": min(
+                    terms.valid_until, snapshot.observed_at + _plan_window(self._settings)
+                ),
                 "calculation_inputs": _demo_calculation_inputs(
                     raw=raw,
                     quantity=quantity,
@@ -876,6 +904,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 "margin_assumption_version": "1",
             }
         )
+        if profile_leverage is None:
+            values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
+            if snapshot.margin_mode == "isolated":
+                values["margin_mode"] = "ISOLATED"
         if profile_leverage is not None:
             values["margin_mode"] = "ISOLATED"
             values["risk_and_exits"]["leverage"] = format(profile_leverage, "f")
@@ -1682,3 +1714,49 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             logger.warning("stale_manual_demo_entry_reconciliation_failed", exc_info=True)
             stale = ()
         return governed + stale
+
+
+def _plan_window(settings: Settings) -> timedelta:
+    """Configurable submit window for a governed demo plan (>= 10s)."""
+
+    seconds = int(getattr(settings, "governed_demo_plan_valid_seconds", 60))
+    ceiling = int(getattr(settings, "governed_demo_plan_valid_max_seconds", 300))
+    ceiling = min(max(10, ceiling), 3600)
+    return timedelta(seconds=min(max(10, seconds), ceiling))
+
+
+DEMO_LEVERAGE_HARD_CAP = Decimal("20")
+STOP_LOSS_BAND_FLOOR_PERCENT = Decimal("1")
+STOP_LOSS_BAND_CEILING_PERCENT = Decimal("5")
+
+
+def demo_max_leverage(settings: Settings) -> Decimal:
+    """Configured leverage ceiling for demo plans: hard cap 20x; config may only lower it."""
+
+    raw = getattr(settings, "governed_demo_max_leverage", Decimal("20"))
+    try:
+        value = Decimal(str(raw))
+    except Exception:
+        return Decimal("1")
+    if not value.is_finite() or value < 1:
+        return Decimal("1")
+    return min(value, DEMO_LEVERAGE_HARD_CAP)
+
+
+def stop_loss_band(settings: Settings, equity: Decimal) -> tuple[Decimal | None, Decimal | None]:
+    """Money band for one trade's stop-distance loss, from configurable percents."""
+
+    low = getattr(settings, "governed_demo_stop_loss_min_percent", Decimal("1"))
+    high = getattr(settings, "governed_demo_stop_loss_max_percent", Decimal("5"))
+    if (
+        not isinstance(equity, Decimal)
+        or not equity.is_finite()
+        or equity <= 0
+        or not low.is_finite()
+        or not high.is_finite()
+        or low < STOP_LOSS_BAND_FLOOR_PERCENT
+        or high < low
+        or high > STOP_LOSS_BAND_CEILING_PERCENT
+    ):
+        return None, None
+    return equity * low / Decimal("100"), equity * high / Decimal("100")

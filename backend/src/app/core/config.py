@@ -250,6 +250,18 @@ class Settings(BaseSettings):
     # is pinned to one tenant/user/account; defaults never construct a client.
     manual_blofin_demo_enabled: bool = False
     governed_blofin_demo_enabled: bool = False
+    # Per-trade stop-loss band as a percent of total portfolio equity. A demo
+    # plan is sized so its stop-distance loss lands inside [min, max]; a plan
+    # that cannot fit is refused. Adjustable, not a fixed rule.
+    governed_demo_stop_loss_min_percent: Decimal = Decimal("1")
+    governed_demo_stop_loss_max_percent: Decimal = Decimal("5")
+    # How long a governed demo plan stays submittable. Submit re-reads the
+    # live quote and re-checks slippage, so this only bounds staleness.
+    governed_demo_plan_valid_seconds: int = 60
+    # Upper bound for governed_demo_plan_valid_seconds; larger values clamp.
+    governed_demo_plan_valid_max_seconds: int = 300
+    # Ceiling on the demo account's existing leverage; above it a plan is refused.
+    governed_demo_max_leverage: Decimal = Decimal("20")
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""

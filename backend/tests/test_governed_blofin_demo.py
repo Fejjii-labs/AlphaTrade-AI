@@ -22,6 +22,7 @@ from app.core.execution_credentials import (
 )
 from app.db.learning_attribution import LearningAttributionRecordRow
 from app.db.models import (
+    AccountRiskAccountingState,
     ConversationMessage,
     ExecutionAccount,
     ExecutionCommand,
@@ -67,6 +68,9 @@ class Venue:
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
     tier_min_size: str = "0"
+    # Existing demo account leverage (read only). The 1-5% stop-loss band needs
+    # enough notional headroom for the fixture setup's stop distance.
+    account_leverage: str = "1"
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -101,7 +105,7 @@ class Venue:
                 }
             ]
         elif path.endswith("leverage-info"):
-            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": "1"}
+            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": self.account_leverage}
         elif path.endswith("instruments"):
             data = [
                 {
@@ -213,6 +217,35 @@ class Venue:
         return httpx.Response(200, json={"code": "0", "data": data})
 
 
+def seed_band_ledger_headroom(session, account_id) -> None:
+    """Ledger headroom for a 1-5% stop-loss band at the fixture's 10x leverage.
+
+    The default 10k total cap would refuse the band-sized plan.
+    """
+
+    session.add(
+        AccountRiskAccountingState(
+            organization_id=ORG,
+            account_id=account_id,
+            reserved_notional=Decimal("0"),
+            reserved_daily_loss=Decimal("0"),
+            reserved_trade_slots=0,
+            actual_notional=Decimal("0"),
+            actual_daily_loss=Decimal("0"),
+            actual_trade_count=0,
+            symbol_reserved={},
+            symbol_actual={},
+            max_notional=Decimal("200000"),
+            max_daily_loss=Decimal("5000"),
+            max_trade_slots=20,
+            max_symbol_notional=Decimal("200000"),
+            daily_locked=False,
+            exposure_unit="USDT",
+            version=1,
+        )
+    )
+
+
 def demo_settings(account_id: str, **updates: object) -> Settings:
     values = dict(  # noqa: C408
         _env_file=None,
@@ -281,6 +314,7 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "protection_unrelated_malformed",
         "preflight_kill",
         "preflight_fence",
+        "leverage_above_ceiling",
     ],
 )
 def test_worker_venue_fills_journal_restart_and_protection(
@@ -292,11 +326,17 @@ def test_worker_venue_fills_journal_restart_and_protection(
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
         settings = demo_settings(str(account.id))
+        seed_band_ledger_headroom(session, account.id)
+        session.commit()
     source = _live_source()
     from tests.support.phase6_evaluator import build_pattern_15m_bars, build_slice_trades
 
     price = build_slice_trades(build_pattern_15m_bars())[-1].price
-    venue = Venue(price, behavior)
+    venue = Venue(
+        price,
+        behavior,
+        account_leverage="25" if behavior == "leverage_above_ceiling" else "10",
+    )
 
     def late_safety_change() -> None:
         with factory() as session:
@@ -337,6 +377,12 @@ def test_worker_venue_fills_journal_restart_and_protection(
     assert cycle.scans
     scan = cycle.scans[0]
     assert scan.candidate_ids, scan.reason_code
+    if behavior == "leverage_above_ceiling":
+        # 25x demo account above the 20x ceiling: refused before any plan or POST.
+        assert scan.paper_loop_reason == "demo_leverage_above_ceiling"
+        assert scan.trade_plan_revision_id is None
+        assert venue.post_count == 0
+        return
     if behavior in {"permissions", "basis", "stale", "expiry", "preflight_kill", "preflight_fence"}:
         assert venue.post_count == 0
         with factory() as session:
@@ -708,7 +754,6 @@ def test_governed_demo_loop_refuses_sfp_before_planning() -> None:
     from types import SimpleNamespace
     from uuid import uuid4
 
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
     from tests.test_sfp_detector import spec as sfp_spec
 
     loop = GovernedBloFinDemoLoop(None, None, SimpleNamespace(now=lambda: EVALUATED_AT))
@@ -784,7 +829,6 @@ def _refresh_loop(
     provider: _RefreshingProvider, observed_at: object, *, received: float | None = 0.0
 ) -> tuple[object, list[float]]:
     """Loop holding a preflight book received at monotonic ``received``."""
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 
     mono = [0.0]
     loop = GovernedBloFinDemoLoop(
@@ -858,9 +902,67 @@ def test_unknown_receipt_time_reads_the_quote_again() -> None:
 def test_preflight_snapshot_records_local_monotonic_receipt_time() -> None:
     import inspect
 
-    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
     source = inspect.getsource(GovernedBloFinDemoLoop._bound)
     read = source.index("self._snapshot = self._get_provider().snapshot(")
     stamp = source.index("self._snapshot_received_at = self._monotonic()")
     assert read < stamp < source.index("except Exception", read)
+
+
+def test_loop_eligibility_uses_the_sixty_second_default_window(monkeypatch) -> None:
+    """Sofien's choice (2026-11-04): the governed demo action window defaults to 60s.
+
+    Drives GovernedBloFinDemoLoop._eligibility_command with default Settings, so a
+    default of 10s or 3600s (clamped to the 300s ceiling) fails here.
+    """
+    import app.services.governed_blofin_demo as demo_module
+    from app.providers.exchange.demo_quote import DemoQuoteTimingError, quote_time_at_receipt
+    from app.signal_fusion.action_eligibility import ActionEligibilityService
+
+    settings = Settings(_env_file=None)
+    assert settings.governed_demo_plan_valid_seconds == 60
+    now = EVALUATED_AT + timedelta(seconds=1)
+    market = _scan_market(EVALUATED_AT + timedelta(seconds=10))
+
+    class _Command(SimpleNamespace):
+        def model_copy(self, *, update: dict[str, object]) -> SimpleNamespace:
+            return SimpleNamespace(**{**vars(self), **update})
+
+    monkeypatch.setattr(
+        demo_module, "_eligibility_command", lambda *a, **k: _Command(market_action=market)
+    )
+    provider = _RefreshingProvider()
+    loop, mono = _refresh_loop(provider, now)
+    loop._snapshot = SimpleNamespace(  # type: ignore[attr-defined]
+        instrument="BTC-USDT", observed_at=now, price=Decimal("100")
+    )
+    mono[0] = 0.5  # recent receipt, no re-read
+    command = loop._eligibility_command(  # type: ignore[attr-defined]
+        None,
+        settings=settings,
+        target=None,
+        candidate=None,
+        assessment=None,
+        window=None,
+        assembled=None,
+        account=None,
+        now=now,
+    )
+    evidence = command.market_action
+    assert evidence.action_evidence_valid_until == now + timedelta(seconds=60)
+    assert provider.calls == []
+    stale = ActionEligibilityService._action_evidence_stale
+    assert stale(command, now + timedelta(seconds=59)) is False  # type: ignore[arg-type]
+    assert stale(command, now + timedelta(seconds=60)) is True  # type: ignore[arg-type]
+
+    # Orders still need a demo quote under 10s old at receipt.
+    base_ms = 1_800_000_000_000
+    received = datetime_from_ms(base_ms)
+    assert quote_time_at_receipt(base_ms - 9_999, received) == datetime_from_ms(base_ms - 9_999)
+    with pytest.raises(DemoQuoteTimingError):
+        quote_time_at_receipt(base_ms - 10_000, received)
+
+
+def datetime_from_ms(ms: int):
+    from datetime import UTC, datetime
+
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=ms)

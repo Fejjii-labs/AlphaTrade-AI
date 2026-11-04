@@ -42,7 +42,12 @@ from app.signal_fusion.memory import FrozenClock
 from tests.support.phase5_market import EVALUATED_AT
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
 from tests.test_automated_paper_loop import _live_source, _monitor, _runtime_for, _seed
-from tests.test_governed_blofin_demo import _TS, Venue, demo_settings
+from tests.test_governed_blofin_demo import (
+    _TS,
+    Venue,
+    demo_settings,
+    seed_band_ledger_headroom,
+)
 from tests.test_watcher_paper_runtime import ORG, USER, _seed_approved_compiled
 
 pytestmark = requires_postgres
@@ -174,6 +179,10 @@ def open_world(
         _seed(session)
         account = session.scalar(select(ExecutionAccount))
         settings = demo_settings(str(account.id))
+        # 1-5% stop-loss band: the fixture stop is ~0.14% away, so 1x cannot
+        # reach the 1% floor. Use 10x existing leverage plus ledger headroom.
+        seed_band_ledger_headroom(session, account.id)
+        session.commit()
     source = _live_source()
     from tests.support.phase6_evaluator import build_pattern_15m_bars, build_slice_trades
 
@@ -187,6 +196,7 @@ def open_world(
         exit_fee=exit_fee,
         exit_fee_currency=exit_fee_currency,
         child_tpsl_id=child_tpsl_id,
+        account_leverage="10",
     )
     client = BloFinClient(
         base_url=settings.blofin_demo_rest_base_url,
