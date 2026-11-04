@@ -972,3 +972,166 @@ def test_local_composition_wires_the_watcher_monitor_idle_wait(
         assert waits == [15.0]
     finally:
         supervisor.close()
+
+
+class _QuietTelegram:
+    def run_cycle(self) -> TelegramRuntimeCycle:
+        return TelegramRuntimeCycle(
+            posture="disarmed",
+            delivered=0,
+            poll_applied=0,
+            poll_rejected=0,
+            kill_switch_active=False,
+            lease_held=True,
+            last_error_code="",
+        )
+
+    def stop(self) -> None:
+        return None
+
+
+def _decision(*reasons: str) -> ActivationDecision:
+    return ActivationDecision(
+        allowed=not reasons,
+        reason_codes=reasons or ("cleared",),
+        primary_reason=reasons[0] if reasons else "cleared",
+        phase="preflight",
+    )
+
+
+def test_boot_provider_unavailable_retries_preflight_and_starts_scanning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-11-04 14:51Z: the restart refused on provider_unavailable (Binance lease
+    standby after the OOM kill left the old lease live) and never scanned again."""
+
+    settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
+    answers = [_decision("provider_unavailable"), _decision("freshness_fail_closed"), _decision()]
+    preflight_calls: list[object] = []
+    published: list[dict[str, object]] = []
+    scans = {"n": 0}
+
+    def preflight(*_args: object, **kwargs: object) -> ActivationDecision:
+        preflight_calls.append(kwargs.get("worker_instance_id"))
+        return answers.pop(0)
+
+    class _Watcher:
+        stopped = False
+        released = False
+
+        def run_cycle(self) -> WatcherPaperCycleReport:
+            scans["n"] += 1
+            return WatcherPaperCycleReport(
+                reason_code="completed",
+                enabled=True,
+                scans=(_scan(),),
+                candidates_created=0,
+                kill_switch_active=False,
+            )
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def release_held_leases(self) -> int:
+            self.released = True
+            return 1
+
+    class _Session:
+        def __init__(self) -> None:
+            self.runtime = _Watcher()
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _Session()
+    monkeypatch.setattr("app.workers.paper_worker.ACTIVATION_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr("app.db.session.get_session_factory", lambda: object())
+    monkeypatch.setattr("app.workers.watcher_activation.run_staging_activation", preflight)
+    monkeypatch.setattr(
+        "app.workers.watcher_activation.open_staging_watcher_session",
+        lambda *_args, **_kwargs: session,
+    )
+    monkeypatch.setattr(
+        "app.workers.watcher_paper.publish_idle_watcher_status",
+        lambda *_args, **kwargs: published.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "app.telegram_activation.runtime.build_telegram_runtime",
+        lambda *_args, **_kwargs: _QuietTelegram(),
+    )
+    supervisor = build_paper_worker_supervisor(settings)
+    try:
+        first = supervisor.run_round()  # retry 1: still freshness_fail_closed
+        second = supervisor.run_round()  # retry 2: cleared, opens session, scans
+        third = supervisor.run_round()
+    finally:
+        supervisor.close()
+
+    assert len(preflight_calls) == 3
+    assert len(set(preflight_calls)) == 1  # one worker identity across retries
+    assert [p["reason"] for p in published] == ["freshness_fail_closed"]
+    assert first.watcher.status == "refused"
+    assert first.watcher.last_scan_at is None
+    assert second.watcher.status == "running"
+    assert second.watcher.last_scan_at is not None
+    assert third.watcher.status == "running"
+    assert scans["n"] == 2
+    assert session.runtime.stopped and session.runtime.released and session.closed
+    assert settings.enable_real_trading is settings.real_trading_enabled is False
+
+
+def test_provider_retry_waits_for_the_interval_and_stops_on_a_hard_refusal() -> None:
+    from app.workers.paper_worker import _RecoveringWatcherCycle
+
+    settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
+    answers = [_decision("provider_unavailable"), _decision("migration_unhealthy")]
+    calls = {"n": 0}
+    published: list[str] = []
+    ticks = {"now": 0.0}
+
+    def preflight() -> ActivationDecision:
+        calls["n"] += 1
+        return answers.pop(0)
+
+    def unexpected_start() -> object:
+        raise AssertionError("a refused preflight must not open a scanning runtime")
+
+    class _Now:
+        def now(self) -> datetime:
+            return datetime(2026, 11, 4, 14, 51, tzinfo=UTC)
+
+    cycle = _RecoveringWatcherCycle(
+        settings,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="provider_unavailable",
+        clock=_Now(),
+        preflight=preflight,
+        open_session=unexpected_start,
+        closers=[],
+        stops=[],
+        releases=[],
+        retry_seconds=60.0,
+        monotonic=lambda: ticks["now"],
+    )
+    import app.workers.watcher_paper as watcher_paper
+
+    original = watcher_paper.publish_idle_watcher_status
+    watcher_paper.publish_idle_watcher_status = (  # type: ignore[assignment]
+        lambda *_a, **kwargs: published.append(str(kwargs["reason"]))
+    )
+    try:
+        assert cycle().error == "provider_unavailable"
+        assert calls["n"] == 0  # inside the retry interval: no preflight
+        ticks["now"] = 60.0
+        assert cycle().error == "provider_unavailable"  # retry 1, still provider
+        ticks["now"] = 120.0
+        assert cycle().error == "migration_unhealthy"  # retry 2, hard refusal
+        ticks["now"] = 999.0
+        assert cycle().error == "migration_unhealthy"
+    finally:
+        watcher_paper.publish_idle_watcher_status = original  # type: ignore[assignment]
+    assert calls["n"] == 2  # a non-provider refusal ends the retries
+    assert cycle.runtime is None
+    assert published == ["provider_unavailable"] * 2 + ["migration_unhealthy"] * 2

@@ -827,7 +827,12 @@ def _probe_provider(
     if perpetual_source_is_replay(settings) or bool(getattr(monitor, "replay", False)):
         return "replay"
     resolved = monitor if monitor is not None else _build_monitor(settings)
-    snapshot = resolved.latest("BTCUSDT")  # type: ignore[attr-defined]
+    try:
+        snapshot = resolved.latest("BTCUSDT")  # type: ignore[attr-defined]
+    finally:
+        # A probe-only monitor owns HTTP clients; preflight may now repeat.
+        if monitor is None:
+            _close_monitor(resolved)
     last_update = getattr(snapshot, "last_update", None)
     evaluated_at = getattr(snapshot, "evaluated_at", None)
     if freshness_out is not None and last_update is not None and evaluated_at is not None:

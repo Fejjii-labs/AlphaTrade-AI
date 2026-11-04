@@ -1005,7 +1005,31 @@ def _build_armed_supervisor(
             start=lambda: None,
             worker_instance_id=instance_id,
         )
-        if not decision.allowed:
+        if not decision.allowed and activation_refusal_is_retryable(decision.reason_codes):
+            # A provider outage at boot (Binance lease standby, shared ban) is
+            # temporary: keep heartbeating and re-run the same preflight.
+            recovering = _RecoveringWatcherCycle(
+                watcher_settings,
+                factory,
+                worker_id=instance_id,
+                reason=decision.primary_reason,
+                clock=clock,
+                preflight=lambda: run_staging_activation(
+                    watcher_settings, start=lambda: None, worker_instance_id=instance_id
+                ),
+                open_session=lambda: open_staging_watcher_session(
+                    watcher_settings,
+                    activation_config_from_settings(watcher_settings),
+                    instance_id,
+                    factory,
+                ),
+                closers=closers,
+                stops=stops,
+                releases=releases,
+            )
+            watcher_cycle = recovering
+            watcher_idle_wait = recovering.idle_wait
+        elif not decision.allowed:
             watcher_cycle = _idle_watcher_cycle(
                 watcher_settings,
                 factory,
@@ -1183,6 +1207,109 @@ def _idle_watcher_cycle(
         return CycleOutcome(status=state, error=reason)
 
     return cycle
+
+
+# Refusals that only reflect the market provider at that moment. Anything else
+# (config, migration, lineage, authority) still needs a restart to re-evaluate.
+_RETRYABLE_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
+ACTIVATION_RETRY_SECONDS = 60.0
+
+
+def activation_refusal_is_retryable(reason_codes: tuple[str, ...]) -> bool:
+    return bool(reason_codes) and set(reason_codes) <= _RETRYABLE_ACTIVATION_REASONS
+
+
+class _RecoveringWatcherCycle:
+    """Idle Watcher that re-runs preflight after a provider-only refusal.
+
+    Heartbeats like the idle cycle. Every ``retry_seconds`` it runs the full
+    preflight again; once that clears it opens the staging session and scans.
+    A non-retryable refusal on a later attempt stops the retries.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        *,
+        worker_id: str,
+        reason: str,
+        clock: _NowClock,
+        preflight: Callable[[], object],
+        open_session: Callable[[], object],
+        closers: list[Callable[[], None]],
+        stops: list[Callable[[], None]],
+        releases: list[Callable[[], int]],
+        retry_seconds: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._settings = settings
+        self._factory = session_factory
+        self._worker_id = worker_id
+        self._reason = reason
+        self._clock = clock
+        self._preflight = preflight
+        self._open_session = open_session
+        self._closers = closers
+        self._stops = stops
+        self._releases = releases
+        self._retry_seconds = ACTIVATION_RETRY_SECONDS if retry_seconds is None else retry_seconds
+        self._monotonic = monotonic
+        self._next_attempt_at: float | None = monotonic() + self._retry_seconds
+        self.attempts = 0
+        self.runtime: WatcherPaperRuntime | None = None
+
+    def __call__(self) -> CycleOutcome:
+        due = self._next_attempt_at
+        if self.runtime is None and due is not None and self._monotonic() >= due:
+            self._attempt()
+        if self.runtime is not None:
+            return outcome_from_watcher_report(self.runtime.run_cycle())
+        from app.workers.watcher_paper import publish_idle_watcher_status
+
+        publish_idle_watcher_status(
+            self._settings,
+            self._factory,
+            worker_id=self._worker_id,
+            reason=self._reason,
+            now=self._clock.now(),
+        )
+        return CycleOutcome(status="refused", error=self._reason)
+
+    def idle_wait(self, interval: float, stop: threading.Event) -> bool:
+        waiter = getattr(self.runtime, "wait_publishing_monitor", None)
+        if callable(waiter):
+            return bool(waiter(interval, stop))
+        return stop.wait(interval)
+
+    def _attempt(self) -> None:
+        from app.telegram_activation.errors import TelegramActivationError
+
+        self.attempts += 1
+        self._next_attempt_at = self._monotonic() + self._retry_seconds
+        decision = self._preflight()
+        if not decision.allowed:  # type: ignore[attr-defined]
+            self._reason = decision.primary_reason  # type: ignore[attr-defined]
+            if not activation_refusal_is_retryable(decision.reason_codes):  # type: ignore[attr-defined]
+                self._next_attempt_at = None
+            return
+        try:
+            session = self._open_session()
+        except TelegramActivationError as exc:
+            self._reason = exc.reason
+            self._next_attempt_at = None
+            return
+        self._closers.append(session.close)  # type: ignore[attr-defined]
+        self._stops.append(session.runtime.stop)  # type: ignore[attr-defined]
+        _append_release(self._releases, session.runtime)  # type: ignore[attr-defined]
+        self.runtime = session.runtime  # type: ignore[attr-defined]
+        self._next_attempt_at = None
+        logger.warning(
+            "watcher_paper_activation_recovered",
+            attempts=self.attempts,
+            worker_id=self._worker_id,
+            paper_only=True,
+        )
 
 
 def _guard(

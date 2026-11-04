@@ -279,6 +279,14 @@ class FailoverPerpetualSource:
             )
         return self.active_source.status()
 
+    def close(self) -> None:
+        """Close both venues' HTTP clients. Each source closes only what it owns."""
+
+        for source in (self._primary, self._secondary):
+            close = getattr(source, "close", None)
+            if callable(close):
+                close()
+
     def try_recover_primary(self) -> InstrumentIdentity | None:
         """Return the primary instrument when it is healthy again. Do not publish yet."""
 
