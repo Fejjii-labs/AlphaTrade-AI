@@ -359,18 +359,21 @@ def test_position_mode_parses_long_short_mode() -> None:
 
 def test_leverage_info_parses_cross_margin() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/account/batch-leverage-info"
         assert request.url.params["instId"] == "BTC-USDT"
         assert request.url.params["marginMode"] == "cross"
         return httpx.Response(
             200,
             json={
                 "code": "0",
-                "data": {
-                    "instId": "BTC-USDT",
-                    "marginMode": "cross",
-                    "leverage": "50",
-                    "positionSide": "net",
-                },
+                "data": [
+                    {
+                        "instId": "BTC-USDT",
+                        "marginMode": "cross",
+                        "leverage": "50",
+                        "positionSide": "net",
+                    }
+                ],
             },
         )
 

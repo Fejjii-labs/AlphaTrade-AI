@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -68,13 +68,27 @@ class Venue:
     after_preflight: Callable[[], None] | None = None
     entry_fee_currency: str | None = "USDT"
     tier_min_size: str = "0"
-    # Existing demo account leverage (read only). The 1-5% stop-loss band needs
+    # The demo account's margin mode and leverage. Read as the existing values
+    # unless the app sets the configured ones. The 1-5% stop-loss band needs
     # enough notional headroom for the fixture setup's stop distance.
-    account_leverage: str = "1"
+    margin_mode: str = "cross"
+    leverage: str = "1"
+    account_writes: list[tuple[str, dict]] = field(default_factory=list)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         data: object
+        if request.method == "POST" and path == "/api/v1/account/set-margin-mode":
+            body = json.loads(request.content)
+            self.account_writes.append((path, body))
+            self.margin_mode = body["marginMode"]
+            return httpx.Response(200, json={"code": "0", "data": body})
+        if request.method == "POST" and path == "/api/v1/account/set-leverage":
+            body = json.loads(request.content)
+            assert body["positionSide"] == "net"
+            self.account_writes.append((path, body))
+            self.leverage = body["leverage"]
+            return httpx.Response(200, json={"code": "0", "data": body})
         if request.method == "POST":
             assert path == "/api/v1/trade/order", "Unexpected account mutation"
             self.post_count += 1
@@ -92,12 +106,12 @@ class Venue:
         elif path.endswith("position-mode"):
             data = {"positionMode": "net_mode"}
         elif path.endswith("/margin-mode"):
-            data = {"marginMode": "cross"}
+            data = {"marginMode": self.margin_mode}
         elif path.endswith("position-tiers"):
             data = [
                 {
                     "instId": "BTC-USDT",
-                    "marginMode": "cross",
+                    "marginMode": self.margin_mode,
                     "minSize": self.tier_min_size,
                     "maxSize": "100000",
                     "maintenanceMarginRate": "0.004",
@@ -105,7 +119,9 @@ class Venue:
                 }
             ]
         elif path.endswith("leverage-info"):
-            data = {"instId": "BTC-USDT", "marginMode": "cross", "leverage": self.account_leverage}
+            data = [
+                {"instId": "BTC-USDT", "marginMode": self.margin_mode, "leverage": self.leverage}
+            ]
         elif path.endswith("instruments"):
             data = [
                 {
@@ -257,6 +273,7 @@ def demo_settings(account_id: str, **updates: object) -> Settings:
         blofin_demo_enabled=True,
         blofin_live_evidence_demo_enabled=False,
         governed_blofin_demo_enabled=True,
+        governed_demo_auto_leverage_write_enabled=True,
         watcher_orchestration_enabled=True,
         watcher_paper_staging_activation=True,
         governed_blofin_demo_organization_id=str(ORG),
@@ -325,7 +342,12 @@ def test_worker_venue_fills_journal_restart_and_protection(
         _seed(session)
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
-        settings = demo_settings(str(account.id))
+        # The 25x case reads the existing leverage (no write, no saved setting),
+        # so #424's leverage ceiling applies; every other case sets 10x isolated.
+        settings = demo_settings(
+            str(account.id),
+            governed_demo_auto_leverage_write_enabled=behavior != "leverage_above_ceiling",
+        )
         seed_band_ledger_headroom(session, account.id)
         session.commit()
     source = _live_source()
@@ -335,7 +357,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
     venue = Venue(
         price,
         behavior,
-        account_leverage="25" if behavior == "leverage_above_ceiling" else "10",
+        leverage="25" if behavior == "leverage_above_ceiling" else "10",
     )
 
     def late_safety_change() -> None:

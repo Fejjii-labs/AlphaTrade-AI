@@ -149,7 +149,9 @@ def reconcile_native(
     client_order_id: str,
     clock: Callable[[], datetime],
 ) -> DemoOrderEvidence | None:
-    expected_margin = demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id)
+    expected_margin = demo_order_margin_mode(
+        plan.risk_and_exits.margin_assumption_id, str(plan.margin_mode.value)
+    )
     with stage("order_lookup", ORDER):
         order_rows = rows(
             client.request(

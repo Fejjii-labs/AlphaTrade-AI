@@ -127,6 +127,11 @@ class BloFinClient:
         self._last_error: str | None = None
 
     @property
+    def base_url(self) -> str:
+        """Configured REST base URL; callers re-check it before any account write."""
+        return self._base_url
+
+    @property
     def last_success_at(self) -> datetime | None:
         return self._last_success_at
 

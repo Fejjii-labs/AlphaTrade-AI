@@ -2,7 +2,9 @@
 
 All prices and fills come from venue responses. Submission only acknowledges an
 order: reconciliation reads fills and attached protection separately. No retry,
-account-setting mutation, internal fill fallback, or real venue is supported.
+internal fill fallback, or real venue is supported. The only account-setting
+mutation is ``apply_configured_leverage``: the owner-configured leverage and
+margin mode, on the allowlisted demo host, on a flat account, read back exactly.
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from time import monotonic
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
+from app.core.exchange_safety import BLOFIN_PRODUCTION_HOSTS, is_allowlisted_demo_host
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.demo_order_book import DemoOrderBook, parse_demo_book, venue_decimal
@@ -27,8 +31,15 @@ if TYPE_CHECKING:
     from app.providers.exchange.governed_blofin_exit import VerifiedDemoExit
 
 
-def demo_order_margin_mode(margin_assumption_id: str) -> str:
-    """Profile plans send the isolated mode that was read. Every other plan stays cross.
+# Autonomous demo plans sized without a risk profile, at the owner-configured
+# leverage and margin mode that the app set and read back before planning.
+CONFIGURED_DEMO_MARGIN_ASSUMPTION = "configured-demo-leverage"
+_DEMO_LEVERAGE_CEILING = Decimal("20")
+
+
+def demo_order_margin_mode(margin_assumption_id: str, plan_margin_mode: str | None = None) -> str:
+    """Profile plans send the isolated mode that was read. Configured plans send
+    their stored mode. Every other plan (manual demo) stays cross.
 
     This is the existing order field. It is not a leverage or margin-mode setting call.
     """
@@ -37,7 +48,29 @@ def demo_order_margin_mode(margin_assumption_id: str) -> str:
         return "isolated"
     if margin_assumption_id == "verified-demo-existing-leverage-isolated":
         return "isolated"
+    if margin_assumption_id == CONFIGURED_DEMO_MARGIN_ASSUMPTION:
+        mode = (plan_margin_mode or "").lower()
+        if mode not in {"isolated", "cross"}:
+            raise ValueError("Configured demo plan margin mode missing.")
+        return mode
     return "cross"
+
+
+def demo_plan_leverage(plan: TradePlanRevision) -> tuple[Decimal | None, str]:
+    """Leverage and margin mode the venue must already show before this plan's POST.
+
+    Profile and configured plans require their stored leverage. Every other plan
+    trades at the account's existing leverage (``None``) in the mode it was planned for.
+    """
+
+    assumption = plan.risk_and_exits.margin_assumption_id
+    if assumption == "verified-demo-read-leverage":
+        return plan.risk_and_exits.leverage, "isolated"
+    if assumption == CONFIGURED_DEMO_MARGIN_ASSUMPTION:
+        return plan.risk_and_exits.leverage, demo_order_margin_mode(
+            assumption, str(plan.margin_mode.value)
+        )
+    return None, demo_order_margin_mode(assumption)
 
 
 @dataclass(frozen=True)
@@ -55,7 +88,8 @@ class DemoVenueSnapshot:
     book: DemoOrderBook
     account_observed_at: datetime
     native_account_uid: str | None = None
-    # Read from the margin-mode endpoint and leverage-info. Never written.
+    # Read from the margin-mode endpoint and leverage-info. Written only by
+    # apply_configured_leverage, before this read.
     account_leverage: Decimal = Decimal("1")
     margin_mode: str = "cross"
     # (notional floor, maintenance rate) from public position tiers. Empty refuses a profile plan.
@@ -216,7 +250,7 @@ class GovernedBloFinDemoProvider:
             multiplier = venue_decimal(row.get("contractValue"))
             maximum = venue_decimal(row.get("maxMarketSize"))
         with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
-            # Read only. This provider never sends a margin-mode or leverage write.
+            # Read only. The only write is apply_configured_leverage, called earlier.
             account_mode = self._account.get_account_margin_mode()
             if not account_mode.supplied or account_mode.margin_mode not in {"cross", "isolated"}:
                 raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
@@ -227,7 +261,7 @@ class GovernedBloFinDemoProvider:
                 )
             if margin_mode == "cross" and observed_mode != "cross":
                 raise ValueError("Demo account margin mode is not cross; no margin-mode mutation.")
-        with preflight_stage("leverage", "GET /api/v1/account/leverage-info"):
+        with preflight_stage("leverage", "GET /api/v1/account/batch-leverage-info"):
             # Ask with the mode the account endpoint reported. The payload must
             # repeat that mode. A missing field is not replaced by the request.
             leverage = self._account.get_leverage_info(
@@ -333,6 +367,163 @@ class GovernedBloFinDemoProvider:
                 if pending:
                     raise ValueError("Demo pending orders or protection; new entry refused.")
 
+    def apply_configured_leverage(
+        self, *, symbol: str, leverage: Decimal, margin_mode: str
+    ) -> dict[str, str]:
+        """Set the owner-configured margin mode and leverage, then read both back.
+
+        The only leverage or margin-mode write in this adapter. It refuses a
+        client that is not on the allowlisted BloFin demo host, refuses a
+        non-flat account (a margin-mode change cannot apply to an open
+        position), sends no retry, and raises unless the venue reads back the
+        exact requested values. Every refusal is a ValueError with fixed copy.
+        Returns the previous and new values for the audit journal.
+
+        BloFin docs:
+        - set-margin-mode: https://docs.blofin.com/index.html#set-margin-mode
+        - set-leverage: https://docs.blofin.com/index.html#set-leverage
+        - batch-leverage-info (list; exactly one row for the instId):
+          https://docs.blofin.com/index.html#get-multiple-leverage
+          (replaces the deprecated single endpoint,
+          https://docs.blofin.com/index.html#get-leverage-deprecated)
+        - margin-mode: https://docs.blofin.com/index.html#get-margin-mode
+        """
+
+        with preflight_stage("leverage_write_host", "POST /api/v1/account/set-leverage"):
+            base_url = getattr(self._client, "base_url", None)
+            if (
+                not isinstance(base_url, str)
+                or not is_allowlisted_demo_host(base_url)
+                or (urlsplit(base_url).hostname or "").lower() in BLOFIN_PRODUCTION_HOSTS
+            ):
+                raise ValueError("Demo leverage write refused: client is not the BloFin demo host.")
+        with preflight_stage("leverage_request", "POST /api/v1/account/set-leverage"):
+            if (
+                margin_mode not in {"isolated", "cross"}
+                or not isinstance(leverage, Decimal)
+                or not leverage.is_finite()
+                or leverage != leverage.to_integral_value()
+                or not Decimal("1") <= leverage <= _DEMO_LEVERAGE_CEILING
+            ):
+                raise ValueError("Demo leverage request invalid; no leverage mutation.")
+        self.verify_permissions()
+        with preflight_stage("position_mode", "GET /api/v1/account/position-mode"):
+            if self._account.get_position_mode().position_mode != "net_mode":
+                raise ValueError("Governed demo requires the existing NET account mode.")
+        self.verify_flat_account()
+        instrument = to_blofin_inst_id(symbol)
+        with preflight_stage("margin_mode", "GET /api/v1/account/margin-mode"):
+            current = self._account.get_account_margin_mode()
+            if not current.supplied:
+                raise ValueError("Demo margin-mode omitted; no margin-mode mutation.")
+        try:
+            previous_leverage = str(
+                self._account.get_leverage_info(
+                    inst_id=instrument, margin_mode=current.margin_mode
+                ).leverage
+            )
+        except Exception:
+            previous_leverage = "unknown"
+        if current.margin_mode != margin_mode:
+            with preflight_stage("margin_mode_write", "POST /api/v1/account/set-margin-mode"):
+                try:
+                    data = self._client.request(
+                        "POST",
+                        "/api/v1/account/set-margin-mode",
+                        body={"marginMode": margin_mode},
+                        signed=True,
+                    )
+                except Exception as exc:
+                    raise ValueError("Demo set-margin-mode failed.") from exc
+                rows = _rows(data)
+                if len(rows) != 1 or str(rows[0].get("marginMode", "")).lower() != margin_mode:
+                    raise ValueError("Demo set-margin-mode was not confirmed.")
+        with preflight_stage("leverage_write", "POST /api/v1/account/set-leverage"):
+            try:
+                data = self._client.request(
+                    "POST",
+                    "/api/v1/account/set-leverage",
+                    body={
+                        "instId": instrument,
+                        "leverage": format(leverage.to_integral_value(), "f"),
+                        "marginMode": margin_mode,
+                        "positionSide": "net",
+                    },
+                    signed=True,
+                )
+            except Exception as exc:
+                raise ValueError("Demo set-leverage failed.") from exc
+            rows = _rows(data)
+            try:
+                confirmed = len(rows) == 1 and (
+                    rows[0].get("instId") == instrument
+                    and str(rows[0].get("marginMode", "")).lower() == margin_mode
+                    and Decimal(str(rows[0].get("leverage"))) == leverage
+                )
+            except Exception:
+                confirmed = False
+            if not confirmed:
+                raise ValueError("Demo set-leverage was not confirmed.")
+        with preflight_stage("leverage_readback", "GET /api/v1/account/batch-leverage-info"):
+            account_mode = self._account.get_account_margin_mode()
+            if not account_mode.supplied or account_mode.margin_mode != margin_mode:
+                raise ValueError("Demo margin mode read-back does not match the configured mode.")
+            info = self._account.get_leverage_info(inst_id=instrument, margin_mode=margin_mode)
+            if not info.margin_mode_supplied or info.margin_mode != margin_mode:
+                raise ValueError("Demo margin mode read-back does not match the configured mode.")
+            if info.leverage != leverage:
+                raise ValueError("Demo leverage read-back does not match the configured leverage.")
+        return {
+            "inst_id": instrument,
+            "previous_margin_mode": current.margin_mode,
+            "previous_leverage": previous_leverage,
+            "margin_mode": margin_mode,
+            "leverage": format(leverage.to_integral_value(), "f"),
+            "margin_mode_changed": str(current.margin_mode != margin_mode).lower(),
+        }
+
+    def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
+        """Close the whole NET position for one instrument on the BloFin DEMO host.
+
+        Used only by the post-fill liquidation hold. Same demo-host guard as the
+        leverage write; one POST, never retried; a venue error raises.
+        Positions are read first: already flat for this instrument returns
+        ``noop_already_flat`` with no POST (idempotent across a crash between a
+        close and its commit). An unreadable positions read still sends the
+        close, which is harmless on a flat account.
+        Docs: https://docs.blofin.com/index.html#close-positions
+        """
+
+        with preflight_stage("flatten_host", "POST /api/v1/trade/close-position"):
+            base_url = getattr(self._client, "base_url", None)
+            if (
+                not isinstance(base_url, str)
+                or not is_allowlisted_demo_host(base_url)
+                or (urlsplit(base_url).hostname or "").lower() in BLOFIN_PRODUCTION_HOSTS
+            ):
+                raise ValueError("Demo flatten refused: client is not the BloFin demo host.")
+            if margin_mode not in {"isolated", "cross"}:
+                raise ValueError("Demo flatten margin mode invalid.")
+        instrument = to_blofin_inst_id(symbol)
+        try:
+            open_here = any(p.inst_id == instrument for p in self._account.get_positions())
+        except Exception:
+            open_here = True
+        if not open_here:
+            return "noop_already_flat"
+        with preflight_stage("flatten", "POST /api/v1/trade/close-position"):
+            self._client.request(
+                "POST",
+                "/api/v1/trade/close-position",
+                body={
+                    "instId": instrument,
+                    "marginMode": margin_mode,
+                    "positionSide": "net",
+                },
+                signed=True,
+            )
+        return "flatten_sent"
+
     def verify_permissions(self) -> None:
         with preflight_stage("permissions", "GET /api/v1/user/query-apikey"):
             permissions = self._account.get_account_permissions()
@@ -411,16 +602,17 @@ class GovernedBloFinDemoProvider:
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
-        profile_sized = plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage"
-        # Trade at the demo account's existing leverage and margin mode. Read
-        # only: no leverage or margin-mode write is ever sent.
+        # Read only: no leverage or margin-mode write here. A configured leverage
+        # was set before planning, so any drift refuses; other plans trade at the
+        # account's existing leverage.
+        required_leverage, required_mode = demo_plan_leverage(plan)
         snapshot = self.snapshot(
             symbol=plan.execution_instrument.replace("-", ""),
             now=self._clock(),
             side=plan.side,
             quantity=plan.quantity.value,
-            required_leverage=plan.risk_and_exits.leverage if profile_sized else None,
-            margin_mode=demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id),
+            required_leverage=required_leverage,
+            margin_mode=required_mode,
         )
         rules = plan.instrument_rules
         if (snapshot.tick, snapshot.lot, snapshot.minimum, snapshot.multiplier) != (
@@ -464,7 +656,9 @@ class GovernedBloFinDemoProvider:
             validate_manual_demo(plan, snapshot, now=self._clock())
         body = {
             "instId": plan.execution_instrument,
-            "marginMode": demo_order_margin_mode(plan.risk_and_exits.margin_assumption_id),
+            "marginMode": demo_order_margin_mode(
+                plan.risk_and_exits.margin_assumption_id, str(plan.margin_mode.value)
+            ),
             "positionSide": "net",
             "side": "buy" if plan.side is EntrySide.BUY else "sell",
             "orderType": "market",
