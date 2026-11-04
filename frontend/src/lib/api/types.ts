@@ -1259,7 +1259,7 @@ export interface AutonomousStrategyStatsView {
   counted_sources: string[];
 }
 
-/** GET /policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */
+/** GET /risk/policy/profiles/{kind}: the active grade-based risk profile (values are decimal strings). */
 export interface RiskPolicyView {
   kind: string;
   source: string;

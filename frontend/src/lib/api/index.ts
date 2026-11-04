@@ -1351,7 +1351,7 @@ export const api = {
   },
   riskPolicy: {
     profile: (kind: "internal_paper" | "demo") =>
-      apiFetch<RiskPolicyView>(`/policy/profiles/${kind}`, { auth: true }),
+      apiFetch<RiskPolicyView>(`/risk/policy/profiles/${kind}`, { auth: true }),
   },
   risk: {
     settings: () => apiFetch<UserRiskSettings>("/risk/settings", { auth: true }),
