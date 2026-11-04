@@ -1,0 +1,666 @@
+"""Journal performance dashboard — calendar, cumulative curve, and score.
+
+Deterministic, record-only read model over the caller's CLOSED canonical
+``journal_trades`` (same bounded projection as AT-031 statistics). No live
+market I/O, no execution authority, no mutation.
+
+Rules (documented so every number can be re-derived by hand):
+
+- One classifier (``classify``) drives win/loss/breakeven counts AND the
+  average win/loss, so they cannot disagree: the recorded net-PnL sign when
+  net PnL is recorded, else the recorded ``result``, else undecided. A row
+  marked WIN with negative net PnL is a loss (warned). This differs from
+  AT-031, which prefers the recorded label. Win rate is wins / (wins +
+  losses) and excludes breakevens.
+- Exactly one account scope per response (``SCOPE_RULES``, default ``demo``):
+  demo = BloFin demo (manual demo, mirrored BloFin demo manual, and canonical
+  executions / manual rows with BloFin-demo venue evidence); paper = paper
+  validation, canonical paper executions without BloFin-demo evidence, and
+  manually logged trades that are not provably real; real = manually logged
+  trades with a recorded exchange and neither BloFin-demo nor paper evidence
+  (``real_venue_clause``). A manual trade with paper evidence (paper exchange,
+  linked paper trade / validation run, ``PAPER_INTERNAL`` plan) or with no
+  exchange recorded is never real. Backtest,
+  imported and system trades are read only when their scope is selected.
+- Partial closes: only CLOSED rows count. BloFin demo partial closes are
+  journaled by the manual mirror as separate CLOSED slices (exit reason
+  ``partially_closed``) and are included. ``journal_trades`` records no
+  realised P&L for partial exits on an OPEN row (canonical paper closes are
+  whole-position), so that P&L is excluded until the trade closes; the
+  response counts those open trades and warns. Nothing is estimated.
+- Trades are bucketed by the local calendar date of their effective time
+  (exit, else entry, else creation) in the requested IANA timezone.
+- Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
+  net PnL curve, starting from a 0 baseline, in effective-time order.
+- Expectancy = (win% x avg win) - (loss% x |avg loss|) over trades with
+  recorded net PnL, which equals net PnL / that trade count
+  (``pnl_sample_count``). Closed trades without recorded net PnL are not in
+  the divisor.
+- Recovery factor = net PnL / max drawdown (None when there is no drawdown).
+- Consistency = 1 - (largest winning day / sum of winning days), defined only
+  with at least two winning days.
+- Radar scores normalize each metric to 0-100 against a configured target;
+  the overall score is the equal-weight mean of computable components. It is
+  withheld (None) when sample confidence is insufficient (< 5 closed trades):
+  capped components would otherwise score a single winning trade at 100.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
+from typing import Final, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.core.errors import ValidationAppError
+from app.repositories.journal_trades import (
+    JournalTradeRepository,
+    JournalTradeStatsRow,
+    SourceVenueRule,
+    VenueRequirement,
+)
+from app.schemas.common import JournalTradeSource, TradeResult
+from app.schemas.journal_performance_dashboard import (
+    JournalDashboardCurvePoint,
+    JournalDashboardDay,
+    JournalDashboardFilters,
+    JournalDashboardRisk,
+    JournalDashboardScope,
+    JournalDashboardScore,
+    JournalDashboardScoreComponent,
+    JournalDashboardSummary,
+    JournalPerformanceDashboardResponse,
+)
+from app.schemas.journal_statistics import SampleConfidence
+from app.services.journal_statistics_service import _confidence
+
+_ZERO = Decimal("0")
+
+_S = JournalTradeSource
+_ANY = VenueRequirement.ANY
+_ON_DEMO = VenueRequirement.BLOFIN_DEMO
+_OFF_DEMO = VenueRequirement.NOT_BLOFIN_DEMO
+_REAL = VenueRequirement.REAL_VENUE
+_NOT_REAL = VenueRequirement.NOT_REAL_VENUE
+
+# The single source → scope mapping. Every (source, venue) pair lands in exactly
+# one scope (enforced by tests). Writers, for the record:
+# - MANUAL_DEMO_TEST: manual BloFin demo orders (plan venue fixed to BLOFIN_DEMO).
+# - BLOFIN_DEMO_MANUAL: BloFin demo manual mirror and journal backfill.
+# - PAPER_EXECUTION: canonical execution projector (venue PAPER_INTERNAL or
+#   BLOFIN_DEMO on the linked plan revision) and position-linked paper rows.
+# - PAPER_VALIDATION: paper-validation trades (internal simulation).
+# - MANUAL: hand-logged trades; the mirror may reconcile one with a BloFin demo
+#   close (external ref ``blofin-demo-…``), which makes it demo. Otherwise it is
+#   real only with a recorded exchange and no paper evidence; else paper.
+# - BACKTEST / IMPORTED / SYSTEM: backtest journal, CSV/backfill import, system.
+SCOPE_RULES: Final[Mapping[JournalDashboardScope, tuple[SourceVenueRule, ...]]] = {
+    JournalDashboardScope.DEMO: (
+        SourceVenueRule(frozenset({_S.MANUAL_DEMO_TEST, _S.BLOFIN_DEMO_MANUAL}), _ANY),
+        SourceVenueRule(frozenset({_S.PAPER_EXECUTION, _S.MANUAL}), _ON_DEMO),
+    ),
+    JournalDashboardScope.PAPER: (
+        SourceVenueRule(frozenset({_S.PAPER_VALIDATION}), _ANY),
+        SourceVenueRule(frozenset({_S.PAPER_EXECUTION}), _OFF_DEMO),
+        SourceVenueRule(frozenset({_S.MANUAL}), _NOT_REAL),
+    ),
+    JournalDashboardScope.REAL: (SourceVenueRule(frozenset({_S.MANUAL}), _REAL),),
+    JournalDashboardScope.BACKTEST: (SourceVenueRule(frozenset({_S.BACKTEST}), _ANY),),
+    JournalDashboardScope.IMPORTED: (SourceVenueRule(frozenset({_S.IMPORTED}), _ANY),),
+    JournalDashboardScope.SYSTEM: (SourceVenueRule(frozenset({_S.SYSTEM}), _ANY),),
+}
+
+SCOPE_LABELS: Final[Mapping[JournalDashboardScope, str]] = {
+    JournalDashboardScope.DEMO: "Demo trades (BloFin demo)",
+    JournalDashboardScope.PAPER: (
+        "Paper trades (paper execution, validation, and manual trades without a real venue)"
+    ),
+    JournalDashboardScope.REAL: "Real trades (manually logged, real exchange recorded)",
+    JournalDashboardScope.BACKTEST: "Backtest trades (simulated history)",
+    JournalDashboardScope.IMPORTED: "Imported trades",
+    JournalDashboardScope.SYSTEM: "System trades",
+}
+
+DEFAULT_SCOPE: Final = JournalDashboardScope.DEMO
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreTargets:
+    """Normalization targets: a metric at its target scores 100."""
+
+    win_rate: float
+    profit_factor: float
+    win_loss_ratio: float
+    recovery_factor: float
+    drawdown_tolerance: float
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> ScoreTargets:
+        return cls(
+            win_rate=settings.journal_dashboard_target_win_rate,
+            profit_factor=settings.journal_dashboard_target_profit_factor,
+            win_loss_ratio=settings.journal_dashboard_target_win_loss_ratio,
+            recovery_factor=settings.journal_dashboard_target_recovery_factor,
+            drawdown_tolerance=settings.journal_dashboard_drawdown_tolerance,
+        )
+
+
+class _StatsRowSource(Protocol):
+    def fetch_dashboard_rows(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rules: Sequence[SourceVenueRule],
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        max_rows: int,
+    ) -> tuple[list[JournalTradeStatsRow], bool]: ...
+
+    def count_dashboard_open_trades(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rules: Sequence[SourceVenueRule],
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> int: ...
+
+
+def resolve_timezone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValidationAppError(f"Unknown IANA timezone: {name!r}.") from exc
+
+
+def local_day_bounds(
+    date_from: date | None, date_to: date | None, tz: ZoneInfo
+) -> tuple[datetime | None, datetime | None]:
+    """Inclusive local-day range → UTC instants (end is the last microsecond)."""
+    start = datetime.combine(date_from, time.min, tz).astimezone(UTC) if date_from else None
+    # Subtract in UTC: aware-datetime arithmetic is wall-clock, which would drop
+    # the repeated hour where a zone falls back at midnight (e.g. Santiago).
+    end = (
+        datetime.combine(date_to + timedelta(days=1), time.min, tz).astimezone(UTC)
+        - timedelta(microseconds=1)
+        if date_to
+        else None
+    )
+    return start, end
+
+
+def scope_rules(
+    scope: JournalDashboardScope, source: JournalTradeSource | None
+) -> tuple[SourceVenueRule, ...]:
+    """The scope's rules, optionally narrowed to one source inside the scope."""
+    rules = SCOPE_RULES[scope]
+    if source is None:
+        return rules
+    narrowed = tuple(
+        SourceVenueRule(frozenset({source}), rule.venue) for rule in rules if source in rule.sources
+    )
+    if not narrowed:
+        raise ValidationAppError(
+            f"Source {source.value!r} is not part of the {scope.value!r} scope.",
+            details={"scope": scope.value, "source": source.value},
+        )
+    return narrowed
+
+
+class JournalPerformanceDashboardService:
+    """Calendar/curve/score read model over canonical journal trades."""
+
+    def __init__(
+        self,
+        session: Session | None,
+        *,
+        settings: Settings,
+        trades: _StatsRowSource | None = None,
+    ) -> None:
+        if trades is None:
+            if session is None:
+                raise ValueError("session or trades repository required")
+            trades = JournalTradeRepository(session)
+        self._trades = trades
+        self._max_rows = settings.journal_stats_max_rows
+        self._default_tz = settings.journal_dashboard_default_timezone
+        self._targets = ScoreTargets.from_settings(settings)
+
+    def compute(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        timezone: str | None = None,
+        scope: JournalDashboardScope = DEFAULT_SCOPE,
+        source: JournalTradeSource | None = None,
+    ) -> JournalPerformanceDashboardResponse:
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise ValidationAppError("date_from must not be after date_to.")
+        tz_name = timezone or self._default_tz
+        tz = resolve_timezone(tz_name)
+        start, end = local_day_bounds(date_from, date_to, tz)
+        rules = scope_rules(scope, source)
+        filters = JournalDashboardFilters(
+            scope=scope,
+            scope_label=SCOPE_LABELS[scope],
+            date_from=date_from,
+            date_to=date_to,
+            timezone=tz_name,
+            source=source,
+            included_sources=sorted({s for rule in rules for s in rule.sources}),
+        )
+        rows, truncated = self._trades.fetch_dashboard_rows(
+            organization_id=organization_id,
+            user_id=user_id,
+            rules=rules,
+            date_from=start,
+            date_to=end,
+            max_rows=self._max_rows,
+        )
+        open_trades = self._trades.count_dashboard_open_trades(
+            organization_id=organization_id,
+            user_id=user_id,
+            rules=rules,
+            date_from=start,
+            date_to=end,
+        )
+        return build_dashboard(
+            rows,
+            filters=filters,
+            tz=tz,
+            targets=self._targets,
+            truncated=truncated,
+            max_rows=self._max_rows,
+            open_trades_excluded=open_trades,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Pure computation (unit-testable without a database)
+# --------------------------------------------------------------------------- #
+
+
+def _local_date(moment: datetime, tz: ZoneInfo) -> date:
+    # SQLite returns naive datetimes; persisted times are UTC.
+    aware = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+    return aware.astimezone(tz).date()
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def classify(row: JournalTradeStatsRow) -> TradeResult | None:
+    """Net-PnL sign when recorded, else the recorded result, else undecided."""
+    if row.net_pnl is not None:
+        if row.net_pnl > 0:
+            return TradeResult.WIN
+        if row.net_pnl < 0:
+            return TradeResult.LOSS
+        return TradeResult.BREAKEVEN
+    return row.result if row.result != TradeResult.OPEN else None
+
+
+def label_conflicts(rows: list[JournalTradeStatsRow]) -> int:
+    """Rows whose recorded result disagrees with their recorded net-PnL sign."""
+    return sum(
+        1
+        for row in rows
+        if row.net_pnl is not None
+        and row.result != TradeResult.OPEN
+        and row.result != classify(row)
+    )
+
+
+def summarize(rows: list[JournalTradeStatsRow]) -> JournalDashboardSummary:
+    results = [classify(row) for row in rows]
+    wins = sum(1 for r in results if r == TradeResult.WIN)
+    losses = sum(1 for r in results if r == TradeResult.LOSS)
+    breakeven = sum(1 for r in results if r == TradeResult.BREAKEVEN)
+    pnls = [row.net_pnl for row in rows if row.net_pnl is not None]
+    if not pnls:
+        return JournalDashboardSummary(
+            trade_count=len(rows),
+            wins=wins,
+            losses=losses,
+            breakeven=breakeven,
+            win_rate=_ratio(wins, wins + losses),
+        )
+    # Same classifier as the counts above (for rows with PnL it is the sign).
+    winners = [
+        row.net_pnl
+        for row, r in zip(rows, results, strict=True)
+        if r == TradeResult.WIN and row.net_pnl is not None
+    ]
+    losers = [
+        row.net_pnl
+        for row, r in zip(rows, results, strict=True)
+        if r == TradeResult.LOSS and row.net_pnl is not None
+    ]
+    gross_profit = sum(winners, _ZERO)
+    gross_loss = sum(losers, _ZERO)
+    average_win = gross_profit / len(winners) if winners else None
+    average_loss = gross_loss / len(losers) if losers else None
+    net_pnl = sum(pnls, _ZERO)
+    return JournalDashboardSummary(
+        trade_count=len(rows),
+        pnl_sample_count=len(pnls),
+        wins=wins,
+        losses=losses,
+        breakeven=breakeven,
+        win_rate=_ratio(wins, wins + losses),
+        net_pnl=net_pnl,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        profit_factor=float(gross_profit / -gross_loss) if gross_loss < 0 else None,
+        average_win=average_win,
+        average_loss=average_loss,
+        win_loss_ratio=(
+            float(average_win / -average_loss)
+            if average_win is not None and average_loss is not None
+            else None
+        ),
+        expectancy=net_pnl / len(pnls),
+    )
+
+
+def bucket_days(rows: list[JournalTradeStatsRow], tz: ZoneInfo) -> list[JournalDashboardDay]:
+    grouped: dict[date, list[JournalTradeStatsRow]] = defaultdict(list)
+    for row in rows:
+        if row.effective_time is not None:
+            grouped[_local_date(row.effective_time, tz)].append(row)
+    days: list[JournalDashboardDay] = []
+    for day in sorted(grouped):
+        day_rows = grouped[day]
+        results = [classify(row) for row in day_rows]
+        wins = sum(1 for r in results if r == TradeResult.WIN)
+        losses = sum(1 for r in results if r == TradeResult.LOSS)
+        pnls = [row.net_pnl for row in day_rows if row.net_pnl is not None]
+        days.append(
+            JournalDashboardDay(
+                date=day,
+                net_pnl=sum(pnls, _ZERO) if pnls else None,
+                trade_count=len(day_rows),
+                wins=wins,
+                losses=losses,
+                breakeven=sum(1 for r in results if r == TradeResult.BREAKEVEN),
+                win_rate=_ratio(wins, wins + losses),
+            )
+        )
+    return days
+
+
+def cumulative_curve(days: list[JournalDashboardDay]) -> list[JournalDashboardCurvePoint]:
+    points: list[JournalDashboardCurvePoint] = []
+    running = _ZERO
+    for day in days:
+        if day.net_pnl is None:
+            continue
+        running += day.net_pnl
+        points.append(
+            JournalDashboardCurvePoint(
+                date=day.date, daily_net_pnl=day.net_pnl, cumulative_net_pnl=running
+            )
+        )
+    return points
+
+
+def risk_metrics(
+    rows: list[JournalTradeStatsRow],
+    days: list[JournalDashboardDay],
+    net_pnl: Decimal | None,
+) -> JournalDashboardRisk:
+    pnls = [row.net_pnl for row in rows if row.net_pnl is not None]
+    winning = [d.net_pnl for d in days if d.net_pnl is not None and d.net_pnl > 0]
+    losing_days = sum(1 for d in days if d.net_pnl is not None and d.net_pnl < 0)
+    consistency: float | None = None
+    if len(winning) >= 2:
+        consistency = float(1 - max(winning) / sum(winning, _ZERO))
+    if not pnls:
+        return JournalDashboardRisk(
+            consistency=consistency, winning_days=len(winning), losing_days=losing_days
+        )
+    running = peak = max_dd = _ZERO
+    for pnl in pnls:
+        running += pnl
+        peak = max(peak, running)
+        max_dd = max(max_dd, peak - running)
+    recovery = float(net_pnl / max_dd) if net_pnl is not None and max_dd > 0 else None
+    return JournalDashboardRisk(
+        max_drawdown=max_dd,
+        recovery_factor=recovery,
+        consistency=consistency,
+        winning_days=len(winning),
+        losing_days=losing_days,
+    )
+
+
+def _scaled(value: float, target: float) -> float:
+    return round(max(0.0, min(value / target, 1.0)) * 100, 2)
+
+
+def score(
+    summary: JournalDashboardSummary,
+    risk: JournalDashboardRisk,
+    targets: ScoreTargets,
+) -> JournalDashboardScore:
+    has_pnl = summary.pnl_sample_count > 0
+    no_losers = has_pnl and summary.gross_loss == _ZERO
+    components: list[JournalDashboardScoreComponent] = []
+
+    def add(
+        key: str,
+        label: str,
+        value: float | None,
+        score_value: float | None,
+        target: float | None,
+        note: str | None = None,
+    ) -> None:
+        components.append(
+            JournalDashboardScoreComponent(
+                key=key, label=label, value=value, score=score_value, target=target, note=note
+            )
+        )
+
+    win_rate = summary.win_rate
+    add(
+        "win_rate",
+        "Win %",
+        win_rate,
+        _scaled(win_rate, targets.win_rate) if win_rate is not None else None,
+        targets.win_rate,
+    )
+
+    pf = summary.profit_factor
+    if pf is not None:
+        add(
+            "profit_factor",
+            "Profit factor",
+            pf,
+            _scaled(pf, targets.profit_factor),
+            targets.profit_factor,
+        )
+    elif no_losers and (summary.gross_profit or _ZERO) > 0:
+        add(
+            "profit_factor",
+            "Profit factor",
+            None,
+            100.0,
+            targets.profit_factor,
+            "No losing trades; capped at target.",
+        )
+    else:
+        add("profit_factor", "Profit factor", None, None, targets.profit_factor)
+
+    ratio = summary.win_loss_ratio
+    if ratio is not None:
+        add(
+            "win_loss_ratio",
+            "Avg win/loss",
+            ratio,
+            _scaled(ratio, targets.win_loss_ratio),
+            targets.win_loss_ratio,
+        )
+    elif summary.average_win is not None:
+        add(
+            "win_loss_ratio",
+            "Avg win/loss",
+            None,
+            100.0,
+            targets.win_loss_ratio,
+            "No losing trades; capped at target.",
+        )
+    elif summary.average_loss is not None:
+        add(
+            "win_loss_ratio",
+            "Avg win/loss",
+            None,
+            0.0,
+            targets.win_loss_ratio,
+            "No winning trades.",
+        )
+    else:
+        add("win_loss_ratio", "Avg win/loss", None, None, targets.win_loss_ratio)
+
+    rf = risk.recovery_factor
+    if rf is not None:
+        add(
+            "recovery_factor",
+            "Recovery factor",
+            rf,
+            _scaled(rf, targets.recovery_factor),
+            targets.recovery_factor,
+        )
+    elif risk.max_drawdown == _ZERO and (summary.net_pnl or _ZERO) > 0:
+        add(
+            "recovery_factor",
+            "Recovery factor",
+            None,
+            100.0,
+            targets.recovery_factor,
+            "No drawdown recorded; capped at target.",
+        )
+    else:
+        add("recovery_factor", "Recovery factor", None, None, targets.recovery_factor)
+
+    dd = risk.max_drawdown
+    gross_profit = summary.gross_profit
+    if dd is None:
+        add("max_drawdown", "Max drawdown", None, None, targets.drawdown_tolerance)
+    elif gross_profit is not None and gross_profit > 0:
+        share = float(dd / gross_profit)
+        add(
+            "max_drawdown",
+            "Max drawdown",
+            share,
+            round(max(0.0, 1 - min(share / targets.drawdown_tolerance, 1.0)) * 100, 2),
+            targets.drawdown_tolerance,
+            "Drawdown as a share of gross profit.",
+        )
+    elif dd > 0:
+        add(
+            "max_drawdown",
+            "Max drawdown",
+            None,
+            0.0,
+            targets.drawdown_tolerance,
+            "Drawdown with no gross profit.",
+        )
+    else:
+        add("max_drawdown", "Max drawdown", None, None, targets.drawdown_tolerance)
+
+    consistency = risk.consistency
+    add(
+        "consistency",
+        "Consistency",
+        consistency,
+        round(max(0.0, consistency) * 100, 2) if consistency is not None else None,
+        None,
+        "Needs at least two winning days." if consistency is None else None,
+    )
+
+    scored = [c.score for c in components if c.score is not None]
+    return JournalDashboardScore(
+        overall=round(sum(scored) / len(scored), 2) if scored else None,
+        components=components,
+        missing_components=[c.key for c in components if c.score is None],
+    )
+
+
+def build_dashboard(
+    rows: list[JournalTradeStatsRow],
+    *,
+    filters: JournalDashboardFilters,
+    tz: ZoneInfo,
+    targets: ScoreTargets,
+    truncated: bool,
+    max_rows: int,
+    open_trades_excluded: int = 0,
+    now: datetime | None = None,
+) -> JournalPerformanceDashboardResponse:
+    summary = summarize(rows)
+    days = bucket_days(rows, tz)
+    risk = risk_metrics(rows, days, summary.net_pnl)
+    confidence = _confidence(len(rows))
+    warnings: list[str] = []
+    if not rows:
+        warnings.append("No closed trades match the filters.")
+    elif confidence in (SampleConfidence.INSUFFICIENT, SampleConfidence.LOW):
+        warnings.append(f"Only {len(rows)} closed trade(s); treat these figures as anecdotal.")
+    if summary.pnl_sample_count < summary.trade_count:
+        warnings.append(
+            f"{summary.trade_count - summary.pnl_sample_count} closed trade(s) have no "
+            "recorded net PnL and are excluded from PnL figures."
+        )
+    oldest_covered: date | None = None
+    if truncated and rows and rows[0].effective_time is not None:
+        oldest_covered = _local_date(rows[0].effective_time, tz)
+    conflicts = label_conflicts(rows)
+    if conflicts:
+        warnings.append(
+            f"{conflicts} trade(s) have a recorded result that disagrees with their net "
+            "P&L; they are classified by net P&L."
+        )
+    dashboard_score = score(summary, risk, targets)
+    if rows and confidence == SampleConfidence.INSUFFICIENT:
+        dashboard_score = dashboard_score.model_copy(update={"overall": None})
+        warnings.append("Overall score withheld until at least 5 closed trades.")
+    if open_trades_excluded:
+        warnings.append(
+            f"{open_trades_excluded} open trade(s) in scope are not counted. Realised P&L "
+            "from partial exits on open trades is not recorded in the journal, so it "
+            "appears only once the trade closes."
+        )
+    if truncated:
+        since = f" from {oldest_covered.isoformat()}" if oldest_covered else ""
+        warnings.append(
+            f"Capped at the {max_rows} most recent closed trades{since}; older trades "
+            "in range are not counted. Narrow the date range for full coverage."
+        )
+    return JournalPerformanceDashboardResponse(
+        filters=filters,
+        summary=summary,
+        days=days,
+        cumulative=cumulative_curve(days),
+        risk=risk,
+        score=dashboard_score,
+        confidence=confidence,
+        truncated=truncated,
+        max_rows=max_rows,
+        oldest_covered_date=oldest_covered,
+        open_trades_excluded=open_trades_excluded,
+        warnings=warnings,
+        generated_at=now or datetime.now(UTC),
+    )

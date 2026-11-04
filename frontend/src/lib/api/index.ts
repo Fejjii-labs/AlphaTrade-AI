@@ -16,6 +16,8 @@ import type {
   JournalImportBatch,
   JournalImportRequestBody,
   JournalImportResult,
+  JournalPerformanceDashboardParams,
+  JournalPerformanceDashboardResponse,
   JournalStatsParams,
   JournalStatsResponse,
   PaginatedCanonicalJournalTrades,
@@ -634,6 +636,14 @@ export const api = {
       apiFetch<void>(`/journal/entries/${id}`, { method: "DELETE" }),
     statistics: (params?: JournalStatsParams, options?: { signal?: AbortSignal }) =>
       apiFetch<JournalStatsResponse>("/journal/statistics", { query: params, signal: options?.signal }),
+    performanceCalendar: (
+      params?: JournalPerformanceDashboardParams,
+      options?: { signal?: AbortSignal },
+    ) =>
+      apiFetch<JournalPerformanceDashboardResponse>("/journal/statistics/calendar", {
+        query: params,
+        signal: options?.signal,
+      }),
     listTrades: (params?: { status?: string; source?: string; symbol?: string; limit?: number; offset?: number }) =>
       apiFetch<PaginatedCanonicalJournalTrades>("/journal/trades", { query: params }),
     importTrades: (body: JournalImportRequestBody) =>
