@@ -165,7 +165,7 @@ export function TraderDashboardView({
         </p>
       ) : null}
 
-      <PerformanceDashboard refreshKey={demoRefreshKey} />
+      <PerformanceDashboard key={`performance-${accountContext}`} refreshKey={demoRefreshKey} />
 
       <label className="flex flex-wrap items-center gap-3 text-sm">
         Account

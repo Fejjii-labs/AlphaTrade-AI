@@ -12,7 +12,16 @@ vi.mock("@/lib/api/blofin-activity", () => ({ readNativeActivity: vi.fn() }));
 vi.mock("@/lib/api/dashboard-demo-account", () => ({ demoAccountApi: { latest: vi.fn(), refresh: vi.fn() } }));
 vi.mock("./AttentionCard", () => ({ AttentionCard: () => null }));
 vi.mock("./DailyReviewCard", () => ({ DailyReviewCard: () => null }));
-vi.mock("./performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
+const performanceInstances = vi.hoisted(() => ({ next: 0 }));
+vi.mock("./performance/PerformanceDashboard", async () => {
+  const { useState } = await import("react");
+  return {
+    PerformanceDashboard: () => {
+      const [instance] = useState(() => (performanceInstances.next += 1));
+      return <span data-testid="performance-instance">{instance}</span>;
+    },
+  };
+});
 vi.mock("@/components/settings/ManualDemoTest", () => ({ ManualDemoTest: () => null }));
 
 const unavailable = { available: false, data: null, error: null, fallbackUsed: false };
@@ -56,5 +65,16 @@ describe("Dashboard native integration", () => {
     expect(screen.queryByTestId("native-activity-row")).not.toBeInTheDocument();
     expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent("1,234.5");
     await screen.findByText(/No stored fills/);
+  });
+
+  it("remounts the performance dashboard when the account context changes", () => {
+    const view = () => <TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />;
+    const { rerender } = render(view());
+    const first = screen.getByTestId("performance-instance").textContent;
+    rerender(view());
+    expect(screen.getByTestId("performance-instance").textContent).toBe(first);
+    identity = { ...identity, user: { id: "reader-2" } };
+    rerender(view());
+    expect(screen.getByTestId("performance-instance").textContent).not.toBe(first);
   });
 });
