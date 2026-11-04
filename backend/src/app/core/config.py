@@ -390,6 +390,9 @@ class Settings(BaseSettings):
     # Mirror cadence. The snapshot tick stays at BLOFIN_DEMO_SNAPSHOT_SYNC_SECONDS;
     # the history mirror inside it runs at most once per this interval.
     blofin_demo_manual_mirror_interval_seconds: int = Field(default=300, ge=30, le=3600)
+    # Full 7-day mirror read at least this often, so history published later
+    # than the overlap is still mirrored. Incremental reads run in between.
+    blofin_demo_manual_mirror_full_reread_seconds: int = Field(default=21600, ge=600, le=604800)
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.

@@ -56,6 +56,9 @@ class BloFinDemoSnapshotCycle:
         self._next_attempt: datetime | None = None
         # Last ``ok`` mirror read per owner. In memory: a restart reads 7 days.
         self._mirror_cursor: tuple[tuple[uuid.UUID, uuid.UUID], dict[str, datetime]] | None = None
+        # When the last ``ok`` full 7-day read started. A periodic full read
+        # catches history the venue published later than the overlap.
+        self._mirror_full_read_at: datetime | None = None
         self._mirror_attempted_at: datetime | None = None
 
     def __call__(self) -> CycleOutcome:
@@ -164,8 +167,10 @@ class BloFinDemoSnapshotCycle:
             return
         if not self._mirror_due():
             return
+        started = self._clock()
+        cursor = self._cursor_for(organization_id, user_id, now=started)
         try:
-            report = self._run_mirror(session, organization_id, user_id)
+            report = self._run_mirror(session, organization_id, user_id, cursor)
             session.commit()
         except Exception as exc:
             session.rollback()
@@ -179,6 +184,8 @@ class BloFinDemoSnapshotCycle:
         next_cursor = getattr(report, "next_cursor", None)
         if next_cursor is not None:
             self._mirror_cursor = ((organization_id, user_id), next_cursor)
+            if cursor is None:
+                self._mirror_full_read_at = started
 
     def _mirror_due(self) -> bool:
         """At most one mirror read per interval, whether it succeeds or fails."""
@@ -191,10 +198,15 @@ class BloFinDemoSnapshotCycle:
         return True
 
     def _cursor_for(
-        self, organization_id: uuid.UUID, user_id: uuid.UUID
+        self, organization_id: uuid.UUID, user_id: uuid.UUID, *, now: datetime
     ) -> dict[str, datetime] | None:
+        """The incremental cursor, or None when a full 7-day read is due."""
         held = self._mirror_cursor
         if held is None or held[0] != (organization_id, user_id):
+            return None
+        full_at = self._mirror_full_read_at
+        interval = self.settings.blofin_demo_manual_mirror_full_reread_seconds
+        if full_at is None or not 0 <= (now - full_at).total_seconds() < interval:
             return None
         return dict(held[1])
 
@@ -203,6 +215,7 @@ class BloFinDemoSnapshotCycle:
         session: object,
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
+        cursor: dict[str, datetime] | None,
     ) -> MirrorReport:
         """Journal mirror. The flag stays off unless an operator sets it."""
         from app.core.blofin_readonly_access import get_readonly_client
@@ -216,7 +229,7 @@ class BloFinDemoSnapshotCycle:
         return BloFinDemoManualMirror(
             client,
             now=self._clock(),
-            cursor=self._cursor_for(organization_id, user_id),
+            cursor=cursor,
         ).apply(
             session,  # type: ignore[arg-type]
             organization_id=organization_id,

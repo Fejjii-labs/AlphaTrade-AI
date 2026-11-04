@@ -2377,3 +2377,42 @@ def test_mirror_interval_is_configurable(monkeypatch: pytest.MonkeyPatch) -> Non
         clock[0] = start + timedelta(seconds=offset)
         cycle()
     assert len(seen) == 2
+
+
+def test_mirror_reads_seven_days_again_every_full_reread_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History the venue publishes later than the overlap is caught by the full read."""
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    cursors = [{"/api/v1/account/positions-history": start + timedelta(hours=h)} for h in range(8)]
+    outcomes: list[object] = [SimpleNamespace(next_cursor=c) for c in cursors]
+    cycle, seen = _cursor_cycle(monkeypatch, clock, outcomes)
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_full_reread_seconds == 21600
+    for hours in (0, 1, 5, 6, 7, 11, 12):
+        clock[0] = start + timedelta(hours=hours)
+        cycle()
+    # Full reads (None) at 0h, 6h and 12h; incremental reads use the last ok cursor.
+    assert seen == [None, cursors[0], cursors[1], None, cursors[3], cursors[4], None]
+
+
+def test_failed_full_reread_is_retried_as_a_full_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    start = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    clock = [start]
+    first = {"/api/v1/account/positions-history": start}
+    later = {"/api/v1/account/positions-history": start + timedelta(hours=1)}
+    outcomes: list[object] = [
+        SimpleNamespace(next_cursor=first),
+        RuntimeError("venue read failed"),
+        SimpleNamespace(next_cursor=None),
+        SimpleNamespace(next_cursor=later),
+        SimpleNamespace(next_cursor=None),
+    ]
+    cycle, seen = _cursor_cycle(
+        monkeypatch, clock, outcomes, blofin_demo_manual_mirror_full_reread_seconds=3600
+    )
+    for minutes in (0, 60, 70, 80, 90):
+        clock[0] = start + timedelta(minutes=minutes)
+        cycle()
+    # A failed or incomplete full read keeps the full read due; the next ok one resets it.
+    assert seen == [None, None, None, None, later]
