@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -45,8 +45,10 @@ from app.services.blofin_demo_manual_mirror import (
     METHOD,
     BloFinDemoManualMirror,
     MirrorReadError,
+    _history_pages,
     _opening_side,
     _opening_side_reason,
+    _PagePacer,
     drafts_from_raw,
     publish_mirror_performance,
     record_mirror_cycle,
@@ -1843,3 +1845,70 @@ def test_capped_read_returns_no_cursor(session: Session, monkeypatch: pytest.Mon
     ]
     report = _mirror(session, _Client(bundle), NOW)
     assert report.next_cursor is None  # type: ignore[attr-defined]
+
+
+# --- Page pacing (BloFin rate limits) -----------------------------------------
+
+_FILLS_PATH = "/api/v1/trade/fills-history"
+_PAGED_PATHS = {
+    "/api/v1/account/positions-history",
+    _FILLS_PATH,
+    "/api/v1/account/funding-fees",
+    "/api/v1/trade/orders-history",
+}
+
+
+class _PagedClient:
+    def __init__(self, pages: list[list[dict[str, object]]]) -> None:
+        self.pages = pages
+        self.calls = 0
+
+    def request(self, method: str, path: str, **_kwargs: object) -> list[dict[str, object]]:
+        self.calls += 1
+        return self.pages.pop(0) if self.pages else []
+
+
+def _full_page(start: int) -> list[dict[str, object]]:
+    return [{"tradeId": str(start + index)} for index in range(100)]
+
+
+def _recorder(waits: list[float], *, stop: bool = False) -> Callable[[float], bool]:
+    def _wait(seconds: float) -> bool:
+        waits.append(seconds)
+        return stop
+
+    return _wait
+
+
+def test_history_pages_wait_the_configured_pause_between_pages() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), _full_page(100), [{"tradeId": "999"}]])
+    rows, capped = _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(1.5, _recorder(waits)))
+    assert len(rows) == 201 and capped is False and client.calls == 3
+    assert waits == [1.5, 1.5]
+
+
+def test_zero_pause_never_waits() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), [{"tradeId": "999"}]])
+    _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(0.0, _recorder(waits)))
+    assert client.calls == 2 and waits == []
+
+
+def test_a_stopping_worker_fails_the_paced_read_without_another_request() -> None:
+    waits: list[float] = []
+    client = _PagedClient([_full_page(0), _full_page(100)])
+    with pytest.raises(MirrorReadError, match="stopped"):
+        _history_pages(client, _FILLS_PATH, "1", "2", _PagePacer(1.0, _recorder(waits, stop=True)))
+    assert client.calls == 1 and waits == [1.0]
+
+
+def test_mirror_read_paces_every_history_page_across_endpoints(session: Session) -> None:
+    waits: list[float] = []
+    client = _Client(_paths(_FIXTURE["long"]))  # type: ignore[arg-type]
+    BloFinDemoManualMirror(client, now=NOW, page_pause_seconds=1.0, wait=_recorder(waits)).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings()
+    )
+    paged = [path for _method, path in client.calls if path in _PAGED_PATHS]
+    assert set(paged) == _PAGED_PATHS
+    assert waits == [1.0] * (len(paged) - 1)

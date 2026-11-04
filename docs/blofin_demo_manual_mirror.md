@@ -118,6 +118,51 @@ journal at the next full read, so up to about six hours plus one mirror
 interval later, or sooner on a restart. A row published more than seven days
 late is never mirrored, as before this change.
 
+### Rate-limit budget
+
+BloFin's documented limits (<https://docs.blofin.com/index.html#rate-limits>,
+fetched 2026-11-04): REST calls are limited per IP to 500 per minute (a breach
+suspends the IP for 5 minutes) and 1500 per 5 minutes (a breach suspends it
+for 1 hour). "Trading-related APIs" are limited to 30 requests per 10 seconds
+per user id. The docs do not say whether the `/api/v1/trade/fills-history`
+and `/api/v1/trade/orders-history` reads count as trading-related, so this
+budget assumes they do.
+
+The client throttle is per client instance: at most
+`BLOFIN_RATE_LIMIT_REQUESTS_PER_SECOND` (default 5) request attempts per
+second, and up to `BLOFIN_MAX_RETRIES` (default 2) retries of a GET after a
+429, a 5xx or a transport error. Each mirror run builds its own client.
+
+A full read is the API-key check, instruments, open positions, and up to 40
+pages each of positions history, fills, funding and orders: at most 163
+requests. Unpaced at 5 per second, it finishes in about 33 s. That is up to
+50 requests per 10 s on the same user id as the demo loop's orders, and it
+would also hit the trading limit on its own.
+
+Since this change, history pages are at least
+`BLOFIN_DEMO_MANUAL_MIRROR_PAGE_PAUSE_SECONDS` apart (default 1.0, range
+0–10; 0 turns pacing off), across all four endpoints. A full read therefore
+takes at least about 160 s on the snapshot thread, once per six hours or once
+per restart. The pause wakes up when the worker stops, and the read then fails
+rather than delaying shutdown. Worst case for this worker, retries excluded
+(each request can be tried up to 3 times only while BloFin is already
+refusing it):
+
+| Window | Mirror | Snapshot sync (4 per 45 s tick) | Total | Limit |
+| --- | --- | --- | --- | --- |
+| 10 s, per user id (trading calls) | ≤ 11 history pages | 0 (none are `/trade` calls) | ≤ 11 | 30 |
+| 1 min, per IP | ≤ 61 pages + 3 setup = 64 | ≤ 2 ticks = 8 | ≤ 72 | 500 |
+| 5 min, per IP | ≤ 163 for one full read; paced ceiling 301 pages + 6 setup = 307 | ≤ 7 ticks = 28 | ≤ 191; ceiling ≤ 335 | 1500 |
+
+Even if every request were tried three times, the ceilings stay under the IP
+limits (216 per minute, 1005 per 5 minutes).
+
+An incremental read every 300 s is usually 4–8 requests. Its worst case
+(203 requests: history read twice plus three dependent endpoints, all at the
+page cap) is paced the same way. Not counted: the governed demo loop's
+order-book reads and orders, the market-data reads, and any other service
+that shares the egress IP.
+
 `fillPnl` is "Last filled profit and loss, applicable to orders which have a
 trade and aim to close position." The page does not say whether that number
 is gross or net of fees or funding. The published examples are `0`. This

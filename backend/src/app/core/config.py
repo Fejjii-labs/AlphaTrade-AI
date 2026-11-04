@@ -404,6 +404,9 @@ class Settings(BaseSettings):
     # Full 7-day mirror read at least this often, so history published later
     # than the overlap is still mirrored. Incremental reads run in between.
     blofin_demo_manual_mirror_full_reread_seconds: int = Field(default=21600, ge=600, le=604800)
+    # Minimum gap between mirror history pages. BloFin allows 30 "trading-related"
+    # calls per 10 s per user id; 1 s keeps the mirror at 10 pages per 10 s or less.
+    blofin_demo_manual_mirror_page_pause_seconds: float = Field(default=1.0, ge=0.0, le=10.0)
     # Env name: BLOFIN_DEMO_ALLOW_TRADE_CAPABLE_SYNC_KEY. Default off. Lets the
     # demo-only sync accept a read+trade demo key when the venue reports no
     # withdraw/transfer permission; requests stay GET-only.

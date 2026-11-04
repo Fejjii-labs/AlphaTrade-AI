@@ -249,7 +249,9 @@ def test_demo_key_snapshot_uses_the_get_only_client(monkeypatch: pytest.MonkeyPa
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, now: object = None, cursor: object = None) -> None:
+        def __init__(
+            self, client: object, now: object = None, cursor: object = None, **_pace: object
+        ) -> None:
             captured["client"] = client
 
         def apply(self, *_args: object, **_kwargs: object) -> None:
@@ -1051,7 +1053,9 @@ def test_flag_on_runs_the_mirror_after_the_snapshot_commit(
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1103,7 +1107,9 @@ def test_fresh_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatch) -
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -1151,7 +1157,9 @@ def test_unhealthy_snapshot_still_runs_the_mirror(monkeypatch: pytest.MonkeyPatc
             )
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             assert client == "readonly-client"
             assert now.tzinfo is UTC
 
@@ -2306,7 +2314,9 @@ def _cursor_cycle(
             return SimpleNamespace(snapshot=SimpleNamespace(health_status=health))
 
     class Mirror:
-        def __init__(self, client: object, *, now: datetime, cursor: object = None) -> None:
+        def __init__(
+            self, client: object, *, now: datetime, cursor: object = None, **_pace: object
+        ) -> None:
             seen.append(cursor)
 
         def apply(self, _session: object, **_kwargs: object) -> object:
@@ -2416,3 +2426,31 @@ def test_failed_full_reread_is_retried_as_a_full_read(monkeypatch: pytest.Monkey
         cycle()
     # A failed or incomplete full read keeps the full read due; the next ok one resets it.
     assert seen == [None, None, None, None, later]
+
+
+def test_mirror_pages_are_paced_from_settings_and_stop_with_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(_env_file=None).blofin_demo_manual_mirror_page_pause_seconds == 1.0
+    captured: dict[str, object] = {}
+
+    class Mirror:
+        def __init__(self, client: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def apply(self, _session: object, **_kwargs: object) -> str:
+            return "report"
+
+    monkeypatch.setattr(
+        "app.core.blofin_readonly_access.get_readonly_client",
+        lambda *_args, **_kwargs: "readonly-client",
+    )
+    monkeypatch.setattr("app.services.blofin_demo_manual_mirror.BloFinDemoManualMirror", Mirror)
+    settings = Settings(_env_file=None, blofin_demo_manual_mirror_page_pause_seconds=2.5)
+    cycle = BloFinDemoSnapshotCycle(settings, clock=lambda: datetime(2026, 11, 4, tzinfo=UTC))
+    assert cycle._run_mirror(object(), uuid4(), uuid4(), None) == "report"
+    assert captured["page_pause_seconds"] == 2.5
+    wait = captured["wait"]
+    assert callable(wait) and wait(0.0) is False
+    cycle.request_stop()
+    assert wait(30.0) is True

@@ -47,8 +47,9 @@ rate only when every closed mirrored row is verified.
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
@@ -130,6 +131,36 @@ class _HistoryClient(Protocol):
 
 class MirrorReadError(Exception):
     """A read-only history page was incomplete or malformed."""
+
+
+def _sleep(seconds: float) -> bool:
+    time.sleep(seconds)
+    return False
+
+
+class _PagePacer:
+    """Spaces history page requests at least ``seconds`` apart within one read.
+
+    BloFin limits REST calls per IP (500 per minute, 1500 per 5 minutes) and
+    "trading-related" calls per user id (30 per 10 seconds); the docs do not
+    say whether the ``/api/v1/trade/*-history`` reads count as trading. The
+    client throttle alone allows 5 per second, so an unpaced full 7-day read
+    (up to 160 pages) could take that whole per-user budget from the demo
+    loop's orders if they do. ``wait`` returns True when the worker is
+    stopping; the read then fails instead of holding shutdown.
+    """
+
+    def __init__(self, seconds: float, wait: Callable[[float], bool]) -> None:
+        self._seconds = seconds
+        self._wait = wait
+        self._first = True
+
+    def __call__(self) -> None:
+        if self._first:
+            self._first = False
+            return
+        if self._seconds > 0 and self._wait(self._seconds):
+            raise MirrorReadError("mirror read stopped")
 
 
 @dataclass(frozen=True, slots=True)
@@ -867,7 +898,11 @@ def drafts_from_raw(
 
 
 def _history_pages(
-    client: _HistoryClient, path: str, begin: str, end: str
+    client: _HistoryClient,
+    path: str,
+    begin: str,
+    end: str,
+    pace: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return rows and whether the safety cap stopped the cursor."""
     rows: list[dict[str, Any]] = []
@@ -878,6 +913,8 @@ def _history_pages(
         params = {"begin": begin, "end": end, "limit": "100"}
         if after is not None:
             params["after"] = after
+        if pace is not None:
+            pace()
         page = client.request("GET", path, params=params, signed=True)
         if not isinstance(page, list):
             raise MirrorReadError("history page was not a list")
@@ -1077,11 +1114,14 @@ class BloFinDemoManualMirror:
         *,
         now: datetime,
         cursor: dict[str, datetime] | None = None,
+        page_pause_seconds: float = 0.0,
+        wait: Callable[[float], bool] = _sleep,
     ) -> None:
         self._client = client
         self._now = now
         # Previous ``ok`` read ends. None (first run, restart) reads seven days.
         self._cursor = cursor
+        self._pace = _PagePacer(page_pause_seconds, wait)
 
     def apply(
         self,
@@ -1193,7 +1233,7 @@ class BloFinDemoManualMirror:
     def _read(
         self, path: str, since: datetime, end_ms: str, *, capped_error: bool
     ) -> list[dict[str, Any]]:
-        rows, capped = _history_pages(self._client, path, _ms(since), end_ms)
+        rows, capped = _history_pages(self._client, path, _ms(since), end_ms, self._pace)
         if capped and capped_error:
             raise MirrorReadError("positions-history page cap reached")
         return rows
@@ -1202,7 +1242,7 @@ class BloFinDemoManualMirror:
         self, path: str, deps_begin: datetime, overlap: timedelta, end_ms: str
     ) -> tuple[list[dict[str, Any]], bool]:
         since = min(deps_begin, _since(self._cursor, path, deps_begin, overlap))
-        return _history_pages(self._client, path, _ms(since), end_ms)
+        return _history_pages(self._client, path, _ms(since), end_ms, self._pace)
 
     def _require_internal_read_pin(self, *, organization_id: uuid.UUID, settings: Settings) -> None:
         """Run the #304 org pin and UID check before any account read.

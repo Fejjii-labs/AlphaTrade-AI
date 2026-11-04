@@ -230,6 +230,8 @@ class BloFinDemoSnapshotCycle:
             client,
             now=self._clock(),
             cursor=cursor,
+            page_pause_seconds=self.settings.blofin_demo_manual_mirror_page_pause_seconds,
+            wait=self._stop.wait,
         ).apply(
             session,  # type: ignore[arg-type]
             organization_id=organization_id,
