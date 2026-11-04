@@ -1135,3 +1135,68 @@ def test_provider_retry_waits_for_the_interval_and_stops_on_a_hard_refusal() -> 
     assert calls["n"] == 2  # a non-provider refusal ends the retries
     assert cycle.runtime is None
     assert published == ["provider_unavailable"] * 2 + ["migration_unhealthy"] * 2
+
+
+def test_provider_retry_is_bounded_and_logs_each_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from structlog.testing import capture_logs
+
+    import app.workers.watcher_paper as watcher_paper
+    from app.workers.paper_worker import _RecoveringWatcherCycle
+
+    settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
+    calls = {"n": 0}
+    ticks = {"now": 0.0}
+
+    def preflight() -> ActivationDecision:
+        calls["n"] += 1
+        return _decision("provider_unavailable")
+
+    def unexpected_start() -> object:
+        raise AssertionError("a refused preflight must not open a scanning runtime")
+
+    class _Now:
+        def now(self) -> datetime:
+            return datetime(2026, 11, 4, 14, 51, tzinfo=UTC)
+
+    monkeypatch.setattr(watcher_paper, "publish_idle_watcher_status", lambda *_a, **_k: None)
+    cycle = _RecoveringWatcherCycle(
+        settings,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="provider_unavailable",
+        clock=_Now(),
+        preflight=preflight,
+        open_session=unexpected_start,
+        closers=[],
+        stops=[],
+        releases=[],
+        retry_seconds=60.0,
+        max_attempts=3,
+        monotonic=lambda: ticks["now"],
+    )
+    with capture_logs() as logs:
+        for minute in range(1, 11):  # well past the bound
+            ticks["now"] = 60.0 * minute
+            assert cycle().error == "provider_unavailable"
+    assert calls["n"] == 3
+    assert cycle.attempts == 3
+    failed = [e for e in logs if e["event"] == "watcher_paper_activation_retry_failed"]
+    assert [(e["attempt"], e["retry_in_seconds"], e["max_attempts"]) for e in failed] == [
+        (1, 60.0, 3),
+        (2, 60.0, 3),
+    ]
+    assert all(e["log_level"] == "warning" for e in failed)
+    exhausted = [e for e in logs if e["event"] == "watcher_paper_activation_retry_exhausted"]
+    assert len(exhausted) == 1
+    assert exhausted[0]["log_level"] == "error"
+    assert exhausted[0]["attempts"] == 3
+    assert exhausted[0]["reason"] == "provider_unavailable"
+
+
+def test_provider_retry_default_bound_is_finite() -> None:
+    from app.workers.paper_worker import ACTIVATION_RETRY_MAX_ATTEMPTS, ACTIVATION_RETRY_SECONDS
+
+    assert ACTIVATION_RETRY_MAX_ATTEMPTS >= 1
+    assert ACTIVATION_RETRY_MAX_ATTEMPTS * ACTIVATION_RETRY_SECONDS <= 3600.0

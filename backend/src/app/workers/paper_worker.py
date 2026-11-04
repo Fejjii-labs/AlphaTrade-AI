@@ -1213,6 +1213,8 @@ def _idle_watcher_cycle(
 # (config, migration, lineage, authority) still needs a restart to re-evaluate.
 _RETRYABLE_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
 ACTIVATION_RETRY_SECONDS = 60.0
+# 30 attempts at 60 s: give up after about 30 min of a provider-only refusal.
+ACTIVATION_RETRY_MAX_ATTEMPTS = 30
 
 
 def activation_refusal_is_retryable(reason_codes: tuple[str, ...]) -> bool:
@@ -1224,7 +1226,8 @@ class _RecoveringWatcherCycle:
 
     Heartbeats like the idle cycle. Every ``retry_seconds`` it runs the full
     preflight again; once that clears it opens the staging session and scans.
-    A non-retryable refusal on a later attempt stops the retries.
+    A non-retryable refusal on a later attempt stops the retries, and so does
+    reaching ``max_attempts``; the worker then stays idle until a restart.
     """
 
     def __init__(
@@ -1241,6 +1244,7 @@ class _RecoveringWatcherCycle:
         stops: list[Callable[[], None]],
         releases: list[Callable[[], int]],
         retry_seconds: float | None = None,
+        max_attempts: int | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
@@ -1254,6 +1258,7 @@ class _RecoveringWatcherCycle:
         self._stops = stops
         self._releases = releases
         self._retry_seconds = ACTIVATION_RETRY_SECONDS if retry_seconds is None else retry_seconds
+        self._max_attempts = ACTIVATION_RETRY_MAX_ATTEMPTS if max_attempts is None else max_attempts
         self._monotonic = monotonic
         self._next_attempt_at: float | None = monotonic() + self._retry_seconds
         self.attempts = 0
@@ -1292,6 +1297,31 @@ class _RecoveringWatcherCycle:
             self._reason = decision.primary_reason  # type: ignore[attr-defined]
             if not activation_refusal_is_retryable(decision.reason_codes):  # type: ignore[attr-defined]
                 self._next_attempt_at = None
+                logger.warning(
+                    "watcher_paper_activation_retry_stopped",
+                    attempts=self.attempts,
+                    reason=self._reason,
+                    worker_id=self._worker_id,
+                )
+            elif self.attempts >= self._max_attempts:
+                self._next_attempt_at = None
+                logger.error(
+                    "watcher_paper_activation_retry_exhausted",
+                    attempts=self.attempts,
+                    max_attempts=self._max_attempts,
+                    reason=self._reason,
+                    worker_id=self._worker_id,
+                    action="restart the worker once the market provider recovers",
+                )
+            else:
+                logger.warning(
+                    "watcher_paper_activation_retry_failed",
+                    attempt=self.attempts,
+                    max_attempts=self._max_attempts,
+                    retry_in_seconds=self._retry_seconds,
+                    reason=self._reason,
+                    worker_id=self._worker_id,
+                )
             return
         try:
             session = self._open_session()

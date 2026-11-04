@@ -185,3 +185,56 @@ def test_failover_source_close_closes_both_venues() -> None:
     source._secondary = type("S", (), {"close": lambda self: closed.append("bybit")})()  # type: ignore[attr-defined]
     source.close()
     assert closed == ["binance", "bybit"]
+
+
+def test_build_monitor_closes_the_source_when_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import Settings
+    from app.market_contracts.adapters import factory as adapters_factory
+    from app.market_monitor import factory as monitor_factory
+    from app.workers import watcher_activation
+
+    closed: list[str] = []
+
+    class _Source:
+        def close(self) -> None:
+            closed.append("source")
+
+    source = _Source()
+
+    def failing_build(_settings: Settings, *, source: object) -> object:
+        raise ValueError("bad backoff settings")
+
+    monkeypatch.setattr(adapters_factory, "resolve_perpetual_evidence_source", lambda _s: source)
+    monkeypatch.setattr(monitor_factory, "build_perpetual_market_monitor", failing_build)
+    with pytest.raises(ValueError, match="bad backoff settings"):
+        watcher_activation._build_monitor(Settings())
+    assert closed == ["source"]
+
+    # A failing close must not mask the original construction error.
+    def failing_close() -> None:
+        raise RuntimeError("close failed")
+
+    source.close = failing_close  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="bad backoff settings"):
+        watcher_activation._build_monitor(Settings())
+
+
+def test_build_monitor_keeps_the_source_open_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import Settings
+    from app.market_contracts.adapters import factory as adapters_factory
+    from app.market_monitor import factory as monitor_factory
+    from app.workers import watcher_activation
+
+    closed: list[str] = []
+    source = type("S", (), {"close": lambda self: closed.append("source")})()
+    built = object()
+    monkeypatch.setattr(adapters_factory, "resolve_perpetual_evidence_source", lambda _s: source)
+    monkeypatch.setattr(
+        monitor_factory, "build_perpetual_market_monitor", lambda _s, *, source: built
+    )
+    assert watcher_activation._build_monitor(Settings()) is built
+    assert closed == []

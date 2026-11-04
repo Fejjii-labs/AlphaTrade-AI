@@ -857,9 +857,21 @@ def _close_monitor(monitor: object | None) -> None:
 
 
 def _build_monitor(settings: Settings) -> object:
+    from app.market_contracts.adapters.factory import resolve_perpetual_evidence_source
     from app.market_monitor.factory import build_perpetual_market_monitor
 
-    return build_perpetual_market_monitor(settings)
+    source = resolve_perpetual_evidence_source(settings)
+    try:
+        return build_perpetual_market_monitor(settings, source=source)
+    except BaseException:
+        # The source owns HTTP clients; a half-built monitor must not leak them.
+        close = getattr(source, "close", None)
+        try:
+            if callable(close):
+                close()
+        except Exception:
+            logger.warning("watcher_activation_monitor_close_failed", exc_info=True)
+        raise
 
 
 @dataclass(frozen=True, slots=True)
