@@ -217,6 +217,35 @@ class Venue:
         return httpx.Response(200, json={"code": "0", "data": data})
 
 
+def seed_band_ledger_headroom(session, account_id) -> None:
+    """Ledger headroom for a 1-5% stop-loss band at the fixture's 10x leverage.
+
+    The default 10k total cap would refuse the band-sized plan.
+    """
+
+    session.add(
+        AccountRiskAccountingState(
+            organization_id=ORG,
+            account_id=account_id,
+            reserved_notional=Decimal("0"),
+            reserved_daily_loss=Decimal("0"),
+            reserved_trade_slots=0,
+            actual_notional=Decimal("0"),
+            actual_daily_loss=Decimal("0"),
+            actual_trade_count=0,
+            symbol_reserved={},
+            symbol_actual={},
+            max_notional=Decimal("200000"),
+            max_daily_loss=Decimal("5000"),
+            max_trade_slots=20,
+            max_symbol_notional=Decimal("200000"),
+            daily_locked=False,
+            exposure_unit="USDT",
+            version=1,
+        )
+    )
+
+
 def demo_settings(account_id: str, **updates: object) -> Settings:
     values = dict(  # noqa: C408
         _env_file=None,
@@ -297,29 +326,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
         account = session.scalar(select(ExecutionAccount))
         assert account is not None
         settings = demo_settings(str(account.id))
-        # Ledger headroom for a 1-5% stop-loss band at the account's existing
-        # 10x leverage (the default 10k total cap would refuse the sized plan).
-        session.add(
-            AccountRiskAccountingState(
-                organization_id=ORG,
-                account_id=account.id,
-                reserved_notional=Decimal("0"),
-                reserved_daily_loss=Decimal("0"),
-                reserved_trade_slots=0,
-                actual_notional=Decimal("0"),
-                actual_daily_loss=Decimal("0"),
-                actual_trade_count=0,
-                symbol_reserved={},
-                symbol_actual={},
-                max_notional=Decimal("200000"),
-                max_daily_loss=Decimal("5000"),
-                max_trade_slots=20,
-                max_symbol_notional=Decimal("200000"),
-                daily_locked=False,
-                exposure_unit="USDT",
-                version=1,
-            )
-        )
+        seed_band_ledger_headroom(session, account.id)
         session.commit()
     source = _live_source()
     from tests.support.phase6_evaluator import build_pattern_15m_bars, build_slice_trades
