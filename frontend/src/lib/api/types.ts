@@ -1195,6 +1195,19 @@ export interface AutonomousTradingSettingsView {
   worker_heartbeat_age_seconds?: number | null;
   worker_flags_stale?: boolean;
   autonomy_mode?: string;
+  /** BloFin demo only: the app sets this on the demo venue before an entry. */
+  demo_leverage?: number;
+  demo_margin_mode?: DemoMarginMode;
+  demo_leverage_overrides?: Record<string, DemoLeverageOverride>;
+  demo_leverage_using_default?: boolean;
+  max_demo_leverage_ceiling?: number;
+}
+
+export type DemoMarginMode = "isolated" | "cross";
+
+export interface DemoLeverageOverride {
+  leverage?: number | null;
+  margin_mode?: DemoMarginMode | null;
 }
 
 export type BotActionOutcome = "entered" | "blocked" | "rejected";
