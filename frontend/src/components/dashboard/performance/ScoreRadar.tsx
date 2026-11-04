@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import type { TooltipProps } from "recharts";
 
-import type { JournalDashboardScoreComponent } from "@/lib/api/types";
+import type { JournalDashboardScoreComponent, SampleConfidence } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
 
 type RadarDatum = { axis: string; score: number | null; raw: string };
@@ -41,10 +41,13 @@ function RadarTooltip({ active, payload }: TooltipProps<number, string>) {
 export function ScoreRadar({
   overall,
   components,
+  confidence = null,
 }: {
   overall: number | null;
   components: JournalDashboardScoreComponent[];
+  confidence?: SampleConfidence | null;
 }) {
+  const smallSample = confidence === "insufficient" && components.some((c) => c.score !== null);
   const rows: RadarDatum[] = components.map((component) => ({
     axis: component.label,
     score: component.score,
@@ -53,7 +56,7 @@ export function ScoreRadar({
   // Unscored axes are left off the polygon (never drawn as 0) and listed as n/a.
   const scored = rows.filter((row): row is ScoredDatum => row.score !== null);
   const unscored = rows.filter((row) => row.score === null);
-  const marker = overall === null ? null : Math.max(0, Math.min(100, overall));
+  const marker = overall === null || smallSample ? null : Math.max(0, Math.min(100, overall));
   return (
     <section
       className="flex flex-col rounded-card border border-border-subtle bg-surface-1 p-4"
@@ -112,8 +115,13 @@ export function ScoreRadar({
         <div>
           <p className="text-[11px] text-text-muted">Overall score</p>
           <p className="font-data text-2xl font-semibold text-text-primary" data-testid="score-overall">
-            {overall === null ? UNAVAILABLE : overall.toFixed(1)}
+            {overall === null || smallSample ? UNAVAILABLE : overall.toFixed(1)}
           </p>
+          {smallSample ? (
+            <p className="text-[11px] text-warning" data-testid="score-small-sample">
+              Small sample · needs 5+ closed trades
+            </p>
+          ) : null}
         </div>
         <div className="flex-1 pb-2">
           <div

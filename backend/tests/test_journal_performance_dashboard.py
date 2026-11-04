@@ -169,8 +169,19 @@ def test_scores_normalize_against_targets() -> None:
     # Drawdown 150 / gross profit 300 = 0.5 → at tolerance → 0.
     assert by_key["max_drawdown"].score == 0.0
     assert by_key["consistency"].score == 20.0
-    overall = _build(rows).score.overall
+    # Four trades is an insufficient sample: overall is withheld, components stay.
+    assert _build(rows).score.overall is None
+    fifth = _row("0", datetime(2026, 7, 4, 9, tzinfo=UTC), result=TradeResult.BREAKEVEN)
+    overall = _build([*rows, fifth]).score.overall
     assert overall == pytest.approx((83.33 + 60 + 60 + 22.22 + 0 + 20) / 6, abs=0.02)
+
+
+def test_single_winning_trade_withholds_overall_score() -> None:
+    result = _build([_row("50", datetime(2026, 7, 1, tzinfo=UTC))])
+    assert result.confidence == SampleConfidence.INSUFFICIENT
+    assert result.score.overall is None
+    assert {c.key: c.score for c in result.score.components}["win_rate"] == 100.0
+    assert "Overall score withheld until at least 5 closed trades." in result.warnings
 
 
 def test_no_losses_keeps_profit_factor_null_but_caps_score() -> None:

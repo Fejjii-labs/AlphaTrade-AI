@@ -64,7 +64,7 @@ function response(
       ],
       missing_components: [],
     },
-    confidence: "insufficient",
+    confidence: "low",
     truncated: false,
     max_rows: 5000,
     warnings: [],

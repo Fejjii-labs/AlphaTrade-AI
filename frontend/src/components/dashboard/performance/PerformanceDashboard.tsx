@@ -185,6 +185,7 @@ export function PerformanceDashboard({
               <ScoreRadar
                 overall={rangeData?.score.overall ?? null}
                 components={rangeData?.score.components ?? []}
+                confidence={rangeData?.confidence ?? null}
               />
               <CumulativePnlChart points={rangeData?.cumulative ?? []} />
             </div>

@@ -66,4 +66,20 @@ describe("ScoreRadar", () => {
     expect(plotted.data.find((d) => d.axis === "Max drawdown")?.score).toBe(0);
     expect(screen.queryByTestId("score-radar-unscored")).not.toBeInTheDocument();
   });
+
+  it("withholds the overall score on an insufficient sample", () => {
+    render(
+      <ScoreRadar
+        overall={100}
+        confidence="insufficient"
+        components={[
+          component("win_rate", "Win %", 100),
+          component("profit_factor", "Profit factor", 100),
+          component("win_loss_ratio", "Avg win/loss", 100),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
+    expect(screen.getByTestId("score-small-sample")).toHaveTextContent("Small sample");
+  });
 });

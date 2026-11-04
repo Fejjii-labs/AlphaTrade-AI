@@ -19044,7 +19044,7 @@
       },
       "JournalDashboardScore": {
         "additionalProperties": false,
-        "description": "Equal-weight mean of the computable components; None when none are.",
+        "description": "Equal-weight mean of the computable components.\n\n``overall`` is None when no component is computable or when sample\nconfidence is insufficient (< 5 closed trades); components stay populated.",
         "properties": {
           "components": {
             "items": {

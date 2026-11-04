@@ -92,7 +92,11 @@ class JournalDashboardScoreComponent(StrictModel):
 
 
 class JournalDashboardScore(StrictModel):
-    """Equal-weight mean of the computable components; None when none are."""
+    """Equal-weight mean of the computable components.
+
+    ``overall`` is None when no component is computable or when sample
+    confidence is insufficient (< 5 closed trades); components stay populated.
+    """
 
     overall: float | None = Field(default=None, ge=0, le=100)
     components: list[JournalDashboardScoreComponent]

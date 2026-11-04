@@ -19,7 +19,9 @@ Rules (documented so every number can be re-derived by hand):
 - Consistency = 1 - (largest winning day / sum of winning days), defined only
   with at least two winning days.
 - Radar scores normalize each metric to 0-100 against a configured target;
-  the overall score is the equal-weight mean of computable components.
+  the overall score is the equal-weight mean of computable components. It is
+  withheld (None) when sample confidence is insufficient (< 5 closed trades):
+  capped components would otherwise score a single winning trade at 100.
 """
 
 from __future__ import annotations
@@ -501,6 +503,10 @@ def build_dashboard(
             f"{summary.trade_count - summary.pnl_sample_count} closed trade(s) have no "
             "recorded net PnL and are excluded from PnL figures."
         )
+    dashboard_score = score(summary, risk, targets)
+    if rows and confidence == SampleConfidence.INSUFFICIENT:
+        dashboard_score = dashboard_score.model_copy(update={"overall": None})
+        warnings.append("Overall score withheld until at least 5 closed trades.")
     if truncated:
         warnings.append(
             f"Capped at {max_rows} closed trades; figures cover only the oldest trades "
@@ -512,7 +518,7 @@ def build_dashboard(
         days=days,
         cumulative=cumulative_curve(days),
         risk=risk,
-        score=score(summary, risk, targets),
+        score=dashboard_score,
         confidence=confidence,
         truncated=truncated,
         max_rows=max_rows,
