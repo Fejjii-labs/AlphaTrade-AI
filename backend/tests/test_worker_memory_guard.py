@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -132,3 +133,119 @@ def test_untripped_or_absent_watchdog_does_not_exit() -> None:
     )
     assert supervisor._memory_watchdog_tripped_now() is False
     exit_if_memory_watchdog_tripped(supervisor)
+
+
+# --- Startup grace and restart backoff (Griller PR #426 blocker 2) ----------
+
+MB = 1024 * 1024
+
+
+def _graced(
+    rss: list[int], clock: list[float], wall: list[float], state: Path | None
+) -> MemoryWatchdog:
+    return MemoryWatchdog(
+        limit_bytes=440 * MB,
+        check_seconds=30.0,
+        startup_grace_seconds=300.0,
+        backoff_max_seconds=3600.0,
+        state_path=state,
+        read_rss=lambda: rss[0],
+        monotonic=lambda: clock[0],
+        wall_clock=lambda: wall[0],
+    )
+
+
+def test_worker_starting_above_the_limit_does_not_exit_immediately(tmp_path: Path) -> None:
+    rss, clock, wall = [500 * MB], [1000.0], [1_800_000_000.0]
+    watchdog = _graced(rss, clock, wall, tmp_path / "wd.json")
+    assert watchdog.grace_seconds == 300.0
+    assert watchdog.seconds_until_check() == 300.0
+    for elapsed in (0.0, 30.0, 299.0):
+        clock[0] = 1000.0 + elapsed
+        assert watchdog.check() is False
+    assert watchdog.tripped is False
+    clock[0] = 1300.0
+    assert watchdog.check() is True
+
+
+def test_supervisor_does_not_stop_during_the_startup_grace() -> None:
+    supervisor = _supervisor()
+    supervisor.attach_memory_watchdog(
+        MemoryWatchdog(
+            limit_bytes=1000, check_seconds=0.05, startup_grace_seconds=60.0, read_rss=lambda: 2000
+        )
+    )
+    threading.Timer(0.6, lambda: setattr(supervisor, "_signaled", True)).start()
+    supervisor.serve_until_signal(ready=lambda: None)
+    assert supervisor.memory_watchdog_tripped is False
+    exit_if_memory_watchdog_tripped(supervisor)
+
+
+def _trip(rss_mb: int, clock: list[float], wall: list[float], state: Path) -> MemoryWatchdog:
+    rss = [rss_mb * MB]
+    watchdog = _graced(rss, clock, wall, state)
+    clock[0] += watchdog.grace_seconds
+    wall[0] += watchdog.grace_seconds
+    assert watchdog.check() is True
+    return watchdog
+
+
+def test_early_trips_back_off_exponentially_across_restarts_up_to_the_cap(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "wd.json"
+    clock, wall = [0.0], [1_800_000_000.0]
+    graces = []
+    for _ in range(6):
+        graces.append(_trip(500, clock, wall, state).grace_seconds)
+        wall[0] += 5.0  # restart delay
+    assert graces == [300.0, 600.0, 1200.0, 2400.0, 3600.0, 3600.0]
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert set(saved) == {"consecutive_trips", "tripped_at"}
+
+
+def test_late_leak_trip_and_stale_state_reset_the_backoff(tmp_path: Path) -> None:
+    state = tmp_path / "wd.json"
+    clock, wall = [0.0], [1_800_000_000.0]
+    _trip(500, clock, wall, state)
+    assert _graced([0], clock, wall, state).grace_seconds == 600.0
+    # A trip hours after start is an ordinary leak: the streak restarts at one.
+    rss = [100 * MB]
+    watchdog = _graced(rss, clock, wall, state)
+    clock[0] += 600.0
+    assert watchdog.check() is False
+    rss[0] = 500 * MB
+    clock[0] += 5 * 3600.0
+    wall[0] += 5 * 3600.0
+    assert watchdog.check() is True
+    assert json.loads(state.read_text(encoding="utf-8"))["consecutive_trips"] == 1
+    assert _graced([0], clock, wall, state).grace_seconds == 600.0
+    # State older than the backoff cap is ignored.
+    wall[0] += 3601.0
+    assert _graced([0], clock, wall, state).grace_seconds == 300.0
+
+
+def test_missing_corrupt_or_unwritable_state_falls_back_to_the_plain_grace(
+    tmp_path: Path,
+) -> None:
+    clock, wall = [0.0], [1_800_000_000.0]
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert _graced([0], clock, wall, bad).grace_seconds == 300.0
+    assert _graced([0], clock, wall, tmp_path / "missing.json").grace_seconds == 300.0
+    assert _graced([0], clock, wall, None).grace_seconds == 300.0
+    unwritable = tmp_path / "no-such-dir" / "wd.json"
+    assert _trip(500, clock, wall, unwritable).tripped is True
+
+
+def test_watchdog_grace_settings_reach_the_supervisor(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None)
+    assert settings.paper_worker_memory_watchdog_startup_grace_seconds == 300.0
+    assert settings.paper_worker_memory_watchdog_backoff_max_seconds == 3600.0
+    custom = Settings(
+        _env_file=None,
+        paper_worker_memory_watchdog_startup_grace_seconds=120.0,
+        paper_worker_memory_watchdog_state_path=str(tmp_path / "wd.json"),
+    )
+    watchdog = build_paper_worker_supervisor(custom)._memory_watchdog
+    assert watchdog is not None and watchdog.grace_seconds == 120.0

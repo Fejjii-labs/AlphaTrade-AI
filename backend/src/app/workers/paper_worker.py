@@ -833,6 +833,9 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
             MemoryWatchdog(
                 limit_bytes=settings.paper_worker_memory_watchdog_limit_mb * 1024 * 1024,
                 check_seconds=settings.paper_worker_memory_watchdog_check_seconds,
+                startup_grace_seconds=settings.paper_worker_memory_watchdog_startup_grace_seconds,
+                backoff_max_seconds=settings.paper_worker_memory_watchdog_backoff_max_seconds,
+                state_path=settings.paper_worker_memory_watchdog_state_path or None,
             )
         )
     if not settings_are_disarmed_paper_worker(settings):

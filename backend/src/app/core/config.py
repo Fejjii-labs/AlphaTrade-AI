@@ -326,6 +326,18 @@ class Settings(BaseSettings):
     paper_worker_memory_watchdog_enabled: bool = True
     paper_worker_memory_watchdog_limit_mb: int = Field(default=440, ge=64, le=65536)
     paper_worker_memory_watchdog_check_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
+    # No check this long after start. Each early trip doubles it for the next
+    # start, up to the max, so a baseline above the limit cannot exit-loop.
+    paper_worker_memory_watchdog_startup_grace_seconds: float = Field(
+        default=300.0, ge=0.0, le=3600.0
+    )
+    paper_worker_memory_watchdog_backoff_max_seconds: float = Field(
+        default=3600.0, ge=0.0, le=86400.0
+    )
+    # Trip count and time only; nothing secret. Empty disables the backoff state.
+    paper_worker_memory_watchdog_state_path: str = (
+        "/tmp/alphatrade-paper-worker-memory-watchdog.json"
+    )
     # Seconds between periodic paper_worker_health log lines while serving.
     paper_worker_health_log_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
     watcher_paper_max_scopes_per_cycle: int = Field(default=20, ge=1, le=200)
