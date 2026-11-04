@@ -15,11 +15,17 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import ValidationAppError
-from app.repositories.journal_trades import JournalTradeStatsRow
+from app.db.models import JournalTrade, TradePlanRevision
+from app.repositories.journal_trades import (
+    JournalTradeStatsRow,
+    SourceVenueRule,
+    VenueRequirement,
+)
 from app.schemas.common import (
     JournalEntryMethod,
     JournalTradeSource,
@@ -28,16 +34,28 @@ from app.schemas.common import (
     TradeDirection,
     TradeResult,
 )
-from app.schemas.journal_performance_dashboard import JournalDashboardFilters
-from app.schemas.journal_statistics import ExecutionActor, SampleConfidence
+from app.schemas.journal_performance_dashboard import (
+    JournalDashboardFilters,
+    JournalDashboardScope,
+)
+from app.schemas.journal_statistics import SampleConfidence
 from app.services.journal_performance_dashboard_service import (
+    SCOPE_LABELS,
+    SCOPE_RULES,
     JournalPerformanceDashboardService,
     ScoreTargets,
     _local_date,
     build_dashboard,
     local_day_bounds,
 )
-from tests.test_at031_journal_statistics import _BASE, _auth, _build_env, _closed_trade
+from tests.test_at031_journal_statistics import (
+    _BASE,
+    ORG_A,
+    USER_A,
+    _auth,
+    _build_env,
+    _closed_trade,
+)
 
 TARGETS = ScoreTargets(
     win_rate=0.6,
@@ -47,6 +65,7 @@ TARGETS = ScoreTargets(
     drawdown_tolerance=0.5,
 )
 UTC_TZ = ZoneInfo("UTC")
+DEMO = JournalTradeSource.MANUAL_DEMO_TEST
 
 
 def _row(
@@ -89,7 +108,9 @@ def _row(
 def _build(rows: list[JournalTradeStatsRow], tz: str = "UTC", truncated: bool = False) -> Any:
     return build_dashboard(
         rows,
-        filters=JournalDashboardFilters(timezone=tz),
+        filters=JournalDashboardFilters(
+            scope=JournalDashboardScope.DEMO, scope_label="Demo trades (BloFin demo)", timezone=tz
+        ),
         tz=ZoneInfo(tz),
         targets=TARGETS,
         truncated=truncated,
@@ -258,7 +279,7 @@ class _FakeTrades:
         self.rows = rows
         self.calls: list[dict[str, Any]] = []
 
-    def fetch_stats_rows(self, **kwargs: Any) -> tuple[list[JournalTradeStatsRow], bool]:
+    def fetch_dashboard_rows(self, **kwargs: Any) -> tuple[list[JournalTradeStatsRow], bool]:
         self.calls.append(kwargs)
         return self.rows, False
 
@@ -268,7 +289,52 @@ def _service(trades: _FakeTrades, **overrides: object) -> JournalPerformanceDash
     return JournalPerformanceDashboardService(None, settings=settings, trades=trades)
 
 
-def test_service_passes_utc_bounds_and_actor_sources() -> None:
+def test_scope_rules_partition_every_source_and_venue() -> None:
+    venues = (VenueRequirement.BLOFIN_DEMO, VenueRequirement.NOT_BLOFIN_DEMO)
+
+    def covers(rule: SourceVenueRule, venue: VenueRequirement) -> bool:
+        return rule.venue in (VenueRequirement.ANY, venue)
+
+    for source in JournalTradeSource:
+        for venue in venues:
+            owners = [
+                scope
+                for scope, rules in SCOPE_RULES.items()
+                for rule in rules
+                if source in rule.sources and covers(rule, venue)
+            ]
+            assert len(owners) == 1, (source, venue, owners)
+    assert set(SCOPE_RULES) == set(JournalDashboardScope) == set(SCOPE_LABELS)
+
+
+def test_scope_rules_match_the_brief() -> None:
+    def owner(source: JournalTradeSource, venue: VenueRequirement) -> JournalDashboardScope:
+        return next(
+            scope
+            for scope, rules in SCOPE_RULES.items()
+            for rule in rules
+            if source in rule.sources and rule.venue in (VenueRequirement.ANY, venue)
+        )
+
+    on, off = VenueRequirement.BLOFIN_DEMO, VenueRequirement.NOT_BLOFIN_DEMO
+    demo, paper, real = (
+        JournalDashboardScope.DEMO,
+        JournalDashboardScope.PAPER,
+        JournalDashboardScope.REAL,
+    )
+    assert owner(JournalTradeSource.MANUAL_DEMO_TEST, off) == demo
+    assert owner(JournalTradeSource.BLOFIN_DEMO_MANUAL, off) == demo
+    assert owner(JournalTradeSource.PAPER_EXECUTION, on) == demo
+    assert owner(JournalTradeSource.MANUAL, on) == demo
+    assert owner(JournalTradeSource.PAPER_EXECUTION, off) == paper
+    assert owner(JournalTradeSource.PAPER_VALIDATION, on) == paper
+    assert owner(JournalTradeSource.MANUAL, off) == real
+    for hidden in ("backtest", "imported", "system"):
+        source = JournalTradeSource(hidden)
+        assert owner(source, on) == owner(source, off) == JournalDashboardScope(hidden)
+
+
+def test_service_defaults_to_demo_scope_and_utc_bounds() -> None:
     trades = _FakeTrades([])
     service = _service(trades, journal_dashboard_default_timezone="Europe/Paris")
     result = service.compute(
@@ -276,60 +342,47 @@ def test_service_passes_utc_bounds_and_actor_sources() -> None:
         user_id=uuid.uuid4(),
         date_from=date(2026, 7, 1),
         date_to=date(2026, 7, 1),
-        execution_actor=ExecutionActor.SYSTEM,
     )
     call = trades.calls[0]
     assert call["date_from"] == datetime(2026, 6, 30, 22, tzinfo=UTC)
-    assert call["sources"] == {
-        JournalTradeSource.PAPER_VALIDATION,
-        JournalTradeSource.SYSTEM,
-    }
+    assert call["rules"] == SCOPE_RULES[JournalDashboardScope.DEMO]
+    assert result.filters.scope == JournalDashboardScope.DEMO
+    assert result.filters.scope_label == "Demo trades (BloFin demo)"
     assert result.filters.timezone == "Europe/Paris"
-    assert result.filters.excluded_sources == [JournalTradeSource.BACKTEST]
-
-
-def test_service_default_excludes_backtest_but_keeps_live_demo_and_autonomous() -> None:
-    trades = _FakeTrades([])
-    result = _service(trades).compute(organization_id=uuid.uuid4(), user_id=uuid.uuid4())
-    sources = trades.calls[0]["sources"]
-    assert JournalTradeSource.BACKTEST not in sources
-    assert sources == set(JournalTradeSource) - {JournalTradeSource.BACKTEST}
-    assert result.filters.excluded_sources == [JournalTradeSource.BACKTEST]
-
-
-def test_service_human_actor_sources() -> None:
-    trades = _FakeTrades([])
-    _service(trades).compute(
-        organization_id=uuid.uuid4(), user_id=uuid.uuid4(), execution_actor=ExecutionActor.HUMAN
-    )
-    assert trades.calls[0]["sources"] == {
-        JournalTradeSource.MANUAL,
-        JournalTradeSource.IMPORTED,
-        JournalTradeSource.PAPER_EXECUTION,
+    assert set(result.filters.included_sources) == {
         JournalTradeSource.MANUAL_DEMO_TEST,
         JournalTradeSource.BLOFIN_DEMO_MANUAL,
+        JournalTradeSource.PAPER_EXECUTION,
+        JournalTradeSource.MANUAL,
     }
 
 
-def test_service_explicit_backtest_source_is_opt_in() -> None:
+def test_service_source_override_narrows_inside_the_scope() -> None:
     trades = _FakeTrades([])
-    result = _service(trades).compute(
-        organization_id=uuid.uuid4(), user_id=uuid.uuid4(), source=JournalTradeSource.BACKTEST
-    )
-    assert trades.calls[0]["sources"] == {JournalTradeSource.BACKTEST}
-    assert result.filters.excluded_sources == []
-
-
-def test_service_conflicting_source_and_actor_skips_query() -> None:
-    trades = _FakeTrades([_row("5", datetime(2026, 7, 2, tzinfo=UTC))])
     result = _service(trades).compute(
         organization_id=uuid.uuid4(),
         user_id=uuid.uuid4(),
-        source=JournalTradeSource.MANUAL,
-        execution_actor=ExecutionActor.SYSTEM,
+        scope=JournalDashboardScope.PAPER,
+        source=JournalTradeSource.PAPER_EXECUTION,
     )
+    assert trades.calls[0]["rules"] == (
+        SourceVenueRule(
+            frozenset({JournalTradeSource.PAPER_EXECUTION}), VenueRequirement.NOT_BLOFIN_DEMO
+        ),
+    )
+    assert result.filters.included_sources == [JournalTradeSource.PAPER_EXECUTION]
+
+
+def test_service_rejects_source_outside_the_scope() -> None:
+    trades = _FakeTrades([])
+    with pytest.raises(ValidationAppError, match="not part of"):
+        _service(trades).compute(
+            organization_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            scope=JournalDashboardScope.DEMO,
+            source=JournalTradeSource.BACKTEST,
+        )
     assert trades.calls == []
-    assert result.summary.trade_count == 0
 
 
 def test_service_rejects_bad_timezone_and_range() -> None:
@@ -368,10 +421,16 @@ def test_calendar_endpoint_over_real_rows(
 ) -> None:
     test_client, factory = client
     headers = _auth(test_client, "stats-a@test.example")
-    _closed_trade(factory, net_pnl="40", exit_time=datetime(2026, 7, 10, 12, tzinfo=UTC))
-    _closed_trade(factory, net_pnl="-10", exit_time=datetime(2026, 7, 11, 12, tzinfo=UTC))
-    _closed_trade(factory, net_pnl="999", exit_time=datetime(2026, 8, 1, 12, tzinfo=UTC))
-    _closed_trade(factory, net_pnl="500", status=JournalTradeStatus.OPEN)
+    _closed_trade(
+        factory, source=DEMO, net_pnl="40", exit_time=datetime(2026, 7, 10, 12, tzinfo=UTC)
+    )
+    _closed_trade(
+        factory, source=DEMO, net_pnl="-10", exit_time=datetime(2026, 7, 11, 12, tzinfo=UTC)
+    )
+    _closed_trade(
+        factory, source=DEMO, net_pnl="999", exit_time=datetime(2026, 8, 1, 12, tzinfo=UTC)
+    )
+    _closed_trade(factory, source=DEMO, net_pnl="500", status=JournalTradeStatus.OPEN)
 
     response = test_client.get(
         "/journal/statistics/calendar",
@@ -388,29 +447,119 @@ def test_calendar_endpoint_over_real_rows(
     assert body["truncated"] is False
 
 
-def test_calendar_endpoint_excludes_backtest_and_filters_by_actor(
+def _set_columns(factory: sessionmaker[Session], trade_id: uuid.UUID, **values: object) -> None:
+    with factory() as session:
+        row = session.get(JournalTrade, trade_id)
+        assert row is not None
+        for key, value in values.items():
+            setattr(row, key, value)
+        session.commit()
+
+
+def _plan_revision(factory: sessionmaker[Session], *, venue: str) -> uuid.UUID:
+    """Minimal immutable plan revision carrying only the venue (FKs off: test-only)."""
+    revision_id = uuid.uuid4()
+    manual = venue == "BLOFIN_DEMO"
+    with factory() as session:
+        session.execute(text("PRAGMA foreign_keys=OFF"))
+        session.add(
+            TradePlanRevision(
+                id=revision_id,
+                plan_id=uuid.uuid4(),
+                organization_id=ORG_A,
+                user_id=USER_A,
+                account_id=uuid.uuid4(),
+                schema_version="ManualDemoTradePlanV1" if manual else "CanonicalTradePlanContentV1",
+                operation="SUBMIT_ENTRY",
+                plan_authority="manual_demo_test" if manual else "paper_validation",
+                strategy_version_id=None if manual else uuid.uuid4(),
+                setup_definition_id=None if manual else uuid.uuid4(),
+                candidate_id=None if manual else uuid.uuid4(),
+                expected_account_mode="NET",
+                permission_attestation_id=uuid.uuid4(),
+                permission_attestation_version="v1",
+                execution_venue=venue,
+                execution_instrument="BTC-USDT",
+                execution_policy_version="manual-blofin-demo/v1" if manual else "paper/v1",
+                valid_from=datetime(2026, 7, 1, tzinfo=UTC),
+                valid_until=datetime(2026, 8, 1, tzinfo=UTC),
+                semantic_payload={},
+                correlation_id=uuid.uuid4(),
+                content_hash=revision_id.hex * 2,
+            )
+        )
+        session.commit()
+        session.execute(text("PRAGMA foreign_keys=ON"))
+    return revision_id
+
+
+def test_calendar_endpoint_scopes_never_mix(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, factory = client
     headers = _auth(test_client, "stats-a@test.example")
-    _closed_trade(factory, net_pnl="40", source=JournalTradeSource.MANUAL)
-    _closed_trade(factory, net_pnl="15", source=JournalTradeSource.BLOFIN_DEMO_MANUAL)
-    _closed_trade(factory, net_pnl="7", source=JournalTradeSource.PAPER_VALIDATION)
-    _closed_trade(factory, net_pnl="3", source=JournalTradeSource.SYSTEM)
+    demo_plan = _plan_revision(factory, venue="BLOFIN_DEMO")
+    paper_plan = _plan_revision(factory, venue="PAPER_INTERNAL")
+    # Demo: 1 + 2 + 4 + 8 + 16 = 31
+    _closed_trade(factory, net_pnl="1", source=JournalTradeSource.MANUAL_DEMO_TEST)
+    _closed_trade(factory, net_pnl="2", source=JournalTradeSource.BLOFIN_DEMO_MANUAL)
+    auto_demo = _closed_trade(factory, net_pnl="4", source=JournalTradeSource.PAPER_EXECUTION)
+    _set_columns(factory, auto_demo, trade_plan_revision_id=demo_plan)
+    reconciled = _closed_trade(factory, net_pnl="8", source=JournalTradeSource.MANUAL)
+    _set_columns(factory, reconciled, external_ref="blofin-demo-history:42")
+    logged_demo = _closed_trade(factory, net_pnl="16", source=JournalTradeSource.MANUAL)
+    _set_columns(factory, logged_demo, exchange="blofin_demo")
+    # Paper: 100 + 200 + 400 = 700
+    _closed_trade(factory, net_pnl="100", source=JournalTradeSource.PAPER_VALIDATION)
+    _closed_trade(factory, net_pnl="200", source=JournalTradeSource.PAPER_EXECUTION)
+    internal = _closed_trade(factory, net_pnl="400", source=JournalTradeSource.PAPER_EXECUTION)
+    _set_columns(factory, internal, trade_plan_revision_id=paper_plan)
+    # Real: 1000 + 2000
+    _closed_trade(factory, net_pnl="1000", source=JournalTradeSource.MANUAL)
+    real_elsewhere = _closed_trade(factory, net_pnl="2000", source=JournalTradeSource.MANUAL)
+    _set_columns(factory, real_elsewhere, exchange="BLOFIN")
+    # Opt-in only.
     _closed_trade(factory, net_pnl="10000", source=JournalTradeSource.BACKTEST)
+    _closed_trade(factory, net_pnl="20000", source=JournalTradeSource.IMPORTED)
+    _closed_trade(factory, net_pnl="40000", source=JournalTradeSource.SYSTEM)
 
-    def net(params: dict[str, str]) -> tuple[int, Decimal]:
+    def get(params: dict[str, str]) -> dict[str, Any]:
         response = test_client.get("/journal/statistics/calendar", headers=headers, params=params)
         assert response.status_code == 200, response.text
-        body = response.json()
+        body: dict[str, Any] = response.json()
+        return body
+
+    def net(params: dict[str, str]) -> tuple[int, Decimal]:
+        body = get(params)
         return body["summary"]["trade_count"], Decimal(body["summary"]["net_pnl"])
 
-    assert net({}) == (4, Decimal("65"))
-    assert net({"execution_actor": "human"}) == (2, Decimal("55"))
-    assert net({"execution_actor": "system"}) == (2, Decimal("10"))
-    assert net({"source": "backtest"}) == (1, Decimal("10000"))
-    body = test_client.get("/journal/statistics/calendar", headers=headers).json()
-    assert body["filters"]["excluded_sources"] == ["backtest"]
+    default = get({})
+    assert default["filters"]["scope"] == "demo"
+    assert default["filters"]["scope_label"] == "Demo trades (BloFin demo)"
+    assert (default["summary"]["trade_count"], Decimal(default["summary"]["net_pnl"])) == (
+        5,
+        Decimal("31"),
+    )
+    assert net({"scope": "demo"}) == (5, Decimal("31"))
+    assert net({"scope": "paper"}) == (3, Decimal("700"))
+    assert net({"scope": "real"}) == (2, Decimal("3000"))
+    assert net({"scope": "backtest"}) == (1, Decimal("10000"))
+    assert net({"scope": "imported"}) == (1, Decimal("20000"))
+    assert net({"scope": "system"}) == (1, Decimal("40000"))
+    assert net({"scope": "demo", "source": "paper_execution"}) == (1, Decimal("4"))
+    assert net({"scope": "paper", "source": "paper_execution"}) == (2, Decimal("600"))
+    bad = test_client.get(
+        "/journal/statistics/calendar",
+        headers=headers,
+        params={"scope": "real", "source": "backtest"},
+    )
+    assert bad.status_code in (400, 422)
+    assert (
+        test_client.get(
+            "/journal/statistics/calendar", headers=headers, params={"scope": "live"}
+        ).status_code
+        == 422
+    )
 
 
 def test_calendar_endpoint_dst_fall_back_trade_lands_in_its_local_day(
@@ -419,7 +568,9 @@ def test_calendar_endpoint_dst_fall_back_trade_lands_in_its_local_day(
     test_client, factory = client
     headers = _auth(test_client, "stats-a@test.example")
     # 23:30 local (second, -04 occurrence) on 2026-04-04 in Santiago.
-    _closed_trade(factory, net_pnl="12", exit_time=datetime(2026, 4, 5, 3, 30, tzinfo=UTC))
+    _closed_trade(
+        factory, source=DEMO, net_pnl="12", exit_time=datetime(2026, 4, 5, 3, 30, tzinfo=UTC)
+    )
     params = {"date_from": "2026-04-01", "date_to": "2026-04-04", "tz": "America/Santiago"}
     body = test_client.get("/journal/statistics/calendar", headers=headers, params=params).json()
     assert body["summary"]["trade_count"] == 1
@@ -445,7 +596,7 @@ def test_calendar_endpoint_is_tenant_isolated(
     client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, factory = client
-    _closed_trade(factory, net_pnl="40")
+    _closed_trade(factory, source=DEMO, net_pnl="40")
     headers = _auth(test_client, "stats-b@test.example")
     body = test_client.get("/journal/statistics/calendar", headers=headers).json()
     assert body["summary"]["trade_count"] == 0

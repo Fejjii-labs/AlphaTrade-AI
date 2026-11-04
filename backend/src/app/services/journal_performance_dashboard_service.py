@@ -8,9 +8,12 @@ Rules (documented so every number can be re-derived by hand):
 
 - Win/loss/breakeven uses the recorded ``result`` with the AT-031 net-PnL sign
   fallback; win rate is wins / (wins + losses).
-- Hypothetical/simulated-history sources (``BACKTEST``) are excluded unless
-  explicitly requested via ``source``; live, paper, demo and autonomous
-  (system) trades are included.
+- Exactly one account scope per response (``SCOPE_RULES``, default ``demo``):
+  demo = BloFin demo (manual demo, mirrored BloFin demo manual, and canonical
+  executions / manual rows with BloFin-demo venue evidence); paper = paper
+  validation plus canonical paper executions without BloFin-demo evidence;
+  real = manually logged trades without BloFin-demo evidence. Backtest,
+  imported and system trades are read only when their scope is selected.
 - Trades are bucketed by the local calendar date of their effective time
   (exit, else entry, else creation) in the requested IANA timezone.
 - Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
@@ -28,40 +31,80 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Protocol
+from typing import Final, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import ValidationAppError
-from app.repositories.journal_trades import JournalTradeRepository, JournalTradeStatsRow
+from app.repositories.journal_trades import (
+    JournalTradeRepository,
+    JournalTradeStatsRow,
+    SourceVenueRule,
+    VenueRequirement,
+)
 from app.schemas.common import JournalTradeSource, TradeResult
 from app.schemas.journal_performance_dashboard import (
     JournalDashboardCurvePoint,
     JournalDashboardDay,
     JournalDashboardFilters,
     JournalDashboardRisk,
+    JournalDashboardScope,
     JournalDashboardScore,
     JournalDashboardScoreComponent,
     JournalDashboardSummary,
     JournalPerformanceDashboardResponse,
 )
-from app.schemas.journal_statistics import ExecutionActor, SampleConfidence
-from app.services.journal_statistics_service import (
-    _EXECUTION_ACTOR_BY_SOURCE,
-    _confidence,
-    _decide_result,
-)
+from app.schemas.journal_statistics import SampleConfidence
+from app.services.journal_statistics_service import _confidence, _decide_result
 
 _ZERO = Decimal("0")
 
-# Simulated-history sources: never mixed into the dashboard by default.
-HYPOTHETICAL_SOURCES: frozenset[JournalTradeSource] = frozenset({JournalTradeSource.BACKTEST})
+_S = JournalTradeSource
+_ANY = VenueRequirement.ANY
+_ON_DEMO = VenueRequirement.BLOFIN_DEMO
+_OFF_DEMO = VenueRequirement.NOT_BLOFIN_DEMO
+
+# The single source → scope mapping. Every (source, venue) pair lands in exactly
+# one scope (enforced by tests). Writers, for the record:
+# - MANUAL_DEMO_TEST: manual BloFin demo orders (plan venue fixed to BLOFIN_DEMO).
+# - BLOFIN_DEMO_MANUAL: BloFin demo manual mirror and journal backfill.
+# - PAPER_EXECUTION: canonical execution projector (venue PAPER_INTERNAL or
+#   BLOFIN_DEMO on the linked plan revision) and position-linked paper rows.
+# - PAPER_VALIDATION: paper-validation trades (internal simulation).
+# - MANUAL: hand-logged trades; the mirror may reconcile one with a BloFin demo
+#   close (external ref ``blofin-demo-…``), which makes it demo.
+# - BACKTEST / IMPORTED / SYSTEM: backtest journal, CSV/backfill import, system.
+SCOPE_RULES: Final[Mapping[JournalDashboardScope, tuple[SourceVenueRule, ...]]] = {
+    JournalDashboardScope.DEMO: (
+        SourceVenueRule(frozenset({_S.MANUAL_DEMO_TEST, _S.BLOFIN_DEMO_MANUAL}), _ANY),
+        SourceVenueRule(frozenset({_S.PAPER_EXECUTION, _S.MANUAL}), _ON_DEMO),
+    ),
+    JournalDashboardScope.PAPER: (
+        SourceVenueRule(frozenset({_S.PAPER_VALIDATION}), _ANY),
+        SourceVenueRule(frozenset({_S.PAPER_EXECUTION}), _OFF_DEMO),
+    ),
+    JournalDashboardScope.REAL: (SourceVenueRule(frozenset({_S.MANUAL}), _OFF_DEMO),),
+    JournalDashboardScope.BACKTEST: (SourceVenueRule(frozenset({_S.BACKTEST}), _ANY),),
+    JournalDashboardScope.IMPORTED: (SourceVenueRule(frozenset({_S.IMPORTED}), _ANY),),
+    JournalDashboardScope.SYSTEM: (SourceVenueRule(frozenset({_S.SYSTEM}), _ANY),),
+}
+
+SCOPE_LABELS: Final[Mapping[JournalDashboardScope, str]] = {
+    JournalDashboardScope.DEMO: "Demo trades (BloFin demo)",
+    JournalDashboardScope.PAPER: "Paper trades (paper execution and validation)",
+    JournalDashboardScope.REAL: "Real trades (manually logged)",
+    JournalDashboardScope.BACKTEST: "Backtest trades (simulated history)",
+    JournalDashboardScope.IMPORTED: "Imported trades",
+    JournalDashboardScope.SYSTEM: "System trades",
+}
+
+DEFAULT_SCOPE: Final = JournalDashboardScope.DEMO
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,12 +129,12 @@ class ScoreTargets:
 
 
 class _StatsRowSource(Protocol):
-    def fetch_stats_rows(
+    def fetch_dashboard_rows(
         self,
         *,
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
-        sources: Collection[JournalTradeSource] | None = None,
+        rules: Sequence[SourceVenueRule],
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         max_rows: int,
@@ -121,17 +164,22 @@ def local_day_bounds(
     return start, end
 
 
-def _sources_for(
-    source: JournalTradeSource | None, actor: ExecutionActor | None
-) -> frozenset[JournalTradeSource]:
-    """Explicit source allowlist; hypothetical sources only when asked for by name."""
-    if source is not None:
-        candidates = frozenset({source})
-    else:
-        candidates = frozenset(JournalTradeSource) - HYPOTHETICAL_SOURCES
-    if actor is None:
-        return candidates
-    return frozenset(s for s in candidates if _EXECUTION_ACTOR_BY_SOURCE.get(s) == actor)
+def scope_rules(
+    scope: JournalDashboardScope, source: JournalTradeSource | None
+) -> tuple[SourceVenueRule, ...]:
+    """The scope's rules, optionally narrowed to one source inside the scope."""
+    rules = SCOPE_RULES[scope]
+    if source is None:
+        return rules
+    narrowed = tuple(
+        SourceVenueRule(frozenset({source}), rule.venue) for rule in rules if source in rule.sources
+    )
+    if not narrowed:
+        raise ValidationAppError(
+            f"Source {source.value!r} is not part of the {scope.value!r} scope.",
+            details={"scope": scope.value, "source": source.value},
+        )
+    return narrowed
 
 
 class JournalPerformanceDashboardService:
@@ -161,35 +209,32 @@ class JournalPerformanceDashboardService:
         date_from: date | None = None,
         date_to: date | None = None,
         timezone: str | None = None,
+        scope: JournalDashboardScope = DEFAULT_SCOPE,
         source: JournalTradeSource | None = None,
-        execution_actor: ExecutionActor | None = None,
     ) -> JournalPerformanceDashboardResponse:
         if date_from is not None and date_to is not None and date_from > date_to:
             raise ValidationAppError("date_from must not be after date_to.")
         tz_name = timezone or self._default_tz
         tz = resolve_timezone(tz_name)
         start, end = local_day_bounds(date_from, date_to, tz)
-        sources = _sources_for(source, execution_actor)
+        rules = scope_rules(scope, source)
         filters = JournalDashboardFilters(
+            scope=scope,
+            scope_label=SCOPE_LABELS[scope],
             date_from=date_from,
             date_to=date_to,
             timezone=tz_name,
             source=source,
-            execution_actor=execution_actor,
-            excluded_sources=sorted(HYPOTHETICAL_SOURCES - sources),
+            included_sources=sorted({s for rule in rules for s in rule.sources}),
         )
-        if not sources:
-            rows: list[JournalTradeStatsRow] = []
-            truncated = False
-        else:
-            rows, truncated = self._trades.fetch_stats_rows(
-                organization_id=organization_id,
-                user_id=user_id,
-                sources=sources,
-                date_from=start,
-                date_to=end,
-                max_rows=self._max_rows,
-            )
+        rows, truncated = self._trades.fetch_dashboard_rows(
+            organization_id=organization_id,
+            user_id=user_id,
+            rules=rules,
+            date_from=start,
+            date_to=end,
+            max_rows=self._max_rows,
+        )
         return build_dashboard(
             rows,
             filters=filters,

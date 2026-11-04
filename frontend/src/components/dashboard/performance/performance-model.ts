@@ -1,6 +1,6 @@
 import type {
-  ExecutionActor,
   JournalDashboardDay,
+  JournalDashboardScope,
   JournalPerformanceDashboardResponse,
 } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
@@ -107,18 +107,35 @@ export function buildCalendarWeeks(
 
 export type RangePreset = "30d" | "90d" | "ytd" | "all";
 
-/** Who made the trading decision; backtests are excluded server-side in every mode. */
-export type ActorFilter = "all" | ExecutionActor;
+/** One account scope per view; the server never mixes scopes. Default: Demo. */
+export const DEFAULT_SCOPE: JournalDashboardScope = "demo";
 
-export const ACTOR_OPTIONS: Array<{ value: ActorFilter; label: string }> = [
-  { value: "all", label: "All live/demo" },
-  { value: "human", label: "Human" },
-  { value: "system", label: "System (agents)" },
+export const SCOPE_OPTIONS: Array<{
+  value: JournalDashboardScope;
+  label: string;
+  tone?: "paper" | "demo";
+}> = [
+  { value: "demo", label: "Demo", tone: "demo" },
+  { value: "paper", label: "Paper", tone: "paper" },
+  { value: "real", label: "Real" },
 ];
 
-export function actorParams(actor: ActorFilter): { execution_actor?: ExecutionActor } {
-  return actor === "all" ? {} : { execution_actor: actor };
-}
+/** Opt-in scopes, never part of the account views above. */
+export const EXTRA_SCOPE_OPTIONS: Array<{ value: JournalDashboardScope; label: string }> = [
+  { value: "backtest", label: "Backtest" },
+  { value: "imported", label: "Imported" },
+  { value: "system", label: "System" },
+];
+
+/** Fallback label while loading; the server echoes the authoritative one. */
+export const SCOPE_LABELS: Record<JournalDashboardScope, string> = {
+  demo: "Demo trades (BloFin demo)",
+  paper: "Paper trades (paper execution and validation)",
+  real: "Real trades (manually logged)",
+  backtest: "Backtest trades (simulated history)",
+  imported: "Imported trades",
+  system: "System trades",
+};
 
 export const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
   { value: "30d", label: "30D" },
@@ -215,10 +232,11 @@ export function buildSampleDashboard(ref: MonthRef): JournalPerformanceDashboard
   return {
     filters: {
       ...monthRange(ref),
+      scope: DEFAULT_SCOPE,
+      scope_label: SCOPE_LABELS[DEFAULT_SCOPE],
       timezone: "UTC",
       source: null,
-      execution_actor: null,
-      excluded_sources: ["backtest"],
+      included_sources: [],
     },
     summary: {
       trade_count: tradeCount,

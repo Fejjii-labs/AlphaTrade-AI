@@ -4503,12 +4503,16 @@ export type JournalStatsParams = {
 // Monetary values are decimal strings; null means "not computable", never 0.
 // --------------------------------------------------------------------------
 
+/** Account scope; exactly one per response, never mixed. Server default: demo. */
+export type JournalDashboardScope = "demo" | "paper" | "real" | "backtest" | "imported" | "system";
+
 export type JournalPerformanceDashboardParams = {
   date_from?: string;
   date_to?: string;
   tz?: string;
+  scope?: JournalDashboardScope;
+  /** Optional single-source narrowing; must belong to the scope. */
   source?: JournalTradeSource;
-  execution_actor?: ExecutionActor;
 };
 
 export interface JournalDashboardSummary {
@@ -4562,13 +4566,14 @@ export interface JournalDashboardScoreComponent {
 
 export interface JournalPerformanceDashboardResponse {
   filters: {
+    scope: JournalDashboardScope;
+    /** Display label, e.g. "Demo trades (BloFin demo)". */
+    scope_label: string;
     date_from: string | null;
     date_to: string | null;
     timezone: string;
     source: JournalTradeSource | null;
-    execution_actor: ExecutionActor | null;
-    /** Hypothetical sources (backtest) left out of every figure. */
-    excluded_sources: JournalTradeSource[];
+    included_sources: JournalTradeSource[];
   };
   summary: JournalDashboardSummary;
   days: JournalDashboardDay[];

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { api } from "@/lib/api";
 import type {
+  JournalDashboardScope,
   JournalPerformanceDashboardParams,
   JournalPerformanceDashboardResponse,
 } from "@/lib/api/types";
@@ -17,15 +18,16 @@ import { PerformanceKpiCards } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
 import { ScoreRadar } from "./ScoreRadar";
 import {
-  ACTOR_OPTIONS,
+  DEFAULT_SCOPE,
+  EXTRA_SCOPE_OPTIONS,
   RANGE_OPTIONS,
-  actorParams,
+  SCOPE_LABELS,
+  SCOPE_OPTIONS,
   browserTimezone,
   buildSampleDashboard,
   monthRange,
   rangeParams,
   shiftMonth,
-  type ActorFilter,
   type MonthRef,
   type RangePreset,
 } from "./performance-model";
@@ -74,18 +76,18 @@ export function PerformanceDashboard({
   const today = useMemo(() => now ?? new Date(), [now]);
   const thisMonth: MonthRef = { year: today.getFullYear(), month: today.getMonth() };
   const [preset, setPreset] = useState<RangePreset>("90d");
-  const [actor, setActor] = useState<ActorFilter>("all");
+  const [scope, setScope] = useState<JournalDashboardScope>(DEFAULT_SCOPE);
   const [month, setMonth] = useState<MonthRef>(thisMonth);
   const [sample, setSample] = useState(false);
   const tz = useMemo(() => browserTimezone(), []);
 
   const rangeQuery = useMemo(
-    () => ({ ...rangeParams(preset, today), ...actorParams(actor), tz }),
-    [preset, actor, today, tz],
+    () => ({ ...rangeParams(preset, today), scope, tz }),
+    [preset, scope, today, tz],
   );
   const monthQuery = useMemo(
-    () => ({ ...monthRange(month), ...actorParams(actor), tz }),
-    [month, actor, tz],
+    () => ({ ...monthRange(month), scope, tz }),
+    [month, scope, tz],
   );
   const range = useDashboardRequest(rangeQuery, !sample, refreshKey);
   const calendar = useDashboardRequest(monthQuery, !sample, refreshKey);
@@ -94,6 +96,8 @@ export function PerformanceDashboard({
   const rangeData = sample ? sampleData : range.data;
   const monthData = sample ? sampleData : calendar.data;
   const empty = !sample && !range.loading && rangeData?.summary.trade_count === 0;
+  const scopeLabel = range.data?.filters.scope_label ?? SCOPE_LABELS[scope];
+  const extraScope = EXTRA_SCOPE_OPTIONS.some((option) => option.value === scope);
 
   return (
     <div className="space-y-3" data-testid="performance-dashboard" data-sample={sample ? "true" : "false"}>
@@ -112,11 +116,30 @@ export function PerformanceDashboard({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SegmentedControl
-            aria-label="Trades by decision maker"
-            value={actor}
-            onChange={setActor}
-            options={ACTOR_OPTIONS.map((option) => ({ ...option, disabled: sample }))}
+            aria-label="Account scope"
+            value={extraScope ? ("" as JournalDashboardScope) : scope}
+            onChange={setScope}
+            options={SCOPE_OPTIONS.map((option) => ({ ...option, disabled: sample }))}
           />
+          <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+            <span className="sr-only sm:not-sr-only">Other</span>
+            <select
+              aria-label="Other trade scopes"
+              value={extraScope ? scope : ""}
+              disabled={sample}
+              onChange={(event) =>
+                setScope((event.target.value || DEFAULT_SCOPE) as JournalDashboardScope)
+              }
+              className="min-h-9 rounded-control border border-border bg-surface-1 px-2 text-xs text-text-primary"
+            >
+              <option value="">—</option>
+              {EXTRA_SCOPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <SegmentedControl
             aria-label="Performance range"
             value={preset}
@@ -136,8 +159,11 @@ export function PerformanceDashboard({
       </div>
 
       {!sample ? (
-        <p className="text-xs text-text-muted" data-testid="performance-scope">
-          Closed live, paper and demo trades, including autonomous agents. Backtests are excluded.
+        <p className="text-sm font-medium text-text-primary" data-testid="performance-scope">
+          Showing: {scopeLabel}
+          <span className="ml-2 text-xs font-normal text-text-muted">
+            Closed trades only; scopes are never mixed.
+          </span>
         </p>
       ) : null}
 

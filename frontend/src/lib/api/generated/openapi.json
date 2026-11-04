@@ -18951,23 +18951,21 @@
             ],
             "title": "Date To"
           },
-          "excluded_sources": {
-            "description": "Hypothetical sources (e.g. backtest) left out of every figure.",
+          "included_sources": {
+            "description": "Sources the scope reads; venue-split sources are filtered further.",
             "items": {
               "$ref": "#/components/schemas/JournalTradeSource"
             },
-            "title": "Excluded Sources",
+            "title": "Included Sources",
             "type": "array"
           },
-          "execution_actor": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ExecutionActor"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "scope": {
+            "$ref": "#/components/schemas/JournalDashboardScope"
+          },
+          "scope_label": {
+            "description": "Display label, e.g. \"Demo trades (BloFin demo)\".",
+            "title": "Scope Label",
+            "type": "string"
           },
           "source": {
             "anyOf": [
@@ -18977,7 +18975,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Optional single-source narrowing inside the scope."
           },
           "timezone": {
             "title": "Timezone",
@@ -18985,6 +18984,8 @@
           }
         },
         "required": [
+          "scope",
+          "scope_label",
           "timezone"
         ],
         "title": "JournalDashboardFilters",
@@ -19041,6 +19042,19 @@
         },
         "title": "JournalDashboardRisk",
         "type": "object"
+      },
+      "JournalDashboardScope": {
+        "description": "Account scope: exactly one per response, never mixed.\n\n``demo``, ``paper`` and ``real`` are the account scopes; ``backtest``,\n``imported`` and ``system`` are only read when selected explicitly.",
+        "enum": [
+          "demo",
+          "paper",
+          "real",
+          "backtest",
+          "imported",
+          "system"
+        ],
+        "title": "JournalDashboardScope",
+        "type": "string"
       },
       "JournalDashboardScore": {
         "additionalProperties": false,
@@ -68084,7 +68098,7 @@
     },
     "/journal/statistics/calendar": {
       "get": {
-        "description": "Record-only daily buckets and scores over the caller's closed journal trades.\n\nBacktest (simulated-history) trades are excluded unless ``source=backtest``.",
+        "description": "Record-only daily buckets and scores over the caller's closed journal trades.\n\nExactly one account scope per response; the scope is echoed in ``filters``.",
         "operationId": "journal_performance_dashboard_journal_statistics_calendar_get",
         "parameters": [
           {
@@ -68145,7 +68159,18 @@
             }
           },
           {
-            "description": "Single source. Backtest rows are only included when requested here.",
+            "description": "Account scope: demo (BloFin demo), paper, or real (manually logged). backtest, imported and system are read only when selected here. Scopes are never mixed.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/JournalDashboardScope",
+              "default": "demo",
+              "description": "Account scope: demo (BloFin demo), paper, or real (manually logged). backtest, imported and system are read only when selected here. Scopes are never mixed."
+            }
+          },
+          {
+            "description": "Optional single-source narrowing; must belong to the scope.",
             "in": "query",
             "name": "source",
             "required": false,
@@ -68158,26 +68183,8 @@
                   "type": "null"
                 }
               ],
-              "description": "Single source. Backtest rows are only included when requested here.",
+              "description": "Optional single-source narrowing; must belong to the scope.",
               "title": "Source"
-            }
-          },
-          {
-            "description": "human or system (agents); omit for both.",
-            "in": "query",
-            "name": "execution_actor",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ExecutionActor"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "human or system (agents); omit for both.",
-              "title": "Execution Actor"
             }
           }
         ],

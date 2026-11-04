@@ -19,12 +19,13 @@ function response(
 ): JournalPerformanceDashboardResponse {
   return {
     filters: {
+      scope: "demo",
+      scope_label: "Demo trades (BloFin demo)",
       date_from: null,
       date_to: null,
       timezone: "UTC",
       source: null,
-      execution_actor: null,
-      excluded_sources: ["backtest"],
+      included_sources: ["manual_demo_test", "blofin_demo_manual", "paper_execution", "manual"],
     },
     summary: {
       trade_count: 5,
@@ -153,30 +154,46 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
-  it("filters by execution actor and states that backtests are excluded", async () => {
-    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+  it("defaults to the Demo scope, labels it, and never mixes scopes", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockImplementation(async (params) => {
+      const scope = params?.scope ?? "demo";
+      const labels: Record<string, string> = {
+        demo: "Demo trades (BloFin demo)",
+        paper: "Paper trades (paper execution and validation)",
+        real: "Real trades (manually logged)",
+        backtest: "Backtest trades (simulated history)",
+      };
+      const base = response();
+      return { ...base, filters: { ...base.filters, scope, scope_label: labels[scope] ?? scope } };
+    });
     render(<PerformanceDashboard now={NOW} />);
     await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("performance-scope")).toHaveTextContent("Backtests are excluded");
+    expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Demo trades (BloFin demo)");
+    expect(screen.getByRole("radio", { name: "Demo" })).toHaveAttribute("aria-checked", "true");
     const initial = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
-    expect(initial.every((params) => params?.execution_actor === undefined)).toBe(true);
+    expect(initial.length).toBeGreaterThan(0);
+    expect(initial.every((params) => params?.scope === "demo")).toBe(true);
 
-    fireEvent.click(screen.getByRole("radio", { name: "System (agents)" }));
-    await waitFor(() => {
-      const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
-      expect(calls).toContainEqual(
-        expect.objectContaining({ execution_actor: "system", date_from: "2026-07-01", date_to: "2026-07-31" }),
-      );
-      expect(calls).toContainEqual(
-        expect.objectContaining({ execution_actor: "system", date_from: "2026-04-17" }),
-      );
-    });
-    fireEvent.click(screen.getByRole("radio", { name: "Human" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     await waitFor(() =>
-      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.map(([p]) => p)).toContainEqual(
-        expect.objectContaining({ execution_actor: "human" }),
-      ),
+      expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Paper trades"),
     );
+    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls).toContainEqual(
+      expect.objectContaining({ scope: "paper", date_from: "2026-07-01", date_to: "2026-07-31" }),
+    );
+    expect(calls).toContainEqual(expect.objectContaining({ scope: "paper", date_from: "2026-04-17" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), {
+      target: { value: "backtest" },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-scope")).toHaveTextContent("Showing: Backtest trades"),
+    );
+    expect(screen.getByRole("radio", { name: "Demo" })).toHaveAttribute("aria-checked", "false");
+    // Every request carries exactly one scope.
+    const all = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(all.every((params) => typeof params?.scope === "string")).toBe(true);
   });
 
   it("renders a calendar error instead of zeros when only the month request fails", async () => {

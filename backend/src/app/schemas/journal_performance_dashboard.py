@@ -9,24 +9,43 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 
 from pydantic import Field
 
 from app.schemas.common import JournalTradeSource, StrictModel
-from app.schemas.journal_statistics import ExecutionActor, SampleConfidence
+from app.schemas.journal_statistics import SampleConfidence
+
+
+class JournalDashboardScope(StrEnum):
+    """Account scope: exactly one per response, never mixed.
+
+    ``demo``, ``paper`` and ``real`` are the account scopes; ``backtest``,
+    ``imported`` and ``system`` are only read when selected explicitly.
+    """
+
+    DEMO = "demo"
+    PAPER = "paper"
+    REAL = "real"
+    BACKTEST = "backtest"
+    IMPORTED = "imported"
+    SYSTEM = "system"
 
 
 class JournalDashboardFilters(StrictModel):
     """Filters echoed back so the response is self-describing."""
 
+    scope: JournalDashboardScope
+    scope_label: str = Field(description='Display label, e.g. "Demo trades (BloFin demo)".')
     date_from: date | None = None
     date_to: date | None = None
     timezone: str
-    source: JournalTradeSource | None = None
-    execution_actor: ExecutionActor | None = None
-    excluded_sources: list[JournalTradeSource] = Field(
+    source: JournalTradeSource | None = Field(
+        default=None, description="Optional single-source narrowing inside the scope."
+    )
+    included_sources: list[JournalTradeSource] = Field(
         default_factory=list,
-        description="Hypothetical sources (e.g. backtest) left out of every figure.",
+        description="Sources the scope reads; venue-split sources are filtered further.",
     )
 
 

@@ -4,12 +4,13 @@ and import/attachment persistence (AT-033)."""
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, and_, false, func, or_, select
 
 from app.db.models import (
     JournalImportBatch,
@@ -18,6 +19,7 @@ from app.db.models import (
     JournalTradeEvidence,
     JournalTradeObservation,
     JournalTradeRuleCheck,
+    TradePlanRevision,
 )
 from app.repositories.base import SQLAlchemyRepository
 from app.schemas.common import (
@@ -109,6 +111,65 @@ def _stats_columns() -> tuple[object, ...]:
 def _effective_time() -> ColumnElement[datetime]:
     """Exit time when recorded, else entry time, else the row creation time."""
     return func.coalesce(JournalTrade.exit_time, JournalTrade.entry_time, JournalTrade.created_at)
+
+
+class VenueRequirement(StrEnum):
+    """Venue evidence a source/venue rule requires (dashboard account scopes)."""
+
+    ANY = "any"
+    BLOFIN_DEMO = "blofin_demo"
+    NOT_BLOFIN_DEMO = "not_blofin_demo"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceVenueRule:
+    """Rows whose source is in ``sources`` and whose venue meets ``venue``."""
+
+    sources: frozenset[JournalTradeSource]
+    venue: VenueRequirement = VenueRequirement.ANY
+
+
+BLOFIN_DEMO_VENUE = "BLOFIN_DEMO"
+BLOFIN_DEMO_REF_PREFIX = "blofin-demo-"
+
+
+def blofin_demo_venue_clause() -> ColumnElement[bool]:
+    """Recorded evidence that a trade executed on BloFin demo. Never NULL.
+
+    Any of: the linked immutable plan revision's venue, the row's exchange
+    (set by the manual mirror and manual demo flow), or a mirror external ref
+    (``blofin-demo-…``, set when the mirror reconciles a manual row).
+    """
+    plan_on_demo = (
+        select(TradePlanRevision.id)
+        .where(
+            TradePlanRevision.id == JournalTrade.trade_plan_revision_id,
+            TradePlanRevision.organization_id == JournalTrade.organization_id,
+            TradePlanRevision.execution_venue == BLOFIN_DEMO_VENUE,
+        )
+        .exists()
+    )
+    return or_(
+        func.upper(func.coalesce(JournalTrade.exchange, "")) == BLOFIN_DEMO_VENUE,
+        func.coalesce(JournalTrade.external_ref, "").like(f"{BLOFIN_DEMO_REF_PREFIX}%"),
+        plan_on_demo,
+    )
+
+
+def scope_rules_clause(rules: Sequence[SourceVenueRule]) -> ColumnElement[bool]:
+    """OR of source/venue rules; an empty rule set matches nothing."""
+    clauses: list[ColumnElement[bool]] = []
+    for rule in rules:
+        if not rule.sources:
+            continue
+        source_match = JournalTrade.source.in_(tuple(sorted(rule.sources)))
+        if rule.venue is VenueRequirement.BLOFIN_DEMO:
+            clauses.append(and_(source_match, blofin_demo_venue_clause()))
+        elif rule.venue is VenueRequirement.NOT_BLOFIN_DEMO:
+            clauses.append(and_(source_match, ~blofin_demo_venue_clause()))
+        else:
+            clauses.append(source_match)
+    return or_(*clauses) if clauses else false()
 
 
 def assert_stats_projection_excludes_annotation_grade() -> None:
@@ -386,6 +447,42 @@ class JournalTradeRepository(SQLAlchemyRepository[JournalTrade]):
         effective_time = _effective_time()
         stmt = (
             select(*_stats_columns())
+            .where(*filters)
+            .order_by(effective_time.asc(), JournalTrade.id.asc())
+            .limit(max_rows + 1)
+        )
+        raw = self._session.execute(stmt).all()
+        truncated = len(raw) > max_rows
+        rows = [JournalTradeStatsRow(*row) for row in raw[:max_rows]]
+        return rows, truncated
+
+    def fetch_dashboard_rows(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rules: Sequence[SourceVenueRule],
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        max_rows: int,
+    ) -> tuple[list[JournalTradeStatsRow], bool]:
+        """Closed trades for one dashboard scope (OR of source/venue rules).
+
+        Dashboard-only: same bounded projection as ``fetch_stats_rows`` but the
+        scope is expressed as source/venue rules so venue-split sources (e.g.
+        ``paper_execution`` on BloFin demo vs. internal paper) never mix.
+        """
+        assert_stats_projection_excludes_annotation_grade()
+        filters = self._stats_filters(
+            organization_id=organization_id,
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        filters.append(scope_rules_clause(rules))
+        effective_time = _effective_time()
+        stmt = (
+            select(*_stats_columns())  # type: ignore[call-overload]  # same as fetch_stats_rows
             .where(*filters)
             .order_by(effective_time.asc(), JournalTrade.id.asc())
             .limit(max_rows + 1)

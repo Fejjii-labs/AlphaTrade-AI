@@ -57,7 +57,10 @@ from app.schemas.journal_import import (
     JournalImportResult,
     PaginatedJournalImportBatches,
 )
-from app.schemas.journal_performance_dashboard import JournalPerformanceDashboardResponse
+from app.schemas.journal_performance_dashboard import (
+    JournalDashboardScope,
+    JournalPerformanceDashboardResponse,
+)
 from app.schemas.journal_statistics import (
     ExecutionActor,
     JournalStatsFilters,
@@ -399,17 +402,22 @@ async def journal_performance_dashboard(
     date_from: date | None = Query(default=None, description="Inclusive local date."),
     date_to: date | None = Query(default=None, description="Inclusive local date."),
     tz: str | None = Query(default=None, max_length=64, description="IANA timezone."),
+    scope: JournalDashboardScope = Query(
+        default=JournalDashboardScope.DEMO,
+        description=(
+            "Account scope: demo (BloFin demo), paper, or real (manually logged). "
+            "backtest, imported and system are read only when selected here. "
+            "Scopes are never mixed."
+        ),
+    ),
     source: JournalTradeSource | None = Query(
         default=None,
-        description="Single source. Backtest rows are only included when requested here.",
-    ),
-    execution_actor: ExecutionActor | None = Query(
-        default=None, description="human or system (agents); omit for both."
+        description="Optional single-source narrowing; must belong to the scope.",
     ),
 ) -> JournalPerformanceDashboardResponse:
     """Record-only daily buckets and scores over the caller's closed journal trades.
 
-    Backtest (simulated-history) trades are excluded unless ``source=backtest``.
+    Exactly one account scope per response; the scope is echoed in ``filters``.
     """
     return service.compute(
         organization_id=tenant.organization_id,
@@ -417,8 +425,8 @@ async def journal_performance_dashboard(
         date_from=date_from,
         date_to=date_to,
         timezone=tz,
+        scope=scope,
         source=source,
-        execution_actor=execution_actor,
     )
 
 
