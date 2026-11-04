@@ -321,6 +321,11 @@ class Settings(BaseSettings):
     # the normal round-robin tenant scheduler.
     watcher_paper_organization_id: str = ""
     paper_worker_memory_diagnostics_enabled: bool = False
+    # Soft RSS watchdog: above the limit the worker stops cleanly and exits
+    # nonzero so Render restarts it before the plan's hard OOM kill.
+    paper_worker_memory_watchdog_enabled: bool = True
+    paper_worker_memory_watchdog_limit_mb: int = Field(default=440, ge=64, le=65536)
+    paper_worker_memory_watchdog_check_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
     # Seconds between periodic paper_worker_health log lines while serving.
     paper_worker_health_log_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
     watcher_paper_max_scopes_per_cycle: int = Field(default=20, ge=1, le=200)

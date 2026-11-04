@@ -33,6 +33,7 @@ import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
 from app.observability.process_memory import read_process_memory, release_allocator_memory
 from app.observability.worker_memory import CycleMemorySampler, WorkerMemoryDiagnostics
 from app.workers.watcher_paper import (
@@ -234,6 +235,7 @@ class PaperWorkerSupervisor:
         self._exit_monitor: _Component | None = None
         self._exit_monitor_stop: Callable[[], None] | None = None
         self._memory_diagnostics: WorkerMemoryDiagnostics | None = None
+        self._memory_watchdog: MemoryWatchdog | None = None
         if memory_diagnostics_enabled:
             try:
                 self._memory_diagnostics = WorkerMemoryDiagnostics()
@@ -304,6 +306,16 @@ class PaperWorkerSupervisor:
             + ((self._demo_snapshot,) if self._demo_snapshot else ())
             + ((self._exit_monitor,) if self._exit_monitor else ())
         )
+
+    def attach_memory_watchdog(self, watchdog: MemoryWatchdog) -> None:
+        """Checked on the serving thread; a trip stops like SIGTERM, then exits nonzero."""
+
+        self._memory_watchdog = watchdog
+
+    @property
+    def memory_watchdog_tripped(self) -> bool:
+        watchdog = self._memory_watchdog
+        return watchdog is not None and watchdog.tripped
 
     def snapshot(self) -> PaperWorkerHealth:
         """Copy both health records. Callers cannot mutate the supervisor."""
@@ -418,6 +430,8 @@ class PaperWorkerSupervisor:
             self._log_health(phase="startup")
             self._next_health_log_at = self._monotonic() + self._health_log_interval_seconds
             while not self._signaled:
+                if self._memory_watchdog_tripped_now():
+                    break
                 selector.select(timeout=self._select_timeout())
                 _drain_wakeup(read_fd)
                 if not self._signaled:
@@ -438,8 +452,22 @@ class PaperWorkerSupervisor:
     def worker_id(self) -> str:
         return self._worker_id
 
+    def _memory_watchdog_tripped_now(self) -> bool:
+        watchdog = self._memory_watchdog
+        if watchdog is None:
+            return False
+        try:
+            return watchdog.check()
+        except Exception:
+            # The watchdog is a safety net; it must never stop the worker by failing.
+            with contextlib.suppress(Exception):
+                logger.warning("paper_worker_memory_watchdog_failed")
+            return False
+
     def _select_timeout(self) -> float:
         timeout = self._poll_seconds if self._poll_seconds > 0 else 0.05
+        if self._memory_watchdog is not None:
+            timeout = min(timeout, max(self._memory_watchdog.seconds_until_check(), 0.01))
         if self._next_health_log_at is not None:
             remaining = self._next_health_log_at - self._monotonic()
             timeout = min(timeout, max(remaining, 0.01))
@@ -800,6 +828,13 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
                 request_stop=exit_monitor.request_stop,
             )
+    if settings.paper_worker_memory_watchdog_enabled:
+        supervisor.attach_memory_watchdog(
+            MemoryWatchdog(
+                limit_bytes=settings.paper_worker_memory_watchdog_limit_mb * 1024 * 1024,
+                check_seconds=settings.paper_worker_memory_watchdog_check_seconds,
+            )
+        )
     if not settings_are_disarmed_paper_worker(settings):
         from app.services.arming_visibility import publish_boot_arming_posture
 
@@ -876,7 +911,15 @@ def run_paper_worker_process(*, once: bool = False) -> str:
             supervisor.serve_until_signal()
     finally:
         supervisor.close()
+    exit_if_memory_watchdog_tripped(supervisor)
     return "disarmed" if disarmed else "armed"
+
+
+def exit_if_memory_watchdog_tripped(supervisor: PaperWorkerSupervisor) -> None:
+    """After a clean stop, exit nonzero so the platform restarts the worker."""
+
+    if supervisor.memory_watchdog_tripped:
+        raise SystemExit(MEMORY_WATCHDOG_EXIT_CODE)
 
 
 def main() -> None:
