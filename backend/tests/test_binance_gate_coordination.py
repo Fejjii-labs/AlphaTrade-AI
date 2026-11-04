@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool, StaticPool
+from structlog.testing import capture_logs
 
 from app.core.config import Settings
 from app.db.base import Base
@@ -472,6 +473,80 @@ def test_factory_is_off_for_replay_and_kill_switches(lite: sessionmaker[Session]
         binance_market_lease_enabled=False,
     )
     assert start_binance_gate_coordination(off, lite) is None
+
+
+@pytest.mark.parametrize(
+    ("heartbeat", "ttl", "expected"),
+    [(300.0, 15, 5.0), (60.0, 90, 30.0), (20.0, 90, 20.0)],
+)
+def test_heartbeat_is_clamped_to_a_third_of_the_ttl(
+    lite: sessionmaker[Session], heartbeat: float, ttl: int, expected: float
+) -> None:
+    """Config allows heartbeat 300 with TTL 15; renewals must still beat the TTL."""
+
+    coordinator = BinanceGateCoordinator(
+        BinanceRestGate(rng=lambda: 0.0),
+        lite,
+        owner="clamp",
+        lease_ttl_seconds=ttl,
+        heartbeat_seconds=heartbeat,
+        now=Wall(),
+        monotonic=Mono(),
+    )
+    waits: list[float] = []
+
+    class OneWait:
+        def wait(self, interval: float) -> bool:
+            waits.append(interval)
+            coordinator._stop.set()
+            return True
+
+        def set(self) -> None:
+            pass
+
+        def clear(self) -> None:
+            pass
+
+    coordinator._wake = OneWait()  # type: ignore[assignment]
+    coordinator._run()
+    assert waits == [expected]
+
+
+def test_factory_logs_when_both_kill_switches_are_off(lite: sessionmaker[Session]) -> None:
+    off = Settings(
+        perpetual_evidence_source="binance_usdm",
+        binance_gate_persistence_enabled=False,
+        binance_market_lease_enabled=False,
+    )
+    with capture_logs() as logs:
+        assert start_binance_gate_coordination(off, lite) is None
+    disabled = [entry for entry in logs if entry["event"] == "binance_gate_coordination_disabled"]
+    assert len(disabled) == 1
+    assert disabled[0]["reason"] == "kill_switches_off"
+    assert disabled[0]["binance_gate_persistence_enabled"] is False
+    assert disabled[0]["binance_market_lease_enabled"] is False
+
+
+def test_factory_with_one_switch_on_starts_and_does_not_log_disabled(
+    lite: sessionmaker[Session],
+) -> None:
+    from app.market_contracts.adapters import binance_rest_gate
+
+    binance_rest_gate.reset_process_binance_rest_gate()
+    lease_only = Settings(
+        perpetual_evidence_source="binance_usdm", binance_gate_persistence_enabled=False
+    )
+    with capture_logs() as logs:
+        coordinator = start_binance_gate_coordination(lease_only, lite)
+    try:
+        assert coordinator is not None and coordinator.lease_held
+        events = {entry["event"] for entry in logs}
+        assert "binance_gate_coordination_disabled" not in events
+        assert "binance_market_lease_acquired" in events
+    finally:
+        assert coordinator is not None
+        coordinator.stop()
+        binance_rest_gate.reset_process_binance_rest_gate()
 
 
 def test_factory_starts_for_live_source(

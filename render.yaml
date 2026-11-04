@@ -136,6 +136,9 @@ services:
     # release wait up to 10s + close. Gives graceful lease release a better
     # chance on deploy; a cycle that outlasts the wait still falls back to the
     # lease TTL. Staging only.
+    # Keep this worker at one instance. The Binance market-read lease
+    # (binance_gate_coordination) is a startup standby for deploy overlap, not
+    # mutual exclusion; a second permanent instance would also poll Binance.
     maxShutdownDelaySeconds: 60
     envVars:
       # Operator-controlled flags use sync: false so Blueprint syncs never

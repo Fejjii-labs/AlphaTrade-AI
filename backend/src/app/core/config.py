@@ -528,6 +528,8 @@ class Settings(BaseSettings):
     # Paper worker only: a new instance holds Binance market reads until the
     # previous instance's lease is released or expires, at most max_wait.
     # Off starts market reads immediately (pre-2026-11-04 behaviour).
+    # Startup standby only, not mutual exclusion: keep the paper worker at scale 1.
+    # Both flags off logs binance_gate_coordination_disabled at boot.
     binance_market_lease_enabled: bool = True
     binance_market_lease_ttl_seconds: int = Field(default=90, ge=15, le=900)
     binance_market_lease_heartbeat_seconds: float = Field(default=20.0, ge=1.0, le=300.0)

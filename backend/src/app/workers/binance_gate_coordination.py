@@ -14,7 +14,15 @@ adds two cross-instance facts on top of the process gate:
   rate-limit pause, so callers fail closed) until the lease is released or
   expires, at most ``max_wait_seconds``. The holder renews it every heartbeat
   and releases it on clean shutdown (SIGTERM). After max wait the instance
-  proceeds and keeps trying to take the lease.
+  proceeds and keeps trying to take the lease. Lease times use the database
+  clock.
+
+The lease applies at startup only; it is not mutual exclusion. A holder that
+loses its lease (heartbeat stalled past the TTL) logs
+``binance_market_lease_lost`` and keeps reading, and a waiter reads after max
+wait whether or not the holder is gone. It covers a deploy overlap of seconds
+to minutes. The paper worker must stay at scale 1: a second permanent
+instance waits ``max_wait_seconds`` and then polls Binance alongside the first.
 
 Scope: only the paper worker starts this. The API process (agent chat reads)
 keeps its own process gate and is never held by the lease; a chat read is a
@@ -276,7 +284,16 @@ def start_binance_gate_coordination(
 
     persist = settings.binance_gate_persistence_enabled
     lease = settings.binance_market_lease_enabled
-    if not (persist or lease) or perpetual_source_is_replay(settings):
+    if not (persist or lease):
+        logger.warning(
+            "binance_gate_coordination_disabled",
+            reason="kill_switches_off",
+            binance_gate_persistence_enabled=persist,
+            binance_market_lease_enabled=lease,
+        )
+        return None
+    if perpetual_source_is_replay(settings):
+        logger.info("binance_gate_coordination_disabled", reason="replay_source")
         return None
     try:
         from app.db.session import get_session_factory
