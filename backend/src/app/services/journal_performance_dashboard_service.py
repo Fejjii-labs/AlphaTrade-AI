@@ -108,10 +108,11 @@ def local_day_bounds(
 ) -> tuple[datetime | None, datetime | None]:
     """Inclusive local-day range → UTC instants (end is the last microsecond)."""
     start = datetime.combine(date_from, time.min, tz).astimezone(UTC) if date_from else None
+    # Subtract in UTC: aware-datetime arithmetic is wall-clock, which would drop
+    # the repeated hour where a zone falls back at midnight (e.g. Santiago).
     end = (
-        (
-            datetime.combine(date_to + timedelta(days=1), time.min, tz) - timedelta(microseconds=1)
-        ).astimezone(UTC)
+        datetime.combine(date_to + timedelta(days=1), time.min, tz).astimezone(UTC)
+        - timedelta(microseconds=1)
         if date_to
         else None
     )

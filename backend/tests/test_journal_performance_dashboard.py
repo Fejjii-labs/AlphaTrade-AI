@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +33,7 @@ from app.schemas.journal_statistics import ExecutionActor, SampleConfidence
 from app.services.journal_performance_dashboard_service import (
     JournalPerformanceDashboardService,
     ScoreTargets,
+    _local_date,
     build_dashboard,
     local_day_bounds,
 )
@@ -227,6 +228,20 @@ def test_local_day_bounds_cover_whole_local_days() -> None:
     assert end == datetime(2026, 7, 31, 21, 59, 59, 999999, tzinfo=UTC)
 
 
+def test_local_day_bounds_keep_repeated_hour_at_midnight_fall_back() -> None:
+    # America/Santiago falls back at 2026-04-05 00:00 (-03 → -04): 23:00-23:59 on
+    # 04-04 occurs twice, so local 04-04 ends at 04:00 UTC, not 03:00 UTC.
+    tz = ZoneInfo("America/Santiago")
+    start, end = local_day_bounds(date(2026, 4, 4), date(2026, 4, 4), tz)
+    assert start == datetime(2026, 4, 4, 3, tzinfo=UTC)
+    assert end == datetime(2026, 4, 5, 3, 59, 59, 999999, tzinfo=UTC)
+    second_late_hour = datetime(2026, 4, 5, 3, 30, tzinfo=UTC)
+    assert _local_date(second_late_hour, tz) == date(2026, 4, 4)
+    assert start <= second_late_hour <= end
+    next_start, _ = local_day_bounds(date(2026, 4, 5), None, tz)
+    assert next_start == end + timedelta(microseconds=1)
+
+
 class _FakeTrades:
     def __init__(self, rows: list[JournalTradeStatsRow]) -> None:
         self.rows = rows
@@ -385,6 +400,22 @@ def test_calendar_endpoint_excludes_backtest_and_filters_by_actor(
     assert net({"source": "backtest"}) == (1, Decimal("10000"))
     body = test_client.get("/journal/statistics/calendar", headers=headers).json()
     assert body["filters"]["excluded_sources"] == ["backtest"]
+
+
+def test_calendar_endpoint_dst_fall_back_trade_lands_in_its_local_day(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    # 23:30 local (second, -04 occurrence) on 2026-04-04 in Santiago.
+    _closed_trade(factory, net_pnl="12", exit_time=datetime(2026, 4, 5, 3, 30, tzinfo=UTC))
+    params = {"date_from": "2026-04-01", "date_to": "2026-04-04", "tz": "America/Santiago"}
+    body = test_client.get("/journal/statistics/calendar", headers=headers, params=params).json()
+    assert body["summary"]["trade_count"] == 1
+    assert [d["date"] for d in body["days"]] == ["2026-04-04"]
+    params = {"date_from": "2026-04-05", "date_to": "2026-04-30", "tz": "America/Santiago"}
+    body = test_client.get("/journal/statistics/calendar", headers=headers, params=params).json()
+    assert body["summary"]["trade_count"] == 0
 
 
 def test_calendar_endpoint_requires_auth_and_valid_tz(
