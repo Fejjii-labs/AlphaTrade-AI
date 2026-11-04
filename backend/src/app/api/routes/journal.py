@@ -399,10 +399,18 @@ async def journal_performance_dashboard(
     date_from: date | None = Query(default=None, description="Inclusive local date."),
     date_to: date | None = Query(default=None, description="Inclusive local date."),
     tz: str | None = Query(default=None, max_length=64, description="IANA timezone."),
-    source: JournalTradeSource | None = Query(default=None),
-    execution_actor: ExecutionActor | None = Query(default=None),
+    source: JournalTradeSource | None = Query(
+        default=None,
+        description="Single source. Backtest rows are only included when requested here.",
+    ),
+    execution_actor: ExecutionActor | None = Query(
+        default=None, description="human or system (agents); omit for both."
+    ),
 ) -> JournalPerformanceDashboardResponse:
-    """Record-only daily buckets and scores over the caller's closed journal trades."""
+    """Record-only daily buckets and scores over the caller's closed journal trades.
+
+    Backtest (simulated-history) trades are excluded unless ``source=backtest``.
+    """
     return service.compute(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,

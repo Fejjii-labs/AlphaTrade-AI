@@ -1,4 +1,5 @@
 import type {
+  ExecutionActor,
   JournalDashboardDay,
   JournalPerformanceDashboardResponse,
 } from "@/lib/api/types";
@@ -106,6 +107,19 @@ export function buildCalendarWeeks(
 
 export type RangePreset = "30d" | "90d" | "ytd" | "all";
 
+/** Who made the trading decision; backtests are excluded server-side in every mode. */
+export type ActorFilter = "all" | ExecutionActor;
+
+export const ACTOR_OPTIONS: Array<{ value: ActorFilter; label: string }> = [
+  { value: "all", label: "All live/demo" },
+  { value: "human", label: "Human" },
+  { value: "system", label: "System (agents)" },
+];
+
+export function actorParams(actor: ActorFilter): { execution_actor?: ExecutionActor } {
+  return actor === "all" ? {} : { execution_actor: actor };
+}
+
 export const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
   { value: "30d", label: "30D" },
   { value: "90d", label: "90D" },
@@ -199,7 +213,13 @@ export function buildSampleDashboard(ref: MonthRef): JournalPerformanceDashboard
   const scored = components.map((c) => c.score).filter((s): s is number => s !== null);
   const tradeCount = wins + losses;
   return {
-    filters: { ...monthRange(ref), timezone: "UTC", source: null, execution_actor: null },
+    filters: {
+      ...monthRange(ref),
+      timezone: "UTC",
+      source: null,
+      execution_actor: null,
+      excluded_sources: ["backtest"],
+    },
     summary: {
       trade_count: tradeCount,
       pnl_sample_count: tradeCount,

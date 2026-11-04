@@ -18,7 +18,14 @@ function response(
   overrides: Partial<JournalPerformanceDashboardResponse> = {},
 ): JournalPerformanceDashboardResponse {
   return {
-    filters: { date_from: null, date_to: null, timezone: "UTC", source: null, execution_actor: null },
+    filters: {
+      date_from: null,
+      date_to: null,
+      timezone: "UTC",
+      source: null,
+      execution_actor: null,
+      excluded_sources: ["backtest"],
+    },
     summary: {
       trade_count: 5,
       pnl_sample_count: 5,
@@ -144,6 +151,32 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("calendar-month")).toHaveTextContent("June 2026");
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
+  });
+
+  it("filters by execution actor and states that backtests are excluded", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    render(<PerformanceDashboard now={NOW} />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.getByTestId("performance-scope")).toHaveTextContent("Backtests are excluded");
+    const initial = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(initial.every((params) => params?.execution_actor === undefined)).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "System (agents)" }));
+    await waitFor(() => {
+      const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+      expect(calls).toContainEqual(
+        expect.objectContaining({ execution_actor: "system", date_from: "2026-07-01", date_to: "2026-07-31" }),
+      );
+      expect(calls).toContainEqual(
+        expect.objectContaining({ execution_actor: "system", date_from: "2026-04-17" }),
+      );
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Human" }));
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.map(([p]) => p)).toContainEqual(
+        expect.objectContaining({ execution_actor: "human" }),
+      ),
+    );
   });
 
   it("sample data is off by default and visibly badged when enabled", async () => {

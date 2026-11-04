@@ -254,9 +254,44 @@ def test_service_passes_utc_bounds_and_actor_sources() -> None:
     )
     call = trades.calls[0]
     assert call["date_from"] == datetime(2026, 6, 30, 22, tzinfo=UTC)
-    assert JournalTradeSource.BACKTEST in call["sources"]
-    assert JournalTradeSource.MANUAL not in call["sources"]
+    assert call["sources"] == {
+        JournalTradeSource.PAPER_VALIDATION,
+        JournalTradeSource.SYSTEM,
+    }
     assert result.filters.timezone == "Europe/Paris"
+    assert result.filters.excluded_sources == [JournalTradeSource.BACKTEST]
+
+
+def test_service_default_excludes_backtest_but_keeps_live_demo_and_autonomous() -> None:
+    trades = _FakeTrades([])
+    result = _service(trades).compute(organization_id=uuid.uuid4(), user_id=uuid.uuid4())
+    sources = trades.calls[0]["sources"]
+    assert JournalTradeSource.BACKTEST not in sources
+    assert sources == set(JournalTradeSource) - {JournalTradeSource.BACKTEST}
+    assert result.filters.excluded_sources == [JournalTradeSource.BACKTEST]
+
+
+def test_service_human_actor_sources() -> None:
+    trades = _FakeTrades([])
+    _service(trades).compute(
+        organization_id=uuid.uuid4(), user_id=uuid.uuid4(), execution_actor=ExecutionActor.HUMAN
+    )
+    assert trades.calls[0]["sources"] == {
+        JournalTradeSource.MANUAL,
+        JournalTradeSource.IMPORTED,
+        JournalTradeSource.PAPER_EXECUTION,
+        JournalTradeSource.MANUAL_DEMO_TEST,
+        JournalTradeSource.BLOFIN_DEMO_MANUAL,
+    }
+
+
+def test_service_explicit_backtest_source_is_opt_in() -> None:
+    trades = _FakeTrades([])
+    result = _service(trades).compute(
+        organization_id=uuid.uuid4(), user_id=uuid.uuid4(), source=JournalTradeSource.BACKTEST
+    )
+    assert trades.calls[0]["sources"] == {JournalTradeSource.BACKTEST}
+    assert result.filters.excluded_sources == []
 
 
 def test_service_conflicting_source_and_actor_skips_query() -> None:
@@ -325,6 +360,31 @@ def test_calendar_endpoint_over_real_rows(
     assert [d["date"] for d in body["days"]] == ["2026-07-10", "2026-07-11"]
     assert Decimal(body["cumulative"][-1]["cumulative_net_pnl"]) == Decimal("30")
     assert body["truncated"] is False
+
+
+def test_calendar_endpoint_excludes_backtest_and_filters_by_actor(
+    client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, factory = client
+    headers = _auth(test_client, "stats-a@test.example")
+    _closed_trade(factory, net_pnl="40", source=JournalTradeSource.MANUAL)
+    _closed_trade(factory, net_pnl="15", source=JournalTradeSource.BLOFIN_DEMO_MANUAL)
+    _closed_trade(factory, net_pnl="7", source=JournalTradeSource.PAPER_VALIDATION)
+    _closed_trade(factory, net_pnl="3", source=JournalTradeSource.SYSTEM)
+    _closed_trade(factory, net_pnl="10000", source=JournalTradeSource.BACKTEST)
+
+    def net(params: dict[str, str]) -> tuple[int, Decimal]:
+        response = test_client.get("/journal/statistics/calendar", headers=headers, params=params)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        return body["summary"]["trade_count"], Decimal(body["summary"]["net_pnl"])
+
+    assert net({}) == (4, Decimal("65"))
+    assert net({"execution_actor": "human"}) == (2, Decimal("55"))
+    assert net({"execution_actor": "system"}) == (2, Decimal("10"))
+    assert net({"source": "backtest"}) == (1, Decimal("10000"))
+    body = test_client.get("/journal/statistics/calendar", headers=headers).json()
+    assert body["filters"]["excluded_sources"] == ["backtest"]
 
 
 def test_calendar_endpoint_requires_auth_and_valid_tz(

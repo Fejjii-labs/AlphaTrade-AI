@@ -18951,6 +18951,14 @@
             ],
             "title": "Date To"
           },
+          "excluded_sources": {
+            "description": "Hypothetical sources (e.g. backtest) left out of every figure.",
+            "items": {
+              "$ref": "#/components/schemas/JournalTradeSource"
+            },
+            "title": "Excluded Sources",
+            "type": "array"
+          },
           "execution_actor": {
             "anyOf": [
               {
@@ -68076,7 +68084,7 @@
     },
     "/journal/statistics/calendar": {
       "get": {
-        "description": "Record-only daily buckets and scores over the caller's closed journal trades.",
+        "description": "Record-only daily buckets and scores over the caller's closed journal trades.\n\nBacktest (simulated-history) trades are excluded unless ``source=backtest``.",
         "operationId": "journal_performance_dashboard_journal_statistics_calendar_get",
         "parameters": [
           {
@@ -68137,6 +68145,7 @@
             }
           },
           {
+            "description": "Single source. Backtest rows are only included when requested here.",
             "in": "query",
             "name": "source",
             "required": false,
@@ -68149,10 +68158,12 @@
                   "type": "null"
                 }
               ],
+              "description": "Single source. Backtest rows are only included when requested here.",
               "title": "Source"
             }
           },
           {
+            "description": "human or system (agents); omit for both.",
             "in": "query",
             "name": "execution_actor",
             "required": false,
@@ -68165,6 +68176,7 @@
                   "type": "null"
                 }
               ],
+              "description": "human or system (agents); omit for both.",
               "title": "Execution Actor"
             }
           }

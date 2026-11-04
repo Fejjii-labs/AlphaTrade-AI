@@ -24,6 +24,10 @@ class JournalDashboardFilters(StrictModel):
     timezone: str
     source: JournalTradeSource | None = None
     execution_actor: ExecutionActor | None = None
+    excluded_sources: list[JournalTradeSource] = Field(
+        default_factory=list,
+        description="Hypothetical sources (e.g. backtest) left out of every figure.",
+    )
 
 
 class JournalDashboardSummary(StrictModel):

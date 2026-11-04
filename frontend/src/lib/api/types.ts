@@ -4567,6 +4567,8 @@ export interface JournalPerformanceDashboardResponse {
     timezone: string;
     source: JournalTradeSource | null;
     execution_actor: ExecutionActor | null;
+    /** Hypothetical sources (backtest) left out of every figure. */
+    excluded_sources: JournalTradeSource[];
   };
   summary: JournalDashboardSummary;
   days: JournalDashboardDay[];

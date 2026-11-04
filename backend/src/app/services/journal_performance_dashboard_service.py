@@ -8,6 +8,9 @@ Rules (documented so every number can be re-derived by hand):
 
 - Win/loss/breakeven uses the recorded ``result`` with the AT-031 net-PnL sign
   fallback; win rate is wins / (wins + losses).
+- Hypothetical/simulated-history sources (``BACKTEST``) are excluded unless
+  explicitly requested via ``source``; live, paper, demo and autonomous
+  (system) trades are included.
 - Trades are bucketed by the local calendar date of their effective time
   (exit, else entry, else creation) in the requested IANA timezone.
 - Max drawdown is the largest peak-to-trough drop of the per-trade cumulative
@@ -54,6 +57,9 @@ from app.services.journal_statistics_service import (
 )
 
 _ZERO = Decimal("0")
+
+# Simulated-history sources: never mixed into the dashboard by default.
+HYPOTHETICAL_SOURCES: frozenset[JournalTradeSource] = frozenset({JournalTradeSource.BACKTEST})
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,13 +120,15 @@ def local_day_bounds(
 
 def _sources_for(
     source: JournalTradeSource | None, actor: ExecutionActor | None
-) -> frozenset[JournalTradeSource] | None:
-    if actor is None:
-        return frozenset({source}) if source is not None else None
-    actor_sources = frozenset(s for s, a in _EXECUTION_ACTOR_BY_SOURCE.items() if a == actor)
+) -> frozenset[JournalTradeSource]:
+    """Explicit source allowlist; hypothetical sources only when asked for by name."""
     if source is not None:
-        return actor_sources & {source}
-    return actor_sources
+        candidates = frozenset({source})
+    else:
+        candidates = frozenset(JournalTradeSource) - HYPOTHETICAL_SOURCES
+    if actor is None:
+        return candidates
+    return frozenset(s for s in candidates if _EXECUTION_ACTOR_BY_SOURCE.get(s) == actor)
 
 
 class JournalPerformanceDashboardService:
@@ -165,8 +173,9 @@ class JournalPerformanceDashboardService:
             timezone=tz_name,
             source=source,
             execution_actor=execution_actor,
+            excluded_sources=sorted(HYPOTHETICAL_SOURCES - sources),
         )
-        if sources is not None and not sources:
+        if not sources:
             rows: list[JournalTradeStatsRow] = []
             truncated = False
         else:

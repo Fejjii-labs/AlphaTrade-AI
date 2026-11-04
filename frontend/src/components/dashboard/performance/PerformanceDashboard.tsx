@@ -17,12 +17,15 @@ import { PerformanceKpiCards } from "./PerformanceKpiCards";
 import { PnlCalendar } from "./PnlCalendar";
 import { ScoreRadar } from "./ScoreRadar";
 import {
+  ACTOR_OPTIONS,
   RANGE_OPTIONS,
+  actorParams,
   browserTimezone,
   buildSampleDashboard,
   monthRange,
   rangeParams,
   shiftMonth,
+  type ActorFilter,
   type MonthRef,
   type RangePreset,
 } from "./performance-model";
@@ -70,12 +73,19 @@ export function PerformanceDashboard({
   const today = useMemo(() => now ?? new Date(), [now]);
   const thisMonth: MonthRef = { year: today.getFullYear(), month: today.getMonth() };
   const [preset, setPreset] = useState<RangePreset>("90d");
+  const [actor, setActor] = useState<ActorFilter>("all");
   const [month, setMonth] = useState<MonthRef>(thisMonth);
   const [sample, setSample] = useState(false);
   const tz = useMemo(() => browserTimezone(), []);
 
-  const rangeQuery = useMemo(() => ({ ...rangeParams(preset, today), tz }), [preset, today, tz]);
-  const monthQuery = useMemo(() => ({ ...monthRange(month), tz }), [month, tz]);
+  const rangeQuery = useMemo(
+    () => ({ ...rangeParams(preset, today), ...actorParams(actor), tz }),
+    [preset, actor, today, tz],
+  );
+  const monthQuery = useMemo(
+    () => ({ ...monthRange(month), ...actorParams(actor), tz }),
+    [month, actor, tz],
+  );
   const range = useDashboardRequest(rangeQuery, !sample, refreshKey);
   const calendar = useDashboardRequest(monthQuery, !sample, refreshKey);
 
@@ -101,6 +111,12 @@ export function PerformanceDashboard({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SegmentedControl
+            aria-label="Trades by decision maker"
+            value={actor}
+            onChange={setActor}
+            options={ACTOR_OPTIONS.map((option) => ({ ...option, disabled: sample }))}
+          />
+          <SegmentedControl
             aria-label="Performance range"
             value={preset}
             onChange={setPreset}
@@ -117,6 +133,12 @@ export function PerformanceDashboard({
           </label>
         </div>
       </div>
+
+      {!sample ? (
+        <p className="text-xs text-text-muted" data-testid="performance-scope">
+          Closed live, paper and demo trades, including autonomous agents. Backtests are excluded.
+        </p>
+      ) : null}
 
       {sample ? (
         <p
