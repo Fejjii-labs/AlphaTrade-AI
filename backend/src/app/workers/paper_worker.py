@@ -835,6 +835,9 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 check_seconds=settings.paper_worker_memory_watchdog_check_seconds,
                 startup_grace_seconds=settings.paper_worker_memory_watchdog_startup_grace_seconds,
                 backoff_max_seconds=settings.paper_worker_memory_watchdog_backoff_max_seconds,
+                early_trip_window_seconds=(
+                    settings.paper_worker_memory_watchdog_early_trip_window_seconds
+                ),
                 state_path=settings.paper_worker_memory_watchdog_state_path or None,
             )
         )

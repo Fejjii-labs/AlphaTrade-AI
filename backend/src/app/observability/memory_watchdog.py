@@ -8,7 +8,7 @@ platform restarts it.
 A worker whose baseline is already at the limit must not restart every check
 interval. No check runs during a startup grace period counted from process
 start. A small state file (trip count and time only) doubles that grace after
-each trip that came soon after start, up to a cap. When the file does not
+each trip that came within a short window after the grace ended, up to a cap. When the file does not
 survive the restart, the plain grace still limits restarts to one per grace.
 """
 
@@ -77,9 +77,10 @@ class MemoryWatchdog:
 
     No check runs before ``startup_grace_seconds * 2**n`` (capped at
     ``backoff_max_seconds``) after construction, where ``n`` counts the earlier
-    consecutive trips recorded in ``state_path``. A trip within the grace plus
-    ``backoff_max_seconds`` of start continues the streak; a later trip is an
-    ordinary leak and starts a new streak of one.
+    consecutive trips recorded in ``state_path``. A trip within
+    ``early_trip_window_seconds`` after the grace ends continues the streak
+    (the baseline was already at the limit); a later trip is an ordinary leak
+    and starts a new streak of one, so it does not lengthen the next grace.
     """
 
     def __init__(
@@ -89,6 +90,7 @@ class MemoryWatchdog:
         check_seconds: float,
         startup_grace_seconds: float = 0.0,
         backoff_max_seconds: float = 0.0,
+        early_trip_window_seconds: float = 900.0,
         state_path: str | Path | None = None,
         read_rss: Callable[[], int] = _rss_bytes,
         monotonic: Callable[[], float] = time.monotonic,
@@ -100,7 +102,7 @@ class MemoryWatchdog:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._state_path = Path(state_path) if state_path else None
-        self._backoff_max_seconds = backoff_max_seconds
+        self._early_trip_window_seconds = early_trip_window_seconds
         self.prior_trips = _prior_trips(
             self._state_path,
             now=wall_clock(),
@@ -115,6 +117,7 @@ class MemoryWatchdog:
             self._started_at + self.grace_seconds if self.grace_seconds > 0 else None
         )
         self.tripped = False
+        self.consecutive_trips = 0
         logger.info(
             "paper_worker_memory_watchdog_armed",
             limit_bytes=limit_bytes,
@@ -146,8 +149,9 @@ class MemoryWatchdog:
             return False
         self.tripped = True
         uptime = now - self._started_at
-        early = uptime <= self.grace_seconds + self._backoff_max_seconds
+        early = uptime <= self.grace_seconds + self._early_trip_window_seconds
         trips = self.prior_trips + 1 if early else 1
+        self.consecutive_trips = trips
         _write_trips(self._state_path, trips=trips, now=self._wall_clock())
         logger.error(
             "paper_worker_memory_watchdog_tripped",

@@ -250,3 +250,66 @@ def test_watchdog_grace_settings_reach_the_supervisor(tmp_path: Path) -> None:
     )
     watchdog = build_paper_worker_supervisor(custom)._memory_watchdog
     assert watchdog is not None and watchdog.grace_seconds == 120.0
+
+
+def _streak_after_trip_at(
+    uptime: float, prior_trips: int, tmp_path: Path, *, window: float = 900.0
+) -> tuple[MemoryWatchdog, int]:
+    state = tmp_path / "wd.json"
+    wall = [1_800_000_000.0]
+    state.write_text(
+        json.dumps({"consecutive_trips": prior_trips, "tripped_at": wall[0] - 5.0}),
+        encoding="utf-8",
+    )
+    clock = [0.0]
+    watchdog = MemoryWatchdog(
+        limit_bytes=440 * MB,
+        check_seconds=30.0,
+        startup_grace_seconds=300.0,
+        backoff_max_seconds=3600.0,
+        early_trip_window_seconds=window,
+        state_path=state,
+        read_rss=lambda: 500 * MB,
+        monotonic=lambda: clock[0],
+        wall_clock=lambda: wall[0],
+    )
+    clock[0] = uptime
+    wall[0] += uptime
+    assert watchdog.check() is True
+    return watchdog, json.loads(state.read_text(encoding="utf-8"))["consecutive_trips"]
+
+
+def test_leak_tripping_90_minutes_after_start_resets_the_streak(tmp_path: Path) -> None:
+    # Three earlier boot trips: the grace is 2400 s. The old rule (grace plus
+    # the 3600 s backoff cap) still counted a 90 min trip as a boot trip.
+    watchdog, saved = _streak_after_trip_at(90 * 60.0, 3, tmp_path)
+    assert watchdog.grace_seconds == 2400.0
+    assert watchdog.consecutive_trips == 1 and saved == 1
+
+
+def test_leak_tripping_an_hour_after_start_resets_the_streak(tmp_path: Path) -> None:
+    watchdog, saved = _streak_after_trip_at(3600.0, 1, tmp_path)
+    assert watchdog.grace_seconds == 600.0
+    assert watchdog.consecutive_trips == 1 and saved == 1
+
+
+def test_trip_inside_the_early_window_continues_the_streak(tmp_path: Path) -> None:
+    # Grace 600 s after one prior trip; the window ends 900 s after the grace.
+    watchdog, saved = _streak_after_trip_at(600.0 + 900.0, 1, tmp_path)
+    assert watchdog.consecutive_trips == 2 and saved == 2
+    watchdog, saved = _streak_after_trip_at(600.0 + 901.0, 1, tmp_path)
+    assert watchdog.consecutive_trips == 1 and saved == 1
+
+
+def test_early_trip_window_is_configurable(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None)
+    assert settings.paper_worker_memory_watchdog_early_trip_window_seconds == 900.0
+    _, saved = _streak_after_trip_at(600.0 + 1000.0, 1, tmp_path, window=1200.0)
+    assert saved == 2
+    custom = Settings(
+        _env_file=None,
+        paper_worker_memory_watchdog_early_trip_window_seconds=60.0,
+        paper_worker_memory_watchdog_state_path=str(tmp_path / "wd.json"),
+    )
+    watchdog = build_paper_worker_supervisor(custom)._memory_watchdog
+    assert watchdog is not None and watchdog._early_trip_window_seconds == 60.0
