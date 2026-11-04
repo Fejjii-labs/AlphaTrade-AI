@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -181,3 +181,70 @@ def test_claim_predicate_keeps_symbol_cap_off_demo_venue() -> None:
 def test_symbol_keys_normalize_btcusdt_spellings() -> None:
     assert symbol_key("BTC-USDT") == symbol_key("BTCUSDT") == symbol_key("btc/usdt")
     assert symbol_book_amount({"BTC-USDT": "3", "BTCUSDT": "2", "ETHUSDT": "9"}, "BTCUSDT") == 5
+
+
+def _band_plan(monkeypatch, *, leverage: str, stop: str, worst: str) -> object:
+    """Drive GovernedBloFinDemoLoop._plan_terms (unprofiled path) to the band check."""
+
+    from datetime import datetime
+    from uuid import uuid4
+
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+    now = datetime(2026, 11, 4, 8, 0, tzinfo=UTC)
+    side = SimpleNamespace(value="BUY")
+
+    def _dump(**_kwargs: object) -> dict[str, object]:
+        raise AssertionError("plan passed the stop-loss band")
+
+    terms = SimpleNamespace(
+        side=side,
+        account_id=uuid4(),
+        risk_and_exits=SimpleNamespace(
+            stop=SimpleNamespace(value=Decimal(stop)),
+            targets=[SimpleNamespace(price=SimpleNamespace(value=Decimal("110")))],
+        ),
+        model_dump=_dump,
+    )
+    monkeypatch.setattr("app.services.governed_blofin_demo._plan_terms", lambda **_k: terms)
+    snapshot = SimpleNamespace(
+        equity=Decimal("10000"),
+        available=Decimal("10000"),
+        book=SimpleNamespace(side=side, worst_price=lambda *_a, **_k: Decimal(worst)),
+        observed_at=now,
+        tick=Decimal("0.1"),
+        price=Decimal("100"),
+        account_leverage=Decimal(leverage),
+        margin_mode="cross",
+        multiplier=Decimal("1"),
+        maximum=Decimal("1000000"),
+        lot=Decimal("1"),
+        minimum=Decimal("1"),
+        instrument="BTC-USDT",
+    )
+    loop = GovernedBloFinDemoLoop(None, Settings(_env_file=None), SimpleNamespace())  # type: ignore[arg-type]
+    monkeypatch.setattr(loop, "_require_snapshot", lambda: snapshot)
+    return loop._plan_terms(
+        candidate=SimpleNamespace(),  # type: ignore[arg-type]
+        assembled=SimpleNamespace(),  # type: ignore[arg-type]
+        policy=SimpleNamespace(),  # type: ignore[arg-type]
+        account_id=uuid4(),
+        equity=Decimal("10000"),
+        now=now,
+        eligibility_valid_until=now,
+        eligibility_id=uuid4(),
+    )
+
+
+def test_plan_refuses_loss_below_band_floor(monkeypatch) -> None:
+    # 1x leverage caps notional at 9500; a 0.5% stop then risks ~66 < 1% floor (100).
+    assert _band_plan(monkeypatch, leverage="1", stop="99.5", worst="100") == (
+        "stop_loss_below_band"
+    )
+
+
+def test_plan_refuses_loss_above_band_ceiling(monkeypatch) -> None:
+    # Thin book: 116 contracts fill up to 104, so stop loss ~580+ > 5% ceiling (500).
+    assert _band_plan(monkeypatch, leverage="10", stop="99", worst="104") == (
+        "stop_loss_above_band"
+    )
