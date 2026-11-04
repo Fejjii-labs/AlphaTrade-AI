@@ -18,8 +18,9 @@ type Props = {
 
 /**
  * The leverage section at `#leverage`. When GET /autonomous/settings carries
- * the PR #430 demo leverage fields, `LeverageSettingsSlot` (PR #430's editor)
- * renders. Until then this shows profile leverage and the ceilings read-only.
+ * the demo leverage fields, `LeverageSettingsSlot` (the demo leverage editor)
+ * renders. If the settings could not load, this shows profile leverage and the
+ * ceilings read-only.
  */
 export function LeverageSection({ profiles, settings, bounds }: Props) {
   if (hasDemoLeverageConfig(settings)) return <LeverageSettingsSlot profiles={profiles} />;
@@ -42,8 +43,8 @@ export function LeverageSection({ profiles, settings, bounds }: Props) {
           ) : null}
         </div>
         {profiles.length === 0 ? <p className="text-text-muted">Leverage profile unavailable.</p> : null}
-        <p className="text-xs text-text-muted" data-testid="leverage-pending">
-          Read-only. Leverage config pending PR #430.
+        <p className="text-xs text-text-muted" data-testid="leverage-unavailable">
+          Read-only. Leverage settings unavailable.
         </p>
       </CardContent>
     </Card>

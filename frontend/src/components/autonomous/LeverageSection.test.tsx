@@ -8,7 +8,7 @@ import { hasDemoLeverageConfig } from "./bounds";
 import { LeverageSection } from "./LeverageSection";
 
 vi.mock("@/components/autonomous/LeverageSettingsSlot", () => ({
-  LeverageSettingsSlot: () => <section data-testid="pr430-leverage-editor" />,
+  LeverageSettingsSlot: () => <section data-testid="demo-leverage-editor-mock" />,
 }));
 
 const settings = {
@@ -28,28 +28,29 @@ const profile = (kind: string, max: string) =>
 afterEach(cleanup);
 
 describe("LeverageSection", () => {
-  it("is read-only and says leverage config is pending PR #430 when the settings have no demo leverage", () => {
+  it("is read-only and says leverage settings are unavailable when the settings have no demo leverage", () => {
     render(<LeverageSection profiles={[profile("internal_paper", "3"), profile("demo", "5")]} settings={settings} bounds={autonomousBounds} />);
     const card = screen.getByTestId("leverage-settings-slot");
     expect(card).toHaveAttribute("id", "leverage");
     expect(card).toHaveTextContent("Internal paperDefault 2× · max 3×");
     expect(card).toHaveTextContent("BloFin demoDefault 2× · max 5×");
     expect(card).toHaveTextContent("BloFin demo ceiling20×");
-    expect(screen.getByTestId("leverage-pending")).toHaveTextContent("Leverage config pending PR #430");
+    expect(screen.getByTestId("leverage-unavailable")).toHaveTextContent("Read-only. Leverage settings unavailable.");
+    expect(card).not.toHaveTextContent("#430");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("pr430-leverage-editor")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("demo-leverage-editor-mock")).not.toBeInTheDocument();
   });
 
-  it("hands over to the PR #430 leverage editor once the settings carry demo_leverage", () => {
+  it("hands over to the demo leverage editor once the settings carry demo_leverage", () => {
     const withLeverage = { ...settings, demo_leverage: 10, max_demo_leverage_ceiling: 20 } as AutonomousTradingSettingsView;
     render(<LeverageSection profiles={[]} settings={withLeverage} bounds={null} />);
-    expect(screen.getByTestId("pr430-leverage-editor")).toBeInTheDocument();
-    expect(screen.queryByTestId("leverage-pending")).not.toBeInTheDocument();
+    expect(screen.getByTestId("demo-leverage-editor-mock")).toBeInTheDocument();
+    expect(screen.queryByTestId("leverage-unavailable")).not.toBeInTheDocument();
   });
 
-  it("stays pending when settings could not load", () => {
+  it("says leverage settings are unavailable when settings could not load", () => {
     render(<LeverageSection profiles={[]} settings={null} bounds={null} />);
-    expect(screen.getByTestId("leverage-pending")).toBeInTheDocument();
+    expect(screen.getByTestId("leverage-unavailable")).toBeInTheDocument();
     expect(screen.getByTestId("leverage-settings-slot")).toHaveTextContent("Leverage profile unavailable.");
   });
 

@@ -15,7 +15,7 @@ import { PROFILE_KINDS } from "./profile-labels";
 
 type Props = {
   /**
-   * The settings the page already loaded, used to detect PR #430's leverage
+   * The settings the page already loaded, used to detect the demo leverage
    * fields. Omitted: the leverage slot renders on its own (previous behaviour).
    */
   settings?: AutonomousTradingSettingsView | null;

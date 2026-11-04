@@ -20,8 +20,9 @@ export function inputLimits(bound: NumericBound | undefined | null): { min?: str
 }
 
 /**
- * PR #430 adds BloFin demo leverage to GET /autonomous/settings. Until it is
- * merged the response has no `demo_leverage`, and the page says so.
+ * GET /autonomous/settings carries BloFin demo leverage. Without a numeric
+ * `demo_leverage` (for example when the settings failed to load) the page shows
+ * leverage read-only and says the settings are unavailable.
  */
 export function hasDemoLeverageConfig(view: AutonomousTradingSettingsView | null | undefined): boolean {
   return view != null && "demo_leverage" in view && typeof (view as { demo_leverage?: unknown }).demo_leverage === "number";
