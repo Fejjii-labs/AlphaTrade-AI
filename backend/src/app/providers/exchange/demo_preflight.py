@@ -35,6 +35,21 @@ _VALIDATION_REASONS = {
         "leverage_info_margin_mode_mismatch"
     ),
     "Demo maintenance tiers unavailable; no leverage mutation.": "maintenance_tiers_unavailable",
+    # Configured demo leverage write (the only leverage or margin-mode write).
+    "Demo leverage write refused: client is not the BloFin demo host.": (
+        "leverage_write_host_refused"
+    ),
+    "Demo leverage request invalid; no leverage mutation.": "leverage_request_invalid",
+    "Demo set-margin-mode failed.": "margin_mode_set_failed",
+    "Demo set-margin-mode was not confirmed.": "margin_mode_set_unconfirmed",
+    "Demo set-leverage failed.": "leverage_set_failed",
+    "Demo set-leverage was not confirmed.": "leverage_set_unconfirmed",
+    "Demo margin mode read-back does not match the configured mode.": (
+        "margin_mode_readback_mismatch"
+    ),
+    "Demo leverage read-back does not match the configured leverage.": (
+        "leverage_readback_mismatch"
+    ),
     "Demo account state incomplete or unreadable.": "account_state_incomplete",
     "Demo position already open or unreadable; new entry refused.": "account_not_flat",
     "Demo pending orders or protection; new entry refused.": "pending_orders_present",

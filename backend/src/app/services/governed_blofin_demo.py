@@ -41,7 +41,12 @@ from app.market_contracts.enums import VenueId
 from app.providers.exchange.blofin_activity import BloFinActivityProvider
 from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
-from app.providers.exchange.governed_blofin import DemoVenueSnapshot, GovernedBloFinDemoProvider
+from app.providers.exchange.governed_blofin import (
+    CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+    DemoVenueSnapshot,
+    GovernedBloFinDemoProvider,
+    demo_plan_leverage,
+)
 from app.providers.exchange.governed_blofin_exit import DemoPositionLineageError
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.approval import ApprovalDecisionRequest
@@ -84,6 +89,7 @@ from app.services.autonomous_trading import RiskLimitSnapshot
 from app.services.canonical_paper_execution import CanonicalPaperExecutionService
 from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
+from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
 from app.services.paper_alert_service import PaperAlertService
@@ -112,6 +118,10 @@ _DEMO_QUOTE_TTL = timedelta(seconds=10)
 # A preflight book received longer ago than this (local monotonic seconds) is
 # read again right before eligibility.
 _DEMO_QUOTE_REFRESH_AFTER_SECONDS = 2.0
+# Fee and slippage allowances, each a fraction of the worse-price notional. The
+# claim reserves notional plus both, so sizing keeps the sum within headroom.
+_DEMO_FEE_ALLOWANCE_RATE = Decimal("0.001")
+_DEMO_SLIPPAGE_ALLOWANCE_RATE = Decimal("0.001")
 
 
 def _demo_risk_snapshot(
@@ -203,6 +213,38 @@ def _demo_risk_snapshot(
     )
 
 
+def demo_remaining_total_exposure(
+    session: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    account_id: UUID,
+) -> Decimal:
+    """Total-exposure headroom the claim predicate will allow for this account.
+
+    Same source as the claim: the account's risk-accounting row, or the risk
+    settings default when no row exists yet (the claim creates it from those).
+    """
+
+    from app.db.models import AccountRiskAccountingState
+    from app.services.audit_service import AuditService
+    from app.services.risk.settings_service import RiskSettingsService
+
+    row = session.scalar(
+        select(AccountRiskAccountingState).where(
+            AccountRiskAccountingState.organization_id == organization_id,
+            AccountRiskAccountingState.account_id == account_id,
+        )
+    )
+    if row is None:
+        return (
+            RiskSettingsService(session, AuditService(session))
+            .get(organization_id=organization_id, user_id=user_id)
+            .default_account_balance
+        )
+    return row.max_notional - row.reserved_notional - row.actual_notional
+
+
 def demo_posture_refusal(settings: Settings) -> str | None:
     if not governed_demo_worker_access_requested(settings):
         return "governed_demo_disarmed"
@@ -250,6 +292,71 @@ def _resolved_lifecycle(session: Session, command: ExecutionCommand) -> str | No
     return "demo_closed_reconciled"
 
 
+def demo_leverage_write_allowed(settings: object) -> bool:
+    """Automatic demo leverage writes: explicit flag AND a staging/local environment.
+
+    A production environment (including a production demo profile) never
+    writes leverage until the owner approves extending it. Without the write the
+    snapshot still requires the configured leverage, so a mismatch blocks.
+    """
+
+    from app.core.config import Environment
+
+    if getattr(settings, "governed_demo_auto_leverage_write_enabled", False) is not True:
+        return False
+    return getattr(settings, "environment", None) in {Environment.STAGING, Environment.LOCAL}
+
+
+def binding_demo_leverage_config(
+    config: DemoLeverageConfig, settings: object
+) -> DemoLeverageConfig | None:
+    """The configured leverage the loop must use, or None for the existing leverage.
+
+    Binding when the app may write it, or when the owner saved a setting (an
+    account value or a per-coin override). Otherwise the loop trades at the demo
+    account's existing leverage and margin mode, read only (#424).
+    """
+
+    if demo_leverage_write_allowed(settings) or config.source != "default":
+        return config
+    return None
+
+
+def _journal_leverage_write(
+    session: Session,
+    *,
+    organization_id: object,
+    user_id: object,
+    applied: object,
+) -> None:
+    """Audit a confirmed demo leverage write with previous and new values."""
+
+    from uuid import uuid4
+
+    from app.schemas.audit import AuditRecordCreate
+    from app.schemas.common import AuditEventType
+
+    if not isinstance(applied, dict):
+        return
+    try:
+        AuditService(session).record(
+            AuditRecordCreate(
+                request_id=f"demo-leverage-{uuid4()}",
+                trace_id=f"demo-leverage-{uuid4()}",
+                event_type=AuditEventType.DEMO_LEVERAGE_APPLIED,
+                resource_type="blofin_demo_leverage",
+                resource_id=str(applied.get("inst_id", "")),
+                organization_id=organization_id,
+                user_id=user_id,
+                metadata={str(k): str(v) for k, v in applied.items()},
+            )
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.warning("Demo leverage write succeeded but the audit journal failed.")
+
+
 def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Decimal) -> str | None:
     """Compare the open position's liquidation price with the stop. No order write.
 
@@ -272,6 +379,20 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     if liquidation is None:
         return None
     direction = "long" if plan.side is EntrySide.BUY else "short"
+    from app.services.demo_leverage_config import LIQUIDATION_STOP_DISTANCE_MULTIPLE
+
+    stop_price = plan.risk_and_exits.stop.value
+    stop_distance = abs(fill_price - stop_price)
+    through = (direction == "long" and liquidation >= stop_price) or (
+        direction == "short" and liquidation <= stop_price
+    )
+    if through:
+        return "demo_post_fill_liquidation_inside_stop"
+    if (
+        plan.risk_and_exits.margin_assumption_id == "configured-demo-leverage"
+        and abs(fill_price - liquidation) < stop_distance * LIQUIDATION_STOP_DISTANCE_MULTIPLE
+    ):
+        return "demo_post_fill_liquidation_inside_buffer"
     outcome = post_fill_recheck(
         fill_price=fill_price,
         stop_distance=abs(fill_price - plan.risk_and_exits.stop.value),
@@ -287,6 +408,33 @@ def _demo_post_fill_liquidation(provider: object, plan: object, fill_price: Deci
     if outcome.exchange_write_attempted or outcome.accepted:
         return None
     return "demo_post_fill_liquidation_inside_stop"
+
+
+def _alert_liquidation_unreadable(session: Session, command: ExecutionCommand) -> None:
+    """Warning alert: configured-plan fill whose venue liqPrice is unreadable.
+
+    No hold and no close (cross positions may omit liqPrice and the pre-trade
+    liquidation gate already ran). The alert is stored and shown in the UI; an
+    alert failure only logs, it never blocks reconciliation.
+    """
+
+    try:
+        PaperAlertService(session, audit_service=AuditService(session)).create(
+            organization_id=command.organization_id,
+            user_id=command.user_id,
+            alert_type=PaperAlertType.DEMO_LIQUIDATION_UNREADABLE,
+            severity=PaperAlertSeverity.WARNING,
+            message=(
+                "BloFin demo liquidation price was missing or unreadable after a fill. "
+                "No hold and no automatic close; check the position on the venue."
+            ),
+            dedup_key=f"demo_liquidation_unreadable:{command.organization_id}:{command.id}",
+            metadata={"command_id": str(command.id), "auto_close": False},
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.warning("BloFin demo liquidation-unreadable alert failed; command_id=%s", command.id)
 
 
 def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
@@ -308,21 +456,24 @@ def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
     return None
 
 
-def _alert_liquidation_through_stop(session: Session, command: ExecutionCommand) -> None:
+def _alert_liquidation_through_stop(
+    session: Session, command: ExecutionCommand, *, kill_switch_armed: bool
+) -> None:
     """Loud alert on the existing notification path. Does not close or reduce.
 
     Telegram stays off unless it was already enabled. This records a critical
     alert and would deliver only through that existing, default-off path.
     """
 
+    armed = "The kill switch is armed." if kill_switch_armed else "The kill switch is not armed."
     PaperAlertService(session, audit_service=AuditService(session)).create(
         organization_id=command.organization_id,
         user_id=command.user_id,
         alert_type=PaperAlertType.DEMO_LIQUIDATION_THROUGH_STOP,
         severity=PaperAlertSeverity.CRITICAL,
         message=(
-            "LIQUIDATION THROUGH STOP: BloFin demo liquidation price is through "
-            "the stop after a fill. The kill switch is armed. No automatic close "
+            "LIQUIDATION INSIDE STOP OR BUFFER: BloFin demo liquidation price breaches "
+            f"the stop or its 2x buffer after a fill. {armed} No automatic close "
             "or reduction. Operator action required."
         ),
         dedup_key=(f"demo_liquidation_through_stop:{command.organization_id}:{command.id}"),
@@ -401,6 +552,9 @@ def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tup
 
     if liquidation_reason == "demo_post_fill_liquidation_unreadable":
         return "DEMO_LIQUIDATION_UNREADABLE", not protected
+    if liquidation_reason == "demo_post_fill_liquidation_inside_buffer":
+        # Buffer only: the stop still fills first. Warn and alert; arm nothing.
+        return "DEMO_LIQUIDATION_INSIDE_BUFFER", False
     if liquidation_reason == "demo_post_fill_liquidation_inside_stop":
         return "DEMO_LIQUIDATION_INSIDE_STOP", True
     raise ValueError("Unknown demo liquidation hold.")
@@ -429,6 +583,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
+        self._leverage_config: DemoLeverageConfig | None = None
+        self._remaining_exposure: Decimal | None = None
+        # True when the configured leverage is written only after the plan passes.
+        self._leverage_write_pending = False
 
     def _verified_funding_rate(self) -> Decimal | None:
         rate = self._scan_funding_rate
@@ -560,16 +718,51 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             session, account_id=account.id, organization_id=target.organization_id
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
-        session.commit()  # Persist Candidate; no DB transaction held over venue reads.
         from app.services.automated_paper_loop import _load_active_profile
+        from app.services.demo_leverage_config import (
+            DemoLeverageValidationError,
+            load_demo_leverage_config,
+        )
 
         active = _load_active_profile(
             session, target.organization_id, self._risk_policy_kind(), self._clock.now()
         )
-        # Trade at the demo account's existing leverage and margin mode (read
-        # only, never written). A profile still reads the isolated mode it sizes for.
-        required_leverage = None
-        read_margin_mode = "isolated" if active is not None else None
+        try:
+            config = load_demo_leverage_config(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                symbol=target.symbol,
+            )
+        except DemoLeverageValidationError:
+            return _proof(candidate, "blocked", "demo_leverage_config_invalid")
+        session.commit()  # Persist Candidate; no DB transaction held over venue IO.
+        # Without a binding configured leverage, trade at the demo account's
+        # existing leverage and margin mode (read only); a profile still reads isolated.
+        write_allowed = demo_leverage_write_allowed(self._settings)
+        self._leverage_config = binding_demo_leverage_config(config, self._settings)
+        self._leverage_write_pending = self._leverage_config is not None and write_allowed
+        required_leverage: Decimal | None = None
+        read_margin_mode: str | None = "isolated" if active is not None else None
+        if self._leverage_config is not None:
+            # The profile liquidation buffer is isolated-only; refuse before any write.
+            if active is not None and config.margin_mode != "isolated":
+                return _proof(candidate, "blocked", "demo_margin_mode_not_isolated")
+            profile_max = getattr(getattr(active, "profile", None), "max_leverage", None)
+            if active is not None and (
+                not isinstance(profile_max, Decimal) or config.leverage_decimal > profile_max
+            ):
+                return _proof(candidate, "blocked", "demo_leverage_exceeds_profile_max")
+            if not write_allowed:
+                # No write: the snapshot (and the action-time re-read) requires the
+                # configured leverage and margin mode to read back exactly.
+                required_leverage = config.leverage_decimal
+                read_margin_mode = config.margin_mode
+            else:
+                # The write happens only once the plan has passed sizing, band,
+                # exposure and approval, right before the claim and the entry
+                # (_apply_planned_leverage). Read the account as it is until then.
+                read_margin_mode = None
         self._snapshot_request = {
             "symbol": target.symbol,
             "side": EntrySide.BUY if candidate.direction is TradeDirection.LONG else EntrySide.SELL,
@@ -586,6 +779,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
         self._scan_funding_rate = _read_demo_funding(self._get_provider(), target.symbol)
+        try:
+            self._remaining_exposure = demo_remaining_total_exposure(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                account_id=account.id,
+            )
+        except Exception:
+            return _proof(candidate, "blocked", "risk_limits_unverified")
         return super()._bound(
             session,
             target=target,
@@ -692,29 +894,43 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         entry = snapshot.price
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
+        # A binding configured leverage is either written after this plan passes
+        # (sized at the configured values; the write reads them back exactly) or,
+        # without the write, must already read back exactly. Otherwise the plan
+        # trades at the account's existing leverage.
+        config = self._leverage_config
+        configured_leverage = None if config is None else config.leverage_decimal
+        account_leverage = snapshot.account_leverage
+        account_margin_mode = snapshot.margin_mode
+        if config is not None and self._leverage_write_pending:
+            account_leverage = config.leverage_decimal
+            account_margin_mode = config.margin_mode
+        elif config is not None and (
+            snapshot.account_leverage != configured_leverage
+            or snapshot.margin_mode != config.margin_mode
+        ):
+            return "demo_leverage_readback_mismatch"
         # Reserve fees+slippage conservatively; sizing uses base value per contract.
         # Stop-loss band: the stop-distance loss must land in [min%, max%] of
         # equity (configurable). Size just above the floor; notional is bounded
-        # by what the account's existing leverage can margin.
+        # by what the account's leverage (configured or existing) can margin.
         loss_floor, loss_ceiling = stop_loss_band(self._settings, equity)
         if loss_floor is None or loss_ceiling is None:
             return "stop_loss_band_invalid"
         risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
-        account_leverage = snapshot.account_leverage
         if not account_leverage.is_finite() or account_leverage <= 0:
             return "demo_account_leverage_unreadable"
         if account_leverage > demo_max_leverage(self._settings):
             return "demo_leverage_above_ceiling"
         notional_cap = equity * account_leverage * Decimal("0.95")
-        margin_assumption = (
-            "verified-demo-existing-leverage-isolated"
-            if snapshot.margin_mode == "isolated"
-            else (
-                "verified-demo-existing-1x"
-                if account_leverage == 1
-                else "verified-demo-existing-leverage-cross"
-            )
-        )
+        if config is not None:
+            margin_assumption = CONFIGURED_DEMO_MARGIN_ASSUMPTION
+        elif account_margin_mode == "isolated":
+            margin_assumption = "verified-demo-existing-leverage-isolated"
+        elif account_leverage == 1:
+            margin_assumption = "verified-demo-existing-1x"
+        else:
+            margin_assumption = "verified-demo-existing-leverage-cross"
         profile_leverage: Decimal | None = None
         profile_cash_ceiling: Decimal | None = None
         profile_funding_rate: Decimal | None = None
@@ -722,6 +938,18 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         profile_grade = None
         profile_grade_cap: Decimal | None = None
         if active_profile is None:
+            # The claim also caps notional plus fee and slippage allowances at the
+            # account's remaining total exposure; size within it rather than plan a
+            # trade the claim will refuse (e.g. 10x leverage on a 1x exposure limit).
+            remaining_exposure = self._remaining_exposure
+            if remaining_exposure is None or not remaining_exposure.is_finite():
+                return "risk_limits_unverified"
+            if remaining_exposure <= 0:
+                return "insufficient_total_exposure"
+            notional_cap = min(
+                notional_cap,
+                remaining_exposure / (1 + _DEMO_FEE_ALLOWANCE_RATE + _DEMO_SLIPPAGE_ALLOWANCE_RATE),
+            )
             cost_per_base = entry * Decimal("0.002")
             raw = (
                 min(
@@ -773,13 +1001,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 ),
                 execution_channel="demo",
                 fixed_risk_percent=fixed_risk_percent,
+                leverage=configured_leverage,
             )
             if isinstance(sized, str):
                 return sized
-            mismatch = demo_leverage_block(snapshot.account_leverage, sized.leverage)
+            mismatch = demo_leverage_block(account_leverage, sized.leverage)
             if mismatch is not None:
                 return mismatch
-            margin_block = demo_margin_mode_block(snapshot.margin_mode)
+            margin_block = demo_margin_mode_block(account_margin_mode)
             if margin_block is not None:
                 return margin_block
             if risk_records is not None:
@@ -814,6 +1043,20 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         base = quantity * snapshot.multiplier
         lower, upper = min(entry, worst_entry), max(entry, worst_entry)
         adverse_entry = upper if is_long else lower
+        from app.services.demo_leverage_config import demo_liquidation_refusal
+
+        # Pre-trade gate at the configured leverage. Fail closed.
+        if configured_leverage is not None:
+            liquidation_block = demo_liquidation_refusal(
+                entry=adverse_entry,
+                stop=stop,
+                direction="long" if is_long else "short",
+                leverage=configured_leverage,
+                notional=base * adverse_entry,
+                maintenance_tiers=snapshot.maintenance_tiers,
+            )
+            if liquidation_block is not None:
+                return liquidation_block
         from app.services.risk_policy.plan_sizing import reserved_maximum_loss
 
         # Profile plans store the same unit costs the sizer reserved. Non-profile
@@ -897,20 +1140,29 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                     "value": maximum_loss,
                     "unit": "USDT",
                 },
-                "fee_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
-                "slippage_allowance": {"value": base * upper * Decimal("0.001"), "unit": "USDT"},
+                "fee_allowance": {
+                    "value": base * upper * _DEMO_FEE_ALLOWANCE_RATE,
+                    "unit": "USDT",
+                },
+                "slippage_allowance": {
+                    "value": base * upper * _DEMO_SLIPPAGE_ALLOWANCE_RATE,
+                    "unit": "USDT",
+                },
                 "stop": {"value": stop, "unit": "USDT"},
                 "margin_assumption_id": margin_assumption,
                 "margin_assumption_version": "1",
             }
         )
-        if profile_leverage is None:
-            values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
-            if snapshot.margin_mode == "isolated":
-                values["margin_mode"] = "ISOLATED"
         if profile_leverage is not None:
             values["margin_mode"] = "ISOLATED"
             values["risk_and_exits"]["leverage"] = format(profile_leverage, "f")
+        elif config is not None:
+            values["margin_mode"] = config.margin_mode.upper()
+            values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
+        else:
+            values["risk_and_exits"]["leverage"] = format(account_leverage, "f")
+            if account_margin_mode == "isolated":
+                values["margin_mode"] = "ISOLATED"
         values["risk_and_exits"]["targets"][0]["price"]["value"] = target
         revised = TradePlanRevisionCreate.model_validate(values)
         try:
@@ -1214,6 +1466,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 reason=blocked,
             )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        blocked = self._apply_planned_leverage(session, target, candidate, plan)
+        if blocked is not None:
+            approval.revoke_authorization(
+                decided.authorization.authorization_id,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                reason=blocked,
+            )
+            session.commit()
+            return _proof(candidate, "blocked", blocked, revision_id=revision_id)
         result = ExecutionService(
             session, self._settings, AuditService(session), canonical_runtime=self._runtime
         ).execute_paper_plan(
@@ -1316,6 +1578,80 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             journal_status=trade.status.value if trade is not None else None,
         )
 
+    def _apply_planned_leverage(
+        self,
+        session: Session,
+        target: PaperScanTarget,
+        candidate: Candidate,
+        plan: object,
+    ) -> str | None:
+        """Write a configured plan's leverage once the plan has passed, before the entry.
+
+        Called only after sizing, the stop-loss band, the exposure cap and
+        approval accepted the stored plan, so a refused plan never writes. No-op
+        for every other plan, or when the write is not allowed (the plan was then
+        built on an exact read-back). The kill switch is re-read immediately
+        before the write: the cycle's observation (unknown counts as on), the
+        global flag, and a fresh read of the org switch (unreadable counts as on).
+        Returns a block reason, or None to continue to the claim and the entry.
+        """
+
+        from app.schemas.trade_plan import TradePlanRevision as PlanSchema
+        from app.services.autonomous_trading import kill_switch_refusal
+        from app.services.demo_leverage_config import (
+            DemoLeverageValidationError,
+            load_demo_leverage_config,
+        )
+
+        assumption = getattr(getattr(plan, "risk_and_exits", None), "margin_assumption_id", None)
+        if assumption != CONFIGURED_DEMO_MARGIN_ASSUMPTION:
+            return None
+        if not demo_leverage_write_allowed(self._settings):
+            return None
+        if not isinstance(plan, PlanSchema):
+            return "demo_leverage_config_invalid"
+        leverage, margin_mode = demo_plan_leverage(plan)
+        if leverage is None:
+            return "demo_leverage_config_invalid"
+        # The owner's setting must still be what the plan was sized for.
+        try:
+            config = load_demo_leverage_config(
+                session,
+                organization_id=target.organization_id,
+                user_id=target.user_id,
+                symbol=target.symbol,
+            )
+        except DemoLeverageValidationError:
+            return "demo_leverage_config_invalid"
+        if config.leverage_decimal != leverage or config.margin_mode != margin_mode:
+            return "demo_leverage_config_changed"
+        observed_kill_switch = getattr(self, "_observed_kill_switch", None)
+        killed = self._kill_switch_refusal(
+            candidate, kill_switch_active=observed_kill_switch is not False
+        )
+        if killed is not None:
+            return killed.reason_code
+        fresh = kill_switch_refusal(self._settings, session, target.organization_id, observed=False)
+        if fresh is not None:
+            session.rollback()  # A failed read leaves the transaction unusable.
+            return fresh
+        session.commit()  # End the read; no DB transaction held over venue IO.
+        try:
+            # Owner-configured leverage and margin mode, demo host only, exact read-back.
+            applied = self._get_provider().apply_configured_leverage(
+                symbol=target.symbol, leverage=leverage, margin_mode=margin_mode
+            )
+        except Exception as exc:
+            diagnostic = failure_diagnostics(exc, stage="leverage_write")
+            return f"demo_{diagnostic['reason_code']}"
+        _journal_leverage_write(
+            session,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            applied=applied,
+        )
+        return None
+
     def _dispatcher(self, session: Session) -> VenueSubmitDispatcher:
         return VenueSubmitDispatcher(session, self._safety(session), clock=self._clock.now)
 
@@ -1333,12 +1669,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         liquidation_reason: str,
         protected: bool,
     ) -> None:
-        """Arm the existing kill switch, then label the read.
+        """Arm the existing kill switch where it already applied, alert, label the read.
 
         A missing protection hold and a liquidation price through the stop use
-        the same switch as the later unprotected fill. An unreadable price is
-        not stored as a price through the stop. This does not close the
-        position and does not write leverage or margin mode.
+        the same switch as the later unprotected fill. A liquidation price
+        inside the 2x stop buffer only warns and alerts. An unreadable price is
+        not stored as a price through the stop. This never closes or reduces
+        the position and does not write leverage or margin mode.
         """
 
         disposition, arm_kill_switch = profile_liquidation_hold(
@@ -1353,8 +1690,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 protected,
                 disposition,
             )
+        through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
+        breached = through_stop or liquidation_reason == "demo_post_fill_liquidation_inside_buffer"
+        if breached:
+            logger.warning(
+                "BloFin demo liquidation price breaches the stop or buffer after fill; "
+                "command_id=%s disposition=%s",
+                command.id,
+                disposition,
+            )
         if arm_kill_switch:
-            through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
             reason = (
                 "BloFin demo liquidation is through the stop; operator action required"
                 if through_stop
@@ -1366,8 +1711,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 payload=KillSwitchMutationRequest(confirm=True, reason=reason),
                 source="demo_protection",
             )
-            if through_stop:
-                _alert_liquidation_through_stop(session, command)
+        if breached:
+            _alert_liquidation_through_stop(session, command, kill_switch_armed=arm_kill_switch)
         effect.reconciliation_disposition = disposition
 
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:
@@ -1487,16 +1832,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 # Persist actual entry facts before separate bounded venue reads.
                 # No DB transaction/epoch lock spans the exit provider IO.
                 session.commit()
-                profile_fill = (
-                    envelope.plan.risk_and_exits.margin_assumption_id
-                    == "verified-demo-read-leverage"
-                )
-                if profile_fill:
+                assumption = envelope.plan.risk_and_exits.margin_assumption_id
+                profile_fill = assumption == "verified-demo-read-leverage"
+                configured_fill = assumption == "configured-demo-leverage"
+                if profile_fill or configured_fill:
                     liquidation_reason = _demo_post_fill_liquidation(
                         self._get_provider(),
                         envelope.plan,
                         evidence.fills[-1].price,
                     )
+                    # A cross position may omit liqPrice; for non-profile plans an
+                    # unreadable price raises a warning alert, not a hold or close.
+                    if configured_fill and liquidation_reason == (
+                        "demo_post_fill_liquidation_unreadable"
+                    ):
+                        logger.warning(
+                            "BloFin demo liquidation unreadable after configured fill; "
+                            "command_id=%s",
+                            command.id,
+                        )
+                        _alert_liquidation_unreadable(session, command)
+                        liquidation_reason = None
                     if liquidation_reason is not None:
                         self._safety(session).lock_epoch(
                             organization_id=command.organization_id,

@@ -30,6 +30,15 @@ from app.services.autonomous_paper_switch import (
     read_internal_paper_switch,
     write_internal_paper_switch,
 )
+from app.services.demo_leverage_config import (
+    DEFAULT_DEMO_LEVERAGE,
+    DEFAULT_DEMO_MARGIN_MODE,
+    DEMO_LEVERAGE_CEILING,
+    DemoLeverageValidationError,
+    validate_demo_leverage,
+    validate_demo_leverage_overrides,
+    validate_demo_margin_mode,
+)
 from app.services.risk.settings_service import SYSTEM_RISK_DEFAULTS
 from app.services.risk_policy.ceilings import (
     HARD_MAX_DAILY_LOSS_PERCENT,
@@ -112,6 +121,21 @@ def validate_risk_per_trade_percent(value: Decimal | None) -> Decimal | None:
     return value
 
 
+def _demo_leverage_view(row: AutonomousTradingSettingsRow | None) -> dict[str, object]:
+    """Stored demo leverage, or the 10x isolated default when nothing is saved."""
+
+    leverage = None if row is None else row.demo_leverage
+    mode = None if row is None else row.demo_margin_mode
+    overrides = None if row is None else row.demo_leverage_overrides
+    return {
+        "demo_leverage": DEFAULT_DEMO_LEVERAGE if leverage is None else leverage,
+        "demo_margin_mode": DEFAULT_DEMO_MARGIN_MODE if mode is None else mode,
+        "demo_leverage_overrides": overrides or {},
+        "demo_leverage_using_default": leverage is None and mode is None,
+        "max_demo_leverage_ceiling": DEMO_LEVERAGE_CEILING,
+    }
+
+
 @dataclass(frozen=True)
 class ResolvedAutonomousSettings:
     daily_loss_limit_percent: Decimal
@@ -153,6 +177,7 @@ class AutonomousTradingSettingsService:
                 effective_max_trades_per_day=account_cap,
                 **options,
                 **switch,
+                **_demo_leverage_view(None),
             )
         return AutonomousTradingSettingsView(
             organization_id=organization_id,
@@ -167,6 +192,7 @@ class AutonomousTradingSettingsService:
             effective_max_trades_per_day=min(row.max_trades_per_day, account_cap),
             **options,
             **switch,
+            **_demo_leverage_view(row),
         )
 
     def resolve(
@@ -198,6 +224,10 @@ class AutonomousTradingSettingsService:
         risk = current.risk_per_trade_percent
         strategy_id = current.strategy_id
         symbol = current.symbol
+        existing = self._load_row(organization_id=organization_id, user_id=user_id)
+        demo_leverage = None if existing is None else existing.demo_leverage
+        demo_margin_mode = None if existing is None else existing.demo_margin_mode
+        demo_overrides = None if existing is None else existing.demo_leverage_overrides
 
         changes: dict[str, str] = {}
         data = payload.model_dump(exclude_unset=True)
@@ -239,6 +269,27 @@ class AutonomousTradingSettingsService:
             if symbol:
                 self._assert_symbol(organization_id=organization_id, symbol=symbol)
             changes["symbol"] = symbol or "null"
+        try:
+            if data.get("demo_leverage") is not None:
+                demo_leverage = validate_demo_leverage(data["demo_leverage"])
+                changes["demo_leverage"] = str(demo_leverage)
+            if data.get("demo_margin_mode") is not None:
+                demo_margin_mode = validate_demo_margin_mode(data["demo_margin_mode"])
+                changes["demo_margin_mode"] = demo_margin_mode
+            if payload.clear_demo_leverage_overrides:
+                demo_overrides = None
+                changes["demo_leverage_overrides"] = "cleared"
+            elif data.get("demo_leverage_overrides") is not None:
+                demo_overrides = validate_demo_leverage_overrides(data["demo_leverage_overrides"])
+                changes["demo_leverage_overrides"] = (
+                    ",".join(
+                        f"{key}:{value.get('leverage', '-')}:{value.get('margin_mode', '-')}"
+                        for key, value in sorted((demo_overrides or {}).items())
+                    )
+                    or "cleared"
+                )
+        except DemoLeverageValidationError as exc:
+            raise AutonomousSettingsValidationError(exc.code, str(exc)) from exc
         if "internal_paper_enabled" in data:
             requested = data["internal_paper_enabled"]
             if not isinstance(requested, bool):
@@ -273,6 +324,9 @@ class AutonomousTradingSettingsService:
                 risk_per_trade_percent=risk,
                 strategy_id=strategy_id,
                 symbol=symbol,
+                demo_leverage=demo_leverage,
+                demo_margin_mode=demo_margin_mode,
+                demo_leverage_overrides=demo_overrides,
             )
         )
         if changes:
@@ -330,6 +384,9 @@ class AutonomousTradingSettingsService:
         risk_per_trade_percent: Decimal | None,
         strategy_id: uuid.UUID | None,
         symbol: str | None,
+        demo_leverage: int | None = None,
+        demo_margin_mode: str | None = None,
+        demo_leverage_overrides: dict[str, dict[str, object]] | None = None,
     ) -> AutonomousTradingSettingsRow:
         """Insert or update one settings row. Concurrent first saves do not 500."""
 
@@ -349,6 +406,9 @@ class AutonomousTradingSettingsService:
             risk_per_trade_percent=risk_per_trade_percent,
             strategy_id=strategy_id,
             symbol=symbol,
+            demo_leverage=demo_leverage,
+            demo_margin_mode=demo_margin_mode,
+            demo_leverage_overrides=demo_leverage_overrides,
             created_at=now,
             updated_at=now,
         )
@@ -360,6 +420,9 @@ class AutonomousTradingSettingsService:
                 "risk_per_trade_percent": risk_per_trade_percent,
                 "strategy_id": strategy_id,
                 "symbol": symbol,
+                "demo_leverage": demo_leverage,
+                "demo_margin_mode": demo_margin_mode,
+                "demo_leverage_overrides": demo_leverage_overrides,
                 "updated_at": now,
             },
         )
