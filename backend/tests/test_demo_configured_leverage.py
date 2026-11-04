@@ -546,46 +546,6 @@ def test_leverage_read_uses_batch_endpoint_and_refuses_an_unmatched_row() -> Non
     assert info.leverage == 0 and not info.margin_mode_supplied
 
 
-def test_flatten_refuses_live_host_and_posts_close_on_demo() -> None:
-    sent: list[tuple[str, dict]] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        import json
-
-        if request.url.path == "/api/v1/account/positions":
-            row = {"instId": "BTC-USDT", "positions": "3", "positionSide": "net"}
-            return httpx.Response(200, json={"code": "0", "data": [row]})
-        sent.append((request.url.path, json.loads(request.content or b"{}")))
-        return httpx.Response(200, json={"code": "0", "data": [{"instId": "BTC-USDT"}]})
-
-    demo = BloFinClient(
-        base_url=DEMO_URL,
-        api_key="k",
-        api_secret="s",
-        api_passphrase="p",
-        max_retries=0,
-        transport=httpx.MockTransport(handle),
-        sleeper=lambda _: None,
-    )
-    outcome = GovernedBloFinDemoProvider(demo).flatten_position(
-        symbol="BTCUSDT", margin_mode="isolated"
-    )
-    assert outcome == "flatten_sent"
-    assert sent == [
-        (
-            "/api/v1/trade/close-position",
-            {"instId": "BTC-USDT", "marginMode": "isolated", "positionSide": "net"},
-        )
-    ]
-    provider = GovernedBloFinDemoProvider(demo)
-    monkey = type("C", (), {"base_url": "https://openapi.blofin.com"})()
-    provider._client = monkey  # type: ignore[assignment]
-    with pytest.raises(Exception) as refused:
-        provider.flatten_position(symbol="BTCUSDT", margin_mode="isolated")
-    assert _reason(refused.value) == "flatten_host_refused"
-    assert len(sent) == 1
-
-
 def _configured_plan(side: str, stop: Decimal):
     from types import SimpleNamespace
 
@@ -637,55 +597,6 @@ class _Session:
         self._events.append("commit")
 
 
-def test_breach_hold_flattens_and_alert_reports_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-    from uuid import uuid4
-
-    from app.services import governed_blofin_demo as mod
-
-    alerts: list[dict] = []
-
-    class _Alerts:
-        def __init__(self, *_a: object, **_k: object) -> None:
-            return None
-
-        def create(self, **kwargs: object) -> None:
-            alerts.append(dict(kwargs))
-
-    class _Switch:
-        def __init__(self, *_a: object, **_k: object) -> None:
-            return None
-
-        def activate(self, **_k: object) -> None:
-            return None
-
-    flattened: list[tuple[str, str]] = []
-
-    class _Provider:
-        def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
-            flattened.append((symbol, margin_mode))
-
-    monkeypatch.setattr(mod, "KillSwitchService", _Switch)
-    monkeypatch.setattr(mod, "PaperAlertService", _Alerts)
-    monkeypatch.setattr(mod, "AuditService", lambda _s: None)
-    loop = object.__new__(GovernedBloFinDemoLoop)
-    loop._settings = SimpleNamespace()
-    monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _self: _Provider())
-    effect = SimpleNamespace(reconciliation_disposition=None)
-    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
-    loop._hold_profile_liquidation(
-        _Session([]),  # type: ignore[arg-type]
-        command=command,  # type: ignore[arg-type]
-        effect=effect,  # type: ignore[arg-type]
-        liquidation_reason="demo_post_fill_liquidation_inside_buffer",
-        protected=True,
-        plan=_configured_plan("long", Decimal("95")),
-    )
-    assert flattened == [("BTC-USDT", "isolated")]
-    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_BUFFER"
-    assert alerts and alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"
-
-
 # --- Griller #412 re-review C-a: failed close and unreadable liqPrice paths ---
 
 
@@ -725,39 +636,6 @@ def _hold_loop(monkeypatch: pytest.MonkeyPatch, provider: object, events: list[s
     loop._settings = SimpleNamespace()
     monkeypatch.setattr(GovernedBloFinDemoLoop, "_get_provider", lambda _self: provider)
     return loop, alerts, switch.activated
-
-
-def test_failed_close_returns_flatten_failed_arms_switch_and_says_close_manually(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from types import SimpleNamespace
-    from uuid import uuid4
-
-    class _FailingProvider:
-        def flatten_position(self, *, symbol: str, margin_mode: str) -> None:
-            raise RuntimeError("venue close rejected")
-
-    loop, alerts, activated = _hold_loop(monkeypatch, _FailingProvider())
-    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
-    plan = _configured_plan("long", Decimal("95"))
-    assert loop._flatten_after_liquidation_breach(command=command, plan=plan) == "flatten_failed"
-    effect = SimpleNamespace(reconciliation_disposition=None)
-    # Must not raise: the hold still arms the switch and records the alert.
-    loop._hold_profile_liquidation(
-        _Session([]),  # type: ignore[arg-type]
-        command=command,  # type: ignore[arg-type]
-        effect=effect,  # type: ignore[arg-type]
-        liquidation_reason="demo_post_fill_liquidation_inside_stop",
-        protected=True,
-        plan=plan,
-    )
-    assert len(activated) == 1
-    assert activated[0]["organization_id"] == command.organization_id
-    assert effect.reconciliation_disposition == "DEMO_LIQUIDATION_INSIDE_STOP"
-    assert len(alerts) == 1
-    assert alerts[0]["metadata"]["flatten_outcome"] == "flatten_failed"
-    assert alerts[0]["metadata"]["auto_close"] is False
-    assert "close the position manually" in str(alerts[0]["message"])
 
 
 @requires_postgres
@@ -803,95 +681,89 @@ def test_unreadable_liquidation_on_configured_fill_warns_without_hold_or_flatten
     assert venue.close_posts == 0
 
 
-def test_breach_hold_arms_and_commits_switch_before_close_then_alerts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """C-b: arm the kill switch (durably) first, then the close POST, then the alert."""
+class _NoVenueCallsProvider:
+    """Any provider call from the breach hold is a venue call and fails the test."""
 
-    from types import SimpleNamespace
-    from uuid import uuid4
+    def __init__(self) -> None:
+        self.calls: list[str] = []
 
-    events: list[str] = []
-
-    class _Provider:
-        def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
-            events.append("close")
-            return "flatten_sent"
-
-    loop, alerts, _activated = _hold_loop(monkeypatch, _Provider(), events)
-    command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
-    loop._hold_profile_liquidation(
-        _Session(events),  # type: ignore[arg-type]
-        command=command,  # type: ignore[arg-type]
-        effect=SimpleNamespace(reconciliation_disposition=None),  # type: ignore[arg-type]
-        liquidation_reason="demo_post_fill_liquidation_inside_stop",
-        protected=True,
-        plan=_configured_plan("long", Decimal("95")),
-    )
-    assert events == ["arm", "commit", "close", "alert"]
-    assert alerts[0]["metadata"]["flatten_outcome"] == "flatten_sent"
+    def __getattr__(self, name: str) -> object:
+        self.calls.append(name)
+        raise AssertionError(f"Breach hold must not call the provider: {name}")
 
 
 @pytest.mark.parametrize(
-    "positions",
+    ("reason", "disposition", "arms"),
     [
-        [],  # flat account
-        [{"instId": "ETH-USDT", "positions": "2", "positionSide": "net"}],  # other market only
-        [{"instId": "BTC-USDT", "positions": "0", "positionSide": "net"}],  # zero size row
+        # Existing behaviour: a liquidation through the stop arms the kill switch.
+        ("demo_post_fill_liquidation_inside_stop", "DEMO_LIQUIDATION_INSIDE_STOP", 1),
+        # Inside the 2x buffer only: warn and alert, arm nothing.
+        ("demo_post_fill_liquidation_inside_buffer", "DEMO_LIQUIDATION_INSIDE_BUFFER", 0),
     ],
 )
-def test_flatten_skips_close_post_when_already_flat(positions: list[dict]) -> None:
-    """Close idempotency: a flat instrument records noop_already_flat and sends no POST."""
-
-    posts: list[str] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            posts.append(request.url.path)
-            return httpx.Response(200, json={"code": "0", "data": {"instId": "BTC-USDT"}})
-        assert request.url.path == "/api/v1/account/positions"
-        return httpx.Response(200, json={"code": "0", "data": positions})
-
-    demo = BloFinClient(
-        base_url=DEMO_URL,
-        api_key="k",
-        api_secret="s",
-        api_passphrase="p",
-        max_retries=0,
-        transport=httpx.MockTransport(handle),
-        sleeper=lambda _: None,
-    )
-    outcome = GovernedBloFinDemoProvider(demo).flatten_position(
-        symbol="BTCUSDT", margin_mode="isolated"
-    )
-    assert outcome == "noop_already_flat"
-    assert posts == []
-
-
-def test_breach_hold_records_noop_already_flat_on_the_alert(
-    monkeypatch: pytest.MonkeyPatch,
+def test_breach_hold_alerts_without_any_close_or_order_call(
+    monkeypatch: pytest.MonkeyPatch, reason: str, disposition: str, arms: int
 ) -> None:
     from types import SimpleNamespace
     from uuid import uuid4
 
-    class _FlatProvider:
-        def flatten_position(self, *, symbol: str, margin_mode: str) -> str:
-            return "noop_already_flat"
-
-    loop, alerts, activated = _hold_loop(monkeypatch, _FlatProvider())
+    provider = _NoVenueCallsProvider()
+    loop, alerts, activated = _hold_loop(monkeypatch, provider)
     command = SimpleNamespace(id=uuid4(), organization_id=uuid4(), user_id=uuid4())
+    effect = SimpleNamespace(reconciliation_disposition=None)
     loop._hold_profile_liquidation(
         _Session([]),  # type: ignore[arg-type]
         command=command,  # type: ignore[arg-type]
-        effect=SimpleNamespace(reconciliation_disposition=None),  # type: ignore[arg-type]
-        liquidation_reason="demo_post_fill_liquidation_inside_stop",
+        effect=effect,  # type: ignore[arg-type]
+        liquidation_reason=reason,
         protected=True,
-        plan=_configured_plan("long", Decimal("95")),
     )
-    assert len(activated) == 1
-    assert alerts[0]["metadata"]["flatten_outcome"] == "noop_already_flat"
+    assert provider.calls == []
+    assert len(activated) == arms
+    assert effect.reconciliation_disposition == disposition
+    assert len(alerts) == 1
     assert alerts[0]["metadata"]["auto_close"] is False
-    assert "already flat" in str(alerts[0]["message"])
+    assert "No automatic close" in str(alerts[0]["message"])
+    assert not hasattr(GovernedBloFinDemoProvider, "flatten_position")
+
+
+@requires_postgres
+def test_liquidation_breach_after_configured_fill_sends_no_close_or_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db.models import ExecutionCommand, PaperValidationAlert
+
+    price = _price()
+    venue = LeverageVenue(
+        price,
+        # The fixture setup is a short: a liquidation price at or below its stop
+        # is through the stop.
+        post_fill_position={
+            "instId": "BTC-USDT",
+            "positionSide": "net",
+            "liquidationPrice": str(price - 1),
+        },
+    )
+    factory, scan, loop = _run_worker_with_loop(
+        monkeypatch, venue, DemoLeverageConfig(10, "isolated", "default")
+    )
+    assert scan.trade_plan_revision_id is not None, scan.paper_loop_reason
+    assert venue.post_count == 1
+    with factory() as session:
+        command = session.scalar(select(ExecutionCommand))
+        assert command is not None
+        result = loop.reconcile_command(session, command_id=command.id)
+        assert result.startswith("demo_post_fill_liquidation"), result
+        alerts = session.scalars(
+            select(PaperValidationAlert).where(
+                PaperValidationAlert.alert_type == "demo_liquidation_through_stop"
+            )
+        ).all()
+        assert len(alerts) == 1
+        assert alerts[0].metadata_json["auto_close"] is False
+    # Only the entry order: no close-position and no further order on breach.
+    assert venue.close_posts == 0
+    assert venue.post_count == 1
 
 
 # --- v3 port: reconciliation with #424 (existing leverage, stop-loss band, 60s window) ---

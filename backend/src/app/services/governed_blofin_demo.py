@@ -456,22 +456,15 @@ def _read_demo_funding(provider: object, symbol: str) -> Decimal | None:
 
 
 def _alert_liquidation_through_stop(
-    session: Session, command: ExecutionCommand, *, flatten_outcome: str | None = None
+    session: Session, command: ExecutionCommand, *, kill_switch_armed: bool
 ) -> None:
-    """Loud alert on the existing notification path, with the flatten outcome.
+    """Loud alert on the existing notification path. Does not close or reduce.
 
     Telegram stays off unless it was already enabled. This records a critical
     alert and would deliver only through that existing, default-off path.
     """
 
-    if flatten_outcome == "flatten_sent":
-        action = "A demo close-position was sent; verify the account is flat."
-    elif flatten_outcome == "noop_already_flat":
-        action = "The demo account was already flat for this instrument; no close was sent."
-    elif flatten_outcome == "flatten_failed":
-        action = "The automatic demo close FAILED; close the position manually."
-    else:
-        action = "No automatic close or reduction."
+    armed = "The kill switch is armed." if kill_switch_armed else "The kill switch is not armed."
     PaperAlertService(session, audit_service=AuditService(session)).create(
         organization_id=command.organization_id,
         user_id=command.user_id,
@@ -479,15 +472,11 @@ def _alert_liquidation_through_stop(
         severity=PaperAlertSeverity.CRITICAL,
         message=(
             "LIQUIDATION INSIDE STOP OR BUFFER: BloFin demo liquidation price breaches "
-            f"the stop or its 2x buffer after a fill. The kill switch is armed. {action} "
-            "Operator action required."
+            f"the stop or its 2x buffer after a fill. {armed} No automatic close "
+            "or reduction. Operator action required."
         ),
         dedup_key=(f"demo_liquidation_through_stop:{command.organization_id}:{command.id}"),
-        metadata={
-            "command_id": str(command.id),
-            "auto_close": flatten_outcome == "flatten_sent",
-            "flatten_outcome": flatten_outcome or "none",
-        },
+        metadata={"command_id": str(command.id), "auto_close": False},
     )
 
 
@@ -563,7 +552,8 @@ def profile_liquidation_hold(*, liquidation_reason: str, protected: bool) -> tup
     if liquidation_reason == "demo_post_fill_liquidation_unreadable":
         return "DEMO_LIQUIDATION_UNREADABLE", not protected
     if liquidation_reason == "demo_post_fill_liquidation_inside_buffer":
-        return "DEMO_LIQUIDATION_INSIDE_BUFFER", True
+        # Buffer only: the stop still fills first. Warn and alert; arm nothing.
+        return "DEMO_LIQUIDATION_INSIDE_BUFFER", False
     if liquidation_reason == "demo_post_fill_liquidation_inside_stop":
         return "DEMO_LIQUIDATION_INSIDE_STOP", True
     raise ValueError("Unknown demo liquidation hold.")
@@ -1602,15 +1592,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         effect: VenueSubmitEffect,
         liquidation_reason: str,
         protected: bool,
-        plan: object | None = None,
     ) -> None:
-        """Arm the existing kill switch, then flatten a breached position, then alert.
+        """Arm the existing kill switch where it already applied, alert, label the read.
 
         A missing protection hold and a liquidation price through the stop use
-        the same switch as the later unprotected fill. An unreadable price is
-        not stored as a price through the stop. Before a demo close-position
-        POST the armed switch is committed, so a slow or hanging close never
-        delays the arm. This does not write leverage or margin mode.
+        the same switch as the later unprotected fill. A liquidation price
+        inside the 2x stop buffer only warns and alerts. An unreadable price is
+        not stored as a price through the stop. This never closes or reduces
+        the position and does not write leverage or margin mode.
         """
 
         disposition, arm_kill_switch = profile_liquidation_hold(
@@ -1625,10 +1614,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 protected,
                 disposition,
             )
-        through_stop = liquidation_reason in {
-            "demo_post_fill_liquidation_inside_stop",
-            "demo_post_fill_liquidation_inside_buffer",
-        }
+        through_stop = liquidation_reason == "demo_post_fill_liquidation_inside_stop"
+        breached = through_stop or liquidation_reason == "demo_post_fill_liquidation_inside_buffer"
+        if breached:
+            logger.warning(
+                "BloFin demo liquidation price breaches the stop or buffer after fill; "
+                "command_id=%s disposition=%s",
+                command.id,
+                disposition,
+            )
         if arm_kill_switch:
             reason = (
                 "BloFin demo liquidation is through the stop; operator action required"
@@ -1641,36 +1635,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 payload=KillSwitchMutationRequest(confirm=True, reason=reason),
                 source="demo_protection",
             )
-        flatten_outcome = None
-        if plan is not None and through_stop:
-            # Durable arm first: the close below is network IO.
-            session.commit()
-            flatten_outcome = self._flatten_after_liquidation_breach(command=command, plan=plan)
-        if arm_kill_switch and through_stop:
-            _alert_liquidation_through_stop(session, command, flatten_outcome=flatten_outcome)
+        if breached:
+            _alert_liquidation_through_stop(session, command, kill_switch_armed=arm_kill_switch)
         effect.reconciliation_disposition = disposition
-
-    def _flatten_after_liquidation_breach(self, *, command: ExecutionCommand, plan: object) -> str:
-        """Close the demo position whose venue liqPrice breaches the stop or buffer.
-
-        Demo host only (the provider refuses any other host). One attempt, no
-        retry; the result is put on the alert. The kill switch armed by the
-        caller still blocks new entries either way.
-        """
-
-        try:
-            margin_mode = str(getattr(plan, "margin_mode", "isolated")).lower()
-            outcome = self._get_provider().flatten_position(
-                symbol=str(plan.execution_instrument),  # type: ignore[attr-defined]
-                margin_mode=margin_mode,
-            )
-            return "noop_already_flat" if outcome == "noop_already_flat" else "flatten_sent"
-        except Exception:
-            logger.warning(
-                "BloFin demo flatten after liquidation breach failed; command_id=%s",
-                command.id,
-            )
-            return "flatten_failed"
 
     def reconcile_command(self, session: Session, *, command_id: UUID) -> str:
         """Read-only venue recovery runs despite the kill switch. Never resubmits."""
@@ -1821,7 +1788,6 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                             effect=effect,
                             liquidation_reason=liquidation_reason,
                             protected=evidence.protected,
-                            plan=envelope.plan,
                         )
                         session.commit()
                         return liquidation_reason
