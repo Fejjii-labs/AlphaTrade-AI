@@ -496,11 +496,17 @@ def _sweep_account_equity_stops(
     """Snapshot the 00:00 UTC equity baselines and enforce the daily stop (AT-ADR-152).
 
     Runs on the trusted database clock, in dry-run too: it never closes a
-    trade. A failure is logged and the stop fails closed on the next scan,
-    because the baseline goes stale after the grace window.
+    trade. A success publishes the sweep heartbeat that
+    ``GET /health/paper-worker`` watches. A failure raises the
+    ``account_equity_stop_sweep_failed`` alert; the entry gate and the next
+    scan fail closed once the baseline goes stale after the grace window.
     """
 
-    from app.services.risk_policy.equity_stop import sweep_account_equity_stops
+    from app.services.risk_policy.equity_stop import (
+        EQUITY_STOP_SWEEP_COMPONENT,
+        SWEEP_FAILED_CODE,
+        sweep_account_equity_stops,
+    )
 
     session = factory()
     try:
@@ -510,12 +516,41 @@ def _sweep_account_equity_stops(
             logger.warning("account_equity_stop_sweep_armed", armed=armed)
     except Exception as exc:
         session.rollback()
-        logger.error(
-            "account_equity_stop_sweep_failed",
-            error=redact_text(str(exc))[:200],
+        error = redact_text(str(exc))[:200]
+        logger.error("account_equity_stop_sweep_failed", error=error)
+        from app.services.safety_alerts import deliver_observed_alert_outside_transaction
+
+        deliver_observed_alert_outside_transaction(
+            settings,
+            ExitMonitorAlert(
+                code=SWEEP_FAILED_CODE,
+                severity="critical",
+                message=(
+                    "Account equity stop sweep failed. The daily stop was not "
+                    "checked this cycle; new entries fail closed once the "
+                    "baseline is stale."
+                ),
+                fields={"error": error, "dedup_key": SWEEP_FAILED_CODE},
+            ),
         )
+        return
     finally:
         session.close()
+    try:
+        from app.persistence.runtime_status import RuntimeStatusWrite, publish_runtime_status
+
+        publish_runtime_status(
+            factory,
+            RuntimeStatusWrite(
+                component=EQUITY_STOP_SWEEP_COMPONENT,
+                worker_id=settings.watcher_paper_worker_id[:80],
+                heartbeat_at=now,
+                activation_state="swept",
+                market_source="paper_exit_monitor",
+            ),
+        )
+    except Exception:
+        logger.warning("account_equity_stop_sweep_heartbeat_unpublished")
 
 
 def _session_factory() -> sessionmaker[Session]:

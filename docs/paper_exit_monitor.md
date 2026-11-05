@@ -193,17 +193,44 @@ This path does not insert a calibration row for a live close either: the
 walk-forward fold is not known here. Both alerts are audited as the system.
 
 The one loss rule that arms the kill switch is the account daily equity
-stop (AT-ADR-152): total equity, unrealized PnL included, more than
+stop (AT-ADR-152): stop equity more than
 `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10) below the 00:00 UTC
-baseline. Each exit-monitor pass snapshots that baseline and enforces the
-stop for every account with a breaker row, on the trusted database clock,
-in dry-run too. Unreadable equity, or a missing or stale baseline after
-`ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) past midnight,
-fails closed and arms. The audit row is `kill_switch_triggered` with
-`resource_type=account_equity_stop` and `reason=ACCOUNT_DAILY_DRAWDOWN`,
-carrying baseline, equity, drawdown and threshold percents. The switch
-arms at most once per UTC day, is armed as the system, and only a human
-deactivation clears it.
+baseline. Stop equity is `default_account_balance` plus all-time realized
+PnL plus the unrealized PnL of open positions. The baseline and every check
+use that one function; the risk-settings timezone does not enter it. Each
+exit-monitor pass snapshots the baseline and enforces the stop for every
+account with a breaker row, on the trusted database clock, in dry-run too.
+
+It fails closed and arms on: unreadable equity (`equity_unreadable`); an
+open position whose row is older than
+`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900), a stale mark
+(`equity_stale`); or a baseline from an earlier day after
+`ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) past midnight
+(`baseline_stale`). A row that was never snapshotted (`day_start_on` NULL)
+seeds its baseline without tripping. The audit row is
+`kill_switch_triggered` with `resource_type=account_equity_stop` and
+`reason=ACCOUNT_DAILY_DRAWDOWN`, carrying cause, baseline, equity, drawdown
+and threshold percents. The switch arms at most once per UTC day, is armed
+as the system, and only a human deactivation clears it.
+
+The automated paper loop also refuses new entries (`breaker_active`) while
+any breaker row's baseline is for an earlier UTC day past the grace window,
+so entries stay guarded if this pass stalls. Each successful sweep writes
+the `controlled_runtime_status` row `account_equity_stop_sweep`.
+`GET /health/paper-worker` raises `account_equity_stop_sweep_missing` or
+`account_equity_stop_sweep_stale` when that row is absent or older than
+`ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` (default 900), and a sweep
+that raises sends `account_equity_stop_sweep_failed`. These are mandatory
+Telegram safety codes. Changing `default_account_balance` in risk settings
+re-snapshots today's baseline to post-edit equity; it does not clear the
+kill switch.
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| `account_equity_stop_threshold_percent` | `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` | `10` |
+| `account_equity_stop_baseline_grace_seconds` | `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` | `900` |
+| `account_equity_stop_mark_max_age_seconds` | `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` | `900` |
+| `account_equity_stop_sweep_stale_after_seconds` | `ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` | `900` |
 
 A human close leaves those fields unset.
 

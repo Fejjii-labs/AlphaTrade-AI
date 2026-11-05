@@ -1275,11 +1275,21 @@ def _missing_stored_plan_proof(
 
 
 def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
+    """Refuse on an active breaker, or on an overdue equity-stop baseline.
+
+    An account whose 00:00 UTC baseline is for an earlier day past the
+    grace window refuses new entries even when the sweep has not run
+    (AT-ADR-152).
+    """
+
+    from app.services.risk_policy.equity_stop import entry_baseline_overdue
     from app.services.risk_policy.persistence import RiskPolicyService
 
-    return RiskPolicyService(session, AuditService(session)).breaker_active(
+    if RiskPolicyService(session, AuditService(session)).breaker_active(
         organization_id=organization_id, now=now
-    )
+    ):
+        return True
+    return entry_baseline_overdue(session, organization_id=organization_id, now=now)
 
 
 def _commit_risk_record(

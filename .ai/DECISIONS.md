@@ -14,18 +14,59 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   config-driven:
   - Threshold `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT=10` (bounded 0–50).
   - Day boundary 00:00 UTC.
-  - Baseline: start-of-day total equity, unrealized PnL included, stored on
-    `risk_policy_breaker_states` (`day_start_equity`, `day_start_on`) at
-    the rollover. Each paper-worker exit-monitor pass takes the snapshot on
-    the database clock within `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS`
-    (default 900) after midnight. Every profile breaker persist also
-    evaluates the stop.
+  - Equity (one function, `read_stop_equity`): `default_account_balance` +
+    all-time realized PnL (closed legacy positions and canonical paper
+    trades, same sources and mirror exclusion as the risk-day figure, via
+    `DailyRiskAccounting.cumulative_realized_pnl_for_utc_stop`) + unrealized
+    PnL of open positions. The baseline snapshot, every later check, and a
+    balance-edit re-baseline all read it. It never uses the risk-settings
+    timezone, so a non-UTC user's local midnight cannot drop a UTC-day loss,
+    and prior days' losses lower the baseline instead of loosening the stop.
+    `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (daily
+    lock, the soft pauses) are unchanged.
+  - Mark freshness: an open position whose row was last written more than
+    `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900) ago is a stale
+    mark; the reading is unusable and the stop trips with
+    `cause=equity_stale`. No process re-marks legacy `positions` rows today,
+    so any such open row older than the bound fails closed. Canonical paper
+    trades carry no stored unrealized PnL; their loss enters equity when
+    they close.
+  - Baseline: stored on `risk_policy_breaker_states` (`day_start_equity`,
+    `day_start_on`) at the rollover. Each paper-worker exit-monitor pass
+    takes the snapshot on the database clock within
+    `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) after
+    midnight. Every profile breaker persist also evaluates the stop.
   - Trip: `equity < baseline * (1 - threshold)`. Exactly 10% does not trip.
   - Fail closed: unreadable equity (missing, non-finite, not positive, or a
-    read error), or a missing or stale baseline after the grace window,
-    trips. A missing or stale trip then seeds today's baseline from current
-    equity so the rest of the day is still guarded. An account with no
-    breaker row yet seeds on first sight and does not trip.
+    read error: `equity_unreadable`), a stale mark (`equity_stale`), or a
+    baseline from an earlier day after the grace window
+    (`baseline_stale`), or a dated but empty baseline (`baseline_missing`),
+    trips. A stale or missing trip then seeds today's baseline from current
+    equity so the rest of the day is still guarded.
+  - First sight: a row with `day_start_on IS NULL` was never snapshotted.
+    It seeds today's baseline and does not trip, at any time of day, so the
+    first deploy does not arm every organization.
+  - Entry gate: the automated paper loop refuses new plans and stored-plan
+    claims (`breaker_active`) when any of the organization's breaker rows
+    has a baseline for an earlier UTC day past the grace window, even when
+    the sweep has not run. It refuses; it does not arm.
+  - Sweep heartbeat: each successful sweep writes the
+    `controlled_runtime_status` row `account_equity_stop_sweep`. When the
+    exit monitor is expected, `GET /health/paper-worker` raises
+    `account_equity_stop_sweep_missing` / `_stale` once that row is absent
+    or older than `ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` (default
+    900). A sweep that raises sends `account_equity_stop_sweep_failed` from
+    the worker. All three are mandatory Telegram safety codes and are also
+    logged at error.
+  - Balance edit: a `PATCH /risk/settings` or reset-defaults that changes
+    `default_account_balance` re-snapshots today's baseline to post-edit
+    stop equity for the user's accounts. This is a deliberate choice over
+    shifting the baseline by the edit: the stop then measures from
+    post-edit equity, and any loss earlier that UTC day is not carried over.
+    It never deactivates the kill switch and does not touch
+    `equity_stop_tripped_on`; manual deactivate stays the only clear. If
+    equity cannot be read the baseline is left alone and the next check
+    fails closed.
   - On trip: an audit row `kill_switch_triggered`,
     `resource_type=account_equity_stop`, `reason=ACCOUNT_DAILY_DRAWDOWN`,
     with cause, baseline, equity, drawdown percent and threshold percent;
@@ -40,7 +81,7 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   journal, alert and audit with `refusal=none`), and the peak-drawdown arm
   (`_arm_drawdown_kill_switch`, `DRAWDOWN_KILL_REASON`,
   `BreakerVerdict.trip_kill_switch`). The ruined-equity path still latches
-  and refuses, and now fails the equity stop closed instead.
+  and refuses; the equity stop then runs on its own reading.
 - Kept as soft refusals that never arm the switch: the peak
   `drawdown_breaker_percent` latch (refuses new trades until its own human
   reset), the daily-loss pause, and the consecutive-loss pause. They are
@@ -48,9 +89,9 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
   the PnL calendar, and infrastructure arms (unreadable kill-switch state,
   global kill switch, demo protection and lineage holds).
-- Caveat: equity is the existing `DailyRiskAccounting.account_equity`,
-  whose realized part follows the user's risk-settings timezone (default
-  UTC). A non-UTC user's realized PnL resets at local midnight, not UTC.
+- Caveats: the soft peak latch and the consecutive/daily pauses are kept
+  pending Sofien's decision. Accounts without a breaker row are not swept.
+  Canonical open paper trades have no unrealized mark in stop equity.
 - Reference: `docs/paper_exit_monitor.md`, migration `a25equitystop001`.
 
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped

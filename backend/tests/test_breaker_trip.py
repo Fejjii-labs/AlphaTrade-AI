@@ -48,6 +48,17 @@ def _config() -> BreakerConfig:
     )
 
 
+def _stop_reads(monkeypatch: pytest.MonkeyPatch, figures: dict[str, Decimal]) -> None:
+    """The equity stop reads its own UTC equity; follow the stubbed figure."""
+
+    from app.services.risk_policy.equity_stop import StopEquityReading
+
+    monkeypatch.setattr(
+        "app.services.risk_policy.equity_stop.read_stop_equity",
+        lambda _session, **_kwargs: StopEquityReading(figures["equity"]),
+    )
+
+
 def _no_equity_stop(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     """Replace the account equity stop for tests whose session is a stub."""
 
@@ -55,7 +66,7 @@ def _no_equity_stop(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
 
     def enforce(_session: object, **kwargs: object) -> bool:
         calls.append(kwargs)
-        return kwargs["equity"] is None
+        return False
 
     monkeypatch.setattr("app.services.risk_policy.breaker_trip._enforce_equity_stop", enforce)
     return calls
@@ -523,10 +534,11 @@ def test_ruined_equity_latches_drawdown_and_the_streak_and_fails_the_equity_stop
     assert written["drawdown_latched"] is True
     assert written["consecutive_losses"] == 3
     assert written["equity_peak"] == Decimal("10000")
-    # The drawdown latch no longer arms the switch. The equity stop fails
-    # closed on the unreadable equity instead (AT-ADR-152).
+    # The drawdown latch no longer arms the switch. The equity stop still
+    # runs, on its own UTC equity reading (AT-ADR-152).
     assert armed == []
-    assert [call["equity"] for call in stops] == [None]
+    assert [call["account_id"] for call in stops] == [ACCOUNT]
+    assert "equity" not in stops[0]
 
 
 def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch) -> None:
@@ -819,6 +831,7 @@ def test_same_day_scan_keeps_daily_pause_and_breaker_active(monkeypatch) -> None
             return _Daily()
 
     monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    _stop_reads(monkeypatch, figures)
     profile = placeholder_profile(PolicyKind.INTERNAL_PAPER)
     user_id = uuid4()
     tripped = persist_profile_breakers(
@@ -1062,6 +1075,7 @@ def test_daily_equity_stop_arms_kill_switch_and_a_later_scan_does_not_clear_it(m
             return _Daily()
 
     monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
+    _stop_reads(monkeypatch, figures)
     profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
     now = datetime(2026, 10, 19, 12, tzinfo=UTC)
     opened = persist_profile_breakers(

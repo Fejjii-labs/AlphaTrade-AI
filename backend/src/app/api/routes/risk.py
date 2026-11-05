@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app.api.routes.risk_policy import router as risk_policy_router
 from app.core.dependencies import (
@@ -30,6 +33,7 @@ from app.schemas.risk import (
 )
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep, TraderDep
+from app.security.tenant import TenantContext
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 router.include_router(risk_policy_router)
@@ -82,11 +86,13 @@ async def update_risk_settings(
     session: SessionDep,
 ) -> UserRiskSettingsResponse:
     try:
+        before = service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
         result = service.update(
             payload,
             organization_id=tenant.organization_id,
             user_id=tenant.user_id,
         )
+        _rebaseline_on_balance_edit(session, tenant, before, result)
         session.commit()
         return result
     except ValueError as exc:
@@ -104,10 +110,12 @@ async def reset_risk_settings(
     service: RiskSettingsServiceDep,
     session: SessionDep,
 ) -> UserRiskSettingsResponse:
+    before = service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
     result = service.reset_defaults(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,
     )
+    _rebaseline_on_balance_edit(session, tenant, before, result)
     session.commit()
     return result
 
@@ -219,4 +227,31 @@ async def evaluate_loss_acceptance(
     return loss_service.evaluate(
         planned_loss_amount=request.planned_loss_amount,
         request=request,
+    )
+
+
+def _rebaseline_on_balance_edit(
+    session: Session,
+    tenant: TenantContext,
+    before: UserRiskSettingsResponse,
+    after: UserRiskSettingsResponse,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Re-snapshot today's equity-stop baseline after a balance edit (AT-ADR-152).
+
+    A balance change is not a trading loss or gain. Without this, a lower
+    balance false-trips the stop and a higher one hides a real loss. The
+    kill switch is never deactivated here.
+    """
+
+    if before.default_account_balance == after.default_account_balance:
+        return
+    from app.services.risk_policy.equity_stop import rebaseline_after_balance_edit
+
+    rebaseline_after_balance_edit(
+        session,
+        organization_id=tenant.organization_id,
+        user_id=tenant.user_id,
+        now=now or datetime.now(UTC),
     )

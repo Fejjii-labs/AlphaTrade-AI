@@ -235,7 +235,6 @@ def persist_profile_breakers(
         )
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
-    first_sight = row is None
     peak = equity
     if row is not None and isinstance(row.equity_peak, Decimal) and row.equity_peak > 0:
         peak = row.equity_peak
@@ -287,10 +286,8 @@ def persist_profile_breakers(
         organization_id=organization_id,
         user_id=user_id,
         account_id=account_id,
-        equity=equity,
         now=now,
         settings=settings,
-        first_sight=first_sight,
     )
     return verdict.refuse_new_trades or armed
 
@@ -317,8 +314,8 @@ def _latch_ruined_equity(
     """Latch the profile breaker when equity is missing, non-finite, or not positive.
 
     The drawdown latch and the loss streak are written. The account daily
-    equity stop fails closed on the unreadable equity and arms the kill
-    switch, once per UTC day. New trades are refused.
+    equity stop then runs on its own UTC equity reading, which fails closed
+    when that reading is unusable. New trades are refused.
     """
 
     from app.services.audit_service import AuditService
@@ -368,7 +365,6 @@ def _latch_ruined_equity(
         organization_id=organization_id,
         user_id=user_id,
         account_id=account_id,
-        equity=None,
         now=now,
         settings=settings,
     )
@@ -381,20 +377,22 @@ def _enforce_equity_stop(
     organization_id: UUID,
     user_id: UUID,
     account_id: UUID,
-    equity: object,
     now: datetime,
     settings: Settings | None,
-    first_sight: bool = False,
 ) -> bool:
-    from app.services.risk_policy.equity_stop import enforce_account_equity_stop
+    """Run the account daily equity stop on its own UTC equity reading.
 
-    return enforce_account_equity_stop(
+    The stop does not use the risk-day ``account_equity`` the pauses above
+    read: that figure's realized PnL follows the user's timezone.
+    """
+
+    from app.services.risk_policy.equity_stop import enforce_account_equity_stop_from_books
+
+    return enforce_account_equity_stop_from_books(
         session,
         organization_id=organization_id,
         user_id=user_id,
         account_id=account_id,
-        equity=equity,
         now=now,
         settings=settings,
-        first_sight=first_sight,
     )

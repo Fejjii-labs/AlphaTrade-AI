@@ -102,6 +102,9 @@ _COOLDOWN_SECONDS = {
     "worker_memory_watchdog_repeat": 900,
     "worker_unclean_exit": 900,
     "blofin_demo_mirror_page_cap": 6 * 3600,
+    "account_equity_stop_sweep_stale": 900,
+    "account_equity_stop_sweep_missing": 900,
+    "account_equity_stop_sweep_failed": 900,
 }
 _DEFAULT_COOLDOWN_SECONDS = 900
 TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
@@ -109,6 +112,9 @@ TELEGRAM_SAFETY_MANDATORY_CODES: frozenset[str] = frozenset(
         "kill_switch_activated",
         "backfill_loss",
         "stale_live_loss",
+        "account_equity_stop_sweep_stale",
+        "account_equity_stop_sweep_missing",
+        "account_equity_stop_sweep_failed",
     }
 )
 TELEGRAM_SAFETY_DEFAULT_CODES: frozenset[str] = frozenset(
