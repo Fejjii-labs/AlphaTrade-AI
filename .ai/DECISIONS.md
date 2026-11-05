@@ -2,6 +2,57 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-152 — One account daily equity stop arms the kill switch
+
+- Date: 2026-11-05 (approved by Sofien via Griller; paper and BloFin demo
+  only; real money stays blocked). AT-ADR-151 is taken by draft PR #433
+  (`claude/killswitch-current-risk-only`), which this supersedes and which
+  is not merged.
+- Decision: the only loss rule that arms the organization kill switch is an
+  account-level daily equity stop
+  (`backend/src/app/services/risk_policy/equity_stop.py`). Defaults, all
+  config-driven:
+  - Threshold `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT=10` (bounded 0–50).
+  - Day boundary 00:00 UTC.
+  - Baseline: start-of-day total equity, unrealized PnL included, stored on
+    `risk_policy_breaker_states` (`day_start_equity`, `day_start_on`) at
+    the rollover. Each paper-worker exit-monitor pass takes the snapshot on
+    the database clock within `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS`
+    (default 900) after midnight. Every profile breaker persist also
+    evaluates the stop.
+  - Trip: `equity < baseline * (1 - threshold)`. Exactly 10% does not trip.
+  - Fail closed: unreadable equity (missing, non-finite, not positive, or a
+    read error), or a missing or stale baseline after the grace window,
+    trips. A missing or stale trip then seeds today's baseline from current
+    equity so the rest of the day is still guarded. An account with no
+    breaker row yet seeds on first sight and does not trip.
+  - On trip: an audit row `kill_switch_triggered`,
+    `resource_type=account_equity_stop`, `reason=ACCOUNT_DAILY_DRAWDOWN`,
+    with cause, baseline, equity, drawdown percent and threshold percent;
+    then `KillSwitchService.activate` as the system
+    (`source=account_equity_stop`), with the same figures in the reason.
+  - Arms at most once per UTC day (`equity_stop_tripped_on`), so an owner
+    deactivation is not undone by the next scan. A new day's baseline never
+    clears an active switch. Only the manual owner deactivate clears it.
+- Removed as kill-switch arms: the losing-backfill and stale-live-loss
+  arms in `paper_exit_protection` (AT-ADR-127/128 arming is superseded;
+  monitor actions are now `backfill_alert` / `stale_alert` and only
+  journal, alert and audit with `refusal=none`), and the peak-drawdown arm
+  (`_arm_drawdown_kill_switch`, `DRAWDOWN_KILL_REASON`,
+  `BreakerVerdict.trip_kill_switch`). The ruined-equity path still latches
+  and refuses, and now fails the equity stop closed instead.
+- Kept as soft refusals that never arm the switch: the peak
+  `drawdown_breaker_percent` latch (refuses new trades until its own human
+  reset), the daily-loss pause, and the consecutive-loss pause. They are
+  not emergency stops. There is one kill-switch drawdown model: SoD daily.
+- Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
+  the PnL calendar, and infrastructure arms (unreadable kill-switch state,
+  global kill switch, demo protection and lineage holds).
+- Caveat: equity is the existing `DailyRiskAccounting.account_equity`,
+  whose realized part follows the user's risk-settings timezone (default
+  UTC). A non-UTC user's realized PnL resets at local midnight, not UTC.
+- Reference: `docs/paper_exit_monitor.md`, migration `a25equitystop001`.
+
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped
 
 - Date: 2026-10-22

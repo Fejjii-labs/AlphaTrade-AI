@@ -400,7 +400,8 @@ class CanonicalPaperExecutionService:
             # A fresh live profile close feeds the consecutive streak and the
             # daily lock from the bar clock. A labelled backfill does not.
             # A stale live loss does not either: that bar clock is already
-            # too old, so the kill switch refuses new entries instead.
+            # too old. Both alert only; a single loss never arms the kill
+            # switch (AT-ADR-152).
             # No calibration sample is written: a backfill is ineligible, and
             # a live close has no walk-forward fold on this path.
             action = monitor_close_protection(
@@ -436,17 +437,17 @@ class CanonicalPaperExecutionService:
                         account_id=str(request.account_id),
                         consecutive_losses=_consecutive,
                     )
-            elif action == "backfill_kill_switch":
+            elif action == "backfill_alert":
                 assert trade.net_pnl is not None
-                _protect_backfill_loss(
+                _alert_backfill_loss(
                     self._session,
                     request=request,
                     net_pnl=trade.net_pnl,
                     settings=self._settings,
                 )
-            elif action == "stale_kill_switch":
+            elif action == "stale_alert":
                 assert trade.net_pnl is not None
-                _protect_stale_live_loss(
+                _alert_stale_live_loss(
                     self._session,
                     request=request,
                     net_pnl=trade.net_pnl,
@@ -710,10 +711,10 @@ def profile_close_should_note(
     ``_note_profile_close`` is what advances the consecutive-loss streak and
     syncs the daily lock. Skipping it leaves both untouched. A human close
     has no monitor label and still notes. A cash-margin plan does not.
-    A losing backfill is not noted here. The close path refuses new entries
-    for that loss without writing the streak or the daily lock. A stale live
-    loss is also a profile close by this predicate; :func:`monitor_close_protection`
-    sends that loss to the kill switch instead of the note.
+    A losing backfill is not noted here. The close path alerts that loss
+    without writing the streak or the daily lock. A stale live loss is also
+    a profile close by this predicate; :func:`monitor_close_protection`
+    sends that loss to an alert instead of the note.
     """
 
     if replayed or net_pnl is None:
@@ -725,7 +726,7 @@ def profile_close_should_note(
     return not exit_monitor_backfill(request)
 
 
-MonitorCloseAction = Literal["note", "backfill_kill_switch", "stale_kill_switch", "skip"]
+MonitorCloseAction = Literal["note", "backfill_alert", "stale_alert", "skip"]
 
 
 def monitor_close_protection(
@@ -740,13 +741,13 @@ def monitor_close_protection(
 ) -> MonitorCloseAction:
     """Choose the breaker write for one paper close.
 
-    The labelled ``>=24h`` backfill path is first and is unchanged. A stale
-    live loss arms the kill switch. A fresh live profile close, a human
-    close, and a stale win still note at the bar time.
+    The labelled ``>=24h`` backfill path is first. A losing backfill and a
+    stale live loss alert only; neither arms the kill switch. A fresh live
+    profile close, a human close, and a stale win still note at the bar time.
     """
 
     if _backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl):
-        return "backfill_kill_switch"
+        return "backfill_alert"
     from app.services.paper_exit_monitor import stale_live_loss_needs_protection
 
     if stale_live_loss_needs_protection(
@@ -757,7 +758,7 @@ def monitor_close_protection(
         pause_window=pause_window,
         candle_period=candle_period,
     ):
-        return "stale_kill_switch"
+        return "stale_alert"
     if profile_close_should_note(
         request,
         replayed=replayed,
@@ -808,16 +809,16 @@ def _backfill_loss_needs_protection(
     return backfill_loss_needs_protection(request, replayed=replayed, net_pnl=net_pnl)
 
 
-def _protect_backfill_loss(
+def _alert_backfill_loss(
     session: Session,
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
     settings: Settings,
 ) -> None:
-    from app.services.paper_exit_protection import protect_account_from_backfill_loss
+    from app.services.paper_exit_protection import alert_backfill_loss
 
-    protect_account_from_backfill_loss(
+    alert_backfill_loss(
         session,
         request=request,
         net_pnl=net_pnl,
@@ -825,16 +826,16 @@ def _protect_backfill_loss(
     )
 
 
-def _protect_stale_live_loss(
+def _alert_stale_live_loss(
     session: Session,
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
     settings: Settings,
 ) -> None:
-    from app.services.paper_exit_protection import protect_account_from_stale_live_loss
+    from app.services.paper_exit_protection import alert_stale_live_loss
 
-    protect_account_from_stale_live_loss(
+    alert_stale_live_loss(
         session,
         request=request,
         net_pnl=net_pnl,

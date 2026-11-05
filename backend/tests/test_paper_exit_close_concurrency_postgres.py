@@ -225,7 +225,9 @@ def _close_labeled(
 
 
 @requires_postgres
-def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
+def test_losing_backfill_alerts_without_arming_the_kill_switch_or_moving_breakers() -> None:
+    """AT-ADR-152: a single losing backfill journals and alerts. It does not arm."""
+
     factory = _factory()
     envelope, command_id = _open_fill(factory, key="exit-backfill-loss")
     plan = envelope.plan  # type: ignore[attr-defined]
@@ -259,20 +261,22 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         switch = session.scalar(
             select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
         )
-        assert switch is not None
-        assert switch.active is True
-        assert switch.activated_by is None
-        assert "not folded into the live streak" in (switch.reason or "")
+        assert switch is None or switch.active is False
         audit = session.scalar(
             select(AuditLog).where(
                 AuditLog.organization_id == plan.organization_id,
                 AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
             )
         )
-        assert audit is not None
-        assert audit.actor_type is ActorType.SYSTEM
-        assert audit.user_id is None
-        assert audit.actor == "system"
+        assert audit is None
+        blocked = session.scalar(
+            select(AuditLog).where(
+                AuditLog.organization_id == plan.organization_id,
+                AuditLog.resource_type == "paper_exit_monitor",
+            )
+        )
+        assert blocked is not None
+        assert blocked.actor_type is ActorType.SYSTEM
         alert = session.scalar(
             select(PaperValidationAlert).where(
                 PaperValidationAlert.organization_id == plan.organization_id,
@@ -283,7 +287,7 @@ def test_losing_backfill_refuses_entries_without_moving_breakers() -> None:
         assert alert.severity.value == "critical"
         metadata = alert.metadata_json or {}
         assert metadata.get("net_loss") == "true"
-        assert metadata.get("refusal") == "kill_switch"
+        assert metadata.get("refusal") == "none"
         assert metadata.get("exit_origin") == "backfill"
         breaker = session.scalar(
             select(RiskPolicyBreakerState).where(
@@ -361,8 +365,8 @@ def _assert_breakers_untouched(
 
 
 @requires_postgres
-def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> None:
-    """A loss about 6h old is labelled live and still gets working protection."""
+def test_six_hour_live_loss_alerts_without_arming_the_kill_switch() -> None:
+    """A loss about 6h old is labelled live. It alerts; it does not arm (AT-ADR-152)."""
 
     factory = _factory()
     envelope, command_id = _open_fill(factory, key="exit-stale-live-loss")
@@ -396,10 +400,7 @@ def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> No
         switch = session.scalar(
             select(KillSwitchState).where(KillSwitchState.organization_id == plan.organization_id)
         )
-        assert switch is not None
-        assert switch.active is True
-        assert switch.activated_by is None
-        assert "too old" in (switch.reason or "")
+        assert switch is None or switch.active is False
         alert = session.scalar(
             select(PaperValidationAlert).where(
                 PaperValidationAlert.organization_id == plan.organization_id,
@@ -408,7 +409,7 @@ def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> No
         )
         assert alert is not None
         metadata = alert.metadata_json or {}
-        assert metadata.get("refusal") == "kill_switch"
+        assert metadata.get("refusal") == "none"
         assert metadata.get("exit_origin") == "live"
         assert "net_pnl" not in metadata
         audit = session.scalar(
@@ -417,9 +418,7 @@ def test_six_hour_live_loss_arms_the_kill_switch_without_moving_breakers() -> No
                 AuditLog.action == AuditEventType.KILL_SWITCH_ACTIVATED,
             )
         )
-        assert audit is not None
-        assert audit.actor_type is ActorType.SYSTEM
-        assert audit.user_id is None
+        assert audit is None
         _assert_breakers_untouched(session, plan.organization_id, plan.account_id)
 
 

@@ -48,6 +48,19 @@ def _config() -> BreakerConfig:
     )
 
 
+def _no_equity_stop(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    """Replace the account equity stop for tests whose session is a stub."""
+
+    calls: list[dict[str, object]] = []
+
+    def enforce(_session: object, **kwargs: object) -> bool:
+        calls.append(kwargs)
+        return kwargs["equity"] is None
+
+    monkeypatch.setattr("app.services.risk_policy.breaker_trip._enforce_equity_stop", enforce)
+    return calls
+
+
 def test_daily_loss_pause_is_recorded_without_a_consecutive_pause() -> None:
     recorder = _Recorder()
     verdict = trip_breakers(
@@ -101,7 +114,7 @@ def test_drawdown_latches_and_stays_latched() -> None:
         snapshot=_snapshot(equity=Decimal("8000"), equity_peak=Decimal("10000")),
         now=NOW,
     )
-    assert verdict.drawdown_active and verdict.trip_kill_switch
+    assert verdict.drawdown_active and verdict.refuse_new_trades
     assert recorder.calls[0]["drawdown_latched"] is True
     held = trip_breakers(
         recorder,
@@ -383,6 +396,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
 
 
 def test_next_demo_persist_keeps_the_stored_streak_and_refuses(monkeypatch) -> None:
+    _no_equity_stop(monkeypatch)
     from app.services.risk_policy.breaker_trip import persist_profile_breakers
     from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
 
@@ -438,7 +452,7 @@ def test_next_demo_persist_keeps_the_stored_streak_and_refuses(monkeypatch) -> N
 
 
 @pytest.mark.parametrize("equity", [Decimal("0"), Decimal("-1"), Decimal("NaN")])
-def test_ruined_equity_still_latches_drawdown_and_the_loss_streak(
+def test_ruined_equity_latches_drawdown_and_the_streak_and_fails_the_equity_stop_closed(
     monkeypatch: pytest.MonkeyPatch,
     equity: Decimal,
 ) -> None:
@@ -495,6 +509,7 @@ def test_ruined_equity_still_latches_drawdown_and_the_loss_streak(
     monkeypatch.setattr("app.services.risk_policy.persistence.RiskPolicyService", _Service)
     monkeypatch.setattr("app.services.risk.kill_switch.KillSwitchService", _Kill)
     monkeypatch.setattr("app.core.config.get_settings", lambda: None)
+    stops = _no_equity_stop(monkeypatch)
     refused = persist_profile_breakers(
         object(),  # type: ignore[arg-type]
         organization_id=ORG,
@@ -508,10 +523,14 @@ def test_ruined_equity_still_latches_drawdown_and_the_loss_streak(
     assert written["drawdown_latched"] is True
     assert written["consecutive_losses"] == 3
     assert written["equity_peak"] == Decimal("10000")
-    assert armed == [True]
+    # The drawdown latch no longer arms the switch. The equity stop fails
+    # closed on the unreadable equity instead (AT-ADR-152).
+    assert armed == []
+    assert [call["equity"] for call in stops] == [None]
 
 
 def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch) -> None:
+    _no_equity_stop(monkeypatch)
     from datetime import timedelta
 
     from app.services.risk_policy.breaker_trip import persist_profile_breakers
@@ -608,6 +627,7 @@ def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch)
 
 
 def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None:
+    _no_equity_stop(monkeypatch)
     from datetime import timedelta
 
     from app.services.canonical_paper_execution import _note_profile_close
@@ -977,7 +997,9 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     assert service.breaker_active(organization_id=ORG, now=pause) is False
 
 
-def test_drawdown_trip_arms_kill_switch_and_a_later_scan_does_not_clear_it(monkeypatch) -> None:
+def test_daily_equity_stop_arms_kill_switch_and_a_later_scan_does_not_clear_it(monkeypatch) -> None:
+    """A 20% same-day loss arms through ACCOUNT_DAILY_DRAWDOWN, not the peak latch."""
+
     from datetime import timedelta
 
     import pytest
@@ -1075,6 +1097,15 @@ def test_drawdown_trip_arms_kill_switch_and_a_later_scan_does_not_clear_it(monke
         ).all()
     )
     assert len(activated) == 1
+    triggered = list(
+        session.scalars(
+            select(AuditLog).where(
+                AuditLog.action == AuditEventType.KILL_SWITCH_TRIGGERED,
+                AuditLog.resource_type == "account_equity_stop",
+            )
+        ).all()
+    )
+    assert [row.redacted_metadata["reason"] for row in triggered] == ["ACCOUNT_DAILY_DRAWDOWN"]
 
     figures["equity"] = Decimal("9700")
     figures["realized"] = Decimal("-300")

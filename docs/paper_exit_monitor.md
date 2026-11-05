@@ -176,22 +176,34 @@ A losing close that is labelled live, and that is older than the cooldown
 or older than one candle, does not call that note. The bar clock would
 write a pause that has already expired, or a daily lock on the previous
 UTC day. The close stays journaled with `exit_origin=live`. The path raises
-`paper_exit_stale_loss` and arms the organization kill switch (AT-ADR-128).
-Writing the breakers at the current database time was the other option and
-is not used. A replay does not ask again. A zero result does not arm the
-switch.
+`paper_exit_stale_loss` (alert and audit only). Since AT-ADR-152 it does not
+arm the kill switch; AT-ADR-128's arming is superseded. Writing the breakers
+at the current database time was the other option and is not used. A replay
+does not ask again. A zero result does not alert.
 
 A backfill is journaled and does not call that note, so it does not move
 the streak or the daily lock, and it is not an ADR-109 calibration sample.
-A backfill with a net loss still protects the account: the close path raises
-the structured alert `paper_exit_backfill_loss` and arms the organization
-kill switch, which refuses new entries until a human deactivates it
-(AT-ADR-127). A winning or zero backfill does not. Noting the loss onto the
+A backfill with a net loss raises the structured alert
+`paper_exit_backfill_loss` (alert and audit only, `refusal=none`). Since
+AT-ADR-152 it does not arm the kill switch; AT-ADR-127's arming is
+superseded. A winning or zero backfill does not alert. Noting the loss onto the
 live streak or the daily lock was the other option and is not used, because
 those figures are dated from the old bar and do not block today's entries.
 This path does not insert a calibration row for a live close either: the
-walk-forward fold is not known here. Both kill-switch armings are audited
-as the system. The trade owner is not stored as the person who armed it.
+walk-forward fold is not known here. Both alerts are audited as the system.
+
+The one loss rule that arms the kill switch is the account daily equity
+stop (AT-ADR-152): total equity, unrealized PnL included, more than
+`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10) below the 00:00 UTC
+baseline. Each exit-monitor pass snapshots that baseline and enforces the
+stop for every account with a breaker row, on the trusted database clock,
+in dry-run too. Unreadable equity, or a missing or stale baseline after
+`ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) past midnight,
+fails closed and arms. The audit row is `kill_switch_triggered` with
+`resource_type=account_equity_stop` and `reason=ACCOUNT_DAILY_DRAWDOWN`,
+carrying baseline, equity, drawdown and threshold percents. The switch
+arms at most once per UTC day, is armed as the system, and only a human
+deactivation clears it.
 
 A human close leaves those fields unset.
 
@@ -295,7 +307,7 @@ back, the dropped page is logged at error. A kill-switch page is not sent
 when its activation rolls back.
 
 Kill-switch activations from the manual route, the global setting, the
-drawdown breaker, the other breaker and demo-protection paths, and a
+account daily equity stop, the other breaker and demo-protection paths, and a
 fail-closed read use that same redacted, deduplicated Telegram path. The
 free-text reason is not copied. No P&L amount is included. A committed
 activation is marked unsent in the same transaction, in a savepoint, one

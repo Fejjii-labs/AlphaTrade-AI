@@ -9,7 +9,7 @@ windows that latch was open, so a later read can evaluate a past moment.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +17,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -264,6 +265,12 @@ class RiskPolicyBreakerState(UUIDPrimaryKeyMixin, Base):
     consecutive_paused_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Account daily equity stop (AT-ADR-152). The baseline is total equity at
+    # the 00:00 UTC rollover of ``day_start_on``. ``equity_stop_tripped_on``
+    # is the UTC day the stop last armed the kill switch.
+    day_start_equity: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    day_start_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    equity_stop_tripped_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

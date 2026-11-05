@@ -278,7 +278,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             now=NOW,
         ),
     )
-    assert drawdown.trip_kill_switch
+    assert drawdown.refuse_new_trades
     assert drawdown.human_reset_required
     breached = BreakerSnapshot(
         equity=Decimal("89"),

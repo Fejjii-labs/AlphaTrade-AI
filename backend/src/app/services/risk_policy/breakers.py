@@ -1,7 +1,9 @@
 """Daily-loss, drawdown, and consecutive-loss breakers.
 
-Drawdown from the equity peak trips the kill switch and stays tripped until
-a human reset, and only once equity is back inside the threshold. Daily loss
+Drawdown from the equity peak latches a refusal of new trades until a human
+reset, and only once equity is back inside the threshold. It does not arm the
+kill switch: the account daily equity stop (``equity_stop``, AT-ADR-152) is
+the only loss rule that does. Daily loss
 pauses new trades until the next UTC day. A later scan does not clear that
 stored pause before the boundary. Consecutive losses pause until the
 profile cooldown; that expiry is stored by the trip writer and is not
@@ -43,7 +45,6 @@ class BreakerVerdict:
     daily_loss_active: bool
     drawdown_active: bool
     consecutive_loss_active: bool
-    trip_kill_switch: bool
     paused_until: datetime | None
     equity_peak: Decimal
     refuse_new_trades: bool
@@ -87,7 +88,6 @@ def evaluate_breakers(config: BreakerConfig, snapshot: BreakerSnapshot) -> Break
         daily_loss_active=daily_hit,
         drawdown_active=drawdown_hit,
         consecutive_loss_active=consecutive_hit,
-        trip_kill_switch=drawdown_hit,
         paused_until=pause,
         equity_peak=peak,
         refuse_new_trades=daily_hit or drawdown_hit or consecutive_hit,

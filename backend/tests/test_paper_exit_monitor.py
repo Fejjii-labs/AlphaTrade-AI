@@ -1849,7 +1849,7 @@ def _protection(
     )
 
 
-def test_six_hour_loss_across_utc_midnight_gets_the_kill_switch() -> None:
+def test_six_hour_loss_across_utc_midnight_alerts_instead_of_noting() -> None:
     """A 6h-old loss labelled live must not lock yesterday or an expired pause."""
 
     occurred = datetime(2026, 10, 19, 20, 0, tzinfo=UTC)
@@ -1876,12 +1876,12 @@ def test_six_hour_loss_across_utc_midnight_gets_the_kill_switch() -> None:
         pause_window=_PAUSE,
         candle_period=_CANDLE_15M,
     )
-    assert _protection(request, evaluated) == "stale_kill_switch"
+    assert _protection(request, evaluated) == "stale_alert"
     assert counts_for_adr109_calibration(request) is True
     assert _protection(request, evaluated, net_pnl=Decimal("5")) == "note"
     assert _protection(request, evaluated, net_pnl=Decimal("0")) == "note"
     assert _protection(request, evaluated, replayed=True) == "skip"
-    assert _protection(request, evaluated, net_pnl=Decimal("NaN")) == "stale_kill_switch"
+    assert _protection(request, evaluated, net_pnl=Decimal("NaN")) == "stale_alert"
 
 
 def test_stale_live_loss_boundaries_and_a_recent_loss_notes() -> None:
@@ -1893,29 +1893,29 @@ def test_stale_live_loss_boundaries_and_a_recent_loss_notes() -> None:
     assert _protection(request, bar + _PAUSE, candle=_CANDLE_4H) == "note"
     assert (
         _protection(request, bar + _PAUSE + timedelta(microseconds=1), candle=_CANDLE_4H)
-        == "stale_kill_switch"
+        == "stale_alert"
     )
     assert _protection(request, bar + _CANDLE_15M, pause=_PAUSE) == "note"
     assert (
         _protection(request, bar + _CANDLE_15M + timedelta(microseconds=1), pause=_PAUSE)
-        == "stale_kill_switch"
+        == "stale_alert"
     )
     just_inside_backfill = bar + timedelta(hours=24) - timedelta(microseconds=1)
     assert classify_exit_origin(bar, just_inside_backfill) == "live"
-    assert _protection(request, just_inside_backfill) == "stale_kill_switch"
+    assert _protection(request, just_inside_backfill) == "stale_alert"
     at_backfill = bar + timedelta(hours=24)
     assert classify_exit_origin(bar, at_backfill) == "backfill"
     labelled = _backfill_request()
     labelled = labelled.model_copy(update={"occurred_at": bar})
-    assert _protection(labelled, at_backfill) == "backfill_kill_switch"
+    assert _protection(labelled, at_backfill) == "backfill_alert"
     live_at_24h = _live_close(bar)
-    assert _protection(live_at_24h, at_backfill) == "stale_kill_switch"
+    assert _protection(live_at_24h, at_backfill) == "stale_alert"
     disabled_pause = _protection(
         request, bar + timedelta(hours=2), pause=timedelta(0), candle=_CANDLE_4H
     )
     assert disabled_pause == "note"
-    assert _protection(request, None) == "stale_kill_switch"
-    assert _protection(request, bar + timedelta(seconds=30), candle=None) == "stale_kill_switch"
+    assert _protection(request, None) == "stale_alert"
+    assert _protection(request, bar + timedelta(seconds=30), candle=None) == "stale_alert"
     human = ClosePaperPlanRequest(
         organization_id=ORG,
         user_id=USER,

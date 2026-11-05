@@ -3,6 +3,10 @@
 Drawdown, consecutive-loss, and daily-loss pauses stay inert until something
 writes them. This module is that writer for an active profile. It does not
 reset a drawdown latch and it does not place an order.
+
+None of these pauses arms the kill switch. Each persist also runs the
+account daily equity stop (AT-ADR-152), which is the only loss rule that
+does.
 """
 
 from __future__ import annotations
@@ -114,14 +118,6 @@ def profile_close_consecutive(
     return 0
 
 
-# Audited reason stored on the organization kill switch. A later scan does
-# not replace it and does not clear the switch.
-DRAWDOWN_KILL_REASON = (
-    "Profile drawdown breaker tripped; new entries stay blocked until a human "
-    "deactivates the kill switch"
-)
-
-
 def _pause_still_in_force(paused_until: datetime | None, now: datetime) -> bool:
     return paused_until is not None and _as_utc(paused_until) > _as_utc(now)
 
@@ -205,9 +201,9 @@ def persist_profile_breakers(
 ) -> bool:
     """Sync daily figures, then trip. Returns whether new trades are refused.
 
-    A new drawdown trip arms the organization kill switch. A later scan
-    does not deactivate it and does not arm it again while the latch
-    remains, so a human deactivation stays off. Only
+    The peak drawdown latch, the daily pause and the consecutive pause
+    refuse new trades without arming the kill switch. The account daily
+    equity stop arms it, at most once per UTC day. Only
     ``KillSwitchService.deactivate`` turns it off.
     """
 
@@ -239,6 +235,7 @@ def persist_profile_breakers(
         )
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
+    first_sight = row is None
     peak = equity
     if row is not None and isinstance(row.equity_peak, Decimal) and row.equity_peak > 0:
         peak = row.equity_peak
@@ -285,17 +282,17 @@ def persist_profile_breakers(
         existing_daily_paused_until=kept_daily,
         cooldown_hours=profile.consecutive_loss_cooldown_hours,
     )
-    # ``latched`` is the row from before this scan. Arm only on the trip
-    # that sets the latch. A later scan, including one after a human
-    # deactivation, does not call activate again.
-    if verdict.trip_kill_switch and not latched:
-        _arm_drawdown_kill_switch(
-            session,
-            organization_id=organization_id,
-            user_id=user_id,
-            settings=settings,
-        )
-    return verdict.refuse_new_trades
+    armed = _enforce_equity_stop(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        equity=equity,
+        now=now,
+        settings=settings,
+        first_sight=first_sight,
+    )
+    return verdict.refuse_new_trades or armed
 
 
 def _finite_money(value: object) -> Decimal:
@@ -317,10 +314,11 @@ def _latch_ruined_equity(
     unrealized_pnl: object,
     settings: Settings | None,
 ) -> bool:
-    """Arm the profile breaker when equity is missing, non-finite, or not positive.
+    """Latch the profile breaker when equity is missing, non-finite, or not positive.
 
-    The drawdown latch and the loss streak are written. The kill switch arms
-    on the trip that sets the latch. New trades are refused.
+    The drawdown latch and the loss streak are written. The account daily
+    equity stop fails closed on the unreadable equity and arms the kill
+    switch, once per UTC day. New trades are refused.
     """
 
     from app.services.audit_service import AuditService
@@ -339,7 +337,6 @@ def _latch_ruined_equity(
     kept_daily = existing_daily if _pause_still_in_force(existing_daily, now) else None
     if kept_pause is not None and consecutive < stored:
         consecutive = stored
-    latched = False if row is None else bool(row.drawdown_latched)
     peak = Decimal("1")
     stored_peak = None if row is None else row.equity_peak
     if isinstance(stored_peak, Decimal) and stored_peak.is_finite() and stored_peak > 0:
@@ -366,39 +363,38 @@ def _latch_ruined_equity(
         drawdown_latched=True,
         now=now,
     )
-    if not latched:
-        _arm_drawdown_kill_switch(
-            session,
-            organization_id=organization_id,
-            user_id=user_id,
-            settings=settings,
-        )
+    _enforce_equity_stop(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        equity=None,
+        now=now,
+        settings=settings,
+    )
     return True
 
 
-def _arm_drawdown_kill_switch(
+def _enforce_equity_stop(
     session: Session,
     *,
     organization_id: UUID,
     user_id: UUID,
+    account_id: UUID,
+    equity: object,
+    now: datetime,
     settings: Settings | None,
-) -> None:
-    """Arm the existing organization switch. Already-on is a no-op.
+    first_sight: bool = False,
+) -> bool:
+    from app.services.risk_policy.equity_stop import enforce_account_equity_stop
 
-    ``KillSwitchService.activate`` returns the current row without a new
-    audit event when the switch is already active. This function never
-    calls deactivate.
-    """
-
-    from app.core.config import get_settings
-    from app.schemas.risk import KillSwitchMutationRequest
-    from app.services.audit_service import AuditService
-    from app.services.risk.kill_switch import KillSwitchService
-
-    resolved = get_settings() if settings is None else settings
-    KillSwitchService(session, AuditService(session), resolved).activate(
+    return enforce_account_equity_stop(
+        session,
         organization_id=organization_id,
-        actor_user_id=user_id,
-        payload=KillSwitchMutationRequest(confirm=True, reason=DRAWDOWN_KILL_REASON),
-        source="drawdown",
+        user_id=user_id,
+        account_id=account_id,
+        equity=equity,
+        now=now,
+        settings=settings,
+        first_sight=first_sight,
     )

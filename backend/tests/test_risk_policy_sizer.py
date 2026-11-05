@@ -376,7 +376,6 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
         daily_loss_active=False,
         drawdown_active=False,
         consecutive_loss_active=False,
-        trip_kill_switch=False,
         paused_until=None,
         equity_peak=Decimal("10000"),
         refuse_new_trades=False,
@@ -424,4 +423,4 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
         tiers=(MaintenanceTier(Decimal("0"), Decimal("0.004")),),
     )
     assert blocked.reason == "breaker_active"
-    assert tripped.trip_kill_switch
+    assert tripped.human_reset_required

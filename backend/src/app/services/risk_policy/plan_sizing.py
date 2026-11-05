@@ -801,7 +801,6 @@ def _verdict(equity: Decimal, *, refusing: bool) -> BreakerVerdict:
         daily_loss_active=refusing,
         drawdown_active=False,
         consecutive_loss_active=False,
-        trip_kill_switch=False,
         paused_until=None,
         equity_peak=equity,
         refuse_new_trades=refusing,

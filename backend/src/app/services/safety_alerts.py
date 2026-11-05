@@ -77,6 +77,7 @@ _KILL_SWITCH_SOURCES = frozenset(
         "manual",
         "global_setting",
         "drawdown",
+        "account_equity_stop",
         "breaker",
         "fail_closed",
         "exit_monitor",

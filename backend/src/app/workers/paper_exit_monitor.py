@@ -167,6 +167,7 @@ def run_configured_exit_monitor(
         session.rollback()
     finally:
         session.close()
+    _sweep_account_equity_stops(factory, settings, evaluated_at)
     loader = PaperExitCandleLoader(settings)
 
     def candles(trade: OpenInternalPaperTrade) -> FetchedBars:
@@ -487,6 +488,34 @@ class _RefusingCloser(PaperExitCloser):
 
     def close(self, request: ClosePaperPlanRequest) -> ClosePaperPlanResult:
         raise RuntimeError("paper exit monitor dry-run attempted a close")
+
+
+def _sweep_account_equity_stops(
+    factory: sessionmaker[Session], settings: Settings, now: datetime
+) -> None:
+    """Snapshot the 00:00 UTC equity baselines and enforce the daily stop (AT-ADR-152).
+
+    Runs on the trusted database clock, in dry-run too: it never closes a
+    trade. A failure is logged and the stop fails closed on the next scan,
+    because the baseline goes stale after the grace window.
+    """
+
+    from app.services.risk_policy.equity_stop import sweep_account_equity_stops
+
+    session = factory()
+    try:
+        armed = sweep_account_equity_stops(session, now=now, settings=settings)
+        session.commit()
+        if armed:
+            logger.warning("account_equity_stop_sweep_armed", armed=armed)
+    except Exception as exc:
+        session.rollback()
+        logger.error(
+            "account_equity_stop_sweep_failed",
+            error=redact_text(str(exc))[:200],
+        )
+    finally:
+        session.close()
 
 
 def _session_factory() -> sessionmaker[Session]:
