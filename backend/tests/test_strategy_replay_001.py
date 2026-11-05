@@ -489,9 +489,10 @@ def test_canonical_daily_risk_observes_only_prior_realized_losses(store):
         RiskEngine(RiskLimits(max_daily_loss_pct=Decimal("0.001"))),
         0,
     )
-    assert len(trades) == 1 and trades[0].net_pnl < 0
-    assert candidates[0].state == "entered"
-    assert candidates[1].state == "blocked"
+    # The prior realized loss is observed as a warning, not a block, so the
+    # second signal still enters (AT-ADR-152).
+    assert len(trades) == 2 and trades[0].net_pnl < 0
+    assert [candidate.state for candidate in candidates] == ["entered", "entered"]
     assert "max_daily_loss" in [
         r.rule_id.value for r in candidates[1].risk_decision.triggered_rules
     ]

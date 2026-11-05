@@ -32,7 +32,6 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.risk.engine import RiskEngine
 from app.services.risk.rules import (
     RiskEvaluationContext,
-    check_daily_loss_lock,
     check_kill_switch,
     check_weekly_loss,
 )
@@ -490,8 +489,6 @@ class ActionEligibilityService:
 
     def _risk_reason(self, command: ActionEligibilityCommand) -> EligibilityReasonCode | None:
         request, context = self._risk_inputs(command)
-        if check_daily_loss_lock(request, self._risk.limits, context) is not None:
-            return EligibilityReasonCode.BLOCKED_DAILY_LOSS
         if check_weekly_loss(request, self._risk.limits, context) is not None:
             return EligibilityReasonCode.BLOCKED_WEEKLY_LOSS
         if command.risk.cooldown_active:

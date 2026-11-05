@@ -30,7 +30,6 @@ from app.security.passwords import hash_password
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import AutomatedPaperLoop, AutomatedPaperLoopProof
 from app.services.autonomous_trading_guard import (
-    autonomous_daily_loss_exceeded,
     autonomous_max_trades_reached,
     autonomous_precheck_refusal,
 )
@@ -422,14 +421,6 @@ def test_enforcement_guards() -> None:
         )
         == "autonomous_symbol_mismatch"
     )
-    assert autonomous_daily_loss_exceeded(
-        resolved,
-        _snapshot(realized_pnl=Decimal("-250"), account_equity=Decimal("10000")),
-    )
-    assert not autonomous_daily_loss_exceeded(
-        resolved,
-        _snapshot(realized_pnl=Decimal("-100"), account_equity=Decimal("10000")),
-    )
     assert autonomous_max_trades_reached(resolved, _snapshot(trade_count=2))
     assert not autonomous_max_trades_reached(resolved, _snapshot(trade_count=1))
     assert (
@@ -452,10 +443,10 @@ def test_enforcement_guards() -> None:
         autonomous_precheck_refusal(
             configured,
             _target(),
-            _snapshot(realized_pnl=Decimal("-250"), account_equity=Decimal("10000")),
+            _snapshot(realized_pnl=Decimal("-990"), account_equity=Decimal("10000")),
         )
-        == "autonomous_daily_loss_limit"
-    )
+        is None
+    ), "a 9.9% realized loss is not a refusal; only the 10% equity stop halts (AT-ADR-152)"
 
 
 def test_risk_override_replaces_grade_cap() -> None:
@@ -972,13 +963,15 @@ def test_saved_stops_block_the_loop_and_defaults_do_not(
         )
         session.commit()
 
+    # A saved 2% autonomous daily loss is display only: 9.9% realized still
+    # reaches the bound (AT-ADR-152).
     loss = _run_probe(
         factory,
         settings,
-        _snapshot(realized_pnl=Decimal("-250"), trade_count=0),
+        _snapshot(realized_pnl=Decimal("-990"), trade_count=0),
         monkeypatch,
     )
-    assert loss.reason_code == "autonomous_daily_loss_limit"
+    assert loss.reason_code == "probe_reached_bound"
     trades = _run_probe(factory, settings, _snapshot(trade_count=2), monkeypatch)
     assert trades.reason_code == "autonomous_max_trades_per_day"
     allowed = _run_probe(factory, settings, _snapshot(), monkeypatch)

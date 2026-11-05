@@ -393,21 +393,13 @@ class AutomatedPaperLoop:
             open_exposure = _open_exposure(session, target, now=now)
         else:
             funding_rate = self._verified_funding_rate()
-            from app.services.autonomous_trading_guard import (
-                effective_autonomous_daily_loss_percent,
-            )
-
-            daily_cap = active.profile.daily_loss_limit_percent
-            autonomous = getattr(self, "_autonomous_settings", None)
-            if autonomous is not None and not autonomous.using_defaults:
-                daily_cap = effective_autonomous_daily_loss_percent(
-                    autonomous, active.profile.daily_loss_limit_percent
-                )
+            # The autonomous daily loss percent no longer shrinks the daily
+            # cap (AT-ADR-152); only the profile limit bounds open risk.
             book = _profile_open_book(
                 session,
                 target,
                 now=now,
-                daily_loss_limit_percent=daily_cap,
+                daily_loss_limit_percent=active.profile.daily_loss_limit_percent,
                 include_book_buffer=self._risk_policy_kind() == "demo",
                 funding_rate=funding_rate,
                 live_verified=funding_rate is not None,
@@ -1065,7 +1057,6 @@ def _profile_open_book(
     )
     remaining = remaining_daily_budget_percent(
         daily_loss_limit_percent=daily_loss_limit_percent,
-        realized_pnl=snapshot.realized_pnl,
         equity=snapshot.account_equity,
     )
     if isinstance(remaining, str):

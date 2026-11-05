@@ -291,8 +291,6 @@ def configured_risk_refusal(snapshot: RiskLimitSnapshot | None) -> str | None:
         or not snapshot.instrument
     ):
         return "risk_limits_unverified"
-    if snapshot.daily_locked:
-        return "daily_loss_limit"
     if not symbol_cap_exempt(snapshot.execution_venue):
         try:
             symbol_reserved = _symbol_amount(snapshot.symbol_reserved, snapshot.instrument)

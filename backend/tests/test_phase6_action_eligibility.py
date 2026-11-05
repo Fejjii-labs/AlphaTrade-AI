@@ -93,19 +93,19 @@ def test_kill_switch_blocks_and_dominates() -> None:
     assert assessment.state is SetupAssessmentState.CONFIRMED_SETUP
 
 
-def test_daily_loss_limit_blocks() -> None:
+def test_daily_loss_limit_does_not_block() -> None:
+    """The cash daily loss limit is display only (AT-ADR-152)."""
     result = _service().evaluate(
         eligibility_command(
             risk=risk_snapshot(
-                daily_locked=False,
+                daily_locked=True,
                 daily_loss_limit=Decimal("50"),
                 realized_pnl_today=Decimal("-50"),
             )
         )
     )
-    assert result.eligibility.state is ActionEligibilityState.BLOCKED
-    assert result.eligibility.reason_codes == (EligibilityReasonCode.BLOCKED_DAILY_LOSS,)
-    assert result.paper_actionable is False
+    assert result.eligibility.state is ActionEligibilityState.ELIGIBLE
+    assert EligibilityReasonCode.BLOCKED_DAILY_LOSS not in result.eligibility.reason_codes
 
 
 def test_risk_capacity_blocks() -> None:
@@ -286,12 +286,12 @@ def test_changed_risk_snapshot_reevaluates_without_mutating_history() -> None:
             window=window,
             assessment=assessment,
             candidate=candidate,
-            risk=risk_snapshot(risk_snapshot_id=RISK_SNAPSHOT_B, daily_locked=True),
+            risk=risk_snapshot(risk_snapshot_id=RISK_SNAPSHOT_B, cooldown_active=True),
         )
     )
     assert first.eligibility.state is ActionEligibilityState.ELIGIBLE
     assert second.eligibility.state is ActionEligibilityState.BLOCKED
-    assert second.eligibility.reason_codes == (EligibilityReasonCode.BLOCKED_DAILY_LOSS,)
+    assert second.eligibility.reason_codes == (EligibilityReasonCode.BLOCKED_COOLDOWN,)
     assert first.eligibility.eligibility_id != second.eligibility.eligibility_id
     assert first.eligibility.content_hash != second.eligibility.content_hash
     assert first.evaluation_revision == 1

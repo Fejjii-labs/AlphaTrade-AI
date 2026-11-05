@@ -258,17 +258,11 @@ def test_stale_confirmation_fails_closed(paper_world, change):
 
 @requires_postgres
 @pytest.mark.parametrize("at_confirmation", [False, True])
-def test_risk_block_is_final(paper_world, at_confirmation):
+def test_risk_block_is_final(paper_world, at_confirmation, monkeypatch):
     w = paper_world
     proposal = prepare(w) if at_confirmation else None
-    from app.services.audit_service import AuditService
-    from app.services.risk.settings_service import RiskSettingsService
-
-    daily = RiskSettingsService(w.session, AuditService(w.session)).ensure_daily_risk_state(
-        organization_id=ORG_ID, user_id=USER_ID, day=datetime.now().date()
-    )
-    daily.locked = True
-    w.session.commit()
+    # The daily loss lock only warns now (AT-ADR-152); force a real BLOCK rule.
+    _force_risk_block(monkeypatch)
     response = (
         run(w, proposal.paper_execution.confirmation_message, proposal.conversation_id)
         if proposal
@@ -595,9 +589,20 @@ def test_interactive_sealed_proposal_executes_and_replays(interactive_world, tex
     assert count(w, ExecutionCommand) == count(w, ExecutionFillFact) == count(w, JournalTrade) == 1
 
 
+def _force_risk_block(monkeypatch) -> None:
+    from app.schemas.common import RiskAction, RiskRuleId, RiskSeverity
+    from app.services.risk import engine
+    from app.services.risk.rules import _rule
+
+    def _block(_req, _limits, _ctx):
+        return _rule(RiskRuleId.NO_STOP_LOSS, RiskAction.BLOCK, RiskSeverity.CRITICAL, "forced")
+
+    monkeypatch.setattr(engine, "ALL_RULES", (*engine.ALL_RULES, _block))
+
+
 @requires_postgres
 @pytest.mark.parametrize("change", ["hash", "expiry", "price", "risk", "reject", "ambiguous"])
-def test_interactive_confirmation_fails_closed(interactive_world, change):
+def test_interactive_confirmation_fails_closed(interactive_world, change, monkeypatch):
     from app.core.errors import AppError
     from app.interactive_agent.contracts import ProposalDecisionRequest
 
@@ -611,14 +616,7 @@ def test_interactive_confirmation_fails_closed(interactive_world, change):
     elif change == "price":
         w.quotes.price = "100010"
     elif change == "risk":
-        from app.services.audit_service import AuditService
-        from app.services.risk.settings_service import RiskSettingsService
-
-        daily = RiskSettingsService(w.session, AuditService(w.session)).ensure_daily_risk_state(
-            organization_id=ORG_ID, user_id=USER_ID, day=datetime.now().date()
-        )
-        daily.locked = True
-        w.session.commit()
+        _force_risk_block(monkeypatch)
     elif change == "reject":
         interactive_service(w).reject(
             proposal.proposal_id,

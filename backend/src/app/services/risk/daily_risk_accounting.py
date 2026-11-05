@@ -147,6 +147,8 @@ class DailyRiskAccounting:
         row.unrealized_pnl = unrealized
         row.trade_count = trade_count
 
+        # Display flag only (dashboard, attention). No gate refuses on it: the
+        # 10% account equity stop is the only daily brake (AT-ADR-152).
         if daily_loss_limit is not None and realized <= -daily_loss_limit:
             row.locked = True
 

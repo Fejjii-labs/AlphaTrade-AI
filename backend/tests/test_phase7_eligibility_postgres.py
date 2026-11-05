@@ -133,7 +133,7 @@ def test_reused_risk_snapshot_id_with_changed_facts_fails_closed() -> None:
                 window=window,
                 assessment=assessment,
                 candidate=candidate,
-                risk=risk_snapshot(daily_locked=True),
+                risk=risk_snapshot(cooldown_active=True),
             )
         )
     history = service.history(

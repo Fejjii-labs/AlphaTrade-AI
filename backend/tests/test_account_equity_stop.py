@@ -1033,3 +1033,140 @@ def test_balance_edit_leaves_both_users_baselines_unchanged(world) -> None:
     assert (audit["account_id"], audit["outcome"]) == (str(account), "baseline_unchanged")
     assert _sweep(session, NOON + timedelta(minutes=1)) == 0
     assert _active(session, org) is False
+
+
+# Griller R4 B1 (Sofien 2026-11-05): a 3% to 9.9% realized day still trades.
+# The cash daily-loss lock, the autonomous daily-loss percent and the sizer's
+# realized-loss term are not brakes; only the 10% equity stop is.
+@pytest.mark.parametrize("loss", [Decimal("300"), Decimal("600"), Decimal("990")])
+def test_realized_loss_below_ten_percent_still_opens_and_sizes(world, loss: Decimal) -> None:
+    from types import SimpleNamespace
+
+    from app.db.models import UserRiskSettings
+    from app.schemas.common import RiskAction, TradeDirection
+    from app.schemas.risk import RiskCheckRequest
+    from app.services.automated_paper_loop import _profile_open_book
+    from app.services.execution_claim import ReservationIntent, evaluate_claim_predicate
+    from app.services.risk.daily_risk_accounting import DailyRiskAccounting
+    from app.services.risk.engine import RiskEngine
+    from app.services.risk.rules import RiskEvaluationContext
+    from app.services.risk.settings_service import RiskSettingsService
+    from app.services.risk_policy.profile import Grade, PolicyKind, sofien_aggressive_profile
+    from app.services.risk_policy.sizer import SizingInput, size_trade
+
+    session, org, user, account = world
+    _book(session, org, user, account)
+    settings_row = session.scalar(select(UserRiskSettings))
+    assert settings_row is not None
+    settings_row.daily_loss_limit = Decimal("250")  # cash limit below every case
+    _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    _position(session, org, user, realized=-loss, closed_at=NOON - timedelta(hours=1))
+
+    # (a) The cash lock is set for display, but nothing refuses on it.
+    snapshot = DailyRiskAccounting(
+        session, RiskSettingsService(session, AuditService(session)), clock=lambda: NOON
+    ).sync_from_portfolio(organization_id=org, user_id=user)
+    assert snapshot.daily_locked is True
+    accounting = SimpleNamespace(
+        daily_locked=True,
+        max_notional=Decimal("100000"),
+        reserved_notional=Decimal("0"),
+        actual_notional=Decimal("0"),
+        max_daily_loss=Decimal("1000"),
+        reserved_daily_loss=Decimal("0"),
+        actual_daily_loss=Decimal("0"),
+        max_trade_slots=10,
+        reserved_trade_slots=0,
+        actual_trade_count=0,
+        max_symbol_notional=Decimal("100000"),
+        symbol_reserved={},
+        symbol_actual={},
+    )
+    intent = ReservationIntent(
+        pending_notional=Decimal("100"),
+        daily_loss=Decimal("10"),
+        trade_slots=1,
+        instrument="BTC-USDT",
+        exposure_unit="USDT",
+        remaining_quantity=Decimal("1"),
+        quantity_unit="base",
+        contract_multiplier=Decimal("1"),
+        contract_type="linear",
+    )
+    assert (
+        evaluate_claim_predicate(
+            blocking_epoch=False,
+            kill_active=False,
+            accounting=accounting,  # type: ignore[arg-type]
+            intent=intent,
+        )
+        is None
+    )
+    verdict = RiskEngine().evaluate(
+        RiskCheckRequest(
+            symbol="BTCUSDT",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("100"),
+            stop_loss=Decimal("98"),
+            position_size=Decimal("1"),
+            leverage=Decimal("1"),
+            account_equity=snapshot.account_equity,
+        ),
+        context=RiskEvaluationContext(
+            daily_locked=snapshot.daily_locked,
+            realized_pnl_today=snapshot.realized_pnl,
+            daily_loss_limit=snapshot.daily_loss_limit,
+            is_weekend=False,
+        ),
+    )
+    assert verdict.action is not RiskAction.BLOCK
+
+    # (c) The sizer's daily room is the profile limit, not limit minus realized.
+    profile = sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER)
+    book = _profile_open_book(
+        session,
+        SimpleNamespace(organization_id=org, user_id=user),  # type: ignore[arg-type]
+        now=NOON,
+        daily_loss_limit_percent=profile.daily_loss_limit_percent,
+    )
+    assert not isinstance(book, str), book
+    assert book.remaining_daily_budget_percent == profile.daily_loss_limit_percent
+    sized = size_trade(
+        profile,
+        SizingInput(
+            equity=snapshot.account_equity,
+            entry=Decimal("100"),
+            stop=Decimal("97"),
+            direction="long",
+            grade=Grade.A,
+            grade_risk_percent=Decimal("0.5"),
+            atr=Decimal("1"),
+            gap_beyond_stop=Decimal("0"),
+            fee_rate=Decimal("0"),
+            funding_rate=Decimal("0"),
+            funding_periods=Decimal("0"),
+            slippage_rate=Decimal("0"),
+            lot_step=Decimal("0.00000001"),
+            min_quantity=Decimal("0.00000001"),
+            remaining_daily_budget_percent=book.remaining_daily_budget_percent,
+            open_risk_percent=book.open_risk_percent,
+            open_notional=book.open_notional,
+            open_positions=book.open_positions,
+            leverage=Decimal("1"),
+            margin_mode="isolated",
+        ),
+    )
+    assert sized.effective_risk_percent > 0
+
+    # The equity stop does not arm below 10%...
+    assert _sweep(session, NOON) == 0
+    assert _active(session, org) is False
+    # ...and arms at 10.01% (ACCOUNT_DAILY_DRAWDOWN).
+    _position(
+        session, org, user, realized=loss - Decimal("1001"), closed_at=NOON - timedelta(minutes=30)
+    )
+    assert _read(session, org, user).equity == Decimal("8999")
+    assert _sweep(session, NOON + timedelta(minutes=1)) == 1
+    assert _active(session, org) is True
+    [audit] = _trips(session, org)
+    assert audit.redacted_metadata["reason"] == ACCOUNT_DAILY_DRAWDOWN

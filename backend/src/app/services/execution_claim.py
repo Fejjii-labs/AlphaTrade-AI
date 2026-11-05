@@ -887,8 +887,8 @@ def evaluate_claim_predicate(
 
     if blocking_epoch or kill_active:
         return "safety_epoch_blocking"
-    if accounting.daily_locked:
-        return "daily_loss_locked"
+    # ``daily_locked`` is display only (AT-ADR-152): the 10% account equity
+    # stop is the only daily brake and arms the kill switch above.
     remaining_notional = (
         accounting.max_notional - accounting.reserved_notional - accounting.actual_notional
     )

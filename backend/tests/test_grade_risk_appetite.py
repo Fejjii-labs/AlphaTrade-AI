@@ -632,17 +632,16 @@ def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
     assert (
         remaining_daily_budget_percent(
             daily_loss_limit_percent=Decimal("6"),
-            realized_pnl=None,
-            equity=Decimal("10000"),
+            equity=Decimal("0"),
         )
         == "daily_budget_uncomputed"
     )
-    # A $500 realized loss on $10,000 uses 5 points of a 6% daily limit.
+    # Realized loss is not subtracted (AT-ADR-152): the full profile limit
+    # stays available for open risk.
     assert remaining_daily_budget_percent(
         daily_loss_limit_percent=Decimal("6"),
-        realized_pnl=Decimal("-500"),
         equity=Decimal("10000"),
-    ) == Decimal("1")
+    ) == Decimal("6")
     assert (
         open_risk_from_stops(
             equity=Decimal("10000"),

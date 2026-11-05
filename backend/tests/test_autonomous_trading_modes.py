@@ -262,7 +262,8 @@ def test_demo_auto_approval_stays_inside_configured_risk_limits() -> None:
     assert configured_risk_refusal(_limits(proposed_loss=Decimal("101"))) == "daily_loss_limit"
     over_daily_loss = _limits(actual_daily_loss=Decimal("95"), proposed_loss=Decimal("10"))
     assert configured_risk_refusal(over_daily_loss) == "daily_loss_limit"
-    assert configured_risk_refusal(_limits(daily_locked=True)) == "daily_loss_limit"
+    # The daily loss lock is display only (AT-ADR-152).
+    assert configured_risk_refusal(_limits(daily_locked=True)) is None
     assert (
         configured_risk_refusal(_limits(max_trade_slots=1, actual_trade_count=1))
         == "daily_trade_limit"

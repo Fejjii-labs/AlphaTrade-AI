@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 from app.services.autonomous_trading_settings_service import ResolvedAutonomousSettings
 from app.services.risk.daily_risk_accounting import AuthoritativeDailySnapshot
 from app.workers.watcher_paper_targets import PaperScanTarget
@@ -22,18 +20,6 @@ def autonomous_target_matches(
     return None
 
 
-def autonomous_daily_loss_exceeded(
-    settings: ResolvedAutonomousSettings,
-    snapshot: AuthoritativeDailySnapshot,
-) -> bool:
-    if snapshot.account_equity <= 0:
-        return True
-    loss_percent = Decimal("0")
-    if snapshot.realized_pnl < 0:
-        loss_percent = (-snapshot.realized_pnl / snapshot.account_equity) * Decimal("100")
-    return loss_percent >= settings.daily_loss_limit_percent
-
-
 def autonomous_max_trades_reached(
     settings: ResolvedAutonomousSettings,
     snapshot: AuthoritativeDailySnapshot,
@@ -46,28 +32,15 @@ def autonomous_precheck_refusal(
     target: PaperScanTarget,
     snapshot: AuthoritativeDailySnapshot,
 ) -> str | None:
-    # Unsaved settings keep the previous loop. Daily loss, trade count, strategy,
-    # and coin apply only after the user saves a row.
+    # Unsaved settings keep the previous loop. Trade count, strategy, and coin
+    # apply only after the user saves a row. The saved daily loss percent is
+    # display only: the 10% account equity stop is the only daily brake
+    # (AT-ADR-152).
     if settings.using_defaults:
         return None
     mismatch = autonomous_target_matches(settings, target)
     if mismatch is not None:
         return mismatch
-    if autonomous_daily_loss_exceeded(settings, snapshot):
-        return "autonomous_daily_loss_limit"
     if autonomous_max_trades_reached(settings, snapshot):
         return "autonomous_max_trades_per_day"
     return None
-
-
-def effective_autonomous_daily_loss_percent(
-    settings: ResolvedAutonomousSettings,
-    profile_daily_loss_percent: Decimal,
-) -> Decimal:
-    """User autonomous cap, still bounded by profile and the code ceiling."""
-
-    return min(
-        settings.daily_loss_limit_percent,
-        profile_daily_loss_percent,
-        Decimal("6"),
-    )

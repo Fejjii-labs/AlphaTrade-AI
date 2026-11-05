@@ -23,7 +23,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     timezone, so a non-UTC user's local midnight cannot drop a UTC-day loss,
     and prior days' losses lower the baseline instead of loosening the stop.
     `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (the
-    daily lock and the informational breaker figures) are unchanged.
+    display-only daily lock and the informational breaker figures) are
+    unchanged.
   - Mark freshness: an open position whose row was last written more than
     `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900) ago is a stale
     mark; the reading is unusable and the stop trips with
@@ -138,24 +139,39 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   true only on that path or when the equity stop armed. Within the profile
   breaker, the SoD daily equity stop is the one loss rule that halts
   trading.
-- Not removed, and they still refuse new entries (decision pending): the
-  risk-settings cash `daily_loss_limit` lock (`DailyRiskAccounting`
-  `row.locked`, refused as `daily_loss_locked` / `daily_loss_limit` and in
-  action eligibility) with its claim-time `max_daily_loss` budget, and the
-  autonomous-settings `daily_loss_limit_percent` precheck
-  (`autonomous_daily_loss_limit`, at most 6%, only after the user saves
-  autonomous settings), and the profile daily budget in sizing
-  (`remaining_daily_budget_percent` subtracts today's realized loss from
-  the profile `daily_loss_limit_percent`, at most 6%; once it is used up
-  `size_trade` refuses with `budget_exhausted`). These sit outside the
-  profile breaker (the first two are user-configured settings; the third
-  is in the per-trade sizer that this change keeps), so until Sofien
-  decides, a realized day loss under 10% can still stop new entries.
+- Removed as refusals (Sofien decision 2026-11-05, Griller R4 B1): the 10%
+  account daily equity stop is the **only** brake that may halt or pause
+  trading. Three realized-loss daily refusals that remained are removed;
+  their figures stay for alerts and display only:
+  - Risk-settings cash `daily_loss_limit` lock.
+    `DailyRiskAccounting.sync_from_portfolio` still sets `row.locked` and
+    `daily_locked` (dashboard, attention and pre-trade advice read it), but
+    nothing refuses on it: `evaluate_claim_predicate` no longer returns
+    `daily_loss_locked`, `configured_risk_refusal` no longer returns
+    `daily_loss_limit` for the lock, action eligibility no longer returns
+    `BLOCKED_DAILY_LOSS`, paper signal orchestration treats it as passed,
+    and `check_daily_loss_lock` (lock, cash limit, and the 3%
+    `RiskLimits.max_daily_loss_pct` branch) is a WARN, not a BLOCK.
+  - Autonomous-settings `daily_loss_limit_percent` precheck.
+    `autonomous_daily_loss_exceeded` and `autonomous_daily_loss_limit` are
+    gone, and `effective_autonomous_daily_loss_percent` no longer shrinks
+    the sizer's daily cap. The saved percent is kept and shown.
+  - Realized-loss term in sizing. `remaining_daily_budget_percent` returns
+    the profile `daily_loss_limit_percent` without subtracting today's
+    realized loss. The sizer still caps open risk at
+    `min(daily cap, max_aggregate_open_risk_percent) - open risk`, so
+    `budget_exhausted` fires only on concurrent open risk.
+  - Kept (not realized-loss halts): the claim-time reservation check
+    (`max_daily_loss - reserved_daily_loss - actual_daily_loss`; the ledger's
+    `actual_daily_loss` has no writer, so it bounds in-flight planned stop
+    losses), autonomous `max_trades_per_day`, weekly loss, cooldown and the
+    exposure caps.
 - Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
   the PnL calendar, and infrastructure arms (unreadable kill-switch state,
-  global kill switch, demo protection and lineage holds). The legacy
-  `breaker_active` read still gates profile loosening in governance; with
-  no writer it is only true for a legacy row until its next persist.
+  global kill switch, demo protection and lineage holds).
+  `RiskPolicyService.breaker_active` now always returns false, so a stale
+  legacy latch or pause column no longer blocks a profile loosening in
+  governance.
 - Caveats: accounts without a breaker row are not swept. Canonical open
   paper trades have no unrealized mark in stop equity, so the stop is
   effectively realized-only for them (see above).

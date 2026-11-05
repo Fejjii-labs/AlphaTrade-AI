@@ -258,19 +258,15 @@ class RiskPolicyService:
         )
 
     def breaker_active(self, *, organization_id: uuid.UUID, now: datetime) -> bool:
-        rows = self._session.scalars(
-            select(RiskPolicyBreakerState).where(
-                RiskPolicyBreakerState.organization_id == organization_id
-            )
-        ).all()
-        moment = _as_utc(now)
-        for row in rows:
-            if row.drawdown_latched:
-                return True
-            if _pause_active(row.daily_paused_until, moment):
-                return True
-            if _pause_active(row.consecutive_paused_until, moment):
-                return True
+        """Always False: no loss breaker refuses anything (AT-ADR-152).
+
+        The drawdown latch and the daily and consecutive pause columns are no
+        longer written. A stale value left by an older build must not block
+        a profile loosening; the 10% account equity stop arms the kill switch
+        instead.
+        """
+
+        del organization_id, now
         return False
 
     def breaker_covered(self, *, organization_id: uuid.UUID, moment: datetime) -> bool:

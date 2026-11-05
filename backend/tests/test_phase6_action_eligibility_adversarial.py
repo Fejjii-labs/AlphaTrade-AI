@@ -120,17 +120,19 @@ def test_weekly_loss_blocks_with_distinct_reason() -> None:
     assert result.paper_actionable is False
 
 
-def test_daily_loss_percent_path_blocks() -> None:
+def test_daily_loss_percent_path_does_not_block() -> None:
+    """Realized daily loss is not a refusal; the 10% equity stop is (AT-ADR-152)."""
     result = _service().evaluate(
         eligibility_command(
             risk=risk_snapshot(
-                daily_locked=False,
+                daily_locked=True,
                 daily_loss_limit=None,
                 realized_pnl_today=Decimal("-300"),
             )
         )
     )
-    assert result.eligibility.reason_codes == (EligibilityReasonCode.BLOCKED_DAILY_LOSS,)
+    assert EligibilityReasonCode.BLOCKED_DAILY_LOSS not in result.eligibility.reason_codes
+    assert result.eligibility.state is ActionEligibilityState.ELIGIBLE
 
 
 def test_cooldown_and_portfolio_conflict_block() -> None:

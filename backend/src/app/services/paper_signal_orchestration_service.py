@@ -871,9 +871,11 @@ class PaperSignalOrchestrationService:
             logger.warning("paper_signal_daily_risk_unavailable", error=str(exc))
             return False, "Daily risk state unavailable (fail closed).", False, "Cooldown unknown."
 
-        daily_ok = not snap.daily_locked
+        # The daily loss lock is display only (AT-ADR-152); the 10% account
+        # equity stop arms the kill switch instead.
+        daily_ok = True
         daily_detail = (
-            "Daily loss lock active."
+            f"Daily loss limit reached (display only); realized PnL={snap.realized_pnl}."
             if snap.daily_locked
             else f"Daily realized PnL={snap.realized_pnl}."
         )

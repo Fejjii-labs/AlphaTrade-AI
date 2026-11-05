@@ -312,7 +312,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
     assert cleared.drawdown_latched is False
 
 
-def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
+def test_agent_cannot_apply_loosening_waits_and_a_stale_latch_does_not_block_it() -> None:
     session = _session()
     service = _service(session)
     profile, _active, _scheduled = service.read(organization_id=ORG, kind=PolicyKind.DEMO, now=NOW)
@@ -390,9 +390,8 @@ def test_agent_cannot_apply_loosening_waits_and_a_breaker_blocks_it() -> None:
     service.latch_drawdown(
         organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
     )
-    with pytest.raises(RiskPolicyRejected) as blocked:
-        _apply(service, loose_proposal, _human())
-    assert blocked.value.code == "loosening_blocked_by_breaker"
+    # A legacy drawdown latch no longer refuses anything (AT-ADR-152).
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
     session.query(RiskPolicyVersion).all()  # keep the import path honest
     state = session.scalars(select(RiskPolicyVersion)).all()
     latched = next(row for row in state if row.id)
@@ -1390,7 +1389,8 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
         drawdown_latched=True,
         now=NOW,
     )
-    assert service.breaker_active(organization_id=ORG, now=NOW)
+    # Legacy pause and latch columns are display only (AT-ADR-152).
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
     with pytest.raises(RiskPolicyRejected) as agent:
         service.reset_drawdown_latch(
             organization_id=ORG,
@@ -1440,7 +1440,7 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
         owner_user_id="sofien",
         now=NOW,
     )
-    assert service.breaker_active(organization_id=ORG, now=NOW)
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
     reset = session.scalar(select(RiskPolicyBreakerReset))
     assert reset is not None
     assert reset.actor_id == "sofien"
@@ -1487,17 +1487,10 @@ def test_first_stored_profile_looser_than_the_placeholder_is_a_loosening() -> No
         )
     assert unconfirmed.value.code == "apply_proof_missing"
     assert fresh.scalar(select(RiskPolicyVersion.id)) is None
+    # A stale legacy latch does not block the loosening (AT-ADR-152).
     service.latch_drawdown(
         organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=NOW
     )
-    with pytest.raises(RiskPolicyRejected) as blocked:
-        _apply(service, proposal, _human())
-    assert blocked.value.code == "loosening_blocked_by_breaker"
-    assert fresh.scalar(select(RiskPolicyVersion.id)) is None
-    breaker = fresh.scalar(select(RiskPolicyBreakerState))
-    assert breaker is not None
-    breaker.drawdown_latched = False
-    fresh.flush()
     scheduled = _apply(service, proposal, _human())
     assert scheduled.change_class == "loosening"
     assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
@@ -1923,7 +1916,7 @@ def test_consecutive_cooldown_round_trips_and_a_shorter_pause_is_a_loosening() -
         )
     )
     assert audit is not None
-    assert service.breaker_active(organization_id=ORG, now=NOW) is True
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
 
 
 def test_consecutive_reset_rejects_a_telegram_proof_without_iat() -> None:

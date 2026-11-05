@@ -71,7 +71,8 @@ def test_schema_rejects_invalid_leverage(bad_leverage: Decimal) -> None:
 @pytest.mark.parametrize(
     "context,rule,action",
     [
-        (RiskEvaluationContext(daily_locked=True), RiskRuleId.MAX_DAILY_LOSS, RiskAction.BLOCK),
+        # Daily loss is a warning only; the 10% equity stop halts (AT-ADR-152).
+        (RiskEvaluationContext(daily_locked=True), RiskRuleId.MAX_DAILY_LOSS, RiskAction.WARN),
         (RiskEvaluationContext(trades_today=20), RiskRuleId.OVERTRADING, RiskAction.WARN),
         (
             RiskEvaluationContext(protect_green_day=True),

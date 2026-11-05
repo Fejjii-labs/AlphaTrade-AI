@@ -122,6 +122,22 @@ def test_budget_exhaustion_and_open_risk_reduce_the_trade() -> None:
     assert reduced.effective_risk_percent <= Decimal("0.6")
 
 
+def test_open_risk_still_exhausts_the_budget_without_any_realized_term() -> None:
+    """AT-ADR-152: realized loss is not subtracted; concurrent open risk still caps."""
+    profile = _wide()
+    full = profile.daily_loss_limit_percent
+    assert size_trade(profile, _order(remaining_daily_budget_percent=full)).effective_risk_percent
+    with pytest.raises(RiskPolicyRejected) as caught:
+        size_trade(
+            profile,
+            _order(
+                remaining_daily_budget_percent=full,
+                open_risk_percent=profile.max_aggregate_open_risk_percent,
+            ),
+        )
+    assert caught.value.code == "budget_exhausted"
+
+
 def test_notional_cap_reduces_quantity_and_leverage_only_sets_margin() -> None:
     capped_profile = profile_with(
         PolicyKind.DEMO,
