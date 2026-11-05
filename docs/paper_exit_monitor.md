@@ -198,7 +198,7 @@ stop (AT-ADR-152): stop equity more than
 baseline. Stop equity is `default_account_balance` plus all-time realized
 PnL plus the unrealized PnL of open legacy positions. Canonical open paper
 trades carry no unrealized mark yet, so for them the stop is effectively
-realized-only until a mark feed exists; such marks must then obey the same
+realized-only until a mark feed exists (https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437); such marks must then obey the same
 freshness bound. The baseline and every check use that one function; the risk-settings timezone does not enter it. Each
 exit-monitor pass snapshots the baseline and enforces the stop for every
 account with a breaker row, on the trusted database clock, in dry-run too.

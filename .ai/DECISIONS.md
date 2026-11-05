@@ -38,8 +38,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     and the exit monitor, not during exit-monitor backoff or across many
     simultaneous positions. When canonical marks are added they must obey
     the same freshness rule (`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS`,
-    stale ⇒ `equity_stale`, fail closed). The mark feed is a separate
-    follow-up ticket.
+    stale ⇒ `equity_stale`, fail closed). The mark feed is tracked as GitHub issue
+    https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437.
   - Baseline: stored on `risk_policy_breaker_states` (`day_start_equity`,
     `day_start_on`) at the rollover. Each paper-worker exit-monitor pass
     takes the snapshot on the database clock within
