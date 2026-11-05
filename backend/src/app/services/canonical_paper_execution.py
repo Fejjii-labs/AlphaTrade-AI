@@ -898,12 +898,13 @@ def _note_profile_close(
     now: datetime,
     kind: PolicyKind | None = None,
 ) -> tuple[int | None, bool]:
-    """Advance consecutive losses, then persist the breaker verdict. No reset.
+    """Advance consecutive losses, then persist the breaker figures. No reset.
 
-    Returns the streak and whether new trades are refused. ``kind`` selects
-    the active profile and the breaker row is the account's row. Paper uses
-    the internal-paper profile. Demo uses the demo profile. A drawdown latch
-    is not cleared. A refusal is final for the next entry; this close stays.
+    Returns the streak and whether new trades are refused, which is only the
+    account daily equity stop (AT-ADR-152); the streak itself never pauses.
+    ``kind`` selects the active profile and the breaker row is the account's
+    row. Paper uses the internal-paper profile. Demo uses the demo profile.
+    A refusal is final for the next entry; this close stays.
     """
 
     from app.services.audit_service import AuditService

@@ -226,10 +226,16 @@ that raises sends `account_equity_stop_sweep_failed`. A breaker row with no
 matching execution account is never swept; the entry gate ignores it and
 each sweep sends `account_equity_stop_orphan_breaker_rows` (6 h cooldown).
 These are mandatory Telegram safety codes. Changing
-`default_account_balance` in risk settings shifts today's baseline by the
-balance delta, so the day's losses stay counted, and writes an
-`account_equity_stop_baseline` audit row per account; it does not clear the
-kill switch.
+`default_account_balance` in risk settings leaves today's baseline
+unchanged: checks on that day keep using the balance inside the baseline
+(`day_start_balance`), and the new balance enters at the next UTC day's
+snapshot. Each edit writes an `account_equity_stop_baseline` audit row per
+account; it does not clear the kill switch.
+
+This stop is the only loss rule that halts trading. The profile breaker's
+peak drawdown latch, daily-loss pause and consecutive-loss pause were
+removed (AT-ADR-152); their figures are still recorded but do not refuse
+entries. The streak and daily-lock notes above only move those figures.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |

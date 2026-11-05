@@ -3,7 +3,7 @@
 One account-level loss rule arms the organization kill switch: equity more
 than the threshold below the 00:00 UTC baseline. Unreadable equity and a
 missing or stale baseline fail closed. A single loss and a losing streak
-do not arm it.
+do not arm it, and the peak latch and soft pauses no longer refuse.
 """
 
 from __future__ import annotations
@@ -317,8 +317,10 @@ def _figures(monkeypatch: pytest.MonkeyPatch, equity: dict[str, Decimal]) -> Non
     )
 
 
-# 6b/7. Losing closes and a streak past the limit refuse without arming.
-def test_loss_streak_and_peak_drawdown_do_not_arm_the_kill_switch(world, monkeypatch) -> None:
+# 6b/7. A streak past the limit neither pauses, refuses, nor arms (Sofien 2026-11-05).
+def test_loss_streak_no_longer_pauses_or_refuses_and_ten_percent_still_arms(
+    world, monkeypatch
+) -> None:
     from app.services.risk_policy.breaker_trip import persist_profile_breakers
     from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
 
@@ -336,15 +338,17 @@ def test_loss_streak_and_peak_drawdown_do_not_arm_the_kill_switch(world, monkeyp
     assert persist_profile_breakers(session, now=NOON, settings=_settings(), **kwargs) is False
     for losses in range(1, profile.consecutive_loss_limit + 3):
         figures["equity"] -= Decimal("50")
-        persist_profile_breakers(
+        refused = persist_profile_breakers(
             session,
             now=NOON + timedelta(minutes=losses),
             consecutive_losses=losses,
             settings=_settings(),
             **kwargs,
         )
+        assert refused is False
     row = session.scalar(select(RiskPolicyBreakerState))
-    assert row is not None and row.consecutive_paused_until is not None  # soft pause holds
+    assert row is not None and row.consecutive_losses == profile.consecutive_loss_limit + 2
+    assert row.consecutive_paused_until is None and row.daily_paused_until is None
     assert _active(session, org) is False
     assert _trips(session, org) == []
     # A daily equity loss past 10% is what arms it.
@@ -356,8 +360,8 @@ def test_loss_streak_and_peak_drawdown_do_not_arm_the_kill_switch(world, monkeyp
     assert [a.redacted_metadata["cause"] for a in _trips(session, org)] == ["breach"]
 
 
-def test_peak_drawdown_latch_refuses_without_arming_the_kill_switch(world, monkeypatch) -> None:
-    """The peak latch is a soft refusal now. Only the SoD daily rule arms (AT-ADR-152)."""
+def test_peak_drawdown_no_longer_latches_or_refuses(world, monkeypatch) -> None:
+    """The peak latch is removed. Only the SoD daily rule halts trading (AT-ADR-152)."""
 
     from app.services.risk_policy.breaker_trip import persist_profile_breakers
     from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
@@ -388,9 +392,73 @@ def test_peak_drawdown_latch_refuses_without_arming_the_kill_switch(world, monke
         session, now=next_day + timedelta(hours=3), settings=_settings(), **kwargs
     )
     row = session.scalar(select(RiskPolicyBreakerState))
-    assert refused is True and row is not None and row.drawdown_latched is True
+    assert refused is False and row is not None and row.drawdown_latched is False
     assert _active(session, org) is False
     assert _trips(session, org) == []
+
+
+def test_breaker_figures_never_refuse_on_drawdown_daily_loss_or_streak() -> None:
+    from app.services.risk_policy.breakers import (
+        BreakerConfig,
+        BreakerSnapshot,
+        evaluate_breakers,
+    )
+
+    verdict = evaluate_breakers(
+        BreakerConfig(
+            daily_loss_limit_percent=Decimal("3"),
+            drawdown_breaker_percent=Decimal("10"),
+            consecutive_loss_limit=3,
+        ),
+        BreakerSnapshot(
+            equity=Decimal("8000"),
+            equity_peak=Decimal("10000"),
+            reference_equity=Decimal("10000"),
+            realized_pnl_today=Decimal("-2000"),
+            unrealized_pnl_today=Decimal("0"),
+            consecutive_losses=5,
+            drawdown_latched=True,
+            now=NOON,
+        ),
+    )
+    # The figures are still reported, but nothing refuses or pauses.
+    assert verdict.drawdown_active and verdict.daily_loss_active
+    assert verdict.consecutive_loss_active
+    assert verdict.refuse_new_trades is False and verdict.active is False
+    assert verdict.paused_until is None and verdict.human_reset_required is False
+
+
+def test_entry_gate_ignores_a_legacy_latch_and_pauses_and_the_next_persist_clears_them(
+    world, monkeypatch
+) -> None:
+    from app.services.automated_paper_loop import _breaker_refusing
+    from app.services.risk_policy.breaker_trip import persist_profile_breakers
+    from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
+
+    session, org, user, account = world
+    _book(session, org, user, account)
+    row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    row.drawdown_latched = True
+    row.daily_paused_until = NOON + timedelta(hours=12)
+    row.consecutive_paused_until = NOON + timedelta(hours=24)
+    row.consecutive_losses = 9
+    session.flush()
+    assert _breaker_refusing(session, org, NOON) is False
+    figures = {"equity": Decimal("9500")}
+    _figures(monkeypatch, figures)
+    refused = persist_profile_breakers(
+        session,
+        organization_id=org,
+        user_id=user,
+        account_id=account,
+        profile=sofien_aggressive_profile(PolicyKind.INTERNAL_PAPER),
+        now=NOON,
+        settings=_settings(),
+    )
+    assert refused is False
+    assert row.drawdown_latched is False
+    assert row.daily_paused_until is None and row.consecutive_paused_until is None
+    assert row.consecutive_losses == 9  # the streak is still counted, as a figure
 
 
 def test_worker_sweep_snapshots_at_rollover_and_fails_closed_on_unreadable_equity(
@@ -426,7 +494,8 @@ def test_equity_stop_migration_is_the_single_head_after_demo_leverage() -> None:
     from tests.support.alembic_heads import alembic_script_directory, single_alembic_head
 
     script = alembic_script_directory()
-    assert single_alembic_head(script) == "a25equitystop001"
+    assert single_alembic_head(script) == "a26equitystop002"
+    assert script.get_revision("a26equitystop002").down_revision == "a25equitystop001"
     assert script.get_revision("a25equitystop001").down_revision == "a24demoleverage001"
 
 
@@ -564,7 +633,9 @@ def test_stop_equity_is_balance_plus_all_realized_plus_fresh_unrealized(world) -
     )
     _position(session, org, user, realized=Decimal("-50"), closed_at=NOON - timedelta(hours=2))
     _position(session, org, user, unrealized=Decimal("-75"), marked_at=NOON - timedelta(minutes=5))
-    assert _read(session, org, user) == StopEquityReading(Decimal("20125"))
+    assert _read(session, org, user) == StopEquityReading(
+        Decimal("20125"), balance=Decimal("20000")
+    )
 
 
 # Blocker 2: a stale unrealized mark fails closed with its own cause.
@@ -590,7 +661,7 @@ def test_mark_freshness_bound_is_config_driven(world) -> None:
     _position(session, org, user, unrealized=Decimal("5"), marked_at=NOON - timedelta(minutes=16))
     wide = _settings().model_copy(update={"account_equity_stop_mark_max_age_seconds": 1800})
     reading = read_stop_equity(session, organization_id=org, user_id=user, now=NOON, settings=wide)
-    assert reading == StopEquityReading(Decimal("10005"))
+    assert reading == StopEquityReading(Decimal("10005"), balance=Decimal("10000"))
 
 
 # Open point 1: a never-snapshotted row is first sight, even past the grace window.
@@ -685,11 +756,11 @@ def test_worker_sweep_publishes_heartbeat_and_alerts_on_failure(monkeypatch) -> 
     engine.dispose()
 
 
-# Condition: a balance edit re-baselines and never clears the switch.
+# D1 (Sofien 2026-11-05): a balance edit applies from the next UTC day's baseline.
 def _edit_balance(
     session: Session, org: UUID, user: UUID, balance: Decimal, now: datetime = NOON
 ) -> None:
-    from app.api.routes.risk import _rebaseline_on_balance_edit
+    from app.api.routes.risk import _record_balance_edit
     from app.schemas.common import MembershipRole
     from app.schemas.risk import UserRiskSettingsUpdate
     from app.security.tenant import TenantContext
@@ -708,10 +779,10 @@ def _edit_balance(
         email="trader@example.com",
         membership_role=MembershipRole.TRADER,
     )
-    _rebaseline_on_balance_edit(session, tenant, before, after, now=now)
+    _record_balance_edit(session, tenant, before, after, now=now)
 
 
-def _shifts(session: Session, org: UUID) -> list[dict[str, str]]:
+def _edits(session: Session, org: UUID) -> list[dict[str, str]]:
     return [
         a.redacted_metadata
         for a in session.scalars(
@@ -725,27 +796,36 @@ def _shifts(session: Session, org: UUID) -> list[dict[str, str]]:
     ]
 
 
-def test_lowering_the_balance_shifts_the_baseline_instead_of_false_tripping(world) -> None:
+def test_lowering_the_balance_leaves_todays_baseline_and_does_not_false_trip(world) -> None:
     session, org, user, account = world
     _book(session, org, user, account)
     row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
     _edit_balance(session, org, user, Decimal("8000"))
-    assert (row.day_start_on, row.day_start_equity) == (DAY, Decimal("8000"))
+    assert (row.day_start_on, row.day_start_equity) == (DAY, Decimal("10000"))
+    assert row.day_start_balance == Decimal("10000")  # pre-edit balance recorded
+    # Today's check still reads the start-of-day balance, so -20% is not a loss.
     assert _sweep(session, NOON + timedelta(minutes=1)) == 0
     assert _active(session, org) is False
 
 
-def test_raising_the_balance_shifts_the_baseline_so_a_later_loss_still_trips(world) -> None:
+def test_raising_the_balance_mid_loss_does_not_dilute_todays_stop(world) -> None:
     session, org, user, account = world
     _book(session, org, user, account)
     row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
     _position(session, org, user, realized=Decimal("-900"), closed_at=NOON - timedelta(hours=1))
+    assert _sweep(session, NOON) == 0  # 9%: under the threshold
     _edit_balance(session, org, user, Decimal("20000"))
-    # Shifted by the +10000 edit; the earlier -900 stays counted against it.
-    assert row.day_start_equity == Decimal("20000")
-    # Unshifted, 17100 > 9000 would mask this 14.5% day loss.
-    _position(session, org, user, realized=Decimal("-2000"), closed_at=NOON)
+    assert (row.day_start_on, row.day_start_equity) == (DAY, Decimal("10000"))
+    # 101 more is 10.01% of today's 10000 baseline. Read against the new
+    # 20000 balance it would be 18999 > 9000 and mask the loss.
+    _position(session, org, user, realized=Decimal("-101"), closed_at=NOON)
     assert _sweep(session, NOON + timedelta(minutes=1)) == 1
+    [trip] = _trips(session, org)
+    assert trip.redacted_metadata["cause"] == "breach"
+    assert (trip.redacted_metadata["baseline"], trip.redacted_metadata["equity"]) == (
+        "10000.00",
+        "8999.00",
+    )
 
 
 # Griller R2 blocker (c): an edit-and-revert must not forgive the day's losses.
@@ -756,28 +836,42 @@ def test_edit_and_revert_cannot_wipe_the_days_losses(world) -> None:
     _position(session, org, user, realized=Decimal("-900"), closed_at=NOON - timedelta(hours=1))
     assert _sweep(session, NOON) == 0  # 9%: under the threshold
     _edit_balance(session, org, user, Decimal("9999.99"))
-    assert row.day_start_equity == Decimal("9999.99")
+    assert row.day_start_equity == Decimal("10000")
     _edit_balance(session, org, user, Decimal("10000"))
     assert row.day_start_equity == Decimal("10000")
-    # 101 more is 10.01% of the day. Reset-to-post-edit would read it as 1.1%.
+    assert row.day_start_balance == Decimal("10000")  # the first edit's pre-edit balance
+    # 101 more is 10.01% of the day; the baseline never moved.
     _position(session, org, user, realized=Decimal("-101"), closed_at=NOON)
     assert _sweep(session, NOON + timedelta(minutes=1)) == 1
     assert [a.redacted_metadata["cause"] for a in _trips(session, org)] == ["breach"]
-    down, up = _shifts(session, org)
+    down, up = _edits(session, org)
     assert down["actor_user_id"] == str(user) and down["actor_role"] == "trader"
-    assert (down["old_balance"], down["new_balance"], down["delta"]) == (
-        "10000.00",
-        "9999.99",
-        "-0.01",
-    )
-    assert (down["old_baseline"], down["new_baseline"]) == ("10000.00", "9999.99")
-    assert (up["delta"], up["old_baseline"], up["new_baseline"]) == (
-        "0.01",
-        "9999.99",
-        "10000.00",
-    )
-    assert down["outcome"] == up["outcome"] == "shifted"
+    assert (down["old_balance"], down["new_balance"]) == ("10000.00", "9999.99")
+    assert (up["old_balance"], up["new_balance"]) == ("9999.99", "10000.00")
+    assert down["outcome"] == up["outcome"] == "baseline_unchanged"
+    assert down["baseline"] == up["baseline"] == "10000.00"
+    assert down["baseline_day"] == down["day"] == DAY.isoformat()
+    assert down["applies_from"] == "2026-11-06"
     assert down["account_id"] == str(account)
+
+
+def test_balance_edit_applies_at_the_next_utc_day_snapshot(world) -> None:
+    session, org, user, account = world
+    _book(session, org, user, account)
+    row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    _position(session, org, user, realized=Decimal("-500"), closed_at=NOON - timedelta(hours=1))
+    _edit_balance(session, org, user, Decimal("20000"))
+    assert row.day_start_equity == Decimal("10000")
+    tomorrow = datetime(2026, 11, 6, 0, 5, tzinfo=UTC)
+    assert _sweep(session, tomorrow) == 0
+    # New balance + all-time realized: 20000 - 500.
+    assert (row.day_start_on, row.day_start_equity) == (date(2026, 11, 6), Decimal("19500"))
+    assert row.day_start_balance == Decimal("20000")
+    # The 10% stop on the new day is measured against the new baseline.
+    _position(session, org, user, realized=Decimal("-1950"), closed_at=tomorrow)
+    assert _sweep(session, tomorrow + timedelta(hours=1)) == 0  # exactly 10%
+    _position(session, org, user, realized=Decimal("-0.01"), closed_at=tomorrow)
+    assert _sweep(session, tomorrow + timedelta(hours=2)) == 1
 
 
 def test_balance_edit_leaves_a_first_sight_row_to_seed_from_post_edit_equity(world) -> None:
@@ -786,7 +880,7 @@ def test_balance_edit_leaves_a_first_sight_row_to_seed_from_post_edit_equity(wor
     row = _row(session, org, account, baseline=None, day=None)
     _edit_balance(session, org, user, Decimal("12000"))
     assert (row.day_start_on, row.day_start_equity) == (None, None)
-    [audit] = _shifts(session, org)
+    [audit] = _edits(session, org)
     assert audit["outcome"] == "first_sight_unchanged"
     assert _sweep(session, NOON) == 0
     assert (row.day_start_on, row.day_start_equity) == (DAY, Decimal("12000"))
@@ -801,9 +895,9 @@ def test_balance_edit_does_not_deactivate_an_armed_switch(world) -> None:
     _edit_balance(session, org, user, Decimal("12000"))
     assert _active(session, org) is True
     assert row.equity_stop_tripped_on == DAY
-    assert row.day_start_equity == Decimal("12000")  # shifted; the -1500 is still a 12.5% day
-    _edit_balance(session, org, user, Decimal("12000"))  # unchanged balance: no re-baseline
-    assert len(_shifts(session, org)) == 1
+    assert row.day_start_equity == Decimal("10000")  # unchanged; still a 15% day
+    _edit_balance(session, org, user, Decimal("12000"))  # unchanged balance: no audit
+    assert len(_edits(session, org)) == 1
     assert _sweep(session, NOON + timedelta(minutes=1)) == 0  # no second arm today
     assert len(_trips(session, org)) == 1
 
@@ -923,8 +1017,8 @@ def test_sweep_arms_once_per_day_after_owner_deactivation(world) -> None:
     assert len(_trips(session, org)) == 2
 
 
-# Griller R3 D2: one user's balance edit shifts only that user's baselines.
-def test_balance_edit_does_not_shift_another_users_baseline_in_the_org(world) -> None:
+# Griller R3 D2: one user's balance edit touches no baseline, theirs or another user's.
+def test_balance_edit_leaves_both_users_baselines_unchanged(world) -> None:
     session, org, user, account = world
     other, other_account = uuid4(), uuid4()
     _book(session, org, user, account)
@@ -932,9 +1026,10 @@ def test_balance_edit_does_not_shift_another_users_baseline_in_the_org(world) ->
     mine = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
     theirs = _row(session, org, other_account, baseline=Decimal("10000"), day=DAY)
     _edit_balance(session, org, user, Decimal("8000"))
-    assert (mine.day_start_on, mine.day_start_equity) == (DAY, Decimal("8000"))
+    assert (mine.day_start_on, mine.day_start_equity) == (DAY, Decimal("10000"))
     assert (theirs.day_start_on, theirs.day_start_equity) == (DAY, Decimal("10000"))
-    [audit] = _shifts(session, org)
-    assert (audit["account_id"], audit["outcome"]) == (str(account), "shifted")
+    assert theirs.day_start_balance is None  # the other user's row is not written
+    [audit] = _edits(session, org)
+    assert (audit["account_id"], audit["outcome"]) == (str(account), "baseline_unchanged")
     assert _sweep(session, NOON + timedelta(minutes=1)) == 0
     assert _active(session, org) is False

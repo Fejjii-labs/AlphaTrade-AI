@@ -1,13 +1,10 @@
-"""Daily-loss, drawdown, and consecutive-loss breakers.
+"""Daily-loss, drawdown, and consecutive-loss figures. Informational only.
 
-Drawdown from the equity peak latches a refusal of new trades until a human
-reset, and only once equity is back inside the threshold. It does not arm the
-kill switch: the account daily equity stop (``equity_stop``, AT-ADR-152) is
-the only loss rule that does. Daily loss
-pauses new trades until the next UTC day. A later scan does not clear that
-stored pause before the boundary. Consecutive losses pause until the
-profile cooldown; that expiry is stored by the trip writer and is not
-recomputed here.
+None of these refuses or pauses new trades (AT-ADR-152, Sofien 2026-11-05).
+The peak drawdown latch, the daily-loss pause and the consecutive-loss pause
+were removed: the account daily equity stop (``equity_stop``) is the only
+loss rule that halts trading, and it does so by arming the kill switch. The
+flags below are still computed for display and audit.
 """
 
 from __future__ import annotations
@@ -16,7 +13,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 
-from app.services.risk_policy.clock import next_utc_day
 from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.governance import PolicyActor, PolicyChannel
 
@@ -56,7 +52,7 @@ class BreakerVerdict:
 
 
 def evaluate_breakers(config: BreakerConfig, snapshot: BreakerSnapshot) -> BreakerVerdict:
-    """Return the breaker state. Missing or non-positive equity refuses."""
+    """Return the informational breaker figures. Missing or non-positive equity raises."""
 
     _require_money(snapshot.equity, "equity_invalid")
     _require_money(snapshot.equity_peak, "equity_peak_invalid")
@@ -81,17 +77,15 @@ def evaluate_breakers(config: BreakerConfig, snapshot: BreakerSnapshot) -> Break
     daily_limit = snapshot.reference_equity * config.daily_loss_limit_percent / Decimal("100")
     daily_hit = daily_pnl <= -daily_limit and daily_pnl < 0
     consecutive_hit = snapshot.consecutive_losses >= config.consecutive_loss_limit
-    # ``paused_until`` is the daily boundary. The consecutive expiry is a
-    # separate stored timestamp so a later scan cannot push it forward.
-    pause = next_utc_day(snapshot.now) if daily_hit or consecutive_hit else None
+    # The flags are informational. No pause and no latch refuses a trade.
     return BreakerVerdict(
         daily_loss_active=daily_hit,
         drawdown_active=drawdown_hit,
         consecutive_loss_active=consecutive_hit,
-        paused_until=pause,
+        paused_until=None,
         equity_peak=peak,
-        refuse_new_trades=daily_hit or drawdown_hit or consecutive_hit,
-        human_reset_required=drawdown_hit,
+        refuse_new_trades=False,
+        human_reset_required=False,
     )
 
 

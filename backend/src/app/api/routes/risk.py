@@ -92,7 +92,7 @@ async def update_risk_settings(
             organization_id=tenant.organization_id,
             user_id=tenant.user_id,
         )
-        _rebaseline_on_balance_edit(session, tenant, before, result)
+        _record_balance_edit(session, tenant, before, result)
         session.commit()
         return result
     except ValueError as exc:
@@ -115,7 +115,7 @@ async def reset_risk_settings(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,
     )
-    _rebaseline_on_balance_edit(session, tenant, before, result)
+    _record_balance_edit(session, tenant, before, result)
     session.commit()
     return result
 
@@ -230,7 +230,7 @@ async def evaluate_loss_acceptance(
     )
 
 
-def _rebaseline_on_balance_edit(
+def _record_balance_edit(
     session: Session,
     tenant: TenantContext,
     before: UserRiskSettingsResponse,
@@ -238,19 +238,17 @@ def _rebaseline_on_balance_edit(
     *,
     now: datetime | None = None,
 ) -> None:
-    """Shift today's equity-stop baseline by the balance delta (AT-ADR-152).
+    """Audit a balance edit for the equity stop (AT-ADR-152).
 
-    A balance change is not a trading loss or gain. Without this, a lower
-    balance false-trips the stop and a higher one hides a real loss. The
-    shift keeps the day's losses, and each shift is audited. The kill
-    switch is never deactivated here.
+    Today's baseline is left unchanged; the new balance applies from the
+    next UTC day's snapshot. The kill switch is never deactivated here.
     """
 
     if before.default_account_balance == after.default_account_balance:
         return
-    from app.services.risk_policy.equity_stop import rebaseline_after_balance_edit
+    from app.services.risk_policy.equity_stop import record_balance_edit
 
-    rebaseline_after_balance_edit(
+    record_balance_edit(
         session,
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,

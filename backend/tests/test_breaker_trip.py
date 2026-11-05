@@ -1,4 +1,4 @@
-"""Breaker trips are persisted. A drawdown latch is not cleared here."""
+"""Breaker figures are persisted. No pause or latch refuses (AT-ADR-152)."""
 
 from __future__ import annotations
 
@@ -72,121 +72,34 @@ def _no_equity_stop(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     return calls
 
 
-def test_daily_loss_pause_is_recorded_without_a_consecutive_pause() -> None:
+@pytest.mark.parametrize(
+    ("overrides", "flag"),
+    [
+        ({"realized_pnl_today": Decimal("-700")}, "daily_loss_active"),
+        ({"consecutive_losses": 4}, "consecutive_loss_active"),
+        ({"equity": Decimal("8000"), "equity_peak": Decimal("10000")}, "drawdown_active"),
+        ({"equity": Decimal("9500"), "drawdown_latched": True}, "drawdown_active"),
+    ],
+)
+def test_trip_reports_the_figure_but_writes_no_pause_or_latch_and_does_not_refuse(
+    overrides: dict[str, object], flag: str
+) -> None:
     recorder = _Recorder()
     verdict = trip_breakers(
         recorder,
         organization_id=ORG,
         account_id=ACCOUNT,
         config=_config(),
-        snapshot=_snapshot(realized_pnl_today=Decimal("-700")),
+        snapshot=_snapshot(**overrides),
         now=NOW,
     )
-    assert verdict.daily_loss_active and verdict.refuse_new_trades
-    assert verdict.consecutive_loss_active is False
+    assert getattr(verdict, flag) is True
+    assert verdict.refuse_new_trades is False and verdict.paused_until is None
     written = recorder.calls[0]
-    assert written["daily_paused_until"] == verdict.paused_until
+    assert written["daily_paused_until"] is None
     assert written["consecutive_paused_until"] is None
     assert written["drawdown_latched"] is False
-
-
-def test_consecutive_losses_pause_without_touching_the_daily_pause() -> None:
-    from datetime import timedelta
-
-    from app.services.risk_policy.breaker_trip import consecutive_pause_expiry
-
-    recorder = _Recorder()
-    verdict = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=4),
-        now=NOW,
-        cooldown_hours=24,
-    )
-    assert verdict.consecutive_loss_active and verdict.refuse_new_trades
-    written = recorder.calls[0]
-    expiry = consecutive_pause_expiry(NOW, cooldown_hours=24, existing_paused_until=None)
-    assert expiry == NOW + timedelta(hours=24)
-    assert written["consecutive_paused_until"] == expiry
-    assert written["consecutive_paused_until"] != verdict.paused_until
-    assert written["daily_paused_until"] is None
-    assert written["consecutive_losses"] == 4
-
-
-def test_drawdown_latches_and_stays_latched() -> None:
-    recorder = _Recorder()
-    verdict = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(equity=Decimal("8000"), equity_peak=Decimal("10000")),
-        now=NOW,
-    )
-    assert verdict.drawdown_active and verdict.refuse_new_trades
-    assert recorder.calls[0]["drawdown_latched"] is True
-    held = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(
-            equity=Decimal("9500"),
-            equity_peak=Decimal("10000"),
-            drawdown_latched=True,
-        ),
-        now=NOW,
-    )
-    assert held.drawdown_active
-    assert recorder.calls[1]["drawdown_latched"] is True
-
-
-def test_consecutive_pause_is_not_extended_and_expires() -> None:
-    from datetime import timedelta
-
-    from app.services.risk_policy.breaker_trip import streak_after_expiry
-
-    recorder = _Recorder()
-    trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=4),
-        now=NOW,
-        cooldown_hours=24,
-    )
-    expiry = recorder.calls[0]["consecutive_paused_until"]
-    assert isinstance(expiry, datetime)
-    later = NOW + timedelta(hours=18)
-    trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=4, now=later),
-        now=later,
-        existing_consecutive_paused_until=expiry,
-        cooldown_hours=24,
-    )
-    assert recorder.calls[1]["consecutive_paused_until"] == expiry
-    assert recorder.calls[1]["consecutive_losses"] == 4
-    assert streak_after_expiry(4, expiry, expiry) == 0
-    cleared = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=0, now=expiry),
-        now=expiry,
-        existing_consecutive_paused_until=None,
-        cooldown_hours=24,
-    )
-    assert cleared.refuse_new_trades is False
-    assert recorder.calls[2]["consecutive_losses"] == 0
-    assert recorder.calls[2]["consecutive_paused_until"] is None
+    assert written["consecutive_losses"] == overrides.get("consecutive_losses", 0)
 
 
 def test_profile_close_consecutive_increments_a_loss_and_resets_a_win() -> None:
@@ -198,31 +111,6 @@ def test_profile_close_consecutive_increments_a_loss_and_resets_a_win() -> None:
     assert profile_close_consecutive(4, Decimal("2"), pause_in_force=True) == 4
     assert profile_close_consecutive(4, Decimal("-1"), pause_in_force=True) == 5
     assert profile_close_consecutive(3, Decimal("NaN")) == 4
-
-
-def test_stored_consecutive_count_still_refuses_the_next_entry() -> None:
-    recorder = _Recorder()
-    first = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=4),
-        now=NOW,
-    )
-    stored = recorder.calls[0]["consecutive_losses"]
-    assert first.refuse_new_trades and stored == 4
-    second = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(consecutive_losses=stored),  # type: ignore[arg-type]
-        now=NOW,
-    )
-    assert second.consecutive_loss_active and second.refuse_new_trades
-    first_pause = recorder.calls[0]["consecutive_paused_until"]
-    assert recorder.calls[1]["consecutive_paused_until"] == first_pause
 
 
 def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
@@ -406,7 +294,7 @@ def test_demo_profile_close_persists_the_demo_streak(monkeypatch) -> None:
     assert reset == 0
 
 
-def test_next_demo_persist_keeps_the_stored_streak_and_refuses(monkeypatch) -> None:
+def test_next_demo_persist_keeps_the_stored_streak_and_does_not_refuse(monkeypatch) -> None:
     _no_equity_stop(monkeypatch)
     from app.services.risk_policy.breaker_trip import persist_profile_breakers
     from app.services.risk_policy.profile import PolicyKind, sofien_aggressive_profile
@@ -456,14 +344,14 @@ def test_next_demo_persist_keeps_the_stored_streak_and_refuses(monkeypatch) -> N
         profile=profile,
         now=NOW,
     )
-    assert refused is True
+    assert refused is False
     assert written["consecutive_losses"] == 4
-    assert written["consecutive_paused_until"] is not None
+    assert written["consecutive_paused_until"] is None
     assert written["drawdown_latched"] is False
 
 
 @pytest.mark.parametrize("equity", [Decimal("0"), Decimal("-1"), Decimal("NaN")])
-def test_ruined_equity_latches_drawdown_and_the_streak_and_fails_the_equity_stop_closed(
+def test_ruined_equity_records_the_streak_and_fails_closed_without_latching(
     monkeypatch: pytest.MonkeyPatch,
     equity: Decimal,
 ) -> None:
@@ -530,18 +418,19 @@ def test_ruined_equity_latches_drawdown_and_the_streak_and_fails_the_equity_stop
         now=NOW,
         consecutive_losses=3,
     )
-    assert refused is True
-    assert written["drawdown_latched"] is True
+    assert refused is True  # unusable risk-day equity refuses this call
+    assert written["drawdown_latched"] is False
+    assert written["consecutive_paused_until"] is None
     assert written["consecutive_losses"] == 3
     assert written["equity_peak"] == Decimal("10000")
-    # The drawdown latch no longer arms the switch. The equity stop still
-    # runs, on its own UTC equity reading (AT-ADR-152).
+    # Nothing latches. The equity stop still runs, on its own UTC equity
+    # reading (AT-ADR-152), and fails closed there if that is unusable.
     assert armed == []
     assert [call["account_id"] for call in stops] == [ACCOUNT]
     assert "equity" not in stops[0]
 
 
-def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch) -> None:
+def test_a_legacy_consecutive_pause_is_cleared_and_never_refuses(monkeypatch) -> None:
     _no_equity_stop(monkeypatch)
     from datetime import timedelta
 
@@ -600,45 +489,22 @@ def test_expired_pause_clears_the_streak_and_a_future_pause_is_kept(monkeypatch)
     )
     monkeypatch.setattr("app.services.audit_service.AuditService", lambda _session: None)
     monkeypatch.setattr("app.services.risk_policy.persistence.RiskPolicyService", _Service)
-    refused = persist_profile_breakers(
-        object(),  # type: ignore[arg-type]
-        organization_id=ORG,
-        user_id=uuid4(),
-        account_id=ACCOUNT,
-        profile=profile,
-        now=NOW,
-    )
-    assert refused is False
-    assert written["consecutive_losses"] == 0
-    assert written["consecutive_paused_until"] is None
-    state["losses"] = 4
-    state["paused"] = NOW + timedelta(hours=10)
-    kept = persist_profile_breakers(
-        object(),  # type: ignore[arg-type]
-        organization_id=ORG,
-        user_id=uuid4(),
-        account_id=ACCOUNT,
-        profile=profile,
-        now=NOW,
-    )
-    assert kept is True
-    assert written["consecutive_losses"] == 4
-    assert written["consecutive_paused_until"] == NOW + timedelta(hours=10)
-    cleared_attempt = persist_profile_breakers(
-        object(),  # type: ignore[arg-type]
-        organization_id=ORG,
-        user_id=uuid4(),
-        account_id=ACCOUNT,
-        profile=profile,
-        now=NOW,
-        consecutive_losses=0,
-    )
-    assert cleared_attempt is True
-    assert written["consecutive_losses"] == 4
-    assert written["consecutive_paused_until"] == NOW + timedelta(hours=10)
+    for paused in (NOW - timedelta(hours=1), NOW + timedelta(hours=10)):
+        state["paused"] = paused
+        refused = persist_profile_breakers(
+            object(),  # type: ignore[arg-type]
+            organization_id=ORG,
+            user_id=uuid4(),
+            account_id=ACCOUNT,
+            profile=profile,
+            now=NOW,
+        )
+        assert refused is False
+        assert written["consecutive_losses"] == 4  # the streak stays a figure
+        assert written["consecutive_paused_until"] is None
 
 
-def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None:
+def test_profile_close_counts_the_streak_and_writes_no_pause(monkeypatch) -> None:
     _no_equity_stop(monkeypatch)
     from datetime import timedelta
 
@@ -674,10 +540,8 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
             return losses
 
         @property
-        def consecutive_paused_until(self) -> datetime:
-            paused = state["paused"]
-            assert isinstance(paused, datetime)
-            return paused
+        def consecutive_paused_until(self) -> object:
+            return state["paused"]
 
     class _Service:
         def __init__(self, _session: object, _audit: object) -> None:
@@ -706,7 +570,7 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
     for kind in (PolicyKind.DEMO, PolicyKind.INTERNAL_PAPER):
         state["losses"] = 4
         state["paused"] = pause
-        kept, _refused = _note_profile_close(
+        kept, refused = _note_profile_close(
             object(),  # type: ignore[arg-type]
             organization_id=org,
             user_id=user,
@@ -715,10 +579,10 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
             now=NOW,
             kind=kind,
         )
-        assert kept == 4
+        assert kept == 4 and refused is False
         assert written["consecutive_losses"] == 4
-        assert written["consecutive_paused_until"] == pause
-        increased, _refused = _note_profile_close(
+        assert written["consecutive_paused_until"] is None
+        increased, refused = _note_profile_close(
             object(),  # type: ignore[arg-type]
             organization_id=org,
             user_id=user,
@@ -727,75 +591,22 @@ def test_non_negative_close_does_not_end_an_unexpired_pause(monkeypatch) -> None
             now=NOW,
             kind=kind,
         )
+        assert refused is False
         assert increased == 5
         assert written["consecutive_losses"] == 5
-        assert written["consecutive_paused_until"] == pause
+        assert written["consecutive_paused_until"] is None
 
 
-def test_recovered_pnl_same_utc_day_keeps_the_daily_pause() -> None:
-    from app.services.risk_policy.breaker_trip import _as_utc
-    from app.services.risk_policy.clock import next_utc_day
-
-    recorder = _Recorder()
-    tripped = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(
-            realized_pnl_today=Decimal("-700"),
-            unrealized_pnl_today=Decimal("-50"),
-        ),
-        now=NOW,
-    )
-    expiry = recorder.calls[0]["daily_paused_until"]
-    assert tripped.daily_loss_active
-    assert expiry == next_utc_day(NOW)
-    later = datetime(2026, 10, 18, 18, tzinfo=UTC)
-    held = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(
-            realized_pnl_today=Decimal("-10"),
-            unrealized_pnl_today=Decimal("-5"),
-            now=later,
-        ),
-        now=later,
-        existing_daily_paused_until=expiry,  # type: ignore[arg-type]
-    )
-    assert held.daily_loss_active is False
-    assert held.refuse_new_trades is True
-    assert recorder.calls[1]["daily_paused_until"] == expiry
-    assert _as_utc(expiry) > later  # type: ignore[arg-type]
-    expired = trip_breakers(
-        recorder,
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        config=_config(),
-        snapshot=_snapshot(
-            realized_pnl_today=Decimal("-10"),
-            unrealized_pnl_today=Decimal("-5"),
-            now=expiry,  # type: ignore[arg-type]
-        ),
-        now=expiry,  # type: ignore[arg-type]
-        existing_daily_paused_until=expiry,  # type: ignore[arg-type]
-    )
-    assert expired.refuse_new_trades is False
-    assert recorder.calls[2]["daily_paused_until"] is None
-
-
-def test_same_day_scan_keeps_daily_pause_and_breaker_active(monkeypatch) -> None:
-    from sqlalchemy import create_engine, select
+def test_a_daily_loss_past_the_profile_limit_writes_no_pause_and_does_not_refuse(
+    monkeypatch,
+) -> None:
+    from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from app.db.base import Base
     from app.db.models import Organization
-    from app.db.risk_policy import RiskPolicyBreakerInterval
     from app.services.audit_service import AuditService
-    from app.services.risk_policy.breaker_trip import _as_utc, persist_profile_breakers
-    from app.services.risk_policy.clock import next_utc_day
+    from app.services.risk_policy.breaker_trip import persist_profile_breakers
     from app.services.risk_policy.persistence import RiskPolicyService
     from app.services.risk_policy.profile import PolicyKind, placeholder_profile
 
@@ -833,70 +644,26 @@ def test_same_day_scan_keeps_daily_pause_and_breaker_active(monkeypatch) -> None
     monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
     _stop_reads(monkeypatch, figures)
     profile = placeholder_profile(PolicyKind.INTERNAL_PAPER)
-    user_id = uuid4()
     tripped = persist_profile_breakers(
         session,
         organization_id=ORG,
-        user_id=user_id,
+        user_id=uuid4(),
         account_id=ACCOUNT,
         profile=profile,
         now=NOW,
     )
     service = RiskPolicyService(session, AuditService(session))
     stored = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert tripped is True
+    # -200 is past the placeholder's daily limit; it is a figure, not a pause.
+    assert tripped is False
     assert stored is not None
-    assert _as_utc(stored.daily_paused_until) == next_utc_day(NOW)  # type: ignore[arg-type]
+    assert stored.daily_paused_until is None
     assert stored.drawdown_latched is False
     assert stored.consecutive_paused_until is None
-    assert service.breaker_active(organization_id=ORG, now=NOW) is True
-    figures["realized"] = Decimal("-10")
-    figures["unrealized"] = Decimal("-5")
-    later = datetime(2026, 10, 18, 18, tzinfo=UTC)
-    recovered = persist_profile_breakers(
-        session,
-        organization_id=ORG,
-        user_id=user_id,
-        account_id=ACCOUNT,
-        profile=profile,
-        now=later,
-    )
-    session.expire_all()
-    held = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert recovered is True
-    assert held is not None
-    assert held.daily_paused_until is not None
-    assert _as_utc(held.daily_paused_until) == next_utc_day(NOW)
-    assert held.drawdown_latched is False
-    assert held.consecutive_paused_until is None
-    assert service.breaker_active(organization_id=ORG, now=later) is True
-    daily_closes = session.scalars(
-        select(RiskPolicyBreakerInterval).where(
-            RiskPolicyBreakerInterval.organization_id == ORG,
-            RiskPolicyBreakerInterval.account_id == ACCOUNT,
-            RiskPolicyBreakerInterval.kind == "daily",
-            RiskPolicyBreakerInterval.phase == "close",
-        )
-    ).all()
-    assert len(daily_closes) == 1
-    expiry = next_utc_day(NOW)
-    cleared = persist_profile_breakers(
-        session,
-        organization_id=ORG,
-        user_id=user_id,
-        account_id=ACCOUNT,
-        profile=profile,
-        now=expiry,
-    )
-    session.expire_all()
-    ended = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert cleared is False
-    assert ended is not None
-    assert ended.daily_paused_until is None
-    assert service.breaker_active(organization_id=ORG, now=expiry) is False
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
 
 
-def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
+def test_the_next_scan_clears_a_legacy_latch_and_pauses() -> None:
     from datetime import timedelta
 
     from sqlalchemy import create_engine
@@ -906,12 +673,6 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
     from app.db.models import ExecutionAccount, Organization, User
     from app.schemas.trade_plan import AccountMode, ExecutionMode
     from app.services.audit_service import AuditService
-    from app.services.risk_policy.governance import (
-        HumanApplyProof,
-        PolicyActor,
-        PolicyChannel,
-        drawdown_reset_binding,
-    )
     from app.services.risk_policy.persistence import RiskPolicyService
 
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -959,55 +720,12 @@ def test_scan_cannot_clear_drawdown_latch_or_a_future_pause() -> None:
         now=NOW,
     )
     session.expire_all()
-    held = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert held is not None
-    assert held.daily_paused_until is not None
-    assert held.consecutive_paused_until is not None
-    assert held.consecutive_losses == 4
-    assert held.drawdown_latched is True
-    assert service.breaker_active(organization_id=ORG, now=NOW) is True
-    service.record_breaker(
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        equity_peak=Decimal("10000"),
-        consecutive_losses=0,
-        realized_pnl=Decimal("0"),
-        unrealized_pnl=Decimal("0"),
-        daily_paused_until=None,
-        consecutive_paused_until=None,
-        drawdown_latched=False,
-        now=pause,
-    )
-    session.expire_all()
-    expired = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert expired is not None
-    assert expired.daily_paused_until is None
-    assert expired.consecutive_paused_until is None
-    assert expired.consecutive_losses == 0
-    assert expired.drawdown_latched is True
-    proposal_id, content_hash = drawdown_reset_binding(ACCOUNT)
-    service.reset_drawdown_latch(
-        organization_id=ORG,
-        account_id=ACCOUNT,
-        actor=PolicyActor("sofien", PolicyChannel.HUMAN, True),
-        proof=HumanApplyProof(
-            method="interactive_step_up",
-            subject_user_id="sofien",
-            proposal_id=proposal_id,
-            content_hash=content_hash,
-            expires_at=pause + timedelta(minutes=10),
-            session_id="interactive-session",
-            authenticated_at=pause - timedelta(minutes=1),
-            step_up_at=pause - timedelta(seconds=20),
-        ),
-        owner_user_id="sofien",
-        now=pause,
-    )
-    session.expire_all()
-    reset = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
-    assert reset is not None
-    assert reset.drawdown_latched is False
-    assert service.breaker_active(organization_id=ORG, now=pause) is False
+    cleared = service.load_breaker(organization_id=ORG, account_id=ACCOUNT)
+    assert cleared is not None
+    assert cleared.daily_paused_until is None
+    assert cleared.consecutive_paused_until is None
+    assert cleared.drawdown_latched is False
+    assert service.breaker_active(organization_id=ORG, now=NOW) is False
 
 
 def test_daily_equity_stop_arms_kill_switch_and_a_later_scan_does_not_clear_it(monkeypatch) -> None:
@@ -1132,7 +850,8 @@ def test_daily_equity_stop_arms_kill_switch_and_a_later_scan_does_not_clear_it(m
         now=now + timedelta(hours=2),
         settings=settings,
     )
-    assert held is True
+    # No second arm and no soft pause; the armed switch is what blocks.
+    assert held is False
     assert kill.get_status(organization_id=org).active is True
     repeat = list(
         session.scalars(
@@ -1155,7 +874,7 @@ def test_daily_equity_stop_arms_kill_switch_and_a_later_scan_does_not_clear_it(m
         now=now + timedelta(hours=3),
         settings=settings,
     )
-    assert after_reset is True
+    assert after_reset is False
     assert kill.is_execution_blocked(organization_id=org) is False
     still_one = list(
         session.scalars(

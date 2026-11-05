@@ -248,8 +248,9 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             now=NOW,
         ),
     )
+    # Informational only (AT-ADR-152): flagged, but no pause and no refusal.
     assert daily.daily_loss_active
-    assert daily.paused_until == datetime(2026, 10, 19, tzinfo=UTC)
+    assert daily.paused_until is None and daily.refuse_new_trades is False
     streak = evaluate_breakers(
         config,
         BreakerSnapshot(
@@ -264,7 +265,7 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
         ),
     )
     assert streak.consecutive_loss_active
-    assert streak.paused_until == datetime(2026, 10, 19, tzinfo=UTC)
+    assert streak.paused_until is None and streak.refuse_new_trades is False
     drawdown = evaluate_breakers(
         config,
         BreakerSnapshot(
@@ -278,8 +279,9 @@ def test_breakers_pause_drawdown_and_human_reset() -> None:
             now=NOW,
         ),
     )
-    assert drawdown.refuse_new_trades
-    assert drawdown.human_reset_required
+    assert drawdown.drawdown_active
+    assert drawdown.refuse_new_trades is False
+    assert drawdown.human_reset_required is False
     breached = BreakerSnapshot(
         equity=Decimal("89"),
         equity_peak=Decimal("100"),
@@ -1371,7 +1373,7 @@ def test_unrealized_loss_trips_the_daily_breaker_and_reset_is_persisted() -> Non
         ),
     )
     assert verdict.daily_loss_active
-    assert verdict.paused_until == datetime(2026, 10, 19, tzinfo=UTC)
+    assert verdict.paused_until is None and verdict.refuse_new_trades is False
     session = _session()
     service = _service(session)
     account = uuid.uuid4()

@@ -8,9 +8,11 @@ and every later check use that one function, so the user's risk-day
 timezone never enters it. Equity below ``baseline * (1 - threshold)`` arms
 the switch. Unreadable equity, a stale unrealized mark, or a stale
 baseline past the grace window arms it too. A never-snapshotted row seeds
-its baseline without tripping. A balance edit shifts today's baseline by
-the edit (:func:`rebaseline_after_balance_edit`). A single losing close and
-a losing streak do not arm it.
+its baseline without tripping. A balance edit leaves today's baseline
+alone: checks on the snapshot's day use the balance inside that snapshot
+(``day_start_balance``), and the new balance enters at the next UTC day's
+snapshot (:func:`record_balance_edit`). A single losing close and a losing
+streak do not arm it, and no other loss rule pauses trading.
 
 The switch arms at most once per UTC day, so a human deactivation sticks
 for the rest of that day. A new day's baseline does not clear it. This
@@ -59,10 +61,14 @@ TripCause = Literal[
 
 @dataclass(frozen=True)
 class StopEquityReading:
-    """Stop equity, or None with the reason it cannot be used."""
+    """Stop equity, or None with the reason it cannot be used.
+
+    ``balance`` is the ``default_account_balance`` inside ``equity``.
+    """
 
     equity: Decimal | None
     cause: EquityCause | None = None
+    balance: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +149,7 @@ def enforce_account_equity_stop(
     now: datetime,
     settings: Settings | None = None,
     equity_cause: EquityCause = "equity_unreadable",
+    balance: Decimal | None = None,
 ) -> bool:
     """Evaluate the stored baseline, snapshot or arm. Returns True when it armed now.
 
@@ -151,6 +158,10 @@ def enforce_account_equity_stop(
     tripping, so a first deploy does not arm every organization. A breach
     already armed today does not arm again, so an owner deactivation is
     not undone by the next scan.
+
+    ``balance`` is the balance inside ``equity``. On the baseline's own day
+    the check swaps it for the stored ``day_start_balance``, so a balance
+    edit neither trips nor dilutes today's stop; a snapshot stores it.
     """
 
     from app.core.config import get_settings
@@ -163,6 +174,7 @@ def enforce_account_equity_stop(
     )
     if row is None:
         raise RiskPolicyRejected("equity_stop_breaker_row_missing")
+    equity = _at_day_start_balance(equity, balance=balance, row=row, day=_aware(now).date())
     verdict = evaluate_equity_stop(
         threshold_percent=resolved.account_equity_stop_threshold_percent,
         grace=timedelta(seconds=int(resolved.account_equity_stop_baseline_grace_seconds)),
@@ -176,6 +188,7 @@ def enforce_account_equity_stop(
     if verdict.new_baseline is not None:
         row.day_start_equity = verdict.new_baseline
         row.day_start_on = verdict.day
+        row.day_start_balance = _valid_money(balance)
     armed = verdict.trip and row.equity_stop_tripped_on != verdict.day
     if armed:
         row.equity_stop_tripped_on = verdict.day
@@ -241,7 +254,7 @@ def read_stop_equity(
         if not isinstance(value, Decimal) or not value.is_finite():
             return StopEquityReading(None, "equity_unreadable")
         unrealized += value
-    return StopEquityReading(balance + realized + unrealized)
+    return StopEquityReading(balance + realized + unrealized, balance=balance)
 
 
 def enforce_account_equity_stop_from_books(
@@ -284,6 +297,7 @@ def enforce_account_equity_stop_from_books(
         now=now,
         settings=resolved,
         equity_cause=reading.cause or "equity_unreadable",
+        balance=reading.balance,
     )
 
 
@@ -424,7 +438,31 @@ def entry_baseline_overdue(
     return overdue
 
 
-def rebaseline_after_balance_edit(
+def _at_day_start_balance(
+    equity: object, *, balance: Decimal | None, row: object, day: date
+) -> object:
+    """Stop equity with today's start-of-day balance in place of the current one.
+
+    Unchanged unless the row holds a usable baseline for ``day`` with a
+    known balance and both figures are usable. So a reading that seeds a
+    new baseline is never adjusted.
+    """
+
+    start_balance = _valid_money(getattr(row, "day_start_balance", None))
+    if (
+        getattr(row, "day_start_on", None) != day
+        or _valid_money(getattr(row, "day_start_equity", None)) is None
+        or start_balance is None
+        or not isinstance(balance, Decimal)
+        or not balance.is_finite()
+        or not isinstance(equity, Decimal)
+        or not equity.is_finite()
+    ):
+        return equity
+    return equity - balance + start_balance
+
+
+def record_balance_edit(
     session: Session,
     *,
     organization_id: UUID,
@@ -434,18 +472,18 @@ def rebaseline_after_balance_edit(
     now: datetime,
     actor_role: str | None = None,
 ) -> int:
-    """Shift today's baseline by the ``default_account_balance`` edit.
+    """Audit a ``default_account_balance`` edit. Today's baseline is left unchanged.
 
-    A balance change moves stop equity by exactly ``after - before``, so the
-    baseline moves by the same amount: ``day_start_equity += delta``. A lower
-    balance does not false-trip, a higher one does not mask a loss, and the
-    day's losses so far stay counted, so an edit-and-revert forgives
-    nothing. Only rows already snapshotted for today are shifted. A NULL
-    (first sight) row seeds from post-edit equity on its next check, and an
-    earlier-day row is snapshotted or fails closed at the next check as
-    before. Every one of the user's breaker rows gets an audit row naming
-    the outcome. This never deactivates the kill switch and does not touch
-    ``equity_stop_tripped_on``. Returns the number of rows shifted.
+    The edit applies from the next UTC day's snapshot, which reads the
+    current balance. Until then, checks on today's snapshot use its
+    ``day_start_balance``, so a raise mid-loss does not dilute today's stop,
+    a cut does not trip it, and an edit-and-revert forgives nothing. A row
+    snapshotted today before that column existed gets ``before_balance``
+    recorded as its start-of-day balance. A first-sight or earlier-day row
+    is not touched; its next snapshot uses the new balance. Every one of
+    the user's breaker rows gets an audit row. This never deactivates the
+    kill switch and does not touch ``equity_stop_tripped_on``. Returns the
+    number of audited rows.
     """
 
     from app.db.models import ExecutionAccount
@@ -454,7 +492,6 @@ def rebaseline_after_balance_edit(
     from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
     from app.services.audit_service import AuditService
 
-    delta = after_balance - before_balance
     day = _aware(now).date()
     rows = session.scalars(
         select(RiskPolicyBreakerState)
@@ -472,21 +509,19 @@ def rebaseline_after_balance_edit(
     ).all()
     audit = AuditService(session)
     request_id = uuid.uuid4().hex
-    shifted = 0
     for row in rows:
-        old = row.day_start_equity
         if row.day_start_on is None:
             outcome = "first_sight_unchanged"
-        elif row.day_start_on != day or old is None:
+        elif row.day_start_on != day:
             outcome = "not_today_unchanged"
         else:
-            # A non-positive result is stored as is; the next check fails closed.
-            row.day_start_equity = old + delta
-            outcome = "shifted"
-            shifted += 1
+            outcome = "baseline_unchanged"
+            if _valid_money(row.day_start_balance) is None:
+                row.day_start_balance = _valid_money(before_balance)
         metadata = {
-            "action": "equity_stop_baseline_shift",
+            "action": "equity_stop_balance_edit",
             "outcome": outcome,
+            "applies_from": (day + timedelta(days=1)).isoformat(),
             "actor_user_id": str(user_id),
             "actor_role": actor_role or "",
             "account_id": str(row.account_id),
@@ -494,9 +529,8 @@ def rebaseline_after_balance_edit(
             "baseline_day": "" if row.day_start_on is None else row.day_start_on.isoformat(),
             "old_balance": _text(before_balance),
             "new_balance": _text(after_balance),
-            "delta": _text(delta),
-            "old_baseline": _text(old),
-            "new_baseline": _text(row.day_start_equity),
+            "baseline": _text(row.day_start_equity),
+            "day_start_balance": _text(row.day_start_balance),
         }
         audit.record(
             AuditRecordCreate(
@@ -513,9 +547,9 @@ def rebaseline_after_balance_edit(
                 metadata=metadata,
             )
         )
-        logger.info("account_equity_stop_baseline_shift", **metadata)
+        logger.info("account_equity_stop_balance_edit", **metadata)
     session.flush()
-    return shifted
+    return len(rows)
 
 
 def equity_stop_sweep_alert(

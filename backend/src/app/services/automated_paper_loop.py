@@ -1143,11 +1143,11 @@ def _stored_plan_execution_refusal(
     target: PaperScanTarget,
     plan: object,
 ) -> str | None:
-    """Re-check breakers and current limits before a stored plan is approved.
+    """Re-check the equity-stop entry gate and current limits before approval.
 
-    A pause or drawdown latch written after the plan was sized still refuses.
-    Deactivating the kill switch does not clear that latch. When a profile is
-    active, the stored quantity is priced again against the current open book.
+    An equity-stop baseline that became overdue after the plan was sized
+    still refuses. When a profile is active, the stored quantity is priced
+    again against the current open book.
     """
 
     now = _execution_moment(loop)
@@ -1275,20 +1275,16 @@ def _missing_stored_plan_proof(
 
 
 def _breaker_refusing(session: Session, organization_id: UUID, now: datetime) -> bool:
-    """Refuse on an active breaker, or on an overdue equity-stop baseline.
+    """Refuse on an overdue equity-stop baseline (AT-ADR-152).
 
     An account whose 00:00 UTC baseline is for an earlier day past the
-    grace window refuses new entries even when the sweep has not run
-    (AT-ADR-152).
+    grace window refuses new entries even when the sweep has not run. The
+    peak drawdown latch and the daily and consecutive pauses no longer
+    refuse; the armed kill switch is checked separately.
     """
 
     from app.services.risk_policy.equity_stop import entry_baseline_overdue
-    from app.services.risk_policy.persistence import RiskPolicyService
 
-    if RiskPolicyService(session, AuditService(session)).breaker_active(
-        organization_id=organization_id, now=now
-    ):
-        return True
     return entry_baseline_overdue(session, organization_id=organization_id, now=now)
 
 

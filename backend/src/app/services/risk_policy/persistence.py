@@ -72,16 +72,6 @@ def _pause_active(paused_until: datetime | None, now: datetime) -> bool:
     return _as_utc(paused_until) > _as_utc(now)
 
 
-def _kept_pause(
-    stored: datetime | None, proposed: datetime | None, now: datetime
-) -> datetime | None:
-    """Keep a pause that is still in the future. Do not clear or shorten it."""
-
-    if stored is not None and _pause_active(stored, now):
-        return _as_utc(stored)
-    return proposed
-
-
 class RiskPolicyService:
     """Read, propose, and apply grade-based risk profiles for one organization."""
 
@@ -668,20 +658,8 @@ class RiskPolicyService:
         now: datetime,
     ) -> RiskPolicyBreakerState:
         row = self._breaker_row(organization_id, account_id, equity_peak, now)
-        # A scan cannot clear these. Drawdown ends only in ``reset_drawdown_latch``.
-        # Each pause ends at its stored expiry. The consecutive pause can also
-        # end in ``reset_consecutive_losses``, which does not call this method.
-        if row.drawdown_latched:
-            drawdown_latched = True
-        pause_held = row.consecutive_paused_until is not None and _pause_active(
-            row.consecutive_paused_until, now
-        )
-        if pause_held and consecutive_losses < int(row.consecutive_losses):
-            consecutive_losses = int(row.consecutive_losses)
-        daily_paused_until = _kept_pause(row.daily_paused_until, daily_paused_until, now)
-        consecutive_paused_until = _kept_pause(
-            row.consecutive_paused_until, consecutive_paused_until, now
-        )
+        # Stored as given. The trip writer passes no pause and no latch
+        # (AT-ADR-152), so a legacy pause or latch ends at the next persist.
         row.equity_peak = equity_peak
         row.consecutive_losses = consecutive_losses
         row.realized_pnl = realized_pnl

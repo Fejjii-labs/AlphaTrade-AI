@@ -267,8 +267,11 @@ class RiskPolicyBreakerState(UUIDPrimaryKeyMixin, Base):
     )
     # Account daily equity stop (AT-ADR-152). The baseline is total equity at
     # the 00:00 UTC rollover of ``day_start_on``. ``equity_stop_tripped_on``
-    # is the UTC day the stop last armed the kill switch.
+    # is the UTC day the stop last armed the kill switch. ``day_start_balance``
+    # is the ``default_account_balance`` inside that baseline; checks on the
+    # same day use it, so a balance edit applies from the next snapshot.
     day_start_equity: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    day_start_balance: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     day_start_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     equity_stop_tripped_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

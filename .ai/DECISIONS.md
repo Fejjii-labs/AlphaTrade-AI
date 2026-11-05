@@ -22,8 +22,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     check read it. It never uses the risk-settings
     timezone, so a non-UTC user's local midnight cannot drop a UTC-day loss,
     and prior days' losses lower the baseline instead of loosening the stop.
-    `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (daily
-    lock, the soft pauses) are unchanged.
+    `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (the
+    daily lock and the informational breaker figures) are unchanged.
   - Mark freshness: an open position whose row was last written more than
     `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900) ago is a stale
     mark; the reading is unusable and the stop trips with
@@ -80,28 +80,33 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     900). A sweep that raises sends `account_equity_stop_sweep_failed` from
     the worker. All three are mandatory Telegram safety codes and are also
     logged at error.
-  - Balance edit (delta shift, replaces the earlier reset to post-edit
-    equity after Griller R2): a `PATCH /risk/settings` or reset-defaults
-    that changes `default_account_balance` shifts today's baseline by the
-    edit, `day_start_equity += after_balance - before_balance`, for each of
-    the user's breaker rows already snapshotted for today. A balance edit
-    moves stop equity by exactly that delta, so a lower balance does not
-    false-trip and a higher one does not mask a loss, while the day's
-    losses so far stay counted: an edit-and-revert (even by 0.01) forgives
-    nothing. A first-sight row (`day_start_on` NULL) is left alone and
-    seeds from post-edit equity on its next check; an earlier-day row is
-    left alone and is snapshotted in grace or fails closed as
-    `baseline_stale`. Equity is not read, so the shift cannot fail on an
-    unreadable reading. Every one of the user's breaker rows gets one audit
-    row (`risk_settings_updated`,
+  - Balance edit (D1, Sofien 2026-11-05; replaces the Griller R2 delta
+    shift, which replaced the reset to post-edit equity): a `PATCH
+    /risk/settings` or reset-defaults that changes `default_account_balance`
+    **leaves today's baseline unchanged**. The new balance applies only
+    from the next UTC day's snapshot, which reads the current balance as
+    before. Because stop equity reads the current balance, each snapshot
+    also stores the balance inside it (`day_start_balance`, migration
+    `a26equitystop002`, nullable, no backfill); every check on the
+    snapshot's own day uses `equity - current_balance + day_start_balance`.
+    So a raise mid-loss does not dilute today's 10% stop, a cut does not
+    false-trip it, and an edit-and-revert forgives nothing. A row
+    snapshotted today before the column existed (NULL) gets the pre-edit
+    balance recorded on its first edit; with no edit it reads the current
+    balance as before. A first-sight row (`day_start_on` NULL) and an
+    earlier-day row are not written; their next snapshot uses the new
+    balance. Equity is not read, so the edit cannot fail on an unreadable
+    reading. Every one of the editing user's breaker rows (and no other
+    user's) gets one audit row (`risk_settings_updated`,
     `resource_type=account_equity_stop_baseline`, `resource_id=account_id`,
-    severity medium) with `outcome` (`shifted`, `first_sight_unchanged`,
-    `not_today_unchanged`), `actor_user_id`, `actor_role`, `old_balance`,
-    `new_balance`, `delta`, `old_baseline`, `new_baseline`, `day` and
-    `baseline_day`; one `request_id` ties the rows of one edit together. The
-    rows are locked (`FOR UPDATE`) for the shift. It never deactivates the
-    kill switch and does not touch `equity_stop_tripped_on`; manual
-    deactivate stays the only clear.
+    severity medium, `action=equity_stop_balance_edit`) with `outcome`
+    (`baseline_unchanged`, `first_sight_unchanged`, `not_today_unchanged`),
+    `actor_user_id`, `actor_role`, `old_balance`, `new_balance`, `baseline`,
+    `day_start_balance`, `day`, `baseline_day` and `applies_from` (next UTC
+    day); one `request_id` ties the rows of one edit together. The rows
+    are locked (`FOR UPDATE`). It never deactivates the kill switch and
+    does not touch `equity_stop_tripped_on`; manual deactivate stays the
+    only clear.
   - On trip: an audit row `kill_switch_triggered`,
     `resource_type=account_equity_stop`, `reason=ACCOUNT_DAILY_DRAWDOWN`,
     with cause, baseline, equity, drawdown percent and threshold percent;
@@ -115,20 +120,47 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   monitor actions are now `backfill_alert` / `stale_alert` and only
   journal, alert and audit with `refusal=none`), and the peak-drawdown arm
   (`_arm_drawdown_kill_switch`, `DRAWDOWN_KILL_REASON`,
-  `BreakerVerdict.trip_kill_switch`). The ruined-equity path still latches
-  and refuses; the equity stop then runs on its own reading.
-- Kept as soft refusals that never arm the switch: the peak
-  `drawdown_breaker_percent` latch (refuses new trades until its own human
-  reset), the daily-loss pause, and the consecutive-loss pause. They are
-  not emergency stops. There is one kill-switch drawdown model: SoD daily.
+  `BreakerVerdict.trip_kill_switch`). The ruined-equity path refuses
+  that call (it no longer latches); the equity stop then runs on its own
+  reading.
+- Removed as refusals (Sofien 2026-11-05): the peak
+  `drawdown_breaker_percent` latch, the profile daily-loss pause and the
+  consecutive-loss pause. `evaluate_breakers` still computes
+  `drawdown_active`, `daily_loss_active` and `consecutive_loss_active` as
+  figures, but `refuse_new_trades` is always false, `paused_until` is
+  None and `human_reset_required` is false. `trip_breakers` writes no
+  pause and no latch, and `record_breaker` stores what it is given, so a
+  legacy latch or pause is cleared by the next persist. The entry gate
+  (`_breaker_refusing`) no longer reads `breaker_active`; it refuses only
+  on an overdue equity-stop baseline. The ruined-equity path (risk-day
+  equity missing or not positive) still refuses that call and runs the
+  equity stop, but latches nothing. `persist_profile_breakers` returns
+  true only on that path or when the equity stop armed. Within the profile
+  breaker, the SoD daily equity stop is the one loss rule that halts
+  trading.
+- Not removed, and they still refuse new entries (decision pending): the
+  risk-settings cash `daily_loss_limit` lock (`DailyRiskAccounting`
+  `row.locked`, refused as `daily_loss_locked` / `daily_loss_limit` and in
+  action eligibility) with its claim-time `max_daily_loss` budget, and the
+  autonomous-settings `daily_loss_limit_percent` precheck
+  (`autonomous_daily_loss_limit`, at most 6%, only after the user saves
+  autonomous settings), and the profile daily budget in sizing
+  (`remaining_daily_budget_percent` subtracts today's realized loss from
+  the profile `daily_loss_limit_percent`, at most 6%; once it is used up
+  `size_trade` refuses with `budget_exhausted`). These sit outside the
+  profile breaker (the first two are user-configured settings; the third
+  is in the per-trade sizer that this change keeps), so until Sofien
+  decides, a realized day loss under 10% can still stop new entries.
 - Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
   the PnL calendar, and infrastructure arms (unreadable kill-switch state,
-  global kill switch, demo protection and lineage holds).
-- Caveats: the soft peak latch and the consecutive/daily pauses are kept
-  pending Sofien's decision. Accounts without a breaker row are not swept.
-  Canonical open paper trades have no unrealized mark in stop equity, so
-  the stop is effectively realized-only for them (see above).
-- Reference: `docs/paper_exit_monitor.md`, migration `a25equitystop001`.
+  global kill switch, demo protection and lineage holds). The legacy
+  `breaker_active` read still gates profile loosening in governance; with
+  no writer it is only true for a legacy row until its next persist.
+- Caveats: accounts without a breaker row are not swept. Canonical open
+  paper trades have no unrealized mark in stop equity, so the stop is
+  effectively realized-only for them (see above).
+- Reference: `docs/paper_exit_monitor.md`, migrations `a25equitystop001`
+  and `a26equitystop002`.
 
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped
 
