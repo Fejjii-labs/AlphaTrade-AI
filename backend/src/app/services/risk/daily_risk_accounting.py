@@ -284,6 +284,7 @@ class DailyRiskAccounting:
             select(func.coalesce(func.sum(Position.realized_pnl), 0)).where(
                 Position.organization_id == organization_id,
                 Position.user_id == user_id,
+                # CLOSED only: LIQUIDATED legacy losses never reach stop equity (AT-ADR-152).
                 Position.status == PositionStatus.CLOSED,
                 Position.closed_at.is_not(None),
                 Position.closed_at >= start_utc,

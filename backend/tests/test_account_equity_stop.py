@@ -921,3 +921,20 @@ def test_sweep_arms_once_per_day_after_owner_deactivation(world) -> None:
     _position(session, org, user, realized=Decimal("-900"), closed_at=tomorrow)
     assert _sweep(session, tomorrow + timedelta(hours=1)) == 1
     assert len(_trips(session, org)) == 2
+
+
+# Griller R3 D2: one user's balance edit shifts only that user's baselines.
+def test_balance_edit_does_not_shift_another_users_baseline_in_the_org(world) -> None:
+    session, org, user, account = world
+    other, other_account = uuid4(), uuid4()
+    _book(session, org, user, account)
+    _book(session, org, other, other_account)
+    mine = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    theirs = _row(session, org, other_account, baseline=Decimal("10000"), day=DAY)
+    _edit_balance(session, org, user, Decimal("8000"))
+    assert (mine.day_start_on, mine.day_start_equity) == (DAY, Decimal("8000"))
+    assert (theirs.day_start_on, theirs.day_start_equity) == (DAY, Decimal("10000"))
+    [audit] = _shifts(session, org)
+    assert (audit["account_id"], audit["outcome"]) == (str(account), "shifted")
+    assert _sweep(session, NOON + timedelta(minutes=1)) == 0
+    assert _active(session, org) is False

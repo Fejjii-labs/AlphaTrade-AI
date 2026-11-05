@@ -40,6 +40,11 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     the same freshness rule (`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS`,
     stale ⇒ `equity_stale`, fail closed). The mark feed is tracked as GitHub issue
     https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437.
+  - Legacy `LIQUIDATED` positions (acknowledged, pre-existing): the realized
+    sum (`DailyRiskAccounting._sum_realized_closed`) counts only legacy
+    positions with status `CLOSED`, so **`LIQUIDATED` legacy losses never
+    reach stop equity**. Nothing opens legacy `positions` rows anymore, so
+    this is documented and not changed here.
   - Baseline: stored on `risk_policy_breaker_states` (`day_start_equity`,
     `day_start_on`) at the rollover. Each paper-worker exit-monitor pass
     takes the snapshot on the database clock within
