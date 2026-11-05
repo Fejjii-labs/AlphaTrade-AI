@@ -90,3 +90,41 @@ def test_strategy_discipline_and_portfolio_rules_remain_enforced(context, rule, 
     result = RiskEngine().evaluate(_request(), context=context)
     assert result.action is action
     assert any(trigger.rule_id is rule for trigger in result.triggered_rules)
+
+
+@pytest.mark.parametrize(
+    "context,message",
+    [
+        (RiskEvaluationContext(daily_locked=True), "Daily loss limit reached"),
+        # Cash limit reached and exceeded with the lock still false (Griller R5 C1).
+        (
+            RiskEvaluationContext(
+                realized_pnl_today=Decimal("-250"), daily_loss_limit=Decimal("250")
+            ),
+            "Realized PnL has reached the daily loss limit",
+        ),
+        (
+            RiskEvaluationContext(
+                realized_pnl_today=Decimal("-260"), daily_loss_limit=Decimal("250")
+            ),
+            "Realized PnL has reached the daily loss limit",
+        ),
+        # RiskLimits.max_daily_loss_pct (3%) with no cash limit.
+        (RiskEvaluationContext(realized_pnl_today=Decimal("-300")), "Daily loss 3.00%"),
+    ],
+    ids=["lock", "cash_limit_reached", "cash_limit_exceeded", "max_daily_loss_pct"],
+)
+def test_daily_loss_lock_warns_and_never_blocks(context, message):
+    """Every check_daily_loss_lock branch is WARN, never BLOCK (AT-ADR-152)."""
+
+    from app.services.risk.rules import check_daily_loss_lock
+
+    request = _request()
+    rule = check_daily_loss_lock(request, RiskLimits(), context)
+    assert rule is not None
+    assert rule.rule_id is RiskRuleId.MAX_DAILY_LOSS
+    assert rule.action is RiskAction.WARN
+    assert rule.message.startswith(message)
+    result = RiskEngine().evaluate(request, context=context)
+    assert result.action is RiskAction.WARN
+    assert [t.action for t in result.triggered_rules] == [RiskAction.WARN]

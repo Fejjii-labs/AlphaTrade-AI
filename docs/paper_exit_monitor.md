@@ -280,16 +280,16 @@ monitor flags stay default false.
 ## Arming gates
 
 The monitor is not attached, and `run_configured_exit_monitor` returns
-`refused` before any database or candle read, unless both of these hold:
+`refused` before any database or candle read, unless
+`watcher_paper_poll_interval_seconds` is not longer than the smallest entry
+in `paper_signal_allowed_timeframes`. A longer interval, or a timeframe list
+that cannot be read, refuses with `cycle_interval_exceeds_timeframe`. An
+interval equal to that candle is still allowed.
 
-- `paper_signal_cooldown_after_loss_seconds` is a finite number greater
-  than zero. Zero, a negative number, and a non-finite number refuse with
-  `consecutive_loss_cooldown_invalid`.
-- `watcher_paper_poll_interval_seconds` is not longer than the smallest
-  entry in `paper_signal_allowed_timeframes`. A longer interval, or a
-  timeframe list that cannot be read, refuses with
-  `cycle_interval_exceeds_timeframe`. An interval equal to that candle is
-  still allowed.
+The after-loss cooldown (`paper_signal_cooldown_after_loss_seconds`) no
+longer gates arming (AT-ADR-152, R6; replaces that part of AT-ADR-129). It
+refuses no trade anywhere, so `0` is a valid setting and arms.
+`consecutive_loss_cooldown_invalid` is no longer emitted.
 
 The same two checks refuse `resolve_autonomous_mode` when either autonomous
 flag is set. Production still refuses those flags, and both monitor flags

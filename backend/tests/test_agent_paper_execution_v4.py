@@ -788,12 +788,18 @@ def test_interactive_http_paper_execution(interactive_world, monkeypatch):
 @requires_postgres
 @pytest.mark.parametrize("at_confirmation", [False, True])
 @pytest.mark.parametrize("source", ["canonical", "legacy"])
-def test_loss_cooldown_rechecked_for_paper_intent(paper_world, at_confirmation, source):
+def test_recent_loss_no_longer_pauses_paper_intent(paper_world, at_confirmation, source):
+    """A losing close inside the after-loss cooldown window does not refuse (AT-ADR-152, R6)."""
+
     from app.db.models import Position
     from app.schemas.common import JournalTradeSource, JournalTradeStatus, PositionStatus
+    from app.services.risk.paper_cooldown import paper_loss_cooldown_active
 
     w = paper_world
-    proposal = prepare(w) if at_confirmation else None
+    assert w.settings.paper_signal_cooldown_after_loss_seconds > 0
+    # A wider stop keeps notional well under 5% of equity, so the 1-unit loss
+    # cannot trip the per-trade notional recheck at confirmation.
+    proposal = prepare(w, stop="102000", targets=["98000", "96000"]) if at_confirmation else None
     if source == "canonical":
         loss = JournalTrade(
             organization_id=ORG_ID,
@@ -824,20 +830,30 @@ def test_loss_cooldown_rechecked_for_paper_intent(paper_world, at_confirmation, 
         )
     w.session.add(loss)
     w.session.commit()
-    response = (
-        run(w, proposal.paper_execution.confirmation_message, proposal.conversation_id)
-        if proposal
-        else prepare(w)
+    # The loss is inside the window the old cooldown refused on.
+    assert paper_loss_cooldown_active(
+        w.session,
+        organization_id=ORG_ID,
+        user_id=USER_ID,
+        seconds=w.settings.paper_signal_cooldown_after_loss_seconds,
+        now=w.clock.now(),
     )
-    assert response.approval_status == "blocked", response.reply
-    assert "cooldown" in response.reply.lower()
-    assert count(w, ExecutionCommand) == count(w, ExecutionFillFact) == 0
-    assert count(w, ApprovalAuthorization) == 0
+    if proposal:
+        response = run(w, proposal.paper_execution.confirmation_message, proposal.conversation_id)
+        assert response.paper_execution is not None, response.reply
+        assert response.paper_execution.stage == "executed", response.reply
+        assert count(w, ExecutionFillFact) == 1
+    else:
+        response = prepare(w, stop="102000", targets=["98000", "96000"])
+        assert response.paper_execution is not None, response.reply
+        assert response.paper_execution.stage == "proposed", response.reply
+        assert count(w, ExecutionFillFact) == 0
+    assert "cooldown" not in response.reply.lower()
 
 
-@requires_postgres
-@pytest.mark.parametrize("at_confirmation", [False, True])
-def test_canonical_loss_triggers_daily_stop(paper_world, at_confirmation):
+def _cash_limit_loss(w):
+    """Book a -50 canonical loss against a 25 cash daily limit (lock set, display only)."""
+
     from datetime import UTC
 
     from app.schemas.common import JournalTradeSource, JournalTradeStatus
@@ -846,9 +862,6 @@ def test_canonical_loss_triggers_daily_stop(paper_world, at_confirmation):
     from app.services.risk.daily_risk_accounting import DailyRiskAccounting
     from app.services.risk.settings_service import RiskSettingsService
 
-    w = paper_world
-    w.settings.paper_signal_cooldown_after_loss_seconds = 0
-    proposal = prepare(w) if at_confirmation else None
     risk_settings = RiskSettingsService(w.session, AuditService(w.session))
     configured = risk_settings.update(
         UserRiskSettingsUpdate(daily_loss_limit=Decimal("25")),
@@ -884,12 +897,59 @@ def test_canonical_loss_triggers_daily_stop(paper_world, at_confirmation):
     assert snapshot.account_equity == configured.default_account_balance - Decimal("50")
     assert snapshot.trade_count == 1 and snapshot.daily_locked
     w.session.commit()
-    response = (
-        run(w, proposal.paper_execution.confirmation_message, proposal.conversation_id)
-        if proposal
-        else prepare(w)
-    )
+
+
+@requires_postgres
+def test_cash_daily_limit_loss_still_offers_paper_proposal(paper_world):
+    """Past the cash daily limit the lock only warns (AT-ADR-152): a proposal is offered."""
+
+    w = paper_world
+    _cash_limit_loss(w)
+    response = prepare(w)
+    assert response.paper_execution is not None, response.reply
+    assert response.paper_execution.stage == "proposed", response.reply
+    assert response.approval_required is True
+    assert "Risk BLOCK is final" not in response.reply
+    # Sized on the lower equity (9950): 4.975 risk cash rounds down to 0.004.
+    assert response.paper_execution.plan.quantity.value == Decimal("0.004")
+    assert count(w, ExecutionCommand) == count(w, ExecutionFillFact) == 0
+
+
+@requires_postgres
+def test_confirmation_after_loss_rechecks_notional_cap_on_lower_equity(paper_world, monkeypatch):
+    """A proposal sized before the loss fails the per-trade 5% notional check, not a daily stop.
+
+    Proposed at equity 10000 (0.005 BTC, notional 500 = 5%). After the -50 loss
+    equity is 9950, so the confirmation's risk recheck refuses notional 500 >
+    5% of 9950. The cash daily limit only adds a warning (see
+    ``test_cash_daily_limit_loss_still_offers_paper_proposal`` for the fresh
+    proposal on the lower equity).
+    """
+
+    from app.schemas.common import RiskAction, RiskRuleId
+    from app.services.risk_service import RiskService
+
+    w = paper_world
+    proposal = prepare(w)
+    assert proposal.paper_execution.plan.quantity.value == Decimal("0.005")
+    _cash_limit_loss(w)
+    verdicts = []
+    check = RiskService.check
+
+    def spy(self, *args, **kwargs):
+        verdicts.append(check(self, *args, **kwargs))
+        return verdicts[-1]
+
+    monkeypatch.setattr(RiskService, "check", spy)
+    response = run(w, proposal.paper_execution.confirmation_message, proposal.conversation_id)
     assert response.approval_status == "blocked", response.reply
     assert "Risk BLOCK is final" in response.reply
+    verdict = verdicts[-1]
+    assert verdict.action is RiskAction.BLOCK
+    blocks = [r for r in verdict.triggered_rules if r.action is RiskAction.BLOCK]
+    assert [r.rule_id for r in blocks] == [RiskRuleId.MAX_POSITION_SIZE]
+    assert "exceeds 5% of equity" in blocks[0].message
+    daily = [r for r in verdict.triggered_rules if r.rule_id is RiskRuleId.MAX_DAILY_LOSS]
+    assert daily and all(r.action is RiskAction.WARN for r in daily)
     assert count(w, ExecutionCommand) == count(w, ExecutionFillFact) == 0
     assert count(w, ApprovalAuthorization) == 0

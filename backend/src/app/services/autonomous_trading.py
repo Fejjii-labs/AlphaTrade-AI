@@ -184,7 +184,7 @@ def autonomous_decision_metadata(
 
 
 def _arming_refusal(settings: object) -> str | None:
-    """Cooldown and cycle-interval gates. Imported lazily to keep this module small."""
+    """Cycle-interval gate. Imported lazily to keep this module small."""
 
     from app.services.arming_gates import paper_arming_refusal
 

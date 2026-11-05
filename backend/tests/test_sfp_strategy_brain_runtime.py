@@ -721,9 +721,11 @@ def test_governed_candidate_restart_replay_opens_one_internal_paper_trade(
     ],
     ids=["leap_day", "release_day", "utc_midnight", "future_year"],
 )
-def test_existing_daily_risk_lock_is_authoritative_for_sfp(postgres_store, bearish, start):
+def test_existing_daily_risk_lock_is_display_only_for_sfp(postgres_store, bearish, start):
+    """A set daily loss lock no longer blocks SFP eligibility (AT-ADR-152)."""
+
     from app.db.canonical_candidates import CanonicalCandidateRow
-    from app.db.models import DailyRiskState, ExecutionFillFact, TradePlanRevision
+    from app.db.models import DailyRiskState
 
     runtime, _, _, now = runtime_world(
         postgres_store, bearish=bearish, risk_block=True, start=start
@@ -732,19 +734,19 @@ def test_existing_daily_risk_lock_is_authoritative_for_sfp(postgres_store, beari
     report = runtime.run_cycle()
     assert report.scans and report.scans[0].candidate_ids, report
     scan = report.scans[0]
-    assert scan.paper_loop_reason == "risk_block" and scan.paper_loop_stage == "blocked", scan
+    assert scan.eligibility_state == "eligible", scan
+    assert scan.paper_loop_reason != "risk_block", scan
     session, org, _, _ = postgres_store
     session.expire_all()
     linked = [
         s for s in overview(session, organization_id=org, now=now)["setups"] if s["candidate_id"]
     ]
-    assert linked[0]["state"] == "BLOCKED_BY_RISK"
-    assert "blocked_daily_loss" in linked[0]["risk_reason_codes"]
+    assert linked[0]["state"] == "TRADE_CANDIDATE"
+    assert "blocked_daily_loss" not in linked[0]["risk_reason_codes"]
     assert session.scalar(select(func.count()).select_from(CanonicalCandidateRow)) == 1
+    # The lock is still recorded for display.
     risk_rows = session.scalars(select(DailyRiskState)).all()
     assert len(risk_rows) == 1 and risk_rows[0].day == now.date() and risk_rows[0].locked
-    assert session.scalar(select(func.count()).select_from(TradePlanRevision)) == 0
-    assert session.scalar(select(func.count()).select_from(ExecutionFillFact)) == 0
 
 
 def test_forming_sfp_runtime_cannot_mint_candidate(postgres_store):

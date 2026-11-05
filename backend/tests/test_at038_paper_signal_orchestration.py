@@ -367,7 +367,7 @@ def test_tenant_isolation_and_rbac(
     assert cross.status_code == 404
 
 
-def test_kill_switch_and_cooldown_block(
+def test_kill_switch_blocks_and_recent_loss_does_not(
     client: tuple[TestClient, sessionmaker[Session], Settings],
 ) -> None:
     test_client, factory, _settings = client
@@ -415,14 +415,20 @@ def test_kill_switch_and_cooldown_block(
         )
         session.commit()
 
+    # A losing close 5 minutes ago is inside the 3600 s window, but the
+    # after-loss cooldown is advisory only (AT-ADR-152, R6) and never blocks.
     signal2 = _ingest(test_client, alert_id="tv-cooldown-1")
     cooldown = test_client.post(
         f"/paper-signal-orchestration/signals/{signal2}/evaluate",
         headers=headers,
     )
     assert cooldown.status_code == 200
-    assert cooldown.json()["decision"]["status"] == PaperSignalOrchestrationStatus.BLOCKED.value
-    assert "cooldown_active" in (cooldown.json()["decision"]["reason_codes"] or [])
+    decision = cooldown.json()["decision"]
+    assert decision["status"] == PaperSignalOrchestrationStatus.ELIGIBLE.value
+    assert "cooldown_active" not in (decision["reason_codes"] or [])
+    check = next(c for c in decision["risk_checks"] if c["code"] == "cooldown_clear")
+    assert check["passed"] is True
+    assert "advisory only" in check["detail"]
 
 
 def test_candidate_only_and_approval_required_modes(

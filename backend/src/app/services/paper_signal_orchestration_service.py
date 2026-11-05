@@ -737,8 +737,6 @@ class PaperSignalOrchestrationService:
         risk.append(
             EligibilityCheck(code="cooldown_clear", passed=cooldown_ok, detail=cooldown_detail)
         )
-        if not cooldown_ok:
-            block_codes.append("cooldown_active")
 
         reason_codes = reject_codes + block_codes
         if expired and "signal_stale" in reject_codes:
@@ -886,6 +884,8 @@ class PaperSignalOrchestrationService:
 
         from app.services.risk.paper_cooldown import paper_loss_cooldown_active
 
+        # The after-loss cooldown is advisory only (AT-ADR-152, R6): a recent
+        # losing close is reported and never blocks.
         if paper_loss_cooldown_active(
             self._session,
             organization_id=organization_id,
@@ -896,8 +896,8 @@ class PaperSignalOrchestrationService:
             return (
                 daily_ok,
                 daily_detail,
-                False,
-                f"Cooldown active after loss within {cooldown_seconds}s.",
+                True,
+                f"Losing close within {cooldown_seconds}s (advisory only, does not block).",
             )
         return daily_ok, daily_detail, True, "No recent losing close in cooldown window."
 

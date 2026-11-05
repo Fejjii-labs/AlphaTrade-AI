@@ -164,8 +164,27 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   - Kept (not realized-loss halts): the claim-time reservation check
     (`max_daily_loss - reserved_daily_loss - actual_daily_loss`; the ledger's
     `actual_daily_loss` has no writer, so it bounds in-flight planned stop
-    losses), autonomous `max_trades_per_day`, weekly loss, cooldown and the
-    exposure caps.
+    losses), autonomous `max_trades_per_day` and the exposure caps. The
+    weekly-loss BLOCK (`check_weekly_loss`, 8%) is replay-only: only
+    `strategy_replay_engine` sets `weekly_loss_pct`, so no live entry path
+    reaches it. Action eligibility's `BLOCKED_COOLDOWN` is inert the same
+    way: no code in `src` sets `cooldown_active` true.
+- Removed as a refusal (Sofien rule, Griller R5 B2, R6): the 1-hour
+  after-loss cooldown. `paper_loss_cooldown_active` refused every new trade
+  for `PAPER_SIGNAL_COOLDOWN_AFTER_LOSS_SECONDS` (default 3600) after any
+  single losing close, which is a per-trade-loss pause. Now:
+  - The Agent paper path (`agent_paper_execution._check_risk`) no longer
+    checks it and never raises `cooldown_active`.
+  - Paper signal orchestration still reports it in the `cooldown_clear`
+    risk check (detail "advisory only, does not block"), but the check
+    always passes and `cooldown_active` is never a block code.
+  - Arming (`arming_gates.paper_arming_refusal`) no longer reads the
+    cooldown, so `0` is a valid setting and the exit monitor and both
+    autonomous loops arm with it. This supersedes AT-ADR-129's
+    `consecutive_loss_cooldown_invalid` gate; the code stays only so stored
+    `paper_arming` rows render. The cycle-interval gate is unchanged.
+  - The setting is still read as the AT-ADR-128 stale-close window, which
+    now only alerts (see above).
 - Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
   the PnL calendar, and infrastructure arms (unreadable kill-switch state,
   global kill switch, demo protection and lineage holds).
@@ -596,6 +615,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 ## AT-ADR-129 — Arming refuses a disabled loss cooldown, a slow cycle, and a silent alert
 
 - Date: 2026-10-20
+- Superseded in part by AT-ADR-152 (R6): the loss-cooldown arming gate
+  (`consecutive_loss_cooldown_invalid`) is removed, because the after-loss
+  cooldown no longer refuses trades. The cycle-interval gate, heartbeat and
+  alerts below still apply.
 - Decision: The paper exit monitor and both autonomous loops refuse to arm
   unless `paper_signal_cooldown_after_loss_seconds` is a finite number
   greater than zero. The reason code is `consecutive_loss_cooldown_invalid`.
