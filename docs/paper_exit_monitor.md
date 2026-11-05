@@ -196,8 +196,10 @@ The one loss rule that arms the kill switch is the account daily equity
 stop (AT-ADR-152): stop equity more than
 `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10) below the 00:00 UTC
 baseline. Stop equity is `default_account_balance` plus all-time realized
-PnL plus the unrealized PnL of open positions. The baseline and every check
-use that one function; the risk-settings timezone does not enter it. Each
+PnL plus the unrealized PnL of open legacy positions. Canonical open paper
+trades carry no unrealized mark yet, so for them the stop is effectively
+realized-only until a mark feed exists; such marks must then obey the same
+freshness bound. The baseline and every check use that one function; the risk-settings timezone does not enter it. Each
 exit-monitor pass snapshots the baseline and enforces the stop for every
 account with a breaker row, on the trusted database clock, in dry-run too.
 
@@ -220,9 +222,13 @@ the `controlled_runtime_status` row `account_equity_stop_sweep`.
 `GET /health/paper-worker` raises `account_equity_stop_sweep_missing` or
 `account_equity_stop_sweep_stale` when that row is absent or older than
 `ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` (default 900), and a sweep
-that raises sends `account_equity_stop_sweep_failed`. These are mandatory
-Telegram safety codes. Changing `default_account_balance` in risk settings
-re-snapshots today's baseline to post-edit equity; it does not clear the
+that raises sends `account_equity_stop_sweep_failed`. A breaker row with no
+matching execution account is never swept; the entry gate ignores it and
+each sweep sends `account_equity_stop_orphan_breaker_rows` (6 h cooldown).
+These are mandatory Telegram safety codes. Changing
+`default_account_balance` in risk settings shifts today's baseline by the
+balance delta, so the day's losses stay counted, and writes an
+`account_equity_stop_baseline` audit row per account; it does not clear the
 kill switch.
 
 | Setting | Environment variable | Default |

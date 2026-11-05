@@ -238,11 +238,12 @@ def _rebaseline_on_balance_edit(
     *,
     now: datetime | None = None,
 ) -> None:
-    """Re-snapshot today's equity-stop baseline after a balance edit (AT-ADR-152).
+    """Shift today's equity-stop baseline by the balance delta (AT-ADR-152).
 
     A balance change is not a trading loss or gain. Without this, a lower
     balance false-trips the stop and a higher one hides a real loss. The
-    kill switch is never deactivated here.
+    shift keeps the day's losses, and each shift is audited. The kill
+    switch is never deactivated here.
     """
 
     if before.default_account_balance == after.default_account_balance:
@@ -253,5 +254,8 @@ def _rebaseline_on_balance_edit(
         session,
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,
+        before_balance=before.default_account_balance,
+        after_balance=after.default_account_balance,
         now=now or datetime.now(UTC),
+        actor_role=str(tenant.membership_role),
     )

@@ -2,13 +2,15 @@
 
 The one loss rule that arms the organization kill switch. Stop equity is
 ``default_account_balance`` plus all-time realized PnL plus the unrealized
-PnL of open positions (:func:`read_stop_equity`). The 00:00 UTC baseline
+PnL of open legacy positions (:func:`read_stop_equity`); canonical open
+paper trades carry no mark yet. The 00:00 UTC baseline
 and every later check use that one function, so the user's risk-day
 timezone never enters it. Equity below ``baseline * (1 - threshold)`` arms
 the switch. Unreadable equity, a stale unrealized mark, or a stale
 baseline past the grace window arms it too. A never-snapshotted row seeds
-its baseline without tripping. A single losing close and a losing streak
-do not arm it.
+its baseline without tripping. A balance edit shifts today's baseline by
+the edit (:func:`rebaseline_after_balance_edit`). A single losing close and
+a losing streak do not arm it.
 
 The switch arms at most once per UTC day, so a human deactivation sticks
 for the rest of that day. A new day's baseline does not clear it. This
@@ -47,6 +49,7 @@ EQUITY_STOP_ALERT_COMPONENT = "account_equity_stop_alert"
 SWEEP_STALE_CODE = "account_equity_stop_sweep_stale"
 SWEEP_MISSING_CODE = "account_equity_stop_sweep_missing"
 SWEEP_FAILED_CODE = "account_equity_stop_sweep_failed"
+ORPHAN_ROWS_CODE = "account_equity_stop_orphan_breaker_rows"
 
 EquityCause = Literal["equity_unreadable", "equity_stale"]
 TripCause = Literal[
@@ -200,9 +203,11 @@ def read_stop_equity(
 ) -> StopEquityReading:
     """Stop equity: balance + all-time realized + unrealized of open positions.
 
-    This is the one equity function for the stop. The 00:00 UTC baseline,
-    every later check, and a balance-edit re-baseline all read it. It does
-    not use the risk-settings timezone. An open position whose row was last
+    This is the one equity function for the stop. The 00:00 UTC baseline
+    and every later check read it. It does not use the risk-settings
+    timezone. Only legacy ``positions`` rows carry an unrealized mark;
+    canonical open paper trades add none, so for them the stop is
+    realized-only until a mark feed exists (AT-ADR-152). An open position whose row was last
     written more than ``account_equity_stop_mark_max_age_seconds`` before
     ``now`` is a stale mark, and the reading is unusable (``equity_stale``).
     """
@@ -302,6 +307,53 @@ def _account_pairs(
     return list(session.execute(stmt).all())
 
 
+def orphan_breaker_rows(session: Session) -> list[Row[tuple[UUID, UUID]]]:
+    """Breaker rows with no ExecutionAccount in their organization.
+
+    The sweep cannot resolve a user for these, so they are never snapshotted
+    or enforced. They guard no account that can still trade, so the entry
+    gate ignores them; the worker pages on them instead (AT-ADR-152).
+    """
+
+    from app.db.models import ExecutionAccount
+    from app.db.risk_policy import RiskPolicyBreakerState
+
+    stmt = (
+        select(RiskPolicyBreakerState.organization_id, RiskPolicyBreakerState.account_id)
+        .outerjoin(
+            ExecutionAccount,
+            (ExecutionAccount.id == RiskPolicyBreakerState.account_id)
+            & (ExecutionAccount.organization_id == RiskPolicyBreakerState.organization_id),
+        )
+        .where(ExecutionAccount.id.is_(None))
+        .order_by(RiskPolicyBreakerState.organization_id, RiskPolicyBreakerState.account_id)
+    )
+    return list(session.execute(stmt).all())
+
+
+def orphan_breaker_rows_alert(rows: list[Row[tuple[UUID, UUID]]]) -> ExitMonitorAlert | None:
+    """A mandatory page naming the orphan breaker rows, or None when there are none."""
+
+    from app.services.paper_exit_monitor import ExitMonitorAlert
+
+    if not rows:
+        return None
+    return ExitMonitorAlert(
+        code=ORPHAN_ROWS_CODE,
+        severity="critical",
+        message=(
+            "Account equity stop breaker rows have no matching execution account. "
+            "They are not swept and the entry gate ignores them; review and "
+            "remove or re-link them."
+        ),
+        fields={
+            "count": str(len(rows)),
+            "rows": ",".join(f"{org}:{account}" for org, account in rows[:10]),
+            "dedup_key": ORPHAN_ROWS_CODE,
+        },
+    )
+
+
 def sweep_account_equity_stops(session: Session, *, now: datetime, settings: Settings) -> int:
     """Snapshot and enforce every account with a breaker row. Returns the arm count.
 
@@ -334,10 +386,12 @@ def entry_baseline_overdue(
 
     The entry gate refuses new trades on this even when the sweep has not
     run, so a stalled exit monitor cannot leave entries unguarded. A row
-    that was never snapshotted (NULL day) is first sight, not overdue.
+    that was never snapshotted (NULL day) is first sight, not overdue. An
+    orphan row (see :func:`orphan_breaker_rows`) is ignored here.
     """
 
     from app.core.config import get_settings
+    from app.db.models import ExecutionAccount
     from app.db.risk_policy import RiskPolicyBreakerState
 
     resolved = get_settings() if settings is None else settings
@@ -346,8 +400,16 @@ def entry_baseline_overdue(
     grace = timedelta(seconds=int(resolved.account_equity_stop_baseline_grace_seconds))
     if moment - datetime.combine(day, time(), UTC) <= grace:
         return False
+    # An orphan row (no matching ExecutionAccount) is never swept, so its day
+    # would age and refuse the whole organization; it is paged instead.
     days = session.scalars(
-        select(RiskPolicyBreakerState.day_start_on).where(
+        select(RiskPolicyBreakerState.day_start_on)
+        .join(
+            ExecutionAccount,
+            (ExecutionAccount.id == RiskPolicyBreakerState.account_id)
+            & (ExecutionAccount.organization_id == RiskPolicyBreakerState.organization_id),
+        )
+        .where(
             RiskPolicyBreakerState.organization_id == organization_id,
             RiskPolicyBreakerState.day_start_on.is_not(None),
         )
@@ -367,63 +429,93 @@ def rebaseline_after_balance_edit(
     *,
     organization_id: UUID,
     user_id: UUID,
+    before_balance: Decimal,
+    after_balance: Decimal,
     now: datetime,
-    settings: Settings | None = None,
+    actor_role: str | None = None,
 ) -> int:
-    """Re-snapshot today's baseline after ``default_account_balance`` changes.
+    """Shift today's baseline by the ``default_account_balance`` edit.
 
-    Without this a lower balance reads as a loss (false trip) and a higher
-    one hides a real loss. Each of the user's accounts with a breaker row
-    gets today's baseline set to post-edit stop equity. When equity cannot
-    be read the baseline is left alone; the next check fails closed on the
-    same reading. This never deactivates the kill switch and does not touch
-    ``equity_stop_tripped_on``. Returns the number of rows re-baselined.
+    A balance change moves stop equity by exactly ``after - before``, so the
+    baseline moves by the same amount: ``day_start_equity += delta``. A lower
+    balance does not false-trip, a higher one does not mask a loss, and the
+    day's losses so far stay counted, so an edit-and-revert forgives
+    nothing. Only rows already snapshotted for today are shifted. A NULL
+    (first sight) row seeds from post-edit equity on its next check, and an
+    earlier-day row is snapshotted or fails closed at the next check as
+    before. Every one of the user's breaker rows gets an audit row naming
+    the outcome. This never deactivates the kill switch and does not touch
+    ``equity_stop_tripped_on``. Returns the number of rows shifted.
     """
 
-    from app.core.config import get_settings
+    from app.db.models import ExecutionAccount
+    from app.db.risk_policy import RiskPolicyBreakerState
+    from app.schemas.audit import AuditRecordCreate
+    from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
     from app.services.audit_service import AuditService
-    from app.services.risk_policy.persistence import RiskPolicyService
 
-    resolved = get_settings() if settings is None else settings
+    delta = after_balance - before_balance
     day = _aware(now).date()
-    service = RiskPolicyService(session, AuditService(session))
-    done = 0
-    for org, account_id, owner in _account_pairs(session, organization_id):
-        if owner != user_id:
-            continue
-        try:
-            with session.begin_nested():
-                reading = read_stop_equity(
-                    session,
-                    organization_id=org,
-                    user_id=user_id,
-                    now=now,
-                    settings=resolved,
-                )
-        except Exception as exc:
-            # The edit still saves; the next check fails closed on this read.
-            logger.warning(
-                "account_equity_stop_rebaseline_unreadable",
-                organization_id=str(org),
-                error_type=type(exc).__name__,
-            )
-            continue
-        equity = _valid_money(reading.equity)
-        row = service.load_breaker(organization_id=org, account_id=account_id)
-        if equity is None or row is None:
-            continue
-        row.day_start_equity = equity
-        row.day_start_on = day
-        done += 1
-        logger.info(
-            "account_equity_stop_rebaselined",
-            organization_id=str(org),
-            account_id=str(account_id),
-            day=day.isoformat(),
-            baseline=_text(equity),
+    rows = session.scalars(
+        select(RiskPolicyBreakerState)
+        .join(
+            ExecutionAccount,
+            (ExecutionAccount.id == RiskPolicyBreakerState.account_id)
+            & (ExecutionAccount.organization_id == RiskPolicyBreakerState.organization_id),
         )
+        .where(
+            RiskPolicyBreakerState.organization_id == organization_id,
+            ExecutionAccount.user_id == user_id,
+        )
+        .order_by(RiskPolicyBreakerState.account_id)
+        .with_for_update(of=RiskPolicyBreakerState)
+    ).all()
+    audit = AuditService(session)
+    request_id = uuid.uuid4().hex
+    shifted = 0
+    for row in rows:
+        old = row.day_start_equity
+        if row.day_start_on is None:
+            outcome = "first_sight_unchanged"
+        elif row.day_start_on != day or old is None:
+            outcome = "not_today_unchanged"
+        else:
+            # A non-positive result is stored as is; the next check fails closed.
+            row.day_start_equity = old + delta
+            outcome = "shifted"
+            shifted += 1
+        metadata = {
+            "action": "equity_stop_baseline_shift",
+            "outcome": outcome,
+            "actor_user_id": str(user_id),
+            "actor_role": actor_role or "",
+            "account_id": str(row.account_id),
+            "day": day.isoformat(),
+            "baseline_day": "" if row.day_start_on is None else row.day_start_on.isoformat(),
+            "old_balance": _text(before_balance),
+            "new_balance": _text(after_balance),
+            "delta": _text(delta),
+            "old_baseline": _text(old),
+            "new_baseline": _text(row.day_start_equity),
+        }
+        audit.record(
+            AuditRecordCreate(
+                request_id=request_id,
+                trace_id=request_id,
+                event_type=AuditEventType.RISK_SETTINGS_UPDATED,
+                resource_type="account_equity_stop_baseline",
+                actor_type=ActorType.USER,
+                result=AuditResult.SUCCESS,
+                severity=AuditSeverity.MEDIUM,
+                user_id=user_id,
+                organization_id=organization_id,
+                resource_id=str(row.account_id),
+                metadata=metadata,
+            )
+        )
+        logger.info("account_equity_stop_baseline_shift", **metadata)
     session.flush()
-    return done
+    return shifted
 
 
 def equity_stop_sweep_alert(

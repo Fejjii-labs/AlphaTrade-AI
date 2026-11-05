@@ -609,7 +609,8 @@ def test_entry_gate_refuses_when_baseline_is_overdue_past_grace(world) -> None:
     from app.services.automated_paper_loop import _breaker_refusing
     from app.services.risk_policy.equity_stop import entry_baseline_overdue
 
-    session, org, _user, account = world
+    session, org, user, account = world
+    _book(session, org, user, account)  # a real account; orphans are ignored (C4)
     row = _row(session, org, account, baseline=Decimal("10000"), day=DAY - timedelta(days=1))
     in_grace = datetime(2026, 11, 5, 0, 10, tzinfo=UTC)
 
@@ -710,7 +711,21 @@ def _edit_balance(
     _rebaseline_on_balance_edit(session, tenant, before, after, now=now)
 
 
-def test_lowering_the_balance_rebaselines_instead_of_false_tripping(world) -> None:
+def _shifts(session: Session, org: UUID) -> list[dict[str, str]]:
+    return [
+        a.redacted_metadata
+        for a in session.scalars(
+            select(AuditLog)
+            .where(
+                AuditLog.organization_id == org,
+                AuditLog.resource_type == "account_equity_stop_baseline",
+            )
+            .order_by(AuditLog.created_at)
+        ).all()
+    ]
+
+
+def test_lowering_the_balance_shifts_the_baseline_instead_of_false_tripping(world) -> None:
     session, org, user, account = world
     _book(session, org, user, account)
     row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
@@ -720,16 +735,61 @@ def test_lowering_the_balance_rebaselines_instead_of_false_tripping(world) -> No
     assert _active(session, org) is False
 
 
-def test_raising_the_balance_rebaselines_so_a_later_loss_still_trips(world) -> None:
+def test_raising_the_balance_shifts_the_baseline_so_a_later_loss_still_trips(world) -> None:
     session, org, user, account = world
     _book(session, org, user, account)
     row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
     _position(session, org, user, realized=Decimal("-900"), closed_at=NOON - timedelta(hours=1))
     _edit_balance(session, org, user, Decimal("20000"))
-    assert row.day_start_equity == Decimal("19100")
-    # 2000 more is 10.47% of post-edit equity. Unadjusted, 17100 > 10000 would mask it.
+    # Shifted by the +10000 edit; the earlier -900 stays counted against it.
+    assert row.day_start_equity == Decimal("20000")
+    # Unshifted, 17100 > 9000 would mask this 14.5% day loss.
     _position(session, org, user, realized=Decimal("-2000"), closed_at=NOON)
     assert _sweep(session, NOON + timedelta(minutes=1)) == 1
+
+
+# Griller R2 blocker (c): an edit-and-revert must not forgive the day's losses.
+def test_edit_and_revert_cannot_wipe_the_days_losses(world) -> None:
+    session, org, user, account = world
+    _book(session, org, user, account)
+    row = _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    _position(session, org, user, realized=Decimal("-900"), closed_at=NOON - timedelta(hours=1))
+    assert _sweep(session, NOON) == 0  # 9%: under the threshold
+    _edit_balance(session, org, user, Decimal("9999.99"))
+    assert row.day_start_equity == Decimal("9999.99")
+    _edit_balance(session, org, user, Decimal("10000"))
+    assert row.day_start_equity == Decimal("10000")
+    # 101 more is 10.01% of the day. Reset-to-post-edit would read it as 1.1%.
+    _position(session, org, user, realized=Decimal("-101"), closed_at=NOON)
+    assert _sweep(session, NOON + timedelta(minutes=1)) == 1
+    assert [a.redacted_metadata["cause"] for a in _trips(session, org)] == ["breach"]
+    down, up = _shifts(session, org)
+    assert down["actor_user_id"] == str(user) and down["actor_role"] == "trader"
+    assert (down["old_balance"], down["new_balance"], down["delta"]) == (
+        "10000.00",
+        "9999.99",
+        "-0.01",
+    )
+    assert (down["old_baseline"], down["new_baseline"]) == ("10000.00", "9999.99")
+    assert (up["delta"], up["old_baseline"], up["new_baseline"]) == (
+        "0.01",
+        "9999.99",
+        "10000.00",
+    )
+    assert down["outcome"] == up["outcome"] == "shifted"
+    assert down["account_id"] == str(account)
+
+
+def test_balance_edit_leaves_a_first_sight_row_to_seed_from_post_edit_equity(world) -> None:
+    session, org, user, account = world
+    _book(session, org, user, account)
+    row = _row(session, org, account, baseline=None, day=None)
+    _edit_balance(session, org, user, Decimal("12000"))
+    assert (row.day_start_on, row.day_start_equity) == (None, None)
+    [audit] = _shifts(session, org)
+    assert audit["outcome"] == "first_sight_unchanged"
+    assert _sweep(session, NOON) == 0
+    assert (row.day_start_on, row.day_start_equity) == (DAY, Decimal("12000"))
 
 
 def test_balance_edit_does_not_deactivate_an_armed_switch(world) -> None:
@@ -741,10 +801,88 @@ def test_balance_edit_does_not_deactivate_an_armed_switch(world) -> None:
     _edit_balance(session, org, user, Decimal("12000"))
     assert _active(session, org) is True
     assert row.equity_stop_tripped_on == DAY
-    assert row.day_start_equity == Decimal("10500")
+    assert row.day_start_equity == Decimal("12000")  # shifted; the -1500 is still a 12.5% day
     _edit_balance(session, org, user, Decimal("12000"))  # unchanged balance: no re-baseline
+    assert len(_shifts(session, org)) == 1
     assert _sweep(session, NOON + timedelta(minutes=1)) == 0  # no second arm today
     assert len(_trips(session, org)) == 1
+
+
+# Griller R2 C1: a canonical paper-trade realized loss alone reaches stop equity.
+def test_canonical_paper_trade_realized_loss_trips_the_stop(world) -> None:
+    from app.db.models import JournalTrade
+    from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeDirection
+
+    session, org, user, account = world
+    _book(session, org, user, account)
+    _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    session.add(
+        JournalTrade(
+            organization_id=org,
+            user_id=user,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.CLOSED,
+            symbol="BTCUSDT",
+            timeframe="15m",
+            direction=TradeDirection.LONG,
+            size=Decimal("1"),
+            entry_price=Decimal("100"),
+            exit_price=Decimal("90"),
+            entry_time=NOON - timedelta(hours=2),
+            exit_time=NOON - timedelta(hours=1),
+            net_pnl=Decimal("-1000.01"),
+            execution_lifecycle_id=uuid4(),
+        )
+    )
+    session.flush()
+    assert _read(session, org, user).equity == Decimal("8999.99")
+    assert _sweep(session, NOON) == 1
+    [audit] = _trips(session, org)
+    assert audit.redacted_metadata["cause"] == "breach"
+    assert audit.redacted_metadata["equity"] == "8999.99"
+
+
+# Griller R2 C4: an orphan breaker row does not block the org; it is paged.
+def test_orphan_breaker_row_is_paged_and_does_not_block_the_org(world, monkeypatch) -> None:
+    from app.services.automated_paper_loop import _breaker_refusing
+    from app.services.risk_policy.equity_stop import (
+        ORPHAN_ROWS_CODE,
+        entry_baseline_overdue,
+        orphan_breaker_rows,
+    )
+    from app.services.safety_alerts import TELEGRAM_SAFETY_MANDATORY_CODES
+
+    session, org, user, account = world
+    _book(session, org, user, account)
+    _row(session, org, account, baseline=Decimal("10000"), day=DAY)
+    orphan = uuid4()  # no ExecutionAccount: never swept, its day ages
+    _row(session, org, orphan, baseline=Decimal("10000"), day=DAY - timedelta(days=3))
+    assert [tuple(r) for r in orphan_breaker_rows(session)] == [(org, orphan)]
+    assert (
+        entry_baseline_overdue(session, organization_id=org, now=NOON, settings=_settings())
+        is False
+    )
+    assert _breaker_refusing(session, org, NOON) is False
+    # A real account's stale baseline still refuses entries.
+    session.scalar(
+        select(RiskPolicyBreakerState).where(RiskPolicyBreakerState.account_id == account)
+    ).day_start_on = DAY - timedelta(days=1)
+    assert _breaker_refusing(session, org, NOON) is True
+    session.commit()
+    assert ORPHAN_ROWS_CODE in TELEGRAM_SAFETY_MANDATORY_CODES
+
+    from app.services import safety_alerts
+    from app.workers.paper_exit_monitor import _sweep_account_equity_stops
+
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        safety_alerts,
+        "deliver_safety_alert",
+        lambda _settings, alert, **_kw: sent.append((alert.code, alert.fields["rows"])) or True,
+    )
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False)
+    _sweep_account_equity_stops(factory, _settings(), NOON)
+    assert sent == [(ORPHAN_ROWS_CODE, f"{org}:{orphan}")]
 
 
 # Extra pin: the exact 10% boundary does not trip through the books path.

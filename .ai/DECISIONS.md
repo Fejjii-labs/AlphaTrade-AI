@@ -18,8 +18,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     all-time realized PnL (closed legacy positions and canonical paper
     trades, same sources and mirror exclusion as the risk-day figure, via
     `DailyRiskAccounting.cumulative_realized_pnl_for_utc_stop`) + unrealized
-    PnL of open positions. The baseline snapshot, every later check, and a
-    balance-edit re-baseline all read it. It never uses the risk-settings
+    PnL of open legacy positions. The baseline snapshot and every later
+    check read it. It never uses the risk-settings
     timezone, so a non-UTC user's local midnight cannot drop a UTC-day loss,
     and prior days' losses lower the baseline instead of loosening the stop.
     `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (daily
@@ -28,9 +28,18 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900) ago is a stale
     mark; the reading is unusable and the stop trips with
     `cause=equity_stale`. No process re-marks legacy `positions` rows today,
-    so any such open row older than the bound fails closed. Canonical paper
-    trades carry no stored unrealized PnL; their loss enters equity when
-    they close.
+    so any such open row older than the bound fails closed.
+  - Realized-only for canonical trades (acknowledged gap): canonical open
+    paper trades (journal trades, the main live path) carry **no unrealized
+    mark** and contribute nothing to stop equity while open. Their loss
+    enters equity only when they close, so for canonical trading the stop
+    is effectively **realized-only** until a mark-to-market feed exists.
+    Intraday unrealized loss is bounded only by each trade's own stop-loss
+    and the exit monitor, not during exit-monitor backoff or across many
+    simultaneous positions. When canonical marks are added they must obey
+    the same freshness rule (`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS`,
+    stale ⇒ `equity_stale`, fail closed). The mark feed is a separate
+    follow-up ticket.
   - Baseline: stored on `risk_policy_breaker_states` (`day_start_equity`,
     `day_start_on`) at the rollover. Each paper-worker exit-monitor pass
     takes the snapshot on the database clock within
@@ -50,6 +59,14 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     claims (`breaker_active`) when any of the organization's breaker rows
     has a baseline for an earlier UTC day past the grace window, even when
     the sweep has not run. It refuses; it does not arm.
+  - Orphan breaker rows: a row whose `account_id` has no `ExecutionAccount`
+    in the same organization is never swept (no user to read equity for),
+    so its day would age forever. Such a row guards no account that can
+    trade, so the entry gate ignores it instead of refusing the whole
+    organization. Each sweep instead logs
+    `account_equity_stop_orphan_breaker_rows` at error and sends it as a
+    mandatory Telegram safety code (6 h cooldown), naming up to ten
+    `org:account` pairs, until a human removes or re-links the row.
   - Sweep heartbeat: each successful sweep writes the
     `controlled_runtime_status` row `account_equity_stop_sweep`. When the
     exit monitor is expected, `GET /health/paper-worker` raises
@@ -58,15 +75,28 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
     900). A sweep that raises sends `account_equity_stop_sweep_failed` from
     the worker. All three are mandatory Telegram safety codes and are also
     logged at error.
-  - Balance edit: a `PATCH /risk/settings` or reset-defaults that changes
-    `default_account_balance` re-snapshots today's baseline to post-edit
-    stop equity for the user's accounts. This is a deliberate choice over
-    shifting the baseline by the edit: the stop then measures from
-    post-edit equity, and any loss earlier that UTC day is not carried over.
-    It never deactivates the kill switch and does not touch
-    `equity_stop_tripped_on`; manual deactivate stays the only clear. If
-    equity cannot be read the baseline is left alone and the next check
-    fails closed.
+  - Balance edit (delta shift, replaces the earlier reset to post-edit
+    equity after Griller R2): a `PATCH /risk/settings` or reset-defaults
+    that changes `default_account_balance` shifts today's baseline by the
+    edit, `day_start_equity += after_balance - before_balance`, for each of
+    the user's breaker rows already snapshotted for today. A balance edit
+    moves stop equity by exactly that delta, so a lower balance does not
+    false-trip and a higher one does not mask a loss, while the day's
+    losses so far stay counted: an edit-and-revert (even by 0.01) forgives
+    nothing. A first-sight row (`day_start_on` NULL) is left alone and
+    seeds from post-edit equity on its next check; an earlier-day row is
+    left alone and is snapshotted in grace or fails closed as
+    `baseline_stale`. Equity is not read, so the shift cannot fail on an
+    unreadable reading. Every one of the user's breaker rows gets one audit
+    row (`risk_settings_updated`,
+    `resource_type=account_equity_stop_baseline`, `resource_id=account_id`,
+    severity medium) with `outcome` (`shifted`, `first_sight_unchanged`,
+    `not_today_unchanged`), `actor_user_id`, `actor_role`, `old_balance`,
+    `new_balance`, `delta`, `old_baseline`, `new_baseline`, `day` and
+    `baseline_day`; one `request_id` ties the rows of one edit together. The
+    rows are locked (`FOR UPDATE`) for the shift. It never deactivates the
+    kill switch and does not touch `equity_stop_tripped_on`; manual
+    deactivate stays the only clear.
   - On trip: an audit row `kill_switch_triggered`,
     `resource_type=account_equity_stop`, `reason=ACCOUNT_DAILY_DRAWDOWN`,
     with cause, baseline, equity, drawdown percent and threshold percent;
@@ -91,7 +121,8 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
   global kill switch, demo protection and lineage holds).
 - Caveats: the soft peak latch and the consecutive/daily pauses are kept
   pending Sofien's decision. Accounts without a breaker row are not swept.
-  Canonical open paper trades have no unrealized mark in stop equity.
+  Canonical open paper trades have no unrealized mark in stop equity, so
+  the stop is effectively realized-only for them (see above).
 - Reference: `docs/paper_exit_monitor.md`, migration `a25equitystop001`.
 
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped
