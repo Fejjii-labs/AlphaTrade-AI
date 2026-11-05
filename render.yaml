@@ -61,20 +61,32 @@ services:
         value: false
       - key: METRICS_ENABLED
         value: false
+      # Data-source and availability toggles are operator-owned (sync: false)
+      # so a Blueprint sync never undoes an operator rollback to replay or
+      # re-arms Binance during a ban. Staging values: MARKET_DATA_ENABLED=true,
+      # PERPETUAL_EVIDENCE_SOURCE=binance_usdm,
+      # PERPETUAL_EVIDENCE_SECONDARY_SOURCE=bybit_usdt_perpetual,
+      # PERPETUAL_EVIDENCE_TIMEOUT_SECONDS=10. Unset falls back to the code
+      # defaults (replay evidence: no live decision). Validators still bound them.
       - key: MARKET_DATA_ENABLED
-        value: true
+        sync: false
       # Controlled public USD-M evidence. No API key. Apply with the runbook;
       # this blueprint is not a deploy by itself.
       - key: PERPETUAL_EVIDENCE_SOURCE
-        value: binance_usdm
+        sync: false
       - key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE
-        value: bybit_usdt_perpetual
+        sync: false
+      # Host pins stay synced literals: a sync pulls them back to these hosts.
       - key: MARKET_DATA_FUTURES_BASE_URL
         value: https://fapi.binance.com
       - key: BYBIT_PERPETUAL_BASE_URL
         value: https://api.bybit.com
+      - key: BLOFIN_DEMO_REST_BASE_URL
+        value: https://demo-trading-openapi.blofin.com
+      - key: BLOFIN_DEMO_WS_URL
+        value: wss://demo-trading-openapi.blofin.com/ws/public
       - key: PERPETUAL_EVIDENCE_TIMEOUT_SECONDS
-        value: "10"
+        sync: false
       - key: DEBUG
         value: false
       - key: LOG_JSON
@@ -179,18 +191,41 @@ services:
         sync: false
       - key: PROVIDER_MODE
         sync: false
+      - key: MARKET_WATCHER_BRIDGE_AUTO_TICK
+        sync: false
+      # Arm flags are operator-owned. Declared so the Blueprint documents them;
+      # sync: false so a sync never flips them. Unset means the code default,
+      # which is off/empty for every one of them (pinned by
+      # tests/test_disarmed_render_worker_boot.py).
+      - key: AUTONOMOUS_INTERNAL_PAPER_ENABLED
+        sync: false
+      - key: AUTONOMOUS_BLOFIN_DEMO_ENABLED
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_ENABLED
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_USER_ID
+        sync: false
+      - key: GOVERNED_BLOFIN_DEMO_ACCOUNT_ID
+        sync: false
+      # Data-source toggles: operator-owned, see the API service comment.
       - key: MARKET_DATA_ENABLED
-        value: true
+        sync: false
       - key: PERPETUAL_EVIDENCE_SOURCE
-        value: binance_usdm
+        sync: false
       - key: PERPETUAL_EVIDENCE_SECONDARY_SOURCE
-        value: bybit_usdt_perpetual
+        sync: false
       - key: MARKET_DATA_FUTURES_BASE_URL
         value: https://fapi.binance.com
       - key: BYBIT_PERPETUAL_BASE_URL
         value: https://api.bybit.com
+      - key: BLOFIN_DEMO_REST_BASE_URL
+        value: https://demo-trading-openapi.blofin.com
+      - key: BLOFIN_DEMO_WS_URL
+        value: wss://demo-trading-openapi.blofin.com/ws/public
       - key: PERPETUAL_EVIDENCE_TIMEOUT_SECONDS
-        value: "10"
+        sync: false
       - key: DEBUG
         value: false
       - key: LOG_JSON
