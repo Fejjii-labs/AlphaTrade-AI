@@ -123,10 +123,14 @@ class SizedPlan:
 def remaining_daily_budget_percent(
     *,
     daily_loss_limit_percent: Decimal,
-    realized_pnl: Decimal | None,
     equity: Decimal,
 ) -> Decimal | str:
-    """Profile daily room after server realized loss. Missing inputs are not zero."""
+    """Profile daily room for open risk. Missing inputs are not zero.
+
+    Today's realized loss is not subtracted (AT-ADR-152): the 10% account
+    equity stop is the only daily brake. Open risk is still bounded by this
+    room and by ``max_aggregate_open_risk_percent`` in the sizer.
+    """
 
     if (
         not isinstance(daily_loss_limit_percent, Decimal)
@@ -134,12 +138,9 @@ def remaining_daily_budget_percent(
         or not isinstance(equity, Decimal)
         or not equity.is_finite()
         or equity <= 0
-        or not isinstance(realized_pnl, Decimal)
-        or not realized_pnl.is_finite()
     ):
         return "daily_budget_uncomputed"
-    loss = -realized_pnl if realized_pnl < 0 else Decimal("0")
-    return daily_loss_limit_percent - (loss / equity * Decimal("100"))
+    return daily_loss_limit_percent
 
 
 def paper_demo_funding(
@@ -801,7 +802,6 @@ def _verdict(equity: Decimal, *, refusing: bool) -> BreakerVerdict:
         daily_loss_active=refusing,
         drawdown_active=False,
         consecutive_loss_active=False,
-        trip_kill_switch=False,
         paused_until=None,
         equity_peak=equity,
         refuse_new_trades=refusing,

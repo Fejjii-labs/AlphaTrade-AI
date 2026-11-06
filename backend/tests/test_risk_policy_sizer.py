@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import ROUND_DOWN, Decimal
 from uuid import uuid4
 
@@ -119,6 +120,22 @@ def test_budget_exhaustion_and_open_risk_reduce_the_trade() -> None:
         _order(remaining_daily_budget_percent=Decimal("1"), open_risk_percent=Decimal("0.4")),
     )
     assert reduced.effective_risk_percent <= Decimal("0.6")
+
+
+def test_open_risk_still_exhausts_the_budget_without_any_realized_term() -> None:
+    """AT-ADR-152: realized loss is not subtracted; concurrent open risk still caps."""
+    profile = _wide()
+    full = profile.daily_loss_limit_percent
+    assert size_trade(profile, _order(remaining_daily_budget_percent=full)).effective_risk_percent
+    with pytest.raises(RiskPolicyRejected) as caught:
+        size_trade(
+            profile,
+            _order(
+                remaining_daily_budget_percent=full,
+                open_risk_percent=profile.max_aggregate_open_risk_percent,
+            ),
+        )
+    assert caught.value.code == "budget_exhausted"
 
 
 def test_notional_cap_reduces_quantity_and_leverage_only_sets_margin() -> None:
@@ -376,7 +393,6 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
         daily_loss_active=False,
         drawdown_active=False,
         consecutive_loss_active=False,
-        trip_kill_switch=False,
         paused_until=None,
         equity_peak=Decimal("10000"),
         refuse_new_trades=False,
@@ -401,7 +417,8 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
     assert decision.record.grader_version == "deterministic-grade/v1"
     assert "effective_risk_percent" in decision.record.calculation
     assert decision.record.ai_explanation == "The model prefers A+."
-    tripped = evaluate_breakers(
+    # A peak drawdown is a figure now; it does not refuse (AT-ADR-152).
+    drawdown = evaluate_breakers(
         BreakerConfig(Decimal("1"), Decimal("10"), 4),
         BreakerSnapshot(
             equity=Decimal("80"),
@@ -414,14 +431,25 @@ def test_decision_records_the_calculation_and_ignores_a_higher_ai_grade() -> Non
             now=datetime(2026, 10, 18, tzinfo=UTC),
         ),
     )
+    assert drawdown.drawdown_active and drawdown.human_reset_required is False
+    allowed = decide_trade(
+        profile=profile,
+        profile_version_id=version_id,
+        grade=GradeDecision(Grade.A, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None),
+        adjusters=AdjusterInputs("normal", True, True),
+        sizing=_order(),
+        breaker=drawdown,
+        tiers=(MaintenanceTier(Decimal("0"), Decimal("0.004")),),
+    )
+    assert allowed.accepted
+    # The entry gate (an overdue equity-stop baseline) still refuses here.
     blocked = decide_trade(
         profile=profile,
         profile_version_id=version_id,
         grade=GradeDecision(Grade.A, "deterministic-grade/v1", Decimal("1"), Decimal("1"), None),
         adjusters=AdjusterInputs("normal", True, True),
         sizing=_order(),
-        breaker=tripped,
+        breaker=replace(quiet, refuse_new_trades=True),
         tiers=(MaintenanceTier(Decimal("0"), Decimal("0.004")),),
     )
     assert blocked.reason == "breaker_active"
-    assert tripped.trip_kill_switch

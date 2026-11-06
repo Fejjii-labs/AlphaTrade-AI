@@ -147,6 +147,8 @@ class DailyRiskAccounting:
         row.unrealized_pnl = unrealized
         row.trade_count = trade_count
 
+        # Display flag only (dashboard, attention). No gate refuses on it: the
+        # 10% account equity stop is the only daily brake (AT-ADR-152).
         if daily_loss_limit is not None and realized <= -daily_loss_limit:
             row.locked = True
 
@@ -221,6 +223,33 @@ class DailyRiskAccounting:
         )
         return Decimal(str(realized or 0)), int(count or 0), Decimal(str(exposure or 0))
 
+    def cumulative_realized_pnl_for_utc_stop(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> Decimal:
+        """All-time realized PnL from the same sources as the risk-day figure.
+
+        The account daily equity stop (AT-ADR-152) reads this. It does not
+        use the risk-settings timezone, and it does not write
+        ``DailyRiskState``. ``sync_from_portfolio`` is unchanged.
+        """
+        start_utc, end_utc = _ALL_TIME_UTC
+        realized = self._sum_realized_closed(
+            organization_id=organization_id,
+            user_id=user_id,
+            start_utc=start_utc,
+            end_utc=end_utc,
+        )
+        canonical, _count, _exposure = self._canonical_portfolio_totals(
+            organization_id=organization_id,
+            user_id=user_id,
+            start_utc=start_utc,
+            end_utc=end_utc,
+        )
+        return realized + canonical
+
     def record_after_paper_fill(
         self,
         *,
@@ -257,6 +286,7 @@ class DailyRiskAccounting:
             select(func.coalesce(func.sum(Position.realized_pnl), 0)).where(
                 Position.organization_id == organization_id,
                 Position.user_id == user_id,
+                # CLOSED only: LIQUIDATED legacy losses never reach stop equity (AT-ADR-152).
                 Position.status == PositionStatus.CLOSED,
                 Position.closed_at.is_not(None),
                 Position.closed_at >= start_utc,
@@ -305,6 +335,9 @@ class DailyRiskAccounting:
         exposure = sum((r.size * r.entry_price for r in rows), Decimal("0"))
         unrealized = sum((r.unrealized_pnl for r in rows), Decimal("0"))
         return exposure, unrealized
+
+
+_ALL_TIME_UTC = (datetime(1970, 1, 1, tzinfo=UTC), datetime(9999, 1, 1, tzinfo=UTC))
 
 
 def _day_bounds_utc(day: date, timezone_name: str) -> tuple[datetime, datetime]:

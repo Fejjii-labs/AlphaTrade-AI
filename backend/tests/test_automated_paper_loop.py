@@ -416,7 +416,9 @@ def test_confirmed_setup_opens_one_journal_and_replays_cleanly() -> None:
 
 
 @requires_postgres
-def test_risk_block_creates_no_plan_or_fill() -> None:
+def test_daily_loss_lock_is_display_only_and_trade_fills() -> None:
+    """A set daily loss lock is display only (AT-ADR-152): the trade still fills."""
+
     install_persistence_firewall()
     factory = phase7_plan_session_factory()
     with factory() as session:
@@ -437,20 +439,20 @@ def test_risk_block_creates_no_plan_or_fill() -> None:
     runtime = _runtime_for(factory, source, monitor, replay=False, held=[])
     scan = runtime.run_cycle().scans[0]
     assert scan.reason_code == SetupAssessmentState.CONFIRMED_SETUP.value
-    assert scan.paper_loop_stage == "blocked"
-    assert scan.paper_loop_reason == "risk_block"
-    assert scan.eligibility_state == ActionEligibilityState.BLOCKED.value
-    assert scan.trade_plan_revision_id is None
-    assert scan.paper_fill_id is None
-    assert scan.journal_trade_id is None
+    assert scan.paper_loop_stage == "filled"
+    assert scan.paper_loop_reason == "open_journal"
+    assert scan.eligibility_state == ActionEligibilityState.ELIGIBLE.value
+    assert scan.trade_plan_revision_id is not None
+    assert scan.paper_fill_id is not None
+    assert scan.journal_trade_id is not None
     with factory() as session:
-        assert _count(session, JournalTrade) == 0
-        assert _count(session, TradePlanRevision) == 0
-        assert _count(session, ExecutionFillFact) == 0
+        assert _count(session, JournalTrade) == 1
+        assert _count(session, TradePlanRevision) == 1
+        assert _count(session, ExecutionFillFact) == 1
         actions = set(
             session.scalars(select(AuditLog.action).where(AuditLog.organization_id == ORG))
         )
-        assert AuditEventType.RISK_BLOCK in actions
+        assert AuditEventType.RISK_BLOCK not in actions
 
 
 def test_only_risk_limit_reasons_are_labelled_risk_block() -> None:

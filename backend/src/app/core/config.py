@@ -292,6 +292,22 @@ class Settings(BaseSettings):
     # time when that source is supplied. A larger gap refuses the cycle.
     # Default 15 seconds. This does not arm the monitor.
     paper_exit_monitor_max_clock_skew_seconds: int = Field(default=15, ge=1, le=120)
+    # Account daily equity stop (AT-ADR-152). The org kill switch arms when
+    # equity falls more than this percent below the start-of-day baseline.
+    # The baseline is snapshotted at 00:00 UTC. A missing or stale baseline
+    # past the grace window, or unreadable equity, arms it too. Only a human
+    # deactivation clears it. This does not arm the monitor or real trading.
+    account_equity_stop_threshold_percent: Decimal = Field(
+        default=Decimal("10"), gt=Decimal("0"), le=Decimal("50")
+    )
+    account_equity_stop_baseline_grace_seconds: int = Field(default=900, ge=60, le=3600)
+    # Stop equity is balance + all-time realized + unrealized of open
+    # positions. An open position whose row was last written longer ago than
+    # this is a stale mark, and the stop fails closed (cause equity_stale).
+    account_equity_stop_mark_max_age_seconds: int = Field(default=900, ge=60, le=86400)
+    # The exit-monitor pass publishes a heartbeat after each successful sweep.
+    # GET /health/paper-worker alerts when it is missing or older than this.
+    account_equity_stop_sweep_stale_after_seconds: int = Field(default=900, ge=60, le=86400)
     # Adverse fraction applied when a paper quote has no bid and ask.
     # This is the non-major default (5bp). BTC and ETH use the major haircut.
     # Longs pay mid * (1 + haircut). Shorts receive mid * (1 - haircut).

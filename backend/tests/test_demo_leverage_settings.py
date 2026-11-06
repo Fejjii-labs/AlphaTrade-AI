@@ -27,9 +27,9 @@ settings_db = base.settings_db
 client = base.client
 
 
-def test_demo_leverage_migration_is_the_single_head_after_binance_gate() -> None:
+def test_demo_leverage_migration_follows_binance_gate() -> None:
     script = alembic_script_directory()
-    assert single_alembic_head(script) == "a24demoleverage001"
+    single_alembic_head(script)
     assert script.get_revision("a24demoleverage001").down_revision == "a24binancegate001"
 
 

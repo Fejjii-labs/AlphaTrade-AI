@@ -2,6 +2,222 @@
 
 Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 
+## AT-ADR-152 — One account daily equity stop arms the kill switch
+
+- Date: 2026-11-05 (approved by Sofien via Griller; paper and BloFin demo
+  only; real money stays blocked). AT-ADR-151 is taken by draft PR #433
+  (`claude/killswitch-current-risk-only`), which this supersedes and which
+  is not merged.
+- Decision: the only loss rule that arms the organization kill switch is an
+  account-level daily equity stop
+  (`backend/src/app/services/risk_policy/equity_stop.py`). Defaults, all
+  config-driven:
+  - Threshold `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT=10` (bounded 0–50).
+  - Day boundary 00:00 UTC.
+  - Equity (one function, `read_stop_equity`): `default_account_balance` +
+    all-time realized PnL (closed legacy positions and canonical paper
+    trades, same sources and mirror exclusion as the risk-day figure, via
+    `DailyRiskAccounting.cumulative_realized_pnl_for_utc_stop`) + unrealized
+    PnL of open legacy positions. The baseline snapshot and every later
+    check read it. It never uses the risk-settings
+    timezone, so a non-UTC user's local midnight cannot drop a UTC-day loss,
+    and prior days' losses lower the baseline instead of loosening the stop.
+    `DailyRiskAccounting.sync_from_portfolio` and its risk-day callers (the
+    display-only daily lock and the informational breaker figures) are
+    unchanged.
+  - Mark freshness: an open position whose row was last written more than
+    `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900) ago is a stale
+    mark; the reading is unusable and the stop trips with
+    `cause=equity_stale`. No process re-marks legacy `positions` rows today,
+    so any such open row older than the bound fails closed.
+  - Realized-only for canonical trades (acknowledged gap): canonical open
+    paper trades (journal trades, the main live path) carry **no unrealized
+    mark** and contribute nothing to stop equity while open. Their loss
+    enters equity only when they close, so for canonical trading the stop
+    is effectively **realized-only** until a mark-to-market feed exists.
+    Intraday unrealized loss is bounded only by each trade's own stop-loss
+    and the exit monitor, not during exit-monitor backoff or across many
+    simultaneous positions. When canonical marks are added they must obey
+    the same freshness rule (`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS`,
+    stale ⇒ `equity_stale`, fail closed). The mark feed is tracked as GitHub issue
+    https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437.
+  - Legacy `LIQUIDATED` positions (acknowledged, pre-existing): the realized
+    sum (`DailyRiskAccounting._sum_realized_closed`) counts only legacy
+    positions with status `CLOSED`, so **`LIQUIDATED` legacy losses never
+    reach stop equity**. Nothing opens legacy `positions` rows anymore, so
+    this is documented and not changed here.
+  - Baseline: stored on `risk_policy_breaker_states` (`day_start_equity`,
+    `day_start_on`) at the rollover. Each paper-worker exit-monitor pass
+    takes the snapshot on the database clock within
+    `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) after
+    midnight. Every profile breaker persist also evaluates the stop.
+  - Trip: `equity < baseline * (1 - threshold)`. Exactly 10% does not trip.
+  - Fail closed: unreadable equity (missing, non-finite, not positive, or a
+    read error: `equity_unreadable`), a stale mark (`equity_stale`), or a
+    baseline from an earlier day after the grace window
+    (`baseline_stale`), or a dated but empty baseline (`baseline_missing`),
+    trips. A stale or missing trip then seeds today's baseline from current
+    equity so the rest of the day is still guarded.
+  - First sight: a row with `day_start_on IS NULL` was never snapshotted.
+    It seeds today's baseline and does not trip, at any time of day, so the
+    first deploy does not arm every organization.
+  - Entry gate: the automated paper loop refuses new plans and stored-plan
+    claims (`breaker_active`) when any of the organization's breaker rows
+    has a baseline for an earlier UTC day past the grace window, even when
+    the sweep has not run. It refuses; it does not arm.
+  - Orphan breaker rows: a row whose `account_id` has no `ExecutionAccount`
+    in the same organization is never swept (no user to read equity for),
+    so its day would age forever. Such a row guards no account that can
+    trade, so the entry gate ignores it instead of refusing the whole
+    organization. Each sweep instead logs
+    `account_equity_stop_orphan_breaker_rows` at error and sends it as a
+    mandatory Telegram safety code (6 h cooldown), naming up to ten
+    `org:account` pairs, until a human removes or re-links the row.
+  - Sweep heartbeat: each successful sweep writes the
+    `controlled_runtime_status` row `account_equity_stop_sweep`. When the
+    exit monitor is expected, `GET /health/paper-worker` raises
+    `account_equity_stop_sweep_missing` / `_stale` once that row is absent
+    or older than `ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` (default
+    900). A sweep that raises sends `account_equity_stop_sweep_failed` from
+    the worker. All three are mandatory Telegram safety codes and are also
+    logged at error.
+  - Balance edit (D1, Sofien 2026-11-05; replaces the Griller R2 delta
+    shift, which replaced the reset to post-edit equity): a `PATCH
+    /risk/settings` or reset-defaults that changes `default_account_balance`
+    **leaves today's baseline unchanged**. The new balance applies only
+    from the next UTC day's snapshot, which reads the current balance as
+    before. Because stop equity reads the current balance, each snapshot
+    also stores the balance inside it (`day_start_balance`, migration
+    `a26equitystop002`, nullable, no backfill); every check on the
+    snapshot's own day uses `equity - current_balance + day_start_balance`.
+    So a raise mid-loss does not dilute today's 10% stop, a cut does not
+    false-trip it, and an edit-and-revert forgives nothing. A row
+    snapshotted today before the column existed (NULL) gets the pre-edit
+    balance recorded on its first edit; with no edit it reads the current
+    balance as before. A first-sight row (`day_start_on` NULL) and an
+    earlier-day row are not written; their next snapshot uses the new
+    balance. Equity is not read, so the edit cannot fail on an unreadable
+    reading. Every one of the editing user's breaker rows (and no other
+    user's) gets one audit row (`risk_settings_updated`,
+    `resource_type=account_equity_stop_baseline`, `resource_id=account_id`,
+    severity medium, `action=equity_stop_balance_edit`) with `outcome`
+    (`baseline_unchanged`, `first_sight_unchanged`, `not_today_unchanged`),
+    `actor_user_id`, `actor_role`, `old_balance`, `new_balance`, `baseline`,
+    `day_start_balance`, `day`, `baseline_day` and `applies_from` (next UTC
+    day); one `request_id` ties the rows of one edit together. The rows
+    are locked (`FOR UPDATE`). It never deactivates the kill switch and
+    does not touch `equity_stop_tripped_on`; manual deactivate stays the
+    only clear.
+  - On trip: an audit row `kill_switch_triggered`,
+    `resource_type=account_equity_stop`, `reason=ACCOUNT_DAILY_DRAWDOWN`,
+    with cause, baseline, equity, drawdown percent and threshold percent;
+    then `KillSwitchService.activate` as the system
+    (`source=account_equity_stop`), with the same figures in the reason.
+  - Arms at most once per UTC day (`equity_stop_tripped_on`), so an owner
+    deactivation is not undone by the next scan. A new day's baseline never
+    clears an active switch. Only the manual owner deactivate clears it.
+- Removed as kill-switch arms: the losing-backfill and stale-live-loss
+  arms in `paper_exit_protection` (AT-ADR-127/128 arming is superseded;
+  monitor actions are now `backfill_alert` / `stale_alert` and only
+  journal, alert and audit with `refusal=none`), and the peak-drawdown arm
+  (`_arm_drawdown_kill_switch`, `DRAWDOWN_KILL_REASON`,
+  `BreakerVerdict.trip_kill_switch`). The ruined-equity path refuses
+  that call (it no longer latches); the equity stop then runs on its own
+  reading.
+- Removed as refusals (Sofien 2026-11-05): the peak
+  `drawdown_breaker_percent` latch, the profile daily-loss pause and the
+  consecutive-loss pause. `evaluate_breakers` still computes
+  `drawdown_active`, `daily_loss_active` and `consecutive_loss_active` as
+  figures, but `refuse_new_trades` is always false, `paused_until` is
+  None and `human_reset_required` is false. `trip_breakers` writes no
+  pause and no latch, and `record_breaker` stores what it is given, so a
+  legacy latch or pause is cleared by the next persist. The entry gate
+  (`_breaker_refusing`) no longer reads `breaker_active`; it refuses only
+  on an overdue equity-stop baseline. The ruined-equity path (risk-day
+  equity missing or not positive) still refuses that call and runs the
+  equity stop, but latches nothing. `persist_profile_breakers` returns
+  true only on that path or when the equity stop armed. Within the profile
+  breaker, the SoD daily equity stop is the one loss rule that halts
+  trading.
+- Removed as refusals (Sofien decision 2026-11-05, Griller R4 B1): the 10%
+  account daily equity stop is the **only** brake that may halt or pause
+  trading. Three realized-loss daily refusals that remained are removed;
+  their figures stay for alerts and display only:
+  - Risk-settings cash `daily_loss_limit` lock.
+    `DailyRiskAccounting.sync_from_portfolio` still sets `row.locked` and
+    `daily_locked` (dashboard, attention and pre-trade advice read it), but
+    nothing refuses on it: `evaluate_claim_predicate` no longer returns
+    `daily_loss_locked`, `configured_risk_refusal` no longer returns
+    `daily_loss_limit` for the lock, action eligibility no longer returns
+    `BLOCKED_DAILY_LOSS`, paper signal orchestration treats it as passed,
+    and `check_daily_loss_lock` (lock, cash limit, and the 3%
+    `RiskLimits.max_daily_loss_pct` branch) is a WARN, not a BLOCK.
+  - Autonomous-settings `daily_loss_limit_percent` precheck.
+    `autonomous_daily_loss_exceeded` and `autonomous_daily_loss_limit` are
+    gone, and `effective_autonomous_daily_loss_percent` no longer shrinks
+    the sizer's daily cap. The saved percent is kept and shown.
+  - Realized-loss term in sizing. `remaining_daily_budget_percent` returns
+    the profile `daily_loss_limit_percent` without subtracting today's
+    realized loss. The sizer still caps open risk at
+    `min(daily cap, max_aggregate_open_risk_percent) - open risk`, so
+    `budget_exhausted` fires only on concurrent open risk.
+  - Kept (not realized-loss halts): the claim-time reservation check
+    (`max_daily_loss - reserved_daily_loss - actual_daily_loss`; the ledger's
+    `actual_daily_loss` has no writer, so it bounds in-flight planned stop
+    losses), autonomous `max_trades_per_day` and the exposure caps. The
+    weekly-loss BLOCK (`check_weekly_loss`, 8%) is replay-only: only
+    `strategy_replay_engine` sets `weekly_loss_pct`, so no live entry path
+    reaches it. Action eligibility's `BLOCKED_COOLDOWN` is inert the same
+    way: no code in `src` sets `cooldown_active` true.
+- Removed as a refusal (Sofien rule, Griller R5 B2, R6): the 1-hour
+  after-loss cooldown. `paper_loss_cooldown_active` refused every new trade
+  for `PAPER_SIGNAL_COOLDOWN_AFTER_LOSS_SECONDS` (default 3600) after any
+  single losing close, which is a per-trade-loss pause. Now:
+  - The Agent paper path (`agent_paper_execution._check_risk`) no longer
+    checks it and never raises `cooldown_active`.
+  - Paper signal orchestration still reports it in the `cooldown_clear`
+    risk check (detail "advisory only, does not block"), but the check
+    always passes and `cooldown_active` is never a block code.
+  - Arming (`arming_gates.paper_arming_refusal`) no longer reads the
+    cooldown, so `0` is a valid setting and the exit monitor and both
+    autonomous loops arm with it. This supersedes AT-ADR-129's
+    `consecutive_loss_cooldown_invalid` gate; the code stays only so stored
+    `paper_arming` rows render. The cycle-interval gate is unchanged.
+  - The setting is still read as the AT-ADR-128 stale-close window, which
+    now only alerts (see above).
+- Unchanged: sizing, risk-%, stop bands, isolated margin, journaling and
+  the PnL calendar, and infrastructure arms (unreadable kill-switch state,
+  global kill switch, demo protection and lineage holds).
+  `RiskPolicyService.breaker_active` now always returns false, so a stale
+  legacy latch or pause column no longer blocks a profile loosening in
+  governance.
+- Caveats: accounts without a breaker row are not swept. Canonical open
+  paper trades have no unrealized mark in stop equity, so the stop is
+  effectively realized-only for them (see above).
+- Merge acceptance for PR #436 (targeted set only, R7): this ships on a
+  targeted Postgres set plus CI. It does not claim the whole backend
+  Postgres suite is green.
+  - Targeted set: Griller verified 18 files on an isolated Postgres at
+    `1a6be42e`, with 581 passed, 0 failed and 0 skipped.
+  - CI: green at the reviewed head `1a6be42e`. The R7 follow-up commit
+    must also have green CI before merge.
+  - Wider run: the R6 82-file run had 1524 passed and 14 failed. R6 fixed 8
+    of them, all stale cases of
+    `test_sfp_strategy_brain_runtime.py::test_existing_daily_risk_lock_is_authoritative_for_sfp`,
+    which R6 renamed to `test_existing_daily_risk_lock_is_display_only_for_sfp`.
+  - Known leftovers, not treated as #436 regressions:
+    - 2 in `test_stale_demo_entry_reconciliation.py`. They already fail at
+      base `0adae0a5` ("Entry precision proof does not match its immutable
+      fill hash") and are out of scope.
+    - 1 in `test_pr237_migration_aware_rollback.py`. It needs a TCP
+      localhost Postgres and cannot run on the isolated unix-socket
+      database.
+    - 3 timing-sensitive tests that pass in isolation: 2 factory tests in
+      `test_binance_gate_coordination.py` and
+      `test_paper_worker_supervisor.py::test_provider_retry_is_bounded_and_logs_each_attempt`.
+- Reference: `docs/paper_exit_monitor.md`, migrations `a25equitystop001`
+  and `a26equitystop002`.
+
 ## AT-ADR-150 — GPT Live reasoning is voice-scoped
 
 - Date: 2026-10-22
@@ -420,6 +636,10 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 ## AT-ADR-129 — Arming refuses a disabled loss cooldown, a slow cycle, and a silent alert
 
 - Date: 2026-10-20
+- Superseded in part by AT-ADR-152 (R6): the loss-cooldown arming gate
+  (`consecutive_loss_cooldown_invalid`) is removed, because the after-loss
+  cooldown no longer refuses trades. The cycle-interval gate, heartbeat and
+  alerts below still apply.
 - Decision: The paper exit monitor and both autonomous loops refuse to arm
   unless `paper_signal_cooldown_after_loss_seconds` is a finite number
   greater than zero. The reason code is `consecutive_loss_cooldown_invalid`.

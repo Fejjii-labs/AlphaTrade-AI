@@ -148,28 +148,30 @@ def check_max_position_size(
 def check_daily_loss_lock(
     req: RiskCheckRequest, limits: RiskLimits, ctx: RiskEvaluationContext
 ) -> TriggeredRule | None:
+    """Warn only. The 10% account equity stop is the only daily brake (AT-ADR-152)."""
     if ctx.daily_locked:
         return _rule(
             RiskRuleId.MAX_DAILY_LOSS,
-            RiskAction.BLOCK,
-            RiskSeverity.CRITICAL,
-            "Daily loss limit reached; trading is locked for today.",
+            RiskAction.WARN,
+            RiskSeverity.MEDIUM,
+            "Daily loss limit reached (warning only).",
         )
     if ctx.daily_loss_limit is not None and ctx.realized_pnl_today <= -ctx.daily_loss_limit:
         return _rule(
             RiskRuleId.MAX_DAILY_LOSS,
-            RiskAction.BLOCK,
-            RiskSeverity.CRITICAL,
-            "Realized PnL has breached the daily loss limit.",
+            RiskAction.WARN,
+            RiskSeverity.MEDIUM,
+            "Realized PnL has reached the daily loss limit (warning only).",
         )
     if ctx.realized_pnl_today < 0 and req.account_equity > 0:
         loss_pct = abs(ctx.realized_pnl_today) / req.account_equity * Decimal("100")
         if loss_pct >= limits.max_daily_loss_pct:
             return _rule(
                 RiskRuleId.MAX_DAILY_LOSS,
-                RiskAction.BLOCK,
-                RiskSeverity.HIGH,
-                f"Daily loss {loss_pct:.2f}% exceeds limit {limits.max_daily_loss_pct}%.",
+                RiskAction.WARN,
+                RiskSeverity.MEDIUM,
+                f"Daily loss {loss_pct:.2f}% is at or above {limits.max_daily_loss_pct}% "
+                "(warning only).",
             )
     return None
 

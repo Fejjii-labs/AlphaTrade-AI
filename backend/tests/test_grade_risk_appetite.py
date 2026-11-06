@@ -98,7 +98,6 @@ def _breaker() -> BreakerVerdict:
         daily_loss_active=False,
         drawdown_active=False,
         consecutive_loss_active=False,
-        trip_kill_switch=False,
         paused_until=None,
         equity_peak=Decimal("10000"),
         refuse_new_trades=False,
@@ -225,7 +224,6 @@ def test_promotion_bypass_is_limited_to_server_paper_and_demo_kinds() -> None:
                 daily_loss_active=True,
                 drawdown_active=False,
                 consecutive_loss_active=False,
-                trip_kill_switch=False,
                 paused_until=None,
                 equity_peak=Decimal("10000"),
                 refuse_new_trades=True,
@@ -634,17 +632,16 @@ def test_open_book_does_not_invent_daily_budget_or_stop_risk() -> None:
     assert (
         remaining_daily_budget_percent(
             daily_loss_limit_percent=Decimal("6"),
-            realized_pnl=None,
-            equity=Decimal("10000"),
+            equity=Decimal("0"),
         )
         == "daily_budget_uncomputed"
     )
-    # A $500 realized loss on $10,000 uses 5 points of a 6% daily limit.
+    # Realized loss is not subtracted (AT-ADR-152): the full profile limit
+    # stays available for open risk.
     assert remaining_daily_budget_percent(
         daily_loss_limit_percent=Decimal("6"),
-        realized_pnl=Decimal("-500"),
         equity=Decimal("10000"),
-    ) == Decimal("1")
+    ) == Decimal("6")
     assert (
         open_risk_from_stops(
             equity=Decimal("10000"),

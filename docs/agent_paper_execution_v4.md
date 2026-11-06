@@ -35,10 +35,10 @@ quantity, leverage, instrument rules, fees or execution policy overrides.
 
 Shared DailyRiskAccounting includes canonical lifecycle-bound paper journal net
 outcomes, trade counts and open exposure. Imported/unbound journals and legacy
-linked-position mirrors are excluded from these additional totals. The existing
-loss cooldown is shared between the Agent and signal orchestration, and includes
-both legacy position losses and canonical paper journal closes. These limits are
-checked before preparation and again before confirmation.
+linked-position mirrors are excluded from these additional totals. These limits
+are checked before preparation and again before confirmation. The after-loss
+cooldown no longer refuses an Agent paper trade (AT-ADR-152, R6); the 10%
+account daily equity stop is the only loss brake.
 
 `CanonicalTradePlanService` creates the immutable revision and existing
 `ApprovalService` creates its pending decision. The proposal displays entry, stop,

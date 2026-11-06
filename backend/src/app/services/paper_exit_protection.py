@@ -1,10 +1,10 @@
-"""Protect the account after a paper-exit loss the live breakers cannot cover.
+"""Alert on a paper-exit loss the live breakers cannot cover.
 
 The close stays journaled. The live consecutive-loss streak and the daily
-lock are not rewritten from a backfill or from a stale bar clock. New entries
-are refused by the organization kill switch until a human deactivates it.
-The arming is audited as the system. A paper alert and an audit row record
-that refusal. This module does not place an order.
+lock are not rewritten from a backfill or from a stale bar clock. A paper
+alert and an audit row record the loss. A single loss does not arm the kill
+switch (AT-ADR-152); the account daily equity stop is the only loss rule
+that does. This module does not place an order.
 """
 
 from __future__ import annotations
@@ -27,26 +27,11 @@ from app.schemas.common import (
     PaperAlertType,
 )
 from app.schemas.execution_protocol import ClosePaperPlanRequest
-from app.schemas.risk import KillSwitchMutationRequest
 from app.services.audit_service import AuditService
 from app.services.paper_alert_service import PaperAlertService
 from app.services.paper_exit_monitor import ExitMonitorAlert
-from app.services.risk.kill_switch import KillSwitchService
 
 logger = structlog.get_logger(__name__)
-
-BACKFILL_LOSS_KILL_REASON = (
-    "Paper exit monitor journaled a historical backfill with a net loss. "
-    "The loss is not folded into the live streak or the daily lock. "
-    "New entries stay blocked until a human deactivates the kill switch."
-)
-
-STALE_LIVE_LOSS_KILL_REASON = (
-    "Paper exit monitor journaled a losing close whose bar is too old "
-    "for the live loss pause or the daily lock. "
-    "The loss is not folded into the live streak or the daily lock. "
-    "New entries stay blocked until a human deactivates the kill switch."
-)
 
 _ALERT_TYPES = {
     "backfill_loss": PaperAlertType.PAPER_EXIT_BACKFILL_LOSS,
@@ -65,7 +50,7 @@ def build_backfill_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAler
         severity="critical",
         message=(
             "A historical backfill close recorded a net loss. "
-            "New entries are refused until a human deactivates the kill switch."
+            "The close is journaled. The account daily equity stop still applies."
         ),
         fields={
             "exit_origin": "backfill",
@@ -73,7 +58,7 @@ def build_backfill_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAler
             "command_id": str(request.command_id),
             "organization_id": str(request.organization_id),
             "account_id": str(request.account_id),
-            "refusal": "kill_switch",
+            "refusal": "none",
             "dedup_key": f"backfill_loss:{request.organization_id}:{request.command_id}",
         },
     )
@@ -88,7 +73,7 @@ def build_stale_live_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAl
         message=(
             "A losing close is older than the loss pause or one candle, "
             "and younger than a historical backfill. "
-            "New entries are refused until a human deactivates the kill switch."
+            "The close is journaled. The account daily equity stop still applies."
         ),
         fields={
             "exit_origin": "live",
@@ -96,85 +81,62 @@ def build_stale_live_loss_alert(request: ClosePaperPlanRequest) -> ExitMonitorAl
             "command_id": str(request.command_id),
             "organization_id": str(request.organization_id),
             "account_id": str(request.account_id),
-            "refusal": "kill_switch",
+            "refusal": "none",
             "dedup_key": f"stale_live_loss:{request.organization_id}:{request.command_id}",
         },
     )
 
 
-def protect_account_from_backfill_loss(
+def alert_backfill_loss(
     session: Session,
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Alert and arm the kill switch. Does not move the streak or the daily lock.
+    """Alert one losing backfill. Does not arm the kill switch or move the streak.
 
     ``net_pnl`` is accepted so the caller has already required a real loss.
-    The amount is not stored on the alert. The kill switch and the alert
-    share the caller's transaction. A failure rolls the close back with them.
+    The amount is not stored on the alert. The alert shares the caller's
+    transaction.
     """
 
     if not isinstance(net_pnl, Decimal):
-        raise TypeError("backfill loss protection requires a decimal net pnl")
-    return _protect(
-        session,
-        request=request,
-        alert=build_backfill_loss_alert(request),
-        reason=BACKFILL_LOSS_KILL_REASON,
-        settings=settings,
+        raise TypeError("backfill loss alert requires a decimal net pnl")
+    return _alert(
+        session, request=request, alert=build_backfill_loss_alert(request), settings=settings
     )
 
 
-def protect_account_from_stale_live_loss(
+def alert_stale_live_loss(
     session: Session,
     *,
     request: ClosePaperPlanRequest,
     net_pnl: Decimal,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Alert and arm the kill switch for a stale live loss.
-
-    Does not move the streak or the daily lock. ``net_pnl`` is accepted so
-    the caller has already required a loss. The amount is not stored. The
-    kill switch and the alert share the caller's transaction.
-    """
+    """Alert one stale live loss. Does not arm the kill switch or move the streak."""
 
     if not isinstance(net_pnl, Decimal):
-        raise TypeError("stale live loss protection requires a decimal net pnl")
-    return _protect(
-        session,
-        request=request,
-        alert=build_stale_live_loss_alert(request),
-        reason=STALE_LIVE_LOSS_KILL_REASON,
-        settings=settings,
+        raise TypeError("stale live loss alert requires a decimal net pnl")
+    return _alert(
+        session, request=request, alert=build_stale_live_loss_alert(request), settings=settings
     )
 
 
-def _protect(
+def _alert(
     session: Session,
     *,
     request: ClosePaperPlanRequest,
     alert: ExitMonitorAlert,
-    reason: str,
     settings: Settings,
 ) -> ExitMonitorAlert:
-    """Persist the alert and arm the switch as the system, not the trade owner."""
-
     record_exit_monitor_alert(
         session,
         alert,
         organization_id=request.organization_id,
         user_id=request.user_id,
         settings=settings,
-    )
-    KillSwitchService(session, AuditService(session), settings).activate(
-        organization_id=request.organization_id,
-        actor_user_id=request.user_id,
-        payload=KillSwitchMutationRequest(confirm=True, reason=reason),
-        actor_type=ActorType.SYSTEM,
-        source="exit_monitor",
     )
     logger.warning("paper_exit_monitor_alert", **alert.as_log())
     return alert

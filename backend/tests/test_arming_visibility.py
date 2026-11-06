@@ -171,7 +171,22 @@ def test_flags_stay_off() -> None:
     assert settings.enable_real_trading is False
 
 
-def test_boot_records_a_cooldown_refusal_and_sends_one_alert(
+def test_boot_with_a_zero_cooldown_records_no_refusal() -> None:
+    """A zero after-loss cooldown arms both loops (AT-ADR-152, R6)."""
+
+    settings = _settings(
+        paper_exit_monitor_enabled=True,
+        autonomous_internal_paper_enabled=True,
+        paper_signal_cooldown_after_loss_seconds=0,
+    )
+    posture = describe_boot_arming(settings, exit_monitor_attached=True)
+    assert posture.refused is False
+    assert posture.reason == ""
+    assert posture.source == "exit_monitor"
+    assert posture.exit_monitor_attached is True
+
+
+def test_boot_records_a_cycle_refusal_and_sends_one_alert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reset_safety_alert_dedup()
@@ -187,7 +202,8 @@ def test_boot_records_a_cooldown_refusal_and_sends_one_alert(
     settings = _settings(
         paper_exit_monitor_enabled=True,
         autonomous_internal_paper_enabled=True,
-        paper_signal_cooldown_after_loss_seconds=0,
+        watcher_paper_poll_interval_seconds=120,
+        paper_signal_allowed_timeframes=["1m"],
     )
     posture = publish_boot_arming_posture(
         settings,
@@ -195,9 +211,9 @@ def test_boot_records_a_cooldown_refusal_and_sends_one_alert(
         now=_NOW,
     )
     assert posture is not None
-    assert posture.reason == COOLDOWN_INVALID
+    assert posture.reason == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
     assert posture.source == "autonomous+exit_monitor"
-    assert published[0] == (PAPER_ARMING_COMPONENT, "refused", COOLDOWN_INVALID)
+    assert published[0] == (PAPER_ARMING_COMPONENT, "refused", CYCLE_INTERVAL_EXCEEDS_TIMEFRAME)
     assert sent == []
     publish_boot_arming_posture(settings, exit_monitor_attached=False, now=_NOW)
     assert sent == []
@@ -639,7 +655,8 @@ def test_unattached_monitor_heartbeat_is_deleted_when_the_loop_refuses(
         update={
             "paper_exit_monitor_enabled": True,
             "autonomous_internal_paper_enabled": True,
-            "paper_signal_cooldown_after_loss_seconds": 0,
+            "watcher_paper_poll_interval_seconds": 120,
+            "paper_signal_allowed_timeframes": ["1m"],
         }
     )
     moment = datetime.now(UTC)
@@ -955,7 +972,8 @@ def test_disarmed_reboot_clears_an_armed_monitor_and_a_refusal(
     )
     refused = _settings(
         paper_exit_monitor_enabled=True,
-        paper_signal_cooldown_after_loss_seconds=0,
+        watcher_paper_poll_interval_seconds=120,
+        paper_signal_allowed_timeframes=["1m"],
         telegram_bot_token=base.telegram_bot_token,
         telegram_chat_id=base.telegram_chat_id,
     )

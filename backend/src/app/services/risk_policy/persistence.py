@@ -72,16 +72,6 @@ def _pause_active(paused_until: datetime | None, now: datetime) -> bool:
     return _as_utc(paused_until) > _as_utc(now)
 
 
-def _kept_pause(
-    stored: datetime | None, proposed: datetime | None, now: datetime
-) -> datetime | None:
-    """Keep a pause that is still in the future. Do not clear or shorten it."""
-
-    if stored is not None and _pause_active(stored, now):
-        return _as_utc(stored)
-    return proposed
-
-
 class RiskPolicyService:
     """Read, propose, and apply grade-based risk profiles for one organization."""
 
@@ -268,19 +258,15 @@ class RiskPolicyService:
         )
 
     def breaker_active(self, *, organization_id: uuid.UUID, now: datetime) -> bool:
-        rows = self._session.scalars(
-            select(RiskPolicyBreakerState).where(
-                RiskPolicyBreakerState.organization_id == organization_id
-            )
-        ).all()
-        moment = _as_utc(now)
-        for row in rows:
-            if row.drawdown_latched:
-                return True
-            if _pause_active(row.daily_paused_until, moment):
-                return True
-            if _pause_active(row.consecutive_paused_until, moment):
-                return True
+        """Always False: no loss breaker refuses anything (AT-ADR-152).
+
+        The drawdown latch and the daily and consecutive pause columns are no
+        longer written. A stale value left by an older build must not block
+        a profile loosening; the 10% account equity stop arms the kill switch
+        instead.
+        """
+
+        del organization_id, now
         return False
 
     def breaker_covered(self, *, organization_id: uuid.UUID, moment: datetime) -> bool:
@@ -439,21 +425,6 @@ class RiskPolicyService:
                 occurred_at=occurred_at,
             )
         )
-        self._session.flush()
-
-    def latch_drawdown(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        account_id: uuid.UUID,
-        equity_peak: Decimal,
-        now: datetime,
-    ) -> None:
-        row = self._breaker_row(organization_id, account_id, equity_peak, now)
-        row.drawdown_latched = True
-        row.equity_peak = equity_peak
-        row.updated_at = now
-        self._open_breaker(organization_id, account_id, "drawdown", now)
         self._session.flush()
 
     def bind_grade(
@@ -668,20 +639,8 @@ class RiskPolicyService:
         now: datetime,
     ) -> RiskPolicyBreakerState:
         row = self._breaker_row(organization_id, account_id, equity_peak, now)
-        # A scan cannot clear these. Drawdown ends only in ``reset_drawdown_latch``.
-        # Each pause ends at its stored expiry. The consecutive pause can also
-        # end in ``reset_consecutive_losses``, which does not call this method.
-        if row.drawdown_latched:
-            drawdown_latched = True
-        pause_held = row.consecutive_paused_until is not None and _pause_active(
-            row.consecutive_paused_until, now
-        )
-        if pause_held and consecutive_losses < int(row.consecutive_losses):
-            consecutive_losses = int(row.consecutive_losses)
-        daily_paused_until = _kept_pause(row.daily_paused_until, daily_paused_until, now)
-        consecutive_paused_until = _kept_pause(
-            row.consecutive_paused_until, consecutive_paused_until, now
-        )
+        # Stored as given. The trip writer passes no pause and no latch
+        # (AT-ADR-152), so a legacy pause or latch ends at the next persist.
         row.equity_peak = equity_peak
         row.consecutive_losses = consecutive_losses
         row.realized_pnl = realized_pnl

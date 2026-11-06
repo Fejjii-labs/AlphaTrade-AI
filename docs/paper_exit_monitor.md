@@ -176,22 +176,73 @@ A losing close that is labelled live, and that is older than the cooldown
 or older than one candle, does not call that note. The bar clock would
 write a pause that has already expired, or a daily lock on the previous
 UTC day. The close stays journaled with `exit_origin=live`. The path raises
-`paper_exit_stale_loss` and arms the organization kill switch (AT-ADR-128).
-Writing the breakers at the current database time was the other option and
-is not used. A replay does not ask again. A zero result does not arm the
-switch.
+`paper_exit_stale_loss` (alert and audit only). Since AT-ADR-152 it does not
+arm the kill switch; AT-ADR-128's arming is superseded. Writing the breakers
+at the current database time was the other option and is not used. A replay
+does not ask again. A zero result does not alert.
 
 A backfill is journaled and does not call that note, so it does not move
 the streak or the daily lock, and it is not an ADR-109 calibration sample.
-A backfill with a net loss still protects the account: the close path raises
-the structured alert `paper_exit_backfill_loss` and arms the organization
-kill switch, which refuses new entries until a human deactivates it
-(AT-ADR-127). A winning or zero backfill does not. Noting the loss onto the
+A backfill with a net loss raises the structured alert
+`paper_exit_backfill_loss` (alert and audit only, `refusal=none`). Since
+AT-ADR-152 it does not arm the kill switch; AT-ADR-127's arming is
+superseded. A winning or zero backfill does not alert. Noting the loss onto the
 live streak or the daily lock was the other option and is not used, because
 those figures are dated from the old bar and do not block today's entries.
 This path does not insert a calibration row for a live close either: the
-walk-forward fold is not known here. Both kill-switch armings are audited
-as the system. The trade owner is not stored as the person who armed it.
+walk-forward fold is not known here. Both alerts are audited as the system.
+
+The one loss rule that arms the kill switch is the account daily equity
+stop (AT-ADR-152): stop equity more than
+`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10) below the 00:00 UTC
+baseline. Stop equity is `default_account_balance` plus all-time realized
+PnL plus the unrealized PnL of open legacy positions. Canonical open paper
+trades carry no unrealized mark yet, so for them the stop is effectively
+realized-only until a mark feed exists (https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437); such marks must then obey the same
+freshness bound. The baseline and every check use that one function; the risk-settings timezone does not enter it. Each
+exit-monitor pass snapshots the baseline and enforces the stop for every
+account with a breaker row, on the trusted database clock, in dry-run too.
+
+It fails closed and arms on: unreadable equity (`equity_unreadable`); an
+open position whose row is older than
+`ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` (default 900), a stale mark
+(`equity_stale`); or a baseline from an earlier day after
+`ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` (default 900) past midnight
+(`baseline_stale`). A row that was never snapshotted (`day_start_on` NULL)
+seeds its baseline without tripping. The audit row is
+`kill_switch_triggered` with `resource_type=account_equity_stop` and
+`reason=ACCOUNT_DAILY_DRAWDOWN`, carrying cause, baseline, equity, drawdown
+and threshold percents. The switch arms at most once per UTC day, is armed
+as the system, and only a human deactivation clears it.
+
+The automated paper loop also refuses new entries (`breaker_active`) while
+any breaker row's baseline is for an earlier UTC day past the grace window,
+so entries stay guarded if this pass stalls. Each successful sweep writes
+the `controlled_runtime_status` row `account_equity_stop_sweep`.
+`GET /health/paper-worker` raises `account_equity_stop_sweep_missing` or
+`account_equity_stop_sweep_stale` when that row is absent or older than
+`ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` (default 900), and a sweep
+that raises sends `account_equity_stop_sweep_failed`. A breaker row with no
+matching execution account is never swept; the entry gate ignores it and
+each sweep sends `account_equity_stop_orphan_breaker_rows` (6 h cooldown).
+These are mandatory Telegram safety codes. Changing
+`default_account_balance` in risk settings leaves today's baseline
+unchanged: checks on that day keep using the balance inside the baseline
+(`day_start_balance`), and the new balance enters at the next UTC day's
+snapshot. Each edit writes an `account_equity_stop_baseline` audit row per
+account; it does not clear the kill switch.
+
+This stop is the only loss rule that halts trading. The profile breaker's
+peak drawdown latch, daily-loss pause and consecutive-loss pause were
+removed (AT-ADR-152); their figures are still recorded but do not refuse
+entries. The streak and daily-lock notes above only move those figures.
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| `account_equity_stop_threshold_percent` | `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` | `10` |
+| `account_equity_stop_baseline_grace_seconds` | `ACCOUNT_EQUITY_STOP_BASELINE_GRACE_SECONDS` | `900` |
+| `account_equity_stop_mark_max_age_seconds` | `ACCOUNT_EQUITY_STOP_MARK_MAX_AGE_SECONDS` | `900` |
+| `account_equity_stop_sweep_stale_after_seconds` | `ACCOUNT_EQUITY_STOP_SWEEP_STALE_AFTER_SECONDS` | `900` |
 
 A human close leaves those fields unset.
 
@@ -229,16 +280,16 @@ monitor flags stay default false.
 ## Arming gates
 
 The monitor is not attached, and `run_configured_exit_monitor` returns
-`refused` before any database or candle read, unless both of these hold:
+`refused` before any database or candle read, unless
+`watcher_paper_poll_interval_seconds` is not longer than the smallest entry
+in `paper_signal_allowed_timeframes`. A longer interval, or a timeframe list
+that cannot be read, refuses with `cycle_interval_exceeds_timeframe`. An
+interval equal to that candle is still allowed.
 
-- `paper_signal_cooldown_after_loss_seconds` is a finite number greater
-  than zero. Zero, a negative number, and a non-finite number refuse with
-  `consecutive_loss_cooldown_invalid`.
-- `watcher_paper_poll_interval_seconds` is not longer than the smallest
-  entry in `paper_signal_allowed_timeframes`. A longer interval, or a
-  timeframe list that cannot be read, refuses with
-  `cycle_interval_exceeds_timeframe`. An interval equal to that candle is
-  still allowed.
+The after-loss cooldown (`paper_signal_cooldown_after_loss_seconds`) no
+longer gates arming (AT-ADR-152, R6; replaces that part of AT-ADR-129). It
+refuses no trade anywhere, so `0` is a valid setting and arms.
+`consecutive_loss_cooldown_invalid` is no longer emitted.
 
 The same two checks refuse `resolve_autonomous_mode` when either autonomous
 flag is set. Production still refuses those flags, and both monitor flags
@@ -295,7 +346,7 @@ back, the dropped page is logged at error. A kill-switch page is not sent
 when its activation rolls back.
 
 Kill-switch activations from the manual route, the global setting, the
-drawdown breaker, the other breaker and demo-protection paths, and a
+account daily equity stop, the other breaker and demo-protection paths, and a
 fail-closed read use that same redacted, deduplicated Telegram path. The
 free-text reason is not copied. No P&L amount is included. A committed
 activation is marked unsent in the same transaction, in a savepoint, one

@@ -1,4 +1,4 @@
-"""Stored plans re-check breakers and current limits before approval."""
+"""Stored plans re-check the equity-stop entry gate and current limits before approval."""
 
 from __future__ import annotations
 
@@ -117,41 +117,52 @@ def _execute(loop, session):
     )
 
 
-def test_paper_stored_plan_refuses_a_daily_pause_set_after_sizing(monkeypatch) -> None:
-    session = _session()
-    _pause(session, daily=NOW + timedelta(hours=4), consecutive=None, latched=False)
-    proof = _execute(_loop(AutomatedPaperLoop, monkeypatch), session)
-    assert proof.stage == "blocked"
-    assert proof.reason_code == "breaker_active"
-
-
-def test_paper_stored_plan_refuses_a_drawdown_latch_after_the_kill_switch_is_off(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("daily", "consecutive", "latched"),
+    [
+        (NOW + timedelta(hours=4), None, False),
+        (None, NOW + timedelta(hours=4), False),
+        (None, None, True),
+    ],
+)
+def test_a_legacy_pause_or_latch_no_longer_refuses_entries(
+    daily: datetime | None, consecutive: datetime | None, latched: bool
 ) -> None:
+    from app.services.automated_paper_loop import _breaker_refusing
+
     session = _session()
-    _pause(session, daily=None, consecutive=None, latched=True)
-    loop = _loop(AutomatedPaperLoop, monkeypatch)
-    assert loop._observed_kill_switch is False
-    proof = _execute(loop, session)
-    assert proof.reason_code == "breaker_active"
+    _pause(session, daily=daily, consecutive=consecutive, latched=latched)
+    assert _breaker_refusing(session, ORG, NOW) is False
 
 
-def test_demo_stored_plan_refuses_a_consecutive_pause_set_after_sizing(monkeypatch) -> None:
-    session = _session()
-    _pause(session, daily=None, consecutive=NOW + timedelta(hours=4), latched=False)
-    proof = _execute(_loop(GovernedBloFinDemoLoop, monkeypatch), session)
-    assert proof.stage == "blocked"
-    assert proof.reason_code == "breaker_active"
-
-
-def test_demo_stored_plan_refuses_a_drawdown_latch_after_the_kill_switch_is_off(
-    monkeypatch,
+@pytest.mark.parametrize("cls", [AutomatedPaperLoop, GovernedBloFinDemoLoop])
+def test_stored_plan_refuses_an_equity_stop_baseline_overdue_after_sizing(
+    cls: type, monkeypatch
 ) -> None:
+    from app.db.models import ExecutionAccount, User
+
     session = _session()
-    _pause(session, daily=None, consecutive=None, latched=True)
-    loop = _loop(GovernedBloFinDemoLoop, monkeypatch)
-    assert loop._observed_kill_switch is False
-    proof = _execute(loop, session)
+    user, account = uuid4(), uuid4()
+    session.add(User(id=user, email=f"{uuid4()}@example.com", hashed_password="fixture"))
+    session.flush()
+    session.add(ExecutionAccount(id=account, organization_id=ORG, user_id=user, name="paper"))
+    row = RiskPolicyService(session, AuditService(session)).record_breaker(
+        organization_id=ORG,
+        account_id=account,
+        equity_peak=Decimal("10000"),
+        consecutive_losses=0,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
+        now=NOW,
+    )
+    row.day_start_equity = Decimal("10000")
+    row.day_start_on = NOW.date() - timedelta(days=1)
+    session.flush()
+    proof = _execute(_loop(cls, monkeypatch), session)
+    assert proof.stage == "blocked"
     assert proof.reason_code == "breaker_active"
 
 

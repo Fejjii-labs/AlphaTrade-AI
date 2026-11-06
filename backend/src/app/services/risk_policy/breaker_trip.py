@@ -1,14 +1,15 @@
 """Call ``record_breaker`` from server figures.
 
-Drawdown, consecutive-loss, and daily-loss pauses stay inert until something
-writes them. This module is that writer for an active profile. It does not
-reset a drawdown latch and it does not place an order.
+This module writes the informational drawdown, daily-loss and loss-streak
+figures for an active profile. None of them refuses or pauses new trades;
+the peak latch and both pauses were removed (AT-ADR-152). Each persist also
+runs the account daily equity stop, the only loss rule that halts trading.
+It does not place an order.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -22,8 +23,6 @@ from app.services.risk_policy.breakers import (
     BreakerVerdict,
     evaluate_breakers,
 )
-from app.services.risk_policy.clock import next_utc_day
-from app.services.risk_policy.errors import RiskPolicyRejected
 from app.services.risk_policy.profile import RiskPolicyProfile
 
 
@@ -68,32 +67,6 @@ def streak_after_expiry(
     return consecutive_losses
 
 
-def consecutive_pause_expiry(
-    now: datetime,
-    *,
-    cooldown_hours: int,
-    existing_paused_until: datetime | None,
-) -> datetime:
-    """Set the pause once. A later scan keeps the stored expiry.
-
-    The deadline is the later of the next UTC midnight and ``cooldown_hours``
-    after the first trip. Default cooldown is 24 hours.
-    """
-
-    if now.tzinfo is None:
-        raise RiskPolicyRejected("timestamp_must_be_aware")
-    current = _as_utc(now)
-    if existing_paused_until is not None and _as_utc(existing_paused_until) > current:
-        return _as_utc(existing_paused_until)
-    if (
-        isinstance(cooldown_hours, bool)
-        or not isinstance(cooldown_hours, int)
-        or cooldown_hours < 1
-    ):
-        raise RiskPolicyRejected("consecutive_loss_cooldown_invalid")
-    return max(next_utc_day(current), current + timedelta(hours=cooldown_hours))
-
-
 def profile_close_consecutive(
     current: int,
     net_pnl: Decimal,
@@ -114,18 +87,6 @@ def profile_close_consecutive(
     return 0
 
 
-# Audited reason stored on the organization kill switch. A later scan does
-# not replace it and does not clear the switch.
-DRAWDOWN_KILL_REASON = (
-    "Profile drawdown breaker tripped; new entries stay blocked until a human "
-    "deactivates the kill switch"
-)
-
-
-def _pause_still_in_force(paused_until: datetime | None, now: datetime) -> bool:
-    return paused_until is not None and _as_utc(paused_until) > _as_utc(now)
-
-
 def trip_breakers(
     recorder: BreakerRecorder,
     *,
@@ -134,49 +95,15 @@ def trip_breakers(
     config: BreakerConfig,
     snapshot: BreakerSnapshot,
     now: datetime,
-    existing_consecutive_paused_until: datetime | None = None,
-    existing_daily_paused_until: datetime | None = None,
-    cooldown_hours: int = 24,
 ) -> BreakerVerdict:
-    """Evaluate one snapshot and persist it. A latched drawdown stays latched.
+    """Evaluate one snapshot and persist its figures. Writes no pause and no latch.
 
-    The consecutive pause and the daily pause are each written once. A scan
-    while either timestamp is still in the future does not move it and does
-    not clear it. The daily pause ends at its stored expiry. The consecutive
-    pause ends at its stored expiry or at ``reset_consecutive_losses``. After
-    the consecutive pause expires the caller passes a cleared streak; this
-    function does not invent a new pause for a count of zero.
+    The peak drawdown latch, the daily-loss pause and the consecutive-loss
+    pause were removed (AT-ADR-152). The stored pause columns and the latch
+    are written cleared, so a legacy pause or latch ends at the next persist.
     """
 
     verdict = evaluate_breakers(config, snapshot)
-    existing_pause = existing_consecutive_paused_until
-    pause_still_in_force = _pause_still_in_force(existing_pause, now)
-    if verdict.consecutive_loss_active:
-        consecutive_until = consecutive_pause_expiry(
-            now,
-            cooldown_hours=cooldown_hours,
-            existing_paused_until=existing_pause,
-        )
-    elif pause_still_in_force:
-        # A close or a scan cannot end an unexpired pause. Only the human
-        # reset, or the expiry itself, does that.
-        assert existing_pause is not None
-        consecutive_until = _as_utc(existing_pause)
-    else:
-        consecutive_until = None
-    daily_existing = existing_daily_paused_until
-    if _pause_still_in_force(daily_existing, now):
-        # Recovered PnL on the same UTC day does not end the daily pause.
-        # There is no early reset. The stored timestamp is the expiry.
-        assert daily_existing is not None
-        daily_until = _as_utc(daily_existing)
-    elif verdict.daily_loss_active:
-        daily_until = next_utc_day(_as_utc(now))
-    else:
-        daily_until = None
-    pause_held = daily_until is not None or consecutive_until is not None
-    if pause_held and not verdict.refuse_new_trades:
-        verdict = replace(verdict, refuse_new_trades=True)
     recorder.record_breaker(
         organization_id=organization_id,
         account_id=account_id,
@@ -184,9 +111,9 @@ def trip_breakers(
         consecutive_losses=snapshot.consecutive_losses,
         realized_pnl=snapshot.realized_pnl_today,
         unrealized_pnl=snapshot.unrealized_pnl_today,
-        daily_paused_until=daily_until,
-        consecutive_paused_until=consecutive_until,
-        drawdown_latched=verdict.drawdown_active,
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
         now=now,
     )
     return verdict
@@ -203,12 +130,12 @@ def persist_profile_breakers(
     consecutive_losses: int | None = None,
     settings: Settings | None = None,
 ) -> bool:
-    """Sync daily figures, then trip. Returns whether new trades are refused.
+    """Sync daily figures, then run the equity stop. Returns whether new trades are refused.
 
-    A new drawdown trip arms the organization kill switch. A later scan
-    does not deactivate it and does not arm it again while the latch
-    remains, so a human deactivation stays off. Only
-    ``KillSwitchService.deactivate`` turns it off.
+    Only the account daily equity stop refuses here, by arming the kill
+    switch at most once per UTC day; only ``KillSwitchService.deactivate``
+    turns it off. Unusable risk-day equity also refuses this call (fail
+    closed) without latching anything.
     """
 
     from app.services.audit_service import AuditService
@@ -223,14 +150,12 @@ def persist_profile_breakers(
     ).sync_from_portfolio(organization_id=organization_id, user_id=user_id)
     equity = daily.account_equity
     if not isinstance(equity, Decimal) or not equity.is_finite() or equity <= 0:
-        # A close that ruins the book must still latch drawdown and the streak.
-        # Returning here used to refuse without writing either.
-        return _latch_ruined_equity(
+        # A close that ruins the book still records the streak and fails closed.
+        return _record_ruined_equity(
             session,
             organization_id=organization_id,
             user_id=user_id,
             account_id=account_id,
-            profile=profile,
             now=now,
             consecutive_losses=consecutive_losses,
             realized_pnl=daily.realized_pnl,
@@ -243,25 +168,13 @@ def persist_profile_breakers(
     if row is not None and isinstance(row.equity_peak, Decimal) and row.equity_peak > 0:
         peak = row.equity_peak
     stored = 0 if row is None else int(row.consecutive_losses)
-    existing_pause = None if row is None else getattr(row, "consecutive_paused_until", None)
-    existing_daily = None if row is None else getattr(row, "daily_paused_until", None)
-    if consecutive_losses is None:
-        consecutive = streak_after_expiry(stored, existing_pause, now)
-    else:
-        consecutive = consecutive_losses
-    kept_pause = existing_pause if _pause_still_in_force(existing_pause, now) else None
-    kept_daily = existing_daily if _pause_still_in_force(existing_daily, now) else None
-    # A paper or demo close may pass a reset count. While the pause is in
-    # the future that count cannot fall. A loss, which is larger, still counts.
-    if kept_pause is not None and consecutive < stored:
-        consecutive = stored
-    latched = False if row is None else bool(row.drawdown_latched)
+    consecutive = stored if consecutive_losses is None else consecutive_losses
     realized = daily.realized_pnl
     unrealized = daily.unrealized_pnl
     reference = equity - realized - unrealized
     if reference <= 0:
         reference = equity
-    verdict = trip_breakers(
+    trip_breakers(
         service,
         organization_id=organization_id,
         account_id=account_id,
@@ -277,25 +190,19 @@ def persist_profile_breakers(
             realized_pnl_today=realized,
             unrealized_pnl_today=unrealized,
             consecutive_losses=consecutive,
-            drawdown_latched=latched,
+            drawdown_latched=False,
             now=now,
         ),
         now=now,
-        existing_consecutive_paused_until=kept_pause,
-        existing_daily_paused_until=kept_daily,
-        cooldown_hours=profile.consecutive_loss_cooldown_hours,
     )
-    # ``latched`` is the row from before this scan. Arm only on the trip
-    # that sets the latch. A later scan, including one after a human
-    # deactivation, does not call activate again.
-    if verdict.trip_kill_switch and not latched:
-        _arm_drawdown_kill_switch(
-            session,
-            organization_id=organization_id,
-            user_id=user_id,
-            settings=settings,
-        )
-    return verdict.refuse_new_trades
+    return _enforce_equity_stop(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        now=now,
+        settings=settings,
+    )
 
 
 def _finite_money(value: object) -> Decimal:
@@ -304,23 +211,23 @@ def _finite_money(value: object) -> Decimal:
     return Decimal("0")
 
 
-def _latch_ruined_equity(
+def _record_ruined_equity(
     session: Session,
     *,
     organization_id: UUID,
     user_id: UUID,
     account_id: UUID,
-    profile: RiskPolicyProfile,
     now: datetime,
     consecutive_losses: int | None,
     realized_pnl: object,
     unrealized_pnl: object,
     settings: Settings | None,
 ) -> bool:
-    """Arm the profile breaker when equity is missing, non-finite, or not positive.
+    """Fail closed when risk-day equity is missing, non-finite, or not positive.
 
-    The drawdown latch and the loss streak are written. The kill switch arms
-    on the trip that sets the latch. New trades are refused.
+    The loss streak and figures are written; nothing latches. The account
+    daily equity stop then runs on its own UTC equity reading, which arms
+    the kill switch when that reading is unusable. This call refuses.
     """
 
     from app.services.audit_service import AuditService
@@ -329,76 +236,55 @@ def _latch_ruined_equity(
     service = RiskPolicyService(session, AuditService(session))
     row = service.load_breaker(organization_id=organization_id, account_id=account_id)
     stored = 0 if row is None else int(row.consecutive_losses)
-    existing_pause = None if row is None else getattr(row, "consecutive_paused_until", None)
-    existing_daily = None if row is None else getattr(row, "daily_paused_until", None)
-    if consecutive_losses is None:
-        consecutive = streak_after_expiry(stored, existing_pause, now)
-    else:
-        consecutive = consecutive_losses
-    kept_pause = existing_pause if _pause_still_in_force(existing_pause, now) else None
-    kept_daily = existing_daily if _pause_still_in_force(existing_daily, now) else None
-    if kept_pause is not None and consecutive < stored:
-        consecutive = stored
-    latched = False if row is None else bool(row.drawdown_latched)
     peak = Decimal("1")
     stored_peak = None if row is None else row.equity_peak
     if isinstance(stored_peak, Decimal) and stored_peak.is_finite() and stored_peak > 0:
         peak = stored_peak
-    if consecutive >= profile.consecutive_loss_limit:
-        consecutive_until = consecutive_pause_expiry(
-            now,
-            cooldown_hours=profile.consecutive_loss_cooldown_hours,
-            existing_paused_until=kept_pause,
-        )
-    elif kept_pause is not None:
-        consecutive_until = _as_utc(kept_pause)
-    else:
-        consecutive_until = None
     service.record_breaker(
         organization_id=organization_id,
         account_id=account_id,
         equity_peak=peak,
-        consecutive_losses=consecutive,
+        consecutive_losses=stored if consecutive_losses is None else consecutive_losses,
         realized_pnl=_finite_money(realized_pnl),
         unrealized_pnl=_finite_money(unrealized_pnl),
-        daily_paused_until=_as_utc(kept_daily) if kept_daily is not None else None,
-        consecutive_paused_until=consecutive_until,
-        drawdown_latched=True,
+        daily_paused_until=None,
+        consecutive_paused_until=None,
+        drawdown_latched=False,
         now=now,
     )
-    if not latched:
-        _arm_drawdown_kill_switch(
-            session,
-            organization_id=organization_id,
-            user_id=user_id,
-            settings=settings,
-        )
+    _enforce_equity_stop(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+        account_id=account_id,
+        now=now,
+        settings=settings,
+    )
     return True
 
 
-def _arm_drawdown_kill_switch(
+def _enforce_equity_stop(
     session: Session,
     *,
     organization_id: UUID,
     user_id: UUID,
+    account_id: UUID,
+    now: datetime,
     settings: Settings | None,
-) -> None:
-    """Arm the existing organization switch. Already-on is a no-op.
+) -> bool:
+    """Run the account daily equity stop on its own UTC equity reading.
 
-    ``KillSwitchService.activate`` returns the current row without a new
-    audit event when the switch is already active. This function never
-    calls deactivate.
+    The stop does not use the risk-day ``account_equity`` the pauses above
+    read: that figure's realized PnL follows the user's timezone.
     """
 
-    from app.core.config import get_settings
-    from app.schemas.risk import KillSwitchMutationRequest
-    from app.services.audit_service import AuditService
-    from app.services.risk.kill_switch import KillSwitchService
+    from app.services.risk_policy.equity_stop import enforce_account_equity_stop_from_books
 
-    resolved = get_settings() if settings is None else settings
-    KillSwitchService(session, AuditService(session), resolved).activate(
+    return enforce_account_equity_stop_from_books(
+        session,
         organization_id=organization_id,
-        actor_user_id=user_id,
-        payload=KillSwitchMutationRequest(confirm=True, reason=DRAWDOWN_KILL_REASON),
-        source="drawdown",
+        user_id=user_id,
+        account_id=account_id,
+        now=now,
+        settings=settings,
     )

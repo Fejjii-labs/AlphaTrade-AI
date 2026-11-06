@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app.api.routes.risk_policy import router as risk_policy_router
 from app.core.dependencies import (
@@ -30,6 +33,7 @@ from app.schemas.risk import (
 )
 from app.security.rate_limit import tenant_rate_limit_dependency
 from app.security.rbac import OwnerDep, ReaderDep, TraderDep
+from app.security.tenant import TenantContext
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 router.include_router(risk_policy_router)
@@ -82,11 +86,13 @@ async def update_risk_settings(
     session: SessionDep,
 ) -> UserRiskSettingsResponse:
     try:
+        before = service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
         result = service.update(
             payload,
             organization_id=tenant.organization_id,
             user_id=tenant.user_id,
         )
+        _record_balance_edit(session, tenant, before, result)
         session.commit()
         return result
     except ValueError as exc:
@@ -104,10 +110,12 @@ async def reset_risk_settings(
     service: RiskSettingsServiceDep,
     session: SessionDep,
 ) -> UserRiskSettingsResponse:
+    before = service.get(organization_id=tenant.organization_id, user_id=tenant.user_id)
     result = service.reset_defaults(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,
     )
+    _record_balance_edit(session, tenant, before, result)
     session.commit()
     return result
 
@@ -219,4 +227,33 @@ async def evaluate_loss_acceptance(
     return loss_service.evaluate(
         planned_loss_amount=request.planned_loss_amount,
         request=request,
+    )
+
+
+def _record_balance_edit(
+    session: Session,
+    tenant: TenantContext,
+    before: UserRiskSettingsResponse,
+    after: UserRiskSettingsResponse,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Audit a balance edit for the equity stop (AT-ADR-152).
+
+    Today's baseline is left unchanged; the new balance applies from the
+    next UTC day's snapshot. The kill switch is never deactivated here.
+    """
+
+    if before.default_account_balance == after.default_account_balance:
+        return
+    from app.services.risk_policy.equity_stop import record_balance_edit
+
+    record_balance_edit(
+        session,
+        organization_id=tenant.organization_id,
+        user_id=tenant.user_id,
+        before_balance=before.default_account_balance,
+        after_balance=after.default_account_balance,
+        now=now or datetime.now(UTC),
+        actor_role=str(tenant.membership_role),
     )

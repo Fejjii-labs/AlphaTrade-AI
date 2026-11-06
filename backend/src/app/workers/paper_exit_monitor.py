@@ -167,6 +167,7 @@ def run_configured_exit_monitor(
         session.rollback()
     finally:
         session.close()
+    _sweep_account_equity_stops(factory, settings, evaluated_at)
     loader = PaperExitCandleLoader(settings)
 
     def candles(trade: OpenInternalPaperTrade) -> FetchedBars:
@@ -487,6 +488,85 @@ class _RefusingCloser(PaperExitCloser):
 
     def close(self, request: ClosePaperPlanRequest) -> ClosePaperPlanResult:
         raise RuntimeError("paper exit monitor dry-run attempted a close")
+
+
+def _sweep_account_equity_stops(
+    factory: sessionmaker[Session], settings: Settings, now: datetime
+) -> None:
+    """Snapshot the 00:00 UTC equity baselines and enforce the daily stop (AT-ADR-152).
+
+    Runs on the trusted database clock, in dry-run too: it never closes a
+    trade. A success publishes the sweep heartbeat that
+    ``GET /health/paper-worker`` watches. A failure raises the
+    ``account_equity_stop_sweep_failed`` alert; the entry gate and the next
+    scan fail closed once the baseline goes stale after the grace window.
+    """
+
+    from app.services.risk_policy.equity_stop import (
+        EQUITY_STOP_SWEEP_COMPONENT,
+        SWEEP_FAILED_CODE,
+        orphan_breaker_rows,
+        orphan_breaker_rows_alert,
+        sweep_account_equity_stops,
+    )
+
+    session = factory()
+    try:
+        armed = sweep_account_equity_stops(session, now=now, settings=settings)
+        orphans = orphan_breaker_rows(session)
+        session.commit()
+        if armed:
+            logger.warning("account_equity_stop_sweep_armed", armed=armed)
+    except Exception as exc:
+        session.rollback()
+        error = redact_text(str(exc))[:200]
+        logger.error("account_equity_stop_sweep_failed", error=error)
+        from app.services.safety_alerts import deliver_observed_alert_outside_transaction
+
+        deliver_observed_alert_outside_transaction(
+            settings,
+            ExitMonitorAlert(
+                code=SWEEP_FAILED_CODE,
+                severity="critical",
+                message=(
+                    "Account equity stop sweep failed. The daily stop was not "
+                    "checked this cycle; new entries fail closed once the "
+                    "baseline is stale."
+                ),
+                fields={"error": error, "dedup_key": SWEEP_FAILED_CODE},
+            ),
+        )
+        return
+    finally:
+        session.close()
+    orphan_alert = orphan_breaker_rows_alert(orphans)
+    if orphan_alert is not None:
+        logger.error("account_equity_stop_orphan_breaker_rows", **orphan_alert.fields)
+        try:
+            from app.services.safety_alerts import deliver_safety_alert
+
+            deliver_safety_alert(settings, orphan_alert, now=now)
+        except Exception as exc:
+            logger.error(
+                "safety_alert_telegram_failed",
+                code=orphan_alert.code,
+                error=redact_text(str(exc))[:200],
+            )
+    try:
+        from app.persistence.runtime_status import RuntimeStatusWrite, publish_runtime_status
+
+        publish_runtime_status(
+            factory,
+            RuntimeStatusWrite(
+                component=EQUITY_STOP_SWEEP_COMPONENT,
+                worker_id=settings.watcher_paper_worker_id[:80],
+                heartbeat_at=now,
+                activation_state="swept",
+                market_source="paper_exit_monitor",
+            ),
+        )
+    except Exception:
+        logger.warning("account_equity_stop_sweep_heartbeat_unpublished")
 
 
 def _session_factory() -> sessionmaker[Session]:

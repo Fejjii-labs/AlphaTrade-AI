@@ -95,5 +95,7 @@ confirm for `awaiting_review`. Loading / empty / forbidden / disabled / error st
 1. Never calls exchange or paper order placement APIs.
 2. Paper proposals are created only via `ProposalService` with `approval_required=True`.
 3. Candidates/run plans reuse AT-037 / Slice 80–81 pathways.
-4. Kill switch, daily loss, cooldown, and approval confirmations are enforced.
+4. Kill switch and approval confirmations are enforced. Daily loss and the
+   after-loss cooldown are reported in the risk checks but do not block
+   (AT-ADR-152); the 10% account daily equity stop is the only loss brake.
 5. Fail closed when orchestration is disabled or mode is invalid.

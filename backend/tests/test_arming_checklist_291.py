@@ -25,7 +25,6 @@ from app.providers.alert_delivery.base import AlertDeliveryResult
 from app.providers.alert_delivery.telegram import TelegramAlertDeliveryProvider
 from app.schemas.common import AlertDeliveryChannel
 from app.services.arming_gates import (
-    COOLDOWN_INVALID,
     CYCLE_INTERVAL_EXCEEDS_TIMEFRAME,
     paper_arming_refusal,
 )
@@ -151,7 +150,10 @@ def test_flags_stay_off_and_real_trading_stays_blocked() -> None:
     "cooldown",
     [0, -1, True, False, None, float("nan"), float("inf"), Decimal("NaN"), "3600"],
 )
-def test_non_positive_cooldown_refuses_to_arm(cooldown: object) -> None:
+def test_cooldown_value_no_longer_gates_arming(cooldown: object) -> None:
+    """The after-loss cooldown is not a refusal (AT-ADR-152, R6), so it cannot gate arming."""
+
+    assert paper_arming_refusal(_view(paper_signal_cooldown_after_loss_seconds=cooldown)) is None
     paper = resolve_autonomous_mode(
         _view(
             autonomous_internal_paper_enabled=True,
@@ -165,13 +167,13 @@ def test_non_positive_cooldown_refuses_to_arm(cooldown: object) -> None:
             paper_signal_cooldown_after_loss_seconds=cooldown,
         )
     )
-    assert paper.mode is AutonomousMode.OFF
-    assert paper.refusal == COOLDOWN_INVALID
-    assert demo.mode is AutonomousMode.OFF
-    assert demo.refusal == COOLDOWN_INVALID
+    assert paper.mode is AutonomousMode.INTERNAL_PAPER
+    assert paper.refusal is None
+    assert demo.mode is AutonomousMode.BLOFIN_DEMO
+    assert demo.refusal is None
 
 
-def test_production_still_refuses_autonomous_flags_before_the_cooldown_gate() -> None:
+def test_production_still_refuses_autonomous_flags_with_a_zero_cooldown() -> None:
     resolution = resolve_autonomous_mode(
         _view(
             environment="production",
@@ -228,15 +230,6 @@ def test_exit_monitor_refuses_to_arm_without_opening_a_session(
         raise AssertionError("session opened while arming was refused")
 
     monkeypatch.setattr("app.db.session.get_session_factory", _forbidden)
-    cooldown = Settings(
-        _env_file=None,
-        paper_exit_monitor_enabled=True,
-        paper_signal_cooldown_after_loss_seconds=0,
-    )
-    report = run_configured_exit_monitor(cooldown)
-    assert report.status == "refused"
-    assert report.error == COOLDOWN_INVALID
-
     interval = Settings(
         _env_file=None,
         paper_exit_monitor_enabled=True,
@@ -248,7 +241,18 @@ def test_exit_monitor_refuses_to_arm_without_opening_a_session(
     assert refused.error == CYCLE_INTERVAL_EXCEEDS_TIMEFRAME
 
 
-def test_supervisor_does_not_attach_a_monitor_with_an_invalid_cooldown(
+def test_exit_monitor_arming_allows_a_zero_cooldown() -> None:
+    """A zero cooldown passes the arming gate (AT-ADR-152, R6; was refused under AT-ADR-129)."""
+
+    settings = Settings(
+        _env_file=None,
+        paper_exit_monitor_enabled=True,
+        paper_signal_cooldown_after_loss_seconds=0,
+    )
+    assert paper_arming_refusal(settings) is None
+
+
+def test_supervisor_attaches_the_monitor_with_a_zero_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -264,7 +268,7 @@ def test_supervisor_does_not_attach_a_monitor_with_an_invalid_cooldown(
         paper_signal_cooldown_after_loss_seconds=0,
     )
     worker = build_paper_worker_supervisor(settings)
-    assert worker.snapshot().exit_monitor is None
+    assert worker.snapshot().exit_monitor is not None
 
 
 def test_disabled_monitor_stays_disarmed_when_the_cooldown_is_zero() -> None:

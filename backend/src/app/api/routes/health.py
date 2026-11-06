@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import structlog
 from fastapi import APIRouter, BackgroundTasks, Request
 
 from app import __version__
@@ -333,6 +334,29 @@ async def paper_worker_heartbeat(
                 factory,
                 component=EXIT_MONITOR_ALERT_COMPONENT,
             ),
+        )
+    if expected and factory is not None:
+        from app.services.risk_policy.equity_stop import (
+            EQUITY_STOP_ALERT_COMPONENT,
+            EQUITY_STOP_SWEEP_COMPONENT,
+            equity_stop_sweep_alert,
+        )
+
+        sweep_alert = equity_stop_sweep_alert(
+            None if rows is None else rows.get(EQUITY_STOP_SWEEP_COMPONENT),
+            now=observed_at,
+            stale_after_seconds=settings.account_equity_stop_sweep_stale_after_seconds,
+        )
+        if sweep_alert is not None:
+            # Logged every poll, then paged once per cooldown. Not a response field.
+            structlog.get_logger(__name__).error(
+                "account_equity_stop_sweep_alert", **sweep_alert.as_log()
+            )
+        raise_prepared_alert(
+            settings,
+            sweep_alert,
+            now=observed_at,
+            ledger=RuntimeStatusHeartbeatLedger(factory, component=EQUITY_STOP_ALERT_COMPONENT),
         )
     from app.services.market_ban_visibility import MARKET_GATE_COMPONENT, project_market_ban
     from app.services.risk.kill_switch import (

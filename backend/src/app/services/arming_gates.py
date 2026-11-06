@@ -1,10 +1,13 @@
-"""Refuse to arm paper automation when the loss cooldown or the cycle is unsafe.
+"""Refuse to arm paper automation when the cycle is unsafe.
 
 The paper exit monitor and both autonomous loops stay off unless the
-consecutive-loss cooldown is a finite number greater than zero and the
 worker's cycle interval is not longer than the smallest configured strategy
 timeframe. A failed check returns a reason code. It does not place an order,
 and it does not turn a flag on.
+
+The after-loss cooldown no longer gates arming (AT-ADR-152, R6): it is not a
+refusal anywhere, so a cooldown of 0 is a valid setting. ``COOLDOWN_INVALID``
+stays only so stored ``paper_arming`` rows with that reason still render.
 """
 
 from __future__ import annotations
@@ -25,28 +28,14 @@ def paper_arming_refusal(settings: object) -> str | None:
 
     Missing, non-finite, or non-positive values fail closed. Equality between
     the cycle interval and the smallest timeframe is still allowed: a loss on
-    the bar that just closed is not yet older than one candle.
+    the bar that just closed is not yet older than one candle. Missing
+    settings read as an unreadable cycle and fail closed.
     """
 
-    if settings is None:
-        return COOLDOWN_INVALID
-    cooldown = consecutive_loss_cooldown_refusal(
-        getattr(settings, "paper_signal_cooldown_after_loss_seconds", None)
-    )
-    if cooldown is not None:
-        return cooldown
     return cycle_interval_refusal(
         getattr(settings, "watcher_paper_poll_interval_seconds", None),
         getattr(settings, "paper_signal_allowed_timeframes", None),
     )
-
-
-def consecutive_loss_cooldown_refusal(value: object) -> str | None:
-    """Refuse unless the cooldown is a finite number of seconds greater than zero."""
-
-    if _positive_finite(value) is None:
-        return COOLDOWN_INVALID
-    return None
 
 
 def cycle_interval_refusal(interval: object, timeframes: object) -> str | None:
