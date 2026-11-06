@@ -427,21 +427,6 @@ class RiskPolicyService:
         )
         self._session.flush()
 
-    def latch_drawdown(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        account_id: uuid.UUID,
-        equity_peak: Decimal,
-        now: datetime,
-    ) -> None:
-        row = self._breaker_row(organization_id, account_id, equity_peak, now)
-        row.drawdown_latched = True
-        row.equity_peak = equity_peak
-        row.updated_at = now
-        self._open_breaker(organization_id, account_id, "drawdown", now)
-        self._session.flush()
-
     def bind_grade(
         self,
         *,

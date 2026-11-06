@@ -19,6 +19,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import AuditLog, ExecutionAccount, Organization, User
 from app.db.risk_policy import (
+    RiskPolicyBreakerInterval,
     RiskPolicyBreakerReset,
     RiskPolicyBreakerState,
     RiskPolicyProposal,
@@ -91,6 +92,35 @@ def _own_account(session: Session, account_id: uuid.UUID) -> None:
             execution_mode=ExecutionMode.PAPER,
             account_mode=AccountMode.NET,
             enabled=True,
+        )
+    )
+    session.flush()
+
+
+def _seed_legacy_drawdown_latch(session: Session, account_id: uuid.UUID, now: datetime) -> None:
+    """Store a drawdown latch as an older build left it (AT-ADR-152).
+
+    No current code path writes a latch. The row and its open window stand in
+    for stale state, so tests can show it refuses nothing.
+    """
+
+    session.add(
+        RiskPolicyBreakerState(
+            organization_id=ORG,
+            account_id=account_id,
+            equity_peak=Decimal("10000"),
+            drawdown_latched=True,
+            consecutive_losses=0,
+            updated_at=now,
+        )
+    )
+    session.add(
+        RiskPolicyBreakerInterval(
+            organization_id=ORG,
+            account_id=account_id,
+            kind="drawdown",
+            phase="open",
+            occurred_at=now,
         )
     )
     session.flush()
@@ -387,9 +417,7 @@ def test_agent_cannot_apply_loosening_waits_and_a_stale_latch_does_not_block_it(
         )
     assert unconfirmed.value.code == "apply_proof_missing"
     account = uuid.uuid4()
-    service.latch_drawdown(
-        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
-    )
+    _seed_legacy_drawdown_latch(session, account, NOW)
     # A legacy drawdown latch no longer refuses anything (AT-ADR-152).
     assert service.breaker_active(organization_id=ORG, now=NOW) is False
     session.query(RiskPolicyVersion).all()  # keep the import path honest
@@ -1304,9 +1332,7 @@ def test_activation_cancels_a_loosening_when_a_breaker_is_active() -> None:
     scheduled = _apply(service, loose, _human())
     effective = datetime(2026, 10, 19, 15, tzinfo=UTC)
     assert scheduled.effective_at == effective
-    service.latch_drawdown(
-        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=effective
-    )
+    _seed_legacy_drawdown_latch(session, uuid.uuid4(), effective)
     current, active, _waiting = service.read(
         organization_id=ORG, kind=PolicyKind.DEMO, now=effective
     )
@@ -1488,9 +1514,7 @@ def test_first_stored_profile_looser_than_the_placeholder_is_a_loosening() -> No
     assert unconfirmed.value.code == "apply_proof_missing"
     assert fresh.scalar(select(RiskPolicyVersion.id)) is None
     # A stale legacy latch does not block the loosening (AT-ADR-152).
-    service.latch_drawdown(
-        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=NOW
-    )
+    _seed_legacy_drawdown_latch(fresh, uuid.uuid4(), NOW)
     scheduled = _apply(service, proposal, _human())
     assert scheduled.change_class == "loosening"
     assert scheduled.effective_at == datetime(2026, 10, 19, 15, tzinfo=UTC)
@@ -1535,9 +1559,7 @@ def test_breaker_cancellation_survives_the_read_session_rollback() -> None:
     effective = datetime(2026, 10, 19, 15, tzinfo=UTC)
     scheduled_id = scheduled.id
     tight_id = tight.id
-    service.latch_drawdown(
-        organization_id=ORG, account_id=uuid.uuid4(), equity_peak=Decimal("10000"), now=effective
-    )
+    _seed_legacy_drawdown_latch(session, uuid.uuid4(), effective)
     _current, active, _waiting = service.read(
         organization_id=ORG, kind=PolicyKind.DEMO, now=effective
     )
@@ -1609,9 +1631,7 @@ def test_drawdown_reset_refuses_when_the_account_has_no_server_owner() -> None:
     session = _session()
     service = _service(session)
     account = uuid.uuid4()
-    service.latch_drawdown(
-        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=NOW
-    )
+    _seed_legacy_drawdown_latch(session, account, NOW)
     with pytest.raises(RiskPolicyRejected) as unbound:
         service.reset_drawdown_latch(
             organization_id=ORG,
@@ -1681,9 +1701,7 @@ def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None
     service = _service(session)
     _store_tight_then_loose(service)
     account = uuid.uuid4()
-    service.latch_drawdown(
-        organization_id=ORG, account_id=account, equity_peak=Decimal("10000"), now=effective
-    )
+    _seed_legacy_drawdown_latch(session, account, effective)
     reset_at = datetime(2026, 10, 19, 16, tzinfo=UTC)
     _own_account(session, account)
     service.reset_drawdown_latch(
@@ -1750,12 +1768,7 @@ def test_loosening_is_cancelled_from_breaker_history_at_effective_time() -> None
     later = _session()
     later_service = _service(later)
     loose = _store_tight_then_loose(later_service)
-    later_service.latch_drawdown(
-        organization_id=ORG,
-        account_id=uuid.uuid4(),
-        equity_peak=Decimal("10000"),
-        now=datetime(2026, 10, 19, 16, tzinfo=UTC),
-    )
+    _seed_legacy_drawdown_latch(later, uuid.uuid4(), datetime(2026, 10, 19, 16, tzinfo=UTC))
     current, active_later, _waiting_later = later_service.read(
         organization_id=ORG, kind=PolicyKind.DEMO, now=datetime(2026, 10, 19, 16, tzinfo=UTC)
     )

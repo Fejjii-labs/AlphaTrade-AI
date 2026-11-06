@@ -194,6 +194,27 @@ Durable, append-only architecture/workflow decisions. IDs: `AT-ADR-XXX`.
 - Caveats: accounts without a breaker row are not swept. Canonical open
   paper trades have no unrealized mark in stop equity, so the stop is
   effectively realized-only for them (see above).
+- Merge acceptance for PR #436 (targeted set only, R7): this ships on a
+  targeted Postgres set plus CI. It does not claim the whole backend
+  Postgres suite is green.
+  - Targeted set: Griller verified 18 files on an isolated Postgres at
+    `1a6be42e`, with 581 passed, 0 failed and 0 skipped.
+  - CI: green at the reviewed head `1a6be42e`. The R7 follow-up commit
+    must also have green CI before merge.
+  - Wider run: the R6 82-file run had 1524 passed and 14 failed. R6 fixed 8
+    of them, all stale cases of
+    `test_sfp_strategy_brain_runtime.py::test_existing_daily_risk_lock_is_authoritative_for_sfp`,
+    which R6 renamed to `test_existing_daily_risk_lock_is_display_only_for_sfp`.
+  - Known leftovers, not treated as #436 regressions:
+    - 2 in `test_stale_demo_entry_reconciliation.py`. They already fail at
+      base `0adae0a5` ("Entry precision proof does not match its immutable
+      fill hash") and are out of scope.
+    - 1 in `test_pr237_migration_aware_rollback.py`. It needs a TCP
+      localhost Postgres and cannot run on the isolated unix-socket
+      database.
+    - 3 timing-sensitive tests that pass in isolation: 2 factory tests in
+      `test_binance_gate_coordination.py` and
+      `test_paper_worker_supervisor.py::test_provider_retry_is_bounded_and_logs_each_attempt`.
 - Reference: `docs/paper_exit_monitor.md`, migrations `a25equitystop001`
   and `a26equitystop002`.
 
