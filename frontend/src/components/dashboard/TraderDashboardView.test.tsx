@@ -25,7 +25,7 @@ vi.mock("./performance/PerformanceDashboard", async () => {
 vi.mock("@/components/settings/ManualDemoTest", () => ({ ManualDemoTest: () => null }));
 
 const unavailable = { available: false, data: null, error: null, fallbackUsed: false };
-const data: TraderDashboardData = { portfolio: unavailable, strategyStats: unavailable, summary: unavailable,
+const data: TraderDashboardData = { portfolio: unavailable, summary: unavailable,
   watcher: unavailable, market: unavailable, alerts: unavailable,
   journal: { available: true, error: null, fallbackUsed: false, data: { items: [{
     id: "internal-simulated", symbol: "SIMULATED", timeframe: "1h", direction: "long", status: "closed", result: "win", source: "paper_execution", exchange: "BLOFIN_DEMO",

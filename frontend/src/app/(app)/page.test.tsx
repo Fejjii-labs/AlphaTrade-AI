@@ -17,7 +17,6 @@ import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
   CanonicalJournalTradeListItem,
-  JournalStatsResponse,
   PaginatedCanonicalJournalTrades,
   PaperAlert,
   PaperPortfolioResponse,
@@ -89,15 +88,6 @@ function dashboardData(
       limit: 8,
       offset: 0,
     } as PaginatedCanonicalJournalTrades),
-    strategyStats: okSource({
-      buckets: [
-        {
-          key: "s1",
-          label: "HTF Pullback",
-          metrics: { trade_count: 4, win_rate: 0.5, net_pnl_total: "12.50" },
-        },
-      ],
-    } as JournalStatsResponse),
     summary: okSource({
       safety: { execution_mode: "paper", real_trading_enabled: false },
       open_paper_trades_summary: {
@@ -301,7 +291,7 @@ describe("Trader dashboard", () => {
     const pending = pendingSource<never>();
     asyncState.loading = true;
     asyncState.data = {
-      portfolio: pending, journal: pending, strategyStats: pending, summary: pending,
+      portfolio: pending, journal: pending, summary: pending,
       watcher: pending, market: pending, alerts: pending,
     } as TraderDashboardData;
     render(<DashboardPage />);

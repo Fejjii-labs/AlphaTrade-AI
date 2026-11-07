@@ -48,7 +48,6 @@ import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
   JournalDashboardScope,
-  JournalStatsResponse,
   PaginatedCanonicalJournalTrades,
   PaperAlert,
   PaperPortfolioResponse,
@@ -58,7 +57,6 @@ import type {
 export type TraderDashboardData = {
   portfolio: SourceResult<PaperPortfolioResponse>;
   journal: SourceResult<PaginatedCanonicalJournalTrades>;
-  strategyStats: SourceResult<JournalStatsResponse>;
   summary: SourceResult<DashboardSummary>;
   watcher: SourceResult<WatcherMonitoringSnapshot>;
   market: SourceResult<CanonicalMarketMonitorStatusRead>;
@@ -184,7 +182,6 @@ export function TraderDashboardView({
   const unavailable = [
     ["Portfolio", data.portfolio],
     ["Recent trades", data.journal],
-    ["Journal statistics", data.strategyStats],
     ["Daily status", data.summary],
     ["Watcher", data.watcher],
     ["Market evidence", data.market],

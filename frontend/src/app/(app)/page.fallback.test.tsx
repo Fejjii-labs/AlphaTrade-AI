@@ -39,7 +39,6 @@ function failedDashboard(): TraderDashboardData {
   return {
     portfolio: failedSource("portfolio down"),
     journal: failedSource("journal down"),
-    strategyStats: failedSource("stats down"),
     summary: failedSource("summary down"),
     watcher: failedSource("watcher down"),
     market: failedSource("market down"),

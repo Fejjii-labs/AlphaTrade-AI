@@ -114,7 +114,7 @@ describe("Daily Review", () => {
     dailyReview.mockResolvedValue(review);
     render(<TraderDashboardView data={{
       portfolio: failedSource("down"),
-      journal: failedSource("down"), strategyStats: failedSource("down"),
+      journal: failedSource("down"),
       summary: failedSource("down"), watcher: failedSource("down"),
       market: failedSource("down"), alerts: failedSource("down"),
     }} posture={describeSafetyPosture("paper", false)} />);

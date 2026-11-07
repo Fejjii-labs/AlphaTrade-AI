@@ -4,8 +4,10 @@ import { useMemo, useState } from "react";
 
 import {
   TraderDashboardView,
+  type DashboardVenue,
   type TraderDashboardData,
 } from "@/components/dashboard/TraderDashboardView";
+import { DEFAULT_SCOPE } from "@/components/dashboard/performance/performance-model";
 import { describeSafetyPosture } from "@/components/workflows";
 import { useSafetyPosture } from "@/contexts/AppContext";
 import { useDashboardSources } from "@/hooks/useDashboardSources";
@@ -16,27 +18,29 @@ type DashboardPayloads = {
 };
 
 type DashboardLoaders = {
-  [K in keyof DashboardPayloads]: () => Promise<DashboardPayloads[K]>;
+  [K in keyof DashboardPayloads]: (() => Promise<DashboardPayloads[K]>) | null;
 };
 
 export default function DashboardPage() {
   const [demoRefreshKey, setDemoRefreshKey] = useState(0);
+  const [venue, setVenue] = useState<DashboardVenue>(DEFAULT_SCOPE);
   const { executionMode, realTradingEnabled } = useSafetyPosture();
+  const simulator = venue === "paper";
 
   // All requests start in parallel and each section renders as soon as its own
   // data arrives; the account cards mount immediately and fetch alongside.
+  // The summary (safety posture + daily discipline) is needed in every venue;
+  // the simulator sources load only while the Paper venue is shown.
   const loaders = useMemo<DashboardLoaders>(
     () => ({
-      portfolio: () => api.performance.portfolio(),
-      journal: () => api.journal.listTrades({ limit: 8 }),
-      strategyStats: () =>
-        api.journal.statistics({ group_by: "strategy", limit: 8 }),
+      portfolio: simulator ? () => api.performance.portfolio() : null,
+      journal: simulator ? () => api.journal.listTrades({ limit: 8 }) : null,
       summary: () => api.dashboard.summary(),
-      watcher: () => api.marketWatcher.monitoring(),
-      market: () => api.canonical.getMarketStatus(),
-      alerts: () => api.alerts.list({ limit: 8 }),
+      watcher: simulator ? () => api.marketWatcher.monitoring() : null,
+      market: simulator ? () => api.canonical.getMarketStatus() : null,
+      alerts: simulator ? () => api.alerts.list({ limit: 8 }) : null,
     }),
-    [],
+    [simulator],
   );
 
   const { data, loading, reload } = useDashboardSources<DashboardPayloads>(loaders);
@@ -59,6 +63,8 @@ export default function DashboardPage() {
       refreshing={loading}
       demoRefreshKey={demoRefreshKey}
       realTradingEnabled={realEnabled}
+      venue={venue}
+      onVenueChange={setVenue}
     />
   );
 }
