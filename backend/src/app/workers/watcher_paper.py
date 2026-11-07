@@ -805,7 +805,12 @@ class WatcherPaperRuntime:
                 session_dirty=len(session.dirty) if session else 0,
                 **counts,
             )
-        logger.info(
+        # A cycle that only replayed already-evaluated bars says nothing new;
+        # keep it at DEBUG so INFO stays readable (L10). paper_worker_health
+        # still logs liveness every minute.
+        quiet = created == 0 and bool(scans) and all(scan.replayed for scan in scans)
+        cycle_log = logger.debug if quiet else logger.info
+        cycle_log(
             "watcher_paper_cycle",
             worker_id=self._worker_id,
             scans=len(scans),
@@ -1389,7 +1394,9 @@ class WatcherPaperRuntime:
                 sfp_alerts=alerts,
             )
         observe_scan(report.reason_code)
-        logger.info(
+        replay_only = report.replayed and report.paper_loop_stage is None
+        scan_log = logger.debug if replay_only else logger.info
+        scan_log(
             "watcher_paper_scan",
             worker_id=self._worker_id,
             organization_id=str(target.organization_id),
