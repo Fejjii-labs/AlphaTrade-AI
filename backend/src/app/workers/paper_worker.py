@@ -1279,10 +1279,26 @@ def _idle_watcher_cycle(
             reason=reason,
             now=clock.now(),
         )
+        _reconcile_demo_while_idle(settings, session_factory, clock)
         state = "disarmed" if reason == "activation_disarmed" else "refused"
         return CycleOutcome(status=state, error=reason)
 
     return cycle
+
+
+def _reconcile_demo_while_idle(
+    settings: Settings, session_factory: sessionmaker[Session], clock: _NowClock
+) -> None:
+    """Keep governed demo lifecycle rows current while the Watcher cannot scan (M7)."""
+
+    if not settings.governed_blofin_demo_enabled:
+        return
+    from app.workers.watcher_paper import reconcile_governed_demo_once
+
+    try:
+        reconcile_governed_demo_once(settings, session_factory, clock)
+    except Exception as exc:
+        logger.error("governed_demo_idle_reconciliation_failed", error=_safe_error(exc))
 
 
 # Refusals that clear on their own: the market provider at that moment, or the
@@ -1387,6 +1403,7 @@ class _RecoveringWatcherCycle:
             reason=self._reason,
             now=self._clock.now(),
         )
+        _reconcile_demo_while_idle(self._settings, self._factory, self._clock)
         return CycleOutcome(status="refused", error=self._reason)
 
     def idle_wait(self, interval: float, stop: threading.Event) -> bool:

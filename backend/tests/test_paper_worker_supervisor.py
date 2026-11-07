@@ -1298,3 +1298,73 @@ def test_shutdown_join_is_bounded_and_skips_the_stop_hook_under_a_running_cycle(
         for component in supervisor._components():
             if component.thread is not None:
                 component.thread.join(5.0)
+
+
+def test_idle_and_recovering_cycles_keep_reconciling_governed_demo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M7: demo lifecycle rows stay current while the Watcher cannot scan."""
+
+    import app.workers.watcher_paper as watcher_paper
+    from app.workers.paper_worker import _idle_watcher_cycle, _RecoveringWatcherCycle
+
+    calls: list[str] = []
+    monkeypatch.setattr(watcher_paper, "publish_idle_watcher_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        watcher_paper,
+        "reconcile_governed_demo_once",
+        lambda *_a, **_k: calls.append("reconcile") or (),
+    )
+
+    class _Now:
+        def now(self) -> datetime:
+            return datetime(2026, 11, 4, 14, 51, tzinfo=UTC)
+
+    demo = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER}).model_copy(
+        update={"governed_blofin_demo_enabled": True}
+    )
+    idle = _idle_watcher_cycle(
+        demo,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="legacy_watcher_forbidden",
+        clock=_Now(),
+    )
+    assert idle().status == "refused"
+    recovering = _RecoveringWatcherCycle(
+        demo,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="provider_unavailable",
+        clock=_Now(),
+        preflight=lambda: _decision("provider_unavailable"),
+        open_session=lambda: None,
+        closers=[],
+        stops=[],
+        releases=[],
+        monotonic=lambda: 0.0,
+    )
+    assert recovering().status == "refused"
+    assert calls == ["reconcile", "reconcile"]
+
+    def broken(*_a: object, **_k: object) -> tuple[str, ...]:
+        raise RuntimeError("venue down")
+
+    monkeypatch.setattr(watcher_paper, "reconcile_governed_demo_once", broken)
+    assert idle().status == "refused"  # a reconcile failure never breaks the heartbeat
+
+    calls.clear()
+    monkeypatch.setattr(
+        watcher_paper,
+        "reconcile_governed_demo_once",
+        lambda *_a, **_k: calls.append("reconcile") or (),
+    )
+    off = demo.model_copy(update={"governed_blofin_demo_enabled": False})
+    _idle_watcher_cycle(
+        off,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="legacy_watcher_forbidden",
+        clock=_Now(),
+    )()
+    assert calls == []

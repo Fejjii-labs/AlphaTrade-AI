@@ -1018,25 +1018,11 @@ class WatcherPaperRuntime:
     def _reconcile_governed_demo_effects(self) -> None:
         # Existing exposure still needs actual fill/protection observations when
         # new scanning is refused or the organization kill switch is active.
-        if not (
-            self._enabled
-            and self._session_factory is not None
-            and self._settings is not None
-            and self._settings.governed_blofin_demo_enabled
-            and self._canonical_runtime is not None
-        ):
+        if not self._enabled or self._session_factory is None or self._settings is None:
             return
-        from app.runtime.canonical import ProductionCanonicalRuntime
-        from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
-        if not isinstance(self._canonical_runtime, ProductionCanonicalRuntime):
-            return
-        with self._session_factory() as session:
-            recovered = GovernedBloFinDemoLoop(
-                self._canonical_runtime, self._settings, self._clock
-            ).reconcile_pending(session)
-        for reason in recovered:
-            logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+        reconcile_governed_demo_once(
+            self._settings, self._session_factory, self._clock, self._canonical_runtime
+        )
 
     def _activation_refusal(self) -> WatcherPaperCycleReport | None:
         gate = self._activation_gate
@@ -2260,6 +2246,44 @@ def _gate_refusal_reason(decision: object) -> str | None:
     if isinstance(reason, str) and reason and reason != "cleared":
         return reason
     return "activation_gate_error"
+
+
+def reconcile_governed_demo_once(
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    clock: Clock,
+    canonical_runtime: object | None = None,
+) -> tuple[str, ...]:
+    """Reconcile pending governed demo commands once (venue fills, protection).
+
+    Called from the scanning cycle and, while the Watcher is idle or
+    recovering after a boot refusal, from the idle cycle (M7), so open demo
+    positions keep their journal/lifecycle rows current either way. It reads
+    the demo venue and writes lifecycle rows; it never places an order.
+    """
+
+    if not settings.governed_blofin_demo_enabled:
+        return ()
+    from app.runtime.canonical import (
+        ProductionCanonicalRuntime,
+        build_production_canonical_runtime,
+    )
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+    runtime = canonical_runtime
+    if runtime is None:
+        runtime = build_production_canonical_runtime(
+            session_factory,
+            settings=settings,
+            clock=clock,
+        )
+    if not isinstance(runtime, ProductionCanonicalRuntime):
+        return ()
+    with session_factory() as session:
+        recovered = GovernedBloFinDemoLoop(runtime, settings, clock).reconcile_pending(session)
+    for reason in recovered:
+        logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+    return recovered
 
 
 def _report_from_cycle(
