@@ -375,3 +375,47 @@ def test_first_attribution_takes_the_current_exchange_mode(
 ) -> None:
     seen = _attribute(monkeypatch, None)
     assert seen["mode"] is LearningVenueMode.PAPER_EXCHANGE_DEMO
+
+
+def test_exit_candles_are_read_once_per_closed_bar_not_every_pass() -> None:
+    """M6: a trade's candles are re-read after its bar closes, after a close
+    failure, or every 5 minutes; not on every 15 s pass."""
+
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.schemas.common import Timeframe
+    from app.workers.paper_exit_monitor import _trades_due_for_candles
+
+    trade = SimpleNamespace(journal_trade_id=uuid4(), timeframe=Timeframe("15m"))
+    gate: dict = {}
+    start = datetime(2026, 11, 7, 12, 0, 30, tzinfo=UTC)  # 30 s after a 15m close
+    assert _trades_due_for_candles([trade], gate, None, start) == [trade]
+    assert _trades_due_for_candles([trade], gate, None, start + timedelta(seconds=15)) == []
+    assert _trades_due_for_candles([trade], gate, None, start + timedelta(minutes=4)) == []
+    # Safety re-check after five minutes.
+    assert _trades_due_for_candles([trade], gate, None, start + timedelta(minutes=5)) == [trade]
+    assert _trades_due_for_candles([trade], gate, None, start + timedelta(minutes=9)) == []
+    # Next 15m close (12:15:00) is due once settled (+20 s), before the re-check.
+    first_after_close = start + timedelta(minutes=14, seconds=51)
+    assert _trades_due_for_candles([trade], gate, None, first_after_close) == [trade]
+    # A pending close retry is always due.
+    failures = {trade.journal_trade_id: object()}
+    later = start + timedelta(minutes=15)
+    assert _trades_due_for_candles([trade], gate, failures, later) == [trade]  # type: ignore[arg-type]
+    # Closed trades leave the gate.
+    _trades_due_for_candles([], gate, None, later)
+    assert gate == {}
+
+
+def test_candle_loader_begin_pass_drops_bars_but_keeps_adapters() -> None:
+    from app.core.config import Settings
+    from app.services.paper_exit_candles import PaperExitCandleLoader
+
+    adapter = object()
+    loader = PaperExitCandleLoader(Settings(_env_file=None), sources={"replay": adapter})  # type: ignore[dict-item]
+    loader._cache[("replay", "BTCUSDT", "15m")] = object()  # type: ignore[assignment]
+    loader.begin_pass()
+    assert loader._cache == {}
+    assert loader._sources == {"replay": adapter}

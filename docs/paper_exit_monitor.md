@@ -45,6 +45,11 @@ closer is installed instead, so a dry-run branch cannot submit a close.
 The component is attached to the existing paper worker
 (`python -m app.workers.paper_worker`) and uses that worker's poll interval
 (`WATCHER_PAPER_POLL_INTERVAL_SECONDS`). It is not a second service.
+Each pass still runs the clock check and the account equity stop sweep, but a
+trade's candles are read only when they can have changed: once after each
+close of the trade's timeframe (20 s settlement gap), whenever a close retry
+is pending, and at least every 5 minutes as a safety net. The candle adapters
+are built once per worker and reused; fetched bars are dropped every pass.
 
 Attachment happens only after the disarmed-worker check, and only when the
 enabled flag is true. A disarmed staging worker does not construct the
