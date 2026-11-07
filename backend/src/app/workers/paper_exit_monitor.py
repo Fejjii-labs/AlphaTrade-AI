@@ -24,6 +24,7 @@ from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
 from app.services.paper_exit_candles import PaperExitCandleLoader
 from app.services.paper_exit_monitor import (
+    STATUS_BACKING_OFF,
     CloseFailureBackoff,
     DegradationStreak,
     ExitMonitorAlert,
@@ -297,6 +298,8 @@ class PaperExitMonitorCycle:
             return self._beat_outcome(CycleOutcome("degraded", error="paper_exit_monitor_failed"))
         if report.status == "stopped":
             return self._beat_outcome(CycleOutcome("stopped"))
+        if report.status != "refused":
+            self._emit_pass_alerts(report)
         if report.status == "refused":
             self._note_repetition(
                 "refused",
@@ -332,8 +335,35 @@ class PaperExitMonitorCycle:
             return self._beat_outcome(
                 CycleOutcome("degraded", error=report.error or "paper_exit_monitor_failed")
             )
+        if report.status == STATUS_BACKING_OFF:
+            # Healthy but holding stuck trades: shown in /health/paper-worker
+            # (activation_state / last_error_code) without re-paging (M5, L7).
+            self._note_repetition(report.status, error="", refused=0, report=report)
+            error = f"{report.error}:{report.quarantined or report.backed_off}"
+            return self._beat_outcome(CycleOutcome(STATUS_BACKING_OFF, error=error))
         self._note_repetition(report.status, error="", refused=0, report=report)
         return self._beat_outcome(CycleOutcome("running"))
+
+    def _emit_pass_alerts(self, report: MonitorReport) -> None:
+        """Deliver once-per-streak alerts raised inside the pass (close_quarantined)."""
+
+        for alert in report.alerts:
+            logger.warning("paper_exit_monitor_alert", **alert.as_log())
+            organization = alert.fields.get("organization_id", "")
+            try:
+                scope = (UUID(organization),) if organization else report.organization_ids
+            except ValueError:
+                scope = report.organization_ids
+            try:
+                self._emit_repeat_alert(
+                    alert, MonitorReport(status=report.status, organization_ids=scope)
+                )
+            except Exception as exc:
+                logger.error(
+                    "paper_exit_monitor_alert_persist_failed",
+                    error=redact_text(str(exc))[:200],
+                    code=alert.code,
+                )
 
     def request_stop(self) -> None:
         self._stop.set()

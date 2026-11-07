@@ -187,8 +187,11 @@ def test_venue_conflict_does_not_hot_loop_across_16_second_cycles() -> None:
     assert closer.calls == 1
     assert candles.reads == 1
     assert reports[0].errors == 1 and reports[0].error == "close_failed"
-    assert all(r.status == "degraded" and r.backed_off == 1 for r in reports[1:])
-    assert all(r.error == "close_backoff" for r in reports[1:])
+    # Waiting out the quarantine is reported, not re-failed every pass (M5, L7).
+    assert all(r.status == "backing_off" and r.backed_off == 1 for r in reports[1:])
+    assert all(r.error == "close_quarantined" and r.quarantined == 1 for r in reports[1:])
+    assert [a.code for a in reports[0].alerts] == ["close_quarantined"]
+    assert all(r.alerts == () for r in reports[1:])
     events = [entry["event"] for entry in logs]
     assert events.count("paper_exit_monitor_close_failed") == 1
     assert events.count("paper_exit_monitor_close_quarantined") == 1
@@ -419,3 +422,54 @@ def test_candle_loader_begin_pass_drops_bars_but_keeps_adapters() -> None:
     loader.begin_pass()
     assert loader._cache == {}
     assert loader._sources == {"replay": adapter}
+
+
+def test_cycle_reports_quarantine_in_heartbeat_and_pages_once(monkeypatch) -> None:
+    """M5/L7: a quarantined close shows as backing_off with a count; one alert."""
+
+    from uuid import uuid4
+
+    from app.core.config import Settings
+    from app.services.paper_exit_monitor import ExitMonitorAlert, MonitorReport
+    from app.workers import paper_exit_monitor as worker
+
+    org = uuid4()
+    alert = ExitMonitorAlert(
+        code="close_quarantined",
+        severity="warning",
+        message="m",
+        fields={"organization_id": str(org), "dedup_key": "close_quarantined:x"},
+    )
+    reports = iter(
+        [
+            MonitorReport(
+                status="backing_off",
+                error="close_quarantined",
+                backed_off=1,
+                quarantined=1,
+                alerts=(alert,),
+                organization_ids=(org,),
+            ),
+            MonitorReport(
+                status="backing_off", error="close_quarantined", backed_off=1, quarantined=1
+            ),
+        ]
+    )
+    monkeypatch.setattr(worker, "run_configured_exit_monitor", lambda *_a, **_k: next(reports))
+    beats: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        worker.PaperExitMonitorCycle,
+        "_beat",
+        lambda self, status, error: beats.append((status, error)),
+    )
+    sent: list[ExitMonitorAlert] = []
+    cycle = worker.PaperExitMonitorCycle(
+        Settings(_env_file=None, paper_exit_monitor_enabled=True), alert_sink=sent.append
+    )
+    monkeypatch.setattr(cycle, "_note_repetition", lambda *_a, **_k: None)
+    first = cycle()
+    second = cycle()
+    assert first.status == second.status == "backing_off"
+    assert first.error == "close_quarantined:1"
+    assert [a.code for a in sent] == ["close_quarantined"]
+    assert beats[-1] == ("backing_off", "close_quarantined:1")

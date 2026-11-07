@@ -192,6 +192,9 @@ class MonitorReport:
     settling: int = 0
     organization_ids: tuple[UUID, ...] = ()
     backed_off: int = 0
+    # Open trades whose close is quarantined (identity conflict): they stay
+    # OPEN, hold a max_open_positions slot and their stale mark (M5).
+    quarantined: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,6 +485,7 @@ class DegradationWatch:
 
 
 _REPEATED_FAILURE = frozenset({"degraded", "refused"})
+STATUS_BACKING_OFF = "backing_off"
 
 
 def observe_repeated_degradation(
@@ -983,6 +987,7 @@ def run_paper_exit_monitor(
     settling = 0
     backed_off = 0
     error = ""
+    alerts: list[ExitMonitorAlert] = []
     streaks = settling_streaks if settling_streaks is not None else {}
     failures = close_failures if close_failures is not None else {}
     ordered = sorted(
@@ -1097,6 +1102,9 @@ def run_paper_exit_monitor(
                     reason=backoff.reason,
                     retry_at=backoff.retry_at.isoformat(),
                 )
+                # Once per quarantine streak (L7); the streak ends when the
+                # trade closes or leaves the open book.
+                alerts.append(close_quarantined_alert(trade, backoff))
             continue
         failures.pop(trade.journal_trade_id, None)
         if bool(getattr(result, "replayed", False)):
@@ -1113,12 +1121,20 @@ def run_paper_exit_monitor(
         del streaks[stale]
     for stale in [key for key in failures if key not in open_ids]:
         del failures[stale]
-    if errors or refused or backed_off:
+    quarantined = sum(
+        1
+        for trade in ordered
+        if (state := failures.get(trade.journal_trade_id)) is not None and state.quarantined
+    )
+    if errors or refused:
         status = "degraded"
         if not error and refused:
             error = "candles_unusable"
-        if not error:
-            error = "close_backoff"
+    elif backed_off:
+        # Waiting out a close backoff is not a new failure: it is reported in
+        # the heartbeat (M5) but does not re-page every threshold (L7).
+        status = STATUS_BACKING_OFF
+        error = "close_quarantined" if quarantined else "close_backoff"
     elif dry_run:
         status = "dry_run"
     elif closed or replayed:
@@ -1140,6 +1156,31 @@ def run_paper_exit_monitor(
         settling=settling,
         organization_ids=tuple(dict.fromkeys(trade.organization_id for trade in ordered)),
         backed_off=backed_off,
+        quarantined=quarantined,
+        alerts=tuple(alerts),
+    )
+
+
+def close_quarantined_alert(
+    trade: OpenInternalPaperTrade, backoff: CloseFailureBackoff
+) -> ExitMonitorAlert:
+    """One page per quarantine streak: the trade stays OPEN until a human acts."""
+
+    return ExitMonitorAlert(
+        code="close_quarantined",
+        severity="warning",
+        message=(
+            "A paper trade's automatic close was refused and is quarantined. It stays "
+            "OPEN and counts against open-position caps until a human resolves it."
+        ),
+        fields={
+            "journal_trade_id": str(trade.journal_trade_id),
+            "organization_id": str(trade.organization_id),
+            "command_id": str(trade.command_id),
+            "reason": backoff.reason[:120],
+            "retry_at": backoff.retry_at.isoformat(),
+            "dedup_key": f"close_quarantined:{trade.journal_trade_id}",
+        },
     )
 
 

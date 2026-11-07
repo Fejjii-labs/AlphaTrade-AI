@@ -51,6 +51,15 @@ close of the trade's timeframe (20 s settlement gap), whenever a close retry
 is pending, and at least every 5 minutes as a safety net. The candle adapters
 are built once per worker and reused; fetched bars are dropped every pass.
 
+A close that fails waits out an exponential backoff (capped at 1 h); an
+identity conflict (for example `learning_venue_mode_conflict`) is
+**quarantined** at the maximum wait. While any trade is only waiting, the pass
+status is `backing_off`: the exit-monitor heartbeat in `/health/paper-worker`
+shows `activation_state=backing_off` and `last_error_code=close_quarantined:<n>`
+(or `close_backoff:<n>`). A quarantined trade stays `OPEN` and keeps its
+`max_open_positions` slot, so it pages once per quarantine streak
+(`close_quarantined`, warning) instead of a `degraded_repeat` every 15 minutes.
+
 Attachment happens only after the disarmed-worker check, and only when the
 enabled flag is true. A disarmed staging worker does not construct the
 monitor when `PAPER_EXIT_MONITOR_ENABLED` is true. `run_configured_exit_monitor`
