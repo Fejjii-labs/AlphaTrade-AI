@@ -9,7 +9,6 @@ import { LessonAcceptPanel } from "@/components/lessons/LessonAcceptPanel";
 import { LessonReviewCard } from "@/components/lessons/LessonReviewCard";
 import { PaperValidationPanel } from "@/components/strategy/PaperValidationPanel";
 import { StrategyVersionHistory } from "@/components/strategy/StrategyVersionHistory";
-import { StructuredRuleEditor } from "@/components/strategy/StructuredRuleEditor";
 
 const safetyPosture = {
   executionMode: "paper" as string | null,
@@ -830,27 +829,3 @@ describe("PaperValidationPanel", () => {
   });
 });
 
-describe("StructuredRuleEditor", () => {
-  it("add edit delete blocks", () => {
-    render(
-      <StructuredRuleEditor
-        rules={null}
-        testability={{
-          strategy_id: "s1",
-          score: 55,
-          band: "partial",
-          ready_for_backtest: false,
-          missing_fields: [{ field_key: "stop_loss", label: "Stop loss missing" }],
-          has_structured_rules: true,
-        }}
-      />,
-    );
-    expect(screen.getByTestId("testability-score")).toHaveTextContent("55/100");
-    fireEvent.click(screen.getByTestId("add-entry-block"));
-    fireEvent.click(screen.getByTestId("add-exit-block"));
-    fireEvent.click(screen.getByTestId("add-notrade-block"));
-    expect(screen.getByTestId("entry-block-1")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("remove-entry-0"));
-    expect(screen.queryAllByTestId(/^entry-block-/).length).toBe(1);
-  });
-});

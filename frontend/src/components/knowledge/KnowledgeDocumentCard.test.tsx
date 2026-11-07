@@ -31,3 +31,43 @@ it("queues an explicit indexing retry without claiming current search readiness"
   expect(await screen.findByText("Retry queued. Refresh the library to check readiness.")).toBeInTheDocument();
   expect(screen.getByTestId("knowledge-indexing-status")).toHaveTextContent("Search failed");
 });
+
+it("shows dates only, without file hashes, parser or index internals", () => {
+  render(
+    <KnowledgeDocumentCard
+      document={{
+        id: "doc",
+        title: "Rules",
+        source_type: "risk_policy",
+        version: 1,
+        created_at: "2026-10-05T10:00:00Z",
+        updated_at: "2026-10-07T10:00:00Z",
+        ingestion_metadata: {
+          file: {
+            filename: "rules.txt",
+            media_type: "text/plain",
+            raw_content_hash: "a".repeat(64),
+            byte_size: 50,
+            extracted_text_hash: "b".repeat(64),
+            extracted_characters: 50,
+            parser_version: "knowledge-file/v1",
+            confirmed_at: "2026-10-05T10:00:00Z",
+          },
+          indexing: {
+            sql_chunk_count: 2,
+            vector_backend: "qdrant",
+            vector_index_status: "upsert_acknowledged",
+            fallback_used: false,
+            observed_at: "2026-10-05T10:00:00Z",
+          },
+        },
+      }}
+    />,
+  );
+  expect(screen.getByTestId("knowledge-source-context")).toHaveTextContent(
+    /^Added .*5, 2026 · Updated .*7, 2026$/,
+  );
+  expect(
+    screen.queryByText(/SHA-256|knowledge-file\/v1|qdrant|rules\.txt|a{64}/),
+  ).not.toBeInTheDocument();
+});

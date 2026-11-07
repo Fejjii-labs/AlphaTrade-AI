@@ -62,7 +62,7 @@ function executionModeBadgeVariant(
  * Portfolio safety banner for non-redundant honesty only (FP2-123).
  *
  * When the payload confirms verified paper posture with only the standard
- * static disclaimer, the global StatusStrip plus page-header PaperModeIndicator
+ * static disclaimer, the top bar mode pill plus page-header PaperModeIndicator
  * already communicate that posture — suppress this third surface.
  * Unverified, live, conflicting, or dynamic-disclaimer states always remain visible.
  */
