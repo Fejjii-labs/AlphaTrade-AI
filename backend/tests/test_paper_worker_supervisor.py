@@ -1085,7 +1085,7 @@ def test_provider_retry_waits_for_the_interval_and_stops_on_a_hard_refusal() -> 
     from app.workers.paper_worker import _RecoveringWatcherCycle
 
     settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
-    answers = [_decision("provider_unavailable"), _decision("migration_unhealthy")]
+    answers = [_decision("provider_unavailable"), _decision("legacy_watcher_forbidden")]
     calls = {"n": 0}
     published: list[str] = []
     ticks = {"now": 0.0}
@@ -1126,20 +1126,22 @@ def test_provider_retry_waits_for_the_interval_and_stops_on_a_hard_refusal() -> 
         assert calls["n"] == 0  # inside the retry interval: no preflight
         ticks["now"] = 60.0
         assert cycle().error == "provider_unavailable"  # retry 1, still provider
-        ticks["now"] = 120.0
-        assert cycle().error == "migration_unhealthy"  # retry 2, hard refusal
-        ticks["now"] = 999.0
-        assert cycle().error == "migration_unhealthy"
+        ticks["now"] = 180.0  # backoff doubled to 120 s after the first failure
+        assert cycle().error == "legacy_watcher_forbidden"  # retry 2, hard refusal
+        ticks["now"] = 99999.0
+        assert cycle().error == "legacy_watcher_forbidden"
     finally:
         watcher_paper.publish_idle_watcher_status = original  # type: ignore[assignment]
-    assert calls["n"] == 2  # a non-provider refusal ends the retries
+    assert calls["n"] == 2  # a config refusal ends the retries
     assert cycle.runtime is None
-    assert published == ["provider_unavailable"] * 2 + ["migration_unhealthy"] * 2
+    assert published == ["provider_unavailable"] * 2 + ["legacy_watcher_forbidden"] * 2
 
 
-def test_provider_retry_is_bounded_and_logs_each_attempt(
+def test_provider_retry_never_gives_up_and_escalates_a_prolonged_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """H3: a provider outage longer than 30 min must not leave the worker idle."""
+
     from structlog.testing import capture_logs
 
     import app.workers.watcher_paper as watcher_paper
@@ -1173,30 +1175,89 @@ def test_provider_retry_is_bounded_and_logs_each_attempt(
         stops=[],
         releases=[],
         retry_seconds=60.0,
-        max_attempts=3,
+        max_retry_seconds=240.0,
+        escalate_after=3,
         monotonic=lambda: ticks["now"],
     )
     with capture_logs() as logs:
-        for minute in range(1, 11):  # well past the bound
-            ticks["now"] = 60.0 * minute
+        for step in range(1, 400):  # 400 min, far past the old 30-attempt bound
+            ticks["now"] = 60.0 * step
             assert cycle().error == "provider_unavailable"
-    assert calls["n"] == 3
-    assert cycle.attempts == 3
+    # Backoff 60, 120, 240, 240, ...: attempts at minute 1, 2, 4, then every 4th.
+    assert calls["n"] == cycle.attempts == 3 + len(range(8, 400, 4))
     failed = [e for e in logs if e["event"] == "watcher_paper_activation_retry_failed"]
-    assert [(e["attempt"], e["retry_in_seconds"], e["max_attempts"]) for e in failed] == [
-        (1, 60.0, 3),
-        (2, 60.0, 3),
-    ]
-    assert all(e["log_level"] == "warning" for e in failed)
-    exhausted = [e for e in logs if e["event"] == "watcher_paper_activation_retry_exhausted"]
-    assert len(exhausted) == 1
-    assert exhausted[0]["log_level"] == "error"
-    assert exhausted[0]["attempts"] == 3
-    assert exhausted[0]["reason"] == "provider_unavailable"
+    assert [e["retry_in_seconds"] for e in failed[:4]] == [60.0, 120.0, 240.0, 240.0]
+    assert [e["log_level"] for e in failed[:4]] == ["warning", "warning", "error", "error"]
+    assert not [e for e in logs if e["event"] == "watcher_paper_activation_retry_exhausted"]
 
 
-def test_provider_retry_default_bound_is_finite() -> None:
-    from app.workers.paper_worker import ACTIVATION_RETRY_MAX_ATTEMPTS, ACTIVATION_RETRY_SECONDS
+def test_database_refusal_at_boot_is_retried_until_it_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H2: a DB probe failure or a pending migration at boot must not idle forever."""
 
-    assert ACTIVATION_RETRY_MAX_ATTEMPTS >= 1
-    assert ACTIVATION_RETRY_MAX_ATTEMPTS * ACTIVATION_RETRY_SECONDS <= 3600.0
+    import app.workers.watcher_paper as watcher_paper
+    from app.workers.paper_worker import _RecoveringWatcherCycle, activation_refusal_is_retryable
+
+    assert activation_refusal_is_retryable(
+        ("activation_probe_failed", "strategy_lineage_invalid", "migration_unhealthy")
+    )
+    assert activation_refusal_is_retryable(("migration_unhealthy",))
+    assert not activation_refusal_is_retryable(("strategy_lineage_invalid",))
+    assert not activation_refusal_is_retryable(("migration_unhealthy", "real_trading_enabled"))
+    assert not activation_refusal_is_retryable(("activation_disarmed",))
+    assert not activation_refusal_is_retryable(())
+
+    settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
+    answers = [_decision("migration_unhealthy"), _decision()]
+    ticks = {"now": 0.0}
+
+    class _Runtime:
+        def run_cycle(self) -> WatcherPaperCycleReport:
+            return WatcherPaperCycleReport(
+                reason_code="completed",
+                enabled=True,
+                scans=(_scan(),),
+                candidates_created=0,
+                kill_switch_active=False,
+            )
+
+        def stop(self) -> None:
+            return None
+
+    class _Session:
+        runtime = _Runtime()
+
+        def close(self) -> None:
+            return None
+
+    class _Now:
+        def now(self) -> datetime:
+            return datetime(2026, 11, 4, 14, 51, tzinfo=UTC)
+
+    monkeypatch.setattr(watcher_paper, "publish_idle_watcher_status", lambda *_a, **_k: None)
+    cycle = _RecoveringWatcherCycle(
+        settings,
+        object(),  # type: ignore[arg-type]
+        worker_id="w",
+        reason="activation_probe_failed",
+        clock=_Now(),
+        preflight=lambda: answers.pop(0),
+        open_session=_Session,
+        closers=[],
+        stops=[],
+        releases=[],
+        retry_seconds=60.0,
+        monotonic=lambda: ticks["now"],
+    )
+    ticks["now"] = 60.0
+    assert cycle().error == "migration_unhealthy"
+    ticks["now"] = 180.0
+    assert cycle().status == "running"
+    assert cycle.runtime is not None
+
+
+def test_activation_retry_backoff_is_capped() -> None:
+    from app.workers.paper_worker import ACTIVATION_RETRY_MAX_SECONDS, ACTIVATION_RETRY_SECONDS
+
+    assert 0 < ACTIVATION_RETRY_SECONDS <= ACTIVATION_RETRY_MAX_SECONDS <= 900.0

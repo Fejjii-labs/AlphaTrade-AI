@@ -1008,8 +1008,9 @@ def _build_armed_supervisor(
             worker_instance_id=instance_id,
         )
         if not decision.allowed and activation_refusal_is_retryable(decision.reason_codes):
-            # A provider outage at boot (Binance lease standby, shared ban) is
-            # temporary: keep heartbeating and re-run the same preflight.
+            # A provider outage (Binance lease standby, shared ban) or a database
+            # / migration refusal at boot is temporary: keep heartbeating and
+            # re-run the same preflight with capped backoff (H2, H3).
             recovering = _RecoveringWatcherCycle(
                 watcher_settings,
                 factory,
@@ -1211,25 +1212,48 @@ def _idle_watcher_cycle(
     return cycle
 
 
-# Refusals that only reflect the market provider at that moment. Anything else
-# (config, migration, lineage, authority) still needs a restart to re-evaluate.
-_RETRYABLE_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
+# Refusals that clear on their own: the market provider at that moment, or the
+# database at boot (a Postgres blip, or the worker starting before the API's
+# pre-deploy `alembic upgrade head` finishes: H2). The preflight is read-only,
+# so it is retried forever with capped backoff instead of idling until a human
+# restarts the worker (H3). Config, lineage-only and authority refusals still
+# need a restart to re-evaluate.
+_PROVIDER_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
+_DATABASE_ACTIVATION_REASONS = frozenset(
+    {"activation_probe_failed", "migration_unhealthy", "strategy_lineage_invalid"}
+)
+_RETRYABLE_ACTIVATION_REASONS = _PROVIDER_ACTIVATION_REASONS | _DATABASE_ACTIVATION_REASONS
 ACTIVATION_RETRY_SECONDS = 60.0
-# 30 attempts at 60 s: give up after about 30 min of a provider-only refusal.
-ACTIVATION_RETRY_MAX_ATTEMPTS = 30
+# Backoff doubles from ACTIVATION_RETRY_SECONDS up to this cap; there is no
+# attempt limit.
+ACTIVATION_RETRY_MAX_SECONDS = 900.0
+# From this failed attempt on (about 30 min of backoff: 60+120+240+480+900 s)
+# each further failure logs at error so a prolonged refusal pages.
+ACTIVATION_RETRY_ESCALATE_AFTER = 5
 
 
 def activation_refusal_is_retryable(reason_codes: tuple[str, ...]) -> bool:
-    return bool(reason_codes) and set(reason_codes) <= _RETRYABLE_ACTIVATION_REASONS
+    """True when every reason can clear without a restart.
+
+    ``strategy_lineage_invalid`` alone is a configuration problem; it is only
+    retryable next to a failed database probe or an unhealthy migration, which
+    make the lineage read meaningless.
+    """
+
+    codes = set(reason_codes)
+    if not codes or not codes <= _RETRYABLE_ACTIVATION_REASONS:
+        return False
+    return codes != {"strategy_lineage_invalid"}
 
 
 class _RecoveringWatcherCycle:
-    """Idle Watcher that re-runs preflight after a provider-only refusal.
+    """Idle Watcher that re-runs preflight after a refusal that can clear.
 
-    Heartbeats like the idle cycle. Every ``retry_seconds`` it runs the full
-    preflight again; once that clears it opens the staging session and scans.
-    A non-retryable refusal on a later attempt stops the retries, and so does
-    reaching ``max_attempts``; the worker then stays idle until a restart.
+    Heartbeats like the idle cycle. It runs the full preflight again after
+    ``retry_seconds``, doubling the wait up to ``max_retry_seconds``; once the
+    preflight clears it opens the staging session and scans. A non-retryable
+    refusal on a later attempt stops the retries; the worker then stays idle
+    until a restart. ``max_attempts`` is None (retry forever) outside tests.
     """
 
     def __init__(
@@ -1246,7 +1270,9 @@ class _RecoveringWatcherCycle:
         stops: list[Callable[[], None]],
         releases: list[Callable[[], int]],
         retry_seconds: float | None = None,
+        max_retry_seconds: float | None = None,
         max_attempts: int | None = None,
+        escalate_after: int | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
@@ -1260,7 +1286,14 @@ class _RecoveringWatcherCycle:
         self._stops = stops
         self._releases = releases
         self._retry_seconds = ACTIVATION_RETRY_SECONDS if retry_seconds is None else retry_seconds
-        self._max_attempts = ACTIVATION_RETRY_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        self._max_retry_seconds = max(
+            self._retry_seconds,
+            ACTIVATION_RETRY_MAX_SECONDS if max_retry_seconds is None else max_retry_seconds,
+        )
+        self._max_attempts = max_attempts
+        self._escalate_after = (
+            ACTIVATION_RETRY_ESCALATE_AFTER if escalate_after is None else escalate_after
+        )
         self._monotonic = monotonic
         self._next_attempt_at: float | None = monotonic() + self._retry_seconds
         self.attempts = 0
@@ -1289,11 +1322,18 @@ class _RecoveringWatcherCycle:
             return bool(waiter(interval, stop))
         return stop.wait(interval)
 
+    def retry_delay(self, attempts: int) -> float:
+        """Seconds before the attempt after ``attempts`` failures (capped doubling)."""
+
+        exponent = min(max(attempts - 1, 0), 16)
+        return min(self._retry_seconds * (2**exponent), self._max_retry_seconds)
+
     def _attempt(self) -> None:
         from app.telegram_activation.errors import TelegramActivationError
 
         self.attempts += 1
-        self._next_attempt_at = self._monotonic() + self._retry_seconds
+        delay = self.retry_delay(self.attempts)
+        self._next_attempt_at = self._monotonic() + delay
         decision = self._preflight()
         if not decision.allowed:  # type: ignore[attr-defined]
             self._reason = decision.primary_reason  # type: ignore[attr-defined]
@@ -1305,7 +1345,7 @@ class _RecoveringWatcherCycle:
                     reason=self._reason,
                     worker_id=self._worker_id,
                 )
-            elif self.attempts >= self._max_attempts:
+            elif self._max_attempts is not None and self.attempts >= self._max_attempts:
                 self._next_attempt_at = None
                 logger.error(
                     "watcher_paper_activation_retry_exhausted",
@@ -1313,14 +1353,15 @@ class _RecoveringWatcherCycle:
                     max_attempts=self._max_attempts,
                     reason=self._reason,
                     worker_id=self._worker_id,
-                    action="restart the worker once the market provider recovers",
+                    action="restart the worker once the refusal clears",
                 )
             else:
-                logger.warning(
+                log = logger.error if self.attempts >= self._escalate_after else logger.warning
+                log(
                     "watcher_paper_activation_retry_failed",
                     attempt=self.attempts,
                     max_attempts=self._max_attempts,
-                    retry_in_seconds=self._retry_seconds,
+                    retry_in_seconds=delay,
                     reason=self._reason,
                     worker_id=self._worker_id,
                 )
