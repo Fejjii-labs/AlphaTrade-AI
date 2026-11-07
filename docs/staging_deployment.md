@@ -79,8 +79,8 @@ Apply in Render Dashboard → **Environment** → **Save** → **Manual Deploy**
 | `MARKET_WATCHER_BRIDGE_ENABLED` | `false` |
 | `WATCHER_ORCHESTRATION_ENABLED` | `false` |
 | `REQUIRE_EMAIL_VERIFIED` | `false` (frictionless demo login) |
-| `DEMO_SEED_ENABLED` | `true` (enables owner-only `POST /demo/seed` on staging) |
-| `DEMO_SEED_PASSWORD` | Private demo password on Render (min 12 characters; never commit). Sets `demo@alphatrade.ai` on seed. |
+| `DEMO_SEED_ENABLED` | `true` (enables `POST /demo/seed` on staging; callable only by an owner of the demo org, or by any owner for first-time bootstrap while the demo org does not exist) |
+| `DEMO_SEED_PASSWORD` | Private demo password on Render (min 12 characters; never commit). Sets `demo@alphatrade.ai` on seed. Required outside local: a request-body password is ignored unless `ENVIRONMENT=local`. |
 | `RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK` | `true` (when Redis URL invalid on staging) |
 | `REDIS_URL` | Valid Upstash URL: `rediss://default:<token>@<host>.upstash.io:6379` — **not** a `redis-cli` command (app also normalizes common `redis-cli --tls -u` mistakes) |
 | `QDRANT_URL` | Reachable HTTPS endpoint **or** empty (in-memory RAG fallback) |
@@ -158,7 +158,8 @@ DEMO_SEED_USE_SERVER_PASSWORD=true \
 BACKEND_URL=https://alphatrade-api-staging.onrender.com \
 ./scripts/seed-demo.sh --api
 
-# Or pass password locally (also sent in body when server env unset)
+# Or log in as the demo owner with the password (the body password itself is
+# ignored outside ENVIRONMENT=local; the server env value always wins)
 DEMO_SEED_PASSWORD='your-chosen-demo-password' \
 BACKEND_URL=https://alphatrade-api-staging.onrender.com \
 ./scripts/seed-demo.sh --api

@@ -10,14 +10,14 @@ from app.schemas.common import StrictModel
 
 
 class DemoSeedRequest(StrictModel):
-    """Optional body for staging API seed when server env lacks DEMO_SEED_PASSWORD."""
+    """Optional body for local API seed; ignored outside ENVIRONMENT=local."""
 
     password: str | None = Field(
         default=None,
         min_length=1,
         description=(
-            "Demo account password. Used when DEMO_SEED_PASSWORD is unset on the server "
-            "(e.g. Render staging without shell). Never logged."
+            "Demo account password. Honoured only when ENVIRONMENT=local; staging "
+            "always uses the server-side DEMO_SEED_PASSWORD. Never logged."
         ),
     )
 

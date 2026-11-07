@@ -138,9 +138,19 @@ def assert_demo_seed_allowed(settings: Settings) -> None:
 
 
 def resolve_demo_password(settings: Settings, *, explicit: str | None = None) -> str:
-    """Resolve demo password from explicit arg or env — never logged."""
+    """Resolve demo password from explicit arg or env — never logged.
+
+    An explicit (request-body) password is honoured only in ``local``; elsewhere
+    the server-side ``DEMO_SEED_PASSWORD`` is the single source so an API caller
+    can never choose the shared demo account's credentials.
+    """
     import os
 
+    if explicit and settings.environment is not Environment.LOCAL:
+        logger.warning(
+            "demo_seed_explicit_password_ignored", environment=settings.environment.value
+        )
+        explicit = None
     password = explicit or os.environ.get("DEMO_SEED_PASSWORD")
     if password:
         validate_password(password, settings)
@@ -154,6 +164,23 @@ def resolve_demo_password(settings: Settings, *, explicit: str | None = None) ->
     )
 
 
+def assert_demo_seed_requester_allowed(
+    session: Session,
+    *,
+    requester_organization_id: uuid.UUID,
+) -> None:
+    """API callers may only re-seed from inside the demo org.
+
+    The single exception is first-time bootstrap (demo org absent): the demo
+    password still comes from server env, so the caller gains no access to it.
+    """
+    if requester_organization_id == DEMO_ORG_ID:
+        return
+    if session.get(Organization, DEMO_ORG_ID) is None:
+        return
+    raise ForbiddenError("Demo seed is restricted to the demo workspace.")
+
+
 class DemoSeedService:
     """Seed or refresh synthetic paper-only demo tenant data."""
 
@@ -161,10 +188,27 @@ class DemoSeedService:
         self._session = session
         self._settings = settings
 
-    def seed(self, *, password: str | None = None) -> DemoSeedResult:
+    def seed(
+        self,
+        *,
+        password: str | None = None,
+        requester_user_id: uuid.UUID | None = None,
+        requester_organization_id: uuid.UUID | None = None,
+    ) -> DemoSeedResult:
+        """Seed the demo tenant.
+
+        ``requester_*`` are set by the API route. When present the caller must be
+        in the demo org (or the demo org must not exist yet), and bootstrap
+        cleanup only removes the caller's own throwaway bootstrap account. The
+        operator CLI (no requester) keeps the full bootstrap sweep.
+        """
         assert_demo_seed_allowed(self._settings)
         if self._settings.execution_mode.value != "paper":
             raise ForbiddenError("Demo seed requires execution_mode=paper.")
+        if requester_organization_id is not None:
+            assert_demo_seed_requester_allowed(
+                self._session, requester_organization_id=requester_organization_id
+            )
         resolved_password = resolve_demo_password(self._settings, explicit=password)
         org, user = self._ensure_demo_identity(resolved_password)
         self._clear_demo_entities()
@@ -175,7 +219,10 @@ class DemoSeedService:
         self._seed_journals(org.id, user.id)
         self._seed_risk_settings(org.id, user.id)
         self._seed_market_watcher(org.id, user.id)
-        bootstrap_removed = self._cleanup_bootstrap_seed_accounts()
+        bootstrap_removed = self._cleanup_bootstrap_seed_accounts(
+            only_user_id=requester_user_id if requester_organization_id is not None else None,
+            api_request=requester_organization_id is not None,
+        )
         self._session.commit()
         logger.info(
             "demo_seed_completed",
@@ -242,12 +289,24 @@ class DemoSeedService:
         self._session.flush()
         return org, user
 
-    def _cleanup_bootstrap_seed_accounts(self) -> int:
-        """Remove temporary API seed bootstrap owners; never touches demo tenant."""
+    def _cleanup_bootstrap_seed_accounts(
+        self,
+        *,
+        only_user_id: uuid.UUID | None = None,
+        api_request: bool = False,
+    ) -> int:
+        """Remove temporary API seed bootstrap owners; never touches demo tenant.
+
+        API requests may only remove the caller's own bootstrap account
+        (``only_user_id``); other tenants' rows are never touched from the API.
+        """
+        if api_request and only_user_id is None:
+            return 0
         removed = 0
-        candidates = self._session.scalars(
-            select(User).where(User.id != DEMO_USER_ID, User.email != DEMO_EMAIL)
-        ).all()
+        stmt = select(User).where(User.id != DEMO_USER_ID, User.email != DEMO_EMAIL)
+        if only_user_id is not None:
+            stmt = stmt.where(User.id == only_user_id)
+        candidates = self._session.scalars(stmt).all()
         for user in candidates:
             if not BOOTSTRAP_SEED_EMAIL_RE.match(user.email):
                 continue

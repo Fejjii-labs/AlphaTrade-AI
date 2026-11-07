@@ -1,4 +1,8 @@
-"""Owner-only demo seed endpoint (staging/local only)."""
+"""Owner-only demo seed endpoint (staging/local only).
+
+Pinned to the demo org (or first-time bootstrap when it does not exist yet);
+a body password is honoured only in ``local``.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 @router.post(
     "/seed",
     response_model=DemoSeedResponse,
-    summary="Seed synthetic paper-only demo data (owner, staging/local)",
+    summary="Seed synthetic paper-only demo data (demo-org owner, staging/local)",
 )
 def seed_demo_data(
     tenant: OwnerDep,
@@ -24,7 +28,11 @@ def seed_demo_data(
     body: DemoSeedRequest | None = None,
 ) -> DemoSeedResponse:
     service = DemoSeedService(session, settings)
-    result = service.seed(password=body.password if body else None)
+    result = service.seed(
+        password=body.password if body else None,
+        requester_user_id=tenant.user_id,
+        requester_organization_id=tenant.organization_id,
+    )
     return DemoSeedResponse(
         organization_id=result.organization_id,
         user_id=result.user_id,
