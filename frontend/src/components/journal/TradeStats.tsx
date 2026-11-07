@@ -1,13 +1,18 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
+import { SOURCE_LABELS } from "@/components/dashboard/performance/performance-model";
 import { Row } from "@/components/ui/row";
 import { Stat, StatStrip } from "@/components/ui/stat-strip";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { JournalStatsBucket, JournalTradeStatsMetrics } from "@/lib/api/types";
-import { formatMoney, formatPercent } from "@/lib/format";
+import type {
+  JournalStatsBucket,
+  JournalTradeSource,
+  JournalTradeStatsMetrics,
+} from "@/lib/api/types";
+import { formatMoney, formatPercent, humanizeToken } from "@/lib/format";
 
 function signedMoney(value: string | null | undefined): string | null {
   if (value == null) return null;
@@ -58,12 +63,24 @@ function Breakdown({ title, buckets }: { title: string; buckets: JournalStatsBuc
   );
 }
 
-/** Trades → Stats: overall results, then by strategy and by symbol. */
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source as JournalTradeSource] ?? humanizeToken(source);
+}
+
+/**
+ * Trades → Stats: overall results, then by source, strategy and symbol.
+ * The endpoint aggregates every closed journal trade (backtest, imported and
+ * manual rows included) unless one source is picked, so the headline says
+ * which sources it covers instead of implying paper/demo only.
+ */
 export function TradeStats() {
+  const [source, setSource] = useState<JournalTradeSource | "">("");
   const loader = useCallback(async () => {
-    const [strategy, symbol] = await Promise.allSettled([
-      api.journal.statistics({ group_by: "strategy" }),
-      api.journal.statistics({ group_by: "symbol" }),
+    const scoped = source ? { source } : {};
+    const [strategy, symbol, bySource] = await Promise.allSettled([
+      api.journal.statistics({ group_by: "strategy", ...scoped }),
+      api.journal.statistics({ group_by: "symbol", ...scoped }),
+      source ? Promise.resolve(null) : api.journal.statistics({ group_by: "source" }),
     ]);
     const byStrategy = strategy.status === "fulfilled" ? strategy.value : null;
     const bySymbol = symbol.status === "fulfilled" ? symbol.value : null;
@@ -71,19 +88,61 @@ export function TradeStats() {
       overall: (byStrategy ?? bySymbol)?.overall ?? null,
       byStrategy: byStrategy?.buckets ?? null,
       bySymbol: bySymbol?.buckets ?? null,
+      bySource:
+        bySource.status === "fulfilled"
+          ? (bySource.value?.buckets.map((b) => ({ ...b, label: sourceLabel(b.key) })) ?? null)
+          : null,
     };
-  }, []);
-  const { data, loading } = useAsyncData(loader, []);
-  if (loading) return <p role="status">Loading stats…</p>;
+  }, [source]);
+  const { data, loading } = useAsyncData(loader, [loader]);
+  const picker = (
+    <label className="inline-flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+      Source
+      <select
+        aria-label="Stats source"
+        value={source}
+        onChange={(event) => setSource(event.target.value as JournalTradeSource | "")}
+        className="min-h-11 rounded-control border border-border bg-surface-1 px-2 text-sm text-text-primary"
+      >
+        <option value="">All sources (incl. backtest and imported)</option>
+        {(Object.keys(SOURCE_LABELS) as JournalTradeSource[]).map((option) => (
+          <option key={option} value={option}>
+            {SOURCE_LABELS[option]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  if (loading)
+    return (
+      <div className="page-sections">
+        {picker}
+        <p role="status">Loading stats…</p>
+      </div>
+    );
   const m = data?.overall;
-  if (!m) return <p role="status">Stats unavailable.</p>;
+  if (!m)
+    return (
+      <div className="page-sections">
+        {picker}
+        <p role="status">Stats unavailable.</p>
+      </div>
+    );
+  const scopeText = source ? sourceLabel(source) : "all sources";
   return (
     <div className="page-sections" data-testid="trade-stats">
+      {picker}
+      <p className="text-xs text-text-muted" data-testid="trade-stats-scope">
+        Closed journal trades from {scopeText}.
+        {source
+          ? ""
+          : " Backtest, imported and manually logged trades are included; pick a source to compare with the dashboard venue."}
+      </p>
       <StatStrip label="Overall">
         <Stat label="Trades" value={String(m.trade_count)} />
         <Stat label="Win rate" value={m.win_rate == null ? null : formatPercent(m.win_rate)} />
         <Stat
-          label="Net P&L (paper/demo)"
+          label={`Net P&L (${scopeText})`}
           value={
             signedMoney(m.net_pnl_total) == null ? null : (
               <span className={pnlClass(m.net_pnl_total)}>{signedMoney(m.net_pnl_total)}</span>
@@ -93,6 +152,7 @@ export function TradeStats() {
         <Stat label="Profit factor" value={m.profit_factor == null ? null : m.profit_factor.toFixed(2)} />
         <Stat label="Avg R" value={m.average_r == null ? null : m.average_r.toFixed(2)} />
       </StatStrip>
+      {source ? null : <Breakdown title="By source" buckets={data.bySource} />}
       <Breakdown title="By strategy" buckets={data.byStrategy} />
       <Breakdown title="By symbol" buckets={data.bySymbol} />
     </div>
