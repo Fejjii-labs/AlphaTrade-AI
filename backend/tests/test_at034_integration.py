@@ -767,3 +767,61 @@ def test_viewer_rbac_mutations_forbidden_reads_allowed() -> None:
         assert client.get(f"/backtests/{run_id}/trades", headers=viewer).status_code == 403
         assert client.get("/journal/comparison", headers=viewer).status_code == 200
         assert client.get("/journal/setup-evidence", headers=viewer).status_code == 200
+
+
+def test_backtest_rejects_strategy_version_from_another_strategy_or_org() -> None:
+    """H7: ``strategy_version_id`` must belong to the path strategy (and its org)."""
+    with _build_client() as (client, factory, _):
+        owner_a = _auth(client, "at034-int-a@test.example")
+        trader_b = _auth(client, "at034-int-b@test.example")
+        victim_strategy = _create_strategy(client, owner_a, name="Victim Strat")
+        own_other_strategy = _create_strategy(client, owner_a, name="Own Other")
+        attacker_strategy = _create_strategy(client, trader_b, name="Attacker Strat")
+
+        from app.db.models import UserStrategyVersion
+
+        with factory() as session:
+            victim_version = session.scalar(
+                select(UserStrategyVersion).where(
+                    UserStrategyVersion.strategy_id == uuid.UUID(victim_strategy)
+                )
+            )
+            assert victim_version is not None
+            victim_version_id = victim_version.id
+            before = (victim_version.backtest_status, victim_version.validation_status)
+
+        cross_org = client.post(
+            f"/strategies/{attacker_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=trader_b,
+        )
+        assert cross_org.status_code == 404, cross_org.text
+
+        same_org_wrong_strategy = client.post(
+            f"/strategies/{own_other_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=owner_a,
+        )
+        assert same_org_wrong_strategy.status_code == 404, same_org_wrong_strategy.text
+
+        with factory() as session:
+            assert session.scalar(select(BacktestRun)) is None
+            row = session.get(UserStrategyVersion, victim_version_id)
+            assert row is not None
+            assert (row.backtest_status, row.validation_status) == before
+
+        own = client.post(
+            f"/strategies/{victim_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=owner_a,
+        )
+        assert own.status_code == 200, own.text
