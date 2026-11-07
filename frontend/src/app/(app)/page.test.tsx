@@ -210,10 +210,7 @@ describe("Trader dashboard", () => {
   });
   it("shows paper value, pnl, win rate, positions, and trader watcher status", () => {
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent(
       formatCurrency("1000.50"),
     );
@@ -242,10 +239,7 @@ describe("Trader dashboard", () => {
   it("does not present an unmeasured win rate as zero", () => {
     asyncState.data = dashboardData({ portfolio: okSource(portfolio(0, 0)) });
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent(
       UNAVAILABLE,
     );
@@ -269,10 +263,7 @@ describe("Trader dashboard", () => {
       }),
     });
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3");
     expect(screen.getByTestId("dashboard-daily-status")).toHaveTextContent(
       "Daily status unavailable",
@@ -292,10 +283,7 @@ describe("Trader dashboard", () => {
       screen.queryByTestId("dashboard-strategy-performance"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("ETHUSDT")).not.toBeInTheDocument();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(
       screen.queryByTestId("dashboard-demo-account"),
     ).not.toBeInTheDocument();
@@ -321,10 +309,7 @@ describe("Trader dashboard", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByTestId("dashboard-demo-account")).toBeInTheDocument();
     expect(screen.queryByText(/unavailable:/i)).not.toBeInTheDocument();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent("Loading…");
     expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent(UNAVAILABLE);
   });

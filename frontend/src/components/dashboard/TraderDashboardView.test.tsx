@@ -16,9 +16,9 @@ const performanceInstances = vi.hoisted(() => ({ next: 0 }));
 vi.mock("./performance/PerformanceDashboard", async () => {
   const { useState } = await import("react");
   return {
-    PerformanceDashboard: () => {
+    PerformanceDashboard: ({ scope }: { scope?: string }) => {
       const [instance] = useState(() => (performanceInstances.next += 1));
-      return <span data-testid="performance-instance">{instance}</span>;
+      return <span data-testid="performance-instance" data-scope={scope}>{instance}</span>;
     },
   };
 });
@@ -48,7 +48,7 @@ describe("Dashboard native integration", () => {
     await screen.findByTestId("native-activity-row");
     expect(screen.getByTestId("native-activity-statistics")).toBeInTheDocument();
     expect(screen.queryByText(/SIMULATED/)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Dashboard account" }), { target: { value: "simulator" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.queryByTestId("native-activity")).not.toBeInTheDocument();
     expect(screen.getByText(/SIMULATED/)).toBeInTheDocument();
     expect(demoAccountApi.refresh).not.toHaveBeenCalled();
@@ -76,5 +76,31 @@ describe("Dashboard native integration", () => {
     identity = { ...identity, user: { id: "reader-2" } };
     rerender(view());
     expect(screen.getByTestId("performance-instance").textContent).not.toBe(first);
+  });
+
+  it("drives performance and the account block from one venue control", async () => {
+    render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
+    expect(screen.queryByRole("combobox", { name: "Dashboard account" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
+    expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "demo");
+    await screen.findByTestId("native-activity-row");
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "paper");
+    expect(screen.queryByTestId("native-activity")).not.toBeInTheDocument();
+    expect(screen.getByText("Internal simulator")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), { target: { value: "backtest" } });
+    expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "backtest");
+    expect(screen.queryByText("Internal simulator")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-venue-no-account")).toHaveTextContent("Backtest trades");
+  });
+
+  it("disables Real unless real trading is verifiably enabled", () => {
+    const { rerender } = render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
+    expect(screen.getByRole("radio", { name: "Real" })).toBeDisabled();
+    expect(screen.getByTestId("dashboard-venue-real-disabled")).toBeInTheDocument();
+    rerender(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", null)} realTradingEnabled={null} />);
+    expect(screen.getByRole("radio", { name: "Real" })).toBeDisabled();
+    rerender(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", true)} realTradingEnabled />);
+    expect(screen.getByRole("radio", { name: "Real" })).toBeEnabled();
   });
 });

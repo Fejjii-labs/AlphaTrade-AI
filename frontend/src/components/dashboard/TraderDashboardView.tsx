@@ -10,6 +10,12 @@ import { AttentionCard } from "./AttentionCard";
 import { DailyReviewCard } from "./DailyReviewCard";
 import { BloFinDemoAccountCard } from "./BloFinDemoAccountCard";
 import { PerformanceDashboard } from "./performance/PerformanceDashboard";
+import {
+  DEFAULT_SCOPE,
+  EXTRA_SCOPE_OPTIONS,
+  SCOPE_LABELS,
+  SCOPE_OPTIONS,
+} from "./performance/performance-model";
 
 import {
   closedStrategyRows,
@@ -28,6 +34,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataNumber } from "@/components/ui/data-number";
 import { PageHeader } from "@/components/ui/page-header";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import type { SafetyPostureDisplay } from "@/components/workflows/safetyPostureDisplay";
 import type { SourceResult } from "@/components/workflows/sourceResult";
 import {
@@ -40,6 +47,7 @@ import { cn } from "@/lib/utils";
 import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
+  JournalDashboardScope,
   JournalStatsResponse,
   PaginatedCanonicalJournalTrades,
   PaperAlert,
@@ -56,6 +64,64 @@ export type TraderDashboardData = {
   market: SourceResult<CanonicalMarketMonitorStatusRead>;
   alerts: SourceResult<{ items: PaperAlert[]; total: number }>;
 };
+
+/** One venue for the whole page: performance, account card and activity. */
+export type DashboardVenue = JournalDashboardScope;
+
+export function DashboardVenueControl({
+  value,
+  onChange,
+  realTradingEnabled,
+}: {
+  value: DashboardVenue;
+  onChange: (next: DashboardVenue) => void;
+  realTradingEnabled: boolean | null | undefined;
+}) {
+  // Real is only selectable when the runtime posture verifiably enables it;
+  // false or unverified keeps it disabled.
+  const realDisabled = realTradingEnabled !== true;
+  const extra = EXTRA_SCOPE_OPTIONS.some((option) => option.value === value);
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 text-sm"
+      data-testid="dashboard-venue-control"
+    >
+      <span className="text-text-secondary">Venue</span>
+      <SegmentedControl
+        aria-label="Dashboard venue"
+        value={extra ? ("" as DashboardVenue) : value}
+        onChange={onChange}
+        options={SCOPE_OPTIONS.map((option) => ({
+          ...option,
+          disabled: option.value === "real" && realDisabled,
+        }))}
+      />
+      <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+        <span className="sr-only sm:not-sr-only">Other</span>
+        <select
+          aria-label="Other trade scopes"
+          value={extra ? value : ""}
+          onChange={(event) =>
+            onChange((event.target.value || DEFAULT_SCOPE) as DashboardVenue)
+          }
+          className="min-h-9 rounded-control border border-border bg-surface-1 px-2 text-xs text-text-primary"
+        >
+          <option value="">—</option>
+          {EXTRA_SCOPE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {realDisabled ? (
+        <span className="text-xs text-text-muted" data-testid="dashboard-venue-real-disabled">
+          Real is unavailable while real trading is disabled.
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function SectionEmpty({
   title,
@@ -75,19 +141,30 @@ export function TraderDashboardView({
   onRetry,
   refreshing = false,
   demoRefreshKey = 0,
+  venue: controlledVenue,
+  onVenueChange,
+  realTradingEnabled = false,
 }: {
   data: TraderDashboardData;
   posture: SafetyPostureDisplay;
   onRetry?: () => void;
   refreshing?: boolean;
   demoRefreshKey?: number;
+  /** Page-owned venue (so loaders can be gated on it); local state otherwise. */
+  venue?: DashboardVenue;
+  onVenueChange?: (next: DashboardVenue) => void;
+  realTradingEnabled?: boolean | null;
 }) {
   const { user, organization } = useAuth();
   const [session, setSession] = useState(sessionGeneration);
   useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
   const accountContext = JSON.stringify([organization?.id, user?.id, session]);
-  const [accountScope, setAccountScope] = useState("blofin");
-  const simulator = accountScope === "simulator";
+  const [ownVenue, setOwnVenue] = useState<DashboardVenue>(DEFAULT_SCOPE);
+  const venue = controlledVenue ?? ownVenue;
+  const setVenue = onVenueChange ?? setOwnVenue;
+  // Demo = configured BloFin demo account; Paper = internal simulator history.
+  const demo = venue === "demo";
+  const simulator = venue === "paper";
   const winRate = portfolioWinRate(data.portfolio);
   const expectancy = portfolioExpectancy(data.portfolio);
   const closedByStrategy = closedStrategyRows(data.portfolio);
@@ -165,21 +242,28 @@ export function TraderDashboardView({
         </p>
       ) : null}
 
-      <PerformanceDashboard key={`performance-${accountContext}`} refreshKey={demoRefreshKey} />
+      <DashboardVenueControl
+        value={venue}
+        onChange={setVenue}
+        realTradingEnabled={realTradingEnabled}
+      />
 
-      <label className="flex flex-wrap items-center gap-3 text-sm">
-        Account
-        <select
-          aria-label="Dashboard account"
-          value={accountScope}
-          onChange={(event) => setAccountScope(event.target.value)}
-          className="h-11 rounded-control border border-border-subtle bg-surface-1 px-3"
+      <PerformanceDashboard
+        key={`performance-${accountContext}`}
+        refreshKey={demoRefreshKey}
+        scope={venue}
+      />
+
+      {!demo && !simulator ? (
+        <p
+          className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
+          data-testid="dashboard-venue-no-account"
         >
-          <option value="blofin">BloFin demo · configured account</option>
-          <option value="simulator">Internal simulator · history</option>
-        </select>
-      </label>
-      {!simulator && user && organization ? (
+          No account snapshot for {SCOPE_LABELS[venue]}. The performance figures above
+          cover journal trades in this scope only.
+        </p>
+      ) : null}
+      {demo && user && organization ? (
         <div key={accountContext} className="page-sections">
           <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
           <NativeActivity statistics refreshKey={demoRefreshKey} />

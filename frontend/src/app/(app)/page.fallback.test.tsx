@@ -75,10 +75,7 @@ afterEach(() => {
 describe("Trader dashboard unavailable sources", () => {
   it("renders unavailable figures instead of zeros", () => {
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent(
       UNAVAILABLE,
     );

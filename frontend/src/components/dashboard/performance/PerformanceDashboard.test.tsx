@@ -193,6 +193,21 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
+  it("follows a page-owned scope and hides its own scope picker", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} scope="paper" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.queryByRole("radiogroup", { name: "Account scope" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Other trade scopes" })).not.toBeInTheDocument();
+    let calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.scope === "paper")).toBe(true);
+    vi.mocked(api.journal.performanceCalendar).mockClear();
+    rerender(<PerformanceDashboard now={NOW} scope="demo" />);
+    await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
+    calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.scope === "demo")).toBe(true);
+  });
+
   it("defaults to the Demo scope, labels it, and never mixes scopes", async () => {
     vi.mocked(api.journal.performanceCalendar).mockImplementation(async (params) => {
       const scope = params?.scope ?? "demo";

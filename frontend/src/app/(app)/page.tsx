@@ -41,9 +41,11 @@ export default function DashboardPage() {
 
   const { data, loading, reload } = useDashboardSources<DashboardPayloads>(loaders);
 
+  const realEnabled =
+    data.summary.data?.safety.real_trading_enabled ?? realTradingEnabled;
   const posture = describeSafetyPosture(
     data.summary.data?.safety.execution_mode ?? executionMode,
-    data.summary.data?.safety.real_trading_enabled ?? realTradingEnabled,
+    realEnabled,
   );
 
   return (
@@ -56,6 +58,7 @@ export default function DashboardPage() {
       }}
       refreshing={loading}
       demoRefreshKey={demoRefreshKey}
+      realTradingEnabled={realEnabled}
     />
   );
 }

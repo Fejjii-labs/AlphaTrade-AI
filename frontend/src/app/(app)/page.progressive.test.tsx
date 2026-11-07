@@ -61,9 +61,7 @@ it("fires all requests in parallel and renders sections while a slow one is pend
   ]) {
     expect(fn).toHaveBeenCalledTimes(1);
   }
-  fireEvent.change(screen.getByRole("combobox", { name: "Dashboard account" }), {
-    target: { value: "simulator" },
-  });
+  fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
   // Fast sections render while the watcher is still in flight.
   await waitFor(() =>
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3"),
