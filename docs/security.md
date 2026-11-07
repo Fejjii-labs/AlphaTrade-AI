@@ -33,6 +33,8 @@ Secrets are server environment/Settings values. Use environment templates for **
 
 Current staging/production provider policy requires configured OpenAI, authoritative Qdrant and Redis security backends. Local mocks and process-memory fallbacks are development options, not hosted-success behavior. Canonical market evidence uses read-only public perpetual connectors; exchange credentials must not enter those connectors. Demo exchange credentials are separately scoped and do not permit production venue hosts, withdrawal or transfer operations.
 
+The BloFin demo credentials are one shared venue account. The `/exchange/*` routes that read or act on that account (balances, positions, position mode, leverage info, order status, order cancel) are restricted to owners of `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`; when that pin is unset they fail closed outside `local` ([demo access guard](../backend/src/app/core/exchange_demo_access.py)). Instrument metadata stays available to any owner.
+
 Sources: [provider policy](../backend/src/app/core/provider_policy.py), [deployment safety](../backend/src/app/core/deployment_safety.py), [exchange safety](../backend/src/app/core/exchange_safety.py), [market activation](../backend/src/app/market_activation/profile.py).
 
 ## Uploads and untrusted knowledge

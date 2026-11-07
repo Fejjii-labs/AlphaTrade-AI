@@ -466,3 +466,66 @@ def test_cancel_not_generic_live_order_route(demo_client: TestClient) -> None:
     headers = _register_owner(demo_client)
     assert demo_client.post("/execution/paper", headers=headers, json={}).status_code != 200
     assert demo_client.post("/execution/live", headers=headers).status_code in (404, 405)
+
+
+_PINNED_ORG = "00000000-0000-4000-8000-0000000000aa"
+
+
+@pytest.fixture
+def pinned_demo_client() -> Iterator[TestClient]:
+    yield from _build_client(
+        Settings(
+            _env_file=None,
+            **_DEMO_SETTINGS,
+            governed_blofin_demo_organization_id=_PINNED_ORG,
+        )
+    )
+
+
+def test_shared_demo_account_routes_refuse_non_pinned_org(
+    pinned_demo_client: TestClient,
+) -> None:
+    """H8: the single BloFin demo account belongs to the pinned org only."""
+    headers = _register_owner(pinned_demo_client, email="other-owner@example.com")
+    for method, path in (
+        ("GET", "/exchange/balances"),
+        ("GET", "/exchange/positions"),
+        ("GET", "/exchange/account/position-mode"),
+        ("GET", "/exchange/account/leverage-info"),
+        ("GET", "/exchange/orders/BTC-USDT/demo-order-1"),
+        ("POST", "/exchange/orders/BTC-USDT/demo-order-1/cancel"),
+    ):
+        response = pinned_demo_client.request(method, path, headers=headers)
+        assert response.status_code == 403, (method, path, response.text)
+        _assert_no_secrets(response.json())
+    # Market metadata stays available to any owner.
+    assert pinned_demo_client.get("/exchange/instruments", headers=headers).status_code == 200
+
+
+def test_ensure_demo_account_organization_pin_rules() -> None:
+    """H8: pinned org must match; unpinned is tolerated only in local."""
+    import uuid
+
+    from app.core.config import Environment
+    from app.core.errors import ForbiddenError
+    from app.core.exchange_demo_access import ensure_demo_account_organization
+
+    pinned = Settings(_env_file=None, **_BASE, governed_blofin_demo_organization_id=_PINNED_ORG)
+    ensure_demo_account_organization(pinned, uuid.UUID(_PINNED_ORG))
+    with pytest.raises(ForbiddenError):
+        ensure_demo_account_organization(pinned, uuid.uuid4())
+
+    unpinned_local = Settings(_env_file=None, **_BASE)
+    ensure_demo_account_organization(unpinned_local, uuid.uuid4())
+
+    unpinned_staging = Settings.model_construct(
+        environment=Environment.STAGING, governed_blofin_demo_organization_id=""
+    )
+    with pytest.raises(ForbiddenError):
+        ensure_demo_account_organization(unpinned_staging, uuid.uuid4())
+
+    malformed = Settings.model_construct(
+        environment=Environment.LOCAL, governed_blofin_demo_organization_id="not-a-uuid"
+    )
+    with pytest.raises(ForbiddenError):
+        ensure_demo_account_organization(malformed, uuid.uuid4())
