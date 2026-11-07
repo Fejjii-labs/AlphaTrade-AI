@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Row } from "@/components/ui/row";
 import { useAuth } from "@/contexts/AuthContext";
@@ -104,6 +105,30 @@ function toLeveragePayload(form: LeverageForm): Record<string, unknown> {
 }
 
 /**
+ * Changes that raise liquidation risk versus the saved settings: a higher
+ * leverage (default or per coin, against that coin's current effective value)
+ * or a switch to cross margin. These need an explicit confirmation.
+ */
+export function riskierLeverageChanges(view: AutonomousTradingSettingsView, form: LeverageForm): string[] {
+  const savedDefault = view.demo_leverage ?? DEFAULT_DEMO_LEVERAGE;
+  const savedMode = view.demo_margin_mode ?? "isolated";
+  const savedOverrides = view.demo_leverage_overrides ?? {};
+  const changes: string[] = [];
+  const nextDefault = Number(form.demo_leverage.trim());
+  if (nextDefault > savedDefault) changes.push(`Default leverage ${savedDefault}× → ${nextDefault}×`);
+  if (form.demo_margin_mode === "cross" && savedMode !== "cross") changes.push("Default margin mode isolated → cross");
+  for (const row of form.demo_overrides.filter((item) => item.symbol)) {
+    const saved = savedOverrides[row.symbol];
+    const before = saved?.leverage ?? savedDefault;
+    const after = row.leverage.trim() ? Number(row.leverage.trim()) : nextDefault;
+    if (after > before) changes.push(`${row.symbol} leverage ${before}× → ${after}×`);
+    const beforeMode = saved?.margin_mode ?? savedMode;
+    if (row.margin_mode === "cross" && beforeMode !== "cross") changes.push(`${row.symbol} margin mode ${beforeMode} → cross`);
+  }
+  return changes;
+}
+
+/**
  * BloFin demo leverage, margin mode and per-coin overrides. Owner-only writes
  * through PATCH /autonomous/settings (only the demo leverage fields are sent).
  * Uses the settings the page already loaded; fetches only when rendered alone.
@@ -128,6 +153,7 @@ function DemoLeverageEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -149,7 +175,7 @@ function DemoLeverageEditor({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!form || saving) return;
+    if (!form || !view || saving) return;
     setSaveError(null);
     setSaved(false);
     const rows = form.demo_overrides.filter((row) => row.symbol);
@@ -163,16 +189,28 @@ function DemoLeverageEditor({
       setSaveError(localError);
       return;
     }
+    const riskier = riskierLeverageChanges(view, form);
+    if (riskier.length) {
+      setPendingChanges(riskier);
+      return;
+    }
+    await save();
+  }
+
+  async function save() {
+    if (!form || saving) return;
     setSaving(true);
     try {
       const updated = await api.autonomous.updateSettings(toLeveragePayload(form));
       setView(updated);
       setForm(toLeverageForm(updated));
       setSaved(true);
+      setPendingChanges(null);
     } catch (err) {
       setSaveError(
         err instanceof ApiError ? leverageValidationMessage(err.message, ceiling) : "Could not save leverage.",
       );
+      setPendingChanges(null);
     } finally {
       setSaving(false);
     }
@@ -290,6 +328,27 @@ function DemoLeverageEditor({
           Leverage saved.
         </p>
       ) : null}
+      <ConfirmDialog
+        open={pendingChanges !== null}
+        title="Raise BloFin demo leverage?"
+        description={
+          <>
+            Higher leverage or cross margin moves liquidation closer to entry on the next demo trades. It does not
+            increase trade size. BloFin demo only; real money stays blocked.
+          </>
+        }
+        confirmLabel="Save higher leverage"
+        busy={saving}
+        onConfirm={() => void save()}
+        onCancel={() => setPendingChanges(null)}
+        testId="demo-leverage-confirm"
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm text-text-primary" data-testid="demo-leverage-confirm-changes">
+          {(pendingChanges ?? []).map((change) => (
+            <li key={change}>{change}</li>
+          ))}
+        </ul>
+      </ConfirmDialog>
     </form>
   );
 }

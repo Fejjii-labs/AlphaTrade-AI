@@ -280,6 +280,13 @@ describe("TradingLimitsCard", () => {
     const { api } = await import("@/lib/api");
     renderCard();
     fireEvent.click(screen.getByTestId("risk-settings-reset"));
+    expect(screen.getByRole("dialog", { name: "Reset account limits to defaults?" })).toBeInTheDocument();
+    expect(api.risk.resetSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("risk-reset-confirm-cancel"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.risk.resetSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("risk-settings-reset"));
+    fireEvent.click(screen.getByTestId("risk-reset-confirm-confirm"));
     await waitFor(() => expect(screen.getByTestId("limits-saved")).toHaveTextContent("Account limits reset to defaults."));
     expect(api.risk.resetSettings).toHaveBeenCalledOnce();
     expect(onAccountSaved).toHaveBeenCalledWith(expect.objectContaining({ using_defaults: true }));

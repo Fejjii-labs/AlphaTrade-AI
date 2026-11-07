@@ -186,6 +186,10 @@ describe("Autonomous trading settings form", () => {
     const toggle = screen.getByTestId("autonomous-paper-switch-input");
     expect(toggle).toBeEnabled();
     fireEvent.click(toggle);
+    // Arming asks first; nothing is sent until the dialog is confirmed.
+    expect(screen.getByTestId("autonomous-arm-confirm")).toHaveTextContent("cannot trade real money");
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("autonomous-arm-confirm-confirm"));
     await waitFor(() => {
       expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({
         internal_paper_enabled: true,
@@ -200,6 +204,37 @@ describe("Autonomous trading settings form", () => {
       ["WorkerStale", "warn"],
       ["ModeOff", "unknown"],
     ]);
+  });
+
+  it("cancelling the arm dialog sends nothing; disarming needs no dialog", async () => {
+    auth.membershipRole = "owner";
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockReset();
+    render(<BotSettings />);
+    fireEvent.click(screen.getByTestId("autonomous-paper-switch-input"));
+    const dialog = screen.getByRole("dialog", { name: "Arm the autonomous paper bot?" });
+    expect(dialog).toBeInTheDocument();
+    // Focus starts on Cancel, the safe default.
+    expect(screen.getByTestId("autonomous-arm-confirm-cancel")).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+    expect(screen.getByTestId("autonomous-paper-switch-input")).not.toBeChecked();
+
+    cleanup();
+    useAsyncDataMock.mockReturnValue({
+      data: [{ ...settings, internal_paper_enabled: true }, account],
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({ ...settings, internal_paper_enabled: false });
+    render(<BotSettings />);
+    fireEvent.click(screen.getByTestId("autonomous-paper-switch-input"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({ internal_paper_enabled: false }),
+    );
   });
 
   it("keeps the paper switch disabled for a trader membership even if user.role says owner", () => {

@@ -5,6 +5,7 @@ import { FormEvent, type ReactNode, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import type { AutonomousTradingSettingsView, UserRiskSettings, UserRiskSettingsUpdate } from "@/lib/api/types";
@@ -151,6 +152,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
   const inFlight = useRef(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [saved, setSaved] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const botDirty = owner && !same(botForm, toBotForm(bot));
   const accountDirty = !same(accountForm, toAccountForm(account));
@@ -202,6 +204,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
   }
 
   async function handleReset() {
+    setConfirmReset(false);
     if (inFlight.current) return;
     inFlight.current = true;
     setSaving(true);
@@ -426,9 +429,26 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
             <Button type="submit" disabled={saving || (!botDirty && !accountDirty)} data-testid="limits-save">
               {saving ? "Saving…" : "Save limits"}
             </Button>
-            <Button type="button" variant="secondary" disabled={saving} onClick={() => void handleReset()} data-testid="risk-settings-reset">
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setConfirmReset(true)} data-testid="risk-settings-reset">
               Reset account defaults
             </Button>
+            <ConfirmDialog
+              open={confirmReset}
+              title="Reset account limits to defaults?"
+              description={
+                <>
+                  Your account limits (daily loss and target, trades per day, risk per trade, balance, timezone and
+                  guards) return to the system defaults. Unsaved edits in this form are discarded. A balance change
+                  is audited and reaches the account equity stop from the next UTC day. The kill switch and bot limits
+                  are not changed.
+                </>
+              }
+              confirmLabel="Reset to defaults"
+              confirmVariant="destructive"
+              onConfirm={() => void handleReset()}
+              onCancel={() => setConfirmReset(false)}
+              testId="risk-reset-confirm"
+            />
             {ownerReason ? (
               <p className="text-sm text-text-muted" data-testid="autonomous-save-owner-reason">
                 Bot limits: {ownerReason}
