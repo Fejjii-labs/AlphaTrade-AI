@@ -639,7 +639,14 @@ class WatcherPaperRuntime:
         if self._settings is not None and self._settings.watcher_paper_organization_id:
             scoped_org = UUID(self._settings.watcher_paper_organization_id)
         with self._session_factory() as session:
-            query = select(Organization.id).order_by(Organization.id).limit(1)
+            # Only organizations that can produce a scan target take a turn, so
+            # demo-seeded or empty tenants do not dilute the cadence (M9).
+            query = (
+                select(Organization.id)
+                .where(_has_scan_authority(Organization.id))
+                .order_by(Organization.id)
+                .limit(1)
+            )
             if scoped_org is not None:
                 org = session.scalar(select(Organization.id).where(Organization.id == scoped_org))
             else:
@@ -2246,6 +2253,29 @@ def _gate_refusal_reason(decision: object) -> str | None:
     if isinstance(reason, str) and reason and reason != "cleared":
         return reason
     return "activation_gate_error"
+
+
+def _has_scan_authority(organization_id: Any) -> Any:
+    """SQL predicate: the organization has an enabled strategy or a watcher assignment."""
+
+    from sqlalchemy import exists, or_, select
+
+    from app.db.models import UserStrategy
+    from app.db.watcher_assignments import WatcherAssignmentReceiptRow
+
+    return or_(
+        exists(
+            select(UserStrategy.id).where(
+                UserStrategy.organization_id == organization_id,
+                UserStrategy.enabled.is_(True),
+            )
+        ),
+        exists(
+            select(WatcherAssignmentReceiptRow.request_key).where(
+                WatcherAssignmentReceiptRow.organization_id == organization_id
+            )
+        ),
+    )
 
 
 def reconcile_governed_demo_once(
