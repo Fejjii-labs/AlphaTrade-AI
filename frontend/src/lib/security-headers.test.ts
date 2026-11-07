@@ -32,12 +32,15 @@ describe("buildContentSecurityPolicy", () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("form-action 'self'");
+    // Inline event-handler attributes are never needed by React/Next.
+    expect(csp).toContain("script-src-attr 'none'");
   });
 
   it("permits eval and websockets only in dev (HMR)", () => {
     const csp = buildContentSecurityPolicy({ apiOrigin: "http://localhost:8000", dev: true });
     expect(csp).toContain("'unsafe-eval'");
     expect(csp).toContain("ws:");
+    expect(csp).not.toContain("script-src-attr");
   });
 });
 
