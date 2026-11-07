@@ -292,3 +292,28 @@ def test_concurrent_alert_bookkeeping_stays_bounded() -> None:
     for thread in threads:
         thread.join(10)
     assert len(safety_alerts._SENT) <= safety_alerts._SENT_MAX
+
+
+def test_marker_from_a_sigterm_shutdown_logs_but_does_not_page(tmp_path, monkeypatch) -> None:
+    """M8: a deploy whose shutdown overran the grace is not a critical unclean exit."""
+
+    from app.observability.run_marker import claim_run_marker, mark_run_stopping
+    from app.services import worker_restart_alerts
+
+    marker = tmp_path / "run.json"
+    claim_run_marker(marker, now=1000.0)
+    mark_run_stopping(marker, now=1500.0)
+    previous = claim_run_marker(marker, now=1600.0)
+    assert previous is not None
+    assert previous.started_at == 1000.0
+    assert previous.stopping_at == 1500.0
+    sent: list[object] = []
+    monkeypatch.setattr(
+        "app.services.safety_alerts.deliver_safety_alert",
+        lambda *_a, **_k: sent.append(_a) or True,
+    )
+    assert (
+        worker_restart_alerts.alert_unclean_previous_exit(Settings(_env_file=None), previous)
+        is False
+    )
+    assert sent == []

@@ -1261,3 +1261,40 @@ def test_activation_retry_backoff_is_capped() -> None:
     from app.workers.paper_worker import ACTIVATION_RETRY_MAX_SECONDS, ACTIVATION_RETRY_SECONDS
 
     assert 0 < ACTIVATION_RETRY_SECONDS <= ACTIVATION_RETRY_MAX_SECONDS <= 900.0
+
+
+def test_shutdown_join_is_bounded_and_skips_the_stop_hook_under_a_running_cycle() -> None:
+    """M8: an auxiliary loop stuck past the budget must not hold shutdown forever,
+    and leases/clients must not be closed under it."""
+
+    import time
+
+    release = threading.Event()
+    hook_calls: list[str] = []
+
+    def stuck() -> CycleOutcome:
+        release.wait(10.0)
+        return CycleOutcome(status="ok")
+
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=lambda: CycleOutcome(status="ok"),
+        telegram_cycle=lambda: CycleOutcome(status="ok"),
+        poll_seconds=0.01,
+        join_timeout_seconds=0.2,
+        shutdown_budget_seconds=0.3,
+        on_stop=lambda: hook_calls.append("stop"),
+    )
+    supervisor.attach_auxiliary("stuck", stuck, poll_seconds=0.01, request_stop=lambda: None)
+    supervisor.start()
+    time.sleep(0.05)
+    started = time.monotonic()
+    try:
+        supervisor.close()
+        assert time.monotonic() - started < 2.0
+        assert supervisor.alive_components() == ["stuck"]
+        assert hook_calls == []
+    finally:
+        release.set()
+        for component in supervisor._components():
+            if component.thread is not None:
+                component.thread.join(5.0)

@@ -44,6 +44,11 @@ from app.workers.watcher_paper import (
 
 logger = structlog.get_logger("workers.paper_worker")
 
+# Total time the supervisor waits for its threads after SIGTERM. Render kills
+# the worker maxShutdownDelaySeconds (60 s) after SIGTERM; keep a margin for
+# the stop hook (lease release, client close) and the final health log.
+SHUTDOWN_BUDGET_SECONDS = 45.0
+
 _AUTHORITY_FIELDS = (
     "enable_real_trading",
     "real_trading_enabled",
@@ -201,6 +206,7 @@ class PaperWorkerSupervisor:
         telegram_cycle: Callable[[], CycleOutcome],
         poll_seconds: float = 15.0,
         join_timeout_seconds: float = 30.0,
+        shutdown_budget_seconds: float = SHUTDOWN_BUDGET_SECONDS,
         clock: Callable[[], datetime] | None = None,
         watcher_authority: tuple[AuthorityProbe, AuthorityRestore] | None = None,
         telegram_authority: tuple[AuthorityProbe, AuthorityRestore] | None = None,
@@ -217,6 +223,9 @@ class PaperWorkerSupervisor:
         self._worker_id = _new_worker_id()
         self._render_instance_id = os.environ.get("RENDER_INSTANCE_ID", "")[:120]
         self._join_timeout_seconds = join_timeout_seconds
+        self._shutdown_budget_seconds = shutdown_budget_seconds
+        # Called once when SIGTERM/SIGINT arrives, before joining (run marker).
+        self.on_shutdown_signal: Callable[[], None] | None = None
         self._clock = clock if clock is not None else _utc_now
         self._on_stop = on_stop
         self._stop = threading.Event()
@@ -398,22 +407,34 @@ class PaperWorkerSupervisor:
             stop()
 
     def join(self) -> None:
+        """Join every thread within one shared budget (M8).
+
+        Render sends SIGKILL ``maxShutdownDelaySeconds`` (60 s) after SIGTERM,
+        so no component may wait unbounded. A thread still running at the end
+        of the budget is logged; ``close`` then leaves its resources alone.
+        """
+
+        deadline = self._monotonic() + self._shutdown_budget_seconds
         for component in self._components():
             thread = component.thread
-            if thread is not None:
-                thread.join(self._join_timeout_seconds)
-                if (
-                    component
-                    in (
-                        self._indexing,
-                        self._activity,
-                        self._demo_snapshot,
-                        self._exit_monitor,
-                        *self._auxiliary,
-                    )
-                    and thread.is_alive()
-                ):
-                    thread.join()
+            if thread is None:
+                continue
+            remaining = max(deadline - self._monotonic(), 0.0)
+            thread.join(min(self._join_timeout_seconds, remaining))
+        alive = self.alive_components()
+        if alive:
+            logger.error(
+                "paper_worker_join_timeout",
+                components=alive,
+                budget_seconds=self._shutdown_budget_seconds,
+            )
+
+    def alive_components(self) -> list[str]:
+        return [
+            component.name
+            for component in self._components()
+            if component.thread is not None and component.thread.is_alive()
+        ]
 
     def close(self) -> None:
         """Release runtime resources once. Safe to call more than once."""
@@ -431,6 +452,13 @@ class PaperWorkerSupervisor:
         self._closed = True
         hook = self._on_stop
         if hook is None:
+            return
+        alive = self.alive_components()
+        if alive:
+            # Releasing leases or closing HTTP clients under a cycle that is
+            # still running corrupts it. Leave them; leases expire by TTL and
+            # the process exits (M8).
+            logger.error("paper_worker_stop_hook_skipped", components=alive)
             return
         try:
             hook()
@@ -481,6 +509,11 @@ class PaperWorkerSupervisor:
             signal.set_wakeup_fd(previous_wakeup)
             os.close(read_fd)
             os.close(write_fd)
+        if self._signaled and self.on_shutdown_signal is not None:
+            try:
+                self.on_shutdown_signal()
+            except Exception:
+                logger.warning("paper_worker_shutdown_signal_hook_failed", exc_info=True)
         self.request_stop()
         self.join()
         for component in self._components():
@@ -957,6 +990,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     marker_path = settings.paper_worker_run_marker_path or None
     alert_unclean_previous_exit(settings, claim_run_marker(marker_path, now=time.time()))
     supervisor = build_paper_worker_supervisor(settings)
+    from app.observability.run_marker import mark_run_stopping
+
+    supervisor.on_shutdown_signal = lambda: mark_run_stopping(marker_path, now=time.time())
     if disarmed:
         from app.services.arming_visibility import clear_disarmed_boot_rows
 
