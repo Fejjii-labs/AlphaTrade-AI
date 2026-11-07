@@ -1272,6 +1272,20 @@ describe("Agent workspace", () => {
     expect(screen.queryByTestId("agent-proposals")).not.toBeInTheDocument();
   });
 
+  it("pre-expands strategy options for the ?intent=strategy redirect target", async () => {
+    testParams = new URLSearchParams("intent=strategy");
+    render(<AgentWorkspace />);
+    const options = await screen.findByTestId("agent-strategy-options");
+    expect(options).toHaveAttribute("open");
+    expect(screen.getByTestId("agent-strategy-intent-hint")).toHaveTextContent("New strategy");
+    expect(screen.getByRole("button", { name: "Review strategy draft" })).toBeVisible();
+    cleanup();
+    testParams = new URLSearchParams();
+    render(<AgentWorkspace />);
+    expect(await screen.findByTestId("agent-strategy-options")).not.toHaveAttribute("open");
+    expect(screen.queryByTestId("agent-strategy-intent-hint")).not.toBeInTheDocument();
+  });
+
   it("shows a failed proposal decision on its card, not in the composer", async () => {
     apiMocks.agentTurn.mockResolvedValue({ conversation_id: "11111111-1111-4111-8111-111111111111", user_message_id: "u", assistant_message_id: "a", reply: "Draft proposal",
       proposals: [{ proposal_id: "p1", conversation_id: "11111111-1111-4111-8111-111111111111", summary: "Draft journal", status: "proposed", kind: "propose_journal_entry" }] });

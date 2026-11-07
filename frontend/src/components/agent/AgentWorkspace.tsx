@@ -70,6 +70,8 @@ export function AgentWorkspace() {
   currentScope.current = recoveryScope;
   const params = useSearchParams();
   const strategyId = params.get("strategy_id");
+  // `/strategy-lab/new` (and old Telegram links) redirect to `?intent=strategy`.
+  const strategyIntent = params.get("intent") === "strategy";
   const [strategyContext, setStrategyContext] = useState<{ id: string; name: string } | null>(null);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const historyRef = useRef<HTMLDivElement>(null);
@@ -967,8 +969,14 @@ export function AgentWorkspace() {
                   />
                 </div>
 
-                <details className="text-sm">
+                <details className="text-sm" open={strategyIntent || undefined} data-testid="agent-strategy-options">
                   <summary className="min-h-11 cursor-pointer content-center text-text-secondary">Strategy options</summary>
+                  {strategyIntent ? (
+                    <p className="text-caption text-text-muted" data-testid="agent-strategy-intent-hint">
+                      New strategy: describe the setup in the message box, then choose Review strategy draft. It stays a
+                      draft until you confirm it.
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2 py-2">
                     <Button type="button" variant="outline"
                       disabled={!sessionLive || sending || realtimeActive || Boolean(pending) || (!draft.trim() && !attachmentPreview) || Boolean(strategyError) || Boolean(!conversationId && strategyId && !strategyContext)}
