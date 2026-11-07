@@ -18,6 +18,10 @@ from app.paper_evaluation.ports import JournalExcursionPort, PaperEvaluationStor
 from app.paper_evaluation.refinement import refinement_suggestions
 from app.signal_fusion.action_eligibility import ActionEligibilityEvaluation
 
+# The summary rolls up at most this many of the newest observations, so API
+# latency and memory stay bounded as a tenant's history grows (M10).
+PAPER_EVALUATION_SUMMARY_LIMIT = 20_000
+
 
 class PaperEvaluationQueryService:
     """Tenant-scoped measurement reads over observations + attribution + journal."""
@@ -42,7 +46,9 @@ class PaperEvaluationQueryService:
         generated_at: datetime | None = None,
         narrative: str | None = None,
     ) -> PaperEvaluationSummary:
-        observations = self._store.list_for_organization(organization_id)
+        observations = self._store.list_for_organization(
+            organization_id, limit=PAPER_EVALUATION_SUMMARY_LIMIT
+        )
         attributions = self._attributions(
             organization_id=organization_id, learning_venue_mode=learning_venue_mode
         )

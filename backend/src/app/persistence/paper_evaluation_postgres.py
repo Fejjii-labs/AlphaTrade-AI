@@ -116,17 +116,26 @@ class PostgresPaperEvaluationStore:
         return _from_row(row)
 
     def list_for_organization(
-        self, organization_id: UUID
+        self, organization_id: UUID, *, limit: int | None = None
     ) -> tuple[PaperEvaluationObservation, ...]:
-        rows = self._session.scalars(
-            select(PaperEvaluationObservationRow)
-            .where(PaperEvaluationObservationRow.organization_id == organization_id)
-            .order_by(
-                PaperEvaluationObservationRow.occurred_at,
-                PaperEvaluationObservationRow.observation_id,
-            )
+        statement = select(PaperEvaluationObservationRow).where(
+            PaperEvaluationObservationRow.organization_id == organization_id
+        )
+        if limit is None:
+            rows = self._session.scalars(
+                statement.order_by(
+                    PaperEvaluationObservationRow.occurred_at,
+                    PaperEvaluationObservationRow.observation_id,
+                )
+            ).all()
+            return tuple(_from_row(row) for row in rows)
+        newest = self._session.scalars(
+            statement.order_by(
+                PaperEvaluationObservationRow.occurred_at.desc(),
+                PaperEvaluationObservationRow.observation_id.desc(),
+            ).limit(max(limit, 0))
         ).all()
-        return tuple(_from_row(row) for row in rows)
+        return tuple(_from_row(row) for row in reversed(newest))
 
 
 def _to_row(observation: PaperEvaluationObservation) -> PaperEvaluationObservationRow:
