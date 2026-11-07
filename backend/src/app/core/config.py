@@ -373,6 +373,13 @@ class Settings(BaseSettings):
     paper_worker_memory_watchdog_early_trip_window_seconds: float = Field(
         default=900.0, ge=0.0, le=86400.0
     )
+    # Emergency ceiling checked even during the startup grace, on its own short
+    # interval, so a spike toward the 512 MiB plan limit stops cleanly instead
+    # of being OOM-killed. Never below the soft limit; 0 = off.
+    paper_worker_memory_watchdog_ceiling_mb: int = Field(default=480, ge=0, le=65536)
+    paper_worker_memory_watchdog_ceiling_check_seconds: float = Field(
+        default=5.0, ge=1.0, le=3600.0
+    )
     # Telegram ops alert once the watchdog trips this many times in a row; 0 = off.
     paper_worker_memory_watchdog_alert_after_trips: int = Field(default=2, ge=0, le=100)
     # Written at boot, removed after a clean stop. Left behind = the previous run
