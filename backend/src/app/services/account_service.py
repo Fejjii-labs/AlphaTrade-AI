@@ -268,12 +268,15 @@ class AccountService:
         if expires_at <= datetime.now(UTC):
             raise ValidationAppError("Invitation has expired.")
         if hash_account_token(data.token) != row.token_hash:
+            # Record under the caller's org (durably, since the request fails): a
+            # wrong guess must not write rows into the inviting org's audit trail.
             self._record_event(
                 AuditEventType.AUTH_INVALID_TOKEN,
                 user_id=tenant.user_id,
-                organization_id=row.organization_id,
+                organization_id=tenant.organization_id,
                 result=AuditResult.FAILURE,
                 metadata={"reason": "invite_token_mismatch"},
+                durable=True,
             )
             raise AuthError("Invalid invitation token.")
         user = self._users.get(tenant.user_id)

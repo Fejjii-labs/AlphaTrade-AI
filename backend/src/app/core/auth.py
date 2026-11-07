@@ -62,13 +62,27 @@ def get_current_tenant(
 TenantDep = Annotated[TenantContext, Depends(get_current_tenant)]
 
 
+def get_current_tenant_allow_unverified(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> TenantContext:
+    """Like ``get_current_tenant`` but tolerates an unverified email (``/auth/me`` only)."""
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise AuthError("Missing bearer token.")
+    return auth_service.resolve_tenant(credentials.credentials, allow_unverified=True)
+
+
+UnverifiedTenantDep = Annotated[TenantContext, Depends(get_current_tenant_allow_unverified)]
+
+
 def get_optional_tenant(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> TenantContext | None:
     if credentials is None or credentials.scheme.lower() != "bearer":
         return None
-    return auth_service.resolve_tenant(credentials.credentials)
+    # Only the verification-request route uses this; it must work before verification.
+    return auth_service.resolve_tenant(credentials.credentials, allow_unverified=True)
 
 
 OptionalTenantDep = Annotated[TenantContext | None, Depends(get_optional_tenant)]

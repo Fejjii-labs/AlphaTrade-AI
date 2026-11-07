@@ -9,7 +9,7 @@ from app.core.auth import (
     AccountServiceDep,
     AuthServiceDep,
     OptionalTenantDep,
-    TenantDep,
+    UnverifiedTenantDep,
     optional_bearer,
 )
 from app.core.config import Settings, get_settings
@@ -161,7 +161,7 @@ async def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(tenant: TenantDep, auth_service: AuthServiceDep) -> MeResponse:
+async def me(tenant: UnverifiedTenantDep, auth_service: AuthServiceDep) -> MeResponse:
     response = auth_service.get_me(tenant)
     return MeResponse(
         user=response.user,

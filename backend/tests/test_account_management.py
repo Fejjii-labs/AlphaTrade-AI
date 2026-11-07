@@ -547,3 +547,157 @@ def test_real_trading_remains_disabled(account_client: AccountClientFixture) -> 
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["real_trading_enabled"] is False
+
+
+def _verified_required_client() -> Iterator[tuple[TestClient, sessionmaker[Session], Settings]]:
+    get_settings.cache_clear()
+    settings = Settings(
+        environment="local",
+        log_json=False,
+        execution_mode="paper",
+        enable_real_trading=False,
+        database_url="sqlite+pysqlite:///:memory:",
+        jwt_secret="test-secret-key-for-account-slice-32b-min",
+        require_email_verified=True,
+        email_send_enabled=True,
+        email_provider="mock",
+        access_token_denylist_use_redis=False,
+        rate_limit_use_redis=False,
+    )
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def _override_session() -> Iterator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app = create_app(settings=settings)
+    app.dependency_overrides[get_session] = _override_session
+    with TestClient(app) as client:
+        yield client, session_factory, settings
+    app.dependency_overrides.clear()
+    get_settings.cache_clear()
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+def test_unverified_registration_session_is_limited_when_verification_required() -> None:
+    """M14: register tokens only reach /auth/me and verification until verified."""
+    gen = _verified_required_client()
+    client, factory, _settings = next(gen)
+    try:
+        registered = _register(client, email="unverified@example.com")
+        access = registered["tokens"]["access_token"]
+        refresh = registered["tokens"]["refresh_token"]
+
+        me = client.get("/auth/me", headers=_auth(access))
+        assert me.status_code == 200, me.text
+        assert me.json()["user"]["email_verified"] is False
+        resend = client.post("/auth/verify-email/request", headers=_auth(access), json={})
+        assert resend.status_code == 200, resend.text
+
+        blocked = client.get("/organizations/invitations", headers=_auth(access))
+        assert blocked.status_code == 401
+        assert "not verified" in blocked.json()["error"]["message"].lower()
+
+        refreshed = client.post("/auth/refresh", json={"refresh_token": refresh})
+        assert refreshed.status_code == 401
+        assert "not verified" in refreshed.json()["error"]["message"].lower()
+
+        with factory() as session:
+            user = session.scalars(select(User).where(User.email == "unverified@example.com")).one()
+            user.email_verified = True
+            session.commit()
+
+        allowed = client.get("/organizations/invitations", headers=_auth(access))
+        assert allowed.status_code == 200, allowed.text
+        assert client.post("/auth/refresh", json={"refresh_token": refresh}).status_code == 200
+    finally:
+        gen.close()
+
+
+def test_resolve_tenant_uses_membership_matching_token_org(
+    account_client: AccountClientFixture,
+    account_settings: Settings,
+) -> None:
+    """L12: a token for a newer (invited) org resolves that org's membership."""
+    from app.security.tokens import create_access_token
+
+    client, _factory = account_client
+    owner = _register(client, email="inviter@example.com", org="Inviting Org")
+    created = client.post(
+        "/organizations/invitations",
+        headers=_auth(owner["tokens"]["access_token"]),
+        json={"email": "joiner@example.com", "role": "viewer"},
+    )
+    invitation_id = created.json()["id"]
+    inviting_org = uuid.UUID(created.json()["organization_id"])
+    joiner = _register(client, email="joiner@example.com", org="Joiner Home Org")
+    token = _extract_token_from_mock_email(account_settings, "organization_invitation")
+    accept = client.post(
+        f"/organizations/invitations/{invitation_id}/accept",
+        headers=_auth(joiner["tokens"]["access_token"]),
+        json={"token": token},
+    )
+    assert accept.status_code == 200, accept.text
+
+    joiner_id = uuid.UUID(joiner["user"]["id"])
+    second_org_token, _ = create_access_token(
+        user_id=joiner_id,
+        organization_id=inviting_org,
+        email="joiner@example.com",
+        settings=account_settings,
+        actor="user",
+    )
+    me = client.get("/auth/me", headers=_auth(second_org_token))
+    assert me.status_code == 200, me.text
+    assert me.json()["organization"]["id"] == str(inviting_org)
+    assert me.json()["membership_role"] == "viewer"
+
+    # A token for an org the user is not a member of is still refused.
+    stranger_token, _ = create_access_token(
+        user_id=joiner_id,
+        organization_id=uuid.uuid4(),
+        email="joiner@example.com",
+        settings=account_settings,
+        actor="user",
+    )
+    assert client.get("/auth/me", headers=_auth(stranger_token)).status_code == 401
+
+
+def test_invite_token_mismatch_audit_lands_in_caller_org(
+    account_client: AccountClientFixture,
+) -> None:
+    """L12: a wrong invitation token is audited in the caller's org, not the inviter's."""
+    client, factory = account_client
+    owner = _register(client, email="victim-owner@example.com", org="Victim Org")
+    created = client.post(
+        "/organizations/invitations",
+        headers=_auth(owner["tokens"]["access_token"]),
+        json={"email": "guesser@example.com", "role": "viewer"},
+    )
+    invitation_id = created.json()["id"]
+    victim_org = uuid.UUID(created.json()["organization_id"])
+    guesser = _register(client, email="guesser@example.com", org="Guesser Org")
+    guesser_org = uuid.UUID(guesser["organization"]["id"])
+    wrong = client.post(
+        f"/organizations/invitations/{invitation_id}/accept",
+        headers=_auth(guesser["tokens"]["access_token"]),
+        json={"token": "definitely-not-the-token"},
+    )
+    assert wrong.status_code == 401
+    with factory() as session:
+        rows = session.scalars(
+            select(AuditLog).where(AuditLog.action == AuditEventType.AUTH_INVALID_TOKEN)
+        ).all()
+        mismatch = [
+            r for r in rows if (r.redacted_metadata or {}).get("reason") == "invite_token_mismatch"
+        ]
+        assert mismatch, "expected an invite_token_mismatch audit row"
+        assert {r.organization_id for r in mismatch} == {guesser_org}
+        assert victim_org not in {r.organization_id for r in mismatch}
