@@ -15,4 +15,10 @@ describe("PreTradePage", () => {
     render(<PreTradePage />);
     expect(screen.getByText("Pre-Trade Analysis")).toBeInTheDocument();
   });
+
+  it("links Human vs system to the real comparison page, not a placeholder", () => {
+    render(<PreTradePage />);
+    expect(screen.queryByText(/Placeholder panel/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Human vs system" })).toHaveAttribute("href", "/journal/comparison");
+  });
 });

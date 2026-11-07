@@ -124,8 +124,8 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/settings/advanced", kind: "redirect", label: "Advanced (old link)" },
   { path: "/risk", kind: "redirect", label: "Risk settings (old link)" },
   { path: "/risk/autonomous", kind: "redirect", label: "Autonomous settings (old link)" },
-  { path: "/watchlist", kind: "redirect", label: "Watchlist (old link)" },
-  { path: "/strategies/detections", kind: "redirect", label: "Recent detections (old link)" },
+  // /watchlist and /strategies/detections have no page file any more; their
+  // next.config redirects (phase-b-redirects.ts) keep old links working.
 
   { path: "/login", kind: "public", label: "Sign in" },
   { path: "/register", kind: "public", label: "Register" },

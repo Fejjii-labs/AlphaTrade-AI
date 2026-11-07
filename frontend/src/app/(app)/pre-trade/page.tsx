@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -117,9 +118,12 @@ export default function PreTradePage() {
         <CardHeader>
           <CardTitle className="text-base">Human vs system</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-zinc-400">
-          After journaling a trade, open a journal entry ID to compare plan adherence via the API or
-          AI Workspace. Placeholder panel — no live execution.
+        <CardContent className="text-sm text-text-secondary">
+          After a trade is journaled, compare your plan adherence with the system&apos;s on{" "}
+          <Link href="/journal/comparison" className="text-accent underline">
+            Human vs system
+          </Link>
+          . Read-only; nothing is executed from there.
         </CardContent>
       </Card>
     </div>
