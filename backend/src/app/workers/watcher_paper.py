@@ -159,6 +159,48 @@ class WatcherPaperScanReport:
         return self.status == "succeeded" and not self.replayed and self.market_read_completed
 
 
+# A confirmed setup whose continuation raised is retried on the same closed bar
+# at most this many times (H4). The plan store is idempotent by candidate scope
+# and the governed demo loop commits its dispatch effect before venue IO, so a
+# retry resumes the existing plan instead of opening a second one.
+CONTINUATION_MAX_RETRIES = 3
+
+_PAPER_LOOP_FIELDS = (
+    "paper_loop_stage",
+    "paper_loop_reason",
+    "paper_loop_replayed",
+    "eligibility_id",
+    "eligibility_state",
+    "trade_plan_revision_id",
+    "execution_command_id",
+    "paper_fill_id",
+    "journal_trade_id",
+    "journal_status",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenEvidence:
+    """The evaluated bar's assembly, kept so a replay can resume continuation."""
+
+    assembly: Any
+    source: str | None
+
+    def last_assembly(self) -> Any:
+        return self.assembly
+
+    def market_source(self) -> str | None:
+        return self.source
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingContinuation:
+    idempotency_key: str
+    report: WatcherPaperScanReport
+    evidence: _FrozenEvidence
+    retries: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class WatcherPaperCycleReport:
     reason_code: str
@@ -384,6 +426,7 @@ class WatcherPaperRuntime:
         self._thread: threading.Thread | None = None
         self._status_lock = threading.Lock()
         self._held_fencing_tokens: OrderedDict[str, int] = OrderedDict()
+        self._pending_continuations: OrderedDict[str, _PendingContinuation] = OrderedDict()
         self._cycle_lock = threading.Lock()
         self._leases_released = False
         self._fence_organizations: dict[str, UUID] = {}
@@ -1299,7 +1342,9 @@ class WatcherPaperRuntime:
                 reason = assignment_target_reason(session, target)
                 if reason is not None:
                     return replace(report, status="blocked", reason_code=reason, published=False)
-            report = self._continue_paper_loop(session, target, report, evidence)
+            report = self._continue_or_resume(
+                session, target, report, evidence, idempotency_key=request.idempotency_key
+            )
         from app.strategy_brain.assembly import record_paper_link
 
         nested_alert = record_paper_link(
@@ -1540,6 +1585,114 @@ class WatcherPaperRuntime:
                 organization_id=str(organization_id),
             )
             return True
+
+    def _continue_or_resume(
+        self,
+        session: Session | None,
+        target: PaperScanTarget,
+        report: WatcherPaperScanReport,
+        evidence: WatcherScanEvidencePort,
+        *,
+        idempotency_key: str,
+    ) -> WatcherPaperScanReport:
+        """Continue a fresh setup, or resume one whose continuation raised (H4).
+
+        A replayed bar has no discussion snapshot, so without this a transient
+        DB/venue error after the candidate was persisted dropped the trade.
+        """
+
+        scope = target.scan_scope
+        pending = self._pending_continuations.get(scope)
+        if pending is not None and pending.idempotency_key != idempotency_key:
+            self._pending_continuations.pop(scope, None)
+            logger.warning(
+                "watcher_paper_continuation_abandoned",
+                organization_id=str(target.organization_id),
+                scan_scope=scope,
+                reason_code="bar_closed",
+                retries=pending.retries,
+                paper_only=True,
+            )
+            pending = None
+        resume = pending is not None and report.replayed and report.discussion is None
+        try:
+            if resume and pending is not None:
+                logger.warning(
+                    "watcher_paper_continuation_retry",
+                    organization_id=str(target.organization_id),
+                    scan_scope=scope,
+                    retry=pending.retries + 1,
+                    max_retries=CONTINUATION_MAX_RETRIES,
+                    paper_only=True,
+                )
+                stashed = replace(pending.report, kill_switch_active=report.kill_switch_active)
+                resumed = self._continue_paper_loop(
+                    session,
+                    target,
+                    stashed,
+                    pending.evidence,  # type: ignore[arg-type]  # reads only last_assembly/market_source
+                )
+                report = replace(
+                    report, **{name: getattr(resumed, name) for name in _PAPER_LOOP_FIELDS}
+                )
+            else:
+                report = self._continue_paper_loop(session, target, report, evidence)
+        except Exception:
+            self._remember_continuation(
+                target,
+                pending.report if resume and pending is not None else report,
+                pending.evidence if resume and pending is not None else evidence,
+                idempotency_key=idempotency_key,
+                retries=pending.retries + 1 if resume and pending is not None else 0,
+            )
+            raise
+        if resume or report.discussion is not None:
+            self._pending_continuations.pop(scope, None)
+        return report
+
+    def _remember_continuation(
+        self,
+        target: PaperScanTarget,
+        report: WatcherPaperScanReport,
+        evidence: WatcherScanEvidencePort | _FrozenEvidence,
+        *,
+        idempotency_key: str,
+        retries: int,
+    ) -> None:
+        scope = target.scan_scope
+        self._pending_continuations.pop(scope, None)
+        if report.discussion is None or retries >= CONTINUATION_MAX_RETRIES:
+            if retries >= CONTINUATION_MAX_RETRIES:
+                logger.error(
+                    "watcher_paper_continuation_retry_exhausted",
+                    organization_id=str(target.organization_id),
+                    scan_scope=scope,
+                    retries=retries,
+                    paper_only=True,
+                )
+            return
+        if isinstance(evidence, _FrozenEvidence):
+            frozen = evidence
+        else:
+            try:
+                last_assembly = getattr(evidence, "last_assembly", None)
+                read_source = getattr(evidence, "market_source", None)
+                frozen = _FrozenEvidence(
+                    assembly=last_assembly() if callable(last_assembly) else None,
+                    source=read_source() if callable(read_source) else None,
+                )
+            except Exception:
+                return
+        if frozen.assembly is None:
+            return
+        self._pending_continuations[scope] = _PendingContinuation(
+            idempotency_key=idempotency_key,
+            report=report,
+            evidence=frozen,
+            retries=retries,
+        )
+        while len(self._pending_continuations) > self._fence_capacity:
+            self._pending_continuations.popitem(last=False)
 
     def _continue_paper_loop(
         self,
