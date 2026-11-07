@@ -29,6 +29,7 @@ vi.mock("@/components/dashboard/useDemoAccountSnapshot", () => ({
 }));
 
 vi.mock("@/contexts/AppContext", () => ({
+  useAppContext: () => ({ killSwitchStatus: null, killSwitchError: null }),
   useSafetyPosture: () => ({
     executionMode: "paper",
     realTradingEnabled: false,

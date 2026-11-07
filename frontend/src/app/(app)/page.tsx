@@ -9,7 +9,7 @@ import {
 } from "@/components/dashboard/TraderDashboardView";
 import { DEFAULT_SCOPE } from "@/components/dashboard/performance/performance-model";
 import { describeSafetyPosture } from "@/components/workflows";
-import { useSafetyPosture } from "@/contexts/AppContext";
+import { useAppContext, useSafetyPosture } from "@/contexts/AppContext";
 import { useDashboardSources } from "@/hooks/useDashboardSources";
 import { api } from "@/lib/api";
 
@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const [demoRefreshKey, setDemoRefreshKey] = useState(0);
   const [venue, setVenue] = useState<DashboardVenue>(DEFAULT_SCOPE);
   const { executionMode, realTradingEnabled } = useSafetyPosture();
+  const { killSwitchStatus, killSwitchError } = useAppContext();
   const simulator = venue === "paper";
 
   // All requests start in parallel and each section renders as soon as its own
@@ -65,6 +66,10 @@ export default function DashboardPage() {
       realTradingEnabled={realEnabled}
       venue={venue}
       onVenueChange={setVenue}
+      killSwitch={{
+        known: killSwitchStatus != null && !killSwitchError,
+        blocked: Boolean(killSwitchStatus?.execution_blocked),
+      }}
     />
   );
 }

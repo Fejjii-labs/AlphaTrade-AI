@@ -8,6 +8,7 @@ import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 import { AttentionCard } from "./AttentionCard";
 import { DailyReviewCard } from "./DailyReviewCard";
+import { DailyStatusStrip, type KillSwitchDisplay } from "./DailyStatusStrip";
 import { BloFinDemoAccountCard } from "./BloFinDemoAccountCard";
 import { PerformanceDashboard } from "./performance/PerformanceDashboard";
 import {
@@ -142,6 +143,7 @@ export function TraderDashboardView({
   venue: controlledVenue,
   onVenueChange,
   realTradingEnabled = false,
+  killSwitch,
 }: {
   data: TraderDashboardData;
   posture: SafetyPostureDisplay;
@@ -152,6 +154,7 @@ export function TraderDashboardView({
   venue?: DashboardVenue;
   onVenueChange?: (next: DashboardVenue) => void;
   realTradingEnabled?: boolean | null;
+  killSwitch?: KillSwitchDisplay;
 }) {
   const { user, organization } = useAuth();
   const [session, setSession] = useState(sessionGeneration);
@@ -238,6 +241,8 @@ export function TraderDashboardView({
           Refreshing dashboard; showing the previous snapshot.
         </p>
       ) : null}
+
+      <DailyStatusStrip summary={data.summary} killSwitch={killSwitch} />
 
       <DashboardVenueControl
         value={venue}

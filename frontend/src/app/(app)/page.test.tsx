@@ -37,8 +37,14 @@ vi.mock("@/components/activity/useNativeActivity", () => ({
   }),
 }));
 
+const appContext: {
+  killSwitchStatus: { execution_blocked: boolean } | null;
+  killSwitchError: string | null;
+} = { killSwitchStatus: { execution_blocked: false }, killSwitchError: null };
+
 vi.mock("@/contexts/AppContext", () => ({
   useSafetyPosture: () => safetyPosture,
+  useAppContext: () => appContext,
 }));
 
 vi.mock("@/components/dashboard/BloFinDemoAccountCard", () => ({
@@ -151,6 +157,8 @@ afterEach(() => {
   asyncState.data = dashboardData();
   asyncState.loading = false;
   asyncState.error = null;
+  appContext.killSwitchStatus = { execution_blocked: false };
+  appContext.killSwitchError = null;
 });
 
 describe("Trader dashboard", () => {
@@ -304,4 +312,37 @@ describe("Trader dashboard", () => {
     expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent(UNAVAILABLE);
   });
 
+  it("shows the kill switch and daily discipline strip in every venue", () => {
+    const data = dashboardData();
+    appContext.killSwitchStatus = { execution_blocked: true };
+    asyncState.data = dashboardData({
+      summary: okSource({
+        ...data.summary.data!,
+        daily_discipline: {
+          date: "2026-11-07", timezone: "Europe/Paris", loss_lock_active: true,
+          discipline_status: "locked", overtrading_warning_active: false,
+          green_day_protection_active: false, remaining_trades_allowed: 0,
+          max_trades_per_day: 5, reasons: [], limitations: [],
+        } as unknown as DashboardSummary["daily_discipline"],
+      }),
+    });
+    render(<DashboardPage />);
+    const strip = screen.getByTestId("dashboard-status-strip");
+    expect(strip).toHaveTextContent("Kill switch active");
+    expect(strip).toHaveTextContent("Locked");
+    expect(strip).toHaveTextContent("Daily loss limit reached (display only)");
+    expect(strip).toHaveTextContent("0 trades remaining of 5");
+    expect(strip).toHaveTextContent("Europe/Paris");
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Kill switch active");
+    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), { target: { value: "backtest" } });
+    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Locked");
+  });
+
+  it("never shows an unknown kill switch as off", () => {
+    appContext.killSwitchStatus = null;
+    render(<DashboardPage />);
+    expect(screen.getByTestId("dashboard-strip-kill-switch")).toHaveTextContent("Kill switch status unknown");
+    expect(screen.getByTestId("dashboard-strip-unavailable")).toBeInTheDocument();
+  });
 });

@@ -11,6 +11,7 @@ vi.mock("@/components/activity/useNativeActivity", () => ({
   useNativeActivity: () => ({ page: null, busy: false, error: null, refresh: vi.fn(), more: vi.fn() }),
 }));
 vi.mock("@/contexts/AppContext", () => ({
+  useAppContext: () => ({ killSwitchStatus: null, killSwitchError: null }),
   useSafetyPosture: () => ({ executionMode: "paper", realTradingEnabled: false }),
 }));
 vi.mock("@/components/dashboard/AttentionCard", () => ({ AttentionCard: () => null }));
