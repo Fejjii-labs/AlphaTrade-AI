@@ -146,6 +146,8 @@ export function AgentWorkspace() {
   const [latest, setLatest] = useState<AgentTurnResult | null>(null);
   const [proposals, setProposals] = useState<AgentStructuredProposal[]>([]);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  // Decision failures belong to the proposal card, not the message composer.
+  const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const pendingRef = useRef<PendingTurn | null>(null);
 
@@ -219,6 +221,7 @@ export function AgentWorkspace() {
     setLatest(null);
     setProposals(id ? proposalsFromMessages(retainedMessages.current.get(id) ?? []) : []);
     setDecidingId(null);
+    setDecisionErrors({});
     setDraft(typedDrafts.current.get(id) ?? (recoveryScope ? typedDraftFor(recoveryScope, id) : ""));
     setAttached(null);
     setAttachmentPreview(null);
@@ -614,7 +617,11 @@ export function AgentWorkspace() {
     decisionAbort.current = controller;
     const isCurrent = () => mounted.current && generation === contextGeneration.current && !controller.signal.aborted;
     setDecidingId(proposal.proposal_id);
-    setSendError(null);
+    setDecisionErrors((current) => {
+      const next = { ...current };
+      delete next[proposal.proposal_id];
+      return next;
+    });
     try {
       const request = {
         conversation_id: proposal.conversation_id,
@@ -643,9 +650,8 @@ export function AgentWorkspace() {
       );
     } catch (error) {
       if (!isCurrent()) return;
-      setSendError(
-        error instanceof Error ? error.message : "Proposal decision failed",
-      );
+      const message = error instanceof Error ? error.message : "Proposal decision failed.";
+      setDecisionErrors((current) => ({ ...current, [proposal.proposal_id]: message }));
     } finally {
       if (isCurrent()) setDecidingId(null);
     }
@@ -884,6 +890,7 @@ export function AgentWorkspace() {
                       proposal={proposal}
                       deciding={decidingId !== null}
                       onDecide={(statement) => void decideProposal(proposal, statement)}
+                      error={decisionErrors[proposal.proposal_id] ?? null}
                     />
                   ))}
                 </ul>

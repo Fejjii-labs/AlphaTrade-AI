@@ -1272,6 +1272,18 @@ describe("Agent workspace", () => {
     expect(screen.queryByTestId("agent-proposals")).not.toBeInTheDocument();
   });
 
+  it("shows a failed proposal decision on its card, not in the composer", async () => {
+    apiMocks.agentTurn.mockResolvedValue({ conversation_id: "11111111-1111-4111-8111-111111111111", user_message_id: "u", assistant_message_id: "a", reply: "Draft proposal",
+      proposals: [{ proposal_id: "p1", conversation_id: "11111111-1111-4111-8111-111111111111", summary: "Draft journal", status: "proposed", kind: "propose_journal_entry" }] });
+    apiMocks.confirmProposal.mockRejectedValueOnce(new Error("Stale confirmation."));
+    render(<AgentWorkspace />);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm proposal" }));
+    expect(await screen.findByTestId("agent-proposal-error")).toHaveTextContent("Stale confirmation.");
+    expect(screen.queryByText(/Your message draft is kept/)).not.toBeInTheDocument();
+  });
+
   it("cancels a pending turn on unmount and starts no history reconciliation for a late reply", async () => {
     let finish!: (value: unknown) => void;
     apiMocks.agentTurn.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));

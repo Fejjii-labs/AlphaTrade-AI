@@ -72,4 +72,37 @@ describe("ProposalCard", () => {
       "The reply did not confirm this proposal. Sending a chat or voice message does not confirm it either.",
     );
   });
+
+  it.each([
+    "none", "propose_observation", "propose_hypothesis", "propose_strategy", "propose_rule",
+    "propose_journal_entry", "propose_trade_decision", "propose_lesson", "propose_journal_append",
+    "propose_strategy_evidence", "propose_validation_request", "propose_knowledge",
+    "propose_watcher_change", "enable_real_trading",
+  ] as const)("says what Confirm does for %s and shows a venue badge", (kind) => {
+    render(<ProposalCard proposal={proposal({ kind, payload: {} })} deciding={false} onDecide={vi.fn()} />);
+    const note = screen.getByTestId("agent-proposal-kind-note");
+    expect(note.textContent?.length).toBeGreaterThan(20);
+    expect(note).not.toHaveTextContent("Confirm applies only what the summary above describes.");
+    expect(screen.getByTestId("agent-proposal-venue")).toHaveTextContent(
+      kind === "enable_real_trading" ? "Real trading refused" : "No order",
+    );
+  });
+
+  it("marks a prepared paper plan as acting on the internal paper simulator only", () => {
+    render(
+      <ProposalCard
+        proposal={proposal({ kind: "propose_trade_decision", payload: { paper_execution: { stage: "presented" } } })}
+        deciding={false}
+        onDecide={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("agent-proposal-venue")).toHaveTextContent("Paper · internal simulator");
+    expect(screen.getByTestId("agent-proposal-kind-note")).toHaveTextContent("internal paper simulator");
+    expect(screen.getByTestId("agent-proposal-kind-note")).toHaveTextContent("No exchange order is sent.");
+  });
+
+  it("shows a decision error on the card itself", () => {
+    render(<ProposalCard proposal={proposal()} deciding={false} onDecide={vi.fn()} error="Stale confirmation." />);
+    expect(screen.getByTestId("agent-proposal-error")).toHaveTextContent("Stale confirmation. The proposal is unchanged");
+  });
 });
