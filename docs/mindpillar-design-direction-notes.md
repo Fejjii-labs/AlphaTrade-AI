@@ -33,7 +33,7 @@ illustrations or chart widgets. Keep AlphaTrade's semantic colour rules
 - **Not observed:** nav structure from CSS alone (rendered nav not inspected), shadow scale, motion specs.
 
 ### Rules for phases 3-9
-1. Dark is default; light theme uses the light column.
+1. Dark is the only shipped theme. A light theme, if added, uses the light column; the unreachable `[data-theme="light"]` token block was removed from `tokens.css` (audit L20, 2026-11) and must come back together with a theme switch.
 2. Retune `tokens.css` values toward the table (background `#07090f`, surfaces `#0c1020`/`#0f1420`, border `#1c2438`, text `#eef2f8`/`#7d8ba0`); keep variable names; keep AA contrast (`tokens.contrast.test.ts` must pass — `--t3 #3a4558` is decorative only, never body text).
 3. Brand accent `#5a6aff` for primary actions/focus; blue `#2563eb` stays for links/interactive; orange only as eyebrow.
 4. Switch the UI font to Figtree (self-hosted `@fontsource-variable/figtree`), tabular numerals for prices/PnL.

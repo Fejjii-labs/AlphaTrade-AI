@@ -3,16 +3,16 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-type Theme = "dark" | "light";
+// Dark is the only shipped theme (app/layout.tsx pins data-theme="dark"); the
+// unreachable light token block was removed (audit L20).
+type Theme = "dark";
 type Vars = Record<string, string>;
 
 const AA = 4.5;
 
-function parseTheme(css: string, theme: Theme): Vars {
-  const lightAt = css.indexOf('[data-theme="light"]');
-  const slice = theme === "dark" ? css.slice(0, lightAt) : css.slice(lightAt);
+function parseTheme(css: string): Vars {
   const vars: Vars = {};
-  for (const match of slice.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+  for (const match of css.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
     vars[match[1]] = match[2].trim();
   }
   return vars;
@@ -76,10 +76,8 @@ function topBarOver(vars: Vars, under: string): string {
 }
 
 const css = readFileSync(resolve(__dirname, "tokens.css"), "utf8");
-const themes = {
-  dark: parseTheme(css, "dark"),
-  light: parseTheme(css, "light"),
-} as const;
+const themes = { dark: parseTheme(css) } as const;
+const THEMES = ["dark"] as const;
 
 function pair(theme: Theme, foreground: string, background: string): number {
   const vars = themes[theme];
@@ -101,7 +99,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
   const text = ["--color-text-primary", "--color-text-secondary", "--color-text-muted"] as const;
 
   it("keeps text tokens at WCAG AA on every surface", () => {
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       for (const background of surfaces) {
         for (const foreground of text) expectAA(theme, foreground, background);
       }
@@ -129,7 +127,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
       "--color-risk-high",
       "--color-risk-critical",
     ];
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       for (const role of roles) {
         expectAA(theme, role, "--color-background");
         expectAA(theme, role, "--color-surface-2");
@@ -138,7 +136,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
   });
 
   it("keeps button labels at WCAG AA on their fills", () => {
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       expectAA(theme, "--color-accent-foreground", "--color-accent");
       expectAA(theme, "--color-accent-foreground", "--color-accent-hover");
       expectAA(theme, "--color-text-inverse", "--color-danger");
@@ -149,7 +147,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
   });
 
   it("keeps mode badge text at WCAG AA on the tinted fill", () => {
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       const vars = themes[theme];
       const surface = color(vars, "--color-surface-1");
       for (const role of ["paper", "mode-paper", "mode-demo"] as const) {
@@ -179,7 +177,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
       { name: "surface-2", under: "--color-surface-2" },
     ] as const;
 
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       const vars = themes[theme];
       for (const role of badgeRoles) {
         for (const surface of surfaces) {
@@ -205,7 +203,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
   });
 
   it("separates profit, interactive blue, and paper", () => {
-    for (const theme of ["dark", "light"] as const) {
+    for (const theme of THEMES) {
       const vars = themes[theme];
       const accent = color(vars, "--color-accent").toLowerCase();
       const profit = color(vars, "--color-positive").toLowerCase();
@@ -219,7 +217,6 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
 
   it("uses the approved MindPillar-inspired values", () => {
     const dark = themes.dark;
-    const light = themes.light;
     expect(color(dark, "--color-background")).toBe("#07090f");
     expect(color(dark, "--color-accent")).toBe("#4c8dff");
     expect(color(dark, "--color-accent-hover")).toBe("#6ea2ff");
@@ -233,14 +230,7 @@ describe("MindPillar-inspired token contrast (phases 3–9)", () => {
     expect(color(dark, "--color-text-muted")).toBe("#7d8ba0");
     expect(color(dark, "--color-badge-danger")).toBe("#f87171");
     expect(dark["--section-gap"]).toBe("1.25rem");
-    expect(color(light, "--color-accent")).toBe("#1d4ed8");
-    expect(color(light, "--color-highlight")).toBe("#9a3412");
-    expect(color(light, "--color-positive")).toBe("#047857");
-    expect(color(light, "--color-negative")).toBe("#b91c1c");
-    expect(color(light, "--color-warning")).toBe("#854d0b");
-    expect(color(light, "--color-paper")).toBe("#6d28d9");
-    expect(color(light, "--color-mode-demo")).toBe("#0a6378");
-    expect(color(light, "--color-text-muted")).toBe("#556378");
+    expect(css).not.toContain('[data-theme="light"]');
     expect(dark["--text-eyebrow"]).toBe("0.6875rem");
     expect(dark["--text-body"]).toBe("0.875rem");
     expect(dark["--text-display"]).toBe("2rem");
