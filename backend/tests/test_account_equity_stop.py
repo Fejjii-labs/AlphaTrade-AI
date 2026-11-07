@@ -494,7 +494,8 @@ def test_equity_stop_migration_is_the_single_head_after_demo_leverage() -> None:
     from tests.support.alembic_heads import alembic_script_directory, single_alembic_head
 
     script = alembic_script_directory()
-    assert single_alembic_head(script) == "a26equitystop002"
+    assert single_alembic_head(script) == "a27obsretention001"
+    assert script.get_revision("a27obsretention001").down_revision == "a26equitystop002"
     assert script.get_revision("a26equitystop002").down_revision == "a25equitystop001"
     assert script.get_revision("a25equitystop001").down_revision == "a24demoleverage001"
 

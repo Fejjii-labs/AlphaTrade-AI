@@ -130,6 +130,8 @@ class PaperWorkerHealth:
     activity: ComponentHealth | None = None
     demo_snapshot: ComponentHealth | None = None
     exit_monitor: ComponentHealth | None = None
+    # Independently supervised helpers (retention, demo reconciliation).
+    auxiliary: tuple[ComponentHealth, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +236,8 @@ class PaperWorkerSupervisor:
         self._demo_snapshot_stop: Callable[[], None] | None = None
         self._exit_monitor: _Component | None = None
         self._exit_monitor_stop: Callable[[], None] | None = None
+        self._auxiliary: list[_Component] = []
+        self._auxiliary_stops: list[Callable[[], None]] = []
         self._memory_diagnostics: WorkerMemoryDiagnostics | None = None
         self._memory_watchdog: MemoryWatchdog | None = None
         if memory_diagnostics_enabled:
@@ -311,6 +315,19 @@ class PaperWorkerSupervisor:
         self._exit_monitor = _Component("exit_monitor", cycle, None, poll_seconds=poll_seconds)
         self._exit_monitor_stop = request_stop
 
+    def attach_auxiliary(
+        self,
+        name: str,
+        cycle: Callable[[], CycleOutcome],
+        *,
+        poll_seconds: float,
+        request_stop: Callable[[], None],
+    ) -> None:
+        """One more independently supervised loop (own thread, own health)."""
+
+        self._auxiliary.append(_Component(name, cycle, None, poll_seconds=poll_seconds))
+        self._auxiliary_stops.append(request_stop)
+
     def _components(self) -> tuple[_Component, ...]:
         return (
             (self._watcher, self._telegram)
@@ -318,6 +335,7 @@ class PaperWorkerSupervisor:
             + ((self._activity,) if self._activity else ())
             + ((self._demo_snapshot,) if self._demo_snapshot else ())
             + ((self._exit_monitor,) if self._exit_monitor else ())
+            + tuple(self._auxiliary)
         )
 
     def attach_memory_watchdog(self, watchdog: MemoryWatchdog) -> None:
@@ -346,6 +364,7 @@ class PaperWorkerSupervisor:
             activity=self._activity.health() if self._activity else None,
             demo_snapshot=self._demo_snapshot.health() if self._demo_snapshot else None,
             exit_monitor=self._exit_monitor.health() if self._exit_monitor else None,
+            auxiliary=tuple(component.health() for component in self._auxiliary),
         )
 
     def run_round(self) -> PaperWorkerHealth:
@@ -375,6 +394,8 @@ class PaperWorkerSupervisor:
             self._demo_snapshot_stop()
         if self._exit_monitor_stop:
             self._exit_monitor_stop()
+        for stop in self._auxiliary_stops:
+            stop()
 
     def join(self) -> None:
         for component in self._components():
@@ -388,6 +409,7 @@ class PaperWorkerSupervisor:
                         self._activity,
                         self._demo_snapshot,
                         self._exit_monitor,
+                        *self._auxiliary,
                     )
                     and thread.is_alive()
                 ):
@@ -402,6 +424,7 @@ class PaperWorkerSupervisor:
             self._activity is not None
             or self._demo_snapshot is not None
             or self._exit_monitor is not None
+            or self._auxiliary
         ):
             self.request_stop()
             self.join()
@@ -697,6 +720,10 @@ class PaperWorkerSupervisor:
             demo_snapshot_error=health.demo_snapshot.last_error if health.demo_snapshot else "",
             exit_monitor_status=(health.exit_monitor.status if health.exit_monitor else "disabled"),
             exit_monitor_error=health.exit_monitor.last_error if health.exit_monitor else "",
+            auxiliary={
+                component.component: component.last_error or component.status
+                for component in health.auxiliary
+            },
             stopping=health.stopping,
             authority_intact=health.authority_intact,
             paper_only=True,
@@ -857,6 +884,16 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
                 request_stop=exit_monitor.request_stop,
             )
+    if settings.retention_enabled and not settings_are_disarmed_paper_worker(settings):
+        from app.workers.db_retention import DbRetentionCycle
+
+        retention = DbRetentionCycle(settings.model_copy(deep=True))
+        supervisor.attach_auxiliary(
+            "db_retention",
+            retention,
+            poll_seconds=60.0,
+            request_stop=retention.request_stop,
+        )
     if settings.paper_worker_memory_watchdog_enabled:
         supervisor.attach_memory_watchdog(
             MemoryWatchdog(
@@ -1326,7 +1363,7 @@ class _RecoveringWatcherCycle:
         """Seconds before the attempt after ``attempts`` failures (capped doubling)."""
 
         exponent = min(max(attempts - 1, 0), 16)
-        return min(self._retry_seconds * (2**exponent), self._max_retry_seconds)
+        return float(min(self._retry_seconds * (2**exponent), self._max_retry_seconds))
 
     def _attempt(self) -> None:
         from app.telegram_activation.errors import TelegramActivationError
