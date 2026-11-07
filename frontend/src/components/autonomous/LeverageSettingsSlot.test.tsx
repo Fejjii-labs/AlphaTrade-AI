@@ -135,4 +135,29 @@ describe("LeverageSettingsSlot demo leverage editor", () => {
     expect(await screen.findByTestId("demo-leverage")).toBeDisabled();
     expect(screen.getByTestId("demo-leverage-owner-reason")).toHaveTextContent("Owner only.");
   });
+
+  it("uses the page's settings and the bounds ceiling without fetching again", async () => {
+    const { api } = await import("@/lib/api");
+    const bounds = { leverage: { demo_effective_max: "15", demo_hard_cap: "20", profile_max_leverage_ceiling: "20" } } as never;
+    render(<LeverageSettingsSlot profiles={[]} settings={settings} bounds={bounds} />);
+    expect(await screen.findByTestId("demo-leverage-settings")).toHaveTextContent("1–15x");
+    expect(api.autonomous.settings).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("demo-leverage"), { target: { value: "16" } });
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Leverage cannot exceed 15x.");
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("never invents a 20x ceiling when neither bounds nor settings report one", async () => {
+    const { api, ApiError } = await import("@/lib/api");
+    const noCeiling: Record<string, unknown> = { ...settings };
+    delete noCeiling.max_demo_leverage_ceiling;
+    vi.mocked(api.autonomous.settings).mockResolvedValue(noCeiling as unknown as AutonomousTradingSettingsView);
+    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(new ApiError("demo_leverage_exceeds_ceiling", 422, null));
+    render(<LeverageSettingsSlot profiles={[]} />);
+    expect(await screen.findByTestId("demo-leverage-settings")).toHaveTextContent("the server enforces the ceiling");
+    expect(screen.getByTestId("demo-leverage-settings")).not.toHaveTextContent("20x");
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Leverage exceeds the server ceiling.");
+  });
 });
