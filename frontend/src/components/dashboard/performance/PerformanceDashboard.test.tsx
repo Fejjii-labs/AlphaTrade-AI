@@ -414,7 +414,9 @@ describe("performance components", () => {
     expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveTextContent("2 trades");
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("+100.00");
     const table = screen.getByRole("table", { name: "Daily net P&L, July 2026" });
-    expect(within(table).getAllByRole("columnheader")[0]).toHaveTextContent("Sun");
+    expect(within(table).getAllByRole("columnheader")[0]).toHaveAccessibleName("Sun");
+    // Phones show one-letter weekday headers; the accessible name stays full.
+    expect(within(table).getAllByRole("columnheader")[1]).toHaveTextContent(/^MMon$/);
     expect(within(table).getByRole("cell", { name: /^2026-07-02: \+1200\.00 net, 1 trade/ })).toBeInTheDocument();
   });
 
