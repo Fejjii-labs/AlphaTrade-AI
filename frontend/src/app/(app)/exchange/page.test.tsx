@@ -99,7 +99,7 @@ describe("Exchange diagnostics route (/exchange) — FP2-129", () => {
   it("renders honest unavailable state when load succeeds with no payload", () => {
     asyncState = { data: null, loading: false, error: null };
     render(<ExchangeDiagnosticsPage />);
-    expect(screen.getByTestId("error-state")).toHaveTextContent(/Exchange diagnostics unavailable/i);
+    expect(screen.getByTestId("error-state")).toHaveTextContent(/Exchange status unavailable/i);
     expect(screen.queryByTestId("exchange-diagnostics-card")).not.toBeInTheDocument();
   });
 
@@ -108,7 +108,7 @@ describe("Exchange diagnostics route (/exchange) — FP2-129", () => {
     render(<ExchangeDiagnosticsPage />);
     const headings = screen.getAllByRole("heading", { level: 1 });
     expect(headings).toHaveLength(1);
-    expect(headings[0]).toHaveTextContent("Exchange diagnostics");
+    expect(headings[0]).toHaveTextContent("Exchange status");
     expect(screen.getByTestId("exchange-diagnostics-card")).toBeInTheDocument();
     expect(screen.getByText("Paper only")).toBeInTheDocument();
     expect(screen.getByText("Real trading disabled")).toBeInTheDocument();

@@ -10,23 +10,23 @@ export function ExchangeDemoAccountSync() {
 
   return (
     <section data-testid="exchange-demo-sync" className="space-y-2">
-      <h2 className="text-lg font-medium text-zinc-50">Demo account sync</h2>
-      <p className="text-sm text-zinc-400">
+      <h2 className="text-lg font-medium text-text-primary">Demo account sync</h2>
+      <p className="text-sm text-text-secondary">
         Read-only balances and positions. This page does not place orders.
       </p>
       {account?.synced_at ? (
         <p
           data-testid="exchange-last-synced"
-          className={stale ? "text-sm text-amber-300" : "text-sm text-zinc-300"}
+          className={stale ? "text-sm text-amber-300" : "text-sm text-text-primary"}
         >
           Last synced {formatDateTime(account.synced_at)}
           {stale ? " · stale" : ""}
         </p>
       ) : (
-        <p className="text-sm text-zinc-400">No demo snapshot yet.</p>
+        <p className="text-sm text-text-secondary">No demo snapshot yet.</p>
       )}
       {status ? (
-        <p className="text-xs uppercase tracking-wide text-zinc-500">{status}</p>
+        <p className="text-xs uppercase tracking-wide text-text-muted">{status}</p>
       ) : null}
       {error ? (
         <p role="alert" className="text-sm text-rose-300">

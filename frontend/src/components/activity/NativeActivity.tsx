@@ -73,7 +73,7 @@ export function NativeActivity({ statistics = false, refreshKey = 0 }: { statist
               href="/settings/exchange"
               className={cn(buttonVariants({ variant: "outline" }), "h-11")}
             >
-              Exchange settings
+              View exchange status
             </Link>
           )}
         />

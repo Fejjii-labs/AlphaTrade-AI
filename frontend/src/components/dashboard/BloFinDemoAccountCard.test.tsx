@@ -91,7 +91,7 @@ describe("BloFin demo Dashboard", () => {
     expect(screen.getByText(/Unrealized PnL —/)).toBeInTheDocument();
     expect(screen.getByText("BLOFIN_DEMO")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Exchange settings" }),
+      screen.getByRole("link", { name: "View exchange status" }),
     ).toHaveAttribute("href", "/settings/exchange");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("demo-last-synced")).toHaveTextContent("Last synced");

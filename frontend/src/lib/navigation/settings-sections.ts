@@ -10,7 +10,7 @@ export type SettingsSection = {
 /** The six Settings sections, in sub-nav order (UI overhaul B2a). */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { href: "/settings", label: "Account", includes: ["/settings/team", "/settings/billing"] },
-  { href: "/settings/exchange", label: "Exchanges" },
+  { href: "/settings/exchange", label: "Exchange status" },
   { href: "/settings/notifications", label: "Notifications" },
   { href: "/settings/watcher", label: "Watcher" },
   { href: "/settings/diagnostics", label: "Diagnostics", includes: ["/settings/advanced", "/settings/audit"] },
