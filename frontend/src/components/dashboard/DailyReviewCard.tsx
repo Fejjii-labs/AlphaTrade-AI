@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -12,6 +12,7 @@ import type {
   ReviewTopic,
 } from "@/lib/api/daily-review-types";
 import { formatDateTime, humanizeToken } from "@/lib/format";
+import { timeZoneOptions, zonedIsoDate } from "@/lib/timezone";
 
 const TOPICS: Record<ReviewTopic, string> = {
   watcher_activity: "Watcher activity",
@@ -194,12 +195,41 @@ export function DailyReviewContent({
   );
 }
 
-export function DailyReviewCard({ compact = false }: { compact?: boolean }) {
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [timezone, setTimezone] = useState("UTC");
-  const [query, setQuery] = useState({ date, timezone });
-  const loader = useCallback(() => api.dashboard.dailyReview(query), [query]);
+export function DailyReviewCard({
+  compact = false,
+  timezone: resolvedTimezone,
+}: {
+  compact?: boolean;
+  /**
+   * Shared day-bucket zone (risk settings → browser → UTC). `null` while it
+   * resolves (no request yet); omitted = UTC. The trader can still pick another.
+   */
+  timezone?: string | null;
+}) {
+  const defaultTimezone = resolvedTimezone === undefined ? "UTC" : resolvedTimezone;
+  // Follow the resolved zone (and its today) until the trader edits a field.
+  const [timezoneEdit, setTimezoneEdit] = useState<string | null>(null);
+  const [dateEdit, setDateEdit] = useState<string | null>(null);
+  const timezone = timezoneEdit ?? defaultTimezone ?? "UTC";
+  const date = dateEdit ?? zonedIsoDate(new Date(), timezone);
+  const [submitted, setSubmitted] = useState<{ date: string; timezone: string } | null>(null);
+  const query = useMemo(
+    () => submitted ?? (defaultTimezone === null ? null : { date, timezone }),
+    // Unsubmitted edits must not refetch; only the resolved default may.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [submitted, defaultTimezone],
+  );
+  const loader = useCallback(
+    () =>
+      query
+        ? api.dashboard.dailyReview(query)
+        : new Promise<DailyReview>(() => {
+            // Wait for the shared timezone before the first request.
+          }),
+    [query],
+  );
   const { data, loading, error, reload } = useAsyncData(loader, [query]);
+  const zones = useMemo(() => timeZoneOptions(timezone), [timezone]);
 
   const content = (
     <>
@@ -207,8 +237,8 @@ export function DailyReviewCard({ compact = false }: { compact?: boolean }) {
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          if (query.date === date && query.timezone === timezone) void reload();
-          else setQuery({ date, timezone });
+          if (query && query.date === date && query.timezone === timezone) void reload();
+          else setSubmitted({ date, timezone });
         }}
       >
         <label className="min-w-0 text-xs text-text-muted">
@@ -218,21 +248,25 @@ export function DailyReviewCard({ compact = false }: { compact?: boolean }) {
             type="date"
             required
             value={date}
-            onChange={(event) => setDate(event.target.value)}
+            onChange={(event) => setDateEdit(event.target.value)}
             className="mt-1 block max-w-full rounded border border-border-subtle bg-background p-2 text-sm"
           />
         </label>
         <label className="min-w-0 text-xs text-text-muted">
           Timezone
-          <input
+          <select
             aria-label="Review timezone"
             required
-            maxLength={100}
             value={timezone}
-            onChange={(event) => setTimezone(event.target.value)}
-            placeholder="Europe/Berlin"
-            className="mt-1 block w-44 max-w-full rounded border border-border-subtle bg-background p-2 text-sm"
-          />
+            onChange={(event) => setTimezoneEdit(event.target.value)}
+            className="mt-1 block min-h-11 w-48 max-w-full rounded border border-border-subtle bg-background p-2 text-sm"
+          >
+            {zones.map((zone) => (
+              <option key={zone} value={zone}>
+                {zone}
+              </option>
+            ))}
+          </select>
         </label>
         <button
           type="submit"
@@ -249,7 +283,7 @@ export function DailyReviewCard({ compact = false }: { compact?: boolean }) {
       ) : error ? (
         <div role="alert" className="text-sm text-text-muted">
           <p>
-            Daily Review unavailable. Check the date and IANA timezone, then
+            Daily Review unavailable. Check the date and timezone, then
             retry.
           </p>
           <button

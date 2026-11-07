@@ -14,6 +14,7 @@ import type {
   JournalTradeSource,
 } from "@/lib/api/types";
 import { humanizeToken } from "@/lib/format";
+import { zonedToday } from "@/lib/timezone";
 
 import { CumulativePnlChart } from "./CumulativePnlChart";
 import { PerformanceKpiCards } from "./PerformanceKpiCards";
@@ -76,6 +77,8 @@ export function PerformanceDashboard({
   now,
   refreshKey = 0,
   scope: controlledScope,
+  timezone,
+  timezoneLabel,
 }: {
   /** Injected for deterministic tests; defaults to the current time. */
   now?: Date;
@@ -85,8 +88,22 @@ export function PerformanceDashboard({
    * hides its own scope picker so one control drives every dashboard block.
    */
   scope?: JournalDashboardScope;
+  /**
+   * Resolved day-bucket zone from the page (risk settings → browser → UTC).
+   * `null` = still resolving (no request yet); omitted = browser zone.
+   */
+  timezone?: string | null;
+  /** Where the zone came from, shown next to it ("risk settings", "browser"). */
+  timezoneLabel?: string;
 }) {
-  const today = useMemo(() => now ?? new Date(), [now]);
+  const tz = useMemo(
+    () => (timezone === undefined ? browserTimezone() : timezone),
+    [timezone],
+  );
+  const today = useMemo(() => {
+    const base = now ?? new Date();
+    return tz ? zonedToday(tz, base) : base;
+  }, [now, tz]);
   const thisMonth: MonthRef = { year: today.getFullYear(), month: today.getMonth() };
   const [preset, setPreset] = useState<RangePreset>("90d");
   const [ownScope, setOwnScope] = useState<JournalDashboardScope>(DEFAULT_SCOPE);
@@ -112,7 +129,6 @@ export function PerformanceDashboard({
   const [customTo, setCustomTo] = useState(defaultCustom.date_to ?? "");
   const [retryKey, setRetryKey] = useState(0);
   const retry = () => setRetryKey((key) => key + 1);
-  const tz = useMemo(() => browserTimezone(), []);
 
   const customError = preset === "custom" ? customRangeError(customFrom, customTo) : null;
   const rangeBlocked = !sample && customError !== null;
@@ -120,18 +136,19 @@ export function PerformanceDashboard({
     () => ({
       ...(preset === "custom" ? { date_from: customFrom, date_to: customTo } : rangeParams(preset, today)),
       scope,
-      tz,
+      tz: tz ?? undefined,
       ...(source ? { source } : {}),
     }),
     [preset, customFrom, customTo, scope, source, today, tz],
   );
   const monthQuery = useMemo(
-    () => ({ ...monthRange(month), scope, tz, ...(source ? { source } : {}) }),
+    () => ({ ...monthRange(month), scope, tz: tz ?? undefined, ...(source ? { source } : {}) }),
     [month, scope, source, tz],
   );
   const reloadKey = `${refreshKey}:${retryKey}`;
-  const range = useDashboardRequest(rangeQuery, !sample && !rangeBlocked, reloadKey);
-  const calendar = useDashboardRequest(monthQuery, !sample, reloadKey);
+  const zoneReady = tz !== null;
+  const range = useDashboardRequest(rangeQuery, zoneReady && !sample && !rangeBlocked, reloadKey);
+  const calendar = useDashboardRequest(monthQuery, zoneReady && !sample, reloadKey);
 
   // Remember the scope's sources so the picker survives the next reload.
   const loadedFilters = range.data?.filters;
@@ -313,6 +330,13 @@ export function PerformanceDashboard({
           Showing: {scopeLabel}
           {source ? ` · ${SOURCE_LABELS[source] ?? humanizeToken(source)} only` : ""}
           {rangeText ? <span className="font-data text-xs font-normal text-text-secondary"> · {rangeText}</span> : null}
+          {tz ? (
+            <span className="text-xs font-normal text-text-secondary" data-testid="performance-timezone">
+              {" "}
+              · Days in {tz}
+              {timezoneLabel ? ` (${timezoneLabel})` : ""}
+            </span>
+          ) : null}
           <span className="ml-2 text-xs font-normal text-text-muted">
             Closed trades only; scopes are never mixed. Partial exits on open trades count only
             once the trade closes.

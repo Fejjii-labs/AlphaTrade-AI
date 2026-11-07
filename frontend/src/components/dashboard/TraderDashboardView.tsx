@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { NativeActivity } from "@/components/activity/NativeActivity";
 import { useAuth } from "@/contexts/AuthContext";
+import { useResolvedTimezone } from "@/hooks/useResolvedTimezone";
+import { TIMEZONE_SOURCE_LABELS } from "@/lib/timezone";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 import { AttentionCard } from "./AttentionCard";
@@ -160,6 +162,8 @@ export function TraderDashboardView({
   const [session, setSession] = useState(sessionGeneration);
   useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
   const accountContext = JSON.stringify([organization?.id, user?.id, session]);
+  const zone = useResolvedTimezone();
+  const dayZone = zone.ready ? zone.timezone : null;
   const [ownVenue, setOwnVenue] = useState<DashboardVenue>(DEFAULT_SCOPE);
   const venue = controlledVenue ?? ownVenue;
   const setVenue = onVenueChange ?? setOwnVenue;
@@ -254,6 +258,8 @@ export function TraderDashboardView({
         key={`performance-${accountContext}`}
         refreshKey={demoRefreshKey}
         scope={venue}
+        timezone={dayZone}
+        timezoneLabel={TIMEZONE_SOURCE_LABELS[zone.source]}
       />
 
       {!demo && !simulator ? (
@@ -339,7 +345,7 @@ export function TraderDashboardView({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <AttentionCard />
-        <DailyReviewCard compact />
+        <DailyReviewCard compact timezone={dayZone} />
       </div>
 
       {simulator ? (

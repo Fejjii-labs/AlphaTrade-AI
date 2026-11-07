@@ -193,6 +193,17 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
+  it("waits for the resolved timezone and shows it in the Showing line", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} timezone={null} />);
+    expect(api.journal.performanceCalendar).not.toHaveBeenCalled();
+    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" timezoneLabel="risk settings" />);
+    await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
+    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.tz === "Asia/Tokyo")).toBe(true);
+    expect(screen.getByTestId("performance-timezone")).toHaveTextContent("Days in Asia/Tokyo (risk settings)");
+  });
+
   it("follows a page-owned scope and hides its own scope picker", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     const { rerender } = render(<PerformanceDashboard now={NOW} scope="paper" />);

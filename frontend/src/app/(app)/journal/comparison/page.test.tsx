@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import JournalComparisonPage from "@/app/(app)/journal/comparison/page";
+import { api } from "@/lib/api";
 import type {
   ComparisonScorecard,
   DecisionQualityMetrics,
@@ -199,18 +200,43 @@ let asyncState: {
 
 const mockReload = vi.fn();
 
+const search = { params: new URLSearchParams() };
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => search.params,
+}));
+vi.mock("@/hooks/useResolvedTimezone", () => ({
+  useResolvedTimezone: () => ({ timezone: "Europe/Paris", source: "risk_settings", ready: true }),
 }));
 
+const loaders: { last: (() => Promise<unknown>) | null } = { last: null };
 vi.mock("@/hooks/useAsyncData", () => ({
-  useAsyncData: () => ({
+  useAsyncData: (loader: () => Promise<unknown>) => (loaders.last = loader, {
     data: asyncState.data,
     loading: asyncState.loading,
     error: asyncState.error,
     reload: mockReload,
   }),
 }));
+
+describe("JournalComparisonPage day bounds", () => {
+  afterEach(() => {
+    cleanup();
+    search.params = new URLSearchParams();
+    vi.restoreAllMocks();
+  });
+
+  it("sends date bounds in the shared resolved timezone, not UTC", async () => {
+    asyncState = { data: null, loading: true, error: null };
+    search.params = new URLSearchParams("date_from=2026-07-01&date_to=2026-07-31");
+    const comparison = vi.spyOn(api.journal, "comparison").mockResolvedValue(sampleComparison);
+    render(<JournalComparisonPage />);
+    expect(screen.getByTestId("cmp-date-timezone")).toHaveTextContent("Days in Europe/Paris (risk settings)");
+    await loaders.last?.();
+    expect(comparison).toHaveBeenCalledWith(
+      expect.objectContaining({ date_from: "2026-06-30T22:00:00Z", date_to: "2026-07-31T21:59:59Z" }),
+    );
+  });
+});
 
 describe("JournalComparisonPage AT-036", () => {
   beforeEach(() => {

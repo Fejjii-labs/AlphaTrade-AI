@@ -143,4 +143,17 @@ describe("Daily Review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByTestId("daily-review-content");
   });
+  it("waits for the shared timezone, then reviews today in that zone via an IANA select", async () => {
+    dailyReview.mockResolvedValue(review);
+    const { rerender } = render(<DailyReviewCard timezone={null} />);
+    expect(dailyReview).not.toHaveBeenCalled();
+    rerender(<DailyReviewCard timezone="Asia/Tokyo" />);
+    await screen.findByTestId("daily-review-content");
+    const tokyoToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" }).format(new Date());
+    expect(dailyReview).toHaveBeenCalledWith({ date: tokyoToday, timezone: "Asia/Tokyo" });
+    const select = screen.getByLabelText("Review timezone");
+    expect(select.tagName).toBe("SELECT");
+    expect(select).toHaveValue("Asia/Tokyo");
+    expect(within(select).getByRole("option", { name: "UTC" })).toBeInTheDocument();
+  });
 });
