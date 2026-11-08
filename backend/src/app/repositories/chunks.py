@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.models import Chunk
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 
 
 class ChunkRepository(SQLAlchemyRepository[Chunk]):
@@ -20,25 +20,22 @@ class ChunkRepository(SQLAlchemyRepository[Chunk]):
     def list_chunks(
         self,
         *,
+        organization_id: uuid.UUID,
         document_id: uuid.UUID | None = None,
-        organization_id: uuid.UUID | None = None,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Chunk], int]:
-        filters = []
+        filters = [Chunk.organization_id == require_organization_id(organization_id)]
         if document_id is not None:
             filters.append(Chunk.document_id == document_id)
-        if organization_id is not None:
-            filters.append(Chunk.organization_id == organization_id)
         if user_id is not None:
             filters.append(Chunk.user_id == user_id)
 
         count_stmt = select(func.count()).select_from(Chunk)
         list_stmt = select(Chunk).order_by(Chunk.created_at.desc(), Chunk.ordinal)
-        if filters:
-            count_stmt = count_stmt.where(*filters)
-            list_stmt = list_stmt.where(*filters)
+        count_stmt = count_stmt.where(*filters)
+        list_stmt = list_stmt.where(*filters)
 
         total = int(self._session.scalar(count_stmt) or 0)
         rows = list(self._session.scalars(list_stmt.limit(limit).offset(offset)).all())

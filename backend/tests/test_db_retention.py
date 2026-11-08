@@ -316,6 +316,21 @@ def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
     assert getattr(Settings(_env_file=None, **{field: 24}), field) == 24  # type: ignore[arg-type]
 
 
+def test_error_event_window_cannot_be_shorter_than_normal_window() -> None:
+    with pytest.raises(ValidationError, match="RETENTION_WATCHER_ERROR_EVENTS_HOURS"):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            retention_watcher_events_hours=96,
+            retention_watcher_error_events_hours=72,
+        )
+    equal = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        retention_watcher_events_hours=72,
+        retention_watcher_error_events_hours=72,
+    )
+    assert equal.retention_watcher_error_events_hours == equal.retention_watcher_events_hours
+
+
 def test_cycle_waits_one_interval_then_runs_once_per_interval(factory) -> None:
     _seed(factory)
     ticks = {"now": 0.0}

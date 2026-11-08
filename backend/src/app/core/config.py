@@ -1002,6 +1002,18 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_retention_windows(self) -> Settings:
+        """Error watcher events must outlive normal noise, never the reverse (C-B4)."""
+        if self.retention_watcher_error_events_hours < self.retention_watcher_events_hours:
+            raise ValueError(
+                "RETENTION_WATCHER_ERROR_EVENTS_HOURS "
+                f"({self.retention_watcher_error_events_hours}) must be >= "
+                f"RETENTION_WATCHER_EVENTS_HOURS ({self.retention_watcher_events_hours}); "
+                "error events would otherwise be pruned before normal events."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _enforce_exchange_safety(self) -> Settings:
         """Refuse to start with unsafe/ambiguous exchange connectivity.
 

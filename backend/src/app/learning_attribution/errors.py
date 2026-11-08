@@ -36,7 +36,13 @@ class LearningAttributionIncompleteError(ConflictError):
 
 
 class CrossTenantAttributionError(ForbiddenError):
-    """Lineage organization does not match the attribution command."""
+    """Lineage organization does not match the attribution command.
+
+    Internal-only integrity guard: it fires when server-built lineage disagrees
+    with the command's organization, never on a client-supplied id lookup, and no
+    HTTP route raises it. Client lookups must answer cross-org ids with 404
+    (I10); do not surface this 403 from a route.
+    """
 
     code = "cross_tenant_attribution"
 

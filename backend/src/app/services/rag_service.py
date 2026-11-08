@@ -140,6 +140,7 @@ class RagService:
             ).hexdigest()
         existing = self._documents.get_by_source_hash(
             organization_id=data.organization_id,
+            global_scope=data.organization_id is None,
             user_id=data.user_id,
             source_hash=source_hash,
         )
@@ -147,6 +148,7 @@ class RagService:
             # Old hashes omitted user ID. Only the exact owner can reuse them.
             existing = self._documents.get_by_source_hash(
                 organization_id=data.organization_id,
+                global_scope=data.organization_id is None,
                 user_id=data.user_id,
                 source_hash=compute_source_hash(
                     title=data.title,
@@ -181,6 +183,7 @@ class RagService:
                 self._session.rollback()
             existing = self._documents.get_by_source_hash(
                 organization_id=data.organization_id,
+                global_scope=data.organization_id is None,
                 user_id=data.user_id,
                 source_hash=source_hash,
             )
@@ -296,6 +299,7 @@ class RagService:
         )
         existing = self._documents.get_by_source_uri(
             organization_id=data.organization_id,
+            global_scope=data.organization_id is None,
             source_uri=data.source_uri,
             user_id=data.user_id,
             for_update=True,
@@ -627,8 +631,8 @@ class RagService:
     def list_chunks(
         self,
         *,
+        organization_id: UUID,
         document_id: UUID | None = None,
-        organization_id: UUID | None = None,
         user_id: UUID | None = None,
         limit: int = 50,
         offset: int = 0,

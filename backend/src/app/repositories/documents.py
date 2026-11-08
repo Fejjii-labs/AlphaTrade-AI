@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 
 from app.db.models import Document
 from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.common import DocumentSourceType
+
+
+def _document_org_filter(
+    organization_id: uuid.UUID | None, *, global_scope: bool
+) -> ColumnElement[bool]:
+    """Global (org-less) documents are reachable only when the caller asks for them (C-A4)."""
+    if global_scope:
+        if organization_id is not None:
+            raise ValueError("global_scope lookups must not pass an organization_id.")
+        return Document.organization_id.is_(None)
+    return Document.organization_id == require_organization_id(organization_id)
 
 
 class DocumentRepository(SQLAlchemyRepository[Document]):
@@ -21,12 +32,10 @@ class DocumentRepository(SQLAlchemyRepository[Document]):
         source_uri: str,
         user_id: uuid.UUID | None = None,
         for_update: bool = False,
+        global_scope: bool = False,
     ) -> Document | None:
         stmt = select(Document).where(Document.uri == source_uri)
-        if organization_id is None:
-            stmt = stmt.where(Document.organization_id.is_(None))
-        else:
-            stmt = stmt.where(Document.organization_id == organization_id)
+        stmt = stmt.where(_document_org_filter(organization_id, global_scope=global_scope))
         stmt = stmt.where(
             Document.user_id.is_(None) if user_id is None else Document.user_id == user_id
         )
@@ -40,12 +49,10 @@ class DocumentRepository(SQLAlchemyRepository[Document]):
         organization_id: uuid.UUID | None,
         user_id: uuid.UUID | None,
         source_hash: str,
+        global_scope: bool = False,
     ) -> Document | None:
         stmt = select(Document).where(Document.source_hash == source_hash)
-        if organization_id is None:
-            stmt = stmt.where(Document.organization_id.is_(None))
-        else:
-            stmt = stmt.where(Document.organization_id == organization_id)
+        stmt = stmt.where(_document_org_filter(organization_id, global_scope=global_scope))
         stmt = stmt.where(
             Document.user_id.is_(None) if user_id is None else Document.user_id == user_id
         )

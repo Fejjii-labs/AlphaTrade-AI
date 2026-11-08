@@ -9,7 +9,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ForbiddenError, NotFoundError
+from app.core.errors import NotFoundError
 from app.db.models import ManualChartLevel as ManualChartLevelModel
 from app.db.models import ManualLevelRevision
 from app.repositories.manual_levels import ManualChartLevelRepository
@@ -20,10 +20,6 @@ from app.schemas.manual_levels import (
 )
 from app.schemas.strategy_lifecycle import ManualLevelRevisionRecord
 from app.services.canonical_serialization import canonical_sha256
-
-
-class CrossTenantLevelError(ForbiddenError):
-    code = "manual_level_cross_tenant_rejected"
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -208,10 +204,9 @@ class ManualLevelService:
         organization_id: uuid.UUID,
     ) -> ManualLevelRevisionRecord:
         row = self._session.get(ManualLevelRevision, revision_id)
-        if row is None:
+        # A foreign revision must look exactly like a missing one (no existence oracle).
+        if row is None or row.organization_id != organization_id:
             raise NotFoundError("Manual level revision not found.")
-        if row.organization_id != organization_id:
-            raise CrossTenantLevelError("Cross-tenant manual level revision access rejected.")
         return ManualLevelRevisionRecord.model_validate(row, from_attributes=True)
 
     def current_revision(
