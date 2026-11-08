@@ -11,11 +11,12 @@ import logging
 import sys
 import traceback
 from typing import Any, cast
+from urllib.parse import parse_qsl, urlencode
 
 import structlog
 from structlog.typing import EventDict, Processor
 
-from app.guardrails.redaction import redact_for_log, redact_text
+from app.guardrails.redaction import _REDACTED, redact_for_log, redact_text
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -35,6 +36,40 @@ class SecretRedactionFilter(logging.Filter):
                 for key, value in args.items()
             }
         return True
+
+
+def _redact_query_values(path: str) -> str:
+    """Keep the path and query keys; replace every query value (L14)."""
+    base, sep, query = path.partition("?")
+    if not sep:
+        return path
+    pairs = parse_qsl(query, keep_blank_values=True)
+    if not pairs:
+        return f"{base}?{_REDACTED}"
+    return f"{base}?" + urlencode([(key, _REDACTED) for key, _value in pairs], safe="*")
+
+
+class UvicornAccessRedactionFilter(SecretRedactionFilter):
+    """Redact uvicorn access/error records, which bypass the root handlers (L14).
+
+    uvicorn's ``uvicorn.access`` logger has its own handler and ``propagate=False``.
+    Access records carry ``(client_addr, method, path_with_query, http_version, status)``;
+    the tuple shape is kept so uvicorn's ``AccessFormatter`` still renders it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and isinstance(args[2], str)
+        ):
+            record.args = (*args[:2], _redact_query_values(args[2]), *args[3:])
+        return super().filter(record)
+
+
+_UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
 
 
 class RedactingFormatter(logging.Formatter):
@@ -113,6 +148,10 @@ def _install_stdlib_redaction(level: int) -> None:
         library.setLevel(logging.WARNING)
         if not any(isinstance(item, SecretRedactionFilter) for item in library.filters):
             library.addFilter(redaction_filter)
+    for name in _UVICORN_LOGGERS:
+        server = logging.getLogger(name)
+        if not any(isinstance(item, UvicornAccessRedactionFilter) for item in server.filters):
+            server.addFilter(UvicornAccessRedactionFilter())
 
 
 def configure_logging(*, log_level: str = "INFO", json_logs: bool = True) -> None:

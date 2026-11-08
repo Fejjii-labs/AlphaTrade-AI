@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import ipaddress
 import time
 import uuid
@@ -34,6 +36,9 @@ class RateLimiter(Protocol):
     def check(self, key: str, *, limit: int, window_seconds: int) -> None:
         """Raise RateLimitExceededError when the limit is exceeded."""
 
+    def is_limited(self, key: str, *, limit: int, window_seconds: int) -> bool:
+        """Return True when ``key`` already holds ``limit`` hits. Does not count a hit."""
+
 
 @dataclass
 class InMemoryRateLimiter:
@@ -52,6 +57,14 @@ class InMemoryRateLimiter:
             if len(bucket) >= limit:
                 raise RateLimitExceededError("Too many requests. Please try again later.")
             bucket.append(now)
+
+    def is_limited(self, key: str, *, limit: int, window_seconds: int) -> bool:
+        cutoff = time.monotonic() - window_seconds
+        with self._lock:
+            bucket = self._events[key]
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            return len(bucket) >= limit
 
 
 class RedisRateLimiter:
@@ -113,6 +126,21 @@ class RedisRateLimiter:
                         "Rate limiting service temporarily unavailable."
                     ) from exc
         self._fallback.check(key, limit=limit, window_seconds=window_seconds)
+
+    def is_limited(self, key: str, *, limit: int, window_seconds: int) -> bool:
+        if self._redis is not None:
+            try:
+                return int(self._redis.get(f"ratelimit:{key}") or 0) >= limit
+            except Exception as exc:
+                logger.warning(
+                    "rate_limit_redis_error",
+                    key=key,
+                    error_type=type(exc).__name__,
+                    fallback_allowed=self._settings.rate_limit_allow_in_memory_fallback,
+                )
+                if not self._settings.rate_limit_allow_in_memory_fallback:
+                    return True
+        return self._fallback.is_limited(key, limit=limit, window_seconds=window_seconds)
 
     def _check_redis(self, key: str, *, limit: int, window_seconds: int) -> None:
         assert self._redis is not None
@@ -349,6 +377,55 @@ def auth_register_rate_limit(
         user_limit=None,
         tenant=None,
     )
+
+
+def _login_email_key(email: str) -> str:
+    digest = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    return f"auth:login:email:{digest}"
+
+
+def enforce_login_email_limit(
+    request: Request,
+    session: SessionDep,
+    audit_service: AuditServiceDep,
+    email: str,
+) -> None:
+    """Refuse a login once its email holds too many recent failures (L13).
+
+    Runs before the password check, keyed on the submitted email (hashed), so the
+    answer is the same for known and unknown accounts and for every client IP.
+    """
+
+    settings = _request_settings(request)
+    if not get_rate_limiter().is_limited(
+        _login_email_key(email),
+        limit=settings.auth_login_email_failure_limit,
+        window_seconds=settings.auth_login_email_window_seconds,
+    ):
+        return
+    _audit_rate_limit_violation(
+        request=request,
+        session=session,
+        audit_service=audit_service,
+        scope="auth:login:email",
+        client_ip_value=client_ip(request, settings),
+        tenant=None,
+        severity=AuditSeverity.HIGH,
+    )
+    raise RateLimitExceededError("Too many requests. Please try again later.")
+
+
+def record_login_email_failure(request: Request, email: str) -> None:
+    """Count one failed login against the submitted email (L13)."""
+
+    settings = _request_settings(request)
+    # At the limit, check() raises; the next attempt is refused by enforce_login_email_limit.
+    with contextlib.suppress(RateLimitExceededError):
+        get_rate_limiter().check(
+            _login_email_key(email),
+            limit=settings.auth_login_email_failure_limit,
+            window_seconds=settings.auth_login_email_window_seconds,
+        )
 
 
 def tradingview_webhook_rate_limit(
