@@ -3167,6 +3167,7 @@ export interface CanonicalJournalTradeListItem {
   entry_price?: string | null;
   exit_price?: string | null;
   exit_reason?: string | null;
+  exit_time?: string | null;
   fees?: string | null;
   net_pnl?: string | null;
   result: string;

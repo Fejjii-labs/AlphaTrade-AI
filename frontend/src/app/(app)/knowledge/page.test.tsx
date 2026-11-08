@@ -313,6 +313,38 @@ it("requires execution lifecycle provenance for default exchange activity", asyn
   ).toHaveLength(1);
 });
 
+it("shows recorded trades as a table that remembers the list before opening a trade", async () => {
+  state.pathname = "/journal";
+  vi.mocked(api.journal.listTrades).mockResolvedValue({
+    items: [
+      {
+        id: "probe",
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        direction: "long",
+        result: "open",
+        exchange: "BLOFIN_DEMO",
+        source: "manual_demo_test",
+        status: "open",
+        entry_time: "2026-10-09",
+        execution_lifecycle_id: "life",
+      },
+    ],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  });
+  render(<Page />);
+  const table = await screen.findByTestId("journal-trades-table");
+  expect(within(table).getByText("Connectivity test")).toBeInTheDocument();
+  const link = within(table).getByRole("link", { name: "Open exact trade" });
+  expect(link).toHaveAttribute("href", "/journal?trade_id=probe");
+  fireEvent.click(link);
+  expect(JSON.parse(sessionStorage.getItem("alphatrade.journal.return:o:u") ?? "null")).toMatchObject({
+    href: "/journal?",
+  });
+});
+
 it("hides pagination for empty or single-page libraries", async () => {
   render(<Page />);
   await screen.findByText("Confirmation rule");
