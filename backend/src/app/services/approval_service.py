@@ -311,7 +311,7 @@ class ApprovalService:
     def list_approvals(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         status: ApprovalStatus | None = None,
         limit: int = 50,

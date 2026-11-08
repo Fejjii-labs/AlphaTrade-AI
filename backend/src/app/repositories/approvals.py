@@ -10,7 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 
 from app.db.models import ApprovalAuthorization, ApprovalRequest
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.common import ApprovalStatus
 from app.schemas.trade_plan import AuthorizationState, PlanOperation
 
@@ -48,15 +48,14 @@ class ApprovalRepository(SQLAlchemyRepository[ApprovalRequest]):
     def list_approvals(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         status: ApprovalStatus | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[ApprovalRequest], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(ApprovalRequest.organization_id == organization_id)
+        filters.append(ApprovalRequest.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(ApprovalRequest.user_id == user_id)
         if status is not None:

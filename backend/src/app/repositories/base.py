@@ -14,6 +14,13 @@ from sqlalchemy.orm import Session
 from app.db.base import Base
 
 
+def require_organization_id(organization_id: uuid.UUID | None) -> uuid.UUID:
+    """Fail closed on a missing tenant scope instead of dropping the filter (L17)."""
+    if organization_id is None:
+        raise ValueError("organization_id is required for an organization-scoped query.")
+    return organization_id
+
+
 class SQLAlchemyRepository[ModelT: Base]:
     """Base repository for a single ORM model."""
 

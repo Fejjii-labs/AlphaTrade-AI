@@ -11,7 +11,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.models import UsageEvent as UsageEventModel
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.usage import UsageFeatureBreakdown, UsageProviderBreakdown, UsageSummary
 
 
@@ -21,7 +21,7 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
     def list_events(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         request_id: str | None = None,
         feature: str | None = None,
@@ -52,7 +52,7 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
     def summarize(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -274,7 +274,7 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
     @staticmethod
     def _filters(
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         request_id: str | None = None,
         feature: str | None = None,
@@ -282,8 +282,7 @@ class UsageRepository(SQLAlchemyRepository[UsageEventModel]):
         until: datetime | None = None,
     ) -> list[ColumnElement[bool]]:
         filters = []
-        if organization_id is not None:
-            filters.append(UsageEventModel.organization_id == organization_id)
+        filters.append(UsageEventModel.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(UsageEventModel.user_id == user_id)
         if request_id is not None:

@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.models import Position
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.common import PositionStatus
 
 
@@ -17,15 +17,14 @@ class PositionRepository(SQLAlchemyRepository[Position]):
     def list_positions(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         status: PositionStatus | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Position], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(Position.organization_id == organization_id)
+        filters.append(Position.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(Position.user_id == user_id)
         if status is not None:
@@ -42,13 +41,12 @@ class PositionRepository(SQLAlchemyRepository[Position]):
     def list_closed_for_analytics(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> list[Position]:
         """Return all closed positions (oldest-first) for performance analytics."""
         stmt = select(Position).where(Position.status == PositionStatus.CLOSED)
-        if organization_id is not None:
-            stmt = stmt.where(Position.organization_id == organization_id)
+        stmt = stmt.where(Position.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             stmt = stmt.where(Position.user_id == user_id)
         stmt = stmt.order_by(Position.closed_at.asc())
@@ -58,12 +56,11 @@ class PositionRepository(SQLAlchemyRepository[Position]):
         self,
         position_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> Position | None:
         stmt = select(Position).where(Position.id == position_id)
-        if organization_id is not None:
-            stmt = stmt.where(Position.organization_id == organization_id)
+        stmt = stmt.where(Position.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             stmt = stmt.where(Position.user_id == user_id)
         return self._session.scalar(stmt)

@@ -142,7 +142,7 @@ class UsageService:
     def list_events(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         request_id: str | None = None,
         feature: str | None = None,
@@ -164,7 +164,7 @@ class UsageService:
     def summarize(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         since: datetime | None = None,
     ) -> UsageSummary:

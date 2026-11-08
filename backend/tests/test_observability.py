@@ -103,11 +103,14 @@ def test_audit_repository_insert_and_list(db_session: Session) -> None:
         redacted_metadata={"rules": 2},
         request_id="req-a",
         trace_id="trace-a",
+        organization_id=db_session.info["test_org_id"],
         event_at=datetime.now(UTC),
     )
     repo.add(row)
     db_session.commit()
-    items, total = repo.list_events(request_id="req-a")
+    items, total = repo.list_events(
+        organization_id=db_session.info["test_org_id"], request_id="req-a"
+    )
     assert total == 1
     assert items[0].action is AuditEventType.RISK_BLOCK
 
@@ -142,6 +145,7 @@ def test_usage_summary_aggregation(db_session: Session) -> None:
         repo.add(
             UsageEventModel(
                 feature="agent_chat",
+                organization_id=db_session.info["test_org_id"],
                 input_tokens=tokens,
                 output_tokens=tokens,
                 total_tokens=tokens * 2,
@@ -154,7 +158,7 @@ def test_usage_summary_aggregation(db_session: Session) -> None:
             )
         )
     db_session.commit()
-    summary = repo.summarize()
+    summary = repo.summarize(organization_id=db_session.info["test_org_id"])
     assert summary.event_count == 2
     assert summary.total_input_tokens == 300
     assert summary.total_output_tokens == 300

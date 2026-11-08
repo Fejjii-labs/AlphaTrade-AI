@@ -60,7 +60,7 @@ class PerformanceService:
     def build_report(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> PerformanceReport:
         """Compute the full account report from all closed positions in scope."""
@@ -74,7 +74,7 @@ class PerformanceService:
         )
 
     def snapshot_account(
-        self, *, organization_id: uuid.UUID | None = None, user_id: uuid.UUID | None = None
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID | None = None
     ) -> PerformanceSnapshot:
         """Persist an account-level performance snapshot and return the row."""
         trades = self._load_trades(organization_id=organization_id, user_id=user_id)
@@ -108,7 +108,7 @@ class PerformanceService:
         return self._snapshots.add(row)
 
     def rollup_strategy_daily(
-        self, *, day: date_type, organization_id: uuid.UUID | None = None
+        self, *, day: date_type, organization_id: uuid.UUID
     ) -> list[StrategyPerformanceDaily]:
         """Upsert per-strategy rollups for trades closed on ``day``."""
         trades = [
@@ -144,7 +144,7 @@ class PerformanceService:
     def _load_trades(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> list[TradeRecord]:
         positions = self._positions.list_closed_for_analytics(

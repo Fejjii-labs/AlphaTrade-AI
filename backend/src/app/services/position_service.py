@@ -54,7 +54,7 @@ class PositionService:
     def list_positions(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         status: PositionStatus | None = None,
         limit: int = 50,
