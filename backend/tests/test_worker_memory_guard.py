@@ -8,10 +8,12 @@ import time
 from pathlib import Path
 
 import pytest
+import structlog
 import yaml
 from structlog.testing import capture_logs
 
 from app.core.config import Settings
+from app.observability import memory_watchdog as memory_watchdog_module
 from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -328,7 +330,12 @@ def _ceilinged(rss: list[int], clock: list[float], **kwargs: object) -> MemoryWa
     )
 
 
-def test_ceiling_trips_during_the_startup_grace() -> None:
+def test_ceiling_trips_during_the_startup_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # structlog caches the module logger on first use once app logging is
+    # configured (e.g. by another test building the supervisor, whose watchdog
+    # store logs a swallowed read failure); a fresh proxy keeps capture_logs
+    # independent of test order.
+    monkeypatch.setattr(memory_watchdog_module, "logger", structlog.get_logger())
     rss, clock = [300 * MB], [0.0]
     watchdog = _ceilinged(rss, clock)
     assert watchdog.check() is False
