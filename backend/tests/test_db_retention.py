@@ -29,9 +29,13 @@ _DDL = (
     "CREATE TABLE watcher_observability_events "
     "(event_id TEXT PRIMARY KEY, name TEXT, at TIMESTAMP, fields JSON)",
     "CREATE TABLE watcher_subscription_eval_attempts "
-    "(subscription_attempt_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "(subscription_attempt_id TEXT PRIMARY KEY, scan_attempt_id TEXT, created_at TIMESTAMP)",
     "CREATE TABLE watcher_source_fetch_attempts "
-    "(fetch_attempt_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "(fetch_attempt_id TEXT PRIMARY KEY, scan_attempt_id TEXT, created_at TIMESTAMP)",
+    "CREATE TABLE watcher_scan_lineages (lineage_id TEXT PRIMARY KEY, "
+    "terminal_attempt_id TEXT, terminal_status TEXT)",
+    "CREATE TABLE watcher_scan_attempts (attempt_id TEXT PRIMARY KEY, lineage_id TEXT, "
+    "started_at TIMESTAMP)",
     "CREATE TABLE paper_evaluation_observations (observation_id TEXT PRIMARY KEY, "
     "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN)",
     "CREATE TABLE blofin_demo_sync_snapshots (id TEXT PRIMARY KEY, organization_id TEXT, "
@@ -154,6 +158,7 @@ def test_policies_never_name_trade_audit_or_strategy_tables() -> None:
         "watcher_observability_events",
         "watcher_subscription_eval_attempts",
         "watcher_source_fetch_attempts",
+        "watcher_scan_attempts",
         "paper_evaluation_observations",
         "blofin_demo_sync_snapshots",
     }
@@ -192,6 +197,54 @@ def test_error_events_are_kept_three_days_and_the_rest_one_day(factory) -> None:
             .all()
         )
     assert kept == {"failed-finish-2d", "blocked-2d", "stale-fence-2d", "routine-1h", "error-1h"}
+
+
+def test_scan_attempts_keep_terminal_unfinished_and_recent_lineages(factory) -> None:
+    old, fresh = NOW - timedelta(hours=30), NOW - timedelta(hours=1)
+    _insert(
+        factory,
+        "INSERT INTO watcher_scan_lineages VALUES (:id, :terminal, :status)",
+        [
+            {"id": "done", "terminal": "done-2", "status": "succeeded"},
+            {"id": "failed", "terminal": "failed-1", "status": "failed"},
+            {"id": "open", "terminal": None, "status": None},
+            {"id": "recent", "terminal": "recent-2", "status": "succeeded"},
+            {"id": "child", "terminal": "child-2", "status": "succeeded"},
+        ],
+    )
+    _insert(
+        factory,
+        "INSERT INTO watcher_scan_attempts VALUES (:id, :lineage, :at)",
+        [
+            {"id": "done-1", "lineage": "done", "at": old},
+            {"id": "done-2", "lineage": "done", "at": old},
+            {"id": "failed-1", "lineage": "failed", "at": old},
+            {"id": "open-1", "lineage": "open", "at": old},
+            {"id": "recent-1", "lineage": "recent", "at": old},
+            {"id": "recent-2", "lineage": "recent", "at": fresh},
+            {"id": "child-1", "lineage": "child", "at": old},
+            {"id": "child-2", "lineage": "child", "at": old},
+        ],
+    )
+    # A child row the 24 h child policy keeps (fresh) still pins its parent.
+    _insert(
+        factory,
+        "INSERT INTO watcher_source_fetch_attempts VALUES (:id, :parent, :at)",
+        [
+            {"id": "f-old", "parent": "done-1", "at": old},
+            {"id": "f-fresh", "parent": "child-1", "at": fresh},
+        ],
+    )
+    run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT attempt_id FROM watcher_scan_attempts")).scalars().all()
+        )
+        lineages = _count(factory, "watcher_scan_lineages")
+    # done-1 goes (its old child went first); terminal, failed, open, recent
+    # and child-pinned attempts stay.
+    assert kept == {"done-2", "failed-1", "open-1", "recent-1", "recent-2", "child-1", "child-2"}
+    assert lineages == 5
 
 
 def test_error_markers_match_the_monitoring_panel() -> None:

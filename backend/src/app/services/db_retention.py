@@ -88,8 +88,8 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             keep_predicate=error_event,
             name="watcher_observability_events:error",
         ),
-        # Child rows of scan attempts; nothing references them. The parent
-        # watcher_scan_attempts rows are kept: lineages replay through them.
+        # Child rows of scan attempts; nothing references them. They run
+        # before the parent policy so its FK check sees them gone.
         RetentionPolicy(
             table="watcher_subscription_eval_attempts",
             primary_key="subscription_attempt_id",
@@ -101,6 +101,28 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             primary_key="fetch_attempt_id",
             timestamp="created_at",
             window=timedelta(hours=settings.retention_watcher_attempts_hours),
+        ),
+        # Parent scan attempts. Replay of a succeeded lineage reads its
+        # terminal attempt, and attempt_number is len(attempts) + 1, so only
+        # the non-terminal attempts of a succeeded lineage whose attempts are
+        # all past the window may go. Lineages are never pruned.
+        RetentionPolicy(
+            table="watcher_scan_attempts",
+            primary_key="attempt_id",
+            timestamp="started_at",
+            window=timedelta(hours=settings.retention_watcher_attempts_hours),
+            keep_predicate=(
+                "EXISTS (SELECT 1 FROM watcher_scan_lineages AS l "
+                "WHERE l.lineage_id = t.lineage_id AND l.terminal_status = 'succeeded' "
+                "AND l.terminal_attempt_id IS NOT NULL "
+                "AND l.terminal_attempt_id <> t.attempt_id) "
+                "AND NOT EXISTS (SELECT 1 FROM watcher_scan_attempts AS n "
+                "WHERE n.lineage_id = t.lineage_id AND n.started_at >= :cutoff) "
+                "AND NOT EXISTS (SELECT 1 FROM watcher_source_fetch_attempts AS f "
+                "WHERE f.scan_attempt_id = t.attempt_id) "
+                "AND NOT EXISTS (SELECT 1 FROM watcher_subscription_eval_attempts AS e "
+                "WHERE e.scan_attempt_id = t.attempt_id)"
+            ),
         ),
         # Scan-stage observations only. Anything tied to a plan, a fill or a
         # journal trade is learning evidence and is kept.
