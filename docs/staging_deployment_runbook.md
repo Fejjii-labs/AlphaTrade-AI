@@ -157,6 +157,39 @@ Deploy backend; note **HTTPS URL** → `https://alphatrade-api.onrender.com` (ex
 
 ---
 
+### Which env vars a deploy can reset
+
+`render.yaml` splits every key into two kinds (enforced by
+`backend/tests/test_render_blueprint_settings_persist.py`):
+
+- **Pins** have a literal `value:`. Every Blueprint sync writes that value
+  back. These are the paper-only and real-money posture (`ENVIRONMENT`,
+  `EXECUTION_MODE`, `ENABLE_REAL_TRADING`, `BILLING_ENABLED`), the AT-ADR-152
+  account daily equity stop (`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT=10` on both
+  services), auth, cookie, rate-limit and CORS security, the public
+  market-evidence contract, and `MALLOC_ARENA_MAX`. The test asserts every
+  pinned value per service. Change these in `render.yaml` through a PR, not in
+  the dashboard: a dashboard edit is undone by the next sync.
+- **Operator settings** use `sync: false`. Render keeps the dashboard value
+  across deploys and syncs. This covers the provider and exchange mode, LLM and
+  embeddings models, alert, email, webhook, metrics, scheduler, Watcher and
+  Telegram flags. When a key has no dashboard value, the code default in
+  `Settings` applies; every such default is off or conservative
+  (`EXCHANGE_MODE=paper_internal`, `TELEGRAM_INBOUND_MODE=off`, flags false).
+
+`GLOBAL_KILL_SWITCH_ACTIVE` (AT-014) is deliberately not in `render.yaml`. It
+is an incident-only operator control set in the dashboard: pinning it `false`
+would let the next sync disarm an engaged emergency stop, and pinning it `true`
+would halt staging. Its code default is `false`, and the test fails if the key
+is added to the Blueprint.
+
+Changing a key from `value:` to `sync: false` keeps the value the service
+already has. Settings not listed in `render.yaml` at all (for example
+`PAPER_EXIT_MONITOR_*`, `GOVERNED_BLOFIN_DEMO_*`, watchdog limits) are never
+touched by a sync. Org-level trading settings (autonomous mode, risk limits,
+leverage, watchlist, notification preferences) live in Postgres and are not
+affected by deploys.
+
 ## 6. Run Alembic migrations
 
 **Automatic:** Render release command or container entrypoint.

@@ -21,20 +21,24 @@ services:
         value: paper
       - key: ENABLE_REAL_TRADING
         value: false
+      # AT-ADR-152 account daily equity stop. Pinned so a dashboard edit
+      # cannot loosen it; change it through a PR.
+      - key: ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT
+        value: "10"
       - key: PROVIDER_MODE
         sync: false
       - key: EXCHANGE_MODE
         sync: false
       - key: LLM_MODEL
-        value: gpt-6-luna
+        sync: false
       - key: EMBEDDINGS_MODEL
-        value: text-embedding-3-small
+        sync: false
       - key: BILLING_ENABLED
         value: false
       - key: ALERT_DELIVERY_ENABLED
-        value: false
+        sync: false
       - key: ALERT_WEBHOOK_ENABLED
-        value: false
+        sync: false
       - key: TELEGRAM_ALERTS_ENABLED
         sync: false
       - key: TELEGRAM_INTERACTION_ENABLED
@@ -42,9 +46,9 @@ services:
       - key: AUTOMATIC_TELEGRAM_DELIVERY_ENABLED
         sync: false
       - key: EMAIL_PROVIDER
-        value: mock
+        sync: false
       - key: EMAIL_ALERTS_ENABLED
-        value: false
+        sync: false
       - key: MARKET_WATCHER_ENABLED
         sync: false
       - key: MARKET_WATCHER_BRIDGE_ENABLED
@@ -54,13 +58,13 @@ services:
       - key: WATCHER_ORCHESTRATION_ENABLED
         sync: false
       - key: ENABLE_PAPER_SCHEDULER
-        value: false
+        sync: false
       - key: PAPER_SIGNAL_ORCHESTRATION_ENABLED
-        value: false
+        sync: false
       - key: TRADINGVIEW_WEBHOOK_ENABLED
-        value: false
+        sync: false
       - key: METRICS_ENABLED
-        value: false
+        sync: false
       - key: MARKET_DATA_ENABLED
         value: true
       # Controlled public USD-M evidence. No API key. Apply with the runbook;
@@ -152,6 +156,8 @@ services:
         value: paper
       - key: ENABLE_REAL_TRADING
         value: false
+      - key: ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT
+        value: "10"
       - key: EXCHANGE_MODE
         sync: false
       - key: WATCHER_ORCHESTRATION_ENABLED
