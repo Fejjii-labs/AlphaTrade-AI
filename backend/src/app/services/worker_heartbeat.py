@@ -150,6 +150,11 @@ def _publish_effective_flags(
     )
 
 
+# Skip the start-of-cycle beat when the previous end-of-cycle beat is newer
+# than this (well under the 90 s staleness bound).
+_PRE_CYCLE_BEAT_AFTER = timedelta(seconds=30)
+
+
 def watch_cycle_with_heartbeat[CycleT](
     settings: Settings,
     cycle: Callable[[], CycleT],
@@ -159,9 +164,15 @@ def watch_cycle_with_heartbeat[CycleT](
     """Publish a heartbeat around one worker cycle, including a failed cycle."""
 
     clock = now or (lambda: datetime.now(UTC))
+    last_published: list[datetime] = []
 
     def wrapped() -> CycleT:
-        publish_paper_worker_heartbeat(settings, now=clock(), status="running", error="")
+        # One row write per ordinary 15 s cycle (L6): the start-of-cycle
+        # "running" beat is skipped while the last end-of-cycle beat is recent.
+        # It still runs after a long cycle, so the row never ages silently.
+        started = clock()
+        if not last_published or started - last_published[-1] >= _PRE_CYCLE_BEAT_AFTER:
+            publish_paper_worker_heartbeat(settings, now=started, status="running", error="")
         try:
             outcome = cycle()
         except Exception:
@@ -172,12 +183,14 @@ def watch_cycle_with_heartbeat[CycleT](
                 error="paper_worker_cycle_failed",
             )
             raise
+        finished = clock()
         publish_paper_worker_heartbeat(
             settings,
-            now=clock(),
+            now=finished,
             status=str(getattr(outcome, "status", "")),
             error=str(getattr(outcome, "error", "")),
         )
+        last_published[:] = [finished]
         return outcome
 
     return wrapped
