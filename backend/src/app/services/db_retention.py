@@ -2,8 +2,9 @@
 
 Only operational logs are pruned. Trades, journal, orders, fills, plans,
 candidates, strategies, audit logs, P&L and notes are never touched. Plans
-and candidates are append-only in Postgres (DELETE triggers), so pruning them
-needs a migration and the owner's OK first. Each
+and candidates have no DELETE triggers in Postgres; they are protected only by
+not being in the static allowlist (``retention_policies``), so adding them
+needs the owner's OK first. Each
 policy deletes in small batches by primary key so no statement holds a long
 lock on a hot table. Dry-run counts what would go and deletes nothing.
 """

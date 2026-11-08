@@ -185,3 +185,38 @@ def test_postgres_pass_applies_every_rule_and_leaves_guarded_tables(pg_factory) 
     assert _ids(pg_factory, "SELECT intent_id FROM telegram_paper_notifications") == {
         str(fresh_note)
     }
+
+
+def test_postgres_keeps_old_attempts_of_a_failed_lineage(pg_factory) -> None:
+    lineage, first, last = uuid4(), uuid4(), uuid4()
+    _exec(
+        pg_factory,
+        "INSERT INTO watcher_scan_lineages (lineage_id, organization_id, scan_scope, "
+        "request_hash, policy_id, policy_version, policy_content_hash, trigger_created_by, "
+        "created_at) VALUES (:id, :org, 'scope', :hash, :policy, 1, :hash, 'worker', :at)",
+        [_lineage(lineage, None, None)],
+    )
+    # Both attempts are well past the window and have no child rows; only the
+    # lineage's failed terminal status protects the non-terminal one.
+    _exec(
+        pg_factory,
+        "INSERT INTO watcher_scan_attempts (attempt_id, lineage_id, organization_id, "
+        "scan_scope, attempt_number, trigger, mode, status, started_at, heartbeat_at, "
+        "recovery_disposition) VALUES (:id, :lineage, :org, 'scope', :n, 'schedule', "
+        "'worker', 'failed', :at, :at, 'none')",
+        [_attempt(first, lineage, 1, 200), _attempt(last, lineage, 2, 199)],
+    )
+    _exec(
+        pg_factory,
+        "UPDATE watcher_scan_lineages SET terminal_attempt_id = :terminal, "
+        "terminal_status = 'failed' WHERE lineage_id = :id",
+        [{"id": lineage, "terminal": last}],
+    )
+
+    settings = Settings(_env_file=None, retention_dry_run=False, retention_batch_size=100)  # type: ignore[call-arg]
+    run_retention(pg_factory, settings, now=NOW)
+
+    assert _ids(pg_factory, "SELECT attempt_id FROM watcher_scan_attempts") == {
+        str(first),
+        str(last),
+    }

@@ -299,6 +299,23 @@ def test_windows_are_hours_with_a_24_hour_floor() -> None:
         Settings(_env_file=None, retention_watcher_events_hours=23)  # type: ignore[call-arg]
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "retention_watcher_events_hours",
+        "retention_watcher_error_events_hours",
+        "retention_watcher_attempts_hours",
+        "retention_paper_evaluation_hours",
+        "retention_telegram_notifications_hours",
+    ],
+)
+def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
+    for too_short in (0, 23):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **{field: too_short})  # type: ignore[arg-type]
+    assert getattr(Settings(_env_file=None, **{field: 24}), field) == 24  # type: ignore[arg-type]
+
+
 def test_cycle_waits_one_interval_then_runs_once_per_interval(factory) -> None:
     _seed(factory)
     ticks = {"now": 0.0}
