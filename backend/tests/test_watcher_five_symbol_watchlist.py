@@ -699,3 +699,46 @@ def test_runtime_status_follows_symbol_across_reorder_and_replacement() -> None:
     assert rows["SOLUSDT"].last_successful_scan is None
     assert rows["SOLUSDT"].strategy_matches == ()
     assert rows["ETHUSDT"].last_failed_scan == NOW
+
+
+def test_allocator_is_released_between_symbols_after_a_market_read(monkeypatch) -> None:
+    """M12: a symbol's aggTrade window is returned before the next symbol reads."""
+
+    from dataclasses import replace as dc_replace
+
+    import app.observability.process_memory as process_memory
+
+    config = reorder_slots(default_watchlist(now=NOW), (3, 2, 1, 4, 5), now=NOW)
+    symbols = config.enabled_symbols()
+    releases: list[int] = []
+    monkeypatch.setattr(process_memory, "release_allocator_memory", lambda: releases.append(1))
+
+    def factory(_session: object, _store: object, symbol: str) -> object:
+        raise RuntimeError(symbol)
+
+    runtime = WatcherPaperRuntime(
+        store=InMemoryWatcherStore(),
+        lifecycle=CandidateLifecycleService(
+            repository=InMemoryCandidateRepository(),
+            clock=BoundEvaluationClock(),
+        ),
+        clock=FakeClock(NOW),
+        enabled=True,
+        symbols=symbols,
+        watchlist_mode=True,
+        watchlist=config,
+        watchlist_store=MemoryWatchlistStore(config),
+        target_loader=lambda _session: tuple(_target(symbol) for symbol in symbols),
+        evidence_factory=factory,  # type: ignore[arg-type]
+        kill_switch_probe=lambda _org: False,
+        settings=Settings(),
+    )
+    real_scan = WatcherPaperRuntime._scan_one
+
+    def scan_with_read(self, session, target):
+        report = real_scan(self, session, target)
+        return dc_replace(report, market_read_completed=target.symbol in symbols[:2])
+
+    monkeypatch.setattr(WatcherPaperRuntime, "_scan_one", scan_with_read)
+    runtime.run_cycle()
+    assert len(releases) == 2  # only after the two symbols that read the market

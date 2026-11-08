@@ -763,13 +763,22 @@ class WatcherPaperRuntime:
             )
             for symbol in ordered:
                 selected = [target for target in targets if target.symbol == symbol]
+                read_market = False
                 for target in selected:
                     scan = self._scan_one(session, target)
                     scans.append(scan)
                     created += len(scan.candidate_ids)
                     any_kill = any_kill or scan.kill_switch_active
+                    read_market = read_market or scan.market_read_completed
                     self._note_monitor_eligibility(scan)
                     self._refresh_monitor_safely()
+                if read_market and len(ordered) > 1:
+                    # A new-bar read (or a catch-up after a ban/restart) holds
+                    # that symbol's aggTrade window. Return it before the next
+                    # symbol reads its own, so peaks do not add up (M12).
+                    from app.observability.process_memory import release_allocator_memory
+
+                    release_allocator_memory()
                 if not selected:
                     self._note_verified_contract_scans(set(), session=session, only_symbol=symbol)
             # Successful evaluations replay until the next 15m bar; the live monitor
