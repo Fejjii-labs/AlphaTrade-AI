@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.services.db_retention import retention_policies, run_retention
+from app.services.db_retention import (
+    WATCHER_ERROR_EVENT_MARKERS,
+    retention_policies,
+    run_retention,
+)
 from app.workers.db_retention import DbRetentionCycle
 
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
@@ -20,15 +26,22 @@ NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
 pytestmark = pytest.mark.filterwarnings("ignore:The default datetime adapter:DeprecationWarning")
 
 _DDL = (
-    "CREATE TABLE watcher_observability_events (event_id TEXT PRIMARY KEY, at TIMESTAMP)",
+    "CREATE TABLE watcher_observability_events "
+    "(event_id TEXT PRIMARY KEY, name TEXT, at TIMESTAMP, fields JSON)",
     "CREATE TABLE watcher_subscription_eval_attempts "
-    "(subscription_attempt_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "(subscription_attempt_id TEXT PRIMARY KEY, scan_attempt_id TEXT, created_at TIMESTAMP)",
     "CREATE TABLE watcher_source_fetch_attempts "
-    "(fetch_attempt_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "(fetch_attempt_id TEXT PRIMARY KEY, scan_attempt_id TEXT, created_at TIMESTAMP)",
+    "CREATE TABLE watcher_scan_lineages (lineage_id TEXT PRIMARY KEY, "
+    "terminal_attempt_id TEXT, terminal_status TEXT)",
+    "CREATE TABLE watcher_scan_attempts (attempt_id TEXT PRIMARY KEY, lineage_id TEXT, "
+    "started_at TIMESTAMP)",
     "CREATE TABLE paper_evaluation_observations (observation_id TEXT PRIMARY KEY, "
     "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN)",
     "CREATE TABLE blofin_demo_sync_snapshots (id TEXT PRIMARY KEY, organization_id TEXT, "
     "synced_at TIMESTAMP)",
+    "CREATE TABLE telegram_paper_notifications (intent_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "CREATE TABLE telegram_security_outbox (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
     # A table that must never be touched.
     "CREATE TABLE journal_trades (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
 )
@@ -63,10 +76,11 @@ def _count(factory, table: str) -> int:
 
 def _seed(factory) -> None:
     old = NOW - timedelta(days=40)
-    fresh = NOW - timedelta(days=1)
+    fresh = NOW - timedelta(hours=1)
     _insert(
         factory,
-        "INSERT INTO watcher_observability_events VALUES (:id, :at)",
+        "INSERT INTO watcher_observability_events "
+        "VALUES (:id, 'watcher_scan_scheduled', :at, '{}')",
         [{"id": str(uuid4()), "at": old} for _ in range(250)]
         + [{"id": str(uuid4()), "at": fresh} for _ in range(5)],
     )
@@ -102,7 +116,7 @@ def _seed(factory) -> None:
 def test_dry_run_counts_and_deletes_nothing(factory) -> None:
     _seed(factory)
     results = run_retention(factory, _settings(), now=NOW)  # default RETENTION_DRY_RUN=true
-    by_table = {r.table: r for r in results}
+    by_table = {r.policy: r for r in results}
     assert by_table["watcher_observability_events"].matched == 250
     assert by_table["watcher_observability_events"].deleted == 0
     assert all(r.dry_run for r in results)
@@ -112,7 +126,7 @@ def test_dry_run_counts_and_deletes_nothing(factory) -> None:
 def test_prune_keeps_trade_evidence_newest_snapshot_and_other_tables(factory) -> None:
     _seed(factory)
     results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
-    by_table = {r.table: r for r in results}
+    by_table = {r.policy: r for r in results}
     assert by_table["watcher_observability_events"].deleted == 250
     assert by_table["watcher_observability_events"].complete is True
     assert _count(factory, "watcher_observability_events") == 5
@@ -134,7 +148,7 @@ def test_batches_are_bounded_per_pass(factory) -> None:
     _seed(factory)
     settings = _settings(retention_dry_run=False, retention_max_batches_per_table=2)
     results = run_retention(factory, settings, now=NOW)
-    events = next(r for r in results if r.table == "watcher_observability_events")
+    events = next(r for r in results if r.policy == "watcher_observability_events")
     assert events.deleted == 200
     assert events.complete is False
     assert _count(factory, "watcher_observability_events") == 55
@@ -146,15 +160,160 @@ def test_policies_never_name_trade_audit_or_strategy_tables() -> None:
         "watcher_observability_events",
         "watcher_subscription_eval_attempts",
         "watcher_source_fetch_attempts",
+        "watcher_scan_attempts",
         "paper_evaluation_observations",
+        "telegram_paper_notifications",
         "blofin_demo_sync_snapshots",
     }
+
+
+def test_error_events_are_kept_three_days_and_the_rest_one_day(factory) -> None:
+    rows = [
+        # 48 h old: past the 24 h window, inside the 72 h error window.
+        ("routine-2d", "watcher_scan_scheduled", 48, {}),
+        ("ok-finish-2d", "watcher_scan_finished", 48, {"evaluation_status": "succeeded"}),
+        ("failed-finish-2d", "watcher_scan_finished", 48, {"evaluation_status": "failed"}),
+        ("blocked-2d", "watcher_schedule_blocked", 48, {}),
+        ("stale-fence-2d", "watcher_stale_fence_rejected", 48, {}),
+        ("routine-1h", "watcher_lease_claimed", 1, {}),
+        ("error-1h", "watcher_worker_blocked", 1, {}),
+        # 80 h old: past both windows.
+        ("blocked-80h", "watcher_notify_blocked", 80, {}),
+        ("degraded-80h", "watcher_scan_finished", 80, {"evaluation_status": "degraded"}),
+    ]
+    _insert(
+        factory,
+        "INSERT INTO watcher_observability_events VALUES (:id, :name, :at, :fields)",
+        [
+            {"id": i, "name": n, "at": NOW - timedelta(hours=h), "fields": json.dumps(f)}
+            for i, n, h, f in rows
+        ],
+    )
+    results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    by_policy = {r.policy: r for r in results}
+    assert by_policy["watcher_observability_events"].deleted == 2
+    assert by_policy["watcher_observability_events:error"].deleted == 2
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT event_id FROM watcher_observability_events"))
+            .scalars()
+            .all()
+        )
+    assert kept == {"failed-finish-2d", "blocked-2d", "stale-fence-2d", "routine-1h", "error-1h"}
+
+
+def test_scan_attempts_keep_terminal_unfinished_and_recent_lineages(factory) -> None:
+    old, fresh = NOW - timedelta(hours=30), NOW - timedelta(hours=1)
+    _insert(
+        factory,
+        "INSERT INTO watcher_scan_lineages VALUES (:id, :terminal, :status)",
+        [
+            {"id": "done", "terminal": "done-2", "status": "succeeded"},
+            {"id": "failed", "terminal": "failed-1", "status": "failed"},
+            {"id": "open", "terminal": None, "status": None},
+            {"id": "recent", "terminal": "recent-2", "status": "succeeded"},
+            {"id": "child", "terminal": "child-2", "status": "succeeded"},
+        ],
+    )
+    _insert(
+        factory,
+        "INSERT INTO watcher_scan_attempts VALUES (:id, :lineage, :at)",
+        [
+            {"id": "done-1", "lineage": "done", "at": old},
+            {"id": "done-2", "lineage": "done", "at": old},
+            {"id": "failed-1", "lineage": "failed", "at": old},
+            {"id": "open-1", "lineage": "open", "at": old},
+            {"id": "recent-1", "lineage": "recent", "at": old},
+            {"id": "recent-2", "lineage": "recent", "at": fresh},
+            {"id": "child-1", "lineage": "child", "at": old},
+            {"id": "child-2", "lineage": "child", "at": old},
+        ],
+    )
+    # A child row the 24 h child policy keeps (fresh) still pins its parent.
+    _insert(
+        factory,
+        "INSERT INTO watcher_source_fetch_attempts VALUES (:id, :parent, :at)",
+        [
+            {"id": "f-old", "parent": "done-1", "at": old},
+            {"id": "f-fresh", "parent": "child-1", "at": fresh},
+        ],
+    )
+    run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT attempt_id FROM watcher_scan_attempts")).scalars().all()
+        )
+        lineages = _count(factory, "watcher_scan_lineages")
+    # done-1 goes (its old child went first); terminal, failed, open, recent
+    # and child-pinned attempts stay.
+    assert kept == {"done-2", "failed-1", "open-1", "recent-1", "recent-2", "child-1", "child-2"}
+    assert lineages == 5
+
+
+def test_telegram_notifications_go_after_24_hours_and_the_outbox_stays(factory) -> None:
+    old, fresh = NOW - timedelta(hours=25), NOW - timedelta(hours=23)
+    _insert(
+        factory,
+        "INSERT INTO telegram_paper_notifications VALUES (:id, :at)",
+        [{"id": "old", "at": old}, {"id": "fresh", "at": fresh}],
+    )
+    _insert(
+        factory,
+        "INSERT INTO telegram_security_outbox VALUES (:id, :at)",
+        [{"id": "sent", "at": NOW - timedelta(days=30)}],
+    )
+    run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT intent_id FROM telegram_paper_notifications"))
+            .scalars()
+            .all()
+        )
+    assert kept == {"fresh"}
+    assert _count(factory, "telegram_security_outbox") == 1
+
+
+def test_error_markers_match_the_monitoring_panel() -> None:
+    from app.services.watcher_monitoring_service import _ERROR_EVENT_MARKERS
+
+    assert WATCHER_ERROR_EVENT_MARKERS == _ERROR_EVENT_MARKERS
 
 
 def test_retention_is_off_and_dry_run_by_default() -> None:
     settings = Settings(_env_file=None)
     assert settings.retention_enabled is False
     assert settings.retention_dry_run is True
+
+
+def test_windows_are_hours_with_a_24_hour_floor() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.retention_watcher_events_hours == 24
+    assert settings.retention_watcher_error_events_hours == 72
+    assert settings.retention_watcher_attempts_hours == 24
+    assert settings.retention_paper_evaluation_hours == 24
+    assert settings.retention_telegram_notifications_hours == 24
+    windows = {p.table: p.window for p in retention_policies(settings)}
+    assert windows["paper_evaluation_observations"] == timedelta(hours=24)
+    assert windows["blofin_demo_sync_snapshots"] == timedelta(days=30)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, retention_watcher_events_hours=23)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "retention_watcher_events_hours",
+        "retention_watcher_error_events_hours",
+        "retention_watcher_attempts_hours",
+        "retention_paper_evaluation_hours",
+        "retention_telegram_notifications_hours",
+    ],
+)
+def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
+    for too_short in (0, 23):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **{field: too_short})  # type: ignore[arg-type]
+    assert getattr(Settings(_env_file=None, **{field: 24}), field) == 24  # type: ignore[arg-type]
 
 
 def test_cycle_waits_one_interval_then_runs_once_per_interval(factory) -> None:

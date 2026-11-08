@@ -45,7 +45,7 @@ def main() -> int:
     results = run_retention(factory, settings, now=datetime.now(UTC), dry_run=not args.apply)
     for result in results:
         print(
-            f"policy={result.table} cutoff={result.cutoff.isoformat()} "
+            f"policy={result.policy} table={result.table} cutoff={result.cutoff.isoformat()} "
             f"matched={result.matched} deleted={result.deleted} "
             f"dry_run={result.dry_run} complete={result.complete}"
         )

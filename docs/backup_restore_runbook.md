@@ -215,12 +215,23 @@ The paper worker can prune append-only operational logs (`backend/src/app/servic
 It is **off and dry-run by default**: `RETENTION_ENABLED=true` attaches an hourly pass that only
 counts and logs (`db_retention_table`); deletion also needs `RETENTION_DRY_RUN=false`.
 
+Windows are in hours (`RETENTION_*_HOURS`, minimum 24, maximum 8760).
+
 | Table | Default window | Kept regardless |
 |-------|----------------|-----------------|
-| `watcher_observability_events` | 7 days (`RETENTION_WATCHER_EVENTS_DAYS`) | — |
-| `watcher_subscription_eval_attempts`, `watcher_source_fetch_attempts` | 30 days | — (parent `watcher_scan_attempts` are never pruned) |
-| `paper_evaluation_observations` | 30 days | rows with a journal trade, a fill or an approved plan |
-| `blofin_demo_sync_snapshots` | 30 days | the newest snapshot per organization |
+| `watcher_observability_events`, non-error | 24 h (`RETENTION_WATCHER_EVENTS_HOURS`) | — |
+| `watcher_observability_events`, error | 72 h (`RETENTION_WATCHER_ERROR_EVENTS_HOURS`) | — |
+| `watcher_subscription_eval_attempts`, `watcher_source_fetch_attempts` | 24 h (`RETENTION_WATCHER_ATTEMPTS_HOURS`) | — |
+| `watcher_scan_attempts` | 24 h (`RETENTION_WATCHER_ATTEMPTS_HOURS`) | a lineage's terminal attempt; every attempt of a lineage that did not succeed or has an attempt inside the window; attempts a child row still references. Lineages are never pruned. |
+| `paper_evaluation_observations` | 24 h (`RETENTION_PAPER_EVALUATION_HOURS`) | rows with a journal trade, a fill or an approved plan |
+| `telegram_paper_notifications` | 24 h (`RETENTION_TELEGRAM_NOTIFICATIONS_HOURS`) | — (the security outbox, threads, messages and confirmations are never pruned) |
+| `blofin_demo_sync_snapshots` | 30 days (`RETENTION_DEMO_SNAPSHOT_DAYS`) | the newest snapshot per organization |
+
+An event counts as an error when its name contains `fail`, `error`, `blocked`, `degraded`, `stale`
+or `reject` (the markers of the monitoring "recent errors" panel), or when
+`fields.evaluation_status` is `failed`, `degraded` or `blocked`.
 
 Trades, orders, fills, journal, plans, candidates, strategies, audit logs, P&L and notes are never pruned.
+Candidate and plan tables are append-only in Postgres (`BEFORE DELETE` triggers), so a 7-day
+candidate/plan window needs a migration and the owner's OK first.
 Deletes run in batches (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES_PER_TABLE` per pass).
