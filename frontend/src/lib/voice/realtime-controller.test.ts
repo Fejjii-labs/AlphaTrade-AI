@@ -1,6 +1,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { RealtimeVoiceController, type RealtimeSnapshot } from "./realtime-controller";
 import { clearTokens, setTokens } from "@/lib/auth/session";
+import { appConfig } from "@/lib/config";
+import { buildContentSecurityPolicy, resolveApiOrigin } from "@/lib/security-headers";
 import type { AgentTurnResult } from "@/lib/api/types";
 import type { TurnBody } from "@/components/agent/turn-recovery";
 
@@ -65,6 +67,14 @@ describe("supported realtime controller (synthetic protocol, no actual provider/
     expect(f.connect).not.toHaveBeenCalled();
     expect(f.states.at(-1)?.error).toContain("Microphone access was denied");
     expect(audio.stop).toHaveBeenCalled();
+  });
+  it.each(["gpt_live", "realtime"] as const)("opens its %s socket on an origin the production connect-src lists", async provider => {
+    const f = fixture({ configuration: vi.fn().mockResolvedValue({ available: true, maximum_seconds: 30, provider }) });
+    await f.controller.start();
+    const csp = buildContentSecurityPolicy({ apiOrigin: resolveApiOrigin(appConfig.apiBaseUrl), dev: false });
+    const connectSrc = csp.split("; ").find(part => part.startsWith("connect-src "))!.split(" ").slice(1);
+    const socketUrl = new URL(f.connect.mock.calls[0][0]);
+    expect(connectSrc).toContain(`${socketUrl.protocol}//${socketUrl.host}`);
   });
   it("auth travels only in first application envelope; no model or provider key in URL", async () => {
     const f = fixture(); await f.controller.start(); f.socket.onopen?.();

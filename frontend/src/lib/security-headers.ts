@@ -1,7 +1,9 @@
 /**
  * Security header definitions shared by next.config.ts and unit tests (AT-017).
  *
- * The CSP allows the configured API origin for fetch/XHR and keeps inline
+ * The CSP allows the configured API origin for fetch/XHR, plus exactly its
+ * WebSocket counterpart (https -> wss, http -> ws, same host and port) for the
+ * voice socket, and keeps inline
  * styles/scripts permitted because Next.js App Router emits inline runtime
  * scripts and Tailwind emits inline style attributes. Dev mode additionally
  * needs eval + websockets for HMR.
@@ -26,12 +28,37 @@ export function resolveApiOrigin(rawUrl: string | undefined): string {
   }
 }
 
+/**
+ * The WebSocket origin the browser opens for an HTTP(S) API origin: https ->
+ * wss, http -> ws, with host and any explicit port unchanged. Chromium does not
+ * let an `https://host` connect-src source match `wss://host`, so the voice
+ * socket needs this exact origin listed. Null for any other scheme or input.
+ */
+export function resolveWebSocketOrigin(apiOrigin: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(apiOrigin);
+  } catch {
+    return null;
+  }
+  if (url.protocol === "https:") url.protocol = "wss:";
+  else if (url.protocol === "http:") url.protocol = "ws:";
+  else return null;
+  return `${url.protocol}//${url.host}`;
+}
+
 export function buildContentSecurityPolicy(options: {
   apiOrigin: string;
   dev: boolean;
 }): string {
   const { apiOrigin, dev } = options;
-  const connectSrc = ["'self'", apiOrigin, ...(dev ? ["ws:"] : [])].join(" ");
+  const socketOrigin = resolveWebSocketOrigin(apiOrigin);
+  const connectSrc = [
+    "'self'",
+    apiOrigin,
+    ...(socketOrigin ? [socketOrigin] : []),
+    ...(dev ? ["ws:"] : []),
+  ].join(" ");
   const scriptSrc = dev ? "'self' 'unsafe-inline' 'unsafe-eval'" : "'self' 'unsafe-inline'";
   return [
     "default-src 'self'",
