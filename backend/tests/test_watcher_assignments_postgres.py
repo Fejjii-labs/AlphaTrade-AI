@@ -652,6 +652,7 @@ def test_assigned_expiry_retains_evidence_and_uses_existing_notification_policy(
     from app.telegram_paper_agent.contracts import PaperAlertRecipient
     from app.telegram_paper_agent.gateway import TelegramPaperAgent
     from app.telegram_security.clock import FrozenClock
+    from app.telegram_security.contracts import OutboxState
     from app.telegram_security.protocol import TelegramSecurityProtocol
     from app.telegram_security.transport import FakeTelegramTransport
     from tests.support.telegram_security import BOT, CHAT, enroll
@@ -749,8 +750,12 @@ def test_assigned_expiry_retains_evidence_and_uses_existing_notification_policy(
         assert outbox == []  # Existing confirmed-alert policy suppresses stale/expired facts.
     else:
         assert len(outbox) == 1
+        # The expired fact is stored once, but terminal SFP events are muted
+        # unless the recipient subscribes to them (#428); nothing is pushed.
         protocol.deliver_pending()
-        assert len(transport.sent) == 1
         protocol.deliver_pending()
-        assert len(transport.sent) == 1
+        assert transport.sent == []
+        (row,) = protocol.store.list_outbox(organization_id=org)
+        assert row.state is OutboxState.SUPPRESSED
+        assert row.last_error == "POLICY_TERMINAL_EVENT_MUTED"
     assert protocol.execution_attempt_count == 0
