@@ -10,17 +10,19 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app.db.models import PerformanceSnapshot, StrategyPerformanceDaily
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 
 
 class PerformanceSnapshotRepository(SQLAlchemyRepository[PerformanceSnapshot]):
     model = PerformanceSnapshot
 
-    def latest(self, *, organization_id: uuid.UUID | None = None) -> PerformanceSnapshot | None:
-        stmt = select(PerformanceSnapshot)
-        if organization_id is not None:
-            stmt = stmt.where(PerformanceSnapshot.organization_id == organization_id)
-        stmt = stmt.order_by(PerformanceSnapshot.as_of.desc()).limit(1)
+    def latest(self, *, organization_id: uuid.UUID) -> PerformanceSnapshot | None:
+        stmt = (
+            select(PerformanceSnapshot)
+            .where(PerformanceSnapshot.organization_id == require_organization_id(organization_id))
+            .order_by(PerformanceSnapshot.as_of.desc())
+            .limit(1)
+        )
         return self._session.scalar(stmt)
 
     def list_for_tenant(

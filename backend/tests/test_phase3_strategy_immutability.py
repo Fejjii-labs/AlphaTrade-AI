@@ -558,10 +558,14 @@ def test_manual_level_cross_tenant_rejected(session: Session) -> None:
     )
     revision = service.current_revision(created.id, organization_id=ORG_A)
     assert revision is not None
-    from app.services.manual_level_service import CrossTenantLevelError
-
-    with pytest.raises(CrossTenantLevelError):
+    # Cross-org answers exactly like a missing id (C-A2: no existence oracle).
+    with pytest.raises(NotFoundError) as foreign:
         service.get_revision(revision.id, organization_id=ORG_B)
+    with pytest.raises(NotFoundError) as missing:
+        service.get_revision(uuid.uuid4(), organization_id=ORG_B)
+    assert foreign.value.status_code == missing.value.status_code == 404
+    assert foreign.value.code == missing.value.code
+    assert foreign.value.message == missing.value.message
 
 
 def test_migration_dry_run_apply_idempotency_and_rollback(session: Session) -> None:

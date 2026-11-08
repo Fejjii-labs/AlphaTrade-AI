@@ -114,7 +114,7 @@ def test_document_ingestion_persists_chunks(rag_service: RagService, db_session:
     assert result.chunk_count >= 1
     assert result.duplicate is False
 
-    chunks, total = rag_service.list_chunks(document_id=result.document_id)
+    chunks, total = rag_service.list_chunks(organization_id=ORG_ID, document_id=result.document_id)
     assert total == result.chunk_count
     assert chunks[0].metadata.risk_tag == "stop_loss"
     assert chunks[0].text_hash == compute_text_hash(chunks[0].content)
