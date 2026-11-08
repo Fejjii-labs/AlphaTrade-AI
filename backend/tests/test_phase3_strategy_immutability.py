@@ -18,7 +18,7 @@ from app.analysis.wilder_atr_v1 import (
     WilderAtrStatus,
     compute_wilder_atr_v1,
 )
-from app.core.errors import PersistencePolicyError
+from app.core.errors import NotFoundError, PersistencePolicyError
 from app.core.operation_policy import operation_scope
 from app.core.persistence_firewall import install_persistence_firewall
 from app.db.base import Base
@@ -88,7 +88,7 @@ from app.services.setup_ast_compiler import (
 )
 from app.services.setup_migration_service import SetupMigrationService
 from app.services.strategy_library_service import StrategyLibraryService
-from app.services.strategy_versioning import CrossTenantStrategyError, StrategyVersioningService
+from app.services.strategy_versioning import StrategyVersioningService
 from app.services.structured_rules_service import StructuredRulesService
 
 ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000c001")
@@ -366,7 +366,7 @@ def test_tenant_compiled_definition_is_tenant_scoped(session: Session) -> None:
     )
     assert outcome.compiled is not None
     assert outcome.compiled.organization_id == ORG_A
-    with pytest.raises(CrossTenantStrategyError):
+    with pytest.raises(NotFoundError, match=r"Strategy version not found\."):
         CompiledSetupService(session).compile_version(
             selected.id, organization_id=ORG_B, user_id=USER_B
         )

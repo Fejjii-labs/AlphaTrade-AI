@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
+from app.core.errors import NotFoundError
 from app.core.persistence_firewall import install_persistence_firewall
 from app.db.base import Base
 from app.db.models import Membership, Organization, PaperSignal, User, UserStrategy
@@ -455,11 +456,10 @@ def test_stale_and_expired_evidence_cannot_mint(session: Session) -> None:
 def test_wrong_tenant_and_wrong_compiled_hash_cannot_mint(session: Session) -> None:
     strategy, version, compiled = _seed_approved_compiled(session)
     world = _world_for_compiled(compiled, version.id, make_world())
-    with pytest.raises(StrategyEvaluationPolicyError) as tenant_exc:
+    with pytest.raises(NotFoundError, match=r"Strategy version not found\."):
         resolve_executable_strategy_policy(
             session, organization_id=ORG_B, strategy_version_id=version.id, user_id=USER_B
         )
-    assert tenant_exc.value.reason_code == "organization_mismatch"
 
     bad_setup = ExecutableSetupRef(
         setup_definition_id=compiled.id,

@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.errors import NotFoundError
 from app.core.persistence_firewall import install_persistence_firewall
 from app.db.base import Base
 from app.db.models import Membership, Organization, User, UserStrategy
@@ -528,11 +529,17 @@ def test_draft_version_resolve_fail_closed(session: Session) -> None:
 
 def test_tenant_isolation(session: Session) -> None:
     _strategy, version, _compiled = _seed_approved_compiled(session)
-    with pytest.raises(StrategyEvaluationPolicyError) as exc:
+    with pytest.raises(NotFoundError) as cross_org:
         resolve_executable_strategy_policy(
             session, organization_id=ORG_B, strategy_version_id=version.id, user_id=USER_B
         )
-    assert exc.value.reason_code == "organization_mismatch"
+    with pytest.raises(NotFoundError) as missing:
+        resolve_executable_strategy_policy(
+            session, organization_id=ORG_B, strategy_version_id=uuid.uuid4(), user_id=USER_B
+        )
+    # A foreign version is indistinguishable from a missing one.
+    assert type(cross_org.value) is type(missing.value)
+    assert str(cross_org.value) == str(missing.value) == "Strategy version not found."
 
 
 def test_unsupported_stored_spec_fail_closed(session: Session) -> None:
