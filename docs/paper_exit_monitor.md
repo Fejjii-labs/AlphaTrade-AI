@@ -339,7 +339,10 @@ attached thread as `disabled`. The watcher heartbeat can stay fresh while
 this one does not.
 
 `GET /health/paper-worker` also includes `kill_switch` with `active`,
-`source`, and `since`. The free-text reason is not included. No secret and
+`source`, and `since` for the organization pinned by
+`WATCHER_PAPER_ORGANIZATION_ID` (or the global setting). Without a pin it
+reports `active: null, source: "unscoped"` instead of any other tenant's
+switch. The free-text reason is not included. No secret and
 no P&L amount are included. Telegram HTTP sends wait at most 5 seconds.
 
 Kill-switch activation, backfill-loss, stale-loss, worker and exit-monitor

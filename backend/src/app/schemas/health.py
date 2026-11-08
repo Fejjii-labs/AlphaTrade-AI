@@ -89,7 +89,10 @@ class PaperWorkerKillSwitch(BaseModel):
     """Kill-switch posture for the external paper-worker poll.
 
     ``active`` is true when the global setting is on, when the scoped
-    organization switch is on, or when that state cannot be read.
+    organization switch is on, or when that state cannot be read. It is
+    null with ``source="unscoped"`` when ``WATCHER_PAPER_ORGANIZATION_ID`` is
+    not set: this unauthenticated endpoint does not report other tenants'
+    switches (Fable audit M3).
     ``source`` is a fixed token such as ``manual`` or ``global_setting``.
     ``since`` is the organization row's activation time when one exists.
     The free-text reason is not included. No secret and no P&L amount.
@@ -97,7 +100,7 @@ class PaperWorkerKillSwitch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    active: bool = False
+    active: bool | None = False
     source: str = ""
     since: datetime | None = None
 
