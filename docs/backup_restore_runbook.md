@@ -196,6 +196,7 @@ Never paste `DATABASE_URL`, API keys, dump contents, or PII into chat, git, or h
 | Staging/managed restore drill against real Render/Neon snapshot | Requires human approval after this docs lane |
 | PITR / sub-hour RPO on Postgres | Enable on platform when available; update targets |
 | Qdrant Cloud snapshot automation | Confirm plan features; else rely on re-ingest |
+| Automated check that the latest managed Postgres snapshot exists and is recent | Not scripted: the Render backup list needs dashboard/API credentials the repo does not hold. Check it by hand in the Render dashboard before any `--apply` retention run (Fable audit L11). |
 
 ---
 
@@ -206,3 +207,20 @@ Never paste `DATABASE_URL`, API keys, dump contents, or PII into chat, git, or h
 | `scripts/backup-postgres-local.sh` | `pg_dump` via Compose | Local Compose service only |
 | `scripts/restore-postgres-local.sh` | Restore dump into Compose Postgres | `CONFIRM=yes`; local only |
 | `scripts/drill-backup-restore-local.sh` | End-to-end local drill + JSON summary | `CONFIRM=yes`; writes under `.ai/local/` |
+| `backend/scripts/db_retention.py` | Database and largest-table sizes, plus what each runtime-log retention policy would delete | Dry-run unless `--apply`; uses the operator's `DATABASE_URL`; `--apply` on a shared DB needs the owner's OK |
+
+### Runtime-log retention (H5)
+
+The paper worker can prune append-only operational logs (`backend/src/app/services/db_retention.py`).
+It is **off and dry-run by default**: `RETENTION_ENABLED=true` attaches an hourly pass that only
+counts and logs (`db_retention_table`); deletion also needs `RETENTION_DRY_RUN=false`.
+
+| Table | Default window | Kept regardless |
+|-------|----------------|-----------------|
+| `watcher_observability_events` | 7 days (`RETENTION_WATCHER_EVENTS_DAYS`) | — |
+| `watcher_subscription_eval_attempts`, `watcher_source_fetch_attempts` | 30 days | — (parent `watcher_scan_attempts` are never pruned) |
+| `paper_evaluation_observations` | 30 days | rows with a journal trade, a fill or an approved plan |
+| `blofin_demo_sync_snapshots` | 30 days | the newest snapshot per organization |
+
+Trades, orders, fills, journal, plans, candidates, strategies, audit logs, P&L and notes are never pruned.
+Deletes run in batches (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES_PER_TABLE` per pass).

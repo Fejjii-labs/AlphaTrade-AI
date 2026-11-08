@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { useAsyncData } from "@/hooks/useAsyncData";
+import { useResolvedTimezone } from "@/hooks/useResolvedTimezone";
 import { api } from "@/lib/api";
 import type {
   ComparisonBreakdown,
@@ -26,6 +27,7 @@ import type {
   SampleConfidence,
 } from "@/lib/api/types";
 import { formatMonetary, formatPercent, humanizeToken } from "@/lib/format";
+import { TIMEZONE_SOURCE_LABELS, zonedDayBoundsUtc } from "@/lib/timezone";
 
 const COHORT_ORDER: JournalComparisonCohort[] = ["human", "paper_system", "backtest"];
 
@@ -308,7 +310,13 @@ export default function JournalComparisonPage() {
       : 10,
   );
 
+  // Day bounds use the shared resolved zone (risk settings → browser → UTC).
+  const zone = useResolvedTimezone();
   const loader = useCallback(() => {
+    if (!zone.ready && (dateFrom || dateTo)) {
+      // Wait for the shared zone instead of querying UTC days first.
+      return new Promise<never>(() => {});
+    }
     const params: JournalComparisonParams = {
       strategy_id: strategyId.trim() || undefined,
       strategy_version_id: strategyVersionId.trim() || undefined,
@@ -318,8 +326,8 @@ export default function JournalComparisonPage() {
       market_regime: regime || undefined,
       entry_method: entryMethod || undefined,
       source: source || undefined,
-      date_from: dateFrom ? `${dateFrom}T00:00:00Z` : undefined,
-      date_to: dateTo ? `${dateTo}T23:59:59Z` : undefined,
+      date_from: dateFrom ? zonedDayBoundsUtc(dateFrom, zone.timezone).start : undefined,
+      date_to: dateTo ? zonedDayBoundsUtc(dateTo, zone.timezone).end : undefined,
       breakdown_limit: breakdownLimit,
     };
     return api.journal.comparison(params);
@@ -335,6 +343,8 @@ export default function JournalComparisonPage() {
     dateFrom,
     dateTo,
     breakdownLimit,
+    zone.ready,
+    zone.timezone,
   ]);
 
   const { data, loading, error, reload } = useAsyncData(loader, [loader]);
@@ -476,6 +486,9 @@ export default function JournalComparisonPage() {
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
             />
+            <p className="text-xs text-text-muted" data-testid="cmp-date-timezone">
+              Days in {zone.timezone} ({TIMEZONE_SOURCE_LABELS[zone.source]})
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="cmp-breakdown-limit">Breakdown limit</Label>

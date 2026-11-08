@@ -454,3 +454,70 @@ def test_deployment_posture_reports_exchange_axis_without_secrets() -> None:
     assert posture["blofin_demo_configured"] is True
     assert "demo-secret" not in str(posture)
     assert "demo-pass" not in str(posture)
+
+
+def test_staging_rejects_debug_true() -> None:
+    """M21: debug is refused in every non-local environment, not only production."""
+    with pytest.raises(ValidationError, match="debug must be false in staging"):
+        Settings(**{**_STAGING_BASE, "debug": True})
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "REPLACE_WITH_32_PLUS_BYTE_RANDOM_SECRET",
+        "placeholder-placeholder-placeholder-32b",
+        "please-change-me-to-a-long-random-value-xyz",
+    ],
+)
+def test_staging_rejects_placeholder_jwt_secret_even_for_disarmed_worker(secret: str) -> None:
+    """M19: template placeholders are refused even when ops checks are deferred."""
+    from app.core.disarmed_worker_boot import (
+        WorkerBootRole,
+        bind_worker_boot_role,
+        reset_disarmed_worker_boot,
+    )
+
+    with pytest.raises(ValidationError, match="weak placeholder"):
+        Settings(**{**_STAGING_BASE, "jwt_secret": secret})
+    bind_worker_boot_role(WorkerBootRole.PAPER_WORKER)
+    try:
+        with pytest.raises(ValidationError, match="weak placeholder"):
+            Settings(**{**_STAGING_BASE, "jwt_secret": secret})
+    finally:
+        reset_disarmed_worker_boot()
+
+
+def test_jwt_algorithm_is_pinned_to_hs256() -> None:
+    """M19: ``none``/asymmetric algorithms cannot be configured."""
+    with pytest.raises(ValidationError, match="jwt_algorithm must be HS256"):
+        Settings(environment="local", jwt_algorithm="none")
+    with pytest.raises(ValidationError, match="jwt_algorithm must be HS256"):
+        Settings(**{**_STAGING_BASE, "jwt_algorithm": "HS512"})
+
+
+def test_tokens_refuse_weak_secret_outside_local() -> None:
+    """M19: even a process allowed to boot with the local default cannot sign/verify."""
+    import uuid
+
+    from app.core.config import DEFAULT_LOCAL_JWT_SECRET, Environment
+    from app.core.errors import AuthError
+    from app.security.tokens import create_access_token, decode_access_token
+
+    weak = Settings.model_construct(
+        environment=Environment.STAGING,
+        jwt_secret=DEFAULT_LOCAL_JWT_SECRET,
+        jwt_algorithm="HS256",
+        access_token_expire_minutes=15,
+    )
+    with pytest.raises(AuthError):
+        create_access_token(
+            user_id=uuid.uuid4(), organization_id=uuid.uuid4(), email="a@b.c", settings=weak
+        )
+    local = Settings(environment="local")
+    token, _ = create_access_token(
+        user_id=uuid.uuid4(), organization_id=uuid.uuid4(), email="a@b.c", settings=local
+    )
+    assert decode_access_token(token, local)["type"] == "access"
+    with pytest.raises(AuthError):
+        decode_access_token(token, weak)

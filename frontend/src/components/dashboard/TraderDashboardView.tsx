@@ -4,12 +4,21 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { NativeActivity } from "@/components/activity/NativeActivity";
 import { useAuth } from "@/contexts/AuthContext";
+import { useResolvedTimezone } from "@/hooks/useResolvedTimezone";
+import { TIMEZONE_SOURCE_LABELS } from "@/lib/timezone";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 import { AttentionCard } from "./AttentionCard";
 import { DailyReviewCard } from "./DailyReviewCard";
+import { DailyStatusStrip, type KillSwitchDisplay } from "./DailyStatusStrip";
 import { BloFinDemoAccountCard } from "./BloFinDemoAccountCard";
 import { PerformanceDashboard } from "./performance/PerformanceDashboard";
+import {
+  DEFAULT_SCOPE,
+  EXTRA_SCOPE_OPTIONS,
+  SCOPE_LABELS,
+  SCOPE_OPTIONS,
+} from "./performance/performance-model";
 
 import {
   closedStrategyRows,
@@ -28,6 +37,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataNumber } from "@/components/ui/data-number";
 import { PageHeader } from "@/components/ui/page-header";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import type { SafetyPostureDisplay } from "@/components/workflows/safetyPostureDisplay";
 import type { SourceResult } from "@/components/workflows/sourceResult";
 import {
@@ -40,7 +50,7 @@ import { cn } from "@/lib/utils";
 import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
-  JournalStatsResponse,
+  JournalDashboardScope,
   PaginatedCanonicalJournalTrades,
   PaperAlert,
   PaperPortfolioResponse,
@@ -50,12 +60,69 @@ import type {
 export type TraderDashboardData = {
   portfolio: SourceResult<PaperPortfolioResponse>;
   journal: SourceResult<PaginatedCanonicalJournalTrades>;
-  strategyStats: SourceResult<JournalStatsResponse>;
   summary: SourceResult<DashboardSummary>;
   watcher: SourceResult<WatcherMonitoringSnapshot>;
   market: SourceResult<CanonicalMarketMonitorStatusRead>;
   alerts: SourceResult<{ items: PaperAlert[]; total: number }>;
 };
+
+/** One venue for the whole page: performance, account card and activity. */
+export type DashboardVenue = JournalDashboardScope;
+
+export function DashboardVenueControl({
+  value,
+  onChange,
+  realTradingEnabled,
+}: {
+  value: DashboardVenue;
+  onChange: (next: DashboardVenue) => void;
+  realTradingEnabled: boolean | null | undefined;
+}) {
+  // Real is only selectable when the runtime posture verifiably enables it;
+  // false or unverified keeps it disabled.
+  const realDisabled = realTradingEnabled !== true;
+  const extra = EXTRA_SCOPE_OPTIONS.some((option) => option.value === value);
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 text-sm"
+      data-testid="dashboard-venue-control"
+    >
+      <span className="text-text-secondary">Venue</span>
+      <SegmentedControl
+        aria-label="Dashboard venue"
+        value={extra ? ("" as DashboardVenue) : value}
+        onChange={onChange}
+        options={SCOPE_OPTIONS.map((option) => ({
+          ...option,
+          disabled: option.value === "real" && realDisabled,
+        }))}
+      />
+      <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+        <span className="sr-only sm:not-sr-only">Other</span>
+        <select
+          aria-label="Other trade scopes"
+          value={extra ? value : ""}
+          onChange={(event) =>
+            onChange((event.target.value || DEFAULT_SCOPE) as DashboardVenue)
+          }
+          className="min-h-9 rounded-control border border-border bg-surface-1 px-2 text-xs text-text-primary"
+        >
+          <option value="">—</option>
+          {EXTRA_SCOPE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {realDisabled ? (
+        <span className="text-xs text-text-muted" data-testid="dashboard-venue-real-disabled">
+          Real is unavailable while real trading is disabled.
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function SectionEmpty({
   title,
@@ -75,19 +142,34 @@ export function TraderDashboardView({
   onRetry,
   refreshing = false,
   demoRefreshKey = 0,
+  venue: controlledVenue,
+  onVenueChange,
+  realTradingEnabled = false,
+  killSwitch,
 }: {
   data: TraderDashboardData;
   posture: SafetyPostureDisplay;
   onRetry?: () => void;
   refreshing?: boolean;
   demoRefreshKey?: number;
+  /** Page-owned venue (so loaders can be gated on it); local state otherwise. */
+  venue?: DashboardVenue;
+  onVenueChange?: (next: DashboardVenue) => void;
+  realTradingEnabled?: boolean | null;
+  killSwitch?: KillSwitchDisplay;
 }) {
   const { user, organization } = useAuth();
   const [session, setSession] = useState(sessionGeneration);
   useEffect(() => onSessionCleared(() => setSession(sessionGeneration())), []);
   const accountContext = JSON.stringify([organization?.id, user?.id, session]);
-  const [accountScope, setAccountScope] = useState("blofin");
-  const simulator = accountScope === "simulator";
+  const zone = useResolvedTimezone();
+  const dayZone = zone.ready ? zone.timezone : null;
+  const [ownVenue, setOwnVenue] = useState<DashboardVenue>(DEFAULT_SCOPE);
+  const venue = controlledVenue ?? ownVenue;
+  const setVenue = onVenueChange ?? setOwnVenue;
+  // Demo = configured BloFin demo account; Paper = internal simulator history.
+  const demo = venue === "demo";
+  const simulator = venue === "paper";
   const winRate = portfolioWinRate(data.portfolio);
   const expectancy = portfolioExpectancy(data.portfolio);
   const closedByStrategy = closedStrategyRows(data.portfolio);
@@ -107,7 +189,6 @@ export function TraderDashboardView({
   const unavailable = [
     ["Portfolio", data.portfolio],
     ["Recent trades", data.journal],
-    ["Journal statistics", data.strategyStats],
     ["Daily status", data.summary],
     ["Watcher", data.watcher],
     ["Market evidence", data.market],
@@ -165,21 +246,32 @@ export function TraderDashboardView({
         </p>
       ) : null}
 
-      <PerformanceDashboard key={`performance-${accountContext}`} refreshKey={demoRefreshKey} />
+      <DailyStatusStrip summary={data.summary} killSwitch={killSwitch} />
 
-      <label className="flex flex-wrap items-center gap-3 text-sm">
-        Account
-        <select
-          aria-label="Dashboard account"
-          value={accountScope}
-          onChange={(event) => setAccountScope(event.target.value)}
-          className="h-11 rounded-control border border-border-subtle bg-surface-1 px-3"
+      <DashboardVenueControl
+        value={venue}
+        onChange={setVenue}
+        realTradingEnabled={realTradingEnabled}
+      />
+
+      <PerformanceDashboard
+        key={`performance-${accountContext}`}
+        refreshKey={demoRefreshKey}
+        scope={venue}
+        timezone={dayZone}
+        timezoneLabel={TIMEZONE_SOURCE_LABELS[zone.source]}
+      />
+
+      {!demo && !simulator ? (
+        <p
+          className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
+          data-testid="dashboard-venue-no-account"
         >
-          <option value="blofin">BloFin demo · configured account</option>
-          <option value="simulator">Internal simulator · history</option>
-        </select>
-      </label>
-      {!simulator && user && organization ? (
+          No account snapshot for {SCOPE_LABELS[venue]}. The performance figures above
+          cover journal trades in this scope only.
+        </p>
+      ) : null}
+      {demo && user && organization ? (
         <div key={accountContext} className="page-sections">
           <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
           <NativeActivity statistics refreshKey={demoRefreshKey} />
@@ -253,7 +345,7 @@ export function TraderDashboardView({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <AttentionCard />
-        <DailyReviewCard compact />
+        <DailyReviewCard compact timezone={dayZone} />
       </div>
 
       {simulator ? (

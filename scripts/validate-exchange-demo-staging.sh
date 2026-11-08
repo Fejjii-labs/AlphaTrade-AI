@@ -21,7 +21,7 @@ BASE_URL="${BACKEND_URL}"
 export BASE_URL
 SKIP_REGISTER="${SKIP_REGISTER:-false}"
 EMAIL="${SMOKE_EMAIL:-exchange-demo-validate-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 ORG_NAME="${SMOKE_ORG:-Exchange Demo Validate $(date +%s)}"
 
 if [[ "$BACKEND_URL" == *"<"* ]]; then

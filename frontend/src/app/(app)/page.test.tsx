@@ -17,7 +17,6 @@ import type {
   CanonicalMarketMonitorStatusRead,
   DashboardSummary,
   CanonicalJournalTradeListItem,
-  JournalStatsResponse,
   PaginatedCanonicalJournalTrades,
   PaperAlert,
   PaperPortfolioResponse,
@@ -38,8 +37,14 @@ vi.mock("@/components/activity/useNativeActivity", () => ({
   }),
 }));
 
+const appContext: {
+  killSwitchStatus: { execution_blocked: boolean } | null;
+  killSwitchError: string | null;
+} = { killSwitchStatus: { execution_blocked: false }, killSwitchError: null };
+
 vi.mock("@/contexts/AppContext", () => ({
   useSafetyPosture: () => safetyPosture,
+  useAppContext: () => appContext,
 }));
 
 vi.mock("@/components/dashboard/BloFinDemoAccountCard", () => ({
@@ -89,15 +94,6 @@ function dashboardData(
       limit: 8,
       offset: 0,
     } as PaginatedCanonicalJournalTrades),
-    strategyStats: okSource({
-      buckets: [
-        {
-          key: "s1",
-          label: "HTF Pullback",
-          metrics: { trade_count: 4, win_rate: 0.5, net_pnl_total: "12.50" },
-        },
-      ],
-    } as JournalStatsResponse),
     summary: okSource({
       safety: { execution_mode: "paper", real_trading_enabled: false },
       open_paper_trades_summary: {
@@ -161,6 +157,8 @@ afterEach(() => {
   asyncState.data = dashboardData();
   asyncState.loading = false;
   asyncState.error = null;
+  appContext.killSwitchStatus = { execution_blocked: false };
+  appContext.killSwitchError = null;
 });
 
 describe("Trader dashboard", () => {
@@ -210,10 +208,7 @@ describe("Trader dashboard", () => {
   });
   it("shows paper value, pnl, win rate, positions, and trader watcher status", () => {
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent(
       formatCurrency("1000.50"),
     );
@@ -242,10 +237,7 @@ describe("Trader dashboard", () => {
   it("does not present an unmeasured win rate as zero", () => {
     asyncState.data = dashboardData({ portfolio: okSource(portfolio(0, 0)) });
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent(
       UNAVAILABLE,
     );
@@ -269,10 +261,7 @@ describe("Trader dashboard", () => {
       }),
     });
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3");
     expect(screen.getByTestId("dashboard-daily-status")).toHaveTextContent(
       "Daily status unavailable",
@@ -292,10 +281,7 @@ describe("Trader dashboard", () => {
       screen.queryByTestId("dashboard-strategy-performance"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("ETHUSDT")).not.toBeInTheDocument();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(
       screen.queryByTestId("dashboard-demo-account"),
     ).not.toBeInTheDocument();
@@ -313,7 +299,7 @@ describe("Trader dashboard", () => {
     const pending = pendingSource<never>();
     asyncState.loading = true;
     asyncState.data = {
-      portfolio: pending, journal: pending, strategyStats: pending, summary: pending,
+      portfolio: pending, journal: pending, summary: pending,
       watcher: pending, market: pending, alerts: pending,
     } as TraderDashboardData;
     render(<DashboardPage />);
@@ -321,12 +307,42 @@ describe("Trader dashboard", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByTestId("dashboard-demo-account")).toBeInTheDocument();
     expect(screen.queryByText(/unavailable:/i)).not.toBeInTheDocument();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent("Loading…");
     expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent(UNAVAILABLE);
   });
 
+  it("shows the kill switch and daily discipline strip in every venue", () => {
+    const data = dashboardData();
+    appContext.killSwitchStatus = { execution_blocked: true };
+    asyncState.data = dashboardData({
+      summary: okSource({
+        ...data.summary.data!,
+        daily_discipline: {
+          date: "2026-11-07", timezone: "Europe/Paris", loss_lock_active: true,
+          discipline_status: "locked", overtrading_warning_active: false,
+          green_day_protection_active: false, remaining_trades_allowed: 0,
+          max_trades_per_day: 5, reasons: [], limitations: [],
+        } as unknown as DashboardSummary["daily_discipline"],
+      }),
+    });
+    render(<DashboardPage />);
+    const strip = screen.getByTestId("dashboard-status-strip");
+    expect(strip).toHaveTextContent("Kill switch active");
+    expect(strip).toHaveTextContent("Locked");
+    expect(strip).toHaveTextContent("Daily loss limit reached (display only)");
+    expect(strip).toHaveTextContent("0 trades remaining of 5");
+    expect(strip).toHaveTextContent("Europe/Paris");
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Kill switch active");
+    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), { target: { value: "backtest" } });
+    expect(screen.getByTestId("dashboard-status-strip")).toHaveTextContent("Locked");
+  });
+
+  it("never shows an unknown kill switch as off", () => {
+    appContext.killSwitchStatus = null;
+    render(<DashboardPage />);
+    expect(screen.getByTestId("dashboard-strip-kill-switch")).toHaveTextContent("Kill switch status unknown");
+    expect(screen.getByTestId("dashboard-strip-unavailable")).toBeInTheDocument();
+  });
 });

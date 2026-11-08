@@ -98,7 +98,7 @@ export function useDemoAccountSnapshot(refreshKey: number) {
       // Preserve successful account evidence, including its original timestamp.
       setAccount(saved.current);
       setError(
-        "Demo account refresh failed. Showing the last successful snapshot when available. Retry or check Exchange settings.",
+        "Demo account refresh failed. Showing the last successful snapshot when available. Retry or check Exchange status.",
       );
       failures.current += 1;
       const interval = demoRefreshIntervalMs(saved.current?.refresh_interval_seconds);

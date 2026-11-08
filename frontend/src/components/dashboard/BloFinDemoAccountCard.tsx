@@ -64,7 +64,7 @@ export function BloFinDemoAccountCard({
       href="/settings/exchange"
       className={cn(buttonVariants({ variant: "outline" }), "h-11")}
     >
-      Exchange settings
+      View exchange status
     </Link>
   );
   const refreshControl = account?.can_refresh ? (
@@ -126,7 +126,7 @@ export function BloFinDemoAccountCard({
             }
             description={
               account?.message ??
-              "Configure BloFin demo sync to see equity, balances, and positions."
+              "BloFin demo credentials are set by the operator. Once they are, equity, balances and positions appear here."
             }
             action={refreshControl ?? configureLink}
           />

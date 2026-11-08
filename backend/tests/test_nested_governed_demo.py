@@ -24,7 +24,7 @@ from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from app.signal_fusion.memory import FrozenClock
 from tests import test_strategy_brain_nested as nested
 from tests.support.postgres_persistence import phase7_plan_session_factory, requires_postgres
-from tests.test_governed_blofin_demo import demo_settings
+from tests.test_governed_blofin_demo import demo_settings, seed_band_ledger_headroom
 from tests.test_governed_demo_lifecycle import ClosingVenue
 from tests.test_watcher_paper_runtime import ORG, USER
 
@@ -61,6 +61,10 @@ def test_approved_nested_produces_protected_actual_demo_entry_and_verified_exit(
         )
         account = session.scalar(select(ExecutionAccount))
         settings = demo_settings(str(account.id))
+        # demo_settings() arms autonomous BloFin demo mode (M1 requires it for
+        # worker entries); that path refuses without a verifiable risk ledger.
+        seed_band_ledger_headroom(session, account.id)
+        session.commit()
         # The Nested fixture stop is wide (~10%); 10x would correctly refuse with
         # demo_liquidation_inside_stop_buffer, so the owner configures 2x isolated.
         monkeypatch.setattr(

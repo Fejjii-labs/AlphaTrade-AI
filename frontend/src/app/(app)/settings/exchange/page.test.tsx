@@ -66,7 +66,8 @@ describe("Settings exchange shim (FP2-129)", () => {
       error: null,
     };
     render(<SettingsExchangePage />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/Exchange diagnostics/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/Exchange status/i);
+    expect(screen.getByText(/provisioned by the operator/i)).toBeInTheDocument();
     expect(screen.getByTestId("exchange-diagnostics-card")).toBeInTheDocument();
     expect(screen.getByTestId("blofin-sync-panel")).toBeInTheDocument();
   });

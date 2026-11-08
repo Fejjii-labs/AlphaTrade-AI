@@ -48,8 +48,10 @@ class PaperEvaluationStore(Protocol):
     def put(self, observation: PaperEvaluationObservation) -> PaperEvaluationObservation: ...
 
     def list_for_organization(
-        self, organization_id: UUID
-    ) -> tuple[PaperEvaluationObservation, ...]: ...
+        self, organization_id: UUID, *, limit: int | None = None
+    ) -> tuple[PaperEvaluationObservation, ...]:
+        """Oldest first; with ``limit``, only the newest ``limit`` rows (M10)."""
+        ...
 
 
 class JournalExcursionPort(Protocol):

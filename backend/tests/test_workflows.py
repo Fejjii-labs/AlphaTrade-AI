@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.core.errors import TradingPolicyError
+from app.core.errors import NotFoundError, TradingPolicyError
 from app.db.base import Base
 from app.db.models import (
     AuditLog,
@@ -1000,3 +1000,131 @@ def test_demo_mirror_requires_risk_result(
             )
         assert exc.value.details.get("reason") == LEGACY_PAPER_EXECUTION_REASON
         assert fake.calls == []
+
+
+COLLEAGUE_ID = uuid.UUID("00000000-0000-0000-0000-000000000032")
+
+
+def _add_colleague_and_login(
+    client: TestClient, factory: sessionmaker[Session], settings: Settings
+) -> dict[str, str]:
+    with factory() as session:
+        session.add(
+            User(
+                id=COLLEAGUE_ID,
+                email="colleague@test.example",
+                hashed_password=hash_password("TestPassword123!", settings),
+            )
+        )
+        session.flush()
+        session.add(
+            Membership(user_id=COLLEAGUE_ID, organization_id=ORG_ID, role=MembershipRole.TRADER)
+        )
+        session.commit()
+    login = client.post(
+        "/auth/login",
+        json={"email": "colleague@test.example", "password": "TestPassword123!"},
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['tokens']['access_token']}"}
+
+
+def test_trader_cannot_act_on_colleagues_position_or_legacy_approval(
+    workflow_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """M15: positions and legacy approvals are per-user inside an org (404 for colleagues)."""
+    from datetime import UTC, datetime
+
+    from app.db.models import ApprovalRequest as ApprovalRow
+    from app.db.models import Position as PositionRow
+    from app.schemas.common import ApprovalStatus, PositionStatus, TradeDirection
+
+    factory, settings = workflow_db
+    with factory() as session:
+        audit = AuditService(session)
+        proposal = ProposalService(session, audit).create(
+            TradeProposalCreate(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                strategy_id=StrategyId.HTF_TREND_PULLBACK,
+                symbol="BTCUSDT",
+                timeframe="4h",
+                direction="long",
+                entry_price=Decimal("60000"),
+                position_size=Decimal("0.005"),
+                leverage=Decimal("3"),
+                exit=_exit(),
+                confidence=0.7,
+                risk_level=RiskSeverity.MEDIUM,
+                rationale="M15 scoping test",
+                approval_required=True,
+            )
+        )
+        approval = ApprovalService(session, audit).create_for_proposal(
+            proposal_id=proposal.id,  # type: ignore[arg-type]
+            organization_id=ORG_ID,
+            user_id=USER_ID,
+            risk_level=proposal.risk_level,
+            confidence=float(proposal.confidence),
+        )
+        position = PositionRow(
+            organization_id=ORG_ID,
+            user_id=USER_ID,
+            symbol="BTCUSDT",
+            direction=TradeDirection.LONG,
+            size=Decimal("0.01"),
+            entry_price=Decimal("60000"),
+            leverage=Decimal("1"),
+            status=PositionStatus.OPEN,
+            opened_at=datetime.now(UTC),
+        )
+        session.add(position)
+        session.commit()
+        approval_id, position_id = approval.id, position.id
+
+    app = create_app(settings=settings)
+
+    def _override_session() -> Iterator[Session]:
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+    with TestClient(app) as client:
+        colleague = _add_colleague_and_login(client, factory, settings)
+        assert client.get(f"/positions/{position_id}", headers=colleague).status_code == 404
+        assert (
+            client.patch(
+                f"/positions/{position_id}", headers=colleague, json={"stop_loss": "1"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                f"/positions/{position_id}/close-paper",
+                headers=colleague,
+                json={"exit_price": "61000"},
+            ).status_code
+            == 404
+        )
+        for action in ("approve", "reject", "needs-more-analysis"):
+            response = client.post(
+                f"/approvals/{approval_id}/{action}", headers=colleague, json={"reason": "x"}
+            )
+            assert response.status_code == 404, (action, response.text)
+        assert (
+            client.get(f"/approvals/{approval_id}/workflow", headers=colleague).status_code == 404
+        )
+
+    with factory() as session:
+        row = session.get(PositionRow, position_id)
+        assert row is not None and row.status is PositionStatus.OPEN
+        assert session.get(ApprovalRow, approval_id).status is ApprovalStatus.PENDING
+
+    # Service-level guard: a legacy approval decided with another principal is not found.
+    with factory() as session, pytest.raises(NotFoundError):
+        ApprovalService(session, AuditService(session)).decide(
+            approval_id,
+            ApprovalDecisionRequest(action=ApprovalAction.APPROVE),
+            principal_organization_id=ORG_ID,
+            principal_user_id=COLLEAGUE_ID,
+        )

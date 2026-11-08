@@ -132,7 +132,8 @@ def test_projected_target_never_enters_the_paper_or_demo_order_path(
     runtime, _, probe, _ = _runtime(
         session_factory, target_loader=targets, evidence_factory=evidence_factory
     )
-    # Demo exchange with autonomy off: a native confirmed setup enters the governed worker.
+    # Demo exchange with autonomy off: a native confirmed setup enters the paper
+    # loop, which refuses it (M1: OFF places no worker demo order).
     runtime._settings = runtime._settings.model_copy(
         update={"exchange_mode": ExchangeMode.PAPER_EXCHANGE_DEMO}
     )
@@ -143,9 +144,9 @@ def test_projected_target_never_enters_the_paper_or_demo_order_path(
     (scan,) = report.scans
     assert len(scan.candidate_ids) == 1, "the setup confirmed, so a Candidate is recorded"
     if not projected:
-        # Control: the spies see the native order path.
-        assert calls == ["paper_loop", "governed_demo"]
-        assert scan.paper_loop_reason == "governed_human_path"
+        # Control: the native scope reaches the paper loop (and OFF refuses it).
+        assert calls == ["paper_loop"]
+        assert scan.paper_loop_reason == "autonomous_mode_disarmed"
         return
     assert calls == []
     assert scan.market_projection is True

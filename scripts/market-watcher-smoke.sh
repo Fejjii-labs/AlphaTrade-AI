@@ -9,7 +9,7 @@ BASE_URL="${BASE_URL:-http://localhost:8000}"
 BASE_URL="${BASE_URL%/}"
 
 EMAIL="${SMOKE_EMAIL:-market-watcher-smoke-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 
 auth_header() {
   printf 'Authorization: Bearer %s' "$TOKEN"

@@ -44,7 +44,7 @@ Tailwind mapping: `frontend/tailwind.config.ts`.
 ### Theme structure
 
 - Default / dark: `:root` and `[data-theme="dark"]`
-- Light-ready: `[data-theme="light"]` token swap (enable in Phase E)
+- Light-ready: `[data-theme="light"]` token swap (enable in Phase E). Status 2026-11: the unused light block was removed from `tokens.css` (audit L20); reintroduce it with the theme switch.
 - `prefers-reduced-motion` disables non-essential animation globally
 
 ## Typography

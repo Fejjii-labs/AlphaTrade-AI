@@ -583,9 +583,10 @@ class KillSwitchService:
 def read_paper_worker_kill_switch(settings: Settings) -> PaperWorkerKillSwitch:
     """Kill-switch posture for ``GET /health/paper-worker``.
 
-    The global setting wins. Otherwise one active organization row is
-    reported. An unreadable database fails closed. The free-text reason is
-    not copied.
+    The global setting wins. Otherwise the pinned organization's row
+    (``WATCHER_PAPER_ORGANIZATION_ID``) is reported; unpinned reports
+    ``source="unscoped"`` with no boolean. An unreadable database fails
+    closed. The free-text reason is not copied.
     """
 
     if bool(settings.global_kill_switch_active):
@@ -601,10 +602,15 @@ def read_paper_worker_kill_switch(settings: Settings) -> PaperWorkerKillSwitch:
 
 
 def _project_kill_switch(session: Session, settings: Settings) -> PaperWorkerKillSwitch:
-    statement = select(KillSwitchState).where(KillSwitchState.active.is_(True))
     org_token = settings.watcher_paper_organization_id.strip()
-    if org_token:
-        statement = statement.where(KillSwitchState.organization_id == uuid.UUID(org_token))
+    if not org_token:
+        # Unpinned: any organization's row would leak cross-tenant posture
+        # and make ``active`` meaningless for the worker's own tenant (M3).
+        return PaperWorkerKillSwitch(active=None, source="unscoped", since=None)
+    statement = select(KillSwitchState).where(
+        KillSwitchState.active.is_(True),
+        KillSwitchState.organization_id == uuid.UUID(org_token),
+    )
     rows = list(session.scalars(statement).all())
     if not rows:
         return PaperWorkerKillSwitch()

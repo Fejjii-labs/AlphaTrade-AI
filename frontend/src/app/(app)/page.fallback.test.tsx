@@ -29,6 +29,7 @@ vi.mock("@/components/dashboard/useDemoAccountSnapshot", () => ({
 }));
 
 vi.mock("@/contexts/AppContext", () => ({
+  useAppContext: () => ({ killSwitchStatus: null, killSwitchError: null }),
   useSafetyPosture: () => ({
     executionMode: "paper",
     realTradingEnabled: false,
@@ -39,7 +40,6 @@ function failedDashboard(): TraderDashboardData {
   return {
     portfolio: failedSource("portfolio down"),
     journal: failedSource("journal down"),
-    strategyStats: failedSource("stats down"),
     summary: failedSource("summary down"),
     watcher: failedSource("watcher down"),
     market: failedSource("market down"),
@@ -75,10 +75,7 @@ afterEach(() => {
 describe("Trader dashboard unavailable sources", () => {
   it("renders unavailable figures instead of zeros", () => {
     render(<DashboardPage />);
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Dashboard account" }),
-      { target: { value: "simulator" } },
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.getByTestId("dashboard-equity")).toHaveTextContent(
       UNAVAILABLE,
     );

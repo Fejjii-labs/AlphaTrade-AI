@@ -72,8 +72,8 @@ export function BloFinSyncPanel() {
   if (data.forbidden) {
     return (
       <div data-testid="blofin-sync-forbidden" className="space-y-2">
-        <h2 className="text-lg font-medium text-zinc-50">BloFin demo sync</h2>
-        <p className="text-sm text-zinc-400">You do not have permission to view BloFin sync status.</p>
+        <h2 className="text-lg font-medium text-text-primary">BloFin demo sync</h2>
+        <p className="text-sm text-text-secondary">You do not have permission to view BloFin sync status.</p>
       </div>
     );
   }
@@ -84,8 +84,8 @@ export function BloFinSyncPanel() {
     <section data-testid="blofin-sync-panel" className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-medium text-zinc-50">BloFin demo sync</h2>
-          <p className="text-sm text-zinc-400">
+          <h2 className="text-lg font-medium text-text-primary">BloFin demo sync</h2>
+          <p className="text-sm text-text-secondary">
             Read-only account and position reconciliation. Never places or cancels orders.
           </p>
         </div>
@@ -106,33 +106,33 @@ export function BloFinSyncPanel() {
           description="Run a read-only sync when BloFin demo mode is configured."
         />
       ) : (
-        <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/30 p-4">
+        <div className="space-y-3 rounded-lg border border-border-subtle bg-surface-1 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant={healthVariant(snapshot.health_status)}>{snapshot.health_status}</Badge>
             {snapshot.is_stale ? <Badge variant="warning">stale</Badge> : null}
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-text-muted">
               Synced {new Date(snapshot.synced_at).toLocaleString()} · {snapshot.provider} ·{" "}
               {snapshot.exchange_mode}
             </span>
           </div>
           <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             <div>
-              <dt className="text-zinc-500">Balances</dt>
-              <dd className="text-zinc-200">{snapshot.balance_count}</dd>
+              <dt className="text-text-muted">Balances</dt>
+              <dd className="text-text-primary">{snapshot.balance_count}</dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Positions</dt>
-              <dd className="text-zinc-200">{snapshot.position_count}</dd>
+              <dt className="text-text-muted">Positions</dt>
+              <dd className="text-text-primary">{snapshot.position_count}</dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Read-only</dt>
-              <dd className="text-zinc-200">
+              <dt className="text-text-muted">Read-only</dt>
+              <dd className="text-text-primary">
                 {snapshot.provenance?.read_only === false ? "no" : "yes"}
               </dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Order mutations</dt>
-              <dd className="text-zinc-200">never</dd>
+              <dt className="text-text-muted">Order mutations</dt>
+              <dd className="text-text-primary">never</dd>
             </div>
           </dl>
           {snapshot.stale_reason ? (

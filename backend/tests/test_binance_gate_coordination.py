@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import structlog
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
@@ -45,6 +46,18 @@ from tests.support.postgres_persistence import POSTGRES_URL, requires_postgres
 T0 = datetime(2026, 11, 4, 11, 17, tzinfo=UTC)
 _A23 = "a23marketmonitor001"
 _A24 = "a24binancegate001"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    # structlog caches a module logger on first use once app logging is
+    # configured; if an earlier test then resets structlog, capture_logs no
+    # longer sees that logger. A fresh proxy keeps the log assertions
+    # independent of test order (as 52db720b and 2ff8f97e do).
+    monkeypatch.setattr(
+        "app.workers.binance_gate_coordination.logger",
+        structlog.get_logger("app.workers.binance_gate_coordination"),
+    )
 
 
 def _alembic_config() -> Config:

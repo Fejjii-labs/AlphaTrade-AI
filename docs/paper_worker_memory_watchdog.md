@@ -91,8 +91,25 @@ are logged as `safety_alert_telegram_unconfigured` and not sent.
   shutdown deadline, or crashed. The worker logs
   `paper_worker_previous_exit_unclean` at error and sends the alert. A Python
   exception that escapes the run also leaves the marker, on purpose.
+  On SIGTERM the worker adds `stopping_at` to the marker before joining its
+  threads. If that run is then SIGKILLed when Render's 60 s grace runs out (an
+  ordinary deploy whose shutdown overran), the next boot logs
+  `paper_worker_previous_exit_after_sigterm` at warning and does **not** page.
+  The supervisor joins all threads within one 45 s budget
+  (`SHUTDOWN_BUDGET_SECONDS`); a thread still running after it is logged as
+  `paper_worker_join_timeout` and the stop hook (lease release, client close)
+  is skipped (`paper_worker_stop_hook_skipped`) so nothing is closed under a
+  running cycle; its leases expire by TTL.
 
 ### Limit: the files may not survive a Render restart
+
+Since the Fable audit L8 fix, an armed worker also keeps the trip streak in the
+`controlled_runtime_status` row `paper_worker_memory_watchdog`
+(`request_count` = consecutive trips, `heartbeat_at` = trip time). At boot the
+watchdog uses whichever of the file and that row remembers more trips, so the
+startup-grace backoff survives a container replacement. A disarmed worker
+does not open PostgreSQL and keeps file-only state. The run marker is still
+file-only (see below).
 
 Render's documentation (<https://render.com/docs/disks>, fetched 2026-11-04)
 says: "By default, Render services have an ephemeral filesystem. This means

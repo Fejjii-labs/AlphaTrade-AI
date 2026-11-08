@@ -29,7 +29,7 @@ export PLAYWRIGHT_BASE_URL="${PLAYWRIGHT_BASE_URL:-https://alpha-trade-ai-eight.
 export PLAYWRIGHT_API_URL="${PLAYWRIGHT_API_URL:-https://alphatrade-api-staging.onrender.com}"
 
 export SMOKE_EMAIL="${SMOKE_EMAIL:-portfolio-smoke-$(date +%s)@example.com}"
-export SMOKE_PASSWORD="${SMOKE_PASSWORD:-${STAGING_BOOTSTRAP_PASSWORD:-secure-password-1}}"
+export SMOKE_PASSWORD="${SMOKE_PASSWORD:-${STAGING_BOOTSTRAP_PASSWORD:?Set SMOKE_PASSWORD or STAGING_BOOTSTRAP_PASSWORD (never commit it)}}"
 export SMOKE_ORG="${SMOKE_ORG:-Portfolio Smoke $(date +%s)}"
 
 reject_smoke_password_placeholder "$SMOKE_PASSWORD"

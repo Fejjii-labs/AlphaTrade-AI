@@ -114,6 +114,16 @@ historical currency never becomes inferred USDT. A verified closure/sample count
 can therefore coexist with unavailable fee-adjusted performance. No account-wide
 history completeness or net-after-funding result is claimed.
 
+## Autonomous OFF means no worker demo orders (Fable audit M1, 2026-11-07)
+
+With the Autonomous Trading mode OFF (`AUTONOMOUS_BLOFIN_DEMO_ENABLED=false`
+and the internal-paper switch off), the paper worker refuses every confirmed
+setup with `autonomous_mode_disarmed`, on the BloFin demo venue too. Before
+this change the worker's OFF branch still ran `GovernedBloFinDemoLoop` and
+approved on the API channel when `EXCHANGE_MODE=paper_exchange_demo`. Worker
+demo entries now require mode `BLOFIN_DEMO` (`AUTONOMOUS_BLOFIN_DEMO_ENABLED=true`).
+Owner-confirmed manual demo orders and demo reconciliation are unchanged.
+
 ## Fixed acceptance checklist
 
 1. Serialized account reservation bounds include pending/uncertain and prior filled native activity.

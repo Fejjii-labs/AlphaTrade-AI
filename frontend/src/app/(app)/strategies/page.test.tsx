@@ -19,9 +19,6 @@ vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => state.identity }));
 vi.mock("@/components/strategies/ExperimentsPanel", () => ({
   ExperimentsPanel: () => <section aria-label="Bounded experiments" />,
 }));
-vi.mock("@/components/settings/RiskSettingsSummary", () => ({
-  RiskSettingsSummary: () => <p>Saved account limits</p>,
-}));
 
 const note: SavedEntry = {
   id: "persisted-strategy-note", title: "Wait for a close", summary: "Confirm a closed reclaim before entry.",

@@ -183,10 +183,10 @@ for (const width of [1280, 390]) {
     await expect(page.getByTestId("dashboard-pnl")).toContainText("— USDT");
     await expect(page.getByTestId("dashboard-open-count")).toContainText("0");
     await expect(page.getByText("Paper portfolio", { exact: true })).toHaveCount(0);
-    await page.getByLabel("Dashboard account").selectOption("simulator");
+    await page.getByRole("radiogroup", { name: "Dashboard venue" }).getByRole("radio", { name: "Paper" }).click();
     await expect(page.getByTestId("dashboard-equity")).toContainText("500.50");
     await expect(page.getByTestId("dashboard-demo-account")).toHaveCount(0);
-    await page.getByLabel("Dashboard account").selectOption("blofin");
+    await page.getByRole("radiogroup", { name: "Dashboard venue" }).getByRole("radio", { name: "Demo" }).click();
     await expect(page.getByTestId("dashboard-equity")).toContainText("1,001.50 USD");
     const overflow = await page.evaluate(
       () =>

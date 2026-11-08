@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 
-from app.core.config import Settings
-from app.core.errors import ExchangeDemoInactiveError, ExchangeProviderError, TradingPolicyError
+from app.core.config import Environment, Settings
+from app.core.errors import (
+    ExchangeDemoInactiveError,
+    ExchangeProviderError,
+    ForbiddenError,
+    TradingPolicyError,
+)
 from app.guardrails.redaction import redact_text
 from app.providers.exchange.base import ExchangeAccountProvider, ExchangeExecutionProvider
 from app.providers.exchange.errors import ExchangeError
@@ -26,6 +32,33 @@ def ensure_demo_exchange_access(settings: Settings) -> None:
         raise ExchangeDemoInactiveError(
             "BloFin demo exchange is not active.",
             details={"exchange_mode": settings.exchange_mode.value},
+        )
+
+
+def ensure_demo_account_organization(settings: Settings, organization_id: uuid.UUID) -> None:
+    """Refuse shared demo-account reads/actions for any org except the pinned one.
+
+    The BloFin demo credentials are one global venue account, so balances,
+    positions and orders belong to ``GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`` only
+    (same pin as ``manual_demo_service``). Unpinned is tolerated in ``local``
+    only; elsewhere it fails closed.
+    """
+    configured = settings.governed_blofin_demo_organization_id.strip()
+    if not configured:
+        if settings.environment is Environment.LOCAL:
+            return
+        raise ForbiddenError(
+            "BloFin demo account access requires a pinned demo organization.",
+            details={"reason": "demo_organization_unpinned"},
+        )
+    try:
+        pinned = uuid.UUID(configured)
+    except ValueError:
+        pinned = None
+    if pinned != organization_id:
+        raise ForbiddenError(
+            "BloFin demo account is restricted to the configured demo workspace.",
+            details={"reason": "demo_organization_mismatch"},
         )
 
 

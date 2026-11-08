@@ -11,6 +11,7 @@ vi.mock("@/components/activity/useNativeActivity", () => ({
   useNativeActivity: () => ({ page: null, busy: false, error: null, refresh: vi.fn(), more: vi.fn() }),
 }));
 vi.mock("@/contexts/AppContext", () => ({
+  useAppContext: () => ({ killSwitchStatus: null, killSwitchError: null }),
   useSafetyPosture: () => ({ executionMode: "paper", realTradingEnabled: false }),
 }));
 vi.mock("@/components/dashboard/AttentionCard", () => ({ AttentionCard: () => null }));
@@ -48,22 +49,22 @@ vi.mock("@/lib/api", () => ({
 
 afterEach(cleanup);
 
-it("fires all requests in parallel and renders sections while a slow one is pending", async () => {
+it("gates simulator requests on the Paper venue and renders sections while a slow one is pending", async () => {
   render(<DashboardPage />);
   // Page shell and the account card mount immediately (no global skeleton gate).
   expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
   expect(screen.getByTestId("demo-card")).toBeInTheDocument();
   expect(screen.queryByText(/loading dashboard/i)).not.toBeInTheDocument();
-  for (const fn of [
-    api.performance.portfolio, api.journal.listTrades, api.journal.statistics,
-    api.dashboard.summary, api.marketWatcher.monitoring, api.canonical.getMarketStatus,
-    api.alerts.list,
-  ]) {
-    expect(fn).toHaveBeenCalledTimes(1);
-  }
-  fireEvent.change(screen.getByRole("combobox", { name: "Dashboard account" }), {
-    target: { value: "simulator" },
-  });
+  // The default Demo venue only needs the summary (posture + discipline).
+  expect(api.dashboard.summary).toHaveBeenCalledTimes(1);
+  const simulatorSources = [
+    api.performance.portfolio, api.journal.listTrades, api.marketWatcher.monitoring,
+    api.canonical.getMarketStatus, api.alerts.list,
+  ];
+  for (const fn of simulatorSources) expect(fn).not.toHaveBeenCalled();
+  expect(api.journal.statistics).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
+  for (const fn of simulatorSources) expect(fn).toHaveBeenCalledTimes(1);
   // Fast sections render while the watcher is still in flight.
   await waitFor(() =>
     expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("3"),

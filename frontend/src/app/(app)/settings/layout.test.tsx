@@ -15,7 +15,7 @@ describe("Settings sub-nav", () => {
     const subNav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(subNav).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
       ["Account", "/settings"],
-      ["Exchanges", "/settings/exchange"],
+      ["Exchange status", "/settings/exchange"],
       ["Notifications", "/settings/notifications"],
       ["Watcher", "/settings/watcher"],
       ["Diagnostics", "/settings/diagnostics"],
@@ -28,7 +28,7 @@ describe("Settings sub-nav", () => {
     ["/settings", "Account"],
     ["/settings/team", "Account"],
     ["/settings/billing", "Account"],
-    ["/settings/exchange", "Exchanges"],
+    ["/settings/exchange", "Exchange status"],
     ["/settings/notifications", "Notifications"],
     ["/settings/watcher", "Watcher"],
     ["/settings/diagnostics", "Diagnostics"],

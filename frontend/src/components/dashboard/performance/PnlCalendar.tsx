@@ -30,8 +30,9 @@ const valueTone = {
   none: "text-text-muted",
 } as const;
 
+// 44px touch targets on phones, compact from sm up.
 const NAV_BUTTON =
-  "inline-flex h-9 items-center justify-center rounded-control text-text-secondary hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
+  "inline-flex h-11 items-center justify-center rounded-control text-text-secondary hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus sm:h-9";
 
 function DayCell({
   date,
@@ -49,8 +50,8 @@ function DayCell({
   const todaySuffix = isToday ? " (today)" : "";
   if (loading) {
     return (
-      <div role="cell" className="min-h-[64px] p-0.5 sm:min-h-[84px]">
-        <Skeleton className="h-full min-h-[60px] w-full sm:min-h-[80px]" />
+      <div role="cell" className="min-h-[56px] p-0.5 sm:min-h-[84px]">
+        <Skeleton className="h-full min-h-[52px] w-full sm:min-h-[80px]" />
       </div>
     );
   }
@@ -61,7 +62,7 @@ function DayCell({
         aria-label={`${date}${todaySuffix}: no closed trades`}
         aria-current={isToday ? "date" : undefined}
         className={cn(
-          "min-h-[64px] rounded-control border border-transparent p-1.5 sm:min-h-[84px]",
+          "min-h-[56px] rounded-control border border-transparent p-0.5 sm:min-h-[84px] sm:p-1.5",
           todayRing,
         )}
       >
@@ -79,7 +80,7 @@ function DayCell({
     <div
       role="cell"
       className={cn(
-        "flex min-h-[64px] min-w-0 flex-col overflow-hidden rounded-control border p-1 text-center sm:min-h-[84px] sm:p-1.5",
+        "flex min-h-[56px] min-w-0 flex-col overflow-hidden rounded-control border p-0.5 text-center sm:min-h-[84px] sm:p-1.5",
         cellTone[tone],
         todayRing,
       )}
@@ -136,7 +137,7 @@ export function PnlCalendar({
   const monthTone = pnlTone(summary?.net_pnl);
   return (
     <section
-      className="rounded-card border border-border-subtle bg-surface-1 p-4"
+      className="rounded-card border border-border-subtle bg-surface-1 p-3 sm:p-4"
       aria-label="Monthly P&L calendar"
       data-testid="pnl-calendar"
     >
@@ -146,12 +147,12 @@ export function PnlCalendar({
             type="button"
             onClick={onPrev}
             aria-label="Previous month"
-            className={cn(NAV_BUTTON, "w-9")}
+            className={cn(NAV_BUTTON, "w-11 sm:w-9")}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
           <h3
-            className="min-w-[8.5rem] text-center text-sm font-semibold text-text-primary"
+            className="min-w-[7.5rem] text-center sm:min-w-[8.5rem] text-sm font-semibold text-text-primary"
             data-testid="calendar-month"
             aria-live="polite"
           >
@@ -161,7 +162,7 @@ export function PnlCalendar({
             type="button"
             onClick={onNext}
             aria-label="Next month"
-            className={cn(NAV_BUTTON, "w-9")}
+            className={cn(NAV_BUTTON, "w-11 sm:w-9")}
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -212,16 +213,23 @@ export function PnlCalendar({
         role="table"
         aria-label={`Daily net P&L, ${monthLabel(month)}`}
         aria-busy={loading || undefined}
-        className="grid grid-cols-7 gap-1 md:grid-cols-[repeat(7,minmax(0,1fr))_minmax(84px,0.9fr)]"
+        className="grid grid-cols-7 gap-0.5 sm:gap-1 md:grid-cols-[repeat(7,minmax(0,1fr))_minmax(84px,0.9fr)]"
       >
         <div role="row" className="contents">
           {WEEKDAYS.map((name) => (
             <div
               key={name}
               role="columnheader"
+              aria-label={name}
               className="pb-1 text-center text-[11px] font-medium text-text-muted"
             >
-              {name}
+              {/* One letter on phones keeps seven columns readable. */}
+              <span aria-hidden="true" className="sm:hidden">
+                {name[0]}
+              </span>
+              <span aria-hidden="true" className="hidden sm:inline">
+                {name}
+              </span>
             </div>
           ))}
           <div

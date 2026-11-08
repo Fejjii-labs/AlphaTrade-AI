@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import JournalPage from "@/app/(app)/journal/page";
 import { api } from "@/lib/api";
@@ -62,7 +62,9 @@ it("shows Trades and Stats as URL tabs, and Stats skips the trade list reads", a
     truncated: false, max_rows: 1000, generated_at: "2026-10-27T10:00:00Z",
     buckets: query?.group_by === "symbol"
       ? [{ key: "BTCUSDT", label: "BTCUSDT", metrics: metrics({ trade_count: 4, net_pnl_total: "-3" }) }]
-      : [{ key: "nested", label: "Nested BTC", metrics: metrics() }],
+      : query?.group_by === "source"
+        ? [{ key: "backtest", label: "backtest", metrics: metrics({ trade_count: 2 }) }]
+        : [{ key: "nested", label: "Nested BTC", metrics: metrics() }],
   }) as never);
   render(<JournalPage />);
   const tabs = screen.getByRole("navigation", { name: "Trades views" });
@@ -79,13 +81,23 @@ it("shows Trades and Stats as URL tabs, and Stats skips the trade list reads", a
   const stats = await screen.findByTestId("trade-stats");
   expect(screen.getByRole("link", { name: "Stats" })).toHaveAttribute("aria-current", "page");
   expect(stats).toHaveTextContent("Win rate75.0%");
-  expect(stats).toHaveTextContent("Net P&L (paper/demo)+42.50");
+  expect(stats).toHaveTextContent("Net P&L (all sources)+42.50");
+  expect(stats).not.toHaveTextContent("paper/demo");
+  expect(within(screen.getByRole("region", { name: "By source" })).getByText("Backtest")).toBeInTheDocument();
   expect(stats).toHaveTextContent("Profit factor2.50");
   expect(stats).toHaveTextContent("Avg R0.80");
   expect(within(screen.getByRole("region", { name: "By strategy" })).getByText("Nested BTC")).toBeInTheDocument();
   expect(within(screen.getByRole("region", { name: "By symbol" })).getByText("-3.00")).toHaveClass("text-negative");
   expect(api.journal.statistics).toHaveBeenCalledWith({ group_by: "strategy" });
   expect(api.journal.statistics).toHaveBeenCalledWith({ group_by: "symbol" });
+  expect(api.journal.statistics).toHaveBeenCalledWith({ group_by: "source" });
+  vi.mocked(api.journal.statistics).mockClear();
+  fireEvent.change(screen.getByRole("combobox", { name: "Stats source" }), { target: { value: "blofin_demo_manual" } });
+  await waitFor(() => expect(screen.getByTestId("trade-stats")).toHaveTextContent("Net P&L (BloFin demo (manual))"));
+  expect(api.journal.statistics).toHaveBeenCalledWith({ group_by: "strategy", source: "blofin_demo_manual" });
+  expect(api.journal.statistics).toHaveBeenCalledWith({ group_by: "symbol", source: "blofin_demo_manual" });
+  expect(api.journal.statistics).not.toHaveBeenCalledWith(expect.objectContaining({ group_by: "source" }));
+  expect(screen.queryByRole("region", { name: "By source" })).not.toBeInTheDocument();
   expect(api.journal.listTrades).not.toHaveBeenCalled();
   expect(screen.queryByTestId("native-activity-row")).not.toBeInTheDocument();
 });

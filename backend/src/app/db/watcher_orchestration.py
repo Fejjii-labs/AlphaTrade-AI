@@ -325,6 +325,8 @@ class WatcherObservabilityEventRow(Base):
             "organization_id",
             "scan_scope",
         ),
+        Index("ix_watcher_observability_events_at", "at"),
+        Index("ix_watcher_observability_events_org_at", "organization_id", "at"),
     )
 
     event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

@@ -141,6 +141,9 @@ class AuthService:
         user = self._users.get(row.user_id)
         if user is None or not user.is_active:
             raise AuthError("Account is unavailable.")
+        if self._settings.must_verify_email and not user.email_verified:
+            # Same gate as login: an unverified account cannot extend a session.
+            raise AuthError("Email address is not verified.")
         membership = self._memberships.get_primary_for_user(user.id)
         if membership is None:
             raise AuthError("No organization membership found for this user.")
@@ -180,7 +183,19 @@ class AuthService:
             self._denylist_access_token(access_token)
         logger.info("user_logout")
 
-    def resolve_tenant(self, access_token: str) -> TenantContext:
+    def resolve_tenant(
+        self,
+        access_token: str,
+        *,
+        allow_unverified: bool = False,
+    ) -> TenantContext:
+        """Resolve the request tenant from a JWT, re-checked against the DB.
+
+        The role comes from the membership matching the token's ``org_id``.
+        When email verification is required, unverified users are refused
+        unless ``allow_unverified`` (only ``/auth/me`` and the verification
+        request route, so the verify page can work).
+        """
         payload = decode_access_token(access_token, self._settings)
         jti = payload.get("jti")
         if jti and self._denylist.is_denied(str(jti)):
@@ -195,8 +210,10 @@ class AuthService:
         user = self._users.get(user_id)
         if user is None or not user.is_active:
             raise AuthError("Account is unavailable.")
-        membership = self._memberships.get_primary_for_user(user_id)
-        if membership is None or membership.organization_id != organization_id:
+        if not allow_unverified and self._settings.must_verify_email and not user.email_verified:
+            raise AuthError("Email address is not verified.")
+        membership = self._memberships.get_for_user_and_org(user_id, organization_id)
+        if membership is None:
             raise AuthError("Organization membership not valid for this token.")
         return TenantContext(
             user_id=user.id,

@@ -20,6 +20,7 @@ from app.core.dependencies import (
 )
 from app.core.errors import ExchangeProviderError
 from app.core.exchange_demo_access import (
+    ensure_demo_account_organization,
     get_demo_account_provider,
     get_demo_execution_provider,
     run_demo_provider_call,
@@ -230,11 +231,12 @@ async def list_instruments(
     summary="BloFin demo account balances (redacted summary)",
 )
 async def list_balances(
-    _tenant: OwnerDep,
+    tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangeBalancesResponse:
     """Return per-asset totals and available balances only (no raw account payload)."""
     account = get_demo_account_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     balances = run_demo_provider_call("balances", account.get_balances)
     return ExchangeBalancesResponse(
         items=[_map_balance(b) for b in balances],
@@ -248,11 +250,12 @@ async def list_balances(
     summary="Open BloFin demo positions",
 )
 async def list_positions(
-    _tenant: OwnerDep,
+    tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangePositionsResponse:
     """Return open demo positions with safe derived fields only."""
     account = get_demo_account_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     positions = run_demo_provider_call("positions", account.get_positions)
     return ExchangePositionsResponse(
         items=[_map_position(p) for p in positions],
@@ -266,11 +269,12 @@ async def list_positions(
     summary="BloFin demo account position mode",
 )
 async def get_position_mode(
-    _tenant: OwnerDep,
+    tenant: OwnerDep,
     settings: SettingsDep,
 ) -> ExchangePositionModeResponse:
     """Return one-way vs hedge position mode (read-only; no account mutation)."""
     account = get_demo_account_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     mode = run_demo_provider_call("position mode", account.get_position_mode)
     return ExchangePositionModeResponse(
         position_mode=mode.position_mode,
@@ -284,13 +288,14 @@ async def get_position_mode(
     summary="BloFin demo leverage for an instrument",
 )
 async def get_leverage_info(
-    _tenant: OwnerDep,
+    tenant: OwnerDep,
     settings: SettingsDep,
     inst_id: str = Query(default="BTC-USDT", description="BloFin instrument id."),
     margin_mode: str = Query(default="cross", description="Margin mode (cross or isolated)."),
 ) -> ExchangeLeverageInfoResponse:
     """Return configured leverage for an instrument (read-only; no account mutation)."""
     account = get_demo_account_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     normalized_inst = to_blofin_inst_id(inst_id) if "-" not in inst_id else inst_id.upper()
     info = run_demo_provider_call(
         "leverage info",
@@ -357,6 +362,7 @@ async def get_order_status(
 ) -> ExchangeOrderStatusResponse:
     """Read-only demo order status via the venue (no secrets)."""
     execution = get_demo_execution_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     normalized_inst = to_blofin_inst_id(inst_id) if "-" not in inst_id else inst_id.upper()
 
     def get_order() -> ExchangeOrderResult:
@@ -407,6 +413,7 @@ async def cancel_order(
 ) -> ExchangeOrderCancelResponse:
     """Cancel an existing demo venue order. Demo-gated; never places a new order."""
     execution = get_demo_execution_provider(settings)
+    ensure_demo_account_organization(settings, tenant.organization_id)
     normalized_inst = to_blofin_inst_id(inst_id) if "-" not in inst_id else inst_id.upper()
     run_demo_provider_call(
         "order cancel",
@@ -447,7 +454,10 @@ async def blofin_demo_sync(
     service: BloFinSyncServiceDep,
     session: SessionDep,
 ) -> BloFinSyncResult:
-    """Persist a bounded read-only demo snapshot. Never places or cancels orders."""
+    """Persist a bounded read-only demo snapshot. Never places or cancels orders.
+
+    Already org-pinned inside ``BloFinSyncService`` (activity org/UID pin, #366 C2).
+    """
     result = service.sync(
         organization_id=tenant.organization_id,
         user_id=tenant.user_id,

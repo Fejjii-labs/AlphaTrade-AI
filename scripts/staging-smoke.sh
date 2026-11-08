@@ -14,7 +14,7 @@ COOKIE_MODE="${COOKIE_MODE:-false}"
 ALLOW_DEGRADED_READY="${ALLOW_DEGRADED_READY:-false}"
 SKIP_REGISTER="${SKIP_REGISTER:-false}"
 EMAIL="${SMOKE_EMAIL:-staging-smoke-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 ORG_NAME="${SMOKE_ORG:-Staging Smoke Org $(date +%s)}"
 
 COOKIE_JAR="$(mktemp)"

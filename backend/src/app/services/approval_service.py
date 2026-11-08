@@ -346,6 +346,12 @@ class ApprovalService:
                 organization_id=principal_organization_id,
                 user_id=principal_user_id,
             )
+        elif (principal_organization_id is not None or principal_user_id is not None) and (
+            row.organization_id,
+            row.user_id,
+        ) != (principal_organization_id, principal_user_id):
+            # Legacy approvals are per-user too (M15); hide other members' rows.
+            raise NotFoundError("Approval not found")
 
         if row.status is ApprovalStatus.APPROVED and decision.action is ApprovalAction.APPROVE:
             if row.plan_revision_id is None:

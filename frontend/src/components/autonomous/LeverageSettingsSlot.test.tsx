@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AutonomousTradingSettingsView } from "@/lib/api/types";
 
-import { LeverageSettingsSlot } from "./LeverageSettingsSlot";
+import { LeverageSettingsSlot, riskierLeverageChanges } from "./LeverageSettingsSlot";
 
 const settings = {
   organization_id: "org",
@@ -74,6 +74,9 @@ describe("LeverageSettingsSlot demo leverage editor", () => {
     fireEvent.change(screen.getByLabelText("Override coin"), { target: { value: "ETHUSDT" } });
     fireEvent.change(screen.getByLabelText("Override leverage"), { target: { value: "3" } });
     fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    // Switching to cross margin raises liquidation risk, so it asks first.
+    expect(screen.getByTestId("demo-leverage-confirm-changes")).toHaveTextContent("isolated → cross");
+    fireEvent.click(screen.getByTestId("demo-leverage-confirm-confirm"));
     await waitFor(() => {
       expect(api.autonomous.updateSettings).toHaveBeenCalledWith({
         demo_leverage: 5,
@@ -134,5 +137,64 @@ describe("LeverageSettingsSlot demo leverage editor", () => {
     render(<LeverageSettingsSlot profiles={[]} />);
     expect(await screen.findByTestId("demo-leverage")).toBeDisabled();
     expect(screen.getByTestId("demo-leverage-owner-reason")).toHaveTextContent("Owner only.");
+  });
+
+  it("uses the page's settings and the bounds ceiling without fetching again", async () => {
+    const { api } = await import("@/lib/api");
+    const bounds = { leverage: { demo_effective_max: "15", demo_hard_cap: "20", profile_max_leverage_ceiling: "20" } } as never;
+    render(<LeverageSettingsSlot profiles={[]} settings={settings} bounds={bounds} />);
+    expect(await screen.findByTestId("demo-leverage-settings")).toHaveTextContent("1–15x");
+    expect(api.autonomous.settings).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("demo-leverage"), { target: { value: "16" } });
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Leverage cannot exceed 15x.");
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("never invents a 20x ceiling when neither bounds nor settings report one", async () => {
+    const { api, ApiError } = await import("@/lib/api");
+    const noCeiling: Record<string, unknown> = { ...settings };
+    delete noCeiling.max_demo_leverage_ceiling;
+    vi.mocked(api.autonomous.settings).mockResolvedValue(noCeiling as unknown as AutonomousTradingSettingsView);
+    vi.mocked(api.autonomous.updateSettings).mockRejectedValue(new ApiError("demo_leverage_exceeds_ceiling", 422, null));
+    render(<LeverageSettingsSlot profiles={[]} />);
+    expect(await screen.findByTestId("demo-leverage-settings")).toHaveTextContent("the server enforces the ceiling");
+    expect(screen.getByTestId("demo-leverage-settings")).not.toHaveTextContent("20x");
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Leverage exceeds the server ceiling.");
+  });
+
+  it("asks before raising leverage and sends nothing on cancel", async () => {
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.autonomous.updateSettings).mockResolvedValue({ ...settings, demo_leverage: 20 });
+    render(<LeverageSettingsSlot profiles={[]} />);
+    fireEvent.change(await screen.findByTestId("demo-leverage"), { target: { value: "20" } });
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    expect(screen.getByTestId("demo-leverage-confirm-changes")).toHaveTextContent("Default leverage 10× → 20×");
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("demo-leverage-confirm-cancel"));
+    expect(api.autonomous.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("demo-leverage-save"));
+    fireEvent.click(screen.getByTestId("demo-leverage-confirm-confirm"));
+    await waitFor(() =>
+      expect(api.autonomous.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ demo_leverage: 20 })),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Leverage saved.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("flags only changes that raise liquidation risk", () => {
+    const base = { demo_overrides: [], demo_margin_mode: "isolated" as const };
+    expect(riskierLeverageChanges(settings, { ...base, demo_leverage: "5" })).toEqual([]);
+    expect(riskierLeverageChanges(settings, { ...base, demo_leverage: "10", demo_margin_mode: "cross" })).toEqual([
+      "Default margin mode isolated → cross",
+    ]);
+    expect(
+      riskierLeverageChanges(settings, {
+        ...base,
+        demo_leverage: "10",
+        demo_overrides: [{ symbol: "ETHUSDT", leverage: "12", margin_mode: "" }, { symbol: "BTCUSDT", leverage: "3", margin_mode: "" }],
+      }),
+    ).toEqual(["ETHUSDT leverage 10× → 12×"]);
   });
 });

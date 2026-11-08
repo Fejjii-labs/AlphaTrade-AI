@@ -73,11 +73,42 @@ def rejection_authorizes_mutation(message: str) -> bool:
     return is_rejection_only_message(message) or rejected_proposal_id(message) is not None
 
 
+_LEADING_CONFIRMATION = re.compile(
+    r"^(?:i confirm|yes,?\s*(?:i\s+)?confirm|confirm action|confirm=true)\b",
+    re.IGNORECASE,
+)
+_TRAILING_CONFIRMATION = re.compile(
+    r"(?:^|[.!;\n])\s*(?:i confirm|confirm action|confirm=true)[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def has_standalone_confirmation(message: str) -> bool:
+    """True when the confirmation opens the message or is its own closing sentence.
+
+    A phrase buried mid-text (e.g. pasted prose that happens to contain
+    "i confirm") does not count.
+    """
+    stripped = message.strip()
+    return (
+        _LEADING_CONFIRMATION.match(stripped) is not None
+        or _TRAILING_CONFIRMATION.search(stripped) is not None
+    )
+
+
 def mutation_allowed(message: str, *, confirm_arg: bool | None = None) -> bool:
-    """State-changing chat actions require a non-question message with explicit confirmation."""
+    """State-changing chat actions require an unquoted, standalone explicit confirmation.
+
+    Questions, quoted/retrieved blocks and buried "i confirm" substrings never
+    authorize a mutation (legacy chat path, audit M18).
+    """
     if is_question_message(message):
         return False
-    return has_explicit_confirmation(message, confirm_arg=confirm_arg)
+    if contains_quoted_or_retrieved_instruction(message):
+        return False
+    if confirm_arg is True:
+        return True
+    return has_standalone_confirmation(message)
 
 
 _CONFIRMATION_ONLY = re.compile(

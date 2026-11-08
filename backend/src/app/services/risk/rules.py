@@ -35,6 +35,9 @@ class RiskEvaluationContext:
     trades_today: int = 0
     protect_green_day: bool = False
     kill_switch_active: bool = False
+    # The caller could not read the organization switch (no session or org).
+    # Reported as a warning, never as "off" (Fable audit L3).
+    kill_switch_unverified: bool = False
     overtrading: bool = False
     is_weekend: bool = False
     # Sum of open paper position notionals (size * entry) before this order.
@@ -69,6 +72,13 @@ def check_kill_switch(
             RiskAction.BLOCK,
             RiskSeverity.CRITICAL,
             "Kill switch is active; all new execution is blocked.",
+        )
+    if ctx.kill_switch_unverified:
+        return _rule(
+            RiskRuleId.KILL_SWITCH,
+            RiskAction.WARN,
+            RiskSeverity.MEDIUM,
+            "Kill switch state could not be verified here; execution re-checks it.",
         )
     return None
 

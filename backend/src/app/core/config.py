@@ -81,6 +81,30 @@ class ExchangeMode(StrEnum):
 
 
 # Projected Watcher scopes may use these. Each is a whole number of 15m bars.
+# Local-only development signing key. Outside local it is accepted solely by a
+# disarmed worker (no HTTP surface, never signs or verifies tokens); the API and
+# armed workers refuse it in ``deployment_safety`` and ``security.tokens``.
+DEFAULT_LOCAL_JWT_SECRET = "dev-only-change-me-before-production"
+WEAK_JWT_SECRETS = frozenset(
+    {
+        DEFAULT_LOCAL_JWT_SECRET,
+        "change-me-in-production-use-long-random-value",
+        "changeme",
+        "secret",
+    }
+)
+_JWT_PLACEHOLDER_MARKERS = ("replace", "placeholder", "change-me", "change_me", "changeme")
+JWT_ALGORITHM = "HS256"
+
+
+def jwt_secret_is_weak(secret: str) -> bool:
+    """True for known weak values and template placeholders (e.g. ``REPLACE_WITH_...``)."""
+    normalized = secret.strip().lower()
+    if normalized in WEAK_JWT_SECRETS:
+        return True
+    return any(marker in normalized for marker in _JWT_PLACEHOLDER_MARKERS)
+
+
 WATCHER_SCAN_TIMEFRAME_CHOICES = ("15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
 
 
@@ -279,10 +303,25 @@ class Settings(BaseSettings):
     # The enabled flag defaults off. Production refuses it. Dry-run evaluates
     # and logs without calling the paper close service. It defaults true so
     # removing PAPER_EXIT_MONITOR_DRY_RUN cannot close a trade. Live internal
-    # paper closes require an explicit false. Neither flag is set in the
-    # deploy blueprint.
+    # paper closes require an explicit false. The deploy blueprint declares
+    # both keys with sync: false and sets no value (Fable audit I5).
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
+    # Retention for append-only runtime logs (H5): watcher observability
+    # events, scan-attempt child rows, scan-stage paper evaluation rows and
+    # BloFin demo snapshots (newest per org always kept). Trades, orders,
+    # journal, plans, candidates, audit and strategy rows are never pruned.
+    # Off by default and dry-run by default: enabling deletion is an explicit
+    # operator decision (RETENTION_ENABLED=true and RETENTION_DRY_RUN=false).
+    retention_enabled: bool = False
+    retention_dry_run: bool = True
+    retention_interval_seconds: int = Field(default=3600, ge=300, le=86400)
+    retention_batch_size: int = Field(default=5000, ge=100, le=50000)
+    retention_max_batches_per_table: int = Field(default=50, ge=1, le=1000)
+    retention_watcher_events_days: int = Field(default=7, ge=1, le=365)
+    retention_watcher_attempt_children_days: int = Field(default=30, ge=7, le=365)
+    retention_paper_evaluation_days: int = Field(default=30, ge=7, le=365)
+    retention_demo_snapshot_days: int = Field(default=30, ge=7, le=365)
     # Repeated degraded or refused exit-monitor cycles raise a structured
     # alert after this many seconds. Default 15 minutes, capped at 1 hour,
     # so the wait stays well under the 24-hour backfill horizon. At least
@@ -420,6 +459,9 @@ class Settings(BaseSettings):
     tradingview_webhook_max_skew_seconds: int = Field(default=300, ge=30, le=3600)
     tradingview_webhook_rate_limit: int = Field(default=60, ge=1, le=600)
     tradingview_webhook_rate_window_seconds: int = Field(default=3600, ge=60, le=86400)
+    # The webhook secret is global, so it is bound to one org. Required outside
+    # local when intake is enabled; payloads for any other org are refused.
+    tradingview_webhook_organization_id: str = ""
     tradingview_auto_create_candidate: bool = False
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---
@@ -499,6 +541,14 @@ class Settings(BaseSettings):
 
     # --- Data stores (placeholders; clients wired in later slices) ---
     database_url: str = "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade"
+    # Explicit connection pool per process (Fable audit L9). The API and the
+    # paper worker each hold at most size + overflow connections; the staging
+    # Postgres plan allows ~100. Recycle drops connections the platform may
+    # have closed while idle (pre-ping still checks each checkout).
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
@@ -596,10 +646,10 @@ class Settings(BaseSettings):
 
     # --- Authentication ---
     jwt_secret: str = Field(
-        default="dev-only-change-me-before-production",
-        description="HS256 signing secret for access tokens.",
+        default=DEFAULT_LOCAL_JWT_SECRET,
+        description="HS256 signing secret for access tokens (local default only).",
     )
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: str = JWT_ALGORITHM
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     auth_refresh_cookie_enabled: bool = False
@@ -906,12 +956,27 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_jwt_secret(self) -> Settings:
-        """Require a strong JWT secret outside local development."""
+        """Require a strong JWT secret outside local development; pin HS256 everywhere.
+
+        Template placeholders and known weak values are refused outside local
+        regardless of the disarmed-worker deferral. The bare code default is
+        left to ``deployment_safety`` (refused unless the process is a disarmed
+        worker, which never signs or verifies tokens).
+        """
+        if self.jwt_algorithm != JWT_ALGORITHM:
+            raise ValueError(f"jwt_algorithm must be {JWT_ALGORITHM}.")
+        if self.environment is Environment.LOCAL:
+            return self
         secret_length = len(self.jwt_secret.encode("utf-8"))
-        if self.environment is not Environment.LOCAL and secret_length < self.jwt_secret_min_length:
+        if secret_length < self.jwt_secret_min_length:
             raise ValueError(
                 f"jwt_secret must be at least {self.jwt_secret_min_length} bytes in "
                 f"{self.environment.value} environments."
+            )
+        if self.jwt_secret != DEFAULT_LOCAL_JWT_SECRET and jwt_secret_is_weak(self.jwt_secret):
+            raise ValueError(
+                "jwt_secret is a known weak placeholder; use a long random value "
+                f"in {self.environment.value} environments."
             )
         return self
 

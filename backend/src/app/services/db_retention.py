@@ -1,0 +1,196 @@
+"""Bounded retention for append-only runtime tables (H5).
+
+Only operational logs are pruned. Trades, journal, orders, fills, plans,
+candidates, strategies, audit logs, P&L and notes are never touched. Each
+policy deletes in small batches by primary key so no statement holds a long
+lock on a hot table. Dry-run counts what would go and deletes nothing.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+import structlog
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionPolicy:
+    """One table's rule. Identifiers are code constants, never user input."""
+
+    table: str
+    primary_key: str
+    timestamp: str
+    days: int
+    # Extra SQL predicate on the same row (alias ``t``). Constant text only.
+    keep_predicate: str = ""
+    # Always keep the newest row per organization (latest-row readers).
+    keep_newest_per_org: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionResult:
+    table: str
+    cutoff: datetime
+    matched: int
+    deleted: int
+    dry_run: bool
+    complete: bool
+
+
+def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
+    """The pruned tables and their windows. Anything not listed is kept forever."""
+
+    return (
+        RetentionPolicy(
+            table="watcher_observability_events",
+            primary_key="event_id",
+            timestamp="at",
+            days=settings.retention_watcher_events_days,
+        ),
+        # Child rows of scan attempts; nothing references them. The parent
+        # watcher_scan_attempts rows are kept: lineages replay through them.
+        RetentionPolicy(
+            table="watcher_subscription_eval_attempts",
+            primary_key="subscription_attempt_id",
+            timestamp="created_at",
+            days=settings.retention_watcher_attempt_children_days,
+        ),
+        RetentionPolicy(
+            table="watcher_source_fetch_attempts",
+            primary_key="fetch_attempt_id",
+            timestamp="created_at",
+            days=settings.retention_watcher_attempt_children_days,
+        ),
+        # Scan-stage observations only. Anything tied to a plan, a fill or a
+        # journal trade is learning evidence and is kept.
+        RetentionPolicy(
+            table="paper_evaluation_observations",
+            primary_key="observation_id",
+            timestamp="occurred_at",
+            days=settings.retention_paper_evaluation_days,
+            keep_predicate=(
+                "t.journal_trade_id IS NULL AND t.filled = false AND t.plan_approved = false"
+            ),
+        ),
+        RetentionPolicy(
+            table="blofin_demo_sync_snapshots",
+            primary_key="id",
+            timestamp="synced_at",
+            days=settings.retention_demo_snapshot_days,
+            keep_newest_per_org=True,
+        ),
+    )
+
+
+def _where(policy: RetentionPolicy) -> str:
+    clauses = [f"t.{policy.timestamp} < :cutoff"]
+    if policy.keep_predicate:
+        clauses.append(f"({policy.keep_predicate})")
+    if policy.keep_newest_per_org:
+        clauses.append(
+            f"EXISTS (SELECT 1 FROM {policy.table} AS newer "
+            "WHERE newer.organization_id = t.organization_id "
+            f"AND newer.{policy.timestamp} > t.{policy.timestamp})"
+        )
+    return " AND ".join(clauses)
+
+
+def prune_table(
+    session_factory: Callable[[], Session],
+    policy: RetentionPolicy,
+    *,
+    now: datetime,
+    dry_run: bool,
+    batch_size: int,
+    max_batches: int,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> RetentionResult:
+    """Delete (or count) rows older than the policy window, one batch per commit."""
+
+    cutoff = now - timedelta(days=policy.days)
+    where = _where(policy)
+    session = session_factory()
+    try:
+        matched = int(
+            session.execute(
+                text(f"SELECT count(*) FROM {policy.table} AS t WHERE {where}"),
+                {"cutoff": cutoff},
+            ).scalar_one()
+        )
+        session.commit()
+        if dry_run or matched == 0:
+            return RetentionResult(policy.table, cutoff, matched, 0, dry_run, matched == 0)
+        deleted = 0
+        statement = text(
+            f"DELETE FROM {policy.table} WHERE {policy.primary_key} IN ("
+            f"SELECT t.{policy.primary_key} FROM {policy.table} AS t WHERE {where} "
+            f"ORDER BY t.{policy.timestamp} LIMIT :batch)"
+        )
+        for _ in range(max_batches):
+            if should_stop():
+                break
+            outcome = session.execute(statement, {"cutoff": cutoff, "batch": batch_size})
+            count = getattr(outcome, "rowcount", 0)
+            session.commit()
+            deleted += max(int(count or 0), 0)
+            if not count or count < batch_size:
+                return RetentionResult(policy.table, cutoff, matched, deleted, False, True)
+        return RetentionResult(policy.table, cutoff, matched, deleted, False, False)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def run_retention(
+    session_factory: Callable[[], Session],
+    settings: Settings,
+    *,
+    now: datetime,
+    dry_run: bool | None = None,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> tuple[RetentionResult, ...]:
+    """Run every policy once. One table failing does not stop the others."""
+
+    effective_dry_run = settings.retention_dry_run if dry_run is None else dry_run
+    results: list[RetentionResult] = []
+    for policy in retention_policies(settings):
+        if should_stop():
+            break
+        try:
+            result = prune_table(
+                session_factory,
+                policy,
+                now=now,
+                dry_run=effective_dry_run,
+                batch_size=settings.retention_batch_size,
+                max_batches=settings.retention_max_batches_per_table,
+                should_stop=should_stop,
+            )
+        except Exception as exc:
+            logger.error(
+                "db_retention_table_failed",
+                table=policy.table,
+                error=type(exc).__name__,
+            )
+            continue
+        results.append(result)
+        logger.info(
+            "db_retention_table",
+            table=result.table,
+            cutoff=result.cutoff.isoformat(),
+            matched=result.matched,
+            deleted=result.deleted,
+            dry_run=result.dry_run,
+            complete=result.complete,
+        )
+    return tuple(results)

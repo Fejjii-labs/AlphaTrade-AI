@@ -11,7 +11,7 @@ The API validates bearer access JWTs and resolves the current persisted user/mem
 | Default local bearer flow | Returned in the auth flow for client storage. | Short-lived JWT in browser session storage; sent as `Authorization: Bearer`. |
 | Configured cookie flow | httpOnly `alphatrade_refresh` cookie; current default omits refresh from the response body. | Access JWT remains client-readable/session-stored; cookie mode does not eliminate XSS risk. |
 
-Default access/refresh lifetimes are 15 minutes/seven days. Hosted cookie settings require Secure cookies and correct SameSite/CORS origins. Logout revokes refresh and uses the access-token denylist; current hosted policy requires shared Redis and fail-closed revocation/rate-limit behavior.
+Access JWTs are pinned to HS256 (`JWT_ALGORITHM` must be `HS256`). Outside `local`, `JWT_SECRET` must be at least 32 bytes and must not be a known weak value or a template placeholder (anything containing `REPLACE`, `placeholder` or `change-me`); placeholders are refused even for disarmed workers. The code default signing key is local-only: the API and armed workers refuse it at settings load, and token issue/verify refuses it outside `local`. `DEBUG=true` is refused in staging and production. Default access/refresh lifetimes are 15 minutes/seven days. Hosted cookie settings require Secure cookies and correct SameSite/CORS origins. Logout revokes refresh and uses the access-token denylist; current hosted policy requires shared Redis and fail-closed revocation/rate-limit behavior.
 
 [Frontend middleware](../frontend/src/middleware.ts) uses a session marker for navigation, not authorization. A forged marker does not grant API access. [Security headers](../frontend/src/lib/security-headers.ts) include CSP and framing restrictions; the API origin and browser speech permissions must match the intended deployment. See [auth implementation](../backend/src/app/services/auth_service.py), [auth dependency](../backend/src/app/core/auth.py), [settings](../backend/src/app/core/config.py) and [account lifecycle](account_management.md).
 
@@ -25,6 +25,8 @@ Organization/user identity comes from authenticated context, not a client's prop
 | TRADER | Authorized domain mutations supported by the endpoint. |
 | VIEWER | Reader endpoints; not trader mutation authority. |
 
+Within an organization, some records are per-user rather than org-shared. Decision (audit M15, November 2026): paper positions (`/positions/{id}` get/update/close), legacy approvals (`/approvals/{id}` decide routes and `/workflow`) and backtest cancel are scoped to the record's own user, matching the already user-scoped list/get endpoints; another member (including an OWNER) gets 404. Backtest run results stay readable org-wide. Plan-bound approvals already required the exact principal.
+
 [RBAC dependencies](../backend/src/app/security/rbac.py) enforce endpoint-specific role requirements. The current Agent turn routes use trader-level membership, so not every read-like Agent request is available to VIEWER. User-owned knowledge and conversations also retain user scope within an organization.
 
 ## Secrets, providers and network boundaries
@@ -32,6 +34,8 @@ Organization/user identity comes from authenticated context, not a client's prop
 Secrets are server environment/Settings values. Use environment templates for **names and defaults**, never credentials. Frontend `NEXT_PUBLIC_*` values are public build configuration and must not contain keys, passwords, tokens or connection strings. Logs/audit use redaction and status surfaces expose booleans/health rather than secrets; redaction is not permission to copy raw sensitive records into evidence or screenshots.
 
 Current staging/production provider policy requires configured OpenAI, authoritative Qdrant and Redis security backends. Local mocks and process-memory fallbacks are development options, not hosted-success behavior. Canonical market evidence uses read-only public perpetual connectors; exchange credentials must not enter those connectors. Demo exchange credentials are separately scoped and do not permit production venue hosts, withdrawal or transfer operations.
+
+The BloFin demo credentials are one shared venue account. The `/exchange/*` routes that read or act on that account (balances, positions, position mode, leverage info, order status, order cancel) are restricted to owners of `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`; when that pin is unset they fail closed outside `local` ([demo access guard](../backend/src/app/core/exchange_demo_access.py)). Instrument metadata stays available to any owner.
 
 Sources: [provider policy](../backend/src/app/core/provider_policy.py), [deployment safety](../backend/src/app/core/deployment_safety.py), [exchange safety](../backend/src/app/core/exchange_safety.py), [market activation](../backend/src/app/market_activation/profile.py).
 

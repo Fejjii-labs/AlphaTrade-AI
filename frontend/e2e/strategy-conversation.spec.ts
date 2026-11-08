@@ -121,7 +121,9 @@ test.describe("Strategy Lab conversation", () => {
     const headers = { Authorization: `Bearer ${token}` };
     await installSharedE2ESession(page, request);
     await page.goto("/strategy-lab/new");
-    await page.getByText("Strategy options", { exact: true }).click();
+    // /strategy-lab/new redirects to /agent?intent=strategy, which pre-opens this panel (M28).
+    // Clicking the summary would close it and hide "Strategy setup type".
+    await expect(page.getByTestId("agent-strategy-options")).toHaveJSProperty("open", true);
     await page.getByLabel("Strategy setup type").selectOption("liquidity_sweep_reversal");
     await page.getByRole("button", { name: "Attach document" }).click();
     await page.getByLabel("Attach document", { exact: true }).setInputFiles({

@@ -77,6 +77,15 @@ def alert_unclean_previous_exit(
     since: int | None = None
     if previous.started_at is not None:
         since = max(round(moment.timestamp() - previous.started_at), 0)
+    if previous.stopping_at is not None:
+        # The previous run had SIGTERM (an ordinary deploy or restart) and its
+        # shutdown outlasted the platform grace. Worth a log, not a page (M8).
+        logger.warning(
+            "paper_worker_previous_exit_after_sigterm",
+            previous_run_seconds_since_start=since,
+            shutdown_seconds=max(round(moment.timestamp() - previous.stopping_at), 0),
+        )
+        return False
     logger.error(
         "paper_worker_previous_exit_unclean",
         previous_run_seconds_since_start=since,

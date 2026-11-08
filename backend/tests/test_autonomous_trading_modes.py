@@ -516,12 +516,15 @@ def test_watcher_kill_switch_blocks_even_when_the_mode_is_disarmed() -> None:
     assert disarmed.paper_loop_reason == "autonomous_mode_disarmed"
 
 
-def test_disarmed_demo_exchange_still_enters_the_governed_worker(
+def test_autonomous_off_blocks_worker_demo_entries_too(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """M1: AUTONOMOUS_BLOFIN_DEMO_ENABLED=false means the worker places no demo order."""
+
     from tests.test_governed_blofin_demo import demo_settings
 
-    settings = demo_settings(str(uuid4()))
+    # demo_settings() arms autonomous demo mode by default (B1); M1 needs it OFF.
+    settings = demo_settings(str(uuid4()), autonomous_blofin_demo_enabled=False)
     assert settings.autonomous_blofin_demo_enabled is False
     called: dict[str, object] = {}
 
@@ -572,8 +575,9 @@ def test_disarmed_demo_exchange_still_enters_the_governed_worker(
         report,
         evidence,  # type: ignore[arg-type]
     )
-    assert continued.paper_loop_reason == "governed_human_path"
-    assert getattr(called["settings"], "autonomous_blofin_demo_enabled", None) is False
+    assert continued.paper_loop_stage == "blocked"
+    assert continued.paper_loop_reason == "autonomous_mode_disarmed"
+    assert called == {}  # the governed demo loop is never entered
 
 
 def test_trade_slot_refusal_is_distinct_from_exposure() -> None:

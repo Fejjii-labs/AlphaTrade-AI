@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { freshE2EPassword } from "./helpers/e2e-password";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://127.0.0.1:8000";
 
@@ -9,7 +10,7 @@ function uniqueEmail() {
 test.describe("AlphaTrade MVP API workflow", () => {
   test("full happy path via Playwright request", async ({ request }) => {
     const email = uniqueEmail();
-    const password = "secure-password-1";
+    const password = freshE2EPassword();
     const uniqueLesson = `E2E journal lesson ${Date.now()}`;
 
     const health = await request.get(`${API_URL}/health`);
@@ -159,7 +160,7 @@ test.describe("Browser happy path (local optional)", () => {
 
   test("register, dashboard, workspace, logout", async ({ page }) => {
     const email = uniqueEmail();
-    const password = "secure-password-1";
+    const password = freshE2EPassword();
 
     await page.goto("/register");
     await page.getByLabel(/email/i).fill(email);

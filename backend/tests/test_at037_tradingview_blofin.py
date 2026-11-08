@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.core.errors import ExchangeDemoInactiveError
+from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
 from app.db.base import Base
 from app.db.models import (
     BloFinDemoSyncSnapshot,
@@ -532,3 +532,57 @@ def test_real_trading_remains_disabled_in_settings(
     assert settings.enable_real_trading is False
     assert settings.real_trading_enabled is False
     assert settings.execution_mode.value == "paper"
+
+
+def _signed(body: dict[str, Any]) -> tuple[bytes, str, str]:
+    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    timestamp = int(time.time())
+    signature = compute_tradingview_signature(raw, timestamp=timestamp, secret=WEBHOOK_SECRET)
+    return raw, signature, str(timestamp)
+
+
+def test_webhook_org_binding_and_no_existence_oracle(
+    client: tuple[TestClient, sessionmaker[Session], Settings],
+) -> None:
+    """M16: the global secret is bound to one org; unknown and foreign orgs look identical."""
+    from app.core.config import Environment
+    from app.services.tradingview_signal_service import TradingViewSignalService
+
+    _test_client, factory, settings = client
+    bound = settings.model_copy(update={"tradingview_webhook_organization_id": str(ORG_A)})
+
+    def _intake(cfg: Settings, org: uuid.UUID, alert_id: str) -> Any:
+        raw, signature, timestamp = _signed(_payload(organization_id=str(org), alert_id=alert_id))
+        with factory() as session:
+            return TradingViewSignalService(session, cfg).intake_webhook(
+                raw, signature_header=signature, timestamp_header=timestamp
+            )
+
+    errors = []
+    for org, alert_id in ((ORG_B, "tv-bound-foreign"), (uuid.uuid4(), "tv-bound-unknown")):
+        with pytest.raises(ValidationAppError) as raised:
+            _intake(bound, org, alert_id)
+        errors.append((raised.value.code, raised.value.message, raised.value.details))
+    assert errors[0] == errors[1]
+    assert errors[0][0] == "tradingview_webhook_organization_refused"
+    assert not errors[0][2]
+
+    assert _intake(bound, ORG_A, "tv-bound-ok").signal.organization_id == ORG_A
+
+    unbound_staging = settings.model_copy(update={"environment": Environment.STAGING})
+    with pytest.raises(ValidationAppError):
+        _intake(unbound_staging, ORG_A, "tv-unbound-staging")
+
+
+def test_webhook_rate_limit_uses_settings(
+    client: tuple[TestClient, sessionmaker[Session], Settings],
+) -> None:
+    """M16: TRADINGVIEW_WEBHOOK_RATE_LIMIT is honoured instead of a hard-coded 60/h."""
+    test_client, _factory, _settings = client
+    app = test_client.app
+    app.state.settings = app.state.settings.model_copy(update={"tradingview_webhook_rate_limit": 2})
+    statuses = [
+        _post_webhook(test_client, _payload(alert_id=f"tv-rate-{i}")).status_code for i in range(3)
+    ]
+    assert statuses[:2] == [200, 200]
+    assert statuses[2] == 429

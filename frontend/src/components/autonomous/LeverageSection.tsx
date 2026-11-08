@@ -23,7 +23,8 @@ type Props = {
  * ceilings read-only.
  */
 export function LeverageSection({ profiles, settings, bounds }: Props) {
-  if (hasDemoLeverageConfig(settings)) return <LeverageSettingsSlot profiles={profiles} />;
+  if (hasDemoLeverageConfig(settings))
+    return <LeverageSettingsSlot profiles={profiles} settings={settings} bounds={bounds} />;
   return (
     <Card id="leverage" data-testid="leverage-settings-slot" className="scroll-mt-4">
       <CardHeader>

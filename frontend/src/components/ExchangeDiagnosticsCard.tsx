@@ -32,7 +32,7 @@ export function ExchangeDiagnosticsCard({
       <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
         <div>
           <CardTitle className="text-base">Exchange diagnostics</CardTitle>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-text-muted">
             BloFin demo readiness and latest mirror health — read-only, no orders placed.
           </p>
         </div>
@@ -58,7 +58,7 @@ export function ExchangeDiagnosticsCard({
         </div>
 
         {diagnostics.worker_effective?.source === "worker" ? (
-          <p className="text-xs text-zinc-500" data-testid="exchange-worker-flags">
+          <p className="text-xs text-text-muted" data-testid="exchange-worker-flags">
             Worker flags: {workerFlagFreshness(diagnostics.worker_effective)}. Real money stays
             blocked.
           </p>
@@ -72,30 +72,30 @@ export function ExchangeDiagnosticsCard({
 
         <dl className="grid gap-3 sm:grid-cols-2">
           <div>
-            <dt className="text-xs text-zinc-500">Demo exchange</dt>
-            <dd className="text-zinc-200">
+            <dt className="text-xs text-text-muted">Demo exchange</dt>
+            <dd className="text-text-primary">
               {diagnostics.demo_active ? diagnostics.exchange_mode : "inactive"}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Provider health</dt>
-            <dd className="text-zinc-200">{diagnostics.provider_health ?? "unknown"}</dd>
+            <dt className="text-xs text-text-muted">Provider health</dt>
+            <dd className="text-text-primary">{diagnostics.provider_health ?? "unknown"}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Position mode</dt>
-            <dd className="text-zinc-200">{diagnostics.position_mode ?? "—"}</dd>
+            <dt className="text-xs text-text-muted">Position mode</dt>
+            <dd className="text-text-primary">{diagnostics.position_mode ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Leverage (BTC-USDT cross)</dt>
-            <dd className="text-zinc-200">
+            <dt className="text-xs text-text-muted">Leverage (BTC-USDT cross)</dt>
+            <dd className="text-text-primary">
               {diagnostics.leverage?.probe_ok && diagnostics.leverage.leverage != null
                 ? `${formatDecimal(diagnostics.leverage.leverage)}x`
                 : "Unavailable"}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Instrument (BTCUSDT)</dt>
-            <dd className="text-zinc-200">
+            <dt className="text-xs text-text-muted">Instrument (BTCUSDT)</dt>
+            <dd className="text-text-primary">
               {diagnostics.instrument?.active === false
                 ? "Inactive"
                 : diagnostics.instrument?.active
@@ -104,27 +104,27 @@ export function ExchangeDiagnosticsCard({
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Venue positions</dt>
-            <dd className="text-zinc-200">{diagnostics.venue_positions_count ?? "—"}</dd>
+            <dt className="text-xs text-text-muted">Venue positions</dt>
+            <dd className="text-text-primary">{diagnostics.venue_positions_count ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Last mirror order</dt>
-            <dd className="text-zinc-200">{mirrorResultLabel(diagnostics.last_demo_mirror_result)}</dd>
+            <dt className="text-xs text-text-muted">Last mirror order</dt>
+            <dd className="text-text-primary">{mirrorResultLabel(diagnostics.last_demo_mirror_result)}</dd>
           </div>
           <div>
-            <dt className="text-xs text-zinc-500">Last cancel</dt>
-            <dd className="text-zinc-200">{diagnostics.last_cancel_status ?? "—"}</dd>
+            <dt className="text-xs text-text-muted">Last cancel</dt>
+            <dd className="text-text-primary">{diagnostics.last_cancel_status ?? "—"}</dd>
           </div>
           {diagnostics.last_exchange_order_status ? (
             <div>
-              <dt className="text-xs text-zinc-500">Last venue order status</dt>
-              <dd className="text-zinc-200">{diagnostics.last_exchange_order_status}</dd>
+              <dt className="text-xs text-text-muted">Last venue order status</dt>
+              <dd className="text-text-primary">{diagnostics.last_exchange_order_status}</dd>
             </div>
           ) : null}
           {diagnostics.last_demo_mirror_error_code ? (
             <div className="sm:col-span-2">
-              <dt className="text-xs text-zinc-500">Last mirror error</dt>
-              <dd className="text-zinc-200">
+              <dt className="text-xs text-text-muted">Last mirror error</dt>
+              <dd className="text-text-primary">
                 Code {diagnostics.last_demo_mirror_error_code}
                 {diagnostics.last_demo_mirror_error_message
                   ? ` — ${diagnostics.last_demo_mirror_error_message}`
@@ -146,7 +146,7 @@ export function ExchangeDiagnosticsCard({
         ) : null}
 
         {compact ? (
-          <Link href="/exchange" className="inline-block text-xs text-zinc-400 underline">
+          <Link href="/exchange" className="inline-block text-xs text-text-secondary underline">
             Open full exchange diagnostics
           </Link>
         ) : null}

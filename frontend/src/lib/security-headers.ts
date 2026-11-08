@@ -5,6 +5,12 @@
  * styles/scripts permitted because Next.js App Router emits inline runtime
  * scripts and Tailwind emits inline style attributes. Dev mode additionally
  * needs eval + websockets for HMR.
+ *
+ * Production narrows the inline allowance to <script> elements: React and Next
+ * never emit inline event-handler attributes, so `script-src-attr 'none'`
+ * blocks injected `onerror=`/`onclick=` handlers in CSP3 browsers (older ones
+ * fall back to script-src). Nonce-based script-src needs per-request nonces in
+ * middleware and dynamic rendering of every page; tracked separately (L15).
  */
 
 export interface SecurityHeader {
@@ -31,6 +37,7 @@ export function buildContentSecurityPolicy(options: {
     "default-src 'self'",
     `connect-src ${connectSrc}`,
     `script-src ${scriptSrc}`,
+    ...(dev ? [] : ["script-src-attr 'none'"]),
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",

@@ -14,6 +14,7 @@ import type {
   JournalTradeSource,
 } from "@/lib/api/types";
 import { humanizeToken } from "@/lib/format";
+import { zonedToday } from "@/lib/timezone";
 
 import { CumulativePnlChart } from "./CumulativePnlChart";
 import { PerformanceKpiCards } from "./PerformanceKpiCards";
@@ -75,26 +76,59 @@ function useDashboardRequest(
 export function PerformanceDashboard({
   now,
   refreshKey = 0,
+  scope: controlledScope,
+  timezone,
+  timezoneLabel,
 }: {
   /** Injected for deterministic tests; defaults to the current time. */
   now?: Date;
   refreshKey?: number;
+  /**
+   * Account scope chosen by the page-level venue control. When set, this panel
+   * hides its own scope picker so one control drives every dashboard block.
+   */
+  scope?: JournalDashboardScope;
+  /**
+   * Resolved day-bucket zone from the page (risk settings → browser → UTC).
+   * `null` = still resolving (no request yet); omitted = browser zone.
+   */
+  timezone?: string | null;
+  /** Where the zone came from, shown next to it ("risk settings", "browser"). */
+  timezoneLabel?: string;
 }) {
-  const today = useMemo(() => now ?? new Date(), [now]);
+  const tz = useMemo(
+    () => (timezone === undefined ? browserTimezone() : timezone),
+    [timezone],
+  );
+  const today = useMemo(() => {
+    const base = now ?? new Date();
+    return tz ? zonedToday(tz, base) : base;
+  }, [now, tz]);
   const thisMonth: MonthRef = { year: today.getFullYear(), month: today.getMonth() };
   const [preset, setPreset] = useState<RangePreset>("90d");
-  const [scope, setScope] = useState<JournalDashboardScope>(DEFAULT_SCOPE);
+  const [ownScope, setOwnScope] = useState<JournalDashboardScope>(DEFAULT_SCOPE);
+  const controlled = controlledScope !== undefined;
+  const scope = controlledScope ?? ownScope;
   const [month, setMonth] = useState<MonthRef>(thisMonth);
   const [sample, setSample] = useState(false);
-  const [source, setSource] = useState<JournalTradeSource | "">("");
-  const [sourceOptions, setSourceOptions] = useState<JournalTradeSource[]>([]);
+  // Source narrowing belongs to one scope; a scope change (local or from the
+  // page venue control) drops it without an extra request under the old source.
+  const [sourceState, setSourceState] = useState<{
+    scope: JournalDashboardScope;
+    value: JournalTradeSource | "";
+    options: JournalTradeSource[];
+  }>({ scope, value: "", options: [] });
+  const sameScope = sourceState.scope === scope;
+  const source = sameScope ? sourceState.value : "";
+  const sourceOptions = sameScope ? sourceState.options : [];
+  const setSource = (value: JournalTradeSource | "") =>
+    setSourceState((current) => ({ ...current, scope, value }));
   const defaultCustom = useMemo(() => rangeParams("30d", today), [today]);
   const todayIso = defaultCustom.date_to ?? null;
   const [customFrom, setCustomFrom] = useState(defaultCustom.date_from ?? "");
   const [customTo, setCustomTo] = useState(defaultCustom.date_to ?? "");
   const [retryKey, setRetryKey] = useState(0);
   const retry = () => setRetryKey((key) => key + 1);
-  const tz = useMemo(() => browserTimezone(), []);
 
   const customError = preset === "custom" ? customRangeError(customFrom, customTo) : null;
   const rangeBlocked = !sample && customError !== null;
@@ -102,34 +136,41 @@ export function PerformanceDashboard({
     () => ({
       ...(preset === "custom" ? { date_from: customFrom, date_to: customTo } : rangeParams(preset, today)),
       scope,
-      tz,
+      tz: tz ?? undefined,
       ...(source ? { source } : {}),
     }),
     [preset, customFrom, customTo, scope, source, today, tz],
   );
   const monthQuery = useMemo(
-    () => ({ ...monthRange(month), scope, tz, ...(source ? { source } : {}) }),
+    () => ({ ...monthRange(month), scope, tz: tz ?? undefined, ...(source ? { source } : {}) }),
     [month, scope, source, tz],
   );
   const reloadKey = `${refreshKey}:${retryKey}`;
-  const range = useDashboardRequest(rangeQuery, !sample && !rangeBlocked, reloadKey);
-  const calendar = useDashboardRequest(monthQuery, !sample, reloadKey);
+  const zoneReady = tz !== null;
+  const range = useDashboardRequest(rangeQuery, zoneReady && !sample && !rangeBlocked, reloadKey);
+  const calendar = useDashboardRequest(monthQuery, zoneReady && !sample, reloadKey);
 
   // Remember the scope's sources so the picker survives the next reload.
   const loadedFilters = range.data?.filters;
   useEffect(() => {
-    if (loadedFilters && loadedFilters.scope === scope) setSourceOptions(loadedFilters.included_sources);
+    if (loadedFilters && loadedFilters.scope === scope)
+      setSourceState((current) => ({
+        scope,
+        value: current.scope === scope ? current.value : "",
+        options: loadedFilters.included_sources,
+      }));
   }, [loadedFilters, scope]);
 
   const changeScope = (next: JournalDashboardScope) => {
-    setScope(next);
-    setSource("");
-    setSourceOptions([]);
+    setOwnScope(next);
+    setSourceState({ scope: next, value: "", options: [] });
   };
-  const filtersChanged = preset !== "90d" || scope !== DEFAULT_SCOPE || source !== "";
+  const filtersChanged =
+    preset !== "90d" || (!controlled && scope !== DEFAULT_SCOPE) || source !== "";
   const resetFilters = () => {
     setPreset("90d");
-    changeScope(DEFAULT_SCOPE);
+    if (controlled) setSource("");
+    else changeScope(DEFAULT_SCOPE);
   };
 
   const sampleData = useMemo(() => (sample ? buildSampleDashboard(month) : null), [sample, month]);
@@ -168,6 +209,8 @@ export function PerformanceDashboard({
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {controlled ? null : (
+            <>
           <SegmentedControl
             aria-label="Account scope"
             value={extraScope ? ("" as JournalDashboardScope) : scope}
@@ -193,6 +236,8 @@ export function PerformanceDashboard({
               ))}
             </select>
           </label>
+            </>
+          )}
           <SegmentedControl
             aria-label="Performance range"
             value={preset}
@@ -285,6 +330,13 @@ export function PerformanceDashboard({
           Showing: {scopeLabel}
           {source ? ` · ${SOURCE_LABELS[source] ?? humanizeToken(source)} only` : ""}
           {rangeText ? <span className="font-data text-xs font-normal text-text-secondary"> · {rangeText}</span> : null}
+          {tz ? (
+            <span className="text-xs font-normal text-text-secondary" data-testid="performance-timezone">
+              {" "}
+              · Days in {tz}
+              {timezoneLabel ? ` (${timezoneLabel})` : ""}
+            </span>
+          ) : null}
           <span className="ml-2 text-xs font-normal text-text-muted">
             Closed trades only; scopes are never mixed. Partial exits on open trades count only
             once the trade closes.

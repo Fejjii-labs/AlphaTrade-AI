@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import structlog
 from fastapi import BackgroundTasks
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
@@ -84,6 +85,17 @@ _TOKEN = "123456:TESTTOKENVALUENOTASECRET1234567890"
 _CHAT = "424242"
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000d1")
 _USER = uuid.UUID("00000000-0000-0000-0000-0000000000d2")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    # structlog caches a module logger on first use once app logging is
+    # configured; if an earlier test then resets structlog, capture_logs no
+    # longer sees that logger. A fresh proxy keeps the log assertions
+    # independent of test order (as 52db720b and 2ff8f97e do).
+    monkeypatch.setattr(
+        "app.services.safety_alerts.logger", structlog.get_logger("app.services.safety_alerts")
+    )
 
 
 def _settings(**updates: object) -> Settings:
@@ -822,6 +834,8 @@ def test_paper_worker_health_reports_kill_switch_without_secrets(
     reset_safety_alert_dedup()
     _capture_telegram(monkeypatch)
     factory, settings = _kill_db
+    # The health projection reports only the pinned tenant's switch (M3).
+    settings = settings.model_copy(update={"watcher_paper_organization_id": str(_ORG)})
     monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
 
     idle = _run_heartbeat(settings)
@@ -1050,6 +1064,8 @@ def test_failed_kill_switch_page_retries_once_per_version(
 
     monkeypatch.setattr(TelegramAlertDeliveryProvider, "deliver", _fail)
     factory, settings = _kill_db
+    # The health projection reports only the pinned tenant's switch (M3).
+    settings = settings.model_copy(update={"watcher_paper_organization_id": str(_ORG)})
     monkeypatch.setattr("app.db.session.get_session_factory", lambda: factory)
     with factory() as session:
         service = KillSwitchService(session, AuditService(session), settings)

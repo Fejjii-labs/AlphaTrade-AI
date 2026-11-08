@@ -47,6 +47,34 @@ _ALWAYS_MUTATING_TOOLS = frozenset(
     }
 )
 
+# Tools the generic ``POST /tools/execute`` route may run. Read/compute only:
+# none of these has a mutating action, so a session injected later cannot turn
+# the debug route into a human-confirmation bypass (audit M17).
+HTTP_EXECUTABLE_READ_ONLY_TOOLS = frozenset(
+    {
+        "rag_retriever",
+        "market_data",
+        "indicator",
+        "funding",
+        "risk_checker",
+        "strategy_evaluator",
+        "position_reader",
+        "analytics_summary_tool",
+        "position_sizing_tool",
+        "manual_levels_tool",
+        "human_vs_system_tool",
+        "strategy_testability_tool",
+        "structure_from_text_tool",
+        "paper_eligibility_tool",
+    }
+)
+
+# Client-supplied keys that carry consent/identity and must never reach a tool
+# from the generic HTTP route; consent comes only from the proposal/confirm flow.
+HTTP_STRIPPED_TOOL_ARGUMENTS = frozenset(
+    {"confirm", "confirmed", "user_message", "organization_id", "user_id"}
+)
+
 
 def _funding_execute(args: dict[str, Any], market_data_service: MarketDataService) -> ToolOutput:
     """Read-only funding context from the market-data service. Never a trading signal."""

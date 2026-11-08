@@ -44,7 +44,7 @@ if [[ "${_url_lower}" != https://* ]]; then
   exit 1
 fi
 
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 TICK_SIZE="0.1"
 MIN_SIZE="0.1"
 SYMBOL="ETHUSDT"

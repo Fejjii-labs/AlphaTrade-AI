@@ -5,6 +5,7 @@ import type {
   JournalTradeSource,
 } from "@/lib/api/types";
 import { UNAVAILABLE } from "@/lib/format";
+import { browserTimeZone } from "@/lib/timezone";
 
 /** Decimal string → finite number, else null (never a fabricated 0). */
 export function toNumber(value: string | number | null | undefined): number | null {
@@ -189,11 +190,7 @@ export function rangeParams(
 }
 
 export function browserTimezone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
+  return browserTimeZone();
 }
 
 // --------------------------------------------------------------------------

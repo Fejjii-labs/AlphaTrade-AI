@@ -235,3 +235,118 @@ def test_demo_seed_removes_bootstrap_accounts(
         assert session.get(Organization, bootstrap_org.id) is None
         demo_user = session.scalar(select(User).where(User.email == DEMO_EMAIL))
         assert demo_user is not None
+
+
+def _register(client: TestClient, email: str, org: str) -> str:
+    resp = client.post(
+        "/auth/register",
+        json={"email": email, "password": "DemoPaper2026!", "organization_name": org},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["tokens"]["access_token"]
+
+
+def test_demo_seed_endpoint_refuses_non_demo_owner_once_demo_org_exists(
+    demo_client: TestClient,
+    demo_seed_env: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """H6: after bootstrap only demo-org owners may re-seed; others get 403."""
+    factory, settings = demo_seed_env
+    with factory() as session:
+        DemoSeedService(session, settings).seed(password="DemoPaper2026!")
+        bystander_org = Organization(id=uuid.uuid4(), name="Bystander")
+        bystander = User(
+            id=uuid.uuid4(),
+            email="seed-bootstrap-1111111111@example.com",
+            hashed_password="not-used",
+            email_verified=False,
+        )
+        session.add_all([bystander_org, bystander])
+        session.flush()
+        session.add(
+            Membership(
+                user_id=bystander.id,
+                organization_id=bystander_org.id,
+                role=MembershipRole.OWNER,
+            )
+        )
+        session.commit()
+        bystander_id = bystander.id
+
+    with demo_client as client:
+        token = _register(client, "attacker@test.example", "Attacker Org")
+        refused = client.post(
+            "/demo/seed",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"password": "AttackerChosen2026!"},
+        )
+        assert refused.status_code == 403, refused.text
+
+        # The demo password is unchanged and other tenants' rows are untouched.
+        assert (
+            client.post(
+                "/auth/login",
+                json={"email": DEMO_EMAIL, "password": "AttackerChosen2026!"},
+            ).status_code
+            == 401
+        )
+        demo_login = client.post(
+            "/auth/login", json={"email": DEMO_EMAIL, "password": "DemoPaper2026!"}
+        )
+        assert demo_login.status_code == 200, demo_login.text
+        demo_token = demo_login.json()["tokens"]["access_token"]
+
+        reseed = client.post("/demo/seed", headers={"Authorization": f"Bearer {demo_token}"})
+        assert reseed.status_code == 200, reseed.text
+
+    with factory() as session:
+        assert session.get(User, bystander_id) is not None
+
+
+def test_demo_seed_endpoint_bootstrap_only_removes_caller(
+    demo_client: TestClient,
+    demo_seed_env: tuple[sessionmaker[Session], Settings],
+) -> None:
+    """H6: API bootstrap cleanup never removes other tenants' bootstrap accounts."""
+    factory, _settings = demo_seed_env
+    with factory() as session:
+        other_org = Organization(id=uuid.uuid4(), name="Other Bootstrap")
+        other = User(
+            id=uuid.uuid4(),
+            email="seed-bootstrap-2222222222@example.com",
+            hashed_password="not-used",
+            email_verified=False,
+        )
+        session.add_all([other_org, other])
+        session.flush()
+        session.add(
+            Membership(user_id=other.id, organization_id=other_org.id, role=MembershipRole.OWNER)
+        )
+        session.commit()
+        other_id = other.id
+
+    with demo_client as client:
+        token = _register(client, "demo-seed-bootstrap-3333333333@example.com", "Boot Org")
+        seeded = client.post("/demo/seed", headers={"Authorization": f"Bearer {token}"})
+        assert seeded.status_code == 200, seeded.text
+
+    with factory() as session:
+        # Another tenant's bootstrap-looking account is never touched from the API
+        # (removing the caller's own account is best-effort).
+        assert session.get(User, other_id) is not None
+        assert session.get(Organization, other_org.id) is not None
+
+
+def test_resolve_demo_password_ignores_explicit_outside_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H6: a body-supplied password is never used on staging."""
+    from app.core.errors import ValidationAppError
+    from app.services.demo_seed_service import resolve_demo_password
+
+    staging = Settings.model_construct(environment=Environment.STAGING)
+    monkeypatch.delenv("DEMO_SEED_PASSWORD", raising=False)
+    with pytest.raises(ValidationAppError, match="DEMO_SEED_PASSWORD"):
+        resolve_demo_password(staging, explicit="AttackerChosen2026!")
+    monkeypatch.setenv("DEMO_SEED_PASSWORD", "ServerSideDemo2026!")
+    assert resolve_demo_password(staging, explicit="AttackerChosen2026!") == "ServerSideDemo2026!"

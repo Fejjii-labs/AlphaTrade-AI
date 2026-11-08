@@ -655,13 +655,19 @@ class PostgresWatcherStore:
 
         self._run(work)
 
-    def events(self) -> tuple[WatcherObservabilityEvent, ...]:
+    def events(self, *, limit: int = 10_000) -> tuple[WatcherObservabilityEvent, ...]:
+        """Newest ``limit`` events, oldest first. Bounded: the table grows (M10)."""
+
         def work(session: Session) -> tuple[WatcherObservabilityEvent, ...]:
-            rows = session.scalars(
-                select(WatcherObservabilityEventRow).order_by(
-                    WatcherObservabilityEventRow.at, WatcherObservabilityEventRow.event_id
+            newest = session.scalars(
+                select(WatcherObservabilityEventRow)
+                .order_by(
+                    WatcherObservabilityEventRow.at.desc(),
+                    WatcherObservabilityEventRow.event_id.desc(),
                 )
+                .limit(max(limit, 0))
             ).all()
+            rows = list(reversed(newest))
             return tuple(
                 WatcherObservabilityEvent(
                     name=item.name,

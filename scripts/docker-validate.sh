@@ -57,9 +57,11 @@ echo "  /audit/events returns 401 without token"
 echo "Registering temporary user for protected endpoint checks..."
 validate_email="docker-validate-$(date +%s)@example.com"
 validate_org="Docker Validate $(date +%s)"
+# Throwaway account: random per run, never a committed literal (M20).
+validate_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 register_json="$(curl -fsS -X POST "${BASE_URL}/auth/register" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${validate_email}\",\"password\":\"secure-password-1\",\"organization_name\":\"${validate_org}\"}")"
+  -d "{\"email\":\"${validate_email}\",\"password\":\"${validate_password}\",\"organization_name\":\"${validate_org}\"}")"
 token="$(python3 - <<'PY' "$register_json"
 import json, sys
 print(json.loads(sys.argv[1])["tokens"]["access_token"])

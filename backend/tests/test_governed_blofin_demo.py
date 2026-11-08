@@ -273,6 +273,7 @@ def demo_settings(account_id: str, **updates: object) -> Settings:
         blofin_demo_enabled=True,
         blofin_live_evidence_demo_enabled=False,
         governed_blofin_demo_enabled=True,
+        autonomous_blofin_demo_enabled=True,
         governed_demo_auto_leverage_write_enabled=True,
         watcher_orchestration_enabled=True,
         watcher_paper_staging_activation=True,
@@ -332,6 +333,7 @@ def test_demo_gate_requires_separate_arm_and_exact_principal_pins() -> None:
         "preflight_kill",
         "preflight_fence",
         "leverage_above_ceiling",
+        "autonomous_off",
     ],
 )
 def test_worker_venue_fills_journal_restart_and_protection(
@@ -347,6 +349,7 @@ def test_worker_venue_fills_journal_restart_and_protection(
         settings = demo_settings(
             str(account.id),
             governed_demo_auto_leverage_write_enabled=behavior != "leverage_above_ceiling",
+            autonomous_blofin_demo_enabled=behavior != "autonomous_off",
         )
         seed_band_ledger_headroom(session, account.id)
         session.commit()
@@ -402,6 +405,12 @@ def test_worker_venue_fills_journal_restart_and_protection(
     if behavior == "leverage_above_ceiling":
         # 25x demo account above the 20x ceiling: refused before any plan or POST.
         assert scan.paper_loop_reason == "demo_leverage_above_ceiling"
+        assert scan.trade_plan_revision_id is None
+        assert venue.post_count == 0
+        return
+    if behavior == "autonomous_off":
+        # M1: with the autonomous demo mode OFF the worker opens no demo entry.
+        assert scan.paper_loop_reason == "autonomous_mode_disarmed"
         assert scan.trade_plan_revision_id is None
         assert venue.post_count == 0
         return

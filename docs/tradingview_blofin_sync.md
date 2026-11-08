@@ -21,7 +21,8 @@ See also: [paper_validation.md](./paper_validation.md) · [research_validation.m
 | Idempotency | Unique `(organization_id, idempotency_key)` and `(organization_id, alert_id)`; same payload converges; different payload → `422` |
 | Schema | Strict Pydantic model, `extra=forbid`, bounded field sizes |
 | Storage | Redacted payload only (`redact_value`); secrets never logged |
-| Rate limit | Public IP scope `tradingview:webhook` (60/hour default) |
+| Org binding | The secret is global, so it is bound to `TRADINGVIEW_WEBHOOK_ORGANIZATION_ID`; payloads for any other org are refused. Unset is allowed only in `local`. Unknown, unbound and foreign orgs return the same `422 tradingview_webhook_organization_refused` (no existence oracle) |
+| Rate limit | Public IP scope `tradingview:webhook`, `TRADINGVIEW_WEBHOOK_RATE_LIMIT` per `TRADINGVIEW_WEBHOOK_RATE_WINDOW_SECONDS` (60/hour default) |
 
 ### Endpoint
 
@@ -105,6 +106,8 @@ Safety:
 |---------|---------|-------|
 | `TRADINGVIEW_WEBHOOK_ENABLED` | `false` | Fail-closed when false |
 | `TRADINGVIEW_WEBHOOK_SECRET` | empty | Required when enabled |
+| `TRADINGVIEW_WEBHOOK_ORGANIZATION_ID` | empty | Org the secret is bound to; required outside local when enabled |
+| `TRADINGVIEW_WEBHOOK_RATE_LIMIT` / `_RATE_WINDOW_SECONDS` | `60` / `3600` | Per-IP webhook budget |
 | `TRADINGVIEW_WEBHOOK_MAX_SKEW_SECONDS` | `300` | Replay window |
 | `TRADINGVIEW_AUTO_CREATE_CANDIDATE` | `false` | Intake does not auto-queue |
 | `BLOFIN_SYNC_STALE_AFTER_SECONDS` | `300` | Freshness for latest reads |

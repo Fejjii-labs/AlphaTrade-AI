@@ -81,6 +81,15 @@ class PaperExitCandleLoader:
         self._sources: dict[str, PerpetualMarketSource] = dict(sources or {})
         self._cache: dict[tuple[str, str, str], _CandleCache] = {}
 
+    def begin_pass(self) -> None:
+        """Drop fetched bars so a reused loader reads fresh candles (M6).
+
+        The adapters in ``_sources`` are kept: rebuilding them every 15 s pass
+        was the expensive part.
+        """
+
+        self._cache.clear()
+
     def __call__(self, trade: OpenInternalPaperTrade, *, evaluated_at: datetime) -> FetchedBars:
         mode, origin = candle_mode_for_trade(trade, self._settings)
         key = (mode, trade.symbol, trade.timeframe.value)

@@ -349,7 +349,7 @@ def nested_runtime_world(tenant_store, monkeypatch, *, forming=False, risk_block
         autonomous_internal_paper_enabled=True,
     )
     if risk_block:
-        # Use the existing daily loss gate; do not invent a Nested risk engine.
+        # A locked daily row: display-only since AT-ADR-152 (no Nested risk engine).
         from app.db.models import DailyRiskState
 
         session.add(
@@ -500,22 +500,27 @@ def postgres_tenant_store():
         yield session, org, user
 
 
-def test_existing_daily_risk_lock_blocks_nested_paper_execution(postgres_tenant_store, monkeypatch):
-    from app.db.models import ExecutionFillFact, JournalTrade, TradePlanRevision
+def test_existing_daily_risk_lock_is_display_only_for_nested(postgres_tenant_store, monkeypatch):
+    """A set daily loss lock no longer blocks Nested paper execution (AT-ADR-152).
+
+    The 10% account equity stop, which arms the kill switch, is the only daily
+    brake; the lock row stays for display.
+    """
+    from app.db.models import DailyRiskState
 
     runtime, _, _, now = nested_runtime_world(postgres_tenant_store, monkeypatch, risk_block=True)
     report = runtime.run_cycle()
     scan = report.scans[0]
     assert scan.candidate_ids
-    assert scan.paper_loop_reason == "risk_block", scan
-    assert scan.paper_loop_stage == "blocked"
+    assert scan.paper_loop_reason != "risk_block", scan
+    assert scan.paper_loop_stage != "blocked", scan
     session, org, _ = postgres_tenant_store
+    session.expire_all()
     view = overview(session, organization_id=org, now=now)["setups"][0]
-    assert view["state"] == "BLOCKED_BY_RISK"
-    assert "blocked_daily_loss" in view["risk_reason_codes"]
-    assert view["decision_id"] == str(scan.eligibility_id)
-    for table in (ExecutionFillFact, JournalTrade, TradePlanRevision):
-        assert session.scalar(select(func.count()).select_from(table)) == 0
+    assert view["state"] != "BLOCKED_BY_RISK"
+    assert "blocked_daily_loss" not in view["risk_reason_codes"]
+    risk_rows = session.scalars(select(DailyRiskState)).all()
+    assert len(risk_rows) == 1 and risk_rows[0].locked
 
 
 def test_confirmed_sequence_failure_is_recorded_without_waiting_for_next_impulse():

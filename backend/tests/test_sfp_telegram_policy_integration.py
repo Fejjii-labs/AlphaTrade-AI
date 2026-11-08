@@ -338,7 +338,8 @@ def test_scope_freshness_binding_and_disarmed_gates(store):
     [
         (True, False, {EventType.SFP_SWEEP_DETECTED, EventType.SFP_RECLAIM_FORMING}),
         (False, False, {EventType.SFP_CONFIRMED}),
-        (False, True, {EventType.SFP_CONFIRMED, EventType.SFP_BLOCKED_BY_RISK}),
+        # A locked daily row is display-only (AT-ADR-152): no risk-block event.
+        (False, True, {EventType.SFP_CONFIRMED}),
     ],
 )
 def test_watcher_projects_canonical_sfp_history_after_risk_and_replays_without_actions(
@@ -357,8 +358,7 @@ def test_watcher_projects_canonical_sfp_history_after_risk_and_replays_without_a
     scan = report.scans[0]
     assert {s.event_type for s in scan.sfp_alerts} == expected
     if risk_block:
-        blocked = next(s for s in scan.sfp_alerts if s.event_type == EventType.SFP_BLOCKED_BY_RISK)
-        assert "blocked_daily_loss" in blocked.risk_reasons
+        assert all("blocked_daily_loss" not in s.risk_reasons for s in scan.sfp_alerts)
     from app.persistence.composition import build_postgres_telegram_security_store
 
     world = World(

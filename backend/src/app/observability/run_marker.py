@@ -26,9 +26,14 @@ logger = structlog.get_logger("observability.run_marker")
 
 @dataclass(frozen=True)
 class UncleanExit:
-    """The previous run left its marker. ``started_at`` is None when unreadable."""
+    """The previous run left its marker. ``started_at`` is None when unreadable.
+
+    ``stopping_at`` is set when that run had received SIGTERM: it was shutting
+    down (an ordinary deploy) and was killed when the platform's grace ran out.
+    """
 
     started_at: float | None
+    stopping_at: float | None = None
 
 
 def claim_run_marker(path: str | Path | None, *, now: float) -> UncleanExit | None:
@@ -47,13 +52,18 @@ def claim_run_marker(path: str | Path | None, *, now: float) -> UncleanExit | No
         text = None
     if text is not None:
         started_at: float | None = None
+        stopping_at: float | None = None
         try:
-            value = json.loads(text)["started_at"]
+            payload = json.loads(text)
+            value = payload["started_at"]
             if isinstance(value, int | float) and not isinstance(value, bool):
                 started_at = float(value)
+            stopping = payload.get("stopping_at")
+            if isinstance(stopping, int | float) and not isinstance(stopping, bool):
+                stopping_at = float(stopping)
         except Exception:
             started_at = None
-        previous = UncleanExit(started_at=started_at)
+        previous = UncleanExit(started_at=started_at, stopping_at=stopping_at)
     try:
         tmp = marker.with_name(marker.name + ".tmp")
         tmp.write_text(json.dumps({"started_at": now}), encoding="utf-8")
@@ -61,6 +71,27 @@ def claim_run_marker(path: str | Path | None, *, now: float) -> UncleanExit | No
     except Exception as exc:
         logger.warning("paper_worker_run_marker_unwritten", error_type=type(exc).__name__)
     return previous
+
+
+def mark_run_stopping(path: str | Path | None, *, now: float) -> None:
+    """Record that this run received SIGTERM. Never raises."""
+
+    if not path:
+        return
+    marker = Path(path)
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+    payload["stopping_at"] = now
+    try:
+        tmp = marker.with_name(marker.name + ".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, marker)
+    except Exception as exc:
+        logger.warning("paper_worker_run_marker_unwritten", error_type=type(exc).__name__)
 
 
 def clear_run_marker(path: str | Path | None) -> None:

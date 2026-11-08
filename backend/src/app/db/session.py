@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.persistence_firewall import install_persistence_firewall
 
 _engine: Engine | None = None
@@ -27,6 +27,19 @@ def _connect_args(database_url: str) -> dict[str, bool]:
     return {}
 
 
+def _pool_args(settings: Settings) -> dict[str, int]:
+    """Explicit pool sizing for server databases; SQLite keeps its own pool."""
+
+    if settings.database_url.startswith("sqlite"):
+        return {}
+    return {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+    }
+
+
 def get_engine() -> Engine:
     """Return the process-wide engine, creating it on first use."""
     global _engine
@@ -37,6 +50,7 @@ def get_engine() -> Engine:
             pool_pre_ping=True,
             future=True,
             connect_args=_connect_args(settings.database_url),
+            **_pool_args(settings),
         )
     return _engine
 

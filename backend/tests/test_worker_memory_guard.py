@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 
 import pytest
+import structlog
 import yaml
 from structlog.testing import capture_logs
 
 from app.core.config import Settings
+from app.observability import memory_watchdog as memory_watchdog_module
 from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
 from app.workers.paper_worker import (
     CycleOutcome,
@@ -106,17 +107,25 @@ def test_tripped_watchdog_stops_the_supervisor_cleanly_and_exits_nonzero() -> No
     # The first check is below the limit; the next due check trips it.
     threading.Timer(0.2, lambda: rss.__setitem__(0, 2000)).start()
     # Safety stop: if the watchdog never stops the loop, end it so the test fails.
-    safety = threading.Timer(5.0, lambda: setattr(supervisor, "_signaled", True))
+    # It records that it fired, so the test tells the two stops apart without a
+    # wall-clock bound: thread startup under full-suite load can take seconds.
+    safety_fired = threading.Event()
+
+    def _safety_stop() -> None:
+        safety_fired.set()
+        supervisor._signaled = True
+
+    safety = threading.Timer(60.0, _safety_stop)
     safety.start()
     done = threading.Event()
-    started = time.monotonic()
     try:
         supervisor.serve_until_signal(ready=done.set)
     finally:
         safety.cancel()
     assert done.is_set()
-    # Stopped by the watchdog (about 1s check interval), not by the safety stop.
-    assert time.monotonic() - started < 4.0
+    # Stopped by the watchdog, not by the safety stop or a signal.
+    assert not safety_fired.is_set()
+    assert supervisor._signaled is False
     health = supervisor.snapshot()
     assert health.stopping is True
     assert health.watcher.status == "stopped" and health.telegram.status == "stopped"
@@ -328,7 +337,12 @@ def _ceilinged(rss: list[int], clock: list[float], **kwargs: object) -> MemoryWa
     )
 
 
-def test_ceiling_trips_during_the_startup_grace() -> None:
+def test_ceiling_trips_during_the_startup_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # structlog caches the module logger on first use once app logging is
+    # configured (e.g. by another test building the supervisor, whose watchdog
+    # store logs a swallowed read failure); a fresh proxy keeps capture_logs
+    # independent of test order.
+    monkeypatch.setattr(memory_watchdog_module, "logger", structlog.get_logger())
     rss, clock = [300 * MB], [0.0]
     watchdog = _ceilinged(rss, clock)
     assert watchdog.check() is False
@@ -407,3 +421,72 @@ def test_ceiling_settings_reach_the_supervisor() -> None:
     off = Settings(_env_file=None, paper_worker_memory_watchdog_ceiling_mb=0)
     disabled = build_paper_worker_supervisor(off)._memory_watchdog
     assert disabled is not None and disabled.ceiling_bytes is None
+
+
+def test_watchdog_trip_streak_survives_a_lost_state_file() -> None:
+    """L8: the durable store keeps the backoff when /tmp is wiped by a restart."""
+
+    from app.observability.memory_watchdog import MemoryWatchdog
+
+    class _Store:
+        def __init__(self) -> None:
+            self.saved: tuple[int, float] | None = None
+
+        def load(self) -> tuple[int, float] | None:
+            return self.saved
+
+        def save(self, *, trips: int, tripped_at: float) -> None:
+            self.saved = (trips, tripped_at)
+
+    store = _Store()
+    wall = {"now": 1_000.0}
+    ticks = {"m": 0.0}
+    watchdog = MemoryWatchdog(
+        limit_bytes=100,
+        check_seconds=1.0,
+        startup_grace_seconds=60.0,
+        backoff_max_seconds=600.0,
+        state_store=store,
+        read_rss=lambda: 200,
+        monotonic=lambda: ticks["m"],
+        wall_clock=lambda: wall["now"],
+    )
+    ticks["m"] = 61.0
+    assert watchdog.check() is True
+    assert store.saved == (1, 1_000.0)
+    # Next boot: no state file at all, but the store remembers one early trip.
+    wall["now"] = 1_100.0
+    rebooted = MemoryWatchdog(
+        limit_bytes=100,
+        check_seconds=1.0,
+        startup_grace_seconds=60.0,
+        backoff_max_seconds=600.0,
+        state_store=store,
+        read_rss=lambda: 0,
+        monotonic=lambda: 0.0,
+        wall_clock=lambda: wall["now"],
+    )
+    assert rebooted.prior_trips == 1
+    assert rebooted.grace_seconds == 120.0
+
+
+def test_watchdog_store_failures_never_block_a_trip() -> None:
+    from app.observability.memory_watchdog import MemoryWatchdog
+
+    class _Broken:
+        def load(self) -> tuple[int, float] | None:
+            raise RuntimeError("db down")
+
+        def save(self, *, trips: int, tripped_at: float) -> None:
+            raise RuntimeError("db down")
+
+    ticks = {"m": 0.0}
+    watchdog = MemoryWatchdog(
+        limit_bytes=100,
+        check_seconds=1.0,
+        state_store=_Broken(),
+        read_rss=lambda: 200,
+        monotonic=lambda: ticks["m"],
+    )
+    assert watchdog.prior_trips == 0
+    assert watchdog.check() is True

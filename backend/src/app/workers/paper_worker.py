@@ -33,7 +33,11 @@ import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
+from app.observability.memory_watchdog import (
+    MEMORY_WATCHDOG_EXIT_CODE,
+    MemoryWatchdog,
+    RuntimeStatusWatchdogStore,
+)
 from app.observability.process_memory import read_process_memory, release_allocator_memory
 from app.observability.worker_memory import CycleMemorySampler, WorkerMemoryDiagnostics
 from app.workers.watcher_paper import (
@@ -43,6 +47,11 @@ from app.workers.watcher_paper import (
 )
 
 logger = structlog.get_logger("workers.paper_worker")
+
+# Total time the supervisor waits for its threads after SIGTERM. Render kills
+# the worker maxShutdownDelaySeconds (60 s) after SIGTERM; keep a margin for
+# the stop hook (lease release, client close) and the final health log.
+SHUTDOWN_BUDGET_SECONDS = 45.0
 
 _AUTHORITY_FIELDS = (
     "enable_real_trading",
@@ -113,9 +122,13 @@ class ComponentHealth:
     last_scan_at: datetime | None
     last_delivery_at: datetime | None
     last_error: str
+    # Total failed cycles since boot. The name is historical: nothing restarts
+    # the component; the next cycle simply runs (Fable audit I4).
     restart_count: int
     cycles_completed: int
     kill_switch_active: bool
+    # Failed cycles in a row; reset by the next successful cycle (I7).
+    consecutive_failures: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +143,8 @@ class PaperWorkerHealth:
     activity: ComponentHealth | None = None
     demo_snapshot: ComponentHealth | None = None
     exit_monitor: ComponentHealth | None = None
+    # Independently supervised helpers (retention, demo reconciliation).
+    auxiliary: tuple[ComponentHealth, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +185,7 @@ class _Component:
         self.last_delivery_at: datetime | None = None
         self.last_error = ""
         self.restart_count = 0
+        self.consecutive_failures = 0
         self.cycles_completed = 0
         self.kill_switch_active = False
         self.thread: threading.Thread | None = None
@@ -186,6 +202,7 @@ class _Component:
                 restart_count=self.restart_count,
                 cycles_completed=self.cycles_completed,
                 kill_switch_active=self.kill_switch_active,
+                consecutive_failures=self.consecutive_failures,
             )
 
 
@@ -199,6 +216,7 @@ class PaperWorkerSupervisor:
         telegram_cycle: Callable[[], CycleOutcome],
         poll_seconds: float = 15.0,
         join_timeout_seconds: float = 30.0,
+        shutdown_budget_seconds: float = SHUTDOWN_BUDGET_SECONDS,
         clock: Callable[[], datetime] | None = None,
         watcher_authority: tuple[AuthorityProbe, AuthorityRestore] | None = None,
         telegram_authority: tuple[AuthorityProbe, AuthorityRestore] | None = None,
@@ -215,6 +233,9 @@ class PaperWorkerSupervisor:
         self._worker_id = _new_worker_id()
         self._render_instance_id = os.environ.get("RENDER_INSTANCE_ID", "")[:120]
         self._join_timeout_seconds = join_timeout_seconds
+        self._shutdown_budget_seconds = shutdown_budget_seconds
+        # Called once when SIGTERM/SIGINT arrives, before joining (run marker).
+        self.on_shutdown_signal: Callable[[], None] | None = None
         self._clock = clock if clock is not None else _utc_now
         self._on_stop = on_stop
         self._stop = threading.Event()
@@ -234,6 +255,8 @@ class PaperWorkerSupervisor:
         self._demo_snapshot_stop: Callable[[], None] | None = None
         self._exit_monitor: _Component | None = None
         self._exit_monitor_stop: Callable[[], None] | None = None
+        self._auxiliary: list[_Component] = []
+        self._auxiliary_stops: list[Callable[[], None]] = []
         self._memory_diagnostics: WorkerMemoryDiagnostics | None = None
         self._memory_watchdog: MemoryWatchdog | None = None
         if memory_diagnostics_enabled:
@@ -311,6 +334,19 @@ class PaperWorkerSupervisor:
         self._exit_monitor = _Component("exit_monitor", cycle, None, poll_seconds=poll_seconds)
         self._exit_monitor_stop = request_stop
 
+    def attach_auxiliary(
+        self,
+        name: str,
+        cycle: Callable[[], CycleOutcome],
+        *,
+        poll_seconds: float,
+        request_stop: Callable[[], None],
+    ) -> None:
+        """One more independently supervised loop (own thread, own health)."""
+
+        self._auxiliary.append(_Component(name, cycle, None, poll_seconds=poll_seconds))
+        self._auxiliary_stops.append(request_stop)
+
     def _components(self) -> tuple[_Component, ...]:
         return (
             (self._watcher, self._telegram)
@@ -318,6 +354,7 @@ class PaperWorkerSupervisor:
             + ((self._activity,) if self._activity else ())
             + ((self._demo_snapshot,) if self._demo_snapshot else ())
             + ((self._exit_monitor,) if self._exit_monitor else ())
+            + tuple(self._auxiliary)
         )
 
     def attach_memory_watchdog(self, watchdog: MemoryWatchdog) -> None:
@@ -346,6 +383,7 @@ class PaperWorkerSupervisor:
             activity=self._activity.health() if self._activity else None,
             demo_snapshot=self._demo_snapshot.health() if self._demo_snapshot else None,
             exit_monitor=self._exit_monitor.health() if self._exit_monitor else None,
+            auxiliary=tuple(component.health() for component in self._auxiliary),
         )
 
     def run_round(self) -> PaperWorkerHealth:
@@ -375,23 +413,38 @@ class PaperWorkerSupervisor:
             self._demo_snapshot_stop()
         if self._exit_monitor_stop:
             self._exit_monitor_stop()
+        for stop in self._auxiliary_stops:
+            stop()
 
     def join(self) -> None:
+        """Join every thread within one shared budget (M8).
+
+        Render sends SIGKILL ``maxShutdownDelaySeconds`` (60 s) after SIGTERM,
+        so no component may wait unbounded. A thread still running at the end
+        of the budget is logged; ``close`` then leaves its resources alone.
+        """
+
+        deadline = self._monotonic() + self._shutdown_budget_seconds
         for component in self._components():
             thread = component.thread
-            if thread is not None:
-                thread.join(self._join_timeout_seconds)
-                if (
-                    component
-                    in (
-                        self._indexing,
-                        self._activity,
-                        self._demo_snapshot,
-                        self._exit_monitor,
-                    )
-                    and thread.is_alive()
-                ):
-                    thread.join()
+            if thread is None:
+                continue
+            remaining = max(deadline - self._monotonic(), 0.0)
+            thread.join(min(self._join_timeout_seconds, remaining))
+        alive = self.alive_components()
+        if alive:
+            logger.error(
+                "paper_worker_join_timeout",
+                components=alive,
+                budget_seconds=self._shutdown_budget_seconds,
+            )
+
+    def alive_components(self) -> list[str]:
+        return [
+            component.name
+            for component in self._components()
+            if component.thread is not None and component.thread.is_alive()
+        ]
 
     def close(self) -> None:
         """Release runtime resources once. Safe to call more than once."""
@@ -402,12 +455,20 @@ class PaperWorkerSupervisor:
             self._activity is not None
             or self._demo_snapshot is not None
             or self._exit_monitor is not None
+            or self._auxiliary
         ):
             self.request_stop()
             self.join()
         self._closed = True
         hook = self._on_stop
         if hook is None:
+            return
+        alive = self.alive_components()
+        if alive:
+            # Releasing leases or closing HTTP clients under a cycle that is
+            # still running corrupts it. Leave them; leases expire by TTL and
+            # the process exits (M8).
+            logger.error("paper_worker_stop_hook_skipped", components=alive)
             return
         try:
             hook()
@@ -458,6 +519,11 @@ class PaperWorkerSupervisor:
             signal.set_wakeup_fd(previous_wakeup)
             os.close(read_fd)
             os.close(write_fd)
+        if self._signaled and self.on_shutdown_signal is not None:
+            try:
+                self.on_shutdown_signal()
+            except Exception:
+                logger.warning("paper_worker_shutdown_signal_hook_failed", exc_info=True)
         self.request_stop()
         self.join()
         for component in self._components():
@@ -529,6 +595,7 @@ class PaperWorkerSupervisor:
             interval = (
                 component.poll_seconds if component.poll_seconds is not None else self._poll_seconds
             )
+            interval = failure_backoff_interval(interval, component.consecutive_failures)
             if self._idle(component, interval if interval > 0 else 0.05):
                 break
         self._mark_stopped(component)
@@ -642,13 +709,30 @@ class PaperWorkerSupervisor:
             component.last_heartbeat_at = now
             component.last_error = message
             component.restart_count += 1
+            component.consecutive_failures += 1
+            streak = component.consecutive_failures
         logger.error(
             "paper_worker_component_failed",
             component=component.name,
             error=message,
             restart_count=component.restart_count,
+            consecutive_failures=streak,
             paper_only=True,
         )
+        if streak in _FAILURE_ESCALATION_STREAKS or (
+            streak > _FAILURE_ESCALATION_STREAKS[-1]
+            and streak % _FAILURE_ESCALATION_STREAKS[-1] == 0
+        ):
+            # Circuit-breaker signal (I7): a component failing every cycle is
+            # not a blip. The loop also slows down (failure_backoff_interval).
+            logger.critical(
+                "paper_worker_component_failing_repeatedly",
+                component=component.name,
+                consecutive_failures=streak,
+                error=message,
+                next_interval_multiplier=failure_backoff_multiplier(streak),
+                paper_only=True,
+            )
 
     def _succeed(self, component: _Component, outcome: CycleOutcome) -> None:
         now = self._clock()
@@ -656,6 +740,7 @@ class PaperWorkerSupervisor:
             component.status = outcome.status
             component.last_heartbeat_at = now
             component.last_error = outcome.error[:120]
+            component.consecutive_failures = 0
             component.kill_switch_active = outcome.kill_switch_active
             component.cycles_completed += 1
             if outcome.record_scan:
@@ -683,6 +768,7 @@ class PaperWorkerSupervisor:
             watcher_error=health.watcher.last_error,
             watcher_heartbeat=_iso(health.watcher.last_heartbeat_at),
             watcher_last_scan=_iso(health.watcher.last_scan_at),
+            watcher_consecutive_failures=health.watcher.consecutive_failures,
             telegram_status=health.telegram.status,
             telegram_error=health.telegram.last_error,
             telegram_heartbeat=_iso(health.telegram.last_heartbeat_at),
@@ -697,6 +783,10 @@ class PaperWorkerSupervisor:
             demo_snapshot_error=health.demo_snapshot.last_error if health.demo_snapshot else "",
             exit_monitor_status=(health.exit_monitor.status if health.exit_monitor else "disabled"),
             exit_monitor_error=health.exit_monitor.last_error if health.exit_monitor else "",
+            auxiliary={
+                component.component: component.last_error or component.status
+                for component in health.auxiliary
+            },
             stopping=health.stopping,
             authority_intact=health.authority_intact,
             paper_only=True,
@@ -857,6 +947,16 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 poll_seconds=float(settings.watcher_paper_poll_interval_seconds),
                 request_stop=exit_monitor.request_stop,
             )
+    if settings.retention_enabled and not settings_are_disarmed_paper_worker(settings):
+        from app.workers.db_retention import DbRetentionCycle
+
+        retention = DbRetentionCycle(settings.model_copy(deep=True))
+        supervisor.attach_auxiliary(
+            "db_retention",
+            retention,
+            poll_seconds=60.0,
+            request_stop=retention.request_stop,
+        )
     if settings.paper_worker_memory_watchdog_enabled:
         supervisor.attach_memory_watchdog(
             MemoryWatchdog(
@@ -870,6 +970,12 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 state_path=settings.paper_worker_memory_watchdog_state_path or None,
                 ceiling_bytes=settings.paper_worker_memory_watchdog_ceiling_mb * 1024 * 1024,
                 ceiling_check_seconds=settings.paper_worker_memory_watchdog_ceiling_check_seconds,
+                # A disarmed worker never opens PostgreSQL: file state only.
+                state_store=(
+                    None
+                    if settings_are_disarmed_paper_worker(settings)
+                    else RuntimeStatusWatchdogStore()
+                ),
             )
         )
     if not settings_are_disarmed_paper_worker(settings):
@@ -920,6 +1026,9 @@ def run_paper_worker_process(*, once: bool = False) -> str:
     marker_path = settings.paper_worker_run_marker_path or None
     alert_unclean_previous_exit(settings, claim_run_marker(marker_path, now=time.time()))
     supervisor = build_paper_worker_supervisor(settings)
+    from app.observability.run_marker import mark_run_stopping
+
+    supervisor.on_shutdown_signal = lambda: mark_run_stopping(marker_path, now=time.time())
     if disarmed:
         from app.services.arming_visibility import clear_disarmed_boot_rows
 
@@ -1008,8 +1117,9 @@ def _build_armed_supervisor(
             worker_instance_id=instance_id,
         )
         if not decision.allowed and activation_refusal_is_retryable(decision.reason_codes):
-            # A provider outage at boot (Binance lease standby, shared ban) is
-            # temporary: keep heartbeating and re-run the same preflight.
+            # A provider outage (Binance lease standby, shared ban) or a database
+            # / migration refusal at boot is temporary: keep heartbeating and
+            # re-run the same preflight with capped backoff (H2, H3).
             recovering = _RecoveringWatcherCycle(
                 watcher_settings,
                 factory,
@@ -1205,31 +1315,92 @@ def _idle_watcher_cycle(
             reason=reason,
             now=clock.now(),
         )
+        _reconcile_demo_while_idle(settings, session_factory, clock)
         state = "disarmed" if reason == "activation_disarmed" else "refused"
         return CycleOutcome(status=state, error=reason)
 
     return cycle
 
 
-# Refusals that only reflect the market provider at that moment. Anything else
-# (config, migration, lineage, authority) still needs a restart to re-evaluate.
-_RETRYABLE_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
+def _reconcile_demo_while_idle(
+    settings: Settings, session_factory: sessionmaker[Session], clock: _NowClock
+) -> None:
+    """Keep governed demo lifecycle rows current while the Watcher cannot scan (M7)."""
+
+    if not settings.governed_blofin_demo_enabled:
+        return
+    from app.workers.watcher_paper import reconcile_governed_demo_once
+
+    try:
+        reconcile_governed_demo_once(settings, session_factory, clock)
+    except Exception as exc:
+        logger.error("governed_demo_idle_reconciliation_failed", error=_safe_error(exc))
+
+
+# Consecutive failed cycles at which a component escalates to a critical log
+# line; after the last one, every further multiple of it escalates again (I7).
+_FAILURE_ESCALATION_STREAKS = (5, 20, 80)
+# From this many consecutive failures the inter-cycle wait doubles, capped at
+# 8x the poll interval (2 min at 15 s, well inside one 15 m bar).
+_FAILURE_BACKOFF_AFTER = 5
+_FAILURE_BACKOFF_MAX_MULTIPLIER = 8
+
+
+def failure_backoff_multiplier(consecutive_failures: int) -> int:
+    if consecutive_failures < _FAILURE_BACKOFF_AFTER:
+        return 1
+    exponent = min(consecutive_failures - _FAILURE_BACKOFF_AFTER + 1, 3)
+    return int(min(2**exponent, _FAILURE_BACKOFF_MAX_MULTIPLIER))
+
+
+def failure_backoff_interval(interval: float, consecutive_failures: int) -> float:
+    """Slow a component that fails every cycle, instead of hammering at full cadence."""
+
+    return interval * failure_backoff_multiplier(consecutive_failures)
+
+
+# Refusals that clear on their own: the market provider at that moment, or the
+# database at boot (a Postgres blip, or the worker starting before the API's
+# pre-deploy `alembic upgrade head` finishes: H2). The preflight is read-only,
+# so it is retried forever with capped backoff instead of idling until a human
+# restarts the worker (H3). Config, lineage-only and authority refusals still
+# need a restart to re-evaluate.
+_PROVIDER_ACTIVATION_REASONS = frozenset({"provider_unavailable", "freshness_fail_closed"})
+_DATABASE_ACTIVATION_REASONS = frozenset(
+    {"activation_probe_failed", "migration_unhealthy", "strategy_lineage_invalid"}
+)
+_RETRYABLE_ACTIVATION_REASONS = _PROVIDER_ACTIVATION_REASONS | _DATABASE_ACTIVATION_REASONS
 ACTIVATION_RETRY_SECONDS = 60.0
-# 30 attempts at 60 s: give up after about 30 min of a provider-only refusal.
-ACTIVATION_RETRY_MAX_ATTEMPTS = 30
+# Backoff doubles from ACTIVATION_RETRY_SECONDS up to this cap; there is no
+# attempt limit.
+ACTIVATION_RETRY_MAX_SECONDS = 900.0
+# From this failed attempt on (about 30 min of backoff: 60+120+240+480+900 s)
+# each further failure logs at error so a prolonged refusal pages.
+ACTIVATION_RETRY_ESCALATE_AFTER = 5
 
 
 def activation_refusal_is_retryable(reason_codes: tuple[str, ...]) -> bool:
-    return bool(reason_codes) and set(reason_codes) <= _RETRYABLE_ACTIVATION_REASONS
+    """True when every reason can clear without a restart.
+
+    ``strategy_lineage_invalid`` alone is a configuration problem; it is only
+    retryable next to a failed database probe or an unhealthy migration, which
+    make the lineage read meaningless.
+    """
+
+    codes = set(reason_codes)
+    if not codes or not codes <= _RETRYABLE_ACTIVATION_REASONS:
+        return False
+    return codes != {"strategy_lineage_invalid"}
 
 
 class _RecoveringWatcherCycle:
-    """Idle Watcher that re-runs preflight after a provider-only refusal.
+    """Idle Watcher that re-runs preflight after a refusal that can clear.
 
-    Heartbeats like the idle cycle. Every ``retry_seconds`` it runs the full
-    preflight again; once that clears it opens the staging session and scans.
-    A non-retryable refusal on a later attempt stops the retries, and so does
-    reaching ``max_attempts``; the worker then stays idle until a restart.
+    Heartbeats like the idle cycle. It runs the full preflight again after
+    ``retry_seconds``, doubling the wait up to ``max_retry_seconds``; once the
+    preflight clears it opens the staging session and scans. A non-retryable
+    refusal on a later attempt stops the retries; the worker then stays idle
+    until a restart. ``max_attempts`` is None (retry forever) outside tests.
     """
 
     def __init__(
@@ -1246,7 +1417,9 @@ class _RecoveringWatcherCycle:
         stops: list[Callable[[], None]],
         releases: list[Callable[[], int]],
         retry_seconds: float | None = None,
+        max_retry_seconds: float | None = None,
         max_attempts: int | None = None,
+        escalate_after: int | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
@@ -1260,7 +1433,14 @@ class _RecoveringWatcherCycle:
         self._stops = stops
         self._releases = releases
         self._retry_seconds = ACTIVATION_RETRY_SECONDS if retry_seconds is None else retry_seconds
-        self._max_attempts = ACTIVATION_RETRY_MAX_ATTEMPTS if max_attempts is None else max_attempts
+        self._max_retry_seconds = max(
+            self._retry_seconds,
+            ACTIVATION_RETRY_MAX_SECONDS if max_retry_seconds is None else max_retry_seconds,
+        )
+        self._max_attempts = max_attempts
+        self._escalate_after = (
+            ACTIVATION_RETRY_ESCALATE_AFTER if escalate_after is None else escalate_after
+        )
         self._monotonic = monotonic
         self._next_attempt_at: float | None = monotonic() + self._retry_seconds
         self.attempts = 0
@@ -1281,6 +1461,7 @@ class _RecoveringWatcherCycle:
             reason=self._reason,
             now=self._clock.now(),
         )
+        _reconcile_demo_while_idle(self._settings, self._factory, self._clock)
         return CycleOutcome(status="refused", error=self._reason)
 
     def idle_wait(self, interval: float, stop: threading.Event) -> bool:
@@ -1289,11 +1470,18 @@ class _RecoveringWatcherCycle:
             return bool(waiter(interval, stop))
         return stop.wait(interval)
 
+    def retry_delay(self, attempts: int) -> float:
+        """Seconds before the attempt after ``attempts`` failures (capped doubling)."""
+
+        exponent = min(max(attempts - 1, 0), 16)
+        return float(min(self._retry_seconds * (2**exponent), self._max_retry_seconds))
+
     def _attempt(self) -> None:
         from app.telegram_activation.errors import TelegramActivationError
 
         self.attempts += 1
-        self._next_attempt_at = self._monotonic() + self._retry_seconds
+        delay = self.retry_delay(self.attempts)
+        self._next_attempt_at = self._monotonic() + delay
         decision = self._preflight()
         if not decision.allowed:  # type: ignore[attr-defined]
             self._reason = decision.primary_reason  # type: ignore[attr-defined]
@@ -1305,7 +1493,7 @@ class _RecoveringWatcherCycle:
                     reason=self._reason,
                     worker_id=self._worker_id,
                 )
-            elif self.attempts >= self._max_attempts:
+            elif self._max_attempts is not None and self.attempts >= self._max_attempts:
                 self._next_attempt_at = None
                 logger.error(
                     "watcher_paper_activation_retry_exhausted",
@@ -1313,14 +1501,15 @@ class _RecoveringWatcherCycle:
                     max_attempts=self._max_attempts,
                     reason=self._reason,
                     worker_id=self._worker_id,
-                    action="restart the worker once the market provider recovers",
+                    action="restart the worker once the refusal clears",
                 )
             else:
-                logger.warning(
+                log = logger.error if self.attempts >= self._escalate_after else logger.warning
+                log(
                     "watcher_paper_activation_retry_failed",
                     attempt=self.attempts,
                     max_attempts=self._max_attempts,
-                    retry_in_seconds=self._retry_seconds,
+                    retry_in_seconds=delay,
                     reason=self._reason,
                     worker_id=self._worker_id,
                 )

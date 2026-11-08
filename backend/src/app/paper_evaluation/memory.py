@@ -100,10 +100,11 @@ class InMemoryPaperEvaluationStore:
             return observation
 
     def list_for_organization(
-        self, organization_id: UUID
+        self, organization_id: UUID, *, limit: int | None = None
     ) -> tuple[PaperEvaluationObservation, ...]:
         with self._lock:
             rows = [item for (org, _), item in self._by_id.items() if org == organization_id]
-            return tuple(
-                sorted(rows, key=lambda item: (item.occurred_at, str(item.observation_id)))
-            )
+            ordered = sorted(rows, key=lambda item: (item.occurred_at, str(item.observation_id)))
+            if limit is not None:
+                ordered = ordered[-limit:] if limit > 0 else []
+            return tuple(ordered)

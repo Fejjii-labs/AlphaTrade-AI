@@ -24,10 +24,14 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
 from app.observability.process_memory import read_process_memory
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session, sessionmaker
 
 logger = structlog.get_logger("observability.memory_watchdog")
 
@@ -77,6 +81,32 @@ def _write_trips(path: Path | None, *, trips: int, now: float) -> None:
         )
 
 
+class WatchdogStateStore(Protocol):
+    """Durable copy of the trip streak; Render's /tmp does not survive a restart."""
+
+    def load(self) -> tuple[int, float] | None: ...
+
+    def save(self, *, trips: int, tripped_at: float) -> None: ...
+
+
+def _stored_trips(store: WatchdogStateStore | None, *, now: float, max_age_seconds: float) -> int:
+    if store is None:
+        return 0
+    try:
+        loaded = store.load()
+    except Exception as exc:
+        logger.warning(
+            "paper_worker_memory_watchdog_store_unreadable", error_type=type(exc).__name__
+        )
+        return 0
+    if loaded is None:
+        return 0
+    trips, tripped_at = loaded
+    if type(trips) is not int or trips < 0 or not 0 <= now - tripped_at <= max_age_seconds:
+        return 0
+    return trips
+
+
 class MemoryWatchdog:
     """Trips once RSS reaches ``limit_bytes``. Checks at most every ``check_seconds``.
 
@@ -104,6 +134,7 @@ class MemoryWatchdog:
         state_path: str | Path | None = None,
         ceiling_bytes: int | None = None,
         ceiling_check_seconds: float = 5.0,
+        state_store: WatchdogStateStore | None = None,
         read_rss: Callable[[], int] = _rss_bytes,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -114,11 +145,14 @@ class MemoryWatchdog:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._state_path = Path(state_path) if state_path else None
+        self._state_store = state_store
         self._early_trip_window_seconds = early_trip_window_seconds
-        self.prior_trips = _prior_trips(
-            self._state_path,
-            now=wall_clock(),
-            max_age_seconds=max(backoff_max_seconds, startup_grace_seconds),
+        max_age = max(backoff_max_seconds, startup_grace_seconds)
+        # The file is lost on a container replacement; the durable store is
+        # not (Fable audit L8). Use whichever remembers more.
+        self.prior_trips = max(
+            _prior_trips(self._state_path, now=wall_clock(), max_age_seconds=max_age),
+            _stored_trips(state_store, now=wall_clock(), max_age_seconds=max_age),
         )
         self.grace_seconds = min(
             startup_grace_seconds * 2**self.prior_trips,
@@ -179,7 +213,17 @@ class MemoryWatchdog:
         early = uptime <= self.grace_seconds + self._early_trip_window_seconds
         trips = self.prior_trips + 1 if early else 1
         self.consecutive_trips = trips
-        _write_trips(self._state_path, trips=trips, now=self._wall_clock())
+        tripped_at = self._wall_clock()
+        _write_trips(self._state_path, trips=trips, now=tripped_at)
+        if self._state_store is not None:
+            try:
+                self._state_store.save(trips=trips, tripped_at=tripped_at)
+            except Exception as exc:
+                # Losing the backoff state must never stop the trip.
+                logger.warning(
+                    "paper_worker_memory_watchdog_store_unwritten",
+                    error_type=type(exc).__name__,
+                )
         logger.error(
             "paper_worker_memory_watchdog_tripped",
             rss_bytes=rss,
@@ -192,3 +236,54 @@ class MemoryWatchdog:
             action="graceful_stop_then_exit",
         )
         return True
+
+
+MEMORY_WATCHDOG_COMPONENT = "paper_worker_memory_watchdog"
+
+
+class RuntimeStatusWatchdogStore:
+    """Keeps the trip streak in ``controlled_runtime_status`` (survives restarts).
+
+    ``request_count`` holds the consecutive trips and ``heartbeat_at`` the trip
+    time. Every read or write failure is swallowed by the watchdog.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session] | None = None) -> None:
+        self._session_factory = session_factory
+
+    def _factory(self) -> sessionmaker[Session]:
+        if self._session_factory is not None:
+            return self._session_factory
+        from app.db.session import get_session_factory
+
+        return get_session_factory()
+
+    def load(self) -> tuple[int, float] | None:
+        from app.db.runtime_status import ControlledRuntimeStatusRow
+
+        with self._factory()() as session:
+            row = session.get(ControlledRuntimeStatusRow, MEMORY_WATCHDOG_COMPONENT)
+            if row is None or row.heartbeat_at is None:
+                return None
+            moment = row.heartbeat_at
+            if moment.tzinfo is None:
+                from datetime import UTC
+
+                moment = moment.replace(tzinfo=UTC)
+            return int(row.request_count or 0), moment.timestamp()
+
+    def save(self, *, trips: int, tripped_at: float) -> None:
+        from datetime import UTC, datetime
+
+        from app.persistence.runtime_status import RuntimeStatusWrite, publish_runtime_status
+
+        publish_runtime_status(
+            self._factory(),
+            RuntimeStatusWrite(
+                component=MEMORY_WATCHDOG_COMPONENT,
+                worker_id="paper-worker",
+                heartbeat_at=datetime.fromtimestamp(tripped_at, tz=UTC),
+                activation_state="tripped",
+                request_count=trips,
+            ),
+        )

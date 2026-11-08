@@ -159,6 +159,48 @@ class WatcherPaperScanReport:
         return self.status == "succeeded" and not self.replayed and self.market_read_completed
 
 
+# A confirmed setup whose continuation raised is retried on the same closed bar
+# at most this many times (H4). The plan store is idempotent by candidate scope
+# and the governed demo loop commits its dispatch effect before venue IO, so a
+# retry resumes the existing plan instead of opening a second one.
+CONTINUATION_MAX_RETRIES = 3
+
+_PAPER_LOOP_FIELDS = (
+    "paper_loop_stage",
+    "paper_loop_reason",
+    "paper_loop_replayed",
+    "eligibility_id",
+    "eligibility_state",
+    "trade_plan_revision_id",
+    "execution_command_id",
+    "paper_fill_id",
+    "journal_trade_id",
+    "journal_status",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenEvidence:
+    """The evaluated bar's assembly, kept so a replay can resume continuation."""
+
+    assembly: Any
+    source: str | None
+
+    def last_assembly(self) -> Any:
+        return self.assembly
+
+    def market_source(self) -> str | None:
+        return self.source
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingContinuation:
+    idempotency_key: str
+    report: WatcherPaperScanReport
+    evidence: _FrozenEvidence
+    retries: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class WatcherPaperCycleReport:
     reason_code: str
@@ -384,6 +426,7 @@ class WatcherPaperRuntime:
         self._thread: threading.Thread | None = None
         self._status_lock = threading.Lock()
         self._held_fencing_tokens: OrderedDict[str, int] = OrderedDict()
+        self._pending_continuations: OrderedDict[str, _PendingContinuation] = OrderedDict()
         self._cycle_lock = threading.Lock()
         self._leases_released = False
         self._fence_organizations: dict[str, UUID] = {}
@@ -596,7 +639,14 @@ class WatcherPaperRuntime:
         if self._settings is not None and self._settings.watcher_paper_organization_id:
             scoped_org = UUID(self._settings.watcher_paper_organization_id)
         with self._session_factory() as session:
-            query = select(Organization.id).order_by(Organization.id).limit(1)
+            # Only organizations that can produce a scan target take a turn, so
+            # demo-seeded or empty tenants do not dilute the cadence (M9).
+            query = (
+                select(Organization.id)
+                .where(_has_scan_authority(Organization.id))
+                .order_by(Organization.id)
+                .limit(1)
+            )
             if scoped_org is not None:
                 org = session.scalar(select(Organization.id).where(Organization.id == scoped_org))
             else:
@@ -713,13 +763,22 @@ class WatcherPaperRuntime:
             )
             for symbol in ordered:
                 selected = [target for target in targets if target.symbol == symbol]
+                read_market = False
                 for target in selected:
                     scan = self._scan_one(session, target)
                     scans.append(scan)
                     created += len(scan.candidate_ids)
                     any_kill = any_kill or scan.kill_switch_active
+                    read_market = read_market or scan.market_read_completed
                     self._note_monitor_eligibility(scan)
                     self._refresh_monitor_safely()
+                if read_market and len(ordered) > 1:
+                    # A new-bar read (or a catch-up after a ban/restart) holds
+                    # that symbol's aggTrade window. Return it before the next
+                    # symbol reads its own, so peaks do not add up (M12).
+                    from app.observability.process_memory import release_allocator_memory
+
+                    release_allocator_memory()
                 if not selected:
                     self._note_verified_contract_scans(set(), session=session, only_symbol=symbol)
             # Successful evaluations replay until the next 15m bar; the live monitor
@@ -762,7 +821,12 @@ class WatcherPaperRuntime:
                 session_dirty=len(session.dirty) if session else 0,
                 **counts,
             )
-        logger.info(
+        # A cycle that only replayed already-evaluated bars says nothing new;
+        # keep it at DEBUG so INFO stays readable (L10). paper_worker_health
+        # still logs liveness every minute.
+        quiet = created == 0 and bool(scans) and all(scan.replayed for scan in scans)
+        cycle_log = logger.debug if quiet else logger.info
+        cycle_log(
             "watcher_paper_cycle",
             worker_id=self._worker_id,
             scans=len(scans),
@@ -970,25 +1034,11 @@ class WatcherPaperRuntime:
     def _reconcile_governed_demo_effects(self) -> None:
         # Existing exposure still needs actual fill/protection observations when
         # new scanning is refused or the organization kill switch is active.
-        if not (
-            self._enabled
-            and self._session_factory is not None
-            and self._settings is not None
-            and self._settings.governed_blofin_demo_enabled
-            and self._canonical_runtime is not None
-        ):
+        if not self._enabled or self._session_factory is None or self._settings is None:
             return
-        from app.runtime.canonical import ProductionCanonicalRuntime
-        from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
-        if not isinstance(self._canonical_runtime, ProductionCanonicalRuntime):
-            return
-        with self._session_factory() as session:
-            recovered = GovernedBloFinDemoLoop(
-                self._canonical_runtime, self._settings, self._clock
-            ).reconcile_pending(session)
-        for reason in recovered:
-            logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+        reconcile_governed_demo_once(
+            self._settings, self._session_factory, self._clock, self._canonical_runtime
+        )
 
     def _activation_refusal(self) -> WatcherPaperCycleReport | None:
         gate = self._activation_gate
@@ -1299,7 +1349,9 @@ class WatcherPaperRuntime:
                 reason = assignment_target_reason(session, target)
                 if reason is not None:
                     return replace(report, status="blocked", reason_code=reason, published=False)
-            report = self._continue_paper_loop(session, target, report, evidence)
+            report = self._continue_or_resume(
+                session, target, report, evidence, idempotency_key=request.idempotency_key
+            )
         from app.strategy_brain.assembly import record_paper_link
 
         nested_alert = record_paper_link(
@@ -1344,7 +1396,9 @@ class WatcherPaperRuntime:
                 sfp_alerts=alerts,
             )
         observe_scan(report.reason_code)
-        logger.info(
+        replay_only = report.replayed and report.paper_loop_stage is None
+        scan_log = logger.debug if replay_only else logger.info
+        scan_log(
             "watcher_paper_scan",
             worker_id=self._worker_id,
             organization_id=str(target.organization_id),
@@ -1541,6 +1595,114 @@ class WatcherPaperRuntime:
             )
             return True
 
+    def _continue_or_resume(
+        self,
+        session: Session | None,
+        target: PaperScanTarget,
+        report: WatcherPaperScanReport,
+        evidence: WatcherScanEvidencePort,
+        *,
+        idempotency_key: str,
+    ) -> WatcherPaperScanReport:
+        """Continue a fresh setup, or resume one whose continuation raised (H4).
+
+        A replayed bar has no discussion snapshot, so without this a transient
+        DB/venue error after the candidate was persisted dropped the trade.
+        """
+
+        scope = target.scan_scope
+        pending = self._pending_continuations.get(scope)
+        if pending is not None and pending.idempotency_key != idempotency_key:
+            self._pending_continuations.pop(scope, None)
+            logger.warning(
+                "watcher_paper_continuation_abandoned",
+                organization_id=str(target.organization_id),
+                scan_scope=scope,
+                reason_code="bar_closed",
+                retries=pending.retries,
+                paper_only=True,
+            )
+            pending = None
+        resume = pending is not None and report.replayed and report.discussion is None
+        try:
+            if resume and pending is not None:
+                logger.warning(
+                    "watcher_paper_continuation_retry",
+                    organization_id=str(target.organization_id),
+                    scan_scope=scope,
+                    retry=pending.retries + 1,
+                    max_retries=CONTINUATION_MAX_RETRIES,
+                    paper_only=True,
+                )
+                stashed = replace(pending.report, kill_switch_active=report.kill_switch_active)
+                resumed = self._continue_paper_loop(
+                    session,
+                    target,
+                    stashed,
+                    pending.evidence,  # type: ignore[arg-type]  # reads only last_assembly/market_source
+                )
+                report = replace(
+                    report, **{name: getattr(resumed, name) for name in _PAPER_LOOP_FIELDS}
+                )
+            else:
+                report = self._continue_paper_loop(session, target, report, evidence)
+        except Exception:
+            self._remember_continuation(
+                target,
+                pending.report if resume and pending is not None else report,
+                pending.evidence if resume and pending is not None else evidence,
+                idempotency_key=idempotency_key,
+                retries=pending.retries + 1 if resume and pending is not None else 0,
+            )
+            raise
+        if resume or report.discussion is not None:
+            self._pending_continuations.pop(scope, None)
+        return report
+
+    def _remember_continuation(
+        self,
+        target: PaperScanTarget,
+        report: WatcherPaperScanReport,
+        evidence: WatcherScanEvidencePort | _FrozenEvidence,
+        *,
+        idempotency_key: str,
+        retries: int,
+    ) -> None:
+        scope = target.scan_scope
+        self._pending_continuations.pop(scope, None)
+        if report.discussion is None or retries >= CONTINUATION_MAX_RETRIES:
+            if retries >= CONTINUATION_MAX_RETRIES:
+                logger.error(
+                    "watcher_paper_continuation_retry_exhausted",
+                    organization_id=str(target.organization_id),
+                    scan_scope=scope,
+                    retries=retries,
+                    paper_only=True,
+                )
+            return
+        if isinstance(evidence, _FrozenEvidence):
+            frozen = evidence
+        else:
+            try:
+                last_assembly = getattr(evidence, "last_assembly", None)
+                read_source = getattr(evidence, "market_source", None)
+                frozen = _FrozenEvidence(
+                    assembly=last_assembly() if callable(last_assembly) else None,
+                    source=read_source() if callable(read_source) else None,
+                )
+            except Exception:
+                return
+        if frozen.assembly is None:
+            return
+        self._pending_continuations[scope] = _PendingContinuation(
+            idempotency_key=idempotency_key,
+            report=report,
+            evidence=frozen,
+            retries=retries,
+        )
+        while len(self._pending_continuations) > self._fence_capacity:
+            self._pending_continuations.popitem(last=False)
+
     def _continue_paper_loop(
         self,
         session: Session | None,
@@ -1586,31 +1748,12 @@ class WatcherPaperRuntime:
             if resolution.refusal is not None:
                 proof = _proof(candidate, "blocked", resolution.refusal)
             elif resolution.mode is AutonomousMode.OFF:
-                # The autonomous flag is off. Internal paper stays disarmed.
-                # The existing governed demo worker still approves on the API
-                # channel; that path is not the autonomous ledger guard.
-                exchange = getattr(
-                    self._settings.exchange_mode, "value", self._settings.exchange_mode
-                )
-                if exchange == "paper_exchange_demo":
-                    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
-
-                    proof = GovernedBloFinDemoLoop(
-                        runtime,  # type: ignore[arg-type]
-                        self._settings,
-                        self._clock,
-                    ).continue_confirmed_setup(
-                        session,
-                        target=target,
-                        candidate=candidate,
-                        assessment=discussion.assessment,
-                        window=discussion.window,
-                        assembled=assembled,
-                        policy=policy,
-                        kill_switch_active=report.kill_switch_active,
-                    )
-                else:
-                    proof = _proof(candidate, "blocked", "autonomous_mode_disarmed")
+                # Autonomous OFF means no worker-originated orders on either
+                # venue (M1). The governed demo loop used to keep approving on
+                # the API channel here; worker demo entries now need
+                # AUTONOMOUS_BLOFIN_DEMO_ENABLED (mode BLOFIN_DEMO). Manual,
+                # owner-confirmed demo orders and reconciliation are unaffected.
+                proof = _proof(candidate, "blocked", "autonomous_mode_disarmed")
             elif resolution.mode is AutonomousMode.BLOFIN_DEMO:
                 from app.experiments.execution_selection import select_execution_context
                 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
@@ -2100,6 +2243,67 @@ def _gate_refusal_reason(decision: object) -> str | None:
     if isinstance(reason, str) and reason and reason != "cleared":
         return reason
     return "activation_gate_error"
+
+
+def _has_scan_authority(organization_id: Any) -> Any:
+    """SQL predicate: the organization has an enabled strategy or a watcher assignment."""
+
+    from sqlalchemy import exists, or_, select
+
+    from app.db.models import UserStrategy
+    from app.db.watcher_assignments import WatcherAssignmentReceiptRow
+
+    return or_(
+        exists(
+            select(UserStrategy.id).where(
+                UserStrategy.organization_id == organization_id,
+                UserStrategy.enabled.is_(True),
+            )
+        ),
+        exists(
+            select(WatcherAssignmentReceiptRow.request_key).where(
+                WatcherAssignmentReceiptRow.organization_id == organization_id
+            )
+        ),
+    )
+
+
+def reconcile_governed_demo_once(
+    settings: Settings,
+    session_factory: sessionmaker[Session],
+    clock: Clock,
+    canonical_runtime: object | None = None,
+) -> tuple[str, ...]:
+    """Reconcile pending governed demo commands once (venue fills, protection).
+
+    Called from the scanning cycle and, while the Watcher is idle or
+    recovering after a boot refusal, from the idle cycle (M7), so open demo
+    positions keep their journal/lifecycle rows current either way. It reads
+    the demo venue and writes lifecycle rows; it never places an order.
+    """
+
+    if not settings.governed_blofin_demo_enabled:
+        return ()
+    from app.runtime.canonical import (
+        ProductionCanonicalRuntime,
+        build_production_canonical_runtime,
+    )
+    from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
+
+    runtime = canonical_runtime
+    if runtime is None:
+        runtime = build_production_canonical_runtime(
+            session_factory,
+            settings=settings,
+            clock=clock,
+        )
+    if not isinstance(runtime, ProductionCanonicalRuntime):
+        return ()
+    with session_factory() as session:
+        recovered = GovernedBloFinDemoLoop(runtime, settings, clock).reconcile_pending(session)
+    for reason in recovered:
+        logger.info("governed_demo_reconciliation", reason_code=reason, paper_only=True)
+    return recovered
 
 
 def _report_from_cycle(

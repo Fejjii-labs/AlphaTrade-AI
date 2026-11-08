@@ -193,6 +193,32 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
+  it("waits for the resolved timezone and shows it in the Showing line", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} timezone={null} />);
+    expect(api.journal.performanceCalendar).not.toHaveBeenCalled();
+    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" timezoneLabel="risk settings" />);
+    await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
+    const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.tz === "Asia/Tokyo")).toBe(true);
+    expect(screen.getByTestId("performance-timezone")).toHaveTextContent("Days in Asia/Tokyo (risk settings)");
+  });
+
+  it("follows a page-owned scope and hides its own scope picker", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} scope="paper" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.queryByRole("radiogroup", { name: "Account scope" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Other trade scopes" })).not.toBeInTheDocument();
+    let calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.scope === "paper")).toBe(true);
+    vi.mocked(api.journal.performanceCalendar).mockClear();
+    rerender(<PerformanceDashboard now={NOW} scope="demo" />);
+    await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
+    calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
+    expect(calls.every((params) => params?.scope === "demo")).toBe(true);
+  });
+
   it("defaults to the Demo scope, labels it, and never mixes scopes", async () => {
     vi.mocked(api.journal.performanceCalendar).mockImplementation(async (params) => {
       const scope = params?.scope ?? "demo";
@@ -388,7 +414,9 @@ describe("performance components", () => {
     expect(screen.getByTestId("calendar-day-2026-07-01")).toHaveTextContent("2 trades");
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("+100.00");
     const table = screen.getByRole("table", { name: "Daily net P&L, July 2026" });
-    expect(within(table).getAllByRole("columnheader")[0]).toHaveTextContent("Sun");
+    expect(within(table).getAllByRole("columnheader")[0]).toHaveAccessibleName("Sun");
+    // Phones show one-letter weekday headers; the accessible name stays full.
+    expect(within(table).getAllByRole("columnheader")[1]).toHaveTextContent(/^MMon$/);
     expect(within(table).getByRole("cell", { name: /^2026-07-02: \+1200\.00 net, 1 trade/ })).toBeInTheDocument();
   });
 

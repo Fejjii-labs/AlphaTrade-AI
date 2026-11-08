@@ -94,7 +94,7 @@ test.describe("Watcher paper monitoring", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
     await expect(paperModeActive(page)).toBeVisible();
-    await page.getByLabel("Dashboard account").selectOption("simulator");
+    await page.getByRole("radiogroup", { name: "Dashboard venue" }).getByRole("radio", { name: "Paper" }).click();
     await page.getByText("Simulator daily status & monitoring", { exact: true }).click();
     await expect(page.getByTestId("dashboard-watcher-status")).toContainText("Stopped");
     await expect(page.getByTestId("watcher-monitoring-card")).toHaveCount(0);

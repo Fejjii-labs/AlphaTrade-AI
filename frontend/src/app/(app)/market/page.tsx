@@ -18,7 +18,9 @@ import type {
 } from "@/lib/api/types";
 import { perpetualMarketStatusFromCanonical } from "@/lib/canonical-decision/compose";
 
-const EXCHANGES = ["binance", "mock"];
+// Public market data comes from Binance; the internal mock is a server fallback
+// (badged below when used), not something a trader picks.
+const EXCHANGE = "binance";
 const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
 function dataTone(quality: string): "healthy" | "paper" | "warn" | "muted" {
@@ -158,7 +160,7 @@ function AnalyzePanel({ analysis }: { analysis: MarketAnalyzeResponse }) {
 
 export default function MarketPage() {
   const [symbol, setSymbol] = useState("BTCUSDT");
-  const [exchange, setExchange] = useState("binance");
+  const exchange = EXCHANGE;
   const [timeframe, setTimeframe] = useState("1h");
   const [analysis, setAnalysis] = useState<MarketAnalyzeResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -225,19 +227,10 @@ export default function MarketPage() {
             <Input id="symbol" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="exchange">Exchange</Label>
-            <select
-              id="exchange"
-              className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm"
-              value={exchange}
-              onChange={(e) => setExchange(e.target.value)}
-            >
-              {EXCHANGES.map((ex) => (
-                <option key={ex} value={ex}>
-                  {ex}
-                </option>
-              ))}
-            </select>
+            <p className="text-label text-text-secondary">Exchange</p>
+            <p className="min-h-9 py-2 text-sm text-text-primary" data-testid="market-exchange">
+              Binance · public market data
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="timeframe">Timeframe</Label>

@@ -74,6 +74,9 @@ def voice_database(request):
         market_data_provider="mock",
         rate_limit_use_redis=False,
         access_token_denylist_use_redis=False,
+        # Some scenarios switch to staging, where tokens refuse the weak local
+        # default signing key (M19); issue the fixture token with a real one.
+        jwt_secret="synthetic-voice-jwt-secret-32-minimum",
     )
     organization_id, user_id = uuid4(), uuid4()
     with sessions() as session:

@@ -179,6 +179,17 @@ services:
         sync: false
       - key: TELEGRAM_PAPER_ACTIVATION_ARMED
         sync: false
+      # Exit monitor and retention flags (Fable audit I5, H5). Declared so the
+      # operator sees them; values stay in the dashboard. Unset keeps the code
+      # defaults: monitor off + dry-run, retention off + dry-run.
+      - key: PAPER_EXIT_MONITOR_ENABLED
+        sync: false
+      - key: PAPER_EXIT_MONITOR_DRY_RUN
+        sync: false
+      - key: RETENTION_ENABLED
+        sync: false
+      - key: RETENTION_DRY_RUN
+        sync: false
       - key: TELEGRAM_INBOUND_MODE
         sync: false
       - key: TELEGRAM_NETWORK_PERMITTED

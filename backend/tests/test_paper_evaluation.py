@@ -514,3 +514,24 @@ def test_postgres_store_roundtrip_and_narrative_converge(
         listed = store.list_for_organization(ORG_ID)
         assert len(listed) == 1
         assert store.list_for_organization(OTHER_ORG) == ()
+
+
+def test_list_for_organization_limit_keeps_the_newest_rows_oldest_first() -> None:
+    """M10: the summary read is bounded to the newest rows."""
+
+    store = InMemoryPaperEvaluationStore()
+    recorder = PaperEvaluationRecorder(store)
+    command = make_eval_command()
+    recorder.record_watcher_outcome(
+        command, make_eval_outcome(command, candidate_ids=()), occurred_at=GENERATED_AT
+    )
+    recorder.record_watcher_outcome(
+        command,
+        make_eval_outcome(command, candidate_ids=(CANDIDATE_ID,)),
+        occurred_at=GENERATED_AT + timedelta(seconds=3),
+    )
+    everything = store.list_for_organization(ORG_ID)
+    assert len(everything) >= 2
+    assert store.list_for_organization(ORG_ID, limit=1) == everything[-1:]
+    assert store.list_for_organization(ORG_ID, limit=2) == everything[-2:]
+    assert store.list_for_organization(ORG_ID, limit=0) == ()

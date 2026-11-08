@@ -70,6 +70,8 @@ export function AgentWorkspace() {
   currentScope.current = recoveryScope;
   const params = useSearchParams();
   const strategyId = params.get("strategy_id");
+  // `/strategy-lab/new` (and old Telegram links) redirect to `?intent=strategy`.
+  const strategyIntent = params.get("intent") === "strategy";
   const [strategyContext, setStrategyContext] = useState<{ id: string; name: string } | null>(null);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const historyRef = useRef<HTMLDivElement>(null);
@@ -146,6 +148,8 @@ export function AgentWorkspace() {
   const [latest, setLatest] = useState<AgentTurnResult | null>(null);
   const [proposals, setProposals] = useState<AgentStructuredProposal[]>([]);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  // Decision failures belong to the proposal card, not the message composer.
+  const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const pendingRef = useRef<PendingTurn | null>(null);
 
@@ -219,6 +223,7 @@ export function AgentWorkspace() {
     setLatest(null);
     setProposals(id ? proposalsFromMessages(retainedMessages.current.get(id) ?? []) : []);
     setDecidingId(null);
+    setDecisionErrors({});
     setDraft(typedDrafts.current.get(id) ?? (recoveryScope ? typedDraftFor(recoveryScope, id) : ""));
     setAttached(null);
     setAttachmentPreview(null);
@@ -614,7 +619,11 @@ export function AgentWorkspace() {
     decisionAbort.current = controller;
     const isCurrent = () => mounted.current && generation === contextGeneration.current && !controller.signal.aborted;
     setDecidingId(proposal.proposal_id);
-    setSendError(null);
+    setDecisionErrors((current) => {
+      const next = { ...current };
+      delete next[proposal.proposal_id];
+      return next;
+    });
     try {
       const request = {
         conversation_id: proposal.conversation_id,
@@ -643,9 +652,8 @@ export function AgentWorkspace() {
       );
     } catch (error) {
       if (!isCurrent()) return;
-      setSendError(
-        error instanceof Error ? error.message : "Proposal decision failed",
-      );
+      const message = error instanceof Error ? error.message : "Proposal decision failed.";
+      setDecisionErrors((current) => ({ ...current, [proposal.proposal_id]: message }));
     } finally {
       if (isCurrent()) setDecidingId(null);
     }
@@ -884,6 +892,7 @@ export function AgentWorkspace() {
                       proposal={proposal}
                       deciding={decidingId !== null}
                       onDecide={(statement) => void decideProposal(proposal, statement)}
+                      error={decisionErrors[proposal.proposal_id] ?? null}
                     />
                   ))}
                 </ul>
@@ -960,8 +969,14 @@ export function AgentWorkspace() {
                   />
                 </div>
 
-                <details className="text-sm">
+                <details className="text-sm" open={strategyIntent || undefined} data-testid="agent-strategy-options">
                   <summary className="min-h-11 cursor-pointer content-center text-text-secondary">Strategy options</summary>
+                  {strategyIntent ? (
+                    <p className="text-caption text-text-muted" data-testid="agent-strategy-intent-hint">
+                      New strategy: describe the setup in the message box, then choose Review strategy draft. It stays a
+                      draft until you confirm it.
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2 py-2">
                     <Button type="button" variant="outline"
                       disabled={!sessionLive || sending || realtimeActive || Boolean(pending) || (!draft.trim() && !attachmentPreview) || Boolean(strategyError) || Boolean(!conversationId && strategyId && !strategyContext)}

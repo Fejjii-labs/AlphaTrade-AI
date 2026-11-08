@@ -162,6 +162,9 @@ describe("MarketPage route honesty (FP2-129)", () => {
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveTextContent("Market Monitor");
     expect(screen.getByText(/no exchange execution/i)).toBeInTheDocument();
+    // No "mock" exchange option; the mock is only a badged server fallback.
+    expect(screen.getByTestId("market-exchange")).toHaveTextContent("Binance");
+    expect(screen.queryByRole("option", { name: "mock" })).not.toBeInTheDocument();
   });
 
   it("renders loading without an empty or fabricated snapshot", () => {

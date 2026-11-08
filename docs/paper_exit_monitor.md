@@ -25,8 +25,9 @@ No exchange write endpoint is added. Real-money trading stays rejected.
 
 ## Flags
 
-The enabled flag defaults false. Dry-run defaults true. This change does not
-set them in `render.yaml` or in any deployed environment.
+The enabled flag defaults false. Dry-run defaults true. `render.yaml`
+declares both keys with `sync: false` (Fable audit I5) so the worker's
+dashboard lists them, but it sets no value: an unset key keeps these defaults.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
@@ -45,6 +46,20 @@ closer is installed instead, so a dry-run branch cannot submit a close.
 The component is attached to the existing paper worker
 (`python -m app.workers.paper_worker`) and uses that worker's poll interval
 (`WATCHER_PAPER_POLL_INTERVAL_SECONDS`). It is not a second service.
+Each pass still runs the clock check and the account equity stop sweep, but a
+trade's candles are read only when they can have changed: once after each
+close of the trade's timeframe (20 s settlement gap), whenever a close retry
+is pending, and at least every 5 minutes as a safety net. The candle adapters
+are built once per worker and reused; fetched bars are dropped every pass.
+
+A close that fails waits out an exponential backoff (capped at 1 h); an
+identity conflict (for example `learning_venue_mode_conflict`) is
+**quarantined** at the maximum wait. While any trade is only waiting, the pass
+status is `backing_off`: the exit-monitor heartbeat in `/health/paper-worker`
+shows `activation_state=backing_off` and `last_error_code=close_quarantined:<n>`
+(or `close_backoff:<n>`). A quarantined trade stays `OPEN` and keeps its
+`max_open_positions` slot, so it pages once per quarantine streak
+(`close_quarantined`, warning) instead of a `degraded_repeat` every 15 minutes.
 
 Attachment happens only after the disarmed-worker check, and only when the
 enabled flag is true. A disarmed staging worker does not construct the
@@ -325,7 +340,10 @@ attached thread as `disabled`. The watcher heartbeat can stay fresh while
 this one does not.
 
 `GET /health/paper-worker` also includes `kill_switch` with `active`,
-`source`, and `since`. The free-text reason is not included. No secret and
+`source`, and `since` for the organization pinned by
+`WATCHER_PAPER_ORGANIZATION_ID` (or the global setting). Without a pin it
+reports `active: null, source: "unscoped"` instead of any other tenant's
+switch. The free-text reason is not included. No secret and
 no P&L amount are included. Telegram HTTP sends wait at most 5 seconds.
 
 Kill-switch activation, backfill-loss, stale-loss, worker and exit-monitor

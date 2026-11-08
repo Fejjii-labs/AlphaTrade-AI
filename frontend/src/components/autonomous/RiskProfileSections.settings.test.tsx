@@ -47,6 +47,9 @@ describe("RiskProfileSections with the page's settings", () => {
     expect(screen.getByTestId("demo-leverage-save")).toBeInTheDocument();
     expect(screen.queryByTestId("leverage-unavailable")).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("#430");
+    // The page already loaded the settings; the editor does not fetch them again.
+    const { api } = await import("@/lib/api");
+    expect(api.autonomous.settings).not.toHaveBeenCalled();
   });
 
   it("shows read-only leverage with an unavailable notice when the settings have no demo leverage", async () => {

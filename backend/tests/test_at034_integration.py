@@ -767,3 +767,102 @@ def test_viewer_rbac_mutations_forbidden_reads_allowed() -> None:
         assert client.get(f"/backtests/{run_id}/trades", headers=viewer).status_code == 403
         assert client.get("/journal/comparison", headers=viewer).status_code == 200
         assert client.get("/journal/setup-evidence", headers=viewer).status_code == 200
+
+
+def test_backtest_rejects_strategy_version_from_another_strategy_or_org() -> None:
+    """H7: ``strategy_version_id`` must belong to the path strategy (and its org)."""
+    with _build_client() as (client, factory, _):
+        owner_a = _auth(client, "at034-int-a@test.example")
+        trader_b = _auth(client, "at034-int-b@test.example")
+        victim_strategy = _create_strategy(client, owner_a, name="Victim Strat")
+        own_other_strategy = _create_strategy(client, owner_a, name="Own Other")
+        attacker_strategy = _create_strategy(client, trader_b, name="Attacker Strat")
+
+        from app.db.models import UserStrategyVersion
+
+        with factory() as session:
+            victim_version = session.scalar(
+                select(UserStrategyVersion).where(
+                    UserStrategyVersion.strategy_id == uuid.UUID(victim_strategy)
+                )
+            )
+            assert victim_version is not None
+            victim_version_id = victim_version.id
+            before = (victim_version.backtest_status, victim_version.validation_status)
+
+        cross_org = client.post(
+            f"/strategies/{attacker_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=trader_b,
+        )
+        assert cross_org.status_code == 404, cross_org.text
+
+        same_org_wrong_strategy = client.post(
+            f"/strategies/{own_other_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=owner_a,
+        )
+        assert same_org_wrong_strategy.status_code == 404, same_org_wrong_strategy.text
+
+        with factory() as session:
+            assert session.scalar(select(BacktestRun)) is None
+            row = session.get(UserStrategyVersion, victim_version_id)
+            assert row is not None
+            assert (row.backtest_status, row.validation_status) == before
+
+        own = client.post(
+            f"/strategies/{victim_strategy}/backtests",
+            json={
+                "assumptions": _assumptions(),
+                "strategy_version_id": str(victim_version_id),
+            },
+            headers=owner_a,
+        )
+        assert own.status_code == 200, own.text
+
+
+def test_backtest_cancel_is_limited_to_run_creator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M15: an org colleague can read a run but cannot cancel it (404)."""
+    monkeypatch.setattr(
+        "app.api.routes.backtests.enqueue_backtest_if_needed",
+        lambda **_kwargs: None,
+    )
+    colleague_id = uuid.UUID("00000000-0000-0000-0000-000000034514")
+    with _build_client(
+        backtest_sync_max_bars=50,
+        candle_seed=_seed_pullback_candles,
+        candle_kwargs={"n": 120},
+    ) as (client, factory, settings):
+        with factory() as session:
+            session.add(
+                User(
+                    id=colleague_id,
+                    email="at034-int-colleague@test.example",
+                    hashed_password=hash_password("SecurePass123!", settings),
+                    email_verified=True,
+                )
+            )
+            session.flush()
+            session.add(
+                Membership(user_id=colleague_id, organization_id=ORG_A, role=MembershipRole.TRADER)
+            )
+            session.commit()
+        owner = _auth(client, "at034-int-a@test.example")
+        colleague = _auth(client, "at034-int-colleague@test.example")
+        strategy_id = _create_strategy(client, owner, name="Cancel Scope")
+        run = _run_backtest(client, owner, strategy_id)
+        assert run["status"] == "queued"
+
+        assert client.get(f"/backtests/{run['id']}", headers=colleague).status_code == 200
+        refused = client.post(f"/backtests/{run['id']}/cancel", headers=colleague)
+        assert refused.status_code == 404, refused.text
+        assert client.get(f"/backtests/{run['id']}", headers=owner).json()["status"] == "queued"
+
+        cancelled = client.post(f"/backtests/{run['id']}/cancel", headers=owner)
+        assert cancelled.status_code == 200, cancelled.text

@@ -31,7 +31,7 @@ BACKEND_URL="${BACKEND_URL%/}"
 BASE_URL="${BACKEND_URL}"
 SEED_SCRIPT="${ROOT_DIR}/scripts/seed-approved-demo-proposal.py"
 TICK_SIZE="0.1"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 
 echo "=== Seed path smoke (no order) ==="
 [[ -n "${DATABASE_URL:-}" ]] || { echo "missing DATABASE_URL" >&2; exit 1; }

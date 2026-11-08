@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Row } from "@/components/ui/row";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,6 +12,7 @@ import { useAsyncData } from "@/hooks/useAsyncData";
 import { api, ApiError } from "@/lib/api";
 import type { AutonomousTradingSettingsView, DemoMarginMode, RiskPolicyView } from "@/lib/api/types";
 
+import type { Bounds } from "./bounds";
 import { PROFILE_LABEL } from "./profile-labels";
 
 const leverage = (value: string | undefined) => (value ? `${value}×` : "Not set");
@@ -23,9 +25,9 @@ type LeverageForm = {
   demo_overrides: OverrideRow[];
 };
 
-// Mirrors the server defaults; the server enforces the same 1–20x range.
+// Mirrors the server default leverage. The ceiling is never guessed: it comes
+// from GET /autonomous/settings/bounds (leverage.demo_effective_max).
 const DEFAULT_DEMO_LEVERAGE = 10;
-const DEFAULT_DEMO_LEVERAGE_CEILING = 20;
 const selectClass = "min-h-11 w-full rounded-control border border-border-subtle bg-surface-1 px-3";
 
 function toLeverageForm(data: AutonomousTradingSettingsView): LeverageForm {
@@ -40,20 +42,36 @@ function toLeverageForm(data: AutonomousTradingSettingsView): LeverageForm {
   };
 }
 
-/** Whole number within 1..ceiling, or null. Blank is allowed only where `optional`. */
-function leverageError(text: string, ceiling: number, optional = false): string | null {
+/**
+ * Whole number within 1..ceiling, or null. Blank is allowed only where
+ * `optional`. Without a known ceiling the server check is the only upper bound.
+ */
+function leverageError(text: string, ceiling: number | null, optional = false): string | null {
   const trimmed = text.trim();
   if (!trimmed) return optional ? null : "Leverage is required.";
   if (!/^\d+$/.test(trimmed)) return "Leverage must be a whole number.";
   const value = Number(trimmed);
   if (value < 1) return "Leverage must be at least 1x.";
-  if (value > ceiling) return `Leverage cannot exceed ${ceiling}x.`;
+  if (ceiling != null && value > ceiling) return `Leverage cannot exceed ${ceiling}x.`;
   return null;
 }
 
-export function leverageValidationMessage(code: string, ceiling: number): string {
+/** Effective demo ceiling: server bounds first, then the settings view; null when neither says. */
+export function demoLeverageCeiling(
+  bounds: Bounds | undefined,
+  view: AutonomousTradingSettingsView | null,
+): number | null {
+  const fromBounds = Number(bounds?.leverage.demo_effective_max);
+  if (bounds && Number.isFinite(fromBounds) && fromBounds >= 1) return fromBounds;
+  return view?.max_demo_leverage_ceiling ?? null;
+}
+
+export function leverageValidationMessage(code: string, ceiling: number | null): string {
   const map: Record<string, string> = {
-    demo_leverage_exceeds_ceiling: `Leverage cannot exceed ${ceiling}x (code ceiling).`,
+    demo_leverage_exceeds_ceiling:
+      ceiling == null
+        ? "Leverage exceeds the server ceiling."
+        : `Leverage cannot exceed ${ceiling}x (code ceiling).`,
     demo_leverage_below_one: "Leverage must be at least 1x.",
     demo_leverage_not_whole: "Leverage must be a whole number.",
     demo_leverage_invalid: "Leverage must be a number.",
@@ -87,18 +105,55 @@ function toLeveragePayload(form: LeverageForm): Record<string, unknown> {
 }
 
 /**
+ * Changes that raise liquidation risk versus the saved settings: a higher
+ * leverage (default or per coin, against that coin's current effective value)
+ * or a switch to cross margin. These need an explicit confirmation.
+ */
+export function riskierLeverageChanges(view: AutonomousTradingSettingsView, form: LeverageForm): string[] {
+  const savedDefault = view.demo_leverage ?? DEFAULT_DEMO_LEVERAGE;
+  const savedMode = view.demo_margin_mode ?? "isolated";
+  const savedOverrides = view.demo_leverage_overrides ?? {};
+  const changes: string[] = [];
+  const nextDefault = Number(form.demo_leverage.trim());
+  if (nextDefault > savedDefault) changes.push(`Default leverage ${savedDefault}× → ${nextDefault}×`);
+  if (form.demo_margin_mode === "cross" && savedMode !== "cross") changes.push("Default margin mode isolated → cross");
+  for (const row of form.demo_overrides.filter((item) => item.symbol)) {
+    const saved = savedOverrides[row.symbol];
+    const before = saved?.leverage ?? savedDefault;
+    const after = row.leverage.trim() ? Number(row.leverage.trim()) : nextDefault;
+    if (after > before) changes.push(`${row.symbol} leverage ${before}× → ${after}×`);
+    const beforeMode = saved?.margin_mode ?? savedMode;
+    if (row.margin_mode === "cross" && beforeMode !== "cross") changes.push(`${row.symbol} margin mode ${beforeMode} → cross`);
+  }
+  return changes;
+}
+
+/**
  * BloFin demo leverage, margin mode and per-coin overrides. Owner-only writes
  * through PATCH /autonomous/settings (only the demo leverage fields are sent).
+ * Uses the settings the page already loaded; fetches only when rendered alone.
  */
-function DemoLeverageEditor() {
+function DemoLeverageEditor({
+  initial,
+  bounds,
+}: {
+  initial?: AutonomousTradingSettingsView | null;
+  bounds?: Bounds;
+}) {
   const { membershipRole } = useAuth();
-  const loader = useCallback(() => api.autonomous.settings(), []);
+  // First-mount snapshot only: later page updates must not reset unsaved edits.
+  const initialRef = useRef(initial);
+  const loader = useCallback(
+    () => (initialRef.current ? Promise.resolve(initialRef.current) : api.autonomous.settings()),
+    [],
+  );
   const { data, loading, error } = useAsyncData(loader, []);
   const [view, setView] = useState<AutonomousTradingSettingsView | null>(null);
   const [form, setForm] = useState<LeverageForm | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<string[] | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -111,7 +166,7 @@ function DemoLeverageEditor() {
   if (error || !view || !form) return <p className="text-text-muted">Demo leverage settings unavailable.</p>;
 
   const owner = membershipRole === "owner";
-  const ceiling = view.max_demo_leverage_ceiling ?? DEFAULT_DEMO_LEVERAGE_CEILING;
+  const ceiling = demoLeverageCeiling(bounds, view);
   const setRow = (index: number, patch: Partial<OverrideRow>) => {
     const rows = [...form.demo_overrides];
     rows[index] = { ...rows[index], ...patch };
@@ -120,7 +175,7 @@ function DemoLeverageEditor() {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!form || saving) return;
+    if (!form || !view || saving) return;
     setSaveError(null);
     setSaved(false);
     const rows = form.demo_overrides.filter((row) => row.symbol);
@@ -134,16 +189,28 @@ function DemoLeverageEditor() {
       setSaveError(localError);
       return;
     }
+    const riskier = riskierLeverageChanges(view, form);
+    if (riskier.length) {
+      setPendingChanges(riskier);
+      return;
+    }
+    await save();
+  }
+
+  async function save() {
+    if (!form || saving) return;
     setSaving(true);
     try {
       const updated = await api.autonomous.updateSettings(toLeveragePayload(form));
       setView(updated);
       setForm(toLeverageForm(updated));
       setSaved(true);
+      setPendingChanges(null);
     } catch (err) {
       setSaveError(
         err instanceof ApiError ? leverageValidationMessage(err.message, ceiling) : "Could not save leverage.",
       );
+      setPendingChanges(null);
     } finally {
       setSaving(false);
     }
@@ -171,7 +238,8 @@ function DemoLeverageEditor() {
               onChange={(e) => setForm({ ...form, demo_leverage: e.target.value })}
             />
             <span className="block text-xs text-text-muted">
-              1–{ceiling}x.{view.demo_leverage_using_default === false ? "" : " Default 10x isolated."}
+              {ceiling == null ? "Min 1x; the server enforces the ceiling." : `1–${ceiling}x.`}
+              {view.demo_leverage_using_default === false ? "" : " Default 10x isolated."}
             </span>
           </label>
           <label className="space-y-1 text-sm">
@@ -260,6 +328,27 @@ function DemoLeverageEditor() {
           Leverage saved.
         </p>
       ) : null}
+      <ConfirmDialog
+        open={pendingChanges !== null}
+        title="Raise BloFin demo leverage?"
+        description={
+          <>
+            Higher leverage or cross margin moves liquidation closer to entry on the next demo trades. It does not
+            increase trade size. BloFin demo only; real money stays blocked.
+          </>
+        }
+        confirmLabel="Save higher leverage"
+        busy={saving}
+        onConfirm={() => void save()}
+        onCancel={() => setPendingChanges(null)}
+        testId="demo-leverage-confirm"
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm text-text-primary" data-testid="demo-leverage-confirm-changes">
+          {(pendingChanges ?? []).map((change) => (
+            <li key={change}>{change}</li>
+          ))}
+        </ul>
+      </ConfirmDialog>
     </form>
   );
 }
@@ -269,14 +358,23 @@ function DemoLeverageEditor() {
  * leverage editor, plus the leverage the active risk profiles carry
  * (read-only, from GET /risk/policy/profiles).
  */
-export function LeverageSettingsSlot({ profiles }: { profiles: RiskPolicyView[] }) {
+export function LeverageSettingsSlot({
+  profiles,
+  settings,
+  bounds,
+}: {
+  profiles: RiskPolicyView[];
+  /** Page-loaded settings; omitted = the editor fetches them itself. */
+  settings?: AutonomousTradingSettingsView | null;
+  bounds?: Bounds;
+}) {
   return (
     <Card id="leverage" data-testid="leverage-settings-slot" className="scroll-mt-4">
       <CardHeader>
         <CardTitle>Leverage</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <DemoLeverageEditor />
+        <DemoLeverageEditor initial={settings} bounds={bounds} />
         {profiles.length === 0 ? (
           <p className="text-text-muted">Leverage profile unavailable.</p>
         ) : (

@@ -32,7 +32,6 @@ fi
 COOKIE_MODE="${COOKIE_MODE:-false}"
 SKIP_REGISTER="${SKIP_REGISTER:-false}"
 EMAIL="${SMOKE_EMAIL:-canonical-smoke-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
 ORG_NAME="${SMOKE_ORG:-Canonical Smoke Org $(date +%s)}"
 EMAIL_B="${SMOKE_EMAIL_B:-canonical-smoke-b-$(date +%s)@example.com}"
 ORG_B="${SMOKE_ORG_B:-Canonical Smoke Org B $(date +%s)}"
@@ -53,6 +52,9 @@ if [[ "$SELF_CHECK" == "true" ]]; then
   echo "Canonical staging smoke self-check passed."
   exit 0
 fi
+
+# Required for network runs only, so the offline self-check needs no secret.
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 BASE_URL="${BASE_URL%/}"

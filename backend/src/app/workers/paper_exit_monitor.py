@@ -24,6 +24,7 @@ from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
 from app.services.paper_exit_candles import PaperExitCandleLoader
 from app.services.paper_exit_monitor import (
+    STATUS_BACKING_OFF,
     CloseFailureBackoff,
     DegradationStreak,
     ExitMonitorAlert,
@@ -102,6 +103,8 @@ def run_configured_exit_monitor(
     alert_sink: Callable[[ExitMonitorAlert], None] | None = None,
     settling_streaks: dict[UUID, int] | None = None,
     close_failures: dict[UUID, CloseFailureBackoff] | None = None,
+    loader: PaperExitCandleLoader | None = None,
+    bar_gate: dict[UUID, tuple[datetime, datetime]] | None = None,
 ) -> MonitorReport:
     """One monitor pass. The flag off returns before any database or market read.
 
@@ -168,10 +171,15 @@ def run_configured_exit_monitor(
     finally:
         session.close()
     _sweep_account_equity_stops(factory, settings, evaluated_at)
-    loader = PaperExitCandleLoader(settings)
+    candle_loader = loader if loader is not None else PaperExitCandleLoader(settings)
+    begin_pass = getattr(candle_loader, "begin_pass", None)
+    if callable(begin_pass):
+        begin_pass()
+    if bar_gate is not None:
+        trades = tuple(_trades_due_for_candles(trades, bar_gate, close_failures, evaluated_at))
 
     def candles(trade: OpenInternalPaperTrade) -> FetchedBars:
-        return loader(trade, evaluated_at=evaluated_at)
+        return candle_loader(trade, evaluated_at=evaluated_at)
 
     if settings.paper_exit_monitor_dry_run:
         exit_closer: PaperExitCloser = _RefusingCloser()
@@ -191,6 +199,49 @@ def run_configured_exit_monitor(
         settling_streaks=settling_streaks,
         close_failures=close_failures,
     )
+
+
+# An exit decision can only change when a bar closes. A trade's candles are
+# read after each close of its timeframe (plus a settlement gap for the
+# provider to publish the bar) and, as a safety net, at least every
+# _CANDLE_RECHECK_SECONDS; not on every 15 s pass (M6).
+_CANDLE_SETTLEMENT_SECONDS = 20
+_CANDLE_RECHECK_SECONDS = 300
+
+
+def _last_settled_bar_end(timeframe: object, now: datetime) -> datetime:
+    from app.market_contracts.identity import interval_timedelta
+    from app.schemas.common import Timeframe
+
+    seconds = int(
+        interval_timedelta(Timeframe(str(getattr(timeframe, "value", timeframe)))).total_seconds()
+    )
+    settled = now - timedelta(seconds=_CANDLE_SETTLEMENT_SECONDS)
+    epoch = int(settled.timestamp())
+    return datetime.fromtimestamp(epoch - (epoch % seconds), tz=UTC)
+
+
+def _trades_due_for_candles(
+    trades: list[OpenInternalPaperTrade] | tuple[OpenInternalPaperTrade, ...],
+    gate: dict[UUID, tuple[datetime, datetime]],
+    close_failures: dict[UUID, CloseFailureBackoff] | None,
+    now: datetime,
+) -> list[OpenInternalPaperTrade]:
+    """Trades whose candles may have changed since their last read; updates ``gate``."""
+
+    open_ids = {trade.journal_trade_id for trade in trades}
+    for stale in [trade_id for trade_id in gate if trade_id not in open_ids]:
+        gate.pop(stale, None)
+    due: list[OpenInternalPaperTrade] = []
+    recheck = timedelta(seconds=_CANDLE_RECHECK_SECONDS)
+    for trade in trades:
+        bar_end = _last_settled_bar_end(trade.timeframe, now)
+        seen = gate.get(trade.journal_trade_id)
+        pending_close = close_failures is not None and trade.journal_trade_id in close_failures
+        if seen is None or pending_close or bar_end > seen[0] or now - seen[1] >= recheck:
+            due.append(trade)
+            gate[trade.journal_trade_id] = (bar_end, now)
+    return due
 
 
 class PaperExitMonitorCycle:
@@ -213,6 +264,9 @@ class PaperExitMonitorCycle:
         self._streak: DegradationStreak | None = None
         self._settling_streaks: dict[UUID, int] = {}
         self._close_failures: dict[UUID, CloseFailureBackoff] = {}
+        # Kept across passes so candle adapters are built once (M6).
+        self._loader = PaperExitCandleLoader(self._settings)
+        self._bar_gate: dict[UUID, tuple[datetime, datetime]] = {}
 
     def __call__(self) -> CycleOutcome:
         from app.core.disarmed_worker_boot import settings_are_disarmed_paper_worker
@@ -231,6 +285,8 @@ class PaperExitMonitorCycle:
                 clock=self._clock,
                 settling_streaks=self._settling_streaks,
                 close_failures=self._close_failures,
+                loader=self._loader,
+                bar_gate=self._bar_gate,
             )
         except Exception as exc:
             self._note_repetition("degraded", error="paper_exit_monitor_failed", refused=0)
@@ -242,6 +298,8 @@ class PaperExitMonitorCycle:
             return self._beat_outcome(CycleOutcome("degraded", error="paper_exit_monitor_failed"))
         if report.status == "stopped":
             return self._beat_outcome(CycleOutcome("stopped"))
+        if report.status != "refused":
+            self._emit_pass_alerts(report)
         if report.status == "refused":
             self._note_repetition(
                 "refused",
@@ -277,8 +335,35 @@ class PaperExitMonitorCycle:
             return self._beat_outcome(
                 CycleOutcome("degraded", error=report.error or "paper_exit_monitor_failed")
             )
+        if report.status == STATUS_BACKING_OFF:
+            # Healthy but holding stuck trades: shown in /health/paper-worker
+            # (activation_state / last_error_code) without re-paging (M5, L7).
+            self._note_repetition(report.status, error="", refused=0, report=report)
+            error = f"{report.error}:{report.quarantined or report.backed_off}"
+            return self._beat_outcome(CycleOutcome(STATUS_BACKING_OFF, error=error))
         self._note_repetition(report.status, error="", refused=0, report=report)
         return self._beat_outcome(CycleOutcome("running"))
+
+    def _emit_pass_alerts(self, report: MonitorReport) -> None:
+        """Deliver once-per-streak alerts raised inside the pass (close_quarantined)."""
+
+        for alert in report.alerts:
+            logger.warning("paper_exit_monitor_alert", **alert.as_log())
+            organization = alert.fields.get("organization_id", "")
+            try:
+                scope = (UUID(organization),) if organization else report.organization_ids
+            except ValueError:
+                scope = report.organization_ids
+            try:
+                self._emit_repeat_alert(
+                    alert, MonitorReport(status=report.status, organization_ids=scope)
+                )
+            except Exception as exc:
+                logger.error(
+                    "paper_exit_monitor_alert_persist_failed",
+                    error=redact_text(str(exc))[:200],
+                    code=alert.code,
+                )
 
     def request_stop(self) -> None:
         self._stop.set()

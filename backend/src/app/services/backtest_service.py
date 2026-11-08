@@ -123,11 +123,14 @@ class BacktestService:
         if strategy is None:
             raise NotFoundError("Strategy not found.")
 
-        version = (
-            self._versions.get_by_id(payload.strategy_version_id)
-            if payload.strategy_version_id
-            else self._versions.latest(strategy_id)
-        )
+        if payload.strategy_version_id:
+            version = self._versions.get_by_id(payload.strategy_version_id)
+            # The strategy is already org/user scoped above; a version that does
+            # not belong to it (another strategy or another org) must not leak.
+            if version is None or version.strategy_id != strategy.id:
+                raise NotFoundError("Strategy version not found.")
+        else:
+            version = self._versions.latest(strategy_id)
         if version is None or not version.card:
             raise ValidationAppError("Strategy version or card not found.")
 
@@ -477,7 +480,8 @@ class BacktestService:
         user_id: uuid.UUID,
     ) -> BacktestRun:
         run = self._runs.get_scoped(run_id, organization_id=organization_id)
-        if run is None:
+        # Results are org-visible, but only the run's creator may cancel it (M15).
+        if run is None or run.user_id != user_id:
             raise NotFoundError("Backtest run not found.")
 
         now = datetime.now(UTC)

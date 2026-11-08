@@ -10,7 +10,7 @@ Persisted per organization + user in `user_risk_settings`:
 
 | Field | Purpose |
 | --- | --- |
-| `daily_loss_limit` | Max realized+unrealized paper loss before loss lock |
+| `daily_loss_limit` | Realized+unrealized paper loss that sets the display/WARN loss lock (does not refuse since AT-ADR-152) |
 | `daily_target` | Green-day protection threshold |
 | `max_trades_per_day` | Overtrading guard |
 | `max_risk_per_trade_percent` | Position sizing guidance (≤ 10%) |
@@ -28,6 +28,44 @@ Persisted per organization + user in `user_risk_settings`:
 - `POST /risk/settings/reset-defaults` — restore system defaults
 
 All routes are auth-protected, tenant-scoped, and rate limited. No broker or live trading paths.
+
+## Which rule can stop trading (after AT-ADR-152)
+
+Fable audit L5/M4/L1/L4, checked against main `c5a46c99` (2026-11-07). Since
+AT-ADR-152 the **account daily equity stop is the only loss rule that halts
+entries**. Every other daily-loss figure is display or warning only.
+
+| Rule | Scope | Clock | Effect | Reset |
+| --- | --- | --- | --- | --- |
+| Account daily equity stop (`risk_policy/equity_stop.py`) | Organization + user: `default_account_balance` + all-time realized (closed **and liquidated** legacy positions, canonical paper and manual demo journal trades) + legacy open marks | 00:00 UTC baseline | Equity below baseline × (1 − `ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT`, 10%) arms the organization kill switch | Owner deactivates the kill switch; never cleared automatically |
+| Kill switch (`risk/kill_switch.py`) | Organization (plus `GLOBAL_KILL_SWITCH_ACTIVE`) | None | Blocks every new entry; fail-closed on read error. Entry-only: it does not close open positions | Owner deactivate with reason |
+| Risk-settings daily loss lock (`daily_loss_limit`, `DailyRiskState.locked`) | Organization + user | User's risk-settings timezone day | Dashboard / attention / pre-trade **WARN only** | Next local day |
+| Profile breaker figures (daily loss %, consecutive losses, peak drawdown; `risk_policy/breakers.py`) | Organization + account | Informational | Computed and stored, **never refuse** (`refuse_new_trades` is always false; `breaker_active` is always false) | — |
+| Autonomous `daily_loss_limit_percent` | Organization | — | Saved and shown, **display only** | — |
+| Legacy `RiskLimits.max_daily_loss_pct` (3%) | Request | — | WARN in `check_daily_loss_lock` | — |
+| Weekly loss 8% (`check_weekly_loss`) | Replay only | — | BLOCK inside strategy replay; no live entry path sets it | — |
+
+Because nothing refuses on the risk-day lock any more, the different clocks
+(user timezone for the display lock, UTC for the stop) no longer decide
+whether a trade is allowed (audit M4). The display lock and the profile
+figures keep their own denominators (cash limit vs reference equity); the stop
+uses its own 00:00 UTC baseline (audit L1).
+
+**Caps are separate and labelled, not merged** (AGENTS.md): the **account cap**
+(risk settings `max_trades_per_day`) and the **bot cap** (Autonomous Trading
+`max_trades_per_day`, never above the account cap; the page shows
+`account_max_trades_per_day` and `effective_max_trades_per_day`). The bot cap
+refuses new autonomous entries (`autonomous_max_trades_per_day`). Internal paper
+also allows one open position at a time (`max_open_positions` = 1).
+
+**Paper and BloFin demo share one equity reading (audit M2, decision needed).**
+The stop reads one figure per organization + user across internal paper and
+demo journal trades, measured against the paper `default_account_balance`.
+A losing paper day therefore moves the same stop that guards demo entries, and
+demo losses count against the paper balance. Demo sizing already uses venue
+equity. Splitting the reading per venue would let combined losses exceed 10%
+of the stated balance, which would loosen an approved safety rule, so it is
+not changed without an explicit decision from Sofien and a Griller review.
 
 ## Daily discipline snapshot resolution
 

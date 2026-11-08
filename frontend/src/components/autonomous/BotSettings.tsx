@@ -8,6 +8,7 @@ import { RiskProfileSections } from "@/components/autonomous/RiskProfileSections
 import { TradingLimitsCard } from "@/components/autonomous/TradingLimitsCard";
 import { ErrorState, LoadingState } from "@/components/states";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { StatusTile, type StatusTone } from "@/components/ui/status-tile";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
@@ -55,6 +56,8 @@ export function BotSettings() {
   const [account, setAccount] = useState<UserRiskSettings | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
+  // Arming asks first; disarming is immediate (stopping new entries must stay fast).
+  const [confirmArm, setConfirmArm] = useState(false);
 
   useEffect(() => {
     if (data) {
@@ -78,6 +81,7 @@ export function BotSettings() {
     setSwitchError(null);
     try {
       setView(await api.autonomous.updateSettings({ internal_paper_enabled: enabled }));
+      setConfirmArm(false);
     } catch (err) {
       setSwitchError(err instanceof Error ? err.message : "Unable to change the paper switch.");
     } finally {
@@ -112,7 +116,12 @@ export function BotSettings() {
               data-testid="autonomous-paper-switch-input"
               checked={view.internal_paper_enabled === true}
               disabled={!owner || switching}
-              onChange={(event) => void handlePaperSwitch(event.target.checked)}
+              onChange={(event) => {
+                if (event.target.checked) {
+                  setSwitchError(null);
+                  setConfirmArm(true);
+                } else void handlePaperSwitch(false);
+              }}
             />
             <span>Autonomous internal paper</span>
           </label>
@@ -130,11 +139,30 @@ export function BotSettings() {
           <p className="text-xs text-text-muted" data-testid="autonomous-paper-switch-note">
             Turning it off stops new entries and does not close open positions. It cannot enable real money.
           </p>
-          {switchError ? (
+          {switchError && !confirmArm ? (
             <p className="text-sm text-danger" role="alert">
               {switchError}
             </p>
           ) : null}
+          <ConfirmDialog
+            open={confirmArm}
+            title="Arm the autonomous paper bot?"
+            description={
+              <>
+                The bot may open internal paper trades on its own, within the limits on this page. It cannot trade
+                real money. Turning it off later stops new entries but does not close open positions.
+              </>
+            }
+            confirmLabel="Arm paper bot"
+            busy={switching}
+            error={switchError}
+            onConfirm={() => void handlePaperSwitch(true)}
+            onCancel={() => {
+              setConfirmArm(false);
+              setSwitchError(null);
+            }}
+            testId="autonomous-arm-confirm"
+          />
         </CardContent>
       </Card>
       <TradingLimitsCard
