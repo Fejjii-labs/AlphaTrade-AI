@@ -9,6 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { LinkTabs } from "@/components/ui/link-tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { NewDemoOrder } from "./NewDemoOrder";
+import { JournalTradesTable } from "./JournalTradesTable";
 import { TradeStats } from "./TradeStats";
 import { cn } from "@/lib/utils";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -498,30 +499,6 @@ function JournalWorkspaceContent() {
                   </Link>
                 </article>
               ))}
-              {!knowledge &&
-                visibleTrades?.map((t) => (
-                  <article
-                    key={t.id}
-                    className="space-y-2 rounded-card border border-border-subtle p-4"
-                  >
-                    <h2 className="font-medium">
-                      {t.symbol} · {t.direction}
-                    </h2>
-                    <p className="text-sm text-text-muted">
-                      Recorded trade review · {t.status} · {formatDateTime(t.entry_time)}
-                      {t.source === "manual_demo_test"
-                        ? " · Connectivity test"
-                        : ""}
-                    </p>
-                    <Link
-                      onClick={remember}
-                      href={`/journal?trade_id=${t.id}`}
-                      className="inline-flex min-h-11 items-center text-accent"
-                    >
-                      Open exact trade
-                    </Link>
-                  </article>
-                ))}
               {knowledge &&
                 documents?.map((d) => (
                   <KnowledgeDocumentCard
@@ -543,6 +520,9 @@ function JournalWorkspaceContent() {
                 )}
             </div>
           )}
+          {!knowledge && !savedId && !documentId && visibleTrades?.length ? (
+            <JournalTradesTable trades={visibleTrades} onOpen={remember} />
+          ) : null}
           {!savedId && !documentId && data && (
             <div className="flex flex-wrap gap-4 text-sm">
               {[
