@@ -723,6 +723,9 @@ class Settings(BaseSettings):
     # Production registration stays at 10/hour/IP. The disposable e2e server raises
     # this because one loopback worker legitimately registers for the whole smoke suite.
     auth_register_rate_limit: int = Field(default=10, ge=1, le=10_000)
+    # L13: failed logins per submitted email, across all client IPs.
+    auth_login_email_failure_limit: int = Field(default=10, ge=1, le=10_000)
+    auth_login_email_window_seconds: int = Field(default=900, ge=60, le=86_400)
     redis_connect_timeout_seconds: float = 1.0
     jwt_secret_min_length: int = 32
 

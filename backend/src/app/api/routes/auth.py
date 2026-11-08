@@ -13,7 +13,7 @@ from app.core.auth import (
     optional_bearer,
 )
 from app.core.config import Settings, get_settings
-from app.core.dependencies import SessionDep
+from app.core.dependencies import AuditServiceDep, SessionDep
 from app.core.errors import AuthError
 from app.schemas.account import (
     MessageResponse,
@@ -32,7 +32,12 @@ from app.schemas.auth import (
     TokenPair,
 )
 from app.security.cookies import clear_refresh_cookie, set_refresh_cookie
-from app.security.rate_limit import auth_register_rate_limit, public_rate_limit_dependency
+from app.security.rate_limit import (
+    auth_register_rate_limit,
+    enforce_login_email_limit,
+    public_rate_limit_dependency,
+    record_login_email_failure,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -111,9 +116,16 @@ async def login(
     response: Response,
     auth_service: AuthServiceDep,
     session: SessionDep,
+    audit_service: AuditServiceDep,
     settings: Settings = Depends(get_settings),
 ) -> AuthResponse:
-    result = auth_service.login(body)
+    email = str(body.email)
+    enforce_login_email_limit(request, session, audit_service, email)
+    try:
+        result = auth_service.login(body)
+    except AuthError:
+        record_login_email_failure(request, email)
+        raise
     session.commit()
     result.tokens = _apply_auth_cookies(response, result.tokens, settings, auth_service)
     return result
