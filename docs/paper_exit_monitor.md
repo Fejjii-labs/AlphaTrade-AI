@@ -25,8 +25,9 @@ No exchange write endpoint is added. Real-money trading stays rejected.
 
 ## Flags
 
-The enabled flag defaults false. Dry-run defaults true. This change does not
-set them in `render.yaml` or in any deployed environment.
+The enabled flag defaults false. Dry-run defaults true. `render.yaml`
+declares both keys with `sync: false` (Fable audit I5) so the worker's
+dashboard lists them, but it sets no value: an unset key keeps these defaults.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |

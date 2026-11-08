@@ -279,8 +279,8 @@ class Settings(BaseSettings):
     # The enabled flag defaults off. Production refuses it. Dry-run evaluates
     # and logs without calling the paper close service. It defaults true so
     # removing PAPER_EXIT_MONITOR_DRY_RUN cannot close a trade. Live internal
-    # paper closes require an explicit false. Neither flag is set in the
-    # deploy blueprint.
+    # paper closes require an explicit false. The deploy blueprint declares
+    # both keys with sync: false and sets no value (Fable audit I5).
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
     # Retention for append-only runtime logs (H5): watcher observability
