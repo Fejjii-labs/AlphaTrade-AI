@@ -5,8 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+import structlog
 from structlog.testing import capture_logs
 
+from app.watcher import observability as observability_module
 from app.watcher.observability import emit, is_routine_event
 
 
@@ -19,6 +22,16 @@ class _Store:
 
 
 _AT = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    # structlog caches the module logger on first use once app logging is
+    # configured (e.g. by an earlier watcher test); a fresh proxy keeps
+    # capture_logs independent of test order.
+    monkeypatch.setattr(
+        observability_module, "logger", structlog.get_logger("watcher.orchestration")
+    )
 
 
 def test_replay_events_are_not_stored_and_log_at_debug() -> None:
