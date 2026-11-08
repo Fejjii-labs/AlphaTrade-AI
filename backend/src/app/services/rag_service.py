@@ -607,7 +607,7 @@ class RagService:
     def list_documents(
         self,
         *,
-        organization_id: UUID | None = None,
+        organization_id: UUID,
         user_id: UUID | None = None,
         source_type: DocumentSourceType | None = None,
         limit: int = 50,

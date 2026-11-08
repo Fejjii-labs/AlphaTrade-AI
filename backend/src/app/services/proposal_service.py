@@ -123,7 +123,7 @@ class ProposalService:
         self,
         proposal_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeProposal:
         return proposal_to_schema(
@@ -137,7 +137,7 @@ class ProposalService:
     def list_proposals(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -155,7 +155,7 @@ class ProposalService:
         proposal_id: uuid.UUID,
         update: ProposalStatusUpdate,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeProposal:
         row = self._require_analysis_proposal(
@@ -180,7 +180,7 @@ class ProposalService:
         proposal_id: uuid.UUID,
         update: LossAcceptanceUpdate,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeProposal:
         from app.schemas.position_sizing import LossAcceptanceRequest
@@ -272,7 +272,7 @@ class ProposalService:
         self,
         proposal_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeProposalModel:
         """Load a proposal for ProposalService trading authority.

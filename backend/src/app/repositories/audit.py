@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 
 from app.db.models import AuditLog
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.common import AuditEventType
 
 
@@ -18,7 +18,7 @@ class AuditRepository(SQLAlchemyRepository[AuditLog]):
     def list_events(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         request_id: str | None = None,
         event_type: AuditEventType | None = None,
@@ -27,8 +27,7 @@ class AuditRepository(SQLAlchemyRepository[AuditLog]):
         offset: int = 0,
     ) -> tuple[list[AuditLog], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(AuditLog.organization_id == organization_id)
+        filters.append(AuditLog.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(AuditLog.user_id == user_id)
         if request_id is not None:

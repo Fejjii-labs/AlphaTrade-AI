@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.models import Document
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 from app.schemas.common import DocumentSourceType
 
 
@@ -54,15 +54,14 @@ class DocumentRepository(SQLAlchemyRepository[Document]):
     def list_documents(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         source_type: DocumentSourceType | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Document], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(Document.organization_id == organization_id)
+        filters.append(Document.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(Document.user_id == user_id)
         if source_type is not None:

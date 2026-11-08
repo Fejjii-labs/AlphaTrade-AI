@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.models import Order
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 
 
 class OrderRepository(SQLAlchemyRepository[Order]):
@@ -20,14 +20,13 @@ class OrderRepository(SQLAlchemyRepository[Order]):
     def list_orders(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Order], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(Order.organization_id == organization_id)
+        filters.append(Order.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(Order.user_id == user_id)
 

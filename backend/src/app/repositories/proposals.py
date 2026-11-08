@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from app.db.canonical_trade_plans import PLAN_ROOT_ANALYSIS
 from app.db.models import TradeProposal
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 
 
 class ProposalRepository(SQLAlchemyRepository[TradeProposal]):
@@ -17,14 +17,13 @@ class ProposalRepository(SQLAlchemyRepository[TradeProposal]):
     def list_proposals(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[TradeProposal], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(TradeProposal.organization_id == organization_id)
+        filters.append(TradeProposal.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(TradeProposal.user_id == user_id)
         filters.append(TradeProposal.plan_root_kind == PLAN_ROOT_ANALYSIS)
@@ -41,12 +40,11 @@ class ProposalRepository(SQLAlchemyRepository[TradeProposal]):
         self,
         proposal_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeProposal | None:
         stmt = select(TradeProposal).where(TradeProposal.id == proposal_id)
-        if organization_id is not None:
-            stmt = stmt.where(TradeProposal.organization_id == organization_id)
+        stmt = stmt.where(TradeProposal.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             stmt = stmt.where(TradeProposal.user_id == user_id)
         return self._session.scalar(stmt)

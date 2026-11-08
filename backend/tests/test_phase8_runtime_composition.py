@@ -101,7 +101,7 @@ def test_proposal_service_filters_and_rejects_canonical_plan_root(session: Sessi
     session.flush()
     service = ProposalService(session, AuditService(session))
     with pytest.raises(TradingPolicyError) as exc:
-        service.get(ids["proposal_id"])
+        service.get(ids["proposal_id"], organization_id=ids["organization"].id)
     assert exc.value.details["reason"] == "canonical_plan_root_not_proposal_authority"
     items, total = service.list_proposals(organization_id=ids["organization"].id)
     assert total == 0

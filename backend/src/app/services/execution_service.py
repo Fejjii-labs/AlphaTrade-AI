@@ -156,7 +156,7 @@ class ExecutionService:
     def list_orders(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,

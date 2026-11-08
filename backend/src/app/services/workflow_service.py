@@ -24,7 +24,7 @@ class WorkflowService:
         self,
         proposal_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> ProposalWorkflowView:
         proposal = self._proposals.get(
@@ -45,7 +45,7 @@ class WorkflowService:
         self,
         approval_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> ApprovalWorkflowView:
         approval = self._approvals.get(approval_id)

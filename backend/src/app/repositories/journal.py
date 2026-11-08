@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.models import TradeJournal
-from app.repositories.base import SQLAlchemyRepository
+from app.repositories.base import SQLAlchemyRepository, require_organization_id
 
 
 class JournalRepository(SQLAlchemyRepository[TradeJournal]):
@@ -16,14 +16,13 @@ class JournalRepository(SQLAlchemyRepository[TradeJournal]):
     def list_entries(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[TradeJournal], int]:
         filters = []
-        if organization_id is not None:
-            filters.append(TradeJournal.organization_id == organization_id)
+        filters.append(TradeJournal.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             filters.append(TradeJournal.user_id == user_id)
 
@@ -39,12 +38,11 @@ class JournalRepository(SQLAlchemyRepository[TradeJournal]):
         self,
         entry_id: uuid.UUID,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
     ) -> TradeJournal | None:
         stmt = select(TradeJournal).where(TradeJournal.id == entry_id)
-        if organization_id is not None:
-            stmt = stmt.where(TradeJournal.organization_id == organization_id)
+        stmt = stmt.where(TradeJournal.organization_id == require_organization_id(organization_id))
         if user_id is not None:
             stmt = stmt.where(TradeJournal.user_id == user_id)
         return self._session.scalar(stmt)

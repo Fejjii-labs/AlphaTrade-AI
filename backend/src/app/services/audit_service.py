@@ -124,7 +124,7 @@ class AuditService:
     def list_records(
         self,
         *,
-        organization_id: uuid.UUID | None = None,
+        organization_id: uuid.UUID,
         user_id: uuid.UUID | None = None,
         request_id: str | None = None,
         event_type: AuditEventType | None = None,
