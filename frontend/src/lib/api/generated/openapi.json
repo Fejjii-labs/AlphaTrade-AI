@@ -11151,7 +11151,7 @@
       },
       "DemoSeedRequest": {
         "additionalProperties": false,
-        "description": "Optional body for staging API seed when server env lacks DEMO_SEED_PASSWORD.",
+        "description": "Optional body for local API seed; ignored outside ENVIRONMENT=local.",
         "properties": {
           "password": {
             "anyOf": [
@@ -11163,7 +11163,7 @@
                 "type": "null"
               }
             ],
-            "description": "Demo account password. Used when DEMO_SEED_PASSWORD is unset on the server (e.g. Render staging without shell). Never logged.",
+            "description": "Demo account password. Honoured only when ENVIRONMENT=local; staging always uses the server-side DEMO_SEED_PASSWORD. Never logged.",
             "title": "Password"
           }
         },
@@ -39110,12 +39110,19 @@
       },
       "PaperWorkerKillSwitch": {
         "additionalProperties": false,
-        "description": "Kill-switch posture for the external paper-worker poll.\n\n``active`` is true when the global setting is on, when the scoped\norganization switch is on, or when that state cannot be read.\n``source`` is a fixed token such as ``manual`` or ``global_setting``.\n``since`` is the organization row's activation time when one exists.\nThe free-text reason is not included. No secret and no P&L amount.",
+        "description": "Kill-switch posture for the external paper-worker poll.\n\n``active`` is true when the global setting is on, when the scoped\norganization switch is on, or when that state cannot be read. It is\nnull with ``source=\"unscoped\"`` when ``WATCHER_PAPER_ORGANIZATION_ID`` is\nnot set: this unauthenticated endpoint does not report other tenants'\nswitches (Fable audit M3).\n``source`` is a fixed token such as ``manual`` or ``global_setting``.\n``since`` is the organization row's activation time when one exists.\nThe free-text reason is not included. No secret and no P&L amount.",
         "properties": {
           "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "default": false,
-            "title": "Active",
-            "type": "boolean"
+            "title": "Active"
           },
           "since": {
             "anyOf": [
@@ -64532,7 +64539,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Seed synthetic paper-only demo data (owner, staging/local)",
+        "summary": "Seed synthetic paper-only demo data (demo-org owner, staging/local)",
         "tags": [
           "demo"
         ]
@@ -64738,7 +64745,7 @@
     },
     "/exchange/blofin/sync": {
       "post": {
-        "description": "Persist a bounded read-only demo snapshot. Never places or cancels orders.",
+        "description": "Persist a bounded read-only demo snapshot. Never places or cancels orders.\n\nAlready org-pinned inside ``BloFinSyncService`` (activity org/UID pin, #366 C2).",
         "operationId": "blofin_demo_sync_exchange_blofin_sync_post",
         "responses": {
           "200": {
