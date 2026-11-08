@@ -351,6 +351,26 @@ def auth_register_rate_limit(
     )
 
 
+def tradingview_webhook_rate_limit(
+    request: Request,
+    session: SessionDep,
+    audit_service: AuditServiceDep,
+) -> None:
+    """IP budget for the TradingView webhook from ``TRADINGVIEW_WEBHOOK_RATE_*`` settings."""
+
+    settings = _request_settings(request)
+    _enforce_limits(
+        request=request,
+        session=session,
+        audit_service=audit_service,
+        scope="tradingview:webhook",
+        window_seconds=settings.tradingview_webhook_rate_window_seconds,
+        ip_limit=settings.tradingview_webhook_rate_limit,
+        user_limit=None,
+        tenant=None,
+    )
+
+
 # Backward-compatible alias used by older route wiring.
 def rate_limit_dependency(
     scope: str,

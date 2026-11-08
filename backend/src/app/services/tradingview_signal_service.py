@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
+from app.core.config import Environment, Settings, get_settings
 from app.core.errors import AuthError, NotFoundError, ServiceUnavailableError, ValidationAppError
 from app.db.models import Organization, SetupDefinition, UserStrategy, UserStrategyVersion
 from app.db.models import PaperValidationAlert as AlertModel
@@ -88,6 +88,29 @@ class TradingViewSignalService:
         self._candidates = PaperValidationCandidateRepository(session)
         self._audit = AuditService(session)
 
+    def _require_bound_organization(self, organization_id: uuid.UUID) -> None:
+        """Accept only the org the global secret is bound to; one generic refusal.
+
+        Unknown, unbound and mismatched orgs share the same error so the
+        endpoint is not an organization-existence oracle (audit M16).
+        """
+        refusal = ValidationAppError(
+            "TradingView webhook organization is not accepted.",
+            code="tradingview_webhook_organization_refused",
+        )
+        bound = self._settings.tradingview_webhook_organization_id.strip()
+        if bound:
+            try:
+                bound_id = uuid.UUID(bound)
+            except ValueError:
+                raise refusal from None
+            if organization_id != bound_id:
+                raise refusal
+        elif self._settings.environment is not Environment.LOCAL:
+            raise refusal
+        if self._session.get(Organization, organization_id) is None:
+            raise refusal
+
     def intake_webhook(
         self,
         raw_body: bytes,
@@ -126,12 +149,7 @@ class TradingViewSignalService:
                 details={"errors": _serialize_pydantic_errors(exc)},
             ) from exc
 
-        org = self._session.get(Organization, payload.organization_id)
-        if org is None:
-            raise ValidationAppError(
-                "Unknown organization_id for TradingView webhook.",
-                details={"organization_id": str(payload.organization_id)},
-            )
+        self._require_bound_organization(payload.organization_id)
 
         assert payload.idempotency_key is not None
         payload_hash = hashlib.sha256(raw_body).hexdigest()

@@ -459,6 +459,9 @@ class Settings(BaseSettings):
     tradingview_webhook_max_skew_seconds: int = Field(default=300, ge=30, le=3600)
     tradingview_webhook_rate_limit: int = Field(default=60, ge=1, le=600)
     tradingview_webhook_rate_window_seconds: int = Field(default=3600, ge=60, le=86400)
+    # The webhook secret is global, so it is bound to one org. Required outside
+    # local when intake is enabled; payloads for any other org are refused.
+    tradingview_webhook_organization_id: str = ""
     tradingview_auto_create_candidate: bool = False
 
     # --- BloFin demo read-only sync (AT-037 — demo only; never places orders) ---

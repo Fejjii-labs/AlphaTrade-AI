@@ -15,14 +15,12 @@ from app.schemas.tradingview_signal import (
     TradingViewSignalItem,
     TradingViewSignalListResponse,
 )
-from app.security.rate_limit import public_rate_limit_dependency, tenant_rate_limit_dependency
+from app.security.rate_limit import tenant_rate_limit_dependency, tradingview_webhook_rate_limit
 from app.security.rbac import ReaderDep, TraderDep
 
 router = APIRouter(tags=["tradingview"])
 
-_WEBHOOK_LIMIT = Depends(
-    public_rate_limit_dependency("tradingview:webhook", limit=60, window_seconds=3600)
-)
+_WEBHOOK_LIMIT = Depends(tradingview_webhook_rate_limit)
 _READ_LIMIT = Depends(
     tenant_rate_limit_dependency("tradingview:read", limit=120, window_seconds=3600)
 )
