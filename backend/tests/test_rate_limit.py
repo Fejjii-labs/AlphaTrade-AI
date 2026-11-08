@@ -325,3 +325,106 @@ def test_trusted_proxy_hop_separates_clients_by_forwarded_ip(limit_settings: Set
                 headers={"X-Forwarded-For": f"198.51.100.{index}"},
             )
             assert response.status_code == 201, response.text
+
+
+# --- L13: per-email failed-login throttle ---
+
+
+def _register(client: TestClient, email: str) -> None:
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": "secure-password-1",
+            "organization_name": f"Login Throttle {email}",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
+def _login(client: TestClient, email: str, password: str, *, ip: str) -> int:
+    response = client.post(
+        "/auth/login",
+        json={"email": email, "password": password},
+        headers={"X-Forwarded-For": ip},
+    )
+    return response.status_code
+
+
+@pytest.fixture
+def email_limit_client(limit_settings: Settings) -> Iterator[TestClient]:
+    settings = limit_settings.model_copy(
+        update={"trusted_proxy_hops": 1, "auth_login_email_failure_limit": 3}
+    )
+    with _client_for(settings) as client:
+        yield client
+
+
+def test_login_email_lockout_spans_ips_and_blocks_correct_password(
+    email_limit_client: TestClient,
+) -> None:
+    _register(email_limit_client, "victim@example.com")
+    for index in range(3):
+        status = _login(
+            email_limit_client, "victim@example.com", "wrong-password-1", ip=f"198.51.100.{index}"
+        )
+        assert status == 401
+
+    # A fresh IP with the right password is refused before the password is checked.
+    assert (
+        _login(email_limit_client, "Victim@Example.com", "secure-password-1", ip="192.0.2.9") == 429
+    )
+    # Other accounts are unaffected.
+    _register(email_limit_client, "bystander@example.com")
+    assert (
+        _login(email_limit_client, "bystander@example.com", "secure-password-1", ip="192.0.2.9")
+        == 200
+    )
+
+
+def test_login_email_lockout_treats_unknown_email_the_same(email_limit_client: TestClient) -> None:
+    for _ in range(3):
+        assert (
+            _login(email_limit_client, "nobody@example.com", "wrong-password-1", ip="192.0.2.1")
+            == 401
+        )
+    assert (
+        _login(email_limit_client, "nobody@example.com", "wrong-password-1", ip="192.0.2.2") == 429
+    )
+
+
+def test_successful_logins_do_not_count_toward_email_lockout(
+    email_limit_client: TestClient,
+) -> None:
+    _register(email_limit_client, "regular@example.com")
+    for index in range(5):
+        status = _login(
+            email_limit_client, "regular@example.com", "secure-password-1", ip=f"192.0.2.{index}"
+        )
+        assert status == 200
+
+
+def test_login_email_limiter_keys_are_hashed_and_peek_does_not_count() -> None:
+    from app.security.rate_limit import _login_email_key
+
+    key = _login_email_key(" Victim@Example.com ")
+    assert key == _login_email_key("victim@example.com")
+    assert "victim" not in key and "@" not in key
+
+    limiter = InMemoryRateLimiter()
+    for _ in range(5):
+        assert limiter.is_limited(key, limit=2, window_seconds=60) is False
+    limiter.check(key, limit=2, window_seconds=60)
+    limiter.check(key, limit=2, window_seconds=60)
+    assert limiter.is_limited(key, limit=2, window_seconds=60) is True
+
+
+def test_redis_is_limited_fails_closed_without_fallback(limit_settings: Settings) -> None:
+    class _BrokenRedis:
+        def get(self, _key: str) -> None:
+            raise ConnectionError("down")
+
+    settings = limit_settings.model_copy(update={"rate_limit_allow_in_memory_fallback": False})
+    limiter = RedisRateLimiter(settings, InMemoryRateLimiter())
+    limiter._redis = _BrokenRedis()
+    assert limiter.is_limited("auth:login:email:x", limit=10, window_seconds=60) is True

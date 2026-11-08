@@ -142,6 +142,10 @@ def validate_deployment_settings(settings: Settings) -> None:
             "auth_register_rate_limit must stay 10 in staging/production "
             "(the higher budget is only for the disposable local e2e server)"
         )
+    if settings.auth_login_email_failure_limit > 10:
+        errors.append(
+            "auth_login_email_failure_limit must be 10 or lower in staging/production (L13)"
+        )
 
     if not settings.access_token_denylist_enabled:
         errors.append("access_token_denylist_enabled must be true in staging/production")
