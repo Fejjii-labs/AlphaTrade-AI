@@ -514,6 +514,14 @@ class Settings(BaseSettings):
 
     # --- Data stores (placeholders; clients wired in later slices) ---
     database_url: str = "postgresql+psycopg://alphatrade:alphatrade@localhost:5432/alphatrade"
+    # Explicit connection pool per process (Fable audit L9). The API and the
+    # paper worker each hold at most size + overflow connections; the staging
+    # Postgres plan allows ~100. Recycle drops connections the platform may
+    # have closed while idle (pre-ping still checks each checkout).
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
