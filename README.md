@@ -14,12 +14,13 @@ AlphaTrade helps discretionary crypto traders answer three questions: *Why is th
 - **Evidence with provenance.** Public Binance USD-M perpetual data is the primary source, with Bybit as a configured secondary. Source, freshness and candle finalization are checked separately; stale or missing data refuses rather than guesses.
 - **Deterministic strategy detection.** The Watcher evaluates approved, compiled strategy versions. A confirmed setup becomes a **Candidate**: an opportunity with evidence attached, not an order.
 - **Immutable plans and explicit authority.** Entry, size, stop and targets are bound to a plan revision and hash. A human approval, or the worker when it is separately armed, authorizes that exact revision.
-- **Risk checks are final.** A risk `BLOCK` cannot be overridden. An organization **kill switch** stops new entries. The **account daily equity stop** arms it when equity falls more than 10% (configurable) below the 00:00 UTC baseline.
+- **Risk checks are final.** A risk `BLOCK` cannot be overridden. An organization **kill switch** stops new entries. The **account daily equity stop** arms it when equity falls more than 10% below the 00:00 UTC baseline. A missing or stale baseline, or unreadable equity, also arms it, and only a human can clear it. The 10% is a server setting (`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT`, default 10, accepted range above 0 up to 50), not a trader setting. The Render Blueprint pins it at 10 on the API and the worker, so changing it takes a reviewed `render.yaml` change.
+- **Tenant isolation fails closed.** Org-scoped repository reads refuse to run without an organization. Another organization's record returns the same 404 as a missing id. Failed logins are throttled per email across IPs, and request logs redact query strings and secrets. Details are in [Security](docs/security.md#hardening-november-2026).
 - **Two non-live venues.** Internal paper fills are simulated in PostgreSQL. BloFin demo orders go through a governed path that reads fills back from the venue and checks stop and target protection.
 - **Journal, analytics and learning.** Plans, fills and outcomes link into the Journal. Strategy changes go through validation and an explicit human promotion step.
 - **Grounded Agent.** The Agent answers from scoped records and sources and drafts structured actions. A separate Confirm request is needed before anything changes.
 
-The web app has seven primary destinations: **Dashboard**, **Autonomous** (bot limits, kill switch, leverage and per-strategy results), **Strategies**, **Trades** (Journal), **Agent**, **Knowledge** and **Settings**.
+The web app has seven primary destinations: **Dashboard**, **Autonomous** (bot limits, kill switch, leverage and per-strategy results), **Strategies**, **Trades** (the Journal, as a table of recorded trades), **Agent**, **Knowledge** and **Settings**.
 
 ## Architecture
 

@@ -215,7 +215,16 @@ The paper worker can prune append-only operational logs (`backend/src/app/servic
 It is **off and dry-run by default**: `RETENTION_ENABLED=true` attaches an hourly pass that only
 counts and logs (`db_retention_table`); deletion also needs `RETENTION_DRY_RUN=false`.
 
-Windows are in hours (`RETENTION_*_HOURS`, minimum 24, maximum 8760).
+Windows are in hours (`RETENTION_*_HOURS`, minimum 24, maximum 8760). Settings reject a value below
+24 at startup. The demo snapshot window is still in days.
+
+> [!WARNING]
+> #449 replaced `RETENTION_WATCHER_EVENTS_DAYS`, `RETENTION_WATCHER_ATTEMPT_CHILDREN_DAYS` and
+> `RETENTION_PAPER_EVALUATION_DAYS` with the `*_HOURS` settings below. Settings ignore unknown keys, so the
+> old names are **silently ignored**, and the defaults fall from 7 or 30 days to 24 hours. This matters
+> only once retention is enabled and dry-run is off. `render.yaml` never set the old keys, but a
+> dashboard-only value may still exist. Before you enable retention on any environment, remove the old
+> keys from that service's environment and set the `*_HOURS` values you want.
 
 | Table | Default window | Kept regardless |
 |-------|----------------|-----------------|
@@ -232,6 +241,9 @@ or `reject` (the markers of the monitoring "recent errors" panel), or when
 `fields.evaluation_status` is `failed`, `degraded` or `blocked`.
 
 Trades, orders, fills, journal, plans, candidates, strategies, audit logs, P&L and notes are never pruned.
-Candidate and plan tables are append-only in Postgres (`BEFORE DELETE` triggers), so a 7-day
-candidate/plan window needs a migration and the owner's OK first.
+The main protection is the static allowlist in `db_retention.py`: only the tables above can be pruned, and no
+setting or input can add one. Some plan and candidate tables also have `BEFORE DELETE` triggers in their
+migrations (`canonical_candidates` and its key and transition tables, `trade_plan_revisions`, the
+`canonical_trade_plan_*` tables). The others, such as `candidates`, have none. A candidate or plan window
+would need a migration and the owner's OK first.
 Deletes run in batches (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES_PER_TABLE` per pass).

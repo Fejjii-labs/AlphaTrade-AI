@@ -39,6 +39,8 @@ SameSite `none` **requires** Secure cookies (HTTPS).
 ## Post-deploy verification
 
 ```bash
+# Smoke scripts exit unless SMOKE_PASSWORD (12+ chars) is set; there is no fallback.
+# Export it from your secret store first. Never type it inline or commit it.
 BASE_URL=https://your-api.example.com ./scripts/staging-smoke.sh
 BASE_URL=https://your-api.example.com ./scripts/verify-safety.sh
 ```
