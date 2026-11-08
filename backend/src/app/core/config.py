@@ -81,6 +81,30 @@ class ExchangeMode(StrEnum):
 
 
 # Projected Watcher scopes may use these. Each is a whole number of 15m bars.
+# Local-only development signing key. Outside local it is accepted solely by a
+# disarmed worker (no HTTP surface, never signs or verifies tokens); the API and
+# armed workers refuse it in ``deployment_safety`` and ``security.tokens``.
+DEFAULT_LOCAL_JWT_SECRET = "dev-only-change-me-before-production"
+WEAK_JWT_SECRETS = frozenset(
+    {
+        DEFAULT_LOCAL_JWT_SECRET,
+        "change-me-in-production-use-long-random-value",
+        "changeme",
+        "secret",
+    }
+)
+_JWT_PLACEHOLDER_MARKERS = ("replace", "placeholder", "change-me", "change_me", "changeme")
+JWT_ALGORITHM = "HS256"
+
+
+def jwt_secret_is_weak(secret: str) -> bool:
+    """True for known weak values and template placeholders (e.g. ``REPLACE_WITH_...``)."""
+    normalized = secret.strip().lower()
+    if normalized in WEAK_JWT_SECRETS:
+        return True
+    return any(marker in normalized for marker in _JWT_PLACEHOLDER_MARKERS)
+
+
 WATCHER_SCAN_TIMEFRAME_CHOICES = ("15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
 
 
@@ -619,10 +643,10 @@ class Settings(BaseSettings):
 
     # --- Authentication ---
     jwt_secret: str = Field(
-        default="dev-only-change-me-before-production",
-        description="HS256 signing secret for access tokens.",
+        default=DEFAULT_LOCAL_JWT_SECRET,
+        description="HS256 signing secret for access tokens (local default only).",
     )
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: str = JWT_ALGORITHM
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     auth_refresh_cookie_enabled: bool = False
@@ -929,12 +953,27 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_jwt_secret(self) -> Settings:
-        """Require a strong JWT secret outside local development."""
+        """Require a strong JWT secret outside local development; pin HS256 everywhere.
+
+        Template placeholders and known weak values are refused outside local
+        regardless of the disarmed-worker deferral. The bare code default is
+        left to ``deployment_safety`` (refused unless the process is a disarmed
+        worker, which never signs or verifies tokens).
+        """
+        if self.jwt_algorithm != JWT_ALGORITHM:
+            raise ValueError(f"jwt_algorithm must be {JWT_ALGORITHM}.")
+        if self.environment is Environment.LOCAL:
+            return self
         secret_length = len(self.jwt_secret.encode("utf-8"))
-        if self.environment is not Environment.LOCAL and secret_length < self.jwt_secret_min_length:
+        if secret_length < self.jwt_secret_min_length:
             raise ValueError(
                 f"jwt_secret must be at least {self.jwt_secret_min_length} bytes in "
                 f"{self.environment.value} environments."
+            )
+        if self.jwt_secret != DEFAULT_LOCAL_JWT_SECRET and jwt_secret_is_weak(self.jwt_secret):
+            raise ValueError(
+                "jwt_secret is a known weak placeholder; use a long random value "
+                f"in {self.environment.value} environments."
             )
         return self
 

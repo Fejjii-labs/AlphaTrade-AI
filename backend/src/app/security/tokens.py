@@ -8,10 +8,22 @@ from typing import Any
 
 import jwt
 
-from app.core.config import Settings
+from app.core.config import JWT_ALGORITHM, Environment, Settings, jwt_secret_is_weak
 from app.core.errors import AuthError
 
 _ACCESS_ACTORS = frozenset({"user", "agent", "bot", "service"})
+
+
+def _signing_secret(settings: Settings) -> str:
+    """Return the signing key, refusing weak/placeholder keys outside local.
+
+    Settings validation already refuses these for the API; this keeps any
+    process that was allowed to boot with the local default (a disarmed
+    worker) from ever issuing or accepting a token signed with it.
+    """
+    if settings.environment is not Environment.LOCAL and jwt_secret_is_weak(settings.jwt_secret):
+        raise AuthError("Access tokens are unavailable: signing key is not configured.")
+    return settings.jwt_secret
 
 
 def create_access_token(
@@ -42,7 +54,7 @@ def create_access_token(
         "exp": datetime.now(UTC) + timedelta(seconds=expires_in),
         "iat": datetime.now(UTC),
     }
-    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    token = jwt.encode(payload, _signing_secret(settings), algorithm=JWT_ALGORITHM)
     return token, expires_in
 
 
@@ -55,11 +67,12 @@ def decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
     one of the issued actors; an omitted actor is left for the caller.
     """
 
+    secret = _signing_secret(settings)
     try:
         payload = jwt.decode(
             token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
+            secret,
+            algorithms=[JWT_ALGORITHM],
             options={"require": ["exp", "iat", "sub", "org_id", "type"]},
         )
     except jwt.PyJWTError as exc:

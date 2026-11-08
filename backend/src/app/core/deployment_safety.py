@@ -13,19 +13,12 @@ from app.core.config import (
     ExchangeMode,
     ExecutionMode,
     Settings,
+    jwt_secret_is_weak,
 )
 from app.core.exchange_safety import BLOFIN_PRODUCTION_HOSTS, is_allowlisted_demo_host
 from app.market_activation.profile import REPLAY_MODES, perpetual_evidence_health
 
 _LOCALHOST_MARKERS = ("localhost", "127.0.0.1")
-_WEAK_JWT_SECRETS = frozenset(
-    {
-        "dev-only-change-me-before-production",
-        "change-me-in-production-use-long-random-value",
-        "changeme",
-        "secret",
-    }
-)
 _VALID_SAMESITE = frozenset({"lax", "strict", "none"})
 
 
@@ -99,7 +92,9 @@ def validate_deployment_settings(settings: Settings) -> None:
 
     defer_ops = defer_operational_dependencies(settings)
 
-    if not defer_ops and settings.jwt_secret.strip().lower() in _WEAK_JWT_SECRETS:
+    # Placeholders are also refused unconditionally in Settings; here the bare
+    # local default is refused too unless this is a disarmed worker boot.
+    if not defer_ops and jwt_secret_is_weak(settings.jwt_secret):
         errors.append("jwt_secret is a known weak placeholder; use a long random value")
 
     if not settings.auth_refresh_cookie_enabled:
@@ -161,8 +156,8 @@ def validate_deployment_settings(settings: Settings) -> None:
             "arrive via a trusted reverse proxy; 0 would rate-limit all clients as one)"
         )
 
-    if settings.environment is Environment.PRODUCTION and settings.debug:
-        errors.append("debug must be false in production")
+    if settings.debug:
+        errors.append(f"debug must be false in {settings.environment.value}")
     if settings.environment is Environment.PRODUCTION:
         # Griller #411 C5: the Blueprint pins these; enforce them in code too.
         if not settings.must_verify_email:

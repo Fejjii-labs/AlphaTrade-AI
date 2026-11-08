@@ -166,6 +166,7 @@ def test_login_blocked_when_email_unverified_when_required(
 def test_must_verify_email_true_for_staging_environment() -> None:
     settings = Settings(
         environment="staging",
+        debug=False,
         log_json=False,
         execution_mode="paper",
         enable_real_trading=False,
