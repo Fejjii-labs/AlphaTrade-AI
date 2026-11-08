@@ -2,7 +2,46 @@
 
 AlphaTrade connects preparation, governed paper execution and review in a modular application. The web interface and Agent make the workflow understandable; application services preserve the facts and control actions.
 
-**Source inspected:** main `b58bedae1baad82b36fd32b04d056372cac3c733`, October 7, 2026. [Current status](current_status.md) separates implemented paths, supplied deployment observations and demonstrated behavior.
+**Source inspected:** main `c5a46c99468e024f4659bb6549b19f3d0b76c748`, November 7, 2026. [Current status](current_status.md) separates implemented paths, supplied deployment observations and demonstrated behavior.
+
+## At a glance
+
+```mermaid
+flowchart LR
+  E["Market evidence<br/>public, source + freshness"] --> W["Watcher<br/>approved strategy rules"]
+  W --> C["Candidate<br/>setup with evidence"]
+  C --> P["Immutable plan<br/>entry, size, stop, targets"]
+  P --> R{"Risk checks<br/>kill switch, caps, daily stop"}
+  R -->|BLOCK is final| X["Refused and recorded"]
+  R -->|allowed| V{"Venue"}
+  V --> PP["Internal paper"]
+  V --> BD["BloFin demo"]
+  PP --> J["Journal<br/>fills, outcome, provenance"]
+  BD --> J
+  J --> L["Review and learning<br/>human-approved changes"]
+  L -.->|new strategy version| W
+  C -.->|alert| T["Telegram"]
+```
+
+Every arrow writes a record, so any trade can be traced back to the evidence and rule that produced it. Nothing on this path reaches a real-money venue.
+
+## Real money is refused in layers
+
+```mermaid
+flowchart TD
+  Env["Environment variables"] --> L1["1. Settings load<br/>paper_safety: EXECUTION_MODE=paper,<br/>ENABLE_REAL_TRADING=false, trade_live refused"]
+  L1 --> L2["2. Settings.real_trading_enabled<br/>always false"]
+  L2 --> L3["3. Credential release<br/>execution_credentials: demo mode, demo host,<br/>staging capability pin"]
+  L3 --> L4["4. BloFin client<br/>assert_demo_host on construction"]
+  L4 --> L5["5. Demo order submit<br/>_assert_safe before every order"]
+  L5 --> Demo["BloFin demo venue only"]
+  L1 -.->|fails| Stop1["Process does not start"]
+  L3 -.->|fails| Stop2["Secrets stay sealed"]
+  L4 -.->|fails| Stop3["Client refuses"]
+  L5 -.->|fails| Stop4["Order refused"]
+```
+
+Each layer checks again on its own, so a single misconfiguration or bypassed caller cannot reach a live order path. Sources: [paper safety](../backend/src/app/core/paper_safety.py), [settings](../backend/src/app/core/config.py), [execution credentials](../backend/src/app/core/execution_credentials.py), [exchange safety](../backend/src/app/core/exchange_safety.py), [demo execution](../backend/src/app/providers/exchange/blofin_execution.py).
 
 ## System architecture and external dependencies
 
@@ -39,6 +78,26 @@ Arrows describe requests and dependencies, not a claim that every provider is cu
 When `PAPER_EXIT_MONITOR_ENABLED` is true and the worker is not the disarmed staging process, that same worker also runs an internal-paper stop/target exit component. A disarmed worker does not attach it and does not open PostgreSQL or public candles, even if the flag is true. Live trades read the same public perpetual candles the live watcher uses for that evidence identity. Gapped, stale, or leading-gap candles are refused. A worker clock that disagrees with database `now()` refuses the cycle. A crossing 24 hours or older is a journaled backfill and does not move the breakers; a losing backfill alerts and arms the kill switch instead. A losing close younger than 24 hours whose bar is older than the paper loss cooldown or one candle does not move those breakers either; it arms the same kill switch (AT-ADR-128). The enabled flag defaults false, production refuses it, and the blueprint does not set it. Dry-run defaults true: removing `PAPER_EXIT_MONITOR_DRY_RUN` does not close trades. A live close requires that variable set to false. Arming also refuses when the worker cycle is longer than the smallest configured strategy timeframe; the after-loss cooldown no longer gates arming (AT-ADR-152). The same gates refuse the autonomous loops. The worker writes a heartbeat each cycle; `GET /health/paper-worker` reports a stale or missing worker or exit-monitor heartbeat and, when armed, sends one deduped Telegram page per gap. Repeated `degraded_repeat`, clock-skew, and arming-refusal conditions stay in structured logs and health JSON only. A refused arming is visible on `GET /health` and `GET /health/paper-worker`, and the exit-monitor thread has its own heartbeat. Kill-switch activations from every source page Telegram in the same redacted form. See [paper exit monitor](paper_exit_monitor.md).
 
 Redis supports applicable security and caching functions; it is not the trade ledger. Qdrant serves knowledge indexing/search. The current Agent's default retrieval reads SQL chunks lexically; the Qdrant edge belongs to the knowledge service, not every conversational turn. No worker-to-LLM or worker-to-Qdrant dependency is asserted merely because provider settings exist in its template.
+
+### Inside the paper worker
+
+```mermaid
+flowchart TB
+  Sup["PaperWorkerSupervisor<br/>python -m app.workers.paper_worker"]
+  Sup --> Watcher["watcher · 15 s<br/>scan, Candidates, paper or demo continuation"]
+  Sup --> Tg["telegram · 15 s<br/>projection outbox, polling"]
+  Sup -.-> Exit["exit_monitor · 15 s<br/>internal paper stop/target, equity stop sweep"]
+  Sup -.-> Snap["demo_snapshot · 45 s<br/>BloFin demo account mirror"]
+  Sup -.-> Act["activity · 60 s<br/>BloFin demo activity"]
+  Sup -.-> Idx["indexing<br/>knowledge jobs"]
+  Sup --> Dog["memory watchdog<br/>soft RSS limit, clean exit 75"]
+  Watcher --> PG[("PostgreSQL<br/>leases, fences, records")]
+  Tg --> PG
+  Exit --> PG
+  Snap --> PG
+```
+
+Each component has its own thread, health record and failure counter, and gets its own copy of the settings, so a Telegram failure cannot change Watcher authority. Dashed components attach only when their own flag is on. Intervals are defaults.
 
 BloFin account sync is a read path. Manual demo submission belongs to the API's owner-confirmed capability; strategy-driven governed demo continuation belongs to a separately armed worker path. Telegram notification receipt is independent of either execution venue. [Hosting and operational detail](deployment.md).
 
@@ -135,7 +194,7 @@ flowchart TD
 
 The Agent reads exact recorded trade/assessment lineage for historical questions rather than substituting a current forming setup. It distinguishes planned targets, Journal projections, actual fills and verified protection. Current policy comparisons come from deterministic application policy, not a retrieved playbook. Analytics, Daily Review, learning-status reads and execution explanation can use deterministic replies rather than model prose. Missing facts remain explicit. [Agent workflow](agent_workflow.md) · [Retrieval](rag_system.md).
 
-The conversational responder requests `GENERAL_AGENT_SYNTHESIS` through ModelRouter, whose Tier A default is `gpt-4o`. Base/Tier B default to `gpt-4o-mini`; embedding default is `text-embedding-3-small`. These are configuration defaults, not observed deployed model identities. Local mock providers and hosted fail-closed providers have different policies. The earlier LangGraph `/chat/message` path remains a compatibility surface.
+The conversational responder requests `GENERAL_AGENT_SYNTHESIS` through ModelRouter, whose Tier A default is `gpt-6.1-sol`. Base (`LLM_MODEL`) and Tier B default to `gpt-6-luna`; embedding default is `text-embedding-3-small`. These are configuration defaults, not observed deployed model identities. Local mock providers and hosted fail-closed providers have different policies. The earlier LangGraph `/chat/message` path remains a compatibility surface.
 
 Sending a turn stores conversation records and supported drafts; it does not apply the proposed domain mutation. Confirm/Reject are separate requests. Confirmation revalidates ownership, exact content and action-specific state, then calls the supported domain service. A knowledge-save confirmation does not authorize trading; strategy drafting does not confer canonical lifecycle approval. Browser dictation/playback uses the same text flow; backend voice/image-analysis contracts remain unimplemented.
 
@@ -169,10 +228,10 @@ Manifest/lock versions identify the inspected repository, not running managed-se
 
 | Component | Declared or locked source baseline | Responsibility |
 | --- | --- | --- |
-| Frontend | [package.json](../frontend/package.json): Next.js `15.5.18`, React `^19.0.0`, TypeScript `^5`, Tailwind `^3.4.1`; [lock](../frontend/package-lock.json): React `19.2.6`, TypeScript `5.9.3`, Tailwind `3.4.19`. | Six workspaces, charts, action review and browser speech controls. |
+| Frontend | [package.json](../frontend/package.json): Next.js `15.5.18`, React `^19.0.0`, TypeScript `^5`, Tailwind `^3.4.1`; [lock](../frontend/package-lock.json): React `19.2.6`, TypeScript `5.9.3`, Tailwind `3.4.19`. | Seven primary destinations (Dashboard, Autonomous, Strategies, Trades, Agent, Knowledge, Settings), charts, action review and browser speech controls. |
 | Backend | [pyproject.toml](../backend/pyproject.toml): Python `>=3.12`; [uv.lock](../backend/uv.lock): FastAPI `0.136.3`, Pydantic `2.13.4`, SQLAlchemy `2.0.50`, LangGraph `1.2.2`. | Authenticated API, Agent, scoped services and deterministic authority. |
 | Worker | Same backend package/image; Render runs `app.workers.paper_worker`. | Watcher/Telegram supervision, leases and separately authorized continuation. |
-| PostgreSQL | Local [Compose](../docker-compose.yml): `postgres:16-alpine`; Alembic release head `a6manualdemo001`. | Durable ledger and application records. Managed-server version is not established here. |
+| PostgreSQL | Local [Compose](../docker-compose.yml): `postgres:16-alpine`; Alembic head `a26equitystop002`. | Durable ledger and application records. Managed-server version is not established here. |
 | Redis | Local Compose: `redis:7-alpine`; locked Python client `8.0.0`. | Applicable denylist, rate limiting and optional market cache. Client version is not server version. |
 | Qdrant | Local Compose: `qdrant/qdrant:v1.13.2`; locked Python client `1.18.0`. | Knowledge vector index. Hosted policy requires authoritative Qdrant. |
 | Providers | [Factory](../backend/src/app/providers/factory.py), [policy](../backend/src/app/core/provider_policy.py), [model router](../backend/src/app/services/model_router.py). | LLM and embeddings; resolved runtime models require observation. |
