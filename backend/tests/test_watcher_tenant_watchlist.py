@@ -15,8 +15,9 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import Settings
 from app.core.errors import ConflictError
 from app.db.base import Base
-from app.db.models import Organization
+from app.db.models import Organization, User
 from app.db.session import get_session
+from app.db.watcher_assignments import WatcherAssignmentReceiptRow
 from app.db.watcher_watchlist import WatcherSymbolStatusRow, WatcherWatchlistRow
 from app.main import create_app
 from app.market_contracts.errors import StaleEvidenceError, WrongInstrumentError
@@ -70,6 +71,30 @@ def settings(**kwargs):
     )
 
 
+def _grant_scan_authority(session, *organizations):
+    """M9 rotates only tenants with an enabled strategy or a watcher assignment.
+
+    An empty assignment receipt is the narrowest such authority: it adds no
+    strategy scan targets and no managed coverage, so these tenants still run
+    the plain five-symbol probe composition.
+    """
+    user = User(id=uuid4(), email=f"watchlist-{uuid4().hex}@example.test", hashed_password="x")
+    session.add(user)
+    session.flush()
+    session.add_all(
+        WatcherAssignmentReceiptRow(
+            organization_id=organization,
+            request_key="m9-scan-authority",
+            user_id=user.id,
+            payload_hash="0" * 64,
+            configuration_revision=0,
+            response={},
+            created_at=datetime.now(UTC),
+        )
+        for organization in organizations
+    )
+
+
 @pytest.fixture
 def db(tmp_path):
     engine = create_engine(
@@ -80,6 +105,8 @@ def db(tmp_path):
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as session:
         session.add_all([Organization(id=ORG, name="A"), Organization(id=OTHER, name="B")])
+        session.flush()
+        _grant_scan_authority(session, ORG, OTHER)
         session.commit()
     yield factory
     engine.dispose()
