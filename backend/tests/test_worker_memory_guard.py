@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -108,17 +107,25 @@ def test_tripped_watchdog_stops_the_supervisor_cleanly_and_exits_nonzero() -> No
     # The first check is below the limit; the next due check trips it.
     threading.Timer(0.2, lambda: rss.__setitem__(0, 2000)).start()
     # Safety stop: if the watchdog never stops the loop, end it so the test fails.
-    safety = threading.Timer(5.0, lambda: setattr(supervisor, "_signaled", True))
+    # It records that it fired, so the test tells the two stops apart without a
+    # wall-clock bound: thread startup under full-suite load can take seconds.
+    safety_fired = threading.Event()
+
+    def _safety_stop() -> None:
+        safety_fired.set()
+        supervisor._signaled = True
+
+    safety = threading.Timer(60.0, _safety_stop)
     safety.start()
     done = threading.Event()
-    started = time.monotonic()
     try:
         supervisor.serve_until_signal(ready=done.set)
     finally:
         safety.cancel()
     assert done.is_set()
-    # Stopped by the watchdog (about 1s check interval), not by the safety stop.
-    assert time.monotonic() - started < 4.0
+    # Stopped by the watchdog, not by the safety stop or a signal.
+    assert not safety_fired.is_set()
+    assert supervisor._signaled is False
     health = supervisor.snapshot()
     assert health.stopping is True
     assert health.watcher.status == "stopped" and health.telegram.status == "stopped"
