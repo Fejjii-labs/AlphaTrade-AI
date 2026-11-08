@@ -16,6 +16,7 @@ a value a deploy resets.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -24,40 +25,68 @@ from app.core.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 
-PINNED: frozenset[str] = frozenset(
-    {
-        # Paper-only and real-money posture.
-        "ENVIRONMENT",
-        "EXECUTION_MODE",
-        "ENABLE_REAL_TRADING",
-        "BILLING_ENABLED",
-        # Auth, cookies, rate limits, proxy trust, CORS, logging.
-        "ACCESS_TOKEN_DENYLIST_ENABLED",
-        "ACCESS_TOKEN_DENYLIST_FAIL_CLOSED",
-        "ACCESS_TOKEN_DENYLIST_USE_REDIS",
-        "AUTH_COOKIE_SAMESITE",
-        "AUTH_COOKIE_SECURE",
-        "AUTH_OMIT_REFRESH_FROM_BODY",
-        "AUTH_REFRESH_COOKIE_ENABLED",
-        "CORS_ORIGINS",
-        "DEBUG",
-        "LOG_JSON",
-        "RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK",
-        "RATE_LIMIT_USE_REDIS",
-        "TRUSTED_PROXY_HOPS",
-        "REQUIRE_EMAIL_VERIFIED",
-        "DEMO_SEED_ENABLED",
-        # Staging public market-evidence contract (unset would fall back to replay).
-        "MARKET_DATA_ENABLED",
-        "MARKET_DATA_FUTURES_BASE_URL",
-        "BYBIT_PERPETUAL_BASE_URL",
-        "PERPETUAL_EVIDENCE_SOURCE",
-        "PERPETUAL_EVIDENCE_SECONDARY_SOURCE",
-        "PERPETUAL_EVIDENCE_TIMEOUT_SECONDS",
-        # Allocator arena cap for the 512 MiB worker.
-        "MALLOC_ARENA_MAX",
-    }
+API = "alphatrade-api-staging"
+WORKER = "alphatrade-paper-worker-staging"
+
+_CORS = (
+    "https://alpha-trade-ai-eight.vercel.app,"
+    "https://alpha-trade-ai-alphatrade-ai.vercel.app,"
+    "https://alpha-trade-ai-git-main-alphatrade-ai.vercel.app"
 )
+
+# Pins on both services, with the exact value a sync re-applies.
+_SHARED_PINS: dict[str, str] = {
+    # Paper-only and real-money posture.
+    "ENVIRONMENT": "staging",
+    "EXECUTION_MODE": "paper",
+    "ENABLE_REAL_TRADING": "false",
+    # AT-ADR-152 account daily equity stop: the org kill switch arms at a 10% drop.
+    "ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT": "10",
+    # Auth, cookies, rate limits, proxy trust, CORS, logging.
+    "ACCESS_TOKEN_DENYLIST_ENABLED": "true",
+    "ACCESS_TOKEN_DENYLIST_FAIL_CLOSED": "true",
+    "ACCESS_TOKEN_DENYLIST_USE_REDIS": "true",
+    "AUTH_COOKIE_SAMESITE": "none",
+    "AUTH_COOKIE_SECURE": "true",
+    "AUTH_OMIT_REFRESH_FROM_BODY": "true",
+    "AUTH_REFRESH_COOKIE_ENABLED": "true",
+    "CORS_ORIGINS": _CORS,
+    "DEBUG": "false",
+    "LOG_JSON": "true",
+    "RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK": "false",
+    "RATE_LIMIT_USE_REDIS": "true",
+    "TRUSTED_PROXY_HOPS": "1",
+    # Staging public market-evidence contract (unset would fall back to replay).
+    "MARKET_DATA_ENABLED": "true",
+    "MARKET_DATA_FUTURES_BASE_URL": "https://fapi.binance.com",
+    "BYBIT_PERPETUAL_BASE_URL": "https://api.bybit.com",
+    "PERPETUAL_EVIDENCE_SOURCE": "binance_usdm",
+    "PERPETUAL_EVIDENCE_SECONDARY_SOURCE": "bybit_usdt_perpetual",
+    "PERPETUAL_EVIDENCE_TIMEOUT_SECONDS": "10",
+}
+
+# Every pin per service. A missing, extra or changed pin fails the test.
+EXPECTED_PINS: dict[str, dict[str, str]] = {
+    API: {
+        **_SHARED_PINS,
+        "BILLING_ENABLED": "false",
+        # Deliberate staging choices (Fable M21 owns them).
+        "REQUIRE_EMAIL_VERIFIED": "false",
+        "DEMO_SEED_ENABLED": "true",
+    },
+    WORKER: {
+        **_SHARED_PINS,
+        # Allocator arena cap for the 512 MiB worker.
+        "MALLOC_ARENA_MAX": "2",
+    },
+}
+
+PINNED: frozenset[str] = frozenset(key for pins in EXPECTED_PINS.values() for key in pins)
+
+# Never in render.yaml: a pin of false would disarm an engaged emergency stop on
+# the next sync, and a pin of true would halt staging. Incident-only operator
+# control (AT-014), set in the dashboard; see docs/staging_deployment_runbook.md.
+NEVER_IN_BLUEPRINT = frozenset({"GLOBAL_KILL_SWITCH_ACTIVE"})
 
 SECRETS: frozenset[str] = frozenset(
     {"DATABASE_URL", "REDIS_URL", "QDRANT_URL", "QDRANT_API_KEY", "JWT_SECRET", "OPENAI_API_KEY"}
@@ -144,14 +173,50 @@ def test_pins_keep_a_literal_value() -> None:
             assert item.get("sync") is not False, (name, item["key"])
 
 
-def test_real_money_pins_stay_hard_coded_off() -> None:
+def _as_text(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def test_every_pin_has_its_exact_value_on_each_service() -> None:
+    pins: dict[str, dict[str, str]] = {}
     for name, item in _env_items():
-        if item["key"] == "ENABLE_REAL_TRADING":
-            assert item["value"] is False or str(item["value"]).lower() == "false", name
-        if item["key"] == "EXECUTION_MODE":
-            assert item["value"] == "paper", name
-        if item["key"] == "ENVIRONMENT":
-            assert item["value"] == "staging", name
+        if item["key"] in PINNED:
+            pins.setdefault(name, {})[str(item["key"])] = _as_text(item["value"])
+    assert pins == EXPECTED_PINS
+
+
+def test_safety_keys_are_present_on_each_service() -> None:
+    safety = {
+        "ENVIRONMENT",
+        "EXECUTION_MODE",
+        "ENABLE_REAL_TRADING",
+        "ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT",
+        "DEBUG",
+        "CORS_ORIGINS",
+        "AUTH_COOKIE_SECURE",
+        "ACCESS_TOKEN_DENYLIST_FAIL_CLOSED",
+        "RATE_LIMIT_ALLOW_IN_MEMORY_FALLBACK",
+    }
+    keys: dict[str, set[str]] = {}
+    for name, item in _env_items():
+        keys.setdefault(name, set()).add(str(item["key"]))
+    assert set(keys) == {API, WORKER}
+    for name, present in keys.items():
+        assert safety <= present, (name, sorted(safety - present))
+
+
+def test_pinned_equity_stop_threshold_is_what_settings_load() -> None:
+    for name, pins in EXPECTED_PINS.items():
+        pin = pins["ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT"]
+        loaded = Settings(_env_file=None, account_equity_stop_threshold_percent=pin)
+        assert loaded.account_equity_stop_threshold_percent == Decimal("10"), name
+
+
+def test_global_kill_switch_is_never_set_by_the_blueprint() -> None:
+    keys = {str(item["key"]) for _, item in _env_items()}
+    assert not keys & NEVER_IN_BLUEPRINT
 
 
 def test_unset_operator_settings_fall_back_to_safe_defaults() -> None:

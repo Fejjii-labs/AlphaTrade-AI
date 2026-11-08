@@ -21,6 +21,10 @@ services:
         value: paper
       - key: ENABLE_REAL_TRADING
         value: false
+      # AT-ADR-152 account daily equity stop. Pinned so a dashboard edit
+      # cannot loosen it; change it through a PR.
+      - key: ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT
+        value: "10"
       - key: PROVIDER_MODE
         sync: false
       - key: EXCHANGE_MODE
@@ -152,6 +156,8 @@ services:
         value: paper
       - key: ENABLE_REAL_TRADING
         value: false
+      - key: ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT
+        value: "10"
       - key: EXCHANGE_MODE
         sync: false
       - key: WATCHER_ORCHESTRATION_ENABLED
