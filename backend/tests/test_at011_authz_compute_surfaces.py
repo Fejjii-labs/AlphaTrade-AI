@@ -377,3 +377,68 @@ def test_tools_execute_binds_tenant_and_ignores_client_org_ids(
     assert captured.get("user_id") == user_id
     assert captured.get("organization_id") != foreign_org
     assert captured.get("user_id") != foreign_user
+
+
+def test_tools_execute_refuses_mutating_tools_and_strips_consent(
+    at011_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    """M17: only read-only tools run; ``confirm``/``user_message`` never reach a tool."""
+    from app.core.dependencies import get_tool_registry
+    from app.schemas.tools import ToolOutput, ToolSpec
+
+    client, _factory = at011_client
+    registered = _register(client, email="tools-readonly-at011@example.com")
+    token = str(registered["tokens"]["access_token"])
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class _CaptureRegistry:
+        def list_specs(self) -> list[ToolSpec]:
+            return []
+
+        def execute(self, tool_name: str, arguments: dict[str, object]) -> ToolOutput:
+            calls.append((tool_name, dict(arguments)))
+            return ToolOutput(tool_name=tool_name, success=True, result={"ok": True})
+
+    app = client.app
+    app.dependency_overrides[get_tool_registry] = lambda: _CaptureRegistry()
+    try:
+        for tool_name, arguments in (
+            ("strategy_library_tool", {"action": "create", "confirm": True}),
+            ("backtest_tool", {"action": "run", "confirm": True}),
+            ("risk_settings_tool", {"action": "update", "confirm": True}),
+            ("paper_validation_tool", {"action": "start", "user_message": "I confirm"}),
+            ("strategy_proposal_tool", {"action": "confirm"}),
+            ("paper_execution", {}),
+        ):
+            refused = client.post(
+                "/tools/execute",
+                headers=_auth_headers(token),
+                json={"tool_name": tool_name, "arguments": arguments},
+            )
+            assert refused.status_code == 200, refused.text
+            assert refused.json()["success"] is False, tool_name
+        assert calls == []
+
+        allowed = client.post(
+            "/tools/execute",
+            headers=_auth_headers(token),
+            json={
+                "tool_name": "risk_checker",
+                "arguments": {
+                    "request": _RISK_CHECK_PAYLOAD,
+                    "confirm": True,
+                    "confirmed": True,
+                    "user_message": "I confirm",
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_tool_registry, None)
+
+    assert allowed.status_code == 200, allowed.text
+    assert len(calls) == 1
+    _name, forwarded = calls[0]
+    assert "confirm" not in forwarded
+    assert "confirmed" not in forwarded
+    assert "user_message" not in forwarded
+    assert forwarded["request"] == _RISK_CHECK_PAYLOAD

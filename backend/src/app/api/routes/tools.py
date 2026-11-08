@@ -11,6 +11,7 @@ from app.core.dependencies import ToolRegistryDep
 from app.schemas.common import StrictModel
 from app.schemas.tools import ToolOutput, ToolSpec
 from app.security.rbac import ReaderDep, TraderDep
+from app.tools.registry import HTTP_EXECUTABLE_READ_ONLY_TOOLS, HTTP_STRIPPED_TOOL_ARGUMENTS
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -31,9 +32,17 @@ async def execute_tool(
     registry: ToolRegistryDep,
     tenant: TraderDep,
 ) -> ToolOutput:
-    # Bind tenant from JWT; never trust client-supplied organization_id/user_id.
+    # Read-only tools only; mutations go through the proposal/confirm flow.
+    if body.tool_name not in HTTP_EXECUTABLE_READ_ONLY_TOOLS:
+        return ToolOutput(
+            tool_name=body.tool_name,
+            success=False,
+            error="Tool is not executable via this route (read-only tools only).",
+        )
+    # Bind tenant from JWT; never trust client-supplied identity or consent
+    # (organization_id/user_id/confirm/user_message are dropped).
     arguments = {
-        **body.arguments,
+        **{k: v for k, v in body.arguments.items() if k not in HTTP_STRIPPED_TOOL_ARGUMENTS},
         "organization_id": str(tenant.organization_id),
         "user_id": str(tenant.user_id),
     }
