@@ -40,6 +40,8 @@ _DDL = (
     "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN)",
     "CREATE TABLE blofin_demo_sync_snapshots (id TEXT PRIMARY KEY, organization_id TEXT, "
     "synced_at TIMESTAMP)",
+    "CREATE TABLE telegram_paper_notifications (intent_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "CREATE TABLE telegram_security_outbox (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
     # A table that must never be touched.
     "CREATE TABLE journal_trades (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
 )
@@ -160,6 +162,7 @@ def test_policies_never_name_trade_audit_or_strategy_tables() -> None:
         "watcher_source_fetch_attempts",
         "watcher_scan_attempts",
         "paper_evaluation_observations",
+        "telegram_paper_notifications",
         "blofin_demo_sync_snapshots",
     }
 
@@ -245,6 +248,29 @@ def test_scan_attempts_keep_terminal_unfinished_and_recent_lineages(factory) -> 
     # and child-pinned attempts stay.
     assert kept == {"done-2", "failed-1", "open-1", "recent-1", "recent-2", "child-1", "child-2"}
     assert lineages == 5
+
+
+def test_telegram_notifications_go_after_24_hours_and_the_outbox_stays(factory) -> None:
+    old, fresh = NOW - timedelta(hours=25), NOW - timedelta(hours=23)
+    _insert(
+        factory,
+        "INSERT INTO telegram_paper_notifications VALUES (:id, :at)",
+        [{"id": "old", "at": old}, {"id": "fresh", "at": fresh}],
+    )
+    _insert(
+        factory,
+        "INSERT INTO telegram_security_outbox VALUES (:id, :at)",
+        [{"id": "sent", "at": NOW - timedelta(days=30)}],
+    )
+    run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT intent_id FROM telegram_paper_notifications"))
+            .scalars()
+            .all()
+        )
+    assert kept == {"fresh"}
+    assert _count(factory, "telegram_security_outbox") == 1
 
 
 def test_error_markers_match_the_monitoring_panel() -> None:

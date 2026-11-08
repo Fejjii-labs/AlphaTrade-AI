@@ -1,7 +1,9 @@
 """Bounded retention for append-only runtime tables (H5).
 
 Only operational logs are pruned. Trades, journal, orders, fills, plans,
-candidates, strategies, audit logs, P&L and notes are never touched. Each
+candidates, strategies, audit logs, P&L and notes are never touched. Plans
+and candidates are append-only in Postgres (DELETE triggers), so pruning them
+needs a migration and the owner's OK first. Each
 policy deletes in small batches by primary key so no statement holds a long
 lock on a hot table. Dry-run counts what would go and deletes nothing.
 """
@@ -134,6 +136,16 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             keep_predicate=(
                 "t.journal_trade_id IS NULL AND t.filled = false AND t.plan_approved = false"
             ),
+        ),
+        # Paper Telegram notification identity rows. Resend safety lives on
+        # telegram_security_outbox idempotency keys, which are never pruned, and
+        # the intent id is a uuid5 of the identity, so a re-projection re-creates
+        # the same id. Threads, messages and confirmations are kept.
+        RetentionPolicy(
+            table="telegram_paper_notifications",
+            primary_key="intent_id",
+            timestamp="created_at",
+            window=timedelta(hours=settings.retention_telegram_notifications_hours),
         ),
         RetentionPolicy(
             table="blofin_demo_sync_snapshots",
