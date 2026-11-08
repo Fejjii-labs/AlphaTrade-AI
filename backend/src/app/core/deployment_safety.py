@@ -308,6 +308,9 @@ def _telegram_activation_errors(settings: Settings) -> list[str]:
 
     if controlled_telegram_projection(settings) or telegram_enrollment_runtime(settings):
         return errors
+    demo_reason = _telegram_demo_gate_error(settings)
+    if demo_reason:
+        errors.append(demo_reason)
     if settings.telegram_interaction_enabled:
         errors.append("telegram_interaction_enabled must be false in staging/production")
     if settings.telegram_paper_activation_armed:
@@ -319,6 +322,44 @@ def _telegram_activation_errors(settings: Settings) -> list[str]:
     if settings.telegram_webhook_secret.strip():
         errors.append("telegram_webhook_secret must be empty in staging/production")
     return errors
+
+
+def _telegram_demo_gate_error(settings: Settings) -> str:
+    """Name what the BloFin demo worker gate lacks when it is why Telegram is refused.
+
+    Diagnostics only: the refusal itself is unchanged. Telegram on
+    ``paper_exchange_demo`` needs the governed demo worker gate, the same one
+    that lets the worker place demo orders. Names settings, never values.
+    """
+
+    if settings.exchange_mode is not ExchangeMode.PAPER_EXCHANGE_DEMO:
+        return ""
+    if not (
+        settings.telegram_interaction_enabled
+        or settings.telegram_paper_activation_armed
+        or settings.telegram_network_permitted
+    ):
+        return ""
+    from app.core.execution_credentials import (
+        blofin_execution_authorized,
+        governed_demo_worker_access_requested,
+    )
+
+    missing: list[str] = []
+    if not governed_demo_worker_access_requested(settings):
+        missing.append(
+            "governed demo worker pin (GOVERNED_BLOFIN_DEMO_ENABLED, "
+            "GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID/USER_ID/ACCOUNT_ID as UUIDs, "
+            "WATCHER_ORCHESTRATION_ENABLED, WATCHER_PAPER_STAGING_ACTIVATION)"
+        )
+    if not blofin_execution_authorized(settings):
+        missing.append(
+            "BloFin demo execution gate (BLOFIN_DEMO_ENABLED, demo credentials, "
+            "allowlisted demo host, paper only)"
+        )
+    if not missing:
+        return ""
+    return "telegram on exchange_mode=paper_exchange_demo requires the " + " and the ".join(missing)
 
 
 def _watcher_activation_errors(settings: Settings) -> list[str]:
