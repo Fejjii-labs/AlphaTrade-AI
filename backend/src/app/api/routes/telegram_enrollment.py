@@ -10,21 +10,30 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
-from app.core.auth import TenantDep
 from app.core.config import Environment
 from app.core.dependencies import SettingsDep
 from app.core.errors import ConflictError
 from app.db.session import get_session_factory
 from app.persistence.composition import build_postgres_telegram_security_store
+from app.security.rate_limit import tenant_rate_limit_dependency
+from app.security.rbac import TraderDep
 from app.telegram_activation.policy import PAPER_ACTIVATION_BACKOFF
 from app.telegram_activation.runtime import _NoSend
 from app.telegram_security.clock import SystemClock
 from app.telegram_security.protocol import TelegramSecurityProtocol
 
 router = APIRouter(prefix="/telegram-paper", tags=["telegram-paper"])
+
+# The protocol's own limiter is rebuilt per request; this shared one holds across
+# requests and instances (L16).
+_ENROLLMENT_START_LIMIT = Depends(
+    tenant_rate_limit_dependency(
+        "telegram:enrollment:start", limit=10, window_seconds=600, ip_limit=30, user_limit=10
+    )
+)
 
 
 class EnrollmentStartResponse(BaseModel):
@@ -36,12 +45,16 @@ class EnrollmentStartResponse(BaseModel):
     bot_id: str
 
 
-@router.post("/enrollment/start", response_model=EnrollmentStartResponse)
+@router.post(
+    "/enrollment/start",
+    response_model=EnrollmentStartResponse,
+    dependencies=[_ENROLLMENT_START_LIMIT],
+)
 def start_telegram_enrollment(
-    tenant: TenantDep,
+    tenant: TraderDep,
     settings: SettingsDep,
 ) -> EnrollmentStartResponse:
-    """Issue one enrollment token for this tenant. Does not log the token."""
+    """Issue one enrollment token for an OWNER or TRADER. Does not log the token."""
 
     if settings.environment is Environment.PRODUCTION and not settings.production_demo_active:
         raise ConflictError(

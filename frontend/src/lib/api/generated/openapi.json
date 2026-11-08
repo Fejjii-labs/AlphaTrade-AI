@@ -78759,7 +78759,7 @@
     },
     "/telegram-paper/enrollment/start": {
       "post": {
-        "description": "Issue one enrollment token for this tenant. Does not log the token.",
+        "description": "Issue one enrollment token for an OWNER or TRADER. Does not log the token.",
         "operationId": "start_telegram_enrollment_telegram_paper_enrollment_start_post",
         "responses": {
           "200": {
