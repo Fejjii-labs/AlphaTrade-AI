@@ -118,6 +118,11 @@ OPERATOR: dict[str, str] = {
     "TELEGRAM_PAPER_ACTIVATION_ARMED": "telegram_paper_activation_armed",
     "TELEGRAM_INBOUND_MODE": "telegram_inbound_mode",
     "TELEGRAM_NETWORK_PERMITTED": "telegram_network_permitted",
+    # Fable audit I5/H5: declared so the operator sees them; unset = off + dry-run.
+    "PAPER_EXIT_MONITOR_ENABLED": "paper_exit_monitor_enabled",
+    "PAPER_EXIT_MONITOR_DRY_RUN": "paper_exit_monitor_dry_run",
+    "RETENTION_ENABLED": "retention_enabled",
+    "RETENTION_DRY_RUN": "retention_dry_run",
 }
 
 # Settings that turn something on must default to off when the dashboard has no value.
@@ -139,6 +144,8 @@ _OFF_WHEN_UNSET = {
     "automatic_telegram_delivery_enabled",
     "telegram_paper_activation_armed",
     "telegram_network_permitted",
+    "paper_exit_monitor_enabled",
+    "retention_enabled",
 }
 
 
@@ -229,5 +236,7 @@ def test_unset_operator_settings_fall_back_to_safe_defaults() -> None:
     assert defaults.telegram_inbound_mode.value == "off"
     assert defaults.email_provider == "mock"
     assert defaults.watcher_paper_organization_id == ""
+    assert defaults.paper_exit_monitor_dry_run is True
+    assert defaults.retention_dry_run is True
     assert defaults.enable_real_trading is False
     assert defaults.real_trading_enabled is False
