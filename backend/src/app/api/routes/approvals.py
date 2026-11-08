@@ -94,7 +94,9 @@ async def get_approval_workflow(
         approval_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(view.approval.organization_id, tenant)
+    ensure_same_organization(
+        view.approval.organization_id, tenant, not_found_message="Approval not found"
+    )
     if view.approval.user_id != tenant.user_id:
         raise NotFoundError("Approval not found")
     return view

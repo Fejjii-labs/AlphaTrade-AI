@@ -63,11 +63,9 @@ def resolve_executable_strategy_policy(
         raise NotFoundError("Strategy version not found.")
     try:
         strategy = versioning.assert_tenant_version(version, organization_id=organization_id)
-    except CrossTenantStrategyError as exc:
-        raise StrategyEvaluationPolicyError(
-            "Strategy version does not belong to this organization.",
-            reason_code="organization_mismatch",
-        ) from exc
+    except CrossTenantStrategyError:
+        # Another org's version must be indistinguishable from a missing id.
+        raise NotFoundError("Strategy version not found.") from None
     if user_id is not None and strategy.user_id != user_id:
         raise NotFoundError("Strategy version not found.")
 

@@ -612,3 +612,48 @@ def test_cross_tenant_compile_and_approve_fail_closed(
     assert approve_foreign.status_code in {403, 404, 409, 422}, approve_foreign.text
     compile_a = client.post(f"/strategies/{strategy_id}/versions/{version_id}/compile")
     assert compile_a.status_code in {403, 404, 409, 422}, compile_a.text
+
+
+def test_cross_org_compile_and_approve_match_missing_version(
+    client_env: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _factory = client_env
+    _auth(client)
+    created = client.post(
+        "/strategies",
+        json={
+            "name": "Tenant A oracle",
+            "setup_type": StrategyId.LIQUIDITY_SWEEP_REVERSAL.value,
+            "card": _card().model_dump(mode="json"),
+        },
+    )
+    strategy_id = created.json()["id"]
+    conv_id = client.post("/conversations", json={"strategy_id": strategy_id}).json()["id"]
+    preview = client.post(
+        f"/conversations/{conv_id}/proposals",
+        json={"text": complete_first_slice_preview_text(), "strategy_id": strategy_id},
+    )
+    confirmed = client.post(
+        f"/conversations/{conv_id}/proposals/{preview.json()['id']}/confirm",
+        json=_confirm_payload(preview.json()),
+    )
+    version_id = confirmed.json()["resulting_version_id"]
+
+    _auth(client, EMAIL_B)
+    missing_id = uuid.uuid4()
+    strip = ("request_id", "trace_id")
+
+    def _error(response: object) -> dict[str, object]:
+        body = response.json()["error"]  # type: ignore[attr-defined]
+        return {k: v for k, v in body.items() if k not in strip}
+
+    for action, payload in (("compile", None), ("approve", {"confirm": "I confirm"})):
+        cross_org = client.post(
+            f"/strategies/{strategy_id}/versions/{version_id}/{action}", json=payload
+        )
+        missing = client.post(
+            f"/strategies/{strategy_id}/versions/{missing_id}/{action}", json=payload
+        )
+        assert cross_org.status_code == missing.status_code == 404, cross_org.text
+        assert _error(cross_org) == _error(missing)
+        assert _error(cross_org)["message"] == "Strategy version not found."

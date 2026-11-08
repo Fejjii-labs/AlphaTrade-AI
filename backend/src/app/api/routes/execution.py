@@ -123,7 +123,9 @@ async def place_paper_order(
         body.proposal_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(proposal.organization_id, tenant)
+    ensure_same_organization(
+        proposal.organization_id, tenant, not_found_message="Trade proposal not found"
+    )
     placement = execution_service.place_paper_order(body)
 
     # Replays and concurrent losers have no new unit-of-work to commit. The
@@ -257,7 +259,7 @@ async def get_order(
     execution_service: ExecutionServiceDep,
 ) -> PaperOrder:
     order = execution_service.get_order(order_id)
-    ensure_same_organization(order.organization_id, tenant)
+    ensure_same_organization(order.organization_id, tenant, not_found_message="Order not found")
     return order
 
 

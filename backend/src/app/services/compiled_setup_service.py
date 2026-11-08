@@ -20,7 +20,7 @@ from app.schemas.strategy_lifecycle import (
 )
 from app.schemas.structured_rules import StructuredRules
 from app.services.setup_ast_compiler import compile_from_authored, compile_pattern
-from app.services.strategy_versioning import StrategyVersioningService
+from app.services.strategy_versioning import CrossTenantStrategyError, StrategyVersioningService
 
 _COMPILABLE_STATES = frozenset(
     {
@@ -241,9 +241,13 @@ class CompiledSetupService:
         version = self._session.get(UserStrategyVersion, strategy_version_id)
         if version is None:
             raise NotFoundError("Strategy version not found.")
-        strategy = self._versions.assert_tenant_version(
-            version, organization_id=organization_id, alias=alias
-        )
+        try:
+            strategy = self._versions.assert_tenant_version(
+                version, organization_id=organization_id, alias=alias
+            )
+        except CrossTenantStrategyError:
+            # Another org's version must be indistinguishable from a missing id.
+            raise NotFoundError("Strategy version not found.") from None
         if strategy.user_id != user_id:
             raise NotFoundError("Strategy version not found.")
         if strategy_id is not None and strategy.id != strategy_id:
