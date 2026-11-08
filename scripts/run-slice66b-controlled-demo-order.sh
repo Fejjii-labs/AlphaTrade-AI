@@ -167,7 +167,7 @@ if [[ "${SKIP_REGISTER:-false}" == "true" ]]; then
   TOKEN="$SMOKE_ACCESS_TOKEN"
 else
   EMAIL="${SMOKE_EMAIL:-slice66b-$(date +%s)@example.com}"
-  PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+  PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
   ORG_NAME="${SMOKE_ORG:-Slice 66b Validate $(date +%s)}"
   register_json="$(curl -fsS -X POST "${BACKEND_URL}/auth/register" \
     -H 'Content-Type: application/json' \

@@ -32,7 +32,7 @@ fi
 COOKIE_MODE="${COOKIE_MODE:-false}"
 SKIP_REGISTER="${SKIP_REGISTER:-false}"
 EMAIL="${SMOKE_EMAIL:-canonical-smoke-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 ORG_NAME="${SMOKE_ORG:-Canonical Smoke Org $(date +%s)}"
 EMAIL_B="${SMOKE_EMAIL_B:-canonical-smoke-b-$(date +%s)@example.com}"
 ORG_B="${SMOKE_ORG_B:-Canonical Smoke Org B $(date +%s)}"

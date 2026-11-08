@@ -5,8 +5,11 @@
 #   DEMO_SEED_PASSWORD='...' BACKEND_URL=https://alphatrade-api-staging.onrender.com ./scripts/seed-demo.sh --api
 #   DEMO_SEED_USE_SERVER_PASSWORD=true ./scripts/seed-demo.sh --api   # Render has DEMO_SEED_PASSWORD
 #
-# API mode: any owner token (DEMO_OWNER_TOKEN) or auto-register bootstrap owner.
-# Password: DEMO_SEED_PASSWORD in request body when set locally; otherwise server env.
+# API mode: demo-org owner token (DEMO_OWNER_TOKEN), demo login with
+# DEMO_SEED_PASSWORD, or (first-time bootstrap only, while the demo org does not
+# exist) an auto-registered throwaway owner. The server refuses other owners.
+# Password: the server-side DEMO_SEED_PASSWORD is authoritative outside local; a
+# body password is honoured only when the backend runs with ENVIRONMENT=local.
 # Never prints passwords.
 #
 # CLI mode (requires DATABASE_URL / local backend env):
@@ -75,7 +78,8 @@ PY
       echo "      Set DEMO_BOOTSTRAP_PASSWORD (same as STAGING_BOOTSTRAP_PASSWORD) or DEMO_OWNER_TOKEN." >&2
     fi
     BOOT_EMAIL="demo-seed-bootstrap-$(date +%s)@example.com"
-    BOOT_PASS="SecurePass-DemoSeedBootstrap-1"
+    # Throwaway bootstrap owner: random per run, never a committed literal (M20).
+    BOOT_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
     BOOT_ORG="Demo Seed Bootstrap $(date +%s)"
     REG_JSON="$(curl -fsS -X POST "${BACKEND_URL}/auth/register" \
       -H 'Content-Type: application/json' \

@@ -11,7 +11,7 @@ BASE_URL="${BASE_URL%/}"
 FRONTEND_URL="${FRONTEND_URL%/}"
 
 EMAIL="${SMOKE_EMAIL:-smoke-$(date +%s)@example.com}"
-PASSWORD="${SMOKE_PASSWORD:-secure-password-1}"
+PASSWORD="${SMOKE_PASSWORD:?Set SMOKE_PASSWORD (12+ chars; never commit it)}"
 
 echo "E2E smoke — BASE_URL=${BASE_URL} FRONTEND_URL=${FRONTEND_URL}"
 
