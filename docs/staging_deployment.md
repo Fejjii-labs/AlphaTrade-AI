@@ -147,6 +147,8 @@ ENV_FILE=.env.staging ./scripts/check-env.sh
 BACKEND_URL=https://alphatrade-api-staging.onrender.com ./scripts/verify-safety.sh
 
 # Full auth + chat + cookie mode
+# Smoke scripts exit unless SMOKE_PASSWORD (12+ chars) is set; there is no fallback.
+# Export it from your secret store first. Never type it inline or commit it.
 FRONTEND_URL=https://alpha-trade-ai-eight.vercel.app \
 COOKIE_MODE=true \
 ALLOW_DEGRADED_READY=true \

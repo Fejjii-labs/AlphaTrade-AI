@@ -87,6 +87,9 @@ Expect via `verify-safety.sh` (always run by the gate): `execution_mode=paper`,
 Individual scripts (also invoked by the standard gate):
 
 ```bash
+# Smoke scripts exit unless SMOKE_PASSWORD (12+ chars) is set; there is no fallback.
+# Export it from your secret store first. Never type it inline or commit it.
+
 BASE_URL=<BACKEND_URL> ./scripts/verify-safety.sh
 
 FRONTEND_URL=<FRONTEND_URL> \
@@ -201,6 +204,8 @@ docker compose up --build -d
 
 ```bash
 docker compose up --build -d
+# Smoke scripts exit unless SMOKE_PASSWORD (12+ chars) is set; there is no fallback.
+# Export it from your secret store first. Never type it inline or commit it.
 ./scripts/e2e-smoke.sh
 
 cd frontend
@@ -210,6 +215,7 @@ npm run test:e2e
 Backend-only smoke (no Playwright browser tour):
 
 ```bash
+# needs SMOKE_PASSWORD exported, as above
 BASE_URL=http://localhost:8000 FRONTEND_URL=http://localhost:3000 ./scripts/e2e-smoke.sh
 ```
 

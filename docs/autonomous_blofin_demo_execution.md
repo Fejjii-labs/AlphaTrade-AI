@@ -124,6 +124,20 @@ approved on the API channel when `EXCHANGE_MODE=paper_exchange_demo`. Worker
 demo entries now require mode `BLOFIN_DEMO` (`AUTONOMOUS_BLOFIN_DEMO_ENABLED=true`).
 Owner-confirmed manual demo orders and demo reconciliation are unchanged.
 
+## Telegram alongside BloFin demo mode (#440)
+
+Telegram can run while `EXCHANGE_MODE=paper_exchange_demo` only when both of these hold
+([`_paper_exchange_allowed`](../backend/src/app/controlled_activation/profile.py)):
+
+- the **governed demo worker pin**: `GOVERNED_BLOFIN_DEMO_ENABLED`, `GOVERNED_BLOFIN_DEMO_ORGANIZATION_ID`, `_USER_ID` and `_ACCOUNT_ID` as UUIDs, `WATCHER_ORCHESTRATION_ENABLED` and `WATCHER_PAPER_STAGING_ACTIVATION`;
+- the **BloFin demo execution gate**: `BLOFIN_DEMO_ENABLED`, demo credentials, an allowlisted demo host, and paper only.
+
+When either is missing, Settings refuse to load. The error names which gate is missing, by setting name only
+([`_telegram_demo_gate_error`](../backend/src/app/core/deployment_safety.py)). Before #440, the worker crash-looped
+with only the generic `telegram_* must be false in staging/production` lines. The refusal set itself did not change.
+A manual-only demo pin (`MANUAL_BLOFIN_DEMO_ENABLED` alone) still refuses Telegram. Allowing it would be a policy
+change for the owner to decide.
+
 ## Fixed acceptance checklist
 
 1. Serialized account reservation bounds include pending/uncertain and prior filled native activity.

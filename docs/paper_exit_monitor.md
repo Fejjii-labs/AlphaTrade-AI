@@ -209,8 +209,10 @@ walk-forward fold is not known here. Both alerts are audited as the system.
 
 The one loss rule that arms the kill switch is the account daily equity
 stop (AT-ADR-152): stop equity more than
-`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10) below the 00:00 UTC
-baseline. Stop equity is `default_account_balance` plus all-time realized
+`ACCOUNT_EQUITY_STOP_THRESHOLD_PERCENT` (default 10, accepted range above 0
+up to 50) below the 00:00 UTC baseline. `render.yaml` pins it at `"10"` on
+the API and the worker, so every Blueprint sync re-applies 10 and a
+dashboard edit cannot loosen it (#439). Traders cannot change it in the app. Stop equity is `default_account_balance` plus all-time realized
 PnL plus the unrealized PnL of open legacy positions. Canonical open paper
 trades carry no unrealized mark yet, so for them the stop is effectively
 realized-only until a mark feed exists (https://github.com/Fejjii-labs/AlphaTrade-AI/issues/437); such marks must then obey the same

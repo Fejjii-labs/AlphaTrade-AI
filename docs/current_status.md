@@ -2,6 +2,22 @@
 
 **Refreshed:** October 24, 2026, 22:50 Europe/Berlin. **Repository:** [Fejjii-labs/AlphaTrade-AI](https://github.com/Fejjii-labs/AlphaTrade-AI) (moved from `Fejjii/AlphaTrade-AI`; older links below point at the original repository and are kept as historical evidence).
 
+## Merged to main, November 4 to 8, 2026
+
+This list was read from git history on main `485c54d0`. It records what is **implemented**. No deploy, runtime probe or CI run was done for it, so the deployed state of these changes on Render is **UNKNOWN** here.
+
+| PR | Change | Operator note |
+| --- | --- | --- |
+| #435 | Unified Autonomous Trading settings page with bounds from the server (`GET /autonomous/settings/bounds`). | — |
+| #436 | The account daily equity stop arms the organization kill switch (AT-ADR-152). See [paper exit monitor](paper_exit_monitor.md). | Threshold is 10%, pinned in `render.yaml` (#439). |
+| #438 | The paper worker's emergency RSS ceiling is also checked during the startup grace. See [memory guard](paper_worker_memory_watchdog.md). | — |
+| #439 | Ten more API operator settings are `sync: false`, so Blueprint syncs no longer reset them. A test classifies every `render.yaml` key. | Org trading settings were already in Postgres. |
+| #440 | Telegram and BloFin demo mode can coexist. A refusal now names the missing demo gate. See [autonomous demo execution](autonomous_blofin_demo_execution.md#telegram-alongside-blofin-demo-mode-440). | — |
+| #441 | Trades (`/journal`) lists recorded trades as a table. | Frontend only. |
+| #443 | Fable 5.1 audit remediation. | Smoke scripts now need `SMOKE_PASSWORD` and have no fallback. |
+| #444 to #448 | Login throttle per email, uvicorn log redaction, Telegram enrollment limiter and role check, org filters that fail closed, and cross-org 404s with validated correlation ids. See [security](security.md#hardening-november-2026). | — |
+| #449 | Runtime-log retention windows in hours (24 h minimum, error events 72 h). Off and dry-run by default. See [runbook](backup_restore_runbook.md#runtime-log-retention-h5). | The old `RETENTION_*_DAYS` keys are silently ignored. Remove them before enabling retention. |
+
 ## Status as of October 24, 2026
 
 **Main:** [`df09c22d`](https://github.com/Fejjii-labs/AlphaTrade-AI/commit/df09c22d91be5de853098afd36504d26ae106296) (#324). Recent merges: #310 journal owner checks, #321 bounded chat market retrieval and readiness alerting, #322 voice quota lazy init, #323 autonomous switch gated on org membership role.
