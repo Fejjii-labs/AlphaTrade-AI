@@ -868,6 +868,8 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                     settings.paper_worker_memory_watchdog_early_trip_window_seconds
                 ),
                 state_path=settings.paper_worker_memory_watchdog_state_path or None,
+                ceiling_bytes=settings.paper_worker_memory_watchdog_ceiling_mb * 1024 * 1024,
+                ceiling_check_seconds=settings.paper_worker_memory_watchdog_ceiling_check_seconds,
             )
         )
     if not settings_are_disarmed_paper_worker(settings):

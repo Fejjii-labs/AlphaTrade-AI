@@ -10,6 +10,11 @@ interval. No check runs during a startup grace period counted from process
 start. A small state file (trip count and time only) doubles that grace after
 each trip that came within a short window after the grace ended, up to a cap. When the file does not
 survive the restart, the plain grace still limits restarts to one per grace.
+
+An optional emergency ceiling, above the soft limit, is checked on its own
+short interval even during the grace. A fast spike toward the plan limit then
+becomes the same clean stop and exit instead of a kernel OOM kill, which
+skips the shutdown path and leaves leases held.
 """
 
 from __future__ import annotations
@@ -81,6 +86,11 @@ class MemoryWatchdog:
     ``early_trip_window_seconds`` after the grace ends continues the streak
     (the baseline was already at the limit); a later trip is an ordinary leak
     and starts a new streak of one, so it does not lengthen the next grace.
+
+    ``ceiling_bytes`` (None or 0 = off) is checked every
+    ``ceiling_check_seconds`` from construction, grace or not. It is never
+    below ``limit_bytes``, so it cannot trip earlier than the soft limit would
+    after the grace.
     """
 
     def __init__(
@@ -92,6 +102,8 @@ class MemoryWatchdog:
         backoff_max_seconds: float = 0.0,
         early_trip_window_seconds: float = 900.0,
         state_path: str | Path | None = None,
+        ceiling_bytes: int | None = None,
+        ceiling_check_seconds: float = 5.0,
         read_rss: Callable[[], int] = _rss_bytes,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -116,28 +128,39 @@ class MemoryWatchdog:
         self._next_check_at: float | None = (
             self._started_at + self.grace_seconds if self.grace_seconds > 0 else None
         )
+        self.ceiling_bytes = max(ceiling_bytes, limit_bytes) if ceiling_bytes else None
+        self._ceiling_check_seconds = ceiling_check_seconds
+        self._next_ceiling_check_at = self._started_at
         self.tripped = False
         self.consecutive_trips = 0
         logger.info(
             "paper_worker_memory_watchdog_armed",
             limit_bytes=limit_bytes,
+            ceiling_bytes=self.ceiling_bytes,
             grace_seconds=self.grace_seconds,
             prior_trips=self.prior_trips,
         )
 
     def seconds_until_check(self) -> float:
-        if self._next_check_at is None:
-            return 0.0
-        return max(self._next_check_at - self._monotonic(), 0.0)
+        now = self._monotonic()
+        due = 0.0 if self._next_check_at is None else max(self._next_check_at - now, 0.0)
+        if self.ceiling_bytes is not None:
+            due = min(due, max(self._next_ceiling_check_at - now, 0.0))
+        return due
 
     def check(self) -> bool:
         """Return True when RSS is at or above the limit. A read failure never trips."""
         if self.tripped:
             return True
         now = self._monotonic()
-        if self._next_check_at is not None and now < self._next_check_at:
+        limit_due = self._next_check_at is None or now >= self._next_check_at
+        ceiling_due = self.ceiling_bytes is not None and now >= self._next_ceiling_check_at
+        if not (limit_due or ceiling_due):
             return False
-        self._next_check_at = now + self.check_seconds
+        if limit_due:
+            self._next_check_at = now + self.check_seconds
+        if ceiling_due:
+            self._next_ceiling_check_at = now + self._ceiling_check_seconds
         try:
             rss = self._read_rss()
         except Exception as exc:
@@ -145,7 +168,11 @@ class MemoryWatchdog:
                 "paper_worker_memory_watchdog_read_failed", error_type=type(exc).__name__
             )
             return False
-        if rss < self.limit_bytes:
+        if limit_due and rss >= self.limit_bytes:
+            trigger = "limit"
+        elif self.ceiling_bytes is not None and rss >= self.ceiling_bytes:
+            trigger = "ceiling"
+        else:
             return False
         self.tripped = True
         uptime = now - self._started_at
@@ -157,6 +184,8 @@ class MemoryWatchdog:
             "paper_worker_memory_watchdog_tripped",
             rss_bytes=rss,
             limit_bytes=self.limit_bytes,
+            ceiling_bytes=self.ceiling_bytes,
+            trigger=trigger,
             uptime_seconds=round(uptime, 1),
             consecutive_trips=trips,
             exit_code=MEMORY_WATCHDOG_EXIT_CODE,

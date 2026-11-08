@@ -27,9 +27,25 @@ Render restarts it. A failed memory read is logged and never trips.
 | `PAPER_WORKER_MEMORY_WATCHDOG_STARTUP_GRACE_SECONDS` | No check this long after start, 0–3600. Default 300. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_BACKOFF_MAX_SECONDS` | Cap on the backed-off grace, 0–86400. Default 3600. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_EARLY_TRIP_WINDOW_SECONDS` | A trip this soon after the grace ends continues the streak, 0–86400. Default 900. |
+| `PAPER_WORKER_MEMORY_WATCHDOG_CEILING_MB` | Emergency ceiling, 0–65536; 0 = off. Default 480. Raised to the soft limit if set below it. |
+| `PAPER_WORKER_MEMORY_WATCHDOG_CEILING_CHECK_SECONDS` | Ceiling check interval, 1–3600. Default 5. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_STATE_PATH` | Backoff state file. Default `/tmp/alphatrade-paper-worker-memory-watchdog.json`; empty disables it. |
 | `PAPER_WORKER_MEMORY_WATCHDOG_ALERT_AFTER_TRIPS` | Telegram alert once the streak reaches this, 0–100; 0 = off. Default 2. |
 | `PAPER_WORKER_RUN_MARKER_PATH` | Unclean-exit marker. Default `/tmp/alphatrade-paper-worker.running`; empty disables it. |
+
+### Emergency ceiling
+
+The soft limit is checked every 30 s and not at all during the startup grace.
+A fast spike (for example several symbols catching up aggTrade windows right
+after a restart) can go from the steady state to 512 MiB inside that window,
+and the kernel then kills the process: no clean stop, leases stay held, and
+the next boot can refuse on `provider_unavailable`. The ceiling is read every
+`PAPER_WORKER_MEMORY_WATCHDOG_CEILING_CHECK_SECONDS` from the first second,
+grace or not. At or above it the watchdog trips exactly like the soft limit
+(`trigger="ceiling"` on `paper_worker_memory_watchdog_tripped`, clean stop,
+exit 75, the same streak and backoff). Between the soft limit and the ceiling
+the grace still holds, so a worker that starts slightly above 440 MB does not
+exit-loop. The ceiling is never below the soft limit.
 
 ### Start at or above the limit
 

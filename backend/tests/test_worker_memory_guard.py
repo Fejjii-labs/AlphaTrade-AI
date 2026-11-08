@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from structlog.testing import capture_logs
 
 from app.core.config import Settings
 from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
@@ -313,3 +314,96 @@ def test_early_trip_window_is_configurable(tmp_path: Path) -> None:
     )
     watchdog = build_paper_worker_supervisor(custom)._memory_watchdog
     assert watchdog is not None and watchdog._early_trip_window_seconds == 60.0
+
+
+def _ceilinged(rss: list[int], clock: list[float], **kwargs: object) -> MemoryWatchdog:
+    return MemoryWatchdog(
+        limit_bytes=440 * MB,
+        check_seconds=30.0,
+        startup_grace_seconds=float(kwargs.get("grace", 300.0)),  # type: ignore[arg-type]
+        ceiling_bytes=int(kwargs.get("ceiling", 480 * MB)),  # type: ignore[arg-type]
+        ceiling_check_seconds=5.0,
+        read_rss=lambda: rss[0],
+        monotonic=lambda: clock[0],
+    )
+
+
+def test_ceiling_trips_during_the_startup_grace() -> None:
+    rss, clock = [300 * MB], [0.0]
+    watchdog = _ceilinged(rss, clock)
+    assert watchdog.check() is False
+    # Between the soft limit and the ceiling the grace still holds.
+    rss[0] = 460 * MB
+    clock[0] = 5.0
+    assert watchdog.check() is False
+    assert watchdog.seconds_until_check() == 5.0
+    # A catch-up spike inside the grace becomes a clean stop, not a kernel kill.
+    rss[0] = 490 * MB
+    clock[0] = 10.0
+    with capture_logs() as logs:
+        assert watchdog.check() is True
+    tripped = next(e for e in logs if e["event"] == "paper_worker_memory_watchdog_tripped")
+    assert tripped["trigger"] == "ceiling"
+    assert tripped["ceiling_bytes"] == 480 * MB
+
+
+def test_ceiling_catches_a_spike_between_soft_limit_checks() -> None:
+    rss, clock = [300 * MB], [0.0]
+    watchdog = _ceilinged(rss, clock, grace=0.0)
+    assert watchdog.check() is False
+    rss[0] = 500 * MB
+    clock[0] = 5.0
+    # The 30 s soft check is not due yet; the 5 s ceiling check is.
+    assert watchdog.seconds_until_check() == 0.0
+    assert watchdog.check() is True
+
+
+def test_ceiling_is_read_only_on_its_own_interval() -> None:
+    reads: list[int] = []
+
+    def read() -> int:
+        reads.append(1)
+        return 300 * MB
+
+    clock = [0.0]
+    watchdog = MemoryWatchdog(
+        limit_bytes=440 * MB,
+        check_seconds=30.0,
+        startup_grace_seconds=300.0,
+        ceiling_bytes=480 * MB,
+        ceiling_check_seconds=5.0,
+        read_rss=read,
+        monotonic=lambda: clock[0],
+    )
+    for moment in (0.0, 1.0, 4.9, 5.0, 9.0, 10.0):
+        clock[0] = moment
+        watchdog.check()
+    assert len(reads) == 3
+
+
+def test_ceiling_below_the_soft_limit_is_raised_to_it() -> None:
+    rss, clock = [450 * MB], [0.0]
+    watchdog = _ceilinged(rss, clock, ceiling=400 * MB)
+    assert watchdog.ceiling_bytes == 440 * MB
+    # 450 MB is over the clamped ceiling, so it trips even inside the grace.
+    assert watchdog.check() is True
+
+
+def test_zero_ceiling_keeps_the_grace_behaviour() -> None:
+    rss, clock = [500 * MB], [0.0]
+    watchdog = _ceilinged(rss, clock, ceiling=0)
+    assert watchdog.ceiling_bytes is None
+    assert watchdog.seconds_until_check() == 300.0
+    clock[0] = 299.0
+    assert watchdog.check() is False
+
+
+def test_ceiling_settings_reach_the_supervisor() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.paper_worker_memory_watchdog_ceiling_mb == 480
+    assert settings.paper_worker_memory_watchdog_ceiling_check_seconds == 5.0
+    watchdog = build_paper_worker_supervisor(settings)._memory_watchdog
+    assert watchdog is not None and watchdog.ceiling_bytes == 480 * MB
+    off = Settings(_env_file=None, paper_worker_memory_watchdog_ceiling_mb=0)
+    disabled = build_paper_worker_supervisor(off)._memory_watchdog
+    assert disabled is not None and disabled.ceiling_bytes is None
