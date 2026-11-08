@@ -46,7 +46,8 @@ export function resolveSmokePassword(): string {
   if (legacy) {
     return legacy;
   }
-  return "secure-password-1";
+  // No committed default (Fable audit M20): staging smoke needs the env var.
+  throw new Error("Set SMOKE_PASSWORD (or STAGING_BOOTSTRAP_PASSWORD) for the staging smoke account.");
 }
 
 export function resolveSmokeOrgName(): string {

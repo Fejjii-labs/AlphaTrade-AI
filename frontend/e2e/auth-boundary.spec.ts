@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { freshE2EPassword } from "./helpers/e2e-password";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 
@@ -46,7 +47,7 @@ test.describe("AT-017 edge auth boundary", () => {
 
   test("login retains the intended destination", async ({ page, request }) => {
     const email = uniqueEmail();
-    const password = "secure-password-1";
+    const password = freshE2EPassword();
     const register = await request.post(`${API_URL}/auth/register`, {
       data: { email, password, organization_name: `AT017 Boundary ${Date.now()}` },
     });
@@ -66,7 +67,7 @@ test.describe("AT-017 edge auth boundary", () => {
     request,
   }) => {
     const email = uniqueEmail();
-    const password = "secure-password-1";
+    const password = freshE2EPassword();
     const register = await request.post(`${API_URL}/auth/register`, {
       data: { email, password, organization_name: `AT017 Logout ${Date.now()}` },
     });

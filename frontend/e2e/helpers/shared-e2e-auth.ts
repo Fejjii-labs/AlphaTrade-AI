@@ -1,6 +1,7 @@
 import { APIRequestContext, Page, expect } from "@playwright/test";
 
 import { installSmokeSession } from "./staging-smoke-auth";
+import { freshE2EPassword } from "./e2e-password";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 
@@ -17,7 +18,7 @@ export async function getSharedE2EAccessToken(request: APIRequestContext): Promi
   }
 
   const email = `e2e-shared-${Date.now()}@example.com`;
-  const password = "secure-password-1";
+  const password = freshE2EPassword();
   const register = await request.post(`${API_URL}/auth/register`, {
     data: {
       email,

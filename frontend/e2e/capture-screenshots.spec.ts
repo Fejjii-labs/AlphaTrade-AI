@@ -4,6 +4,7 @@
  */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import path from "node:path";
+import { freshE2EPassword } from "./helpers/e2e-password";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL ?? "http://localhost:8000";
 const SCREENSHOT_DIR = path.resolve(__dirname, "../../docs/screenshots");
@@ -94,7 +95,7 @@ test.describe("Portfolio screenshot capture", () => {
   test("capture demo screenshots", async ({ page, request }) => {
     test.setTimeout(180_000);
 
-    const password = "secure-password-1";
+    const password = freshE2EPassword();
     const email = `demo-screenshots-${Date.now()}@example.com`;
     const uniqueLesson = `Pullback discipline lesson ${Date.now()}`;
 
