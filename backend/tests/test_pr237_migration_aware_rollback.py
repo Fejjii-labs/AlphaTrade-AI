@@ -405,6 +405,8 @@ with get_session_factory()() as session:
 # above uses local/mock settings; neither modifies deployed operator settings.
 os.environ.update({
     'ENVIRONMENT': 'staging',
+    # Deployment safety refuses debug outside local (M19), as staging does.
+    'DEBUG': 'false',
     'PROVIDER_MODE': 'fallback',
     'AUTH_REFRESH_COOKIE_ENABLED': 'true',
     'AUTH_COOKIE_SECURE': 'true',
