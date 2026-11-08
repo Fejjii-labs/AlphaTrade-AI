@@ -1827,7 +1827,8 @@ def deterministic_risk_gate(state: dict, runtime: AgentRuntime) -> dict:
         request,
         context=RiskEvaluationContext(
             is_weekend=False,
-            kill_switch_active=kill_switch_active,
+            kill_switch_active=kill_switch_active is True,
+            kill_switch_unverified=kill_switch_active is None,
         ),
     )
     severity = result.severity
@@ -2175,20 +2176,20 @@ def _extract_symbol(message: str) -> str | None:
 def _resolve_kill_switch_active(
     runtime: AgentRuntime,
     organization_id: uuid.UUID | None,
-) -> bool:
+) -> bool | None:
     """Resolve kill-switch for agent risk context (AT-014).
 
-    Global env override applies without a DB session. When organization is known
-    but session is absent (unit tests / analysis-only graphs), treat as inactive
-    here — paper execution remains fail-closed in ExecutionService. When a
-    session exists and storage cannot be evaluated, fail closed.
+    Global env override applies without a DB session. Without an organization
+    or a session (unit tests / analysis-only graphs) the state is unknown and
+    returns None, which the risk context reports as unverified rather than
+    "off" (Fable audit L3); paper execution remains fail-closed in
+    ExecutionService. When a session exists and storage cannot be evaluated,
+    fail closed.
     """
     if runtime.settings.global_kill_switch_active:
         return True
-    if organization_id is None:
-        return False
-    if runtime.session is None:
-        return False
+    if organization_id is None or runtime.session is None:
+        return None
     from app.services.risk.kill_switch import KillSwitchService
 
     try:

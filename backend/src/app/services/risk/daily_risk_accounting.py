@@ -286,8 +286,9 @@ class DailyRiskAccounting:
             select(func.coalesce(func.sum(Position.realized_pnl), 0)).where(
                 Position.organization_id == organization_id,
                 Position.user_id == user_id,
-                # CLOSED only: LIQUIDATED legacy losses never reach stop equity (AT-ADR-152).
-                Position.status == PositionStatus.CLOSED,
+                # A liquidation is a close: its loss counts toward stop equity
+                # and the risk-day figure too (Fable audit L2; was CLOSED only).
+                Position.status.in_((PositionStatus.CLOSED, PositionStatus.LIQUIDATED)),
                 Position.closed_at.is_not(None),
                 Position.closed_at >= start_utc,
                 Position.closed_at < end_utc,
