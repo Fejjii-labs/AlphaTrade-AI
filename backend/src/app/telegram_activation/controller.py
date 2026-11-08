@@ -30,6 +30,7 @@ from app.telegram_activation.intake import (
 )
 from app.telegram_activation.preflight import run_preflight
 from app.telegram_paper_agent.contracts import PaperAlertRecipient
+from app.telegram_paper_agent.errors import PaperTelegramDisabledError, PaperTelegramError
 from app.telegram_paper_agent.gateway import TelegramPaperAgent
 from app.telegram_security.actions import MAX_INBOUND_UPDATE_BYTES, TelegramRemoteAction
 from app.telegram_security.clock import Clock
@@ -264,6 +265,12 @@ class TelegramPaperActivation:
             return "rejected"
         except TelegramActivationError as exc:
             self._reject_update(update, reason=exc.reason)
+            return "rejected"
+        except PaperTelegramDisabledError:
+            # Agent-wide state, not a bad update: keep the cursor so it is retried.
+            raise
+        except PaperTelegramError as exc:
+            self._reject_update(update, reason=type(exc).__name__)
             return "rejected"
         self._advance(update.update_id)
         disposition = "replayed" if replayed else "applied"

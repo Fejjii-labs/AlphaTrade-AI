@@ -41,7 +41,7 @@ from app.telegram_activation.transport import (
 )
 from app.telegram_activation.webhook import mount_paper_telegram_webhook
 from app.telegram_paper_agent.contracts import PaperAlertRecipient, WatcherScanNotice
-from app.telegram_paper_agent.errors import PaperTelegramTenantError
+from app.telegram_paper_agent.errors import PaperTelegramDisabledError, PaperTelegramTenantError
 from app.telegram_paper_agent.gateway import TelegramPaperAgent
 from app.telegram_security.backoff import RATE_LIMITED_ERROR
 from app.telegram_security.clock import FrozenClock
@@ -450,6 +450,54 @@ def test_polling_cursor_survives_restart_and_replay_converges() -> None:
     assert replay.replayed == 1
     audits = [event.event_type for event in world.protocol.store.list_audits()]
     assert "inbound_replayed" in audits
+
+
+def _poll_message(update_id: int) -> ParsedTelegramUpdate:
+    return ParsedTelegramUpdate(
+        update_id=update_id,
+        body_size=64,
+        kind="message",
+        chat_type=ChatType.PRIVATE,
+        chat_id=CHAT,
+        telegram_user_id="tg-user-1",
+        message_id=f"poll-{update_id}",
+        text="explain the candidate",
+    )
+
+
+def test_gateway_tenant_error_is_rejected_and_cursor_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L16: a PaperTelegramError must not escape poll_once and pin the cursor."""
+
+    world = _world(updates=(_poll_message(11),))
+    world.controller.arm()
+
+    def _refuse(**_kwargs: object) -> None:
+        raise PaperTelegramTenantError("No verified Telegram binding for this chat.")
+
+    monkeypatch.setattr(world.agent, "handle_inbound_message", _refuse)
+    result = world.controller.poll_once()
+    assert result.rejected == 1
+    assert result.applied == 0
+    cursor = world.controller.cursor_store.get_cursor(bot_id=BOT)
+    assert cursor is not None and cursor.last_update_id == 11
+    assert world.controller.poll_once().fetched == 0
+    audits = [event.event_type for event in world.protocol.store.list_audits()]
+    assert "inbound_rejected" in audits
+
+
+def test_gateway_disabled_error_keeps_the_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    world = _world(updates=(_poll_message(12),))
+    world.controller.arm()
+
+    def _disabled(**_kwargs: object) -> None:
+        raise PaperTelegramDisabledError()
+
+    monkeypatch.setattr(world.agent, "handle_inbound_message", _disabled)
+    with pytest.raises(PaperTelegramDisabledError):
+        world.controller.poll_once()
+    assert world.controller.cursor_store.get_cursor(bot_id=BOT) is None
 
 
 def test_group_updates_and_cross_chat_messages_are_rejected() -> None:
