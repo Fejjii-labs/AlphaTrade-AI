@@ -28,7 +28,7 @@ class RetentionPolicy:
     table: str
     primary_key: str
     timestamp: str
-    days: int
+    window: timedelta
     # Extra SQL predicate on the same row (alias ``t``). Constant text only.
     keep_predicate: str = ""
     # Always keep the newest row per organization (latest-row readers).
@@ -53,7 +53,7 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             table="watcher_observability_events",
             primary_key="event_id",
             timestamp="at",
-            days=settings.retention_watcher_events_days,
+            window=timedelta(hours=settings.retention_watcher_events_hours),
         ),
         # Child rows of scan attempts; nothing references them. The parent
         # watcher_scan_attempts rows are kept: lineages replay through them.
@@ -61,13 +61,13 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             table="watcher_subscription_eval_attempts",
             primary_key="subscription_attempt_id",
             timestamp="created_at",
-            days=settings.retention_watcher_attempt_children_days,
+            window=timedelta(hours=settings.retention_watcher_attempts_hours),
         ),
         RetentionPolicy(
             table="watcher_source_fetch_attempts",
             primary_key="fetch_attempt_id",
             timestamp="created_at",
-            days=settings.retention_watcher_attempt_children_days,
+            window=timedelta(hours=settings.retention_watcher_attempts_hours),
         ),
         # Scan-stage observations only. Anything tied to a plan, a fill or a
         # journal trade is learning evidence and is kept.
@@ -75,7 +75,7 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             table="paper_evaluation_observations",
             primary_key="observation_id",
             timestamp="occurred_at",
-            days=settings.retention_paper_evaluation_days,
+            window=timedelta(hours=settings.retention_paper_evaluation_hours),
             keep_predicate=(
                 "t.journal_trade_id IS NULL AND t.filled = false AND t.plan_approved = false"
             ),
@@ -84,7 +84,7 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
             table="blofin_demo_sync_snapshots",
             primary_key="id",
             timestamp="synced_at",
-            days=settings.retention_demo_snapshot_days,
+            window=timedelta(days=settings.retention_demo_snapshot_days),
             keep_newest_per_org=True,
         ),
     )
@@ -115,7 +115,7 @@ def prune_table(
 ) -> RetentionResult:
     """Delete (or count) rows older than the policy window, one batch per commit."""
 
-    cutoff = now - timedelta(days=policy.days)
+    cutoff = now - policy.window
     where = _where(policy)
     session = session_factory()
     try:

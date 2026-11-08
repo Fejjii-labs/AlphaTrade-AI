@@ -308,19 +308,23 @@ class Settings(BaseSettings):
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
     # Retention for append-only runtime logs (H5): watcher observability
-    # events, scan-attempt child rows, scan-stage paper evaluation rows and
-    # BloFin demo snapshots (newest per org always kept). Trades, orders,
-    # journal, plans, candidates, audit and strategy rows are never pruned.
+    # events, watcher scan attempts, scan-stage paper evaluation rows, paper
+    # Telegram notification rows and BloFin demo snapshots (newest per org
+    # always kept). Trades, orders, journal, plans, candidates, audit and
+    # strategy rows are never pruned.
     # Off by default and dry-run by default: enabling deletion is an explicit
     # operator decision (RETENTION_ENABLED=true and RETENTION_DRY_RUN=false).
+    # Windows are in hours with a 24-hour floor (one year ceiling).
     retention_enabled: bool = False
     retention_dry_run: bool = True
     retention_interval_seconds: int = Field(default=3600, ge=300, le=86400)
     retention_batch_size: int = Field(default=5000, ge=100, le=50000)
     retention_max_batches_per_table: int = Field(default=50, ge=1, le=1000)
-    retention_watcher_events_days: int = Field(default=7, ge=1, le=365)
-    retention_watcher_attempt_children_days: int = Field(default=30, ge=7, le=365)
-    retention_paper_evaluation_days: int = Field(default=30, ge=7, le=365)
+    retention_watcher_events_hours: int = Field(default=24, ge=24, le=8760)
+    retention_watcher_error_events_hours: int = Field(default=72, ge=24, le=8760)
+    retention_watcher_attempts_hours: int = Field(default=24, ge=24, le=8760)
+    retention_paper_evaluation_hours: int = Field(default=24, ge=24, le=8760)
+    retention_telegram_notifications_hours: int = Field(default=24, ge=24, le=8760)
     retention_demo_snapshot_days: int = Field(default=30, ge=7, le=365)
     # Repeated degraded or refused exit-monitor cycles raise a structured
     # alert after this many seconds. Default 15 minutes, capped at 1 hour,

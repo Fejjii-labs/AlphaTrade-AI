@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -63,7 +64,7 @@ def _count(factory, table: str) -> int:
 
 def _seed(factory) -> None:
     old = NOW - timedelta(days=40)
-    fresh = NOW - timedelta(days=1)
+    fresh = NOW - timedelta(hours=1)
     _insert(
         factory,
         "INSERT INTO watcher_observability_events VALUES (:id, :at)",
@@ -155,6 +156,20 @@ def test_retention_is_off_and_dry_run_by_default() -> None:
     settings = Settings(_env_file=None)
     assert settings.retention_enabled is False
     assert settings.retention_dry_run is True
+
+
+def test_windows_are_hours_with_a_24_hour_floor() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.retention_watcher_events_hours == 24
+    assert settings.retention_watcher_error_events_hours == 72
+    assert settings.retention_watcher_attempts_hours == 24
+    assert settings.retention_paper_evaluation_hours == 24
+    assert settings.retention_telegram_notifications_hours == 24
+    windows = {p.table: p.window for p in retention_policies(settings)}
+    assert windows["paper_evaluation_observations"] == timedelta(hours=24)
+    assert windows["blofin_demo_sync_snapshots"] == timedelta(days=30)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, retention_watcher_events_hours=23)  # type: ignore[call-arg]
 
 
 def test_cycle_waits_one_interval_then_runs_once_per_interval(factory) -> None:
