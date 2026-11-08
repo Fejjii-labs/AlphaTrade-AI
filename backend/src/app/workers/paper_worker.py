@@ -122,9 +122,13 @@ class ComponentHealth:
     last_scan_at: datetime | None
     last_delivery_at: datetime | None
     last_error: str
+    # Total failed cycles since boot. The name is historical: nothing restarts
+    # the component; the next cycle simply runs (Fable audit I4).
     restart_count: int
     cycles_completed: int
     kill_switch_active: bool
+    # Failed cycles in a row; reset by the next successful cycle (I7).
+    consecutive_failures: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +185,7 @@ class _Component:
         self.last_delivery_at: datetime | None = None
         self.last_error = ""
         self.restart_count = 0
+        self.consecutive_failures = 0
         self.cycles_completed = 0
         self.kill_switch_active = False
         self.thread: threading.Thread | None = None
@@ -197,6 +202,7 @@ class _Component:
                 restart_count=self.restart_count,
                 cycles_completed=self.cycles_completed,
                 kill_switch_active=self.kill_switch_active,
+                consecutive_failures=self.consecutive_failures,
             )
 
 
@@ -589,6 +595,7 @@ class PaperWorkerSupervisor:
             interval = (
                 component.poll_seconds if component.poll_seconds is not None else self._poll_seconds
             )
+            interval = failure_backoff_interval(interval, component.consecutive_failures)
             if self._idle(component, interval if interval > 0 else 0.05):
                 break
         self._mark_stopped(component)
@@ -702,13 +709,30 @@ class PaperWorkerSupervisor:
             component.last_heartbeat_at = now
             component.last_error = message
             component.restart_count += 1
+            component.consecutive_failures += 1
+            streak = component.consecutive_failures
         logger.error(
             "paper_worker_component_failed",
             component=component.name,
             error=message,
             restart_count=component.restart_count,
+            consecutive_failures=streak,
             paper_only=True,
         )
+        if streak in _FAILURE_ESCALATION_STREAKS or (
+            streak > _FAILURE_ESCALATION_STREAKS[-1]
+            and streak % _FAILURE_ESCALATION_STREAKS[-1] == 0
+        ):
+            # Circuit-breaker signal (I7): a component failing every cycle is
+            # not a blip. The loop also slows down (failure_backoff_interval).
+            logger.critical(
+                "paper_worker_component_failing_repeatedly",
+                component=component.name,
+                consecutive_failures=streak,
+                error=message,
+                next_interval_multiplier=failure_backoff_multiplier(streak),
+                paper_only=True,
+            )
 
     def _succeed(self, component: _Component, outcome: CycleOutcome) -> None:
         now = self._clock()
@@ -716,6 +740,7 @@ class PaperWorkerSupervisor:
             component.status = outcome.status
             component.last_heartbeat_at = now
             component.last_error = outcome.error[:120]
+            component.consecutive_failures = 0
             component.kill_switch_active = outcome.kill_switch_active
             component.cycles_completed += 1
             if outcome.record_scan:
@@ -743,6 +768,7 @@ class PaperWorkerSupervisor:
             watcher_error=health.watcher.last_error,
             watcher_heartbeat=_iso(health.watcher.last_heartbeat_at),
             watcher_last_scan=_iso(health.watcher.last_scan_at),
+            watcher_consecutive_failures=health.watcher.consecutive_failures,
             telegram_status=health.telegram.status,
             telegram_error=health.telegram.last_error,
             telegram_heartbeat=_iso(health.telegram.last_heartbeat_at),
@@ -1309,6 +1335,28 @@ def _reconcile_demo_while_idle(
         reconcile_governed_demo_once(settings, session_factory, clock)
     except Exception as exc:
         logger.error("governed_demo_idle_reconciliation_failed", error=_safe_error(exc))
+
+
+# Consecutive failed cycles at which a component escalates to a critical log
+# line; after the last one, every further multiple of it escalates again (I7).
+_FAILURE_ESCALATION_STREAKS = (5, 20, 80)
+# From this many consecutive failures the inter-cycle wait doubles, capped at
+# 8x the poll interval (2 min at 15 s, well inside one 15 m bar).
+_FAILURE_BACKOFF_AFTER = 5
+_FAILURE_BACKOFF_MAX_MULTIPLIER = 8
+
+
+def failure_backoff_multiplier(consecutive_failures: int) -> int:
+    if consecutive_failures < _FAILURE_BACKOFF_AFTER:
+        return 1
+    exponent = min(consecutive_failures - _FAILURE_BACKOFF_AFTER + 1, 3)
+    return int(min(2**exponent, _FAILURE_BACKOFF_MAX_MULTIPLIER))
+
+
+def failure_backoff_interval(interval: float, consecutive_failures: int) -> float:
+    """Slow a component that fails every cycle, instead of hammering at full cadence."""
+
+    return interval * failure_backoff_multiplier(consecutive_failures)
 
 
 # Refusals that clear on their own: the market provider at that moment, or the

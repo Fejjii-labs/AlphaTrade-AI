@@ -1377,3 +1377,29 @@ def test_idle_and_recovering_cycles_keep_reconciling_governed_demo(
         clock=_Now(),
     )()
     assert calls == []
+
+
+def test_consecutive_failures_reset_on_success_and_slow_the_loop() -> None:
+    """I4/I7: failures in a row are counted, escalate, back off, and reset."""
+
+    from app.workers.paper_worker import failure_backoff_interval, failure_backoff_multiplier
+
+    results = iter([RuntimeError("a")] * 6 + [None])
+
+    def cycle() -> CycleOutcome:
+        outcome = next(results)
+        if outcome is not None:
+            raise outcome
+        return CycleOutcome(status="ok")
+
+    supervisor = PaperWorkerSupervisor(
+        watcher_cycle=cycle,
+        telegram_cycle=lambda: CycleOutcome(status="ok"),
+    )
+    for _ in range(6):
+        health = supervisor.run_round()
+    assert health.watcher.consecutive_failures == 6
+    assert health.watcher.restart_count == 6
+    assert supervisor.run_round().watcher.consecutive_failures == 0
+    assert [failure_backoff_multiplier(n) for n in (0, 4, 5, 6, 7, 50)] == [1, 1, 2, 4, 8, 8]
+    assert failure_backoff_interval(15.0, 7) == 120.0
