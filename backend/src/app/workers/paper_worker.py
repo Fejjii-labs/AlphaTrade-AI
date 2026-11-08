@@ -33,7 +33,11 @@ import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.observability.memory_watchdog import MEMORY_WATCHDOG_EXIT_CODE, MemoryWatchdog
+from app.observability.memory_watchdog import (
+    MEMORY_WATCHDOG_EXIT_CODE,
+    MemoryWatchdog,
+    RuntimeStatusWatchdogStore,
+)
 from app.observability.process_memory import read_process_memory, release_allocator_memory
 from app.observability.worker_memory import CycleMemorySampler, WorkerMemoryDiagnostics
 from app.workers.watcher_paper import (
@@ -940,6 +944,12 @@ def build_paper_worker_supervisor(settings: Settings) -> PaperWorkerSupervisor:
                 state_path=settings.paper_worker_memory_watchdog_state_path or None,
                 ceiling_bytes=settings.paper_worker_memory_watchdog_ceiling_mb * 1024 * 1024,
                 ceiling_check_seconds=settings.paper_worker_memory_watchdog_ceiling_check_seconds,
+                # A disarmed worker never opens PostgreSQL: file state only.
+                state_store=(
+                    None
+                    if settings_are_disarmed_paper_worker(settings)
+                    else RuntimeStatusWatchdogStore()
+                ),
             )
         )
     if not settings_are_disarmed_paper_worker(settings):

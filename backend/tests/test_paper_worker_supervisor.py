@@ -1142,10 +1142,20 @@ def test_provider_retry_never_gives_up_and_escalates_a_prolonged_refusal(
 ) -> None:
     """H3: a provider outage longer than 30 min must not leave the worker idle."""
 
-    from structlog.testing import capture_logs
-
+    import app.workers.paper_worker as paper_worker
     import app.workers.watcher_paper as watcher_paper
     from app.workers.paper_worker import _RecoveringWatcherCycle
+
+    logs: list[dict[str, object]] = []
+
+    class _Recorder:
+        def warning(self, event: str, **fields: object) -> None:
+            logs.append({"event": event, "log_level": "warning", **fields})
+
+        def error(self, event: str, **fields: object) -> None:
+            logs.append({"event": event, "log_level": "error", **fields})
+
+    monkeypatch.setattr(paper_worker, "logger", _Recorder())
 
     settings = Settings(**{**_CONTRACT, **_PRESENT_SECRETS, **_ARMED_WATCHER})
     calls = {"n": 0}
@@ -1179,10 +1189,9 @@ def test_provider_retry_never_gives_up_and_escalates_a_prolonged_refusal(
         escalate_after=3,
         monotonic=lambda: ticks["now"],
     )
-    with capture_logs() as logs:
-        for step in range(1, 400):  # 400 min, far past the old 30-attempt bound
-            ticks["now"] = 60.0 * step
-            assert cycle().error == "provider_unavailable"
+    for step in range(1, 400):  # 400 min, far past the old 30-attempt bound
+        ticks["now"] = 60.0 * step
+        assert cycle().error == "provider_unavailable"
     # Backoff 60, 120, 240, 240, ...: attempts at minute 1, 2, 4, then every 4th.
     assert calls["n"] == cycle.attempts == 3 + len(range(8, 400, 4))
     failed = [e for e in logs if e["event"] == "watcher_paper_activation_retry_failed"]

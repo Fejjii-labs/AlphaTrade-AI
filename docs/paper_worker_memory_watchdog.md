@@ -103,6 +103,14 @@ are logged as `safety_alert_telegram_unconfigured` and not sent.
 
 ### Limit: the files may not survive a Render restart
 
+Since the Fable audit L8 fix, an armed worker also keeps the trip streak in the
+`controlled_runtime_status` row `paper_worker_memory_watchdog`
+(`request_count` = consecutive trips, `heartbeat_at` = trip time). At boot the
+watchdog uses whichever of the file and that row remembers more trips, so the
+startup-grace backoff survives a container replacement. A disarmed worker
+does not open PostgreSQL and keeps file-only state. The run marker is still
+file-only (see below).
+
 Render's documentation (<https://render.com/docs/disks>, fetched 2026-11-04)
 says: "By default, Render services have an ephemeral filesystem. This means
 that without a persistent disk, any changes you make to a service's local
