@@ -523,7 +523,8 @@ def test_autonomous_off_blocks_worker_demo_entries_too(
 
     from tests.test_governed_blofin_demo import demo_settings
 
-    settings = demo_settings(str(uuid4()))
+    # demo_settings() arms autonomous demo mode by default (B1); M1 needs it OFF.
+    settings = demo_settings(str(uuid4()), autonomous_blofin_demo_enabled=False)
     assert settings.autonomous_blofin_demo_enabled is False
     called: dict[str, object] = {}
 
