@@ -825,3 +825,44 @@ def test_backtest_rejects_strategy_version_from_another_strategy_or_org() -> Non
             headers=owner_a,
         )
         assert own.status_code == 200, own.text
+
+
+def test_backtest_cancel_is_limited_to_run_creator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """M15: an org colleague can read a run but cannot cancel it (404)."""
+    monkeypatch.setattr(
+        "app.api.routes.backtests.enqueue_backtest_if_needed",
+        lambda **_kwargs: None,
+    )
+    colleague_id = uuid.UUID("00000000-0000-0000-0000-000000034514")
+    with _build_client(
+        backtest_sync_max_bars=50,
+        candle_seed=_seed_pullback_candles,
+        candle_kwargs={"n": 120},
+    ) as (client, factory, settings):
+        with factory() as session:
+            session.add(
+                User(
+                    id=colleague_id,
+                    email="at034-int-colleague@test.example",
+                    hashed_password=hash_password("SecurePass123!", settings),
+                    email_verified=True,
+                )
+            )
+            session.flush()
+            session.add(
+                Membership(user_id=colleague_id, organization_id=ORG_A, role=MembershipRole.TRADER)
+            )
+            session.commit()
+        owner = _auth(client, "at034-int-a@test.example")
+        colleague = _auth(client, "at034-int-colleague@test.example")
+        strategy_id = _create_strategy(client, owner, name="Cancel Scope")
+        run = _run_backtest(client, owner, strategy_id)
+        assert run["status"] == "queued"
+
+        assert client.get(f"/backtests/{run['id']}", headers=colleague).status_code == 200
+        refused = client.post(f"/backtests/{run['id']}/cancel", headers=colleague)
+        assert refused.status_code == 404, refused.text
+        assert client.get(f"/backtests/{run['id']}", headers=owner).json()["status"] == "queued"
+
+        cancelled = client.post(f"/backtests/{run['id']}/cancel", headers=owner)
+        assert cancelled.status_code == 200, cancelled.text

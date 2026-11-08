@@ -25,6 +25,8 @@ Organization/user identity comes from authenticated context, not a client's prop
 | TRADER | Authorized domain mutations supported by the endpoint. |
 | VIEWER | Reader endpoints; not trader mutation authority. |
 
+Within an organization, some records are per-user rather than org-shared. Decision (audit M15, November 2026): paper positions (`/positions/{id}` get/update/close), legacy approvals (`/approvals/{id}` decide routes and `/workflow`) and backtest cancel are scoped to the record's own user, matching the already user-scoped list/get endpoints; another member (including an OWNER) gets 404. Backtest run results stay readable org-wide. Plan-bound approvals already required the exact principal.
+
 [RBAC dependencies](../backend/src/app/security/rbac.py) enforce endpoint-specific role requirements. The current Agent turn routes use trader-level membership, so not every read-like Agent request is available to VIEWER. User-owned knowledge and conversations also retain user scope within an organization.
 
 ## Secrets, providers and network boundaries

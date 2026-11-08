@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 
 from app.core.auth import TenantDep
 from app.core.dependencies import ApprovalServiceDep, SessionDep, WorkflowServiceDep
+from app.core.errors import NotFoundError
 from app.schemas.approval import (
     ApprovalActionRequest,
     ApprovalAuthorization,
@@ -94,6 +95,8 @@ async def get_approval_workflow(
         organization_id=tenant.organization_id,
     )
     ensure_same_organization(view.approval.organization_id, tenant)
+    if view.approval.user_id != tenant.user_id:
+        raise NotFoundError("Approval not found")
     return view
 
 
@@ -105,8 +108,10 @@ async def approve(
     approval_service: ApprovalServiceDep,
     session: SessionDep,
 ) -> ApprovalRequest:
-    approval = approval_service.get(approval_id)
-    ensure_same_organization(approval.organization_id, tenant)
+    # Approvals are per-user like list/get: a colleague's is not found (M15).
+    approval_service.get_scoped(
+        approval_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
     result = approval_service.decide(
         approval_id,
         ApprovalDecisionRequest(
@@ -130,8 +135,10 @@ async def reject(
     approval_service: ApprovalServiceDep,
     session: SessionDep,
 ) -> ApprovalRequest:
-    approval = approval_service.get(approval_id)
-    ensure_same_organization(approval.organization_id, tenant)
+    # Approvals are per-user like list/get: a colleague's is not found (M15).
+    approval_service.get_scoped(
+        approval_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
     result = approval_service.decide(
         approval_id,
         ApprovalDecisionRequest(action=ApprovalAction.REJECT, reason=body.reason),
@@ -150,8 +157,10 @@ async def modify(
     approval_service: ApprovalServiceDep,
     session: SessionDep,
 ) -> ApprovalRequest:
-    approval = approval_service.get(approval_id)
-    ensure_same_organization(approval.organization_id, tenant)
+    # Approvals are per-user like list/get: a colleague's is not found (M15).
+    approval_service.get_scoped(
+        approval_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
     result = approval_service.decide(
         approval_id,
         ApprovalDecisionRequest(
@@ -174,8 +183,10 @@ async def needs_more_analysis(
     approval_service: ApprovalServiceDep,
     session: SessionDep,
 ) -> ApprovalRequest:
-    approval = approval_service.get(approval_id)
-    ensure_same_organization(approval.organization_id, tenant)
+    # Approvals are per-user like list/get: a colleague's is not found (M15).
+    approval_service.get_scoped(
+        approval_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
     result = approval_service.decide(
         approval_id,
         ApprovalDecisionRequest(
@@ -197,8 +208,10 @@ async def decide_approval(
     approval_service: ApprovalServiceDep,
     session: SessionDep,
 ) -> ApprovalRequest:
-    approval = approval_service.get(approval_id)
-    ensure_same_organization(approval.organization_id, tenant)
+    # Approvals are per-user like list/get: a colleague's is not found (M15).
+    approval_service.get_scoped(
+        approval_id, organization_id=tenant.organization_id, user_id=tenant.user_id
+    )
     result = approval_service.decide(
         approval_id,
         body,

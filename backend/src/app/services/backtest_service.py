@@ -480,7 +480,8 @@ class BacktestService:
         user_id: uuid.UUID,
     ) -> BacktestRun:
         run = self._runs.get_scoped(run_id, organization_id=organization_id)
-        if run is None:
+        # Results are org-visible, but only the run's creator may cancel it (M15).
+        if run is None or run.user_id != user_id:
             raise NotFoundError("Backtest run not found.")
 
         now = datetime.now(UTC)
