@@ -24,7 +24,9 @@ router = APIRouter(prefix="/positions", tags=["positions"])
 
 def _ensure_own_position(position: Position, tenant: TenantContext) -> None:
     """Positions are per-user (the list is user-scoped); a colleague's is not found (M15)."""
-    ensure_same_organization(position.organization_id, tenant)
+    ensure_same_organization(
+        position.organization_id, tenant, not_found_message="Position not found"
+    )
     if position.user_id != tenant.user_id:
         raise NotFoundError("Position not found")
 

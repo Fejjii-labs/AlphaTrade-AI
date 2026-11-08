@@ -64,7 +64,9 @@ async def get_proposal(
         proposal_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(proposal.organization_id, tenant)
+    ensure_same_organization(
+        proposal.organization_id, tenant, not_found_message="Trade proposal not found"
+    )
     return proposal
 
 
@@ -82,7 +84,9 @@ async def get_proposal_workflow(
         proposal_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(view.proposal.organization_id, tenant)
+    ensure_same_organization(
+        view.proposal.organization_id, tenant, not_found_message="Trade proposal not found"
+    )
     return view
 
 
@@ -102,7 +106,9 @@ async def update_proposal_status(
         proposal_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(proposal.organization_id, tenant)
+    ensure_same_organization(
+        proposal.organization_id, tenant, not_found_message="Trade proposal not found"
+    )
     result = proposal_service.update_status(
         proposal_id,
         body,
@@ -128,7 +134,9 @@ async def update_loss_acceptance(
         proposal_id,
         organization_id=tenant.organization_id,
     )
-    ensure_same_organization(proposal.organization_id, tenant)
+    ensure_same_organization(
+        proposal.organization_id, tenant, not_found_message="Trade proposal not found"
+    )
     result = proposal_service.update_loss_acceptance(
         proposal_id,
         body,

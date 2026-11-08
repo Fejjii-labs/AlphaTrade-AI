@@ -1,13 +1,14 @@
 """HTTP middleware: request-id propagation, access logging, and RED metrics.
 
-Each request gets a stable ``request_id`` (honoring an inbound header when
-present) which is bound to the structlog contextvars so every log line emitted
+Each request gets a stable ``request_id`` (honoring a well-formed inbound header
+when present) which is bound to the structlog contextvars so every log line emitted
 while handling the request carries it. The id is also echoed back in the
 response header for client-side correlation.
 """
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
@@ -27,6 +28,16 @@ from app.observability.metrics import (
 
 logger = structlog.get_logger("http")
 
+# Client-supplied correlation ids reach logs, response headers and audit rows
+# (``request_id`` is String(64)). Anything else is replaced, not rejected (I10).
+_CORRELATION_ID = re.compile(r"[A-Za-z0-9._:-]{1,64}")
+
+
+def _correlation_id(value: str | None) -> str:
+    if value and _CORRELATION_ID.fullmatch(value):
+        return value
+    return str(uuid.uuid4())
+
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Bind request context, time the request, emit access log + RED metrics."""
@@ -45,8 +56,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         self._metrics_enabled = metrics_enabled
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request_id = request.headers.get(self._header) or str(uuid.uuid4())
-        trace_id = request.headers.get(self._trace_header) or str(uuid.uuid4())
+        request_id = _correlation_id(request.headers.get(self._header))
+        trace_id = _correlation_id(request.headers.get(self._trace_header))
         request.state.request_id = request_id
         request.state.trace_id = trace_id
         set_trace_id(trace_id)
