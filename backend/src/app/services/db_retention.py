@@ -20,6 +20,21 @@ from app.core.config import Settings
 
 logger = structlog.get_logger(__name__)
 
+# watcher_observability_events has no severity column. An event counts as an
+# error when its name carries one of the markers the monitoring "recent errors"
+# panel uses (watcher_monitoring_service._ERROR_EVENT_MARKERS; a test keeps the
+# two in sync) or when a finished scan reports a bad evaluation status.
+WATCHER_ERROR_EVENT_MARKERS = ("fail", "error", "blocked", "degraded", "stale", "reject")
+_WATCHER_ERROR_EVALUATION_STATUSES = ("failed", "degraded", "blocked")
+
+
+def _watcher_error_event_sql() -> str:
+    names = " OR ".join(
+        f"lower(t.name) LIKE '%{marker}%'" for marker in WATCHER_ERROR_EVENT_MARKERS
+    )
+    statuses = ", ".join(f"'{status}'" for status in _WATCHER_ERROR_EVALUATION_STATUSES)
+    return f"({names} OR COALESCE(t.fields ->> 'evaluation_status', '') IN ({statuses}))"
+
 
 @dataclass(frozen=True, slots=True)
 class RetentionPolicy:
@@ -33,10 +48,17 @@ class RetentionPolicy:
     keep_predicate: str = ""
     # Always keep the newest row per organization (latest-row readers).
     keep_newest_per_org: bool = False
+    # Distinguishes two policies on one table; defaults to the table name.
+    name: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.name or self.table
 
 
 @dataclass(frozen=True, slots=True)
 class RetentionResult:
+    policy: str
     table: str
     cutoff: datetime
     matched: int
@@ -48,12 +70,23 @@ class RetentionResult:
 def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
     """The pruned tables and their windows. Anything not listed is kept forever."""
 
+    error_event = _watcher_error_event_sql()
     return (
         RetentionPolicy(
             table="watcher_observability_events",
             primary_key="event_id",
             timestamp="at",
             window=timedelta(hours=settings.retention_watcher_events_hours),
+            keep_predicate=f"NOT {error_event}",
+        ),
+        # Errors stay longer so a failure is still visible after a weekend.
+        RetentionPolicy(
+            table="watcher_observability_events",
+            primary_key="event_id",
+            timestamp="at",
+            window=timedelta(hours=settings.retention_watcher_error_events_hours),
+            keep_predicate=error_event,
+            name="watcher_observability_events:error",
         ),
         # Child rows of scan attempts; nothing references them. The parent
         # watcher_scan_attempts rows are kept: lineages replay through them.
@@ -127,7 +160,9 @@ def prune_table(
         )
         session.commit()
         if dry_run or matched == 0:
-            return RetentionResult(policy.table, cutoff, matched, 0, dry_run, matched == 0)
+            return RetentionResult(
+                policy.label, policy.table, cutoff, matched, 0, dry_run, matched == 0
+            )
         deleted = 0
         statement = text(
             f"DELETE FROM {policy.table} WHERE {policy.primary_key} IN ("
@@ -142,8 +177,10 @@ def prune_table(
             session.commit()
             deleted += max(int(count or 0), 0)
             if not count or count < batch_size:
-                return RetentionResult(policy.table, cutoff, matched, deleted, False, True)
-        return RetentionResult(policy.table, cutoff, matched, deleted, False, False)
+                return RetentionResult(
+                    policy.label, policy.table, cutoff, matched, deleted, False, True
+                )
+        return RetentionResult(policy.label, policy.table, cutoff, matched, deleted, False, False)
     except Exception:
         session.rollback()
         raise
@@ -179,6 +216,7 @@ def run_retention(
         except Exception as exc:
             logger.error(
                 "db_retention_table_failed",
+                policy=policy.label,
                 table=policy.table,
                 error=type(exc).__name__,
             )
@@ -186,6 +224,7 @@ def run_retention(
         results.append(result)
         logger.info(
             "db_retention_table",
+            policy=result.policy,
             table=result.table,
             cutoff=result.cutoff.isoformat(),
             matched=result.matched,

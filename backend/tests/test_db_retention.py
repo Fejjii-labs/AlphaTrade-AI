@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -12,7 +13,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.services.db_retention import retention_policies, run_retention
+from app.services.db_retention import (
+    WATCHER_ERROR_EVENT_MARKERS,
+    retention_policies,
+    run_retention,
+)
 from app.workers.db_retention import DbRetentionCycle
 
 NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
@@ -21,7 +26,8 @@ NOW = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
 pytestmark = pytest.mark.filterwarnings("ignore:The default datetime adapter:DeprecationWarning")
 
 _DDL = (
-    "CREATE TABLE watcher_observability_events (event_id TEXT PRIMARY KEY, at TIMESTAMP)",
+    "CREATE TABLE watcher_observability_events "
+    "(event_id TEXT PRIMARY KEY, name TEXT, at TIMESTAMP, fields JSON)",
     "CREATE TABLE watcher_subscription_eval_attempts "
     "(subscription_attempt_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
     "CREATE TABLE watcher_source_fetch_attempts "
@@ -67,7 +73,8 @@ def _seed(factory) -> None:
     fresh = NOW - timedelta(hours=1)
     _insert(
         factory,
-        "INSERT INTO watcher_observability_events VALUES (:id, :at)",
+        "INSERT INTO watcher_observability_events "
+        "VALUES (:id, 'watcher_scan_scheduled', :at, '{}')",
         [{"id": str(uuid4()), "at": old} for _ in range(250)]
         + [{"id": str(uuid4()), "at": fresh} for _ in range(5)],
     )
@@ -103,7 +110,7 @@ def _seed(factory) -> None:
 def test_dry_run_counts_and_deletes_nothing(factory) -> None:
     _seed(factory)
     results = run_retention(factory, _settings(), now=NOW)  # default RETENTION_DRY_RUN=true
-    by_table = {r.table: r for r in results}
+    by_table = {r.policy: r for r in results}
     assert by_table["watcher_observability_events"].matched == 250
     assert by_table["watcher_observability_events"].deleted == 0
     assert all(r.dry_run for r in results)
@@ -113,7 +120,7 @@ def test_dry_run_counts_and_deletes_nothing(factory) -> None:
 def test_prune_keeps_trade_evidence_newest_snapshot_and_other_tables(factory) -> None:
     _seed(factory)
     results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
-    by_table = {r.table: r for r in results}
+    by_table = {r.policy: r for r in results}
     assert by_table["watcher_observability_events"].deleted == 250
     assert by_table["watcher_observability_events"].complete is True
     assert _count(factory, "watcher_observability_events") == 5
@@ -135,7 +142,7 @@ def test_batches_are_bounded_per_pass(factory) -> None:
     _seed(factory)
     settings = _settings(retention_dry_run=False, retention_max_batches_per_table=2)
     results = run_retention(factory, settings, now=NOW)
-    events = next(r for r in results if r.table == "watcher_observability_events")
+    events = next(r for r in results if r.policy == "watcher_observability_events")
     assert events.deleted == 200
     assert events.complete is False
     assert _count(factory, "watcher_observability_events") == 55
@@ -150,6 +157,47 @@ def test_policies_never_name_trade_audit_or_strategy_tables() -> None:
         "paper_evaluation_observations",
         "blofin_demo_sync_snapshots",
     }
+
+
+def test_error_events_are_kept_three_days_and_the_rest_one_day(factory) -> None:
+    rows = [
+        # 48 h old: past the 24 h window, inside the 72 h error window.
+        ("routine-2d", "watcher_scan_scheduled", 48, {}),
+        ("ok-finish-2d", "watcher_scan_finished", 48, {"evaluation_status": "succeeded"}),
+        ("failed-finish-2d", "watcher_scan_finished", 48, {"evaluation_status": "failed"}),
+        ("blocked-2d", "watcher_schedule_blocked", 48, {}),
+        ("stale-fence-2d", "watcher_stale_fence_rejected", 48, {}),
+        ("routine-1h", "watcher_lease_claimed", 1, {}),
+        ("error-1h", "watcher_worker_blocked", 1, {}),
+        # 80 h old: past both windows.
+        ("blocked-80h", "watcher_notify_blocked", 80, {}),
+        ("degraded-80h", "watcher_scan_finished", 80, {"evaluation_status": "degraded"}),
+    ]
+    _insert(
+        factory,
+        "INSERT INTO watcher_observability_events VALUES (:id, :name, :at, :fields)",
+        [
+            {"id": i, "name": n, "at": NOW - timedelta(hours=h), "fields": json.dumps(f)}
+            for i, n, h, f in rows
+        ],
+    )
+    results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    by_policy = {r.policy: r for r in results}
+    assert by_policy["watcher_observability_events"].deleted == 2
+    assert by_policy["watcher_observability_events:error"].deleted == 2
+    with factory() as session:
+        kept = set(
+            session.execute(text("SELECT event_id FROM watcher_observability_events"))
+            .scalars()
+            .all()
+        )
+    assert kept == {"failed-finish-2d", "blocked-2d", "stale-fence-2d", "routine-1h", "error-1h"}
+
+
+def test_error_markers_match_the_monitoring_panel() -> None:
+    from app.services.watcher_monitoring_service import _ERROR_EVENT_MARKERS
+
+    assert WATCHER_ERROR_EVENT_MARKERS == _ERROR_EVENT_MARKERS
 
 
 def test_retention_is_off_and_dry_run_by_default() -> None:
