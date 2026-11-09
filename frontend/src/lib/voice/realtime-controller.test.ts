@@ -344,6 +344,17 @@ describe("reason codes, limits, countdown and turns (UI overhaul B7b)", () => {
     expect(f.audio.start).not.toHaveBeenCalled();
   });
 
+  it("reports budget held by pending sessions with used vs held, not as a monthly limit", async () => {
+    const f = fixture({ configuration: vi.fn().mockResolvedValue({
+      available: false, reason: "voice_budget_held_by_pending_sessions", provider: "gpt_live",
+      used_minutes: 12.5, held_minutes: 3.4, used_tokens: 0, held_tokens: 900,
+    }) });
+    await f.controller.start();
+    expect(f.states.at(-1)).toMatchObject({ state: "error", limit: false,
+      error: "Voice budget temporarily held by pending sessions. Used 12.5 min · Held 3.4 min. Continue typing." });
+    expect(f.audio.start).not.toHaveBeenCalled(); expect(f.connect).not.toHaveBeenCalled();
+  });
+
   it("ends on a server limit with plain text instead of one generic line", async () => {
     const f = fixture(); await f.controller.start(); f.socket.onopen?.();
     f.socket.emit({ type: "session.ready" });

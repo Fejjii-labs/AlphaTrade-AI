@@ -3,7 +3,7 @@ import { getAccessToken } from "@/lib/auth/session";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { appConfig } from "@/lib/config";
 import { RealtimeAudio } from "./realtime-audio";
-import { voiceReason } from "./voice-reasons";
+import { voiceBudget, voiceReason, type VoiceBudget } from "./voice-reasons";
 import type { AgentTurnResult } from "@/lib/api/types";
 import type { TurnBody } from "@/components/agent/turn-recovery";
 
@@ -22,7 +22,7 @@ type AudioDevice = Pick<RealtimeAudio, "start" | "play" | "interrupt" | "stop">
   & Partial<Pick<RealtimeAudio, "level" | "playing">>;
 /** Live audio for the voice orb: reply output while it plays, otherwise the microphone. */
 export type VoiceMeter = Readonly<{ speaking: boolean; level: number }>;
-type VoiceConfiguration = {
+type VoiceConfiguration = VoiceBudget & {
   available: boolean; reason?: string | null; maximum_seconds?: number | null;
   maximum_turns?: number | null; provider?: Provider; transport?: "websocket_pcm24";
 };
@@ -90,7 +90,8 @@ export class RealtimeVoiceController {
       this.maximumTurns = config.maximum_turns ?? null;
       if (!config.available) {
         const reason = voiceReason(config.reason);
-        if (reason) throw new VoiceStop(`${reason.text} Continue typing.`, reason.limit);
+        const budget = voiceBudget(config);
+        if (reason) throw new VoiceStop(`${reason.text}${budget ? ` ${budget}.` : ""} Continue typing.`, reason.limit);
         throw new Error(this.provider === "gpt_live"
           ? "GPT Live is unavailable. Continue typing or use Record."
           : "Interactive voice is unavailable. Continue typing.");

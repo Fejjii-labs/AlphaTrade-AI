@@ -11,11 +11,12 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.agent_voice.accounting import VoiceLedger
+from app.agent_voice.accounting import HELD_BY_PENDING_SESSIONS, VoiceLedger, preview_admission
 from app.agent_voice.config import VoiceUnavailableError, load_limits
 from app.agent_voice.contracts import VoiceConfig, VoiceStart
-from app.agent_voice.live_config import load_live_limits
+from app.agent_voice.live_config import GPT_LIVE_USD_PER_MINUTE, load_live_limits
 from app.agent_voice.live_socket import SHIELDED_CLOSE_SECONDS, live_voice
 from app.agent_voice.service import RealtimeSession
 from app.core.config import get_settings
@@ -46,11 +47,34 @@ def voice_config(tenant: TraderDep, settings: SettingsDep) -> VoiceConfig:
             reason=str(exc),
             provider=provider,
         )
-    return VoiceConfig(
+    config = VoiceConfig(
         available=True,
         maximum_seconds=limits.maximum_seconds,
         maximum_turns=limits.maximum_turns,
         provider="gpt_live" if settings.agent_live_enabled else "realtime",
+    )
+    try:
+        with get_session_factory()() as session:
+            preview = preview_admission(session, settings, limits, tenant.organization_id)
+    except SQLAlchemyError:
+        logger.warning("voice_config_budget_preview_unavailable")
+        return config
+    live = settings.agent_live_enabled
+    held = preview.refusal == HELD_BY_PENDING_SESSIONS
+    return config.model_copy(
+        update={
+            "available": not held,
+            "reason": HELD_BY_PENDING_SESSIONS if held else None,
+            # Live only: the official per-minute rate; Realtime has no minute price.
+            "used_minutes": round(float(preview.used_cost / GPT_LIVE_USD_PER_MINUTE), 1)
+            if live
+            else None,
+            "held_minutes": round(float(preview.held_cost / GPT_LIVE_USD_PER_MINUTE), 1)
+            if live
+            else None,
+            "used_tokens": int(preview.used_tokens),
+            "held_tokens": int(preview.held_tokens),
+        }
     )
 
 

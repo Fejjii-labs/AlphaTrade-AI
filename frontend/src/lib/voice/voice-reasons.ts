@@ -20,7 +20,11 @@ const LIMITS: Record<string, string> = {
   voice_session_expired: "Time limit reached for this voice session.",
 };
 
+/** Open session holds, not consumed usage, block a new session; it clears once they settle. */
+export const VOICE_BUDGET_HELD = "voice_budget_held_by_pending_sessions";
+
 const UNAVAILABLE: Record<string, string> = {
+  [VOICE_BUDGET_HELD]: "Voice budget temporarily held by pending sessions.",
   voice_not_enabled: "Voice is off.",
   gpt_live_not_enabled: "Voice is off.",
   realtime_not_enabled: "Voice is off.",
@@ -40,6 +44,20 @@ export function voiceReason(code: string | null | undefined): VoiceReason | null
     code.startsWith("verified_")
   )
     return { limit: false, text: "Voice is not set up." };
+  return null;
+}
+
+export type VoiceBudget = {
+  used_minutes?: number | null; held_minutes?: number | null;
+  used_tokens?: number | null; held_tokens?: number | null;
+};
+
+/** "Used 12.5 min · Held 3.4 min" from `/agent/voice/config`; tokens when minutes are unset. */
+export function voiceBudget(budget: VoiceBudget): string | null {
+  if (budget.used_minutes != null && budget.held_minutes != null)
+    return `Used ${budget.used_minutes} min · Held ${budget.held_minutes} min`;
+  if (budget.used_tokens != null && budget.held_tokens != null)
+    return `Used ${budget.used_tokens.toLocaleString("en-US")} tokens · Held ${budget.held_tokens.toLocaleString("en-US")} tokens`;
   return null;
 }
 

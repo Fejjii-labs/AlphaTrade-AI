@@ -5387,6 +5387,10 @@ export interface components {
         VoiceConfig: {
             /** Available */
             available: boolean;
+            /** Held Minutes */
+            held_minutes?: number | null;
+            /** Held Tokens */
+            held_tokens?: number | null;
             /** Maximum Seconds */
             maximum_seconds?: number | null;
             /** Maximum Turns */
@@ -5411,6 +5415,10 @@ export interface components {
              * @constant
              */
             transport?: "websocket_pcm24";
+            /** Used Minutes */
+            used_minutes?: number | null;
+            /** Used Tokens */
+            used_tokens?: number | null;
         };
         /** VoiceIoContract */
         VoiceIoContract: {
