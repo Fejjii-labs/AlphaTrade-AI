@@ -18,7 +18,7 @@ from app.agent_voice.config import VoiceUnavailableError
 from app.agent_voice.contracts import VoiceStart
 from app.agent_voice.live_accounting import LiveLedger
 from app.agent_voice.live_config import CLOSE_SECONDS, load_live_limits
-from app.agent_voice.live_service import LiveSession
+from app.agent_voice.live_service import LiveSession, safe_code
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.session import get_session_factory
@@ -27,6 +27,51 @@ logger = structlog.get_logger(__name__)
 
 # Upper bound on the shielded cleanup (Griller N6 on #320).
 SHIELDED_CLOSE_SECONDS = 30
+STARTUP_SECONDS = 10
+PROVIDER_CONNECT_SECONDS = 10
+
+
+def _http_status(exc: BaseException) -> int | None:
+    """HTTP status of a refused upgrade or API call, following the cause chain."""
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None:
+            return None
+        if isinstance(current, AppError):
+            return None  # our own response status, not a provider/upstream one
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if status is None:
+            status = getattr(current, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+            return status
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def failure_diagnostics(
+    exc: BaseException, stage: str, session: LiveSession | None
+) -> dict[str, Any]:
+    """Sanitized failure record: stage, class name, HTTP status and safe codes.
+
+    Never includes exception messages, provider text, credentials, tokens,
+    audio or transcripts.
+    """
+    diagnostics: dict[str, Any] = {"stage": stage, "error_class": type(exc).__name__}
+    if isinstance(exc, VoiceUnavailableError):
+        diagnostics["reason"] = safe_code(str(exc))
+    elif isinstance(exc, AppError):
+        diagnostics["reason"] = safe_code(exc.code)
+    status = _http_status(exc)
+    if status is not None:
+        diagnostics["http_status"] = status
+    received = getattr(exc, "rcvd", None)
+    code = getattr(received, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        diagnostics["close_code"] = code
+    if session is not None:
+        diagnostics.update(session.diagnostics)
+    return {key: value for key, value in diagnostics.items() if value is not None}
 
 
 async def live_voice(websocket: WebSocket) -> None:
@@ -41,6 +86,14 @@ async def live_voice(websocket: WebSocket) -> None:
     ledger: LiveLedger | None = None
     session: LiveSession | None = None
     tasks: list[asyncio.Task[None]] = []
+    stage = "start_message"
+    failure_record: dict[str, Any] | None = None
+
+    def current_stage() -> str:
+        if stage == "awaiting_session_started" and session is not None and session.ready:
+            return "active"
+        return stage
+
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=5)
         if len(raw.encode()) > 12288:
@@ -52,7 +105,9 @@ async def live_voice(websocket: WebSocket) -> None:
         ledger = LiveLedger(
             get_session_factory(), settings, limits, start.access_token, start.conversation_id
         )
+        stage = "admission"
         await asyncio.wait_for(asyncio.to_thread(ledger.reserve), timeout=10)
+        stage = "provider_connect"
         async with contextlib.AsyncExitStack() as stack:
             client = await stack.enter_async_context(
                 AsyncOpenAI(
@@ -73,7 +128,7 @@ async def live_voice(websocket: WebSocket) -> None:
                         max_retries=0,
                     )
                 ),
-                timeout=10,
+                timeout=PROVIDER_CONNECT_SECONDS,
             )
 
             async def to_browser(event: dict[str, Any]) -> None:
@@ -82,9 +137,11 @@ async def live_voice(websocket: WebSocket) -> None:
                     await asyncio.wait_for(websocket.send_json(event), timeout=1)
 
             session = LiveSession(ledger, start, upstream, to_browser)
+            stage = "session_start"
             await session.start_session()
+            stage = "awaiting_session_started"
             deadline = asyncio.get_running_loop().time() + limits.maximum_seconds
-            startup_deadline = asyncio.get_running_loop().time() + 10
+            startup_deadline = asyncio.get_running_loop().time() + STARTUP_SECONDS
 
             async def from_browser() -> None:
                 while True:
@@ -106,7 +163,15 @@ async def live_voice(websocket: WebSocket) -> None:
                         KeyError,
                         TypeError,
                         AttributeError,
-                    ):
+                    ) as exc:
+                        # Keep the specific cause for diagnostics; the browser
+                        # contract still receives the generic reason.
+                        session.diagnostics.setdefault(
+                            "provider_event_reason",
+                            safe_code(str(exc))
+                            if isinstance(exc, VoiceUnavailableError)
+                            else type(exc).__name__,
+                        )
                         session.failure = VoiceUnavailableError("live_provider_event_unavailable")
                         await session.request_close()
                     if session.finalized.is_set():
@@ -116,12 +181,10 @@ async def live_voice(websocket: WebSocket) -> None:
                 while True:
                     await asyncio.sleep(0.5)
                     now = asyncio.get_running_loop().time()
-                    if (
-                        session.closing
-                        or now >= deadline
-                        or (not session.ready and now >= startup_deadline)
-                    ):
+                    if session.closing or now >= deadline:
                         return
+                    if not session.ready and now >= startup_deadline:
+                        raise VoiceUnavailableError("live_session_start_timeout")
                     await asyncio.wait_for(
                         asyncio.to_thread(ledger.update, lambda _row, _data: None), timeout=2
                     )
@@ -165,18 +228,29 @@ async def live_voice(websocket: WebSocket) -> None:
             final_failure = failure or session.failure
             if final_failure is not None:
                 raise final_failure
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        failure_record = failure_diagnostics(exc, current_stage(), session)
     except (AppError, VoiceUnavailableError, ValidationError, ValueError, TimeoutError) as exc:
+        failure_record = failure_diagnostics(exc, current_stage(), session)
         reason = str(exc) if isinstance(exc, VoiceUnavailableError) else "voice_session_unavailable"
         with contextlib.suppress(RuntimeError, WebSocketDisconnect):
             await websocket.send_json({"type": "session.error", "reason": reason})
-    except Exception:
+    except Exception as exc:
+        failure_record = failure_diagnostics(exc, current_stage(), session)
         with contextlib.suppress(RuntimeError, WebSocketDisconnect):
             await websocket.send_json(
                 {"type": "session.error", "reason": "voice_provider_unavailable"}
             )
+    except asyncio.CancelledError as exc:
+        failure_record = failure_diagnostics(exc, current_stage(), session)
+        raise
     finally:
+        if failure_record is not None:
+            logger.warning(
+                "live_voice_failed",
+                reservation_id=str(ledger.id) if ledger is not None else None,
+                **failure_record,
+            )
         # Shielded so an outer cancellation cannot skip the ledger close, but
         # bounded so a DB stall cannot hang shutdown. A missed close is charged
         # conservatively by the stale Live hold sweep.
@@ -186,9 +260,9 @@ async def live_voice(websocket: WebSocket) -> None:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             if session:
-                await session.stop()
+                await session.stop(failure_record)
             elif ledger:
-                await asyncio.to_thread(ledger.close)
+                await asyncio.to_thread(ledger.close, failure_record)
             with contextlib.suppress(RuntimeError):
                 await websocket.close()
         if scope.cancelled_caught:

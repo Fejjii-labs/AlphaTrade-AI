@@ -62,6 +62,10 @@ class VoiceLedger:
         )
         return tenant
 
+    def initial_ledger(self) -> dict[str, Any]:
+        """Transport-specific ledger fields written with the reservation itself."""
+        return {}
+
     def reserve(self) -> None:
         now = datetime.now(UTC)
         maximum = self.limits.reservation(self.settings)
@@ -170,6 +174,7 @@ class VoiceLedger:
                         "tools": {},
                         "reasoning_attempts": [],
                         "embedding_attempts": {},
+                        **self.initial_ledger(),
                     },
                     created_at=now,
                     updated_at=now,

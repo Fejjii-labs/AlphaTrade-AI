@@ -371,8 +371,12 @@ class FakeLedger:
     def history(self):
         return []
 
-    def started(self, identifier):
+    def started(self, identifier, resolved_model=None):
         self.events.append(("started", identifier))
+        self.resolved_model = resolved_model
+
+    def session_start_may_send(self):
+        self.boundary_marked = True
 
     def audio(self, length):
         self.events.append(("audio", length))
@@ -391,8 +395,9 @@ class FakeLedger:
     def tool_done(self, identifier, result):
         self.events.append(("acknowledged", identifier, result))
 
-    def close(self):
+    def close(self, failure=None):
         self.events.append("closed")
+        self.failure = failure
 
 
 def live_session(limits, turn=None):

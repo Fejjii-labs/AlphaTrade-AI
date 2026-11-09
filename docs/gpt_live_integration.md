@@ -94,6 +94,35 @@ Realtime rows, in-flight active sockets inside that margin, rows with a
 non-null `accounted_cost`, and finalized Live receipts with unresolved secondary
 delegation are left unchanged.
 
+## Startup failures and the provider-contact boundary
+
+New Live rows carry `ledger.live_transport.stage`. It is `admitted` at
+reservation and becomes `session_start_sent` in a committed, row-locked update
+immediately before `session.start` can be written. The model is named only in
+`session.start`, so before that point no Live session (the billable unit) can
+exist. A failure while `admitted` (start message, admission, refused or timed-out
+upgrade, cancellation before `session.start`) closes the row at `$0` and
+releases its token and cost hold. After `session_start_sent`, a missing receipt
+never proves zero spend: the row stays `uncertain` until a final duration
+receipt, or the sweep charges its full `reserved_cost` after expiry. The sweep
+also releases expired `admitted` rows (worker died before `session.start`) at
+`$0`. Legacy Live rows without `live_transport` are never changed by the sweep.
+Note that every reservation still debits the approved `remaining_budget_usd`
+receipt permanently (unchanged behaviour), including released ones.
+
+`session.started` binds the provider session ID before its resolved
+configuration is validated, so a refused configuration still records the final
+duration receipt. A resolved model other than the priced one leaves the row
+`uncertain`.
+
+Failures log `live_voice_failed` with `reservation_id`, `stage`
+(`start_message`, `admission`, `provider_connect`, `session_start`,
+`awaiting_session_started`, `active`), `error_class`, and when present
+`http_status`, `close_code`, `reason`, `provider_error_type`/`code`/`param`,
+`provider_event_reason`, `config_mismatch` and `resolved_model`. Only class
+names and machine codes are recorded (also in `live_transport.failure`); never
+exception or provider messages, credentials, tokens, audio or transcripts.
+
 The example file contains no secrets. Dates are placeholders. A real receipt
 must be unexpired, tenant-scoped, and cover the whole session plus the
 14-second margin.

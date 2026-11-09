@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import uuid5
 
@@ -41,12 +42,25 @@ def _live_secondary_unresolved(data: dict[str, Any]) -> bool:
     )
 
 
+def _transport_stage(data: dict[str, Any]) -> str | None:
+    # Local import: rollback overlays may lack newer modules (see quota_service).
+    from app.agent_voice.live_accounting import LIVE_TRANSPORT
+
+    transport = data.get(LIVE_TRANSPORT)
+    return transport.get("stage") if isinstance(transport, dict) else None
+
+
 def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> bool:
+    from app.agent_voice.live_accounting import STAGE_SESSION_START_SENT
+
     data = row.ledger
     live = data.get("live")
-    if not live:
+    # Without a provider identity, only rows whose ledger proves session.start
+    # may have been sent are Live holds. Legacy rows without the transport
+    # marker (and every Realtime row) are never changed here.
+    if not live and _transport_stage(data) != STAGE_SESSION_START_SENT:
         return False
-    if live.get("finalized"):
+    if live and live.get("finalized"):
         return False
     if _live_secondary_unresolved(data):
         return False
@@ -54,6 +68,18 @@ def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> 
     if expires_at is None:
         return False
     return moment >= expires_at + _CLOSE_MARGIN
+
+
+def _eligible_for_unsent_release(row: VoiceSessionReservation, moment: datetime) -> bool:
+    """An abandoned hold whose ledger proves session.start was never sent."""
+    from app.agent_voice.live_accounting import provably_unsent
+
+    expires_at = _parse_expires_at(row.ledger)
+    return (
+        provably_unsent(row.ledger)
+        and expires_at is not None
+        and moment >= expires_at + _CLOSE_MARGIN
+    )
 
 
 def _charge_full_reservation(
@@ -105,12 +131,14 @@ def release_expired_voice_holds(
     *,
     now: datetime | None = None,
 ) -> int:
-    """Charge expired GPT Live rows that never received a final duration receipt.
+    """Settle expired GPT Live rows that never received a final duration receipt.
 
     Scoped to one organization, row-locked, and flushed only so quota reads do
     not commit unrelated work on the caller session. Each released row is charged
-    its full ``reserved_cost`` (never zero). Realtime rows and finalized Live
-    receipts with unresolved secondary delegation are never changed here.
+    its full ``reserved_cost`` (never zero), except a row whose ledger proves
+    ``session.start`` was never sent, which is released at zero. Realtime rows,
+    legacy Live rows without a transport stage, and finalized Live receipts with
+    unresolved secondary delegation are never changed here.
     """
     moment = now or datetime.now(UTC)
     candidate_ids = session.scalars(
@@ -135,6 +163,13 @@ def release_expired_voice_holds(
         if row is None:
             continue
         if row.accounted_cost is not None:
+            continue
+        if _eligible_for_unsent_release(row, moment):
+            # The worker died before session.start: no provider session exists.
+            row.status = "closed"
+            row.accounted_cost = Decimal(0)
+            row.updated_at = moment
+            released += 1
             continue
         if not _eligible_for_live_sweep(row, moment):
             continue
