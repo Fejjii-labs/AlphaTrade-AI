@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { RealtimeVoiceController, type RealtimeSnapshot } from "@/lib/voice/realtime-controller";
-import { formatCountdown } from "@/lib/voice/voice-reasons";
+import { formatCountdown, VOICE_BUDGET_HELD, voiceBudget, voiceReason } from "@/lib/voice/voice-reasons";
 import type { TurnBody } from "./turn-recovery";
 import { VoiceOrb, type OrbState } from "./VoiceOrb";
 import type { AgentTurnResult } from "@/lib/api/types";
@@ -25,7 +25,7 @@ type Props = {
   onAvailability?(available: boolean | null): void;
 };
 
-type Availability = { available: boolean | null; reason: string | null };
+type Availability = { available: boolean | null; reason: string | null; budget?: string | null };
 
 /** Reads voice availability once per session so the mic can hide before a click. */
 function useVoiceAvailability(sessionKey: string | null, authenticated: boolean): Availability {
@@ -36,7 +36,8 @@ function useVoiceAvailability(sessionKey: string | null, authenticated: boolean)
     (async () => {
       try {
         const config = await api.agent.voiceConfig({ signal: abort.signal });
-        if (!abort.signal.aborted) setAvailability({ available: config.available, reason: config.reason ?? null });
+        if (!abort.signal.aborted)
+          setAvailability({ available: config.available, reason: config.reason ?? null, budget: voiceBudget(config) });
       } catch {
         // Unknown: keep today's behaviour (the button explains on click).
         if (!abort.signal.aborted) setAvailability({ available: null, reason: null });
@@ -97,7 +98,16 @@ export function RealtimeVoiceControls(props: Props) {
     state.turnsLeft != null ? `${state.turnsLeft} ${state.turnsLeft === 1 ? "turn" : "turns"} left` : null,
   ].filter(Boolean).join(" · ");
   // One mic: when live voice is known to be off, the composer keeps browser dictation only.
-  if (availability.available === false && !state.active) return null;
+  // Held budget is temporary, so say why instead of hiding silently.
+  if (availability.available === false && !state.active) {
+    if (availability.reason !== VOICE_BUDGET_HELD) return null;
+    return (
+      <p role="status" className="basis-full text-sm text-text-secondary">
+        {voiceReason(availability.reason)?.text}
+        {availability.budget ? ` ${availability.budget}` : null}
+      </p>
+    );
+  }
   return (
     <>
       <Button type="button" variant="secondary" className="h-11"

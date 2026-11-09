@@ -56275,6 +56275,28 @@
             "title": "Available",
             "type": "boolean"
           },
+          "held_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held Minutes"
+          },
+          "held_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held Tokens"
+          },
           "maximum_seconds": {
             "anyOf": [
               {
@@ -56328,6 +56350,28 @@
             "default": "websocket_pcm24",
             "title": "Transport",
             "type": "string"
+          },
+          "used_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Minutes"
+          },
+          "used_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Tokens"
           }
         },
         "required": [

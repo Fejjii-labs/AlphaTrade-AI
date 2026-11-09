@@ -30,6 +30,12 @@ class VoiceConfig(StrictModel):
     sample_rate: Literal[24000] = 24000
     maximum_seconds: int | None = None
     maximum_turns: int | None = None
+    # This month's usage vs. open session holds. Minutes are USD at the official
+    # gpt-live-1 rate (Live only); tokens count against the monthly token quota.
+    used_minutes: float | None = None
+    held_minutes: float | None = None
+    used_tokens: int | None = None
+    held_tokens: int | None = None
 
 
 class VoiceToolInput(StrictModel):

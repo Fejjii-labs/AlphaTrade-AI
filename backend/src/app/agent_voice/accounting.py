@@ -7,7 +7,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import func, select
@@ -26,6 +26,123 @@ from app.services.quota_service import QuotaService
 from app.services.turn_context import current_turn
 
 ChangeResult = TypeVar("ChangeResult")
+
+# Open holds: not closed, or closed without a final accounted cost.
+OPEN_HOLD = (
+    VoiceSessionReservation.status != "closed"
+) | VoiceSessionReservation.accounted_cost.is_(None)
+HELD_BY_PENDING_SESSIONS = "voice_budget_held_by_pending_sessions"
+
+
+def open_holds(session: Session, organization_id: UUID) -> tuple[Decimal, Decimal]:
+    """Cost and tokens still reserved by open voice sessions of the organization."""
+    cost, tokens = session.execute(
+        select(
+            func.coalesce(func.sum(VoiceSessionReservation.reserved_cost), 0),
+            func.coalesce(func.sum(VoiceSessionReservation.reserved_tokens), 0),
+        ).where(VoiceSessionReservation.organization_id == organization_id, OPEN_HOLD)
+    ).one()
+    return Decimal(cost), Decimal(tokens)
+
+
+def approved_budget(
+    session: Session, organization_id: UUID, limits: VoiceLimits | LiveLimits
+) -> tuple[Decimal, Decimal]:
+    """(spent, held) against the approved voice budget receipt.
+
+    Spent is usage since the receipt plus settled reservations on it; held is its
+    open reservations. Together they are the debit admission has always used.
+    """
+    settled, held = session.execute(
+        select(
+            func.coalesce(func.sum(VoiceSessionReservation.reserved_cost).filter(~OPEN_HOLD), 0),
+            func.coalesce(func.sum(VoiceSessionReservation.reserved_cost).filter(OPEN_HOLD), 0),
+        ).where(
+            VoiceSessionReservation.organization_id == organization_id,
+            VoiceSessionReservation.budget_reference == limits.budget_reference,
+        )
+    ).one()
+    used = (
+        UsageRepository(session)
+        .summarize(organization_id=organization_id, since=limits.budget_as_of)
+        .total_cost
+    )
+    return Decimal(used or 0) + Decimal(settled), Decimal(held)
+
+
+def budget_refusal(
+    limits: VoiceLimits | LiveLimits, spent: Decimal, held: Decimal, cost: Decimal
+) -> str | None:
+    if spent + cost > limits.remaining_budget_usd:
+        return "voice_approved_budget_exhausted"
+    if spent + held + cost > limits.remaining_budget_usd:
+        return HELD_BY_PENDING_SESSIONS
+    return None
+
+
+def quota_refusal(
+    quota: OrganizationQuota,
+    *,
+    used: tuple[Decimal, Decimal],
+    held: tuple[Decimal, Decimal],
+    session: tuple[Decimal, Decimal],
+) -> str | None:
+    """Monthly (cost, tokens) check; consumption is reported before open holds.
+
+    Admission is unchanged: a session is refused exactly when used + held + session
+    exceeds a hard threshold. Only the reason differs when the holds decide it.
+    """
+    caps = (
+        (
+            quota.monthly_cost_limit > 0,
+            quota.monthly_cost_limit * quota.hard_block_threshold,
+            "voice_monthly_cost_quota_exhausted",
+        ),
+        (
+            quota.monthly_token_limit >= 0,
+            Decimal(quota.monthly_token_limit) * quota.hard_block_threshold,
+            "voice_monthly_token_quota_exhausted",
+        ),
+    )
+    for (capped, limit, reason), spent, new in zip(caps, used, session, strict=True):
+        if capped and spent + new > limit:
+            return reason
+    for (capped, limit, _), spent, open_, new in zip(caps, used, held, session, strict=True):
+        if capped and spent + open_ + new > limit:
+            return HELD_BY_PENDING_SESSIONS
+    return None
+
+
+class VoiceBudgetPreview(NamedTuple):
+    refusal: str | None
+    used_cost: Decimal
+    held_cost: Decimal
+    used_tokens: Decimal
+    held_tokens: Decimal
+
+
+def preview_admission(
+    session: Session, settings: Settings, limits: VoiceLimits | LiveLimits, organization_id: UUID
+) -> VoiceBudgetPreview:
+    """Read-only dry run of the budget and monthly checks in ``VoiceLedger.reserve``.
+
+    Takes no lock, creates no quota row and no reservation. Used and held are this
+    month's usage and the open holds. Daily and feature request limits are not
+    previewed; ``reserve`` stays the authority.
+    """
+    maximum = limits.reservation(settings)
+    tokens = Decimal(limits.reserved_tokens(settings))
+    month = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    summary = UsageRepository(session).summarize(organization_id=organization_id, since=month)
+    used = (Decimal(summary.total_cost or 0), Decimal(summary.total_tokens or 0))
+    held = open_holds(session, organization_id)
+    refusal = budget_refusal(limits, *approved_budget(session, organization_id, limits), maximum)
+    quota = session.scalar(
+        select(OrganizationQuota).where(OrganizationQuota.organization_id == organization_id)
+    )
+    if refusal is None and quota is not None:
+        refusal = quota_refusal(quota, used=used, held=held, session=(maximum, tokens))
+    return VoiceBudgetPreview(refusal, used[0], held[0], used[1], held[1])
 
 
 class VoiceLedger:
@@ -77,22 +194,12 @@ class VoiceLedger:
                 .where(Organization.id == tenant.organization_id)
                 .with_for_update()
             )
-            competing = session.scalar(
-                select(func.coalesce(func.sum(VoiceSessionReservation.reserved_cost), 0)).where(
-                    VoiceSessionReservation.organization_id == tenant.organization_id,
-                    VoiceSessionReservation.budget_reference == self.limits.budget_reference,
-                )
-            )
             usage = UsageRepository(session)
-            used = usage.summarize(
-                organization_id=tenant.organization_id, since=self.limits.budget_as_of
-            ).total_cost
             # A previous reservation remains a debit even after a restart/unknown reply.
-            if (
-                maximum + Decimal(competing or 0) + Decimal(used or 0)
-                > self.limits.remaining_budget_usd
+            if refusal := budget_refusal(
+                self.limits, *approved_budget(session, tenant.organization_id, self.limits), maximum
             ):
-                raise VoiceUnavailableError("voice_approved_budget_exhausted")
+                raise VoiceUnavailableError(refusal)
             quota = session.scalar(
                 select(OrganizationQuota).where(
                     OrganizationQuota.organization_id == tenant.organization_id
@@ -129,26 +236,14 @@ class VoiceLedger:
                 and feature >= Decimal(quota.limit_agent_chat) * quota.hard_block_threshold
             ):
                 raise VoiceUnavailableError("voice_agent_feature_quota_exhausted")
-            reserved_cost, reserved_tokens = session.execute(
-                select(
-                    func.coalesce(func.sum(VoiceSessionReservation.reserved_cost), 0),
-                    func.coalesce(func.sum(VoiceSessionReservation.reserved_tokens), 0),
-                ).where(
-                    VoiceSessionReservation.organization_id == tenant.organization_id,
-                    (VoiceSessionReservation.status != "closed")
-                    | VoiceSessionReservation.accounted_cost.is_(None),
-                )
-            ).one()
-            if quota.monthly_cost_limit > 0 and (
-                Decimal(usage_cost) + Decimal(reserved_cost) + maximum
-                > quota.monthly_cost_limit * quota.hard_block_threshold
+            reserved_cost, reserved_tokens = open_holds(session, tenant.organization_id)
+            if refusal := quota_refusal(
+                quota,
+                used=(Decimal(usage_cost), Decimal(usage_tokens)),
+                held=(reserved_cost, reserved_tokens),
+                session=(maximum, Decimal(tokens)),
             ):
-                raise VoiceUnavailableError("voice_monthly_cost_quota_exhausted")
-            if quota.monthly_token_limit >= 0 and (
-                usage_tokens + reserved_tokens + tokens
-                > Decimal(quota.monthly_token_limit) * quota.hard_block_threshold
-            ):
-                raise VoiceUnavailableError("voice_monthly_token_quota_exhausted")
+                raise VoiceUnavailableError(refusal)
             digest = hashlib.sha256(self.limits.model_dump_json().encode()).hexdigest()
             session.add(
                 VoiceSessionReservation(

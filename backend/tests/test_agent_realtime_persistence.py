@@ -172,7 +172,8 @@ def test_competing_sessions_cannot_double_spend_existing_receipt(voice_database)
 
     with ThreadPoolExecutor(max_workers=2) as workers:
         results = list(workers.map(lambda _: reserve(), range(2)))
-    assert sorted(results) == ["reserved", "voice_approved_budget_exhausted"]
+    # The loser is blocked by the winner's open hold, not by consumed budget.
+    assert sorted(results) == ["reserved", "voice_budget_held_by_pending_sessions"]
     with voice_database.sessions() as session:
         assert session.scalar(select(func.count()).select_from(VoiceSessionReservation)) == 1
 
@@ -230,6 +231,91 @@ def test_lazily_created_quota_still_enforces_caps(voice_database, monkeypatch):
         ledger_for(voice_database).reserve()
     with voice_database.sessions() as session:
         assert session.scalar(select(func.count()).select_from(VoiceSessionReservation)) == 0
+
+
+def open_hold(database, *, cost="0", tokens=0, budget_reference="synthetic-other-receipt"):
+    now = datetime.now(UTC)
+    return VoiceSessionReservation(
+        id=uuid4(),
+        organization_id=database.organization_id,
+        user_id=database.user_id,
+        conversation_id=None,
+        budget_reference=budget_reference,
+        model="synthetic-protocol-model",
+        status="pending",
+        reserved_cost=Decimal(cost),
+        reserved_tokens=tokens,
+        accounted_cost=None,
+        response_count=0,
+        ledger={"expires_at": (now + timedelta(minutes=5)).isoformat(), "responses": []},
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.parametrize("cap", ["cost", "token"])
+def test_open_holds_over_monthly_quota_report_held_not_exhausted(voice_database, cap):
+    ledger = ledger_for(voice_database)
+    maximum = ledger.limits.reservation(ledger.settings)
+    tokens = ledger.limits.reserved_tokens(ledger.settings)
+    with voice_database.sessions() as session:
+        quota = session.scalar(select(OrganizationQuota))
+        if cap == "cost":
+            # Usage alone (zero) plus this session fits; the open hold does not.
+            quota.monthly_cost_limit = maximum + Decimal("0.01")
+            session.add(open_hold(voice_database, cost="1"))
+        else:
+            quota.monthly_token_limit = tokens + 1
+            session.add(open_hold(voice_database, tokens=tokens))
+        session.commit()
+    with pytest.raises(VoiceUnavailableError, match=r"^voice_budget_held_by_pending_sessions$"):
+        ledger.reserve()
+
+
+def test_consumed_monthly_tokens_still_report_monthly_exhausted(voice_database):
+    ledger = ledger_for(voice_database)
+    tokens = ledger.limits.reserved_tokens(ledger.settings)
+    with voice_database.sessions() as session:
+        session.scalar(select(OrganizationQuota)).monthly_token_limit = tokens + 1
+        session.add(open_hold(voice_database, tokens=tokens))
+        session.add(
+            UsageEvent(
+                organization_id=voice_database.organization_id,
+                user_id=voice_database.user_id,
+                feature="agent_chat",
+                event_at=datetime.now(UTC),
+                total_tokens=2,
+                estimated_cost=Decimal(0),
+                cost_source=CostSource.TOKENIZER_ESTIMATED,
+            )
+        )
+        session.commit()
+    # Holds are present too, but consumption alone already blocks the session.
+    with pytest.raises(VoiceUnavailableError, match=r"^voice_monthly_token_quota_exhausted$"):
+        ledger.reserve()
+
+
+def test_voice_config_reports_held_budget_without_reserving(voice_database, monkeypatch):
+    from app.api.routes import agent_voice
+
+    tokens = voice_database.limits.reserved_tokens(voice_database.settings)
+    with voice_database.sessions() as session:
+        session.scalar(select(OrganizationQuota)).monthly_token_limit = tokens + 1
+        session.add(open_hold(voice_database, cost="0.25", tokens=tokens))
+        session.commit()
+    monkeypatch.setattr(agent_voice, "load_limits", lambda _settings: voice_database.limits)
+    monkeypatch.setattr(agent_voice, "get_session_factory", lambda: voice_database.sessions)
+    settings = voice_database.settings.model_copy(update={"agent_realtime_enabled": True})
+    config = agent_voice.voice_config(
+        SimpleNamespace(organization_id=voice_database.organization_id), settings
+    )
+    assert config.available is False
+    assert config.reason == "voice_budget_held_by_pending_sessions"
+    assert (config.used_tokens, config.held_tokens) == (0, tokens)
+    # Realtime has no per-minute price, so minutes are left unset.
+    assert config.used_minutes is None and config.held_minutes is None
+    with voice_database.sessions() as session:
+        assert session.scalar(select(func.count()).select_from(VoiceSessionReservation)) == 1
 
 
 def test_provider_reported_cost_debits_approved_balance(voice_database):

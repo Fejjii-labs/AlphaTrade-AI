@@ -114,6 +114,20 @@ describe("voice availability, countdown and limits (UI overhaul B7b)", () => {
     expect(mocks.instances[0].start).not.toHaveBeenCalled();
   });
 
+  it("explains a held voice budget with used vs held instead of hiding silently", async () => {
+    config.voiceConfig.mockResolvedValue({
+      available: false, reason: "voice_budget_held_by_pending_sessions", provider: "gpt_live",
+      used_minutes: 12.5, held_minutes: 3.4,
+    });
+    const p = { ...props(), onAvailability: vi.fn() };
+    render(<RealtimeVoiceControls {...p} />);
+    await waitFor(() => expect(p.onAvailability).toHaveBeenLastCalledWith(false));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Voice budget temporarily held by pending sessions. Used 12.5 min · Held 3.4 min");
+    expect(screen.getByRole("status")).not.toHaveTextContent(/monthly/i);
+    expect(screen.queryByRole("button", { name: "Talk to Agent" })).not.toBeInTheDocument();
+  });
+
   it("keeps the live mic when voice is available and reports it", async () => {
     config.voiceConfig.mockResolvedValue({ available: true, provider: "gpt_live", maximum_seconds: 180, maximum_turns: 6 });
     const p = { ...props(), onAvailability: vi.fn() };
