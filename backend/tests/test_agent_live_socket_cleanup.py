@@ -48,6 +48,9 @@ class FakeLedger:
     def reserve(self) -> None:
         return None
 
+    def provider_contact_may_start(self) -> None:
+        return None
+
     def update(self, *_args: Any) -> None:
         return None
 

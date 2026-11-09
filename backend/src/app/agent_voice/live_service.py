@@ -78,13 +78,9 @@ class LiveSession:
         self.diagnostics: dict[str, Any] = {}
 
     async def start_session(self) -> None:
-        event = session_start(
-            await asyncio.wait_for(asyncio.to_thread(self.ledger.history), timeout=2)
+        await self._provider_send(
+            session_start(await asyncio.wait_for(asyncio.to_thread(self.ledger.history), timeout=2))
         )
-        # Durable provider-contact boundary: committed before any byte of
-        # session.start can reach the provider socket.
-        await asyncio.wait_for(asyncio.to_thread(self.ledger.session_start_may_send), timeout=5)
-        await self._provider_send(event)
 
     async def _provider_send(self, event: dict[str, Any]) -> None:
         async with self.send_lock:

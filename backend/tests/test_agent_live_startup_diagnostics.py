@@ -1,5 +1,8 @@
 """GPT Live startup failures: sanitized diagnostics and the provider-contact boundary.
 
+The durable ``provider_contact`` mark must be committed before any connection
+attempt; only failures before that commit leave the hold releasable at $0.
+
 Drives the real ``live_voice`` route and ``LiveSession`` against a scripted
 provider socket and an in-memory ledger. No provider, network or database.
 """
@@ -61,6 +64,10 @@ class Browser:
 
 class Ledger:
     instances: ClassVar[list[Ledger]] = []
+    # Ordered record of ledger and provider calls shared with the fake client.
+    calls: ClassVar[list[str]] = []
+    reserve_hangs = False
+    contact_error: Exception | None = None
 
     def __init__(self, *_args: Any) -> None:
         self.id = "00000000-0000-4000-8000-000000000001"
@@ -72,12 +79,19 @@ class Ledger:
         Ledger.instances.append(self)
 
     def reserve(self) -> None:
-        return None
+        Ledger.calls.append("reserve")
+        if Ledger.reserve_hangs:
+            import time
+
+            time.sleep(0.5)
 
     def history(self) -> list[dict[str, Any]]:
         return []
 
-    def session_start_may_send(self) -> None:
+    def provider_contact_may_start(self) -> None:
+        if Ledger.contact_error is not None:
+            raise Ledger.contact_error
+        Ledger.calls.append("provider_contact")
         self.boundary_marked = True
 
     def started(self, provider_id: str, *, resolved_model: str | None = None) -> None:
@@ -171,6 +185,9 @@ CLOSED = {
 @pytest.fixture
 def harness(monkeypatch: pytest.MonkeyPatch):
     Ledger.instances = []
+    Ledger.calls = []
+    Ledger.reserve_hangs = False
+    Ledger.contact_error = None
     warnings: list[tuple[str, dict[str, Any]]] = []
     behaviour: dict[str, Any] = {}
     settings = SimpleNamespace(
@@ -182,7 +199,11 @@ def harness(monkeypatch: pytest.MonkeyPatch):
 
     class Client:
         def __init__(self, **_kwargs: Any) -> None:
-            self.live = SimpleNamespace(connect=lambda **_k: Manager(behaviour["connect"]))
+            self.live = SimpleNamespace(connect=self.connect)
+
+        def connect(self, **_kwargs: Any) -> Manager:
+            Ledger.calls.append("connect")
+            return Manager(behaviour["connect"])
 
         async def __aenter__(self) -> Client:
             return self
@@ -227,7 +248,7 @@ def rate_limited_upgrade() -> InvalidStatus:
 
 
 @pytest.mark.asyncio
-async def test_refused_upgrade_is_pre_provider_and_logs_status_without_text(harness) -> None:
+async def test_refused_upgrade_is_after_contact_and_logs_status_without_text(harness) -> None:
     harness.behaviour["connect"] = rate_limited_upgrade()
     browser = Browser()
 
@@ -240,30 +261,46 @@ async def test_refused_upgrade_is_pre_provider_and_logs_status_without_text(harn
         "http_status": 429,
     }
     assert failures(harness) == [expected]
+    # Conservative accounting was committed before the credential left the host.
+    assert Ledger.calls == ["reserve", "provider_contact", "connect"]
     ledger = Ledger.instances[0]
-    # session.start was never sent, so the ledger can release this hold.
-    assert ledger.boundary_marked is False
     assert ledger.closed_with == [{k: v for k, v in expected.items() if k != "reservation_id"}]
     assert browser.errors() == ["voice_provider_unavailable"]
     assert_no_sensitive_text(harness)
 
 
 @pytest.mark.asyncio
-async def test_connect_timeout_is_pre_provider(harness, monkeypatch) -> None:
+async def test_connection_refused_is_after_contact_boundary(harness) -> None:
+    harness.behaviour["connect"] = ConnectionRefusedError(111, "refused " + SECRET_TEXT)
+    browser = Browser()
+
+    await asyncio.wait_for(live_socket.live_voice(browser), timeout=10)
+
+    assert Ledger.calls == ["reserve", "provider_contact", "connect"]
+    assert Ledger.instances[0].closed_with == [
+        {"stage": "provider_connect", "error_class": "ConnectionRefusedError"}
+    ]
+    assert browser.errors() == ["voice_provider_unavailable"]
+    assert_no_sensitive_text(harness)
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_is_after_contact_boundary(harness, monkeypatch) -> None:
     monkeypatch.setattr(live_socket, "PROVIDER_CONNECT_SECONDS", 0.1)
     harness.behaviour["connect"] = "hang"
     browser = Browser()
 
     await asyncio.wait_for(live_socket.live_voice(browser), timeout=10)
 
-    ledger = Ledger.instances[0]
-    assert ledger.boundary_marked is False
-    assert ledger.closed_with == [{"stage": "provider_connect", "error_class": "TimeoutError"}]
+    assert Ledger.calls == ["reserve", "provider_contact", "connect"]
+    assert Ledger.instances[0].closed_with == [
+        {"stage": "provider_connect", "error_class": "TimeoutError"}
+    ]
     assert browser.errors() == ["voice_session_unavailable"]
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_connect_closes_ledger_with_stage(harness) -> None:
+async def test_cancellation_during_connect_is_after_contact_boundary(harness) -> None:
     harness.behaviour["connect"] = "hang"
     task = asyncio.create_task(live_socket.live_voice(Browser()))
     await asyncio.sleep(0.1)
@@ -272,9 +309,49 @@ async def test_cancellation_during_connect_closes_ledger_with_stage(harness) -> 
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=10)
 
-    ledger = Ledger.instances[0]
-    assert ledger.boundary_marked is False
-    assert ledger.closed_with == [{"stage": "provider_connect", "error_class": "CancelledError"}]
+    assert Ledger.calls == ["reserve", "provider_contact", "connect"]
+    assert Ledger.instances[0].closed_with == [
+        {"stage": "provider_connect", "error_class": "CancelledError"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_before_contact_never_connects(harness) -> None:
+    Ledger.reserve_hangs = True
+    harness.behaviour["connect"] = "hang"
+    task = asyncio.create_task(live_socket.live_voice(Browser()))
+    await asyncio.sleep(0.1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=10)
+
+    # The provider was never contacted, so the ledger may release this hold.
+    assert "provider_contact" not in Ledger.calls and "connect" not in Ledger.calls
+    assert Ledger.instances[0].closed_with == [
+        {"stage": "admission", "error_class": "CancelledError"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_refused_contact_boundary_never_connects(harness) -> None:
+    from app.agent_voice.config import VoiceUnavailableError
+
+    Ledger.contact_error = VoiceUnavailableError("voice_session_closed")
+    harness.behaviour["connect"] = "hang"
+    browser = Browser()
+
+    await asyncio.wait_for(live_socket.live_voice(browser), timeout=10)
+
+    assert Ledger.calls == ["reserve"]
+    assert Ledger.instances[0].closed_with == [
+        {
+            "stage": "contact_boundary",
+            "error_class": "VoiceUnavailableError",
+            "reason": "voice_session_closed",
+        }
+    ]
+    assert browser.errors() == ["voice_session_closed"]
 
 
 @pytest.mark.asyncio
@@ -295,7 +372,7 @@ async def test_provider_error_before_start_keeps_codes_but_not_message(harness) 
     await asyncio.wait_for(live_socket.live_voice(browser), timeout=10)
 
     ledger = Ledger.instances[0]
-    assert ledger.boundary_marked is True  # session.start may have reached the provider
+    assert ledger.boundary_marked is True  # provider contact preceded the error
     record = ledger.closed_with[0]
     assert record == {
         "stage": "awaiting_session_started",

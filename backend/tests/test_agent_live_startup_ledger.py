@@ -1,8 +1,10 @@
 """GPT Live reservation lifecycle across startup failures (disposable PostgreSQL).
 
-A hold is released only when the ledger proves ``session.start`` never reached
-the provider. Once it may have, accounting stays conservative: uncertain until a
-final duration receipt, or the full reservation charged by the expiry sweep.
+A hold is released at $0 only when the ledger proves the provider was never
+contacted (failure before the committed ``provider_contact`` mark). From that
+mark on, refusal, timeout or cancellation is not proof of zero spend:
+the row stays uncertain until a final duration receipt, or the expiry sweep
+charges the full reservation.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ def live_database(request):
 
 CENTS = Decimal("0.00000001")  # NUMERIC scale of reservation money columns
 CONNECT_REFUSED = {"stage": "provider_connect", "error_class": "InvalidStatus", "http_status": 429}
+PRE_CONTACT = {"stage": "admission", "error_class": "CancelledError"}
 
 
 def roomy(database):
@@ -102,46 +105,49 @@ def charges(database, ledger) -> UsageEvent | None:
         return session.get(UsageEvent, expired_hold_charge_id(ledger.id))
 
 
-def test_failure_before_session_start_releases_tokens_and_keeps_audit(live_database):
+def test_failure_before_provider_contact_releases_tokens_and_keeps_audit(live_database):
     database = live_database
     ledger = ledger_for(database)
     ledger.reserve()
     assert reserved_tokens(database) == tokens_per_hold(database)
 
-    ledger.close(CONNECT_REFUSED)
+    ledger.close(PRE_CONTACT)
 
     released = row(database, ledger)
     assert (released.status, released.accounted_cost) == ("closed", Decimal(0))
     # Audit history is intact: reserved amounts, stage and sanitized failure.
     assert released.reserved_tokens == tokens_per_hold(database)
     assert released.reserved_cost == database.limits.reservation(database.settings).quantize(CENTS)
-    assert released.ledger["live_transport"] == {"stage": "admitted", "failure": CONNECT_REFUSED}
+    assert released.ledger["live_transport"] == {"stage": "admitted", "failure": PRE_CONTACT}
     assert reserved_tokens(database) == 0
     assert charges(database, ledger) is None
 
 
-def test_failure_after_session_start_may_send_keeps_conservative_hold(live_database):
+def test_failure_after_provider_contact_keeps_conservative_hold(live_database):
     database = live_database
     ledger = ledger_for(database)
     ledger.reserve()
-    ledger.session_start_may_send()
+    ledger.provider_contact_may_start()
 
-    ledger.close({"stage": "awaiting_session_started", "error_class": "TimeoutError"})
+    ledger.close(CONNECT_REFUSED)
 
     held = row(database, ledger)
     assert (held.status, held.accounted_cost) == ("uncertain", None)
-    assert held.ledger["live_transport"]["stage"] == "session_start_sent"
+    assert held.ledger["live_transport"] == {
+        "stage": "provider_contact",
+        "failure": CONNECT_REFUSED,
+    }
     assert reserved_tokens(database) == tokens_per_hold(database)
 
 
-def test_released_hold_can_never_be_followed_by_session_start(live_database):
+def test_released_hold_can_never_be_followed_by_provider_contact(live_database):
     database = live_database
     ledger = ledger_for(database)
     ledger.reserve()
-    independent_handle(database, ledger).close(CONNECT_REFUSED)
+    independent_handle(database, ledger).close(PRE_CONTACT)
 
     with pytest.raises(VoiceUnavailableError, match="voice_session_closed"):
-        ledger.session_start_may_send()
+        ledger.provider_contact_may_start()
     assert row(database, ledger).ledger["live_transport"]["stage"] == "admitted"
 
 
@@ -155,7 +161,7 @@ def test_bound_identity_records_final_receipt_even_when_config_refused(
     database = live_database
     ledger = ledger_for(database)
     ledger.reserve()
-    ledger.session_start_may_send()
+    ledger.provider_contact_may_start()
     ledger.started("live_" + ledger.id.hex, resolved_model=resolved_model)
 
     ledger.usage(final_receipt(ledger, seconds=12), final=True)
@@ -176,7 +182,7 @@ def test_successful_session_settles_measured_seconds(live_database):
     database = live_database
     ledger = ledger_for(database)
     ledger.reserve()
-    ledger.session_start_may_send()
+    ledger.provider_contact_may_start()
     ledger.started("live_" + ledger.id.hex, resolved_model="gpt-live-1")
     ledger.usage(final_receipt(ledger, seconds=40), final=True)
 
@@ -190,25 +196,25 @@ def test_successful_session_settles_measured_seconds(live_database):
     assert reserved_tokens(database) == 0
 
 
-def test_repeated_pre_provider_failures_never_exhaust_the_token_quota(live_database):
+def test_repeated_pre_contact_failures_never_exhaust_the_token_quota(live_database):
     database = live_database
     allow_holds(database, 1)
     for _ in range(5):
         ledger = ledger_for(database, limits=roomy(database))
         ledger.reserve()
-        ledger.close(CONNECT_REFUSED)
+        ledger.close(PRE_CONTACT)
 
     assert reserved_tokens(database) == 0
     ledger_for(database, limits=roomy(database)).reserve()  # still admitted
 
 
-def test_repeated_uncertain_failures_block_until_swept_and_charged(live_database):
+def test_repeated_refusals_after_contact_block_until_swept_and_charged(live_database):
     database = live_database
     allow_holds(database, 1)
     first = ledger_for(database, limits=roomy(database))
     first.reserve()
-    first.session_start_may_send()
-    first.close({"stage": "awaiting_session_started", "error_class": "TimeoutError"})
+    first.provider_contact_may_start()
+    first.close(CONNECT_REFUSED)
 
     with pytest.raises(VoiceUnavailableError, match="voice_monthly_token_quota_exhausted"):
         ledger_for(database, limits=roomy(database)).reserve()
@@ -224,10 +230,10 @@ def test_repeated_uncertain_failures_block_until_swept_and_charged(live_database
     ledger_for(database, limits=roomy(database)).reserve()
 
 
-def test_sweep_releases_abandoned_unsent_hold_only_after_expiry(live_database):
+def test_sweep_releases_abandoned_pre_contact_hold_only_after_expiry(live_database):
     database = live_database
     ledger = ledger_for(database)
-    ledger.reserve()  # worker dies before session.start; close never runs
+    ledger.reserve()  # worker dies before provider contact; close never runs
 
     assert sweep(database, datetime.now(UTC)) == 0
     assert row(database, ledger).status == "pending"
@@ -255,7 +261,20 @@ def test_sweep_never_changes_legacy_rows_without_transport_stage(live_database):
     assert reserved_tokens(database) == tokens_per_hold(database)
 
 
-def test_concurrent_release_and_session_start_never_both_succeed(live_database):
+def test_sweep_charges_abandoned_post_contact_hold_after_expiry(live_database):
+    database = live_database
+    ledger = ledger_for(database)
+    ledger.reserve()
+    ledger.provider_contact_may_start()  # worker dies during connect; close never runs
+
+    assert sweep(database, datetime.now(UTC)) == 0
+    assert sweep(database, after_expiry(database)) == 1
+    charged = row(database, ledger)
+    assert (charged.status, charged.accounted_cost) == ("closed", charged.reserved_cost)
+    assert charges(database, ledger).estimated_cost == charged.reserved_cost
+
+
+def test_concurrent_release_and_provider_contact_never_both_succeed(live_database):
     database = live_database
     allow_holds(database, 10)
     for _ in range(4):
@@ -265,14 +284,14 @@ def test_concurrent_release_and_session_start_never_both_succeed(live_database):
 
         def mark(ledger=ledger) -> bool:
             try:
-                ledger.session_start_may_send()
+                ledger.provider_contact_may_start()
             except VoiceUnavailableError:
                 return False
             return True
 
         with ThreadPoolExecutor(2) as pool:
             marked = pool.submit(mark)
-            pool.submit(other.close, CONNECT_REFUSED).result(timeout=10)
+            pool.submit(other.close, PRE_CONTACT).result(timeout=10)
             sent = marked.result(timeout=10)
 
         settled = row(database, ledger)
@@ -299,7 +318,7 @@ def test_concurrent_failed_startups_each_release_their_own_hold(live_database):
     with ThreadPoolExecutor(2) as pool:
         list(pool.map(lambda ledger: ledger.reserve(), ledgers))
     with ThreadPoolExecutor(2) as pool:
-        list(pool.map(lambda ledger: ledger.close(CONNECT_REFUSED), ledgers))
+        list(pool.map(lambda ledger: ledger.close(PRE_CONTACT), ledgers))
 
     assert [row(database, ledger).accounted_cost for ledger in ledgers] == [Decimal(0)] * 2
     assert reserved_tokens(database) == 0
@@ -329,27 +348,41 @@ class _Browser:
         return None
 
 
-class _Refused:
+class _Connect:
+    def __init__(self, behaviour: Any) -> None:
+        self.behaviour = behaviour
+
     async def __aenter__(self) -> Any:
-        raise InvalidStatus(Response(429, "Too Many Requests", Headers(), b"provider text"))
+        if isinstance(self.behaviour, BaseException):
+            raise self.behaviour
+        await asyncio.sleep(3600)  # "hang"
 
     async def __aexit__(self, *_exc: Any) -> None:
         return None
 
 
-@pytest.mark.asyncio
-async def test_route_refused_upgrade_releases_the_real_hold(live_database, monkeypatch):
-    database = live_database
+def patch_route(database, monkeypatch, behaviour: Any, ledger_class=LiveLedger):
     created: list[LiveLedger] = []
+    connects: list[str] = []
 
     def ledger_factory(*_args: Any) -> LiveLedger:
-        ledger = ledger_for(database)
+        ledger = ledger_class(
+            database.sessions,
+            database.settings,
+            database.limits,
+            database.token,
+            database.conversation_id,
+        )
         created.append(ledger)
         return ledger
 
     class Client:
         def __init__(self, **_kwargs: Any) -> None:
-            self.live = SimpleNamespace(connect=lambda **_k: _Refused())
+            self.live = SimpleNamespace(connect=self.connect)
+
+        def connect(self, **_kwargs: Any) -> _Connect:
+            connects.append("connect")
+            return _Connect(behaviour)
 
         async def __aenter__(self) -> Client:
             return self
@@ -377,16 +410,89 @@ async def test_route_refused_upgrade_releases_the_real_hold(live_database, monke
     monkeypatch.setattr(live_socket, "get_session_factory", lambda: database.sessions)
     monkeypatch.setattr(live_socket, "LiveLedger", ledger_factory)
     monkeypatch.setattr(live_socket, "AsyncOpenAI", Client)
-    browser = _Browser(database)
+    monkeypatch.setattr(live_socket, "PROVIDER_CONNECT_SECONDS", 0.2)
+    return created, connects
 
-    await asyncio.wait_for(live_socket.live_voice(browser), timeout=30)
 
-    settled = row(database, created[0])
-    assert (settled.status, settled.accounted_cost) == ("closed", Decimal(0))
-    assert settled.ledger["live_transport"]["failure"] == {
-        "stage": "provider_connect",
-        "error_class": "InvalidStatus",
-        "http_status": 429,
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("behaviour", "failure", "cancel"),
+    [
+        (
+            InvalidStatus(Response(429, "Too Many Requests", Headers(), b"provider text")),
+            CONNECT_REFUSED,
+            False,
+        ),
+        (
+            ConnectionRefusedError(111, "refused"),
+            {"stage": "provider_connect", "error_class": "ConnectionRefusedError"},
+            False,
+        ),
+        ("hang", {"stage": "provider_connect", "error_class": "TimeoutError"}, False),
+        ("hang", {"stage": "provider_connect", "error_class": "CancelledError"}, True),
+    ],
+    ids=["refused_upgrade", "connection_refused", "timeout", "cancelled"],
+)
+async def test_route_failure_after_contact_keeps_hold_until_swept(
+    live_database, monkeypatch, behaviour, failure, cancel
+):
+    database = live_database
+    created, connects = patch_route(database, monkeypatch, behaviour)
+    task = asyncio.create_task(live_socket.live_voice(_Browser(database)))
+    if cancel:
+        while not connects:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=30)
+    else:
+        await asyncio.wait_for(task, timeout=30)
+
+    assert connects == ["connect"]
+    held = row(database, created[0])
+    # Contact was possible: conservative hold, monetary and token, with audit.
+    assert (held.status, held.accounted_cost) == ("uncertain", None)
+    assert held.ledger["live_transport"] == {"stage": "provider_contact", "failure": failure}
+    assert reserved_tokens(database) == tokens_per_hold(database)
+
+    assert sweep(database, after_expiry(database)) == 1
+    charged = row(database, created[0])
+    assert (charged.status, charged.accounted_cost) == ("closed", charged.reserved_cost)
+    assert reserved_tokens(database) == 0
+
+
+class _SlowContactLedger(LiveLedger):
+    """The contact mark is still in flight when the route is cancelled."""
+
+    def provider_contact_may_start(self) -> None:
+        import time
+
+        time.sleep(0.5)
+        super().provider_contact_may_start()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_racing_the_contact_mark_never_connects_and_settles_once(
+    live_database, monkeypatch
+):
+    database = live_database
+    created, connects = patch_route(database, monkeypatch, "hang", _SlowContactLedger)
+    task = asyncio.create_task(live_socket.live_voice(_Browser(database)))
+    while not created or row(database, created[0]) is None:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=30)
+
+    # Cleanup took the row lock first and released it; the late mark then finds
+    # the row closed and refuses, so the provider is never contacted.
+    await asyncio.sleep(1)
+    released = row(database, created[0])
+    assert connects == []
+    assert (released.status, released.accounted_cost) == ("closed", Decimal(0))
+    assert released.ledger["live_transport"] == {
+        "stage": "admitted",
+        "failure": {"stage": "contact_boundary", "error_class": "CancelledError"},
     }
     assert reserved_tokens(database) == 0
-    assert browser.sent == [{"type": "session.error", "reason": "voice_provider_unavailable"}]

@@ -107,6 +107,10 @@ async def live_voice(websocket: WebSocket) -> None:
         )
         stage = "admission"
         await asyncio.wait_for(asyncio.to_thread(ledger.reserve), timeout=10)
+        # Durable, conservative accounting is committed before any provider
+        # contact; only a failure before this commit can release at $0.
+        stage = "contact_boundary"
+        await asyncio.wait_for(asyncio.to_thread(ledger.provider_contact_may_start), timeout=5)
         stage = "provider_connect"
         async with contextlib.AsyncExitStack() as stack:
             client = await stack.enter_async_context(
@@ -246,11 +250,13 @@ async def live_voice(websocket: WebSocket) -> None:
         raise
     finally:
         if failure_record is not None:
-            logger.warning(
-                "live_voice_failed",
-                reservation_id=str(ledger.id) if ledger is not None else None,
-                **failure_record,
-            )
+            # Diagnostics must never prevent the ledger close below.
+            with contextlib.suppress(Exception):
+                logger.warning(
+                    "live_voice_failed",
+                    reservation_id=str(getattr(ledger, "id", None)) if ledger is not None else None,
+                    **failure_record,
+                )
         # Shielded so an outer cancellation cannot skip the ledger close, but
         # bounded so a DB stall cannot hang shutdown. A missed close is charged
         # conservatively by the stale Live hold sweep.

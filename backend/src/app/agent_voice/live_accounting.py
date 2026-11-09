@@ -21,18 +21,18 @@ from app.schemas.common import CostSource, UsageStatus
 from app.services.conversation_service import ConversationService
 
 # Durable Live transport stage, committed under the reservation row lock.
-# ``admitted``: reserved; ``session.start`` has not been handed to the provider
-# socket, so no Live session (the only billable unit) can exist.
-# ``session_start_sent``: committed immediately before ``session.start`` may be
-# written. From here on provider spend is possible and accounting stays
-# conservative until a final duration receipt arrives.
+# ``admitted``: reserved; the provider has not been contacted in any way (no
+# connection attempt, no credential sent).
+# ``provider_contact``: committed before the provider connection is attempted.
+# Nothing proves that a refused, timed-out or interrupted contact is free, so
+# from here on accounting stays conservative until a final duration receipt.
 LIVE_TRANSPORT = "live_transport"
 STAGE_ADMITTED = "admitted"
-STAGE_SESSION_START_SENT = "session_start_sent"
+STAGE_PROVIDER_CONTACT = "provider_contact"
 
 
-def provably_unsent(data: dict[str, Any]) -> bool:
-    """True only when the ledger proves no Live session or secondary work began."""
+def provably_pre_contact(data: dict[str, Any]) -> bool:
+    """True only when the ledger proves the provider was never contacted."""
     transport = data.get(LIVE_TRANSPORT)
     return bool(
         isinstance(transport, dict)
@@ -52,19 +52,19 @@ class LiveLedger(VoiceLedger):
     def initial_ledger(self) -> dict[str, Any]:
         return {LIVE_TRANSPORT: {"stage": STAGE_ADMITTED}}
 
-    def session_start_may_send(self) -> None:
-        """Commit the provider-contact boundary before ``session.start`` is written.
+    def provider_contact_may_start(self) -> None:
+        """Commit conservative accounting before any provider connection attempt.
 
-        Raises (and nothing is sent) when the row is no longer pending/active,
-        expired, or the principal changed, so a swept or released hold can never
-        be followed by provider spend.
+        Raises (and the caller must not connect) when the row is no longer
+        pending/active, expired, or the principal changed, so a released or
+        swept hold can never be followed by provider contact.
         """
 
         def mark(_row: VoiceSessionReservation, data: dict[str, Any]) -> None:
             transport = data.get(LIVE_TRANSPORT)
             if not isinstance(transport, dict) or transport.get("stage") != STAGE_ADMITTED:
                 raise VoiceUnavailableError("live_transport_stage_conflict")
-            transport["stage"] = STAGE_SESSION_START_SENT
+            transport["stage"] = STAGE_PROVIDER_CONTACT
 
         self.update(mark)
 
@@ -237,9 +237,9 @@ class LiveLedger(VoiceLedger):
                 # Sanitized codes only (stage, class, status); kept for audit.
                 transport["failure"] = failure
             row.ledger = data
-            if provably_unsent(data):
-                # session.start was never handed to the provider: no Live session,
-                # no seconds and no secondary work exist. Release the hold at $0.
+            if provably_pre_contact(data):
+                # The provider was never contacted: no connection, no Live
+                # session, no secondary work. Release the hold at $0.
                 row.status = "closed"
                 row.accounted_cost = Decimal(0)
                 row.updated_at = datetime.now(UTC)

@@ -375,7 +375,7 @@ class FakeLedger:
         self.events.append(("started", identifier))
         self.resolved_model = resolved_model
 
-    def session_start_may_send(self):
+    def provider_contact_may_start(self):
         self.boundary_marked = True
 
     def audio(self, length):

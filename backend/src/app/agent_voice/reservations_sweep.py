@@ -51,14 +51,14 @@ def _transport_stage(data: dict[str, Any]) -> str | None:
 
 
 def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> bool:
-    from app.agent_voice.live_accounting import STAGE_SESSION_START_SENT
+    from app.agent_voice.live_accounting import STAGE_PROVIDER_CONTACT
 
     data = row.ledger
     live = data.get("live")
-    # Without a provider identity, only rows whose ledger proves session.start
-    # may have been sent are Live holds. Legacy rows without the transport
+    # Without a provider identity, only rows whose ledger records possible
+    # provider contact are Live holds. Legacy rows without the transport
     # marker (and every Realtime row) are never changed here.
-    if not live and _transport_stage(data) != STAGE_SESSION_START_SENT:
+    if not live and _transport_stage(data) != STAGE_PROVIDER_CONTACT:
         return False
     if live and live.get("finalized"):
         return False
@@ -70,13 +70,13 @@ def _eligible_for_live_sweep(row: VoiceSessionReservation, moment: datetime) -> 
     return moment >= expires_at + _CLOSE_MARGIN
 
 
-def _eligible_for_unsent_release(row: VoiceSessionReservation, moment: datetime) -> bool:
-    """An abandoned hold whose ledger proves session.start was never sent."""
-    from app.agent_voice.live_accounting import provably_unsent
+def _eligible_for_pre_contact_release(row: VoiceSessionReservation, moment: datetime) -> bool:
+    """An abandoned hold whose ledger proves the provider was never contacted."""
+    from app.agent_voice.live_accounting import provably_pre_contact
 
     expires_at = _parse_expires_at(row.ledger)
     return (
-        provably_unsent(row.ledger)
+        provably_pre_contact(row.ledger)
         and expires_at is not None
         and moment >= expires_at + _CLOSE_MARGIN
     )
@@ -136,7 +136,7 @@ def release_expired_voice_holds(
     Scoped to one organization, row-locked, and flushed only so quota reads do
     not commit unrelated work on the caller session. Each released row is charged
     its full ``reserved_cost`` (never zero), except a row whose ledger proves
-    ``session.start`` was never sent, which is released at zero. Realtime rows,
+    the provider was never contacted, which is released at zero. Realtime rows,
     legacy Live rows without a transport stage, and finalized Live receipts with
     unresolved secondary delegation are never changed here.
     """
@@ -164,8 +164,8 @@ def release_expired_voice_holds(
             continue
         if row.accounted_cost is not None:
             continue
-        if _eligible_for_unsent_release(row, moment):
-            # The worker died before session.start: no provider session exists.
+        if _eligible_for_pre_contact_release(row, moment):
+            # The worker died before contacting the provider: nothing was spent.
             row.status = "closed"
             row.accounted_cost = Decimal(0)
             row.updated_at = moment
