@@ -48,10 +48,13 @@ class FakeLedger:
     def reserve(self) -> None:
         return None
 
+    def provider_contact_may_start(self) -> None:
+        return None
+
     def update(self, *_args: Any) -> None:
         return None
 
-    def close(self) -> None:
+    def close(self, failure: Any = None) -> None:
         self.closed = True
 
 
@@ -83,7 +86,7 @@ class FakeSession:
         self.closing = True
         self.finalized.set()
 
-    async def stop(self) -> None:
+    async def stop(self, failure: Any = None) -> None:
         if FakeSession.stop_hangs:
             await asyncio.sleep(3600)
         self.stopped = True

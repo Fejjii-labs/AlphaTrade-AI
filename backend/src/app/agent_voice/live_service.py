@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
@@ -21,6 +22,13 @@ from app.interactive_agent.contracts import AgentTurnRequest
 from app.schemas.common import StrictModel
 
 _LIVE_CLIENT_EVENT = TypeAdapter(ClientEventParam)
+_SAFE_CODE = re.compile(r"[A-Za-z0-9_.:\-]{1,64}")
+_EXPECTED_AUDIO = {"type": "audio/pcm", "rate": 24000}
+
+
+def safe_code(value: object) -> str | None:
+    """A provider/machine code fit for logs; free text is never returned."""
+    return value if isinstance(value, str) and _SAFE_CODE.fullmatch(value) else None
 
 
 class TranscriptFragment(StrictModel):
@@ -66,6 +74,8 @@ class LiveSession:
         self.accepts: dict[str, asyncio.Event] = {}
         self.append_events: set[str] = set()
         self.send_lock = asyncio.Lock()
+        # Sanitized startup/provider diagnostics (codes and field names only).
+        self.diagnostics: dict[str, Any] = {}
 
     async def start_session(self) -> None:
         await self._provider_send(
@@ -138,17 +148,48 @@ class LiveSession:
         if self.closing and kind not in {"session.usage.updated", "session.closed", "error"}:
             return
         if kind == "session.started":
-            resolved = event.get("session", {})
+            resolved = event.get("session")
+            resolved = resolved if isinstance(resolved, dict) else {}
+            identifier = resolved.get("id")
             if (
                 self.ready
-                or resolved.get("model") != self.ledger.limits.voice_model
-                or resolved.get("delegation", {}).get("type") != "client"
-                or resolved.get("audio", {}).get("format") != {"type": "audio/pcm", "rate": 24000}
-                or resolved.get("store") is not False
+                or self.provider_id is not None
+                or not isinstance(identifier, str)
+                or not identifier
+                or len(identifier) > 128
             ):
+                raise VoiceUnavailableError("invalid_live_session_identity")
+            model = resolved.get("model")
+            # Bind the provider identity first: a started session bills even if
+            # its resolved configuration is refused below, and only a bound
+            # identity lets its final duration receipt be recorded.
+            self.provider_id = identifier
+            await asyncio.to_thread(
+                self.ledger.started,
+                identifier,
+                resolved_model=model[:128] if isinstance(model, str) else "",
+            )
+            delegation = resolved.get("delegation")
+            audio = resolved.get("audio")
+            mismatched = [
+                name
+                for name, ok in (
+                    ("model", model == self.ledger.limits.voice_model),
+                    (
+                        "delegation",
+                        isinstance(delegation, dict) and delegation.get("type") == "client",
+                    ),
+                    (
+                        "audio_format",
+                        isinstance(audio, dict) and audio.get("format") == _EXPECTED_AUDIO,
+                    ),
+                    ("store", resolved.get("store") is False),
+                )
+                if not ok
+            ]
+            if mismatched:
+                self.diagnostics.update(config_mismatch=mismatched, resolved_model=safe_code(model))
                 raise VoiceUnavailableError("live_session_config_mismatch")
-            self.provider_id = resolved["id"]
-            await asyncio.to_thread(self.ledger.started, self.provider_id)
             self.ready = True
             await self.send({"type": "session.ready", "session_id": str(self.ledger.id)})
         elif kind in {"session.input_transcript.delta", "session.output_transcript.delta"}:
@@ -229,6 +270,15 @@ class LiveSession:
         }:
             self.append_events.discard(str(event.get("client_event_id")))
         elif kind in {"error", "response.event", "session.updated"}:
+            error = event.get("error") if kind == "error" else None
+            if isinstance(error, dict):
+                # Codes only; the provider's human-readable message is never kept.
+                self.diagnostics.update(
+                    provider_error_type=safe_code(error.get("type")),
+                    provider_error_code=safe_code(error.get("code")),
+                    provider_error_param=safe_code(error.get("param")),
+                )
+            self.diagnostics.setdefault("provider_event", kind)
             raise VoiceUnavailableError("live_provider_error")
 
     async def _delegate(
@@ -325,7 +375,7 @@ class LiveSession:
         _LIVE_CLIENT_EVENT.validate_python(payload)
         await self._provider_send(payload)
 
-    async def stop(self) -> None:
+    async def stop(self, failure: dict[str, Any] | None = None) -> None:
         self.closing = True
         for task in self.tasks:
             if not task.done():
@@ -334,4 +384,4 @@ class LiveSession:
             await asyncio.gather(*self.tasks, return_exceptions=True)
         # Cancelling a to_thread wait does not cancel an admitted canonical turn.
         # TurnCoordinator and original body/key remain the recovery authority.
-        await asyncio.to_thread(self.ledger.close)
+        await asyncio.to_thread(self.ledger.close, failure)

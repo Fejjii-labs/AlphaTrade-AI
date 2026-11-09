@@ -20,9 +20,53 @@ from app.db.voice_realtime import VoiceSessionReservation
 from app.schemas.common import CostSource, UsageStatus
 from app.services.conversation_service import ConversationService
 
+# Durable Live transport stage, committed under the reservation row lock.
+# ``admitted``: reserved; the provider has not been contacted in any way (no
+# connection attempt, no credential sent).
+# ``provider_contact``: committed before the provider connection is attempted.
+# Nothing proves that a refused, timed-out or interrupted contact is free, so
+# from here on accounting stays conservative until a final duration receipt.
+LIVE_TRANSPORT = "live_transport"
+STAGE_ADMITTED = "admitted"
+STAGE_PROVIDER_CONTACT = "provider_contact"
+
+
+def provably_pre_contact(data: dict[str, Any]) -> bool:
+    """True only when the ledger proves the provider was never contacted."""
+    transport = data.get(LIVE_TRANSPORT)
+    return bool(
+        isinstance(transport, dict)
+        and transport.get("stage") == STAGE_ADMITTED
+        and not data.get("live")
+        and not data.get("responses")
+        and not data.get("audio_bytes")
+        and not data.get("tools")
+        and not data.get("reasoning_attempts")
+        and not data.get("embedding_attempts")
+    )
+
 
 class LiveLedger(VoiceLedger):
     limits: LiveLimits
+
+    def initial_ledger(self) -> dict[str, Any]:
+        return {LIVE_TRANSPORT: {"stage": STAGE_ADMITTED}}
+
+    def provider_contact_may_start(self) -> None:
+        """Commit conservative accounting before any provider connection attempt.
+
+        Raises (and the caller must not connect) when the row is no longer
+        pending/active, expired, or the principal changed, so a released or
+        swept hold can never be followed by provider contact.
+        """
+
+        def mark(_row: VoiceSessionReservation, data: dict[str, Any]) -> None:
+            transport = data.get(LIVE_TRANSPORT)
+            if not isinstance(transport, dict) or transport.get("stage") != STAGE_ADMITTED:
+                raise VoiceUnavailableError("live_transport_stage_conflict")
+            transport["stage"] = STAGE_PROVIDER_CONTACT
+
+        self.update(mark)
 
     def history(self) -> list[dict[str, Any]]:
         with self.sessions() as session:
@@ -55,7 +99,14 @@ class LiveLedger(VoiceLedger):
                 )
             return history
 
-    def started(self, provider_id: str) -> None:
+    def started(self, provider_id: str, *, resolved_model: str | None = None) -> None:
+        """Bind the provider session identity so its duration receipts are accepted.
+
+        Called before the resolved configuration is validated: a started session
+        bills even when its configuration is then refused. A resolved model other
+        than the priced one is kept and makes the final receipt unconfirmed.
+        """
+
         def remember(row: VoiceSessionReservation, data: dict[str, Any]) -> None:
             if not provider_id or data.get("live"):
                 raise VoiceUnavailableError("invalid_live_session_identity")
@@ -66,6 +117,8 @@ class LiveLedger(VoiceLedger):
                 "seconds": None,
                 "reason": None,
             }
+            if resolved_model is not None:
+                data["live"]["resolved_model"] = resolved_model
             data["transcripts"] = []
 
         self.update(remember)
@@ -167,7 +220,7 @@ class LiveLedger(VoiceLedger):
         if not live["within_reservation"]:
             raise VoiceUnavailableError("live_duration_outside_reservation")
 
-    def close(self) -> None:
+    def close(self, failure: dict[str, Any] | None = None) -> None:
         # Classify and settle in one locked transaction. Realtime's separate
         # close would temporarily release a silent, unconfirmed Live hold.
         with self.sessions() as session:
@@ -178,11 +231,28 @@ class LiveLedger(VoiceLedger):
             )
             if row is None:
                 return
-            data = row.ledger
+            data = copy.deepcopy(row.ledger)
+            transport = data.get(LIVE_TRANSPORT)
+            if isinstance(transport, dict) and failure and "failure" not in transport:
+                # Sanitized codes only (stage, class, status); kept for audit.
+                transport["failure"] = failure
+            row.ledger = data
+            if provably_pre_contact(data):
+                # The provider was never contacted: no connection, no Live
+                # session, no secondary work. Release the hold at $0.
+                row.status = "closed"
+                row.accounted_cost = Decimal(0)
+                row.updated_at = datetime.now(UTC)
+                session.commit()
+                return
             live = data.get("live", {})
             # Secondary usage is already emitted by the shared Agent pipeline.
             # Its unresolved cost is never replaced by an assumed refund.
-            confirmed = bool(live.get("finalized") and live.get("within_reservation"))
+            confirmed = bool(
+                live.get("finalized")
+                and live.get("within_reservation")
+                and live.get("resolved_model", self.limits.voice_model) == self.limits.voice_model
+            )
             secondary = bool(
                 data["tools"] or data["reasoning_attempts"] or data.get("embedding_attempts")
             )

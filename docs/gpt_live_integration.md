@@ -94,6 +94,36 @@ Realtime rows, in-flight active sockets inside that margin, rows with a
 non-null `accounted_cost`, and finalized Live receipts with unresolved secondary
 delegation are left unchanged.
 
+## Startup failures and the provider-contact boundary
+
+New Live rows carry `ledger.live_transport.stage`. It is `admitted` at
+reservation and becomes `provider_contact` in a committed, row-locked update
+before the provider connection is attempted (before the credential is sent or
+any socket is opened). A failure while still `admitted` (for example a
+cancellation, an expired or revoked principal, or a released row that refuses
+the transition) proves the provider was never contacted; the row closes at
+`$0` and releases its token and cost hold. Once `provider_contact` is
+committed, nothing proves a refused upgrade, connection error, timeout or
+cancellation was free: the row stays `uncertain` until a final duration
+receipt, or the sweep charges its full `reserved_cost` after expiry (which also
+frees its token hold). The sweep releases expired `admitted` rows (worker died
+before contact) at `$0`. Legacy Live rows without `live_transport` are never
+changed by the sweep. Every reservation still debits the approved
+`remaining_budget_usd` receipt permanently (unchanged), including released ones.
+
+`session.started` binds the provider session ID before its resolved
+configuration is validated, so a refused configuration still records the final
+duration receipt. A resolved model other than the priced one leaves the row
+`uncertain`.
+
+Failures log `live_voice_failed` with `reservation_id`, `stage`
+(`start_message`, `admission`, `contact_boundary`, `provider_connect`, `session_start`,
+`awaiting_session_started`, `active`), `error_class`, and when present
+`http_status`, `close_code`, `reason`, `provider_error_type`/`code`/`param`,
+`provider_event_reason`, `config_mismatch` and `resolved_model`. Only class
+names and machine codes are recorded (also in `live_transport.failure`); never
+exception or provider messages, credentials, tokens, audio or transcripts.
+
 The example file contains no secrets. Dates are placeholders. A real receipt
 must be unexpired, tenant-scoped, and cover the whole session plus the
 14-second margin.
