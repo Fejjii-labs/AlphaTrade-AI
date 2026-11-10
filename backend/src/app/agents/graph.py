@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents import nodes
+from app.agents.graph_state import AgentGraphState
 from app.agents.routing import (
     route_after_approval,
     route_after_injection,
@@ -53,7 +54,8 @@ def _wrap(
 
 def build_agent_graph() -> StateGraph[Any, Any, Any, Any]:
     """Construct the uncompiled StateGraph with all workflow nodes wired."""
-    graph: StateGraph = StateGraph(dict)
+    # One last-value channel per AgentState field (see graph_state for why no reducers).
+    graph: StateGraph[Any, Any, Any, Any] = StateGraph(AgentGraphState)
 
     node_fns = {
         "receive_request": nodes.receive_request,
@@ -83,7 +85,7 @@ def build_agent_graph() -> StateGraph[Any, Any, Any, Any]:
         "output_validation": nodes.output_validation,
     }
     for name, node_fn in node_fns.items():
-        # This established dict graph predates LangGraph's typed StateLike bound.
+        # Nodes keep their dict-in/dict-out signature (parse_state/patch_state).
         graph.add_node(name, cast(Any, _wrap(node_fn)))
 
     graph.set_entry_point("receive_request")
