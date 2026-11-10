@@ -63,12 +63,29 @@ def test_capture_request_sends_strict_compatible_schema() -> None:
     _assert_strict(sent["json_schema"]["schema"])
 
 
-def test_raw_capture_schema_was_already_strict_compatible() -> None:
-    # Review claim checked: StrictModel forbids extras and no CapturePlan field has a
-    # default, so the raw schema already met strict mode. The helper keeps it that way.
+def test_raw_capture_schema_differs_from_strict_only_by_unsupported_keywords() -> None:
+    # StrictModel forbids extras and no CapturePlan field has a default, so the raw
+    # schema already had strict object shape. Griller C3: minLength/maxLength are not
+    # strict-supported, so the helper drops them and changes nothing else.
     raw = CapturePlan.model_json_schema()
     _assert_strict(raw)
-    assert raw == strict_json_schema(CapturePlan)
+    assert _without(raw, {"minLength", "maxLength"}) == strict_json_schema(CapturePlan)
+
+
+def _without(node: Any, keys: set[str]) -> Any:
+    if isinstance(node, list):
+        return [_without(item, keys) for item in node]
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: (
+            {name: _without(child, keys) for name, child in value.items()}
+            if key in {"properties", "$defs"}
+            else _without(value, keys)
+        )
+        for key, value in node.items()
+        if key not in keys or not isinstance(value, int)
+    }
 
 
 def test_helper_keeps_capture_strict_if_a_defaulted_field_is_added() -> None:
