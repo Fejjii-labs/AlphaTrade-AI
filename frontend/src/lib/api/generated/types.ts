@@ -849,6 +849,10 @@ export interface components {
              * @enum {string}
              */
             capture_status?: "not_needed" | "saved" | "failed" | "clarification" | "unavailable";
+            /** Citation Violations */
+            citation_violations?: string[];
+            /** Cited Chunk Ids */
+            cited_chunk_ids?: string[];
             /** Connections */
             connections?: components["schemas"]["ConnectionRef"][];
             /**
