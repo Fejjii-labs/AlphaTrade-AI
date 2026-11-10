@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -17,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.prompt_registry import load_prompt_record
+from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET
 from app.interactive_agent.presentation import readable_number
 from app.providers.factory import resolve_providers
 from app.providers.llm import LLMMessage, LLMProvider, OpenAILLMProvider
@@ -46,6 +49,13 @@ _CITATION = r"\[[^\]\n]*\](?:\((?:[^()\n]|\([^()\n]*\))*\))?|【[^】\n]*】"
 _PROSE_BOUNDARY = re.compile(rf"(?:{_CITATION})|[.!?][\"\u201d\u2019')]*(?=\s|$)")
 _SOURCE_MARKER = re.compile(_CITATION)
 _ABBREVIATIONS = frozenset({"e.g.", "i.e.", "etc.", "vs.", "mr.", "mrs.", "dr.", "fig."})
+# Facts beyond this bound are not sent to the model (see compose()).
+_FACT_LIMIT = 16000
+_KNOWLEDGE_MARKER = re.compile(r"([ \t]*)\[(K\d+(?:\s*,\s*K\d+)*)\]")
+UNCITED_SOURCES_NOTE = (
+    "The reply cites none of the supplied source passages; it is not presented as grounded "
+    "in them. Check Stored evidence."
+)
 
 _SYSTEM_PROMPT = load_prompt_record("interactive_agent_system")
 _SYSTEM = _SYSTEM_PROMPT.text
@@ -139,7 +149,7 @@ class ModelConversationalResponder:
                             f"User message:\n{message.strip()}\n\n"
                             "Stored facts. Repeat unavailable or stale exactly. "
                             "Do not invent prices. Do not claim a record was confirmed.\n"
-                            f"{factual_context[:16000]}"
+                            f"{factual_context[:_FACT_LIMIT]}"
                         ),
                     ),
                 ],
@@ -171,6 +181,68 @@ class ModelConversationalResponder:
         if not text:
             return MODEL_REPLY_UNAVAILABLE
         return text
+
+
+@dataclass(frozen=True)
+class SourceMarkerCheck:
+    """Model prose with unsupplied ``[Kn]`` markers removed, plus what it cited."""
+
+    text: str
+    cited_chunk_ids: tuple[uuid.UUID, ...]
+    unknown_markers: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+    def payload(self) -> dict[str, list[str]]:
+        """Stored-evidence record of what the prose cited."""
+        return {
+            "cited_chunk_ids": [str(chunk_id) for chunk_id in self.cited_chunk_ids],
+            "citation_violations": list(self.unknown_markers),
+        }
+
+
+def verify_source_markers(
+    text: str, *, factual_context: str, references: Mapping[str, uuid.UUID]
+) -> SourceMarkerCheck:
+    """Keep only ``[Kn]`` markers for passages actually sent to the model this turn.
+
+    ``references`` is the structural label->chunk map from the knowledge context; a
+    label counts only if its passage line survived the fact bound. Unknown markers
+    are stripped and flagged (``citation_not_in_retrieved_set``). Prose that cites
+    nothing while passages were supplied gets a limitation note, not a failure.
+    """
+    sent = factual_context[:_FACT_LIMIT]
+    supplied = {
+        label: chunk_id
+        for label, chunk_id in references.items()
+        if f'"reference": "{label}"' in sent
+    }
+    cited: list[str] = []
+    unknown: list[str] = []
+
+    def _keep(match: re.Match[str]) -> str:
+        labels = [label.strip() for label in match.group(2).split(",")]
+        kept = [label for label in labels if label in supplied]
+        for label in labels:
+            bucket = cited if label in supplied else unknown
+            if label not in bucket:
+                bucket.append(label)
+        return f"{match.group(1)}[{', '.join(kept)}]" if kept else ""
+
+    cleaned = _KNOWLEDGE_MARKER.sub(_keep, text)
+    notes: list[str] = []
+    if unknown:
+        notes.append(
+            f"Removed source markers not supplied this turn ({', '.join(unknown)}); "
+            f"reason: {CITATION_NOT_IN_RETRIEVED_SET}."
+        )
+    if supplied and not cited:
+        notes.append(UNCITED_SOURCES_NOTE)
+    return SourceMarkerCheck(
+        text=cleaned,
+        cited_chunk_ids=tuple(supplied[label] for label in cited),
+        unknown_markers=tuple(unknown),
+        limitations=tuple(notes),
+    )
 
 
 def compose_visible_reply(

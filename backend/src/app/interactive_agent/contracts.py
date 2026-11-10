@@ -273,6 +273,10 @@ class AgentTurnResult(StrictModel):
     reply: str = Field(min_length=1, max_length=4000)
     recorded_evidence: str | None = Field(default=None, max_length=16000)
     full_reply: str | None = Field(default=None, max_length=16000)
+    # Knowledge chunks the model prose cites via [Kn] markers that were supplied this turn.
+    cited_chunk_ids: list[UUID] = Field(default_factory=list)
+    # Markers the prose used that were not supplied (stripped; citation_not_in_retrieved_set).
+    citation_violations: list[str] = Field(default_factory=list)
     proposals: list[StructuredActionProposal] = Field(default_factory=list)
     knowledge: list[KnowledgeHit] = Field(default_factory=list)
     strategies: list[StrategyHit] = Field(default_factory=list)

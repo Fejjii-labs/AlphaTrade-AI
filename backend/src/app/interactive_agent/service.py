@@ -56,8 +56,10 @@ from app.interactive_agent.contracts import (
 from app.interactive_agent.conversation import (
     MODEL_REPLY_UNAVAILABLE,
     ConversationalResponder,
+    SourceMarkerCheck,
     _prose,
     compose_visible_reply,
+    verify_source_markers,
 )
 from app.interactive_agent.conversation_context import (
     context_from_sources,
@@ -160,6 +162,8 @@ class InteractiveAgentService:
         self._conversations = ConversationService(session)
         self.confirmation_changed = False
         self.pending_reply_warnings: tuple[str, ...] = ()
+        # [Kn] label -> chunk id of knowledge passages placed in this turn's facts.
+        self.supplied_references: dict[str, uuid.UUID] = {}
 
     def catalog(self) -> AgentCapabilityCatalog:
         catalog = capability_catalog(self._settings)
@@ -388,6 +392,8 @@ class InteractiveAgentService:
             limitations.extend(daily_review.limitations)
         knowledge: list[KnowledgeHit] = []
         knowledge_context = ""
+        self.supplied_references = {}
+        marker_check: SourceMarkerCheck | None = None
         strategies: list[StrategyHit] = []
         bundle = ReadBundle()
         if (
@@ -418,6 +424,7 @@ class InteractiveAgentService:
                 )
                 knowledge = source_context.hits
                 knowledge_context = source_context.text
+                self.supplied_references = dict(source_context.references)
                 knowledge_notes.extend(source_context.limitations)
                 strategies, strategy_notes = retrieve_strategies(
                     self._session,
@@ -565,6 +572,12 @@ class InteractiveAgentService:
                 factual_context=factual,
                 history=history,
             )
+            if model_text != MODEL_REPLY_UNAVAILABLE:
+                marker_check = verify_source_markers(
+                    model_text, factual_context=factual, references=self.supplied_references
+                )
+                model_text = marker_check.text
+                limitations.extend(marker_check.limitations)
             if model_text == MODEL_REPLY_UNAVAILABLE:
                 limitations.append(MODEL_REPLY_UNAVAILABLE)
             if recorded_trade is not None and model_text == MODEL_REPLY_UNAVAILABLE:
@@ -589,6 +602,7 @@ class InteractiveAgentService:
                     "operation": classification.operation.value,
                     "recorded_evidence": recorded_evidence,
                     "full_reply": full_reply,
+                    **(marker_check.payload() if marker_check is not None else {}),
                     "sources": [item.model_dump(mode="json") for item in connections],
                     **(
                         {
@@ -636,6 +650,8 @@ class InteractiveAgentService:
             reply=reply,
             recorded_evidence=recorded_evidence,
             full_reply=full_reply,
+            cited_chunk_ids=list(marker_check.cited_chunk_ids) if marker_check else [],
+            citation_violations=list(marker_check.unknown_markers) if marker_check else [],
             proposals=proposals,
             authority_mutated=any(proposal.authority_mutated for proposal in proposals),
             knowledge=knowledge,

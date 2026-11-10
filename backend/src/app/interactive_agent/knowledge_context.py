@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from sqlalchemy import case, func, literal, or_, select
@@ -56,6 +56,8 @@ class KnowledgeContext:
     text: str
     hits: list[KnowledgeHit]
     limitations: list[str]
+    # Source marker label (``K1``...) -> chunk id, for every passage placed in ``text``.
+    references: dict[str, UUID] = field(default_factory=dict)
 
 
 def _words(text: str) -> list[str]:
@@ -337,4 +339,5 @@ def build_knowledge_context(
         and hit.organization_id == organization_id
         and hit.user_id in {None, user_id}
     )
-    return KnowledgeContext("".join(parts), display, notes)
+    references = {f"K{number}": chunk_id for number, chunk_id in enumerate(included, start=1)}
+    return KnowledgeContext("".join(parts), display, notes, references)
