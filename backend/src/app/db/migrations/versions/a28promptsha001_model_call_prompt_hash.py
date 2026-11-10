@@ -22,14 +22,28 @@ depends_on: str | Sequence[str] | None = None
 _TABLE = "model_call_attempts"
 
 
+def _set_lock_timeout(value: str) -> None:
+    # ADD/DROP COLUMN takes an ACCESS EXCLUSIVE lock. Without a bound, a long
+    # transaction holding model_call_attempts would stall this DDL and queue every
+    # later reader behind it. env.py runs migrations in one transaction (PostgreSQL
+    # DDL is transactional), so SET LOCAL ends with it at the latest. Resetting at
+    # the end keeps the bound off later revisions in the same run.
+    if op.get_context().dialect.name == "postgresql":
+        op.execute(f"SET LOCAL lock_timeout = {value}")
+
+
 def upgrade() -> None:
+    _set_lock_timeout("'5s'")
     # Nullable without a default: a catalog-only change in PostgreSQL, no table rewrite.
     op.add_column(_TABLE, sa.Column("system_prompt_sha256", sa.String(length=64), nullable=True))
     op.add_column(_TABLE, sa.Column("prompt_id", sa.String(length=80), nullable=True))
     op.add_column(_TABLE, sa.Column("prompt_version", sa.Integer(), nullable=True))
+    _set_lock_timeout("DEFAULT")
 
 
 def downgrade() -> None:
+    _set_lock_timeout("'5s'")
     op.drop_column(_TABLE, "prompt_version")
     op.drop_column(_TABLE, "prompt_id")
     op.drop_column(_TABLE, "system_prompt_sha256")
+    _set_lock_timeout("DEFAULT")

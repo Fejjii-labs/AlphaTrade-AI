@@ -112,3 +112,10 @@ OpenAPI regen), capture strict schema.
   commentary and the realtime `function_call_output`. The durable result, the `turn.result`
   client event and the ledger keep them. This supersedes "No voice code was changed" in
   decision 6.
+- **C2 (code part).** `a28promptsha001` runs `SET LOCAL lock_timeout = '5s'` before its DDL and
+  `SET LOCAL lock_timeout = DEFAULT` after it, in both upgrade and downgrade, on PostgreSQL only
+  (`op.get_context().dialect.name`, which also works offline). env.py runs the migration in one
+  transaction, so the setting cannot outlive that transaction. A blocked `ADD/DROP COLUMN` fails
+  after 5s instead of queueing traffic behind it. Rerun the deploy once the blocking transaction
+  is gone. The ordering problem remains: new app code needs the migration applied before it
+  serves traffic, and that is an operational condition.

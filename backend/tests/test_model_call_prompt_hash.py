@@ -250,3 +250,41 @@ def test_narrative_router_path_records_prompt_file_and_rendered_hash() -> None:
     # Rendered (context-filled) text, not the template, is what gets hashed.
     assert attempt.system_prompt_sha256 == _sha(system)
     assert attempt.system_prompt_sha256 != load_prompt_record("trading_analysis_narrative").sha256
+
+
+@pytest.mark.parametrize(
+    ("url", "bounded"),
+    [("postgresql+psycopg://offline@localhost/offline", True), ("sqlite:///:memory:", False)],
+)
+@pytest.mark.parametrize(
+    ("direction", "revisions"),
+    [
+        ("upgrade", "a27obsretention001:a28promptsha001"),
+        ("downgrade", "a28promptsha001:a27obsretention001"),
+    ],
+)
+def test_prompt_hash_migration_bounds_its_lock_wait_on_postgres(
+    monkeypatch: pytest.MonkeyPatch, url: str, bounded: bool, direction: str, revisions: str
+) -> None:
+    import io
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", url)
+    buffer = io.StringIO()
+    # No ini file: env.py then skips fileConfig, so test logging is untouched.
+    config = Config(output_buffer=buffer)
+    config.set_main_option(
+        "script_location", str(Path(__file__).parents[1] / "src/app/db/migrations")
+    )
+    getattr(command, direction)(config, revisions, sql=True)
+    lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+    ddl = [i for i, line in enumerate(lines) if line.startswith("ALTER TABLE model_call_attempts")]
+    assert len(ddl) == 3
+    if not bounded:
+        assert not any("lock_timeout" in line for line in lines)
+        return
+    assert lines[ddl[0] - 1] == "SET LOCAL lock_timeout = '5s';"
+    assert lines[ddl[-1] + 1] == "SET LOCAL lock_timeout = DEFAULT;"
