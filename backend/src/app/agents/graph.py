@@ -37,33 +37,6 @@ def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
     """Construct the uncompiled StateGraph with all workflow nodes wired."""
     graph: StateGraph = StateGraph(dict)
 
-    node_names = [
-        "receive_request",
-        "auth_context",
-        "quota_check",
-        "rate_limit_check",
-        "prompt_injection_check",
-        "moderation_check",
-        "message_classification",
-        "intent_classification",
-        "context_retrieval",
-        "strategy_workflow_tools",
-        "paper_action",
-        "trading_analytics_retrieval",
-        "market_context_retrieval",
-        "indicator_calculation",
-        "strategy_module_execution",
-        "trade_proposal_generation",
-        "trading_policy_check",
-        "deterministic_risk_gate",
-        "approval_decision",
-        "tool_execution_if_allowed",
-        "memory_update",
-        "usage_tracking",
-        "final_response",
-        "narrative_enhancement",
-        "output_validation",
-    ]
     node_fns = {
         "receive_request": nodes.receive_request,
         "auth_context": nodes.auth_context,
@@ -91,9 +64,9 @@ def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
         "narrative_enhancement": nodes.narrative_enhancement,
         "output_validation": nodes.output_validation,
     }
-    for name in node_names:
+    for name, node_fn in node_fns.items():
         # This established dict graph predates LangGraph's typed StateLike bound.
-        graph.add_node(name, cast(Any, _wrap(node_fns[name], runtime)))
+        graph.add_node(name, cast(Any, _wrap(node_fn, runtime)))
 
     graph.set_entry_point("receive_request")
     graph.add_edge("receive_request", "auth_context")
