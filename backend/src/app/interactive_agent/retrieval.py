@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.db.models import Chunk, Document
-from app.interactive_agent.contracts import KnowledgeHit, ProvenanceSource, StrategyHit
+from app.interactive_agent.contracts import (
+    NO_RELEVANT_SOURCE_NOTE,
+    KnowledgeHit,
+    ProvenanceSource,
+    StrategyHit,
+)
 from app.interactive_agent.parsing import query_tokens
 from app.schemas.common import DocumentSourceType
 from app.schemas.strategy_library import UserStrategy
@@ -204,9 +209,10 @@ def retrieve_knowledge(
         if verified:
             return verified, limitations
         if not getattr(vector_retriever, "allow_sql_fallback", True):
-            limitations.append(
-                "Provider policy refuses degraded retrieval; source evidence is unavailable."
-            )
+            if NO_RELEVANT_SOURCE_NOTE not in limitations:
+                limitations.append(
+                    "Provider policy refuses degraded retrieval; source evidence is unavailable."
+                )
             return [], limitations
     if not tokens:
         return [], limitations

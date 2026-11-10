@@ -1504,6 +1504,7 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     )
     citations: list[dict] = list(agent.citations)
     retrieved: list[dict] = list(agent.retrieved_context)
+    rag_outcome = "retrieval_failed"
     if output.success and output.result:
         raw_citations = output.result.get("citations", [])
         for raw in raw_citations:
@@ -1511,6 +1512,8 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
             dumped = dump_partial(citation)
             citations.append(dumped)
             retrieved.append(dumped)
+        # Citations come only from hits that passed the relevance floor.
+        rag_outcome = "retrieved" if raw_citations else "no_relevant_source"
     return patch_state(
         state,
         {
@@ -1518,6 +1521,7 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
             "tool_outputs": [*agent.tool_outputs, dump_partial(output)],
             "retrieved_context": retrieved,
             "citations": citations,
+            "rag_outcome": rag_outcome,
             "audit_events": [*agent.audit_events, tool_audit],
         },
     )
@@ -1546,7 +1550,23 @@ def data_gap_note(agent: AgentState) -> str:
     )
 
 
+NO_RELEVANT_SOURCE_NOTE = (
+    "Knowledge sources: no relevant source was found in your knowledge base for this "
+    "question, so no source is cited."
+)
+
+
+def knowledge_source_note(agent: AgentState) -> str:
+    """Explicit user-visible wording when retrieval found nothing relevant."""
+    if agent.rag_outcome == "no_relevant_source":
+        return "\n" + NO_RELEVANT_SOURCE_NOTE
+    return ""
+
+
 def _with_gap_note(answer: str, agent: AgentState) -> str:
+    source_note = knowledge_source_note(agent)
+    if source_note and source_note.strip() not in answer:
+        answer += source_note
     note = data_gap_note(agent)
     if not note or note.strip() in answer:
         return answer

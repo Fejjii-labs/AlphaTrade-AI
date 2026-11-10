@@ -306,6 +306,8 @@ def _rag_retriever_execute(args: dict[str, Any], rag_service: RagService) -> Too
             result={
                 "chunks": [chunk.model_dump(mode="json") for chunk in result.chunks],
                 "citations": [cite.model_dump(mode="json") for cite in result.citations],
+                "no_relevant_source": result.no_relevant_source,
+                "min_score": result.min_score,
                 "context_only": True,
                 "not_trading_signal": True,
             },

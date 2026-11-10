@@ -192,7 +192,8 @@ def test_search_uses_query_points_when_search_missing() -> None:
     )
     assert len(hits) == 1
     assert hits[0].point_id == "chunk-1"
-    assert hits[0].score == 0.91
+    # Raw Qdrant cosine is normalized to the in-memory [0, 1] scale.
+    assert hits[0].score == pytest.approx((0.91 + 1.0) / 2)
     store._client.query_points.assert_called_once()
     store._client.create_payload_index.assert_not_called()
 

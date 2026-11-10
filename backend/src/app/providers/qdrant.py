@@ -770,7 +770,10 @@ class QdrantVectorStore:
                 hits.append(
                     VectorSearchHit(
                         point_id=point_id,
-                        score=float(row.score),
+                        # Qdrant COSINE returns raw cosine [-1, 1]. Normalize to the
+                        # same [0, 1] scale as InMemoryVectorStore so one relevance
+                        # floor (RAG_MIN_RELEVANCE_SCORE) means the same everywhere.
+                        score=_normalize_score(float(row.score)),
                         payload=payload,
                     )
                 )

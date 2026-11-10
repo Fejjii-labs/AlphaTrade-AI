@@ -262,6 +262,13 @@ class AgentState(BaseModel):
     )
     strategy_signals: list[StrategySignal] = Field(default_factory=list)
     retrieved_context: list[Citation] = Field(default_factory=list)
+    rag_outcome: Literal["retrieved", "no_relevant_source", "retrieval_failed"] | None = Field(
+        default=None,
+        description=(
+            "Knowledge retrieval result for this turn. no_relevant_source means nothing "
+            "passed the relevance floor; the answer must say so and cite nothing."
+        ),
+    )
 
     # Tooling
     tool_calls: list[ToolInput] = Field(default_factory=list)

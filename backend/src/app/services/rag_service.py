@@ -456,6 +456,18 @@ class RagService:
         hits, mismatched_models = self._screen_embedding_models(
             hits, expected=vector_space_model(embed_result)
         )
+        min_score = self._relevance_floor(query)
+        relevant = [hit for hit in hits if hit.score >= min_score]
+        below_min_score = len(hits) - len(relevant)
+        if below_min_score:
+            logger.info(
+                "rag_relevance_filter",
+                dropped=below_min_score,
+                kept=len(relevant),
+                min_score=min_score,
+                best_dropped_score=round(max(h.score for h in hits if h.score < min_score), 4),
+            )
+        hits = relevant
 
         def hit_chunk_id(hit: Any) -> UUID | None:
             try:
@@ -551,6 +563,9 @@ class RagService:
             degraded=degraded,
             fallback_used=embed_result.fallback_used or vector_status.using_fallback,
             vector_backend=self._vector_store.name,
+            min_score=min_score,
+            below_min_score=below_min_score,
+            no_relevant_source=not retrieved,
             detail=(
                 f"embedding_model_mismatch: {mismatched_models} hit(s) from another embedding "
                 "model were withheld; reindex the knowledge base."
@@ -562,6 +577,11 @@ class RagService:
                 else None
             ),
         )
+
+    def _relevance_floor(self, query: RagQuery) -> float:
+        """Configured floor; a per-request ``min_score`` may only raise it."""
+        floor = self._settings.rag_min_relevance_score
+        return max(floor, query.min_score) if query.min_score is not None else floor
 
     def _screen_embedding_models(
         self, hits: list[VectorSearchHit], *, expected: str

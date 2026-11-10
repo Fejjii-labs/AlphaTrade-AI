@@ -135,6 +135,15 @@ class RagQuery(StrictModel):
     user_id: UUID | None = None
     include_shared: bool = False
     top_k: int = Field(default=5, ge=1, le=50)
+    min_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description=(
+            "Optional per-request relevance floor (normalized cosine, 0-1). It can only "
+            "raise the configured RAG_MIN_RELEVANCE_SCORE, never lower it."
+        ),
+    )
     source_types: list[DocumentSourceType] = Field(default_factory=list)
     strategy_tag: str | None = None
     symbol_tag: str | None = None
@@ -213,6 +222,16 @@ class RagSearchResponse(StrictModel):
     fallback_used: bool = False
     vector_backend: str | None = None
     detail: str | None = None
+    min_score: float | None = Field(
+        default=None, description="Relevance floor applied to this search (normalized cosine)."
+    )
+    below_min_score: int = Field(
+        default=0, ge=0, description="Vector hits dropped for scoring below min_score."
+    )
+    no_relevant_source: bool = Field(
+        default=False,
+        description="True when no chunk survived relevance and scope checks.",
+    )
 
 
 class PaginatedRagDocuments(StrictModel):
