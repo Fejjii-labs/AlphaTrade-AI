@@ -288,6 +288,14 @@ class AgentState(BaseModel):
 
     # Output
     citations: list[Citation] = Field(default_factory=list)
+    cited_chunk_ids: list[UUID] = Field(
+        default_factory=list,
+        description="Retrieved chunk ids the final answer cites (verified subset).",
+    )
+    citation_violations: list[str] = Field(
+        default_factory=list,
+        description="Ids an LLM cited that were not retrieved; that output was rejected.",
+    )
     paper_execution: AgentPaperResult | None = None
     final_answer: str | None = None
     analysis_detail: TradingAnalysisDetail | None = None

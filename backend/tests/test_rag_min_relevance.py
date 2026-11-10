@@ -124,8 +124,7 @@ def test_agent_reports_no_relevant_source_and_cites_nothing(session: Session) ->
     assert rag.success and rag.result["no_relevant_source"] is True
     assert rag.result["citations"] == []
     assert NO_RELEVANT_SOURCE_NOTE in response.reply
-    retrieved_ids = {str(c.chunk_id) for c in response.citations if c.title == "Risk Policy"}
-    assert retrieved_ids == set()
+    assert response.citations == []
 
 
 def test_agent_with_relevant_source_has_no_empty_note(session: Session) -> None:
@@ -134,6 +133,9 @@ def test_agent_with_relevant_source_has_no_empty_note(session: Session) -> None:
     rag = next(o for o in response.tool_outputs if o.tool_name == "rag_retriever")
     assert rag.result["no_relevant_source"] is False
     assert NO_RELEVANT_SOURCE_NOTE not in response.reply
+    # Only retrieved chunks are cited; no session-memory pseudo-citation.
+    assert response.citations
+    assert {c.title for c in response.citations} == {"Risk Policy"}
 
 
 class _EmptyRetriever:

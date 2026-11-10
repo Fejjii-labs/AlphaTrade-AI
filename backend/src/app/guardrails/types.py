@@ -35,7 +35,12 @@ class GuardrailInput(StrictModel):
     approval_required: bool | None = None
     confidence: float | None = None
     has_market_context: bool = False
+    #: True only when the answer cites >= 1 chunk id (not merely when retrieval ran).
     has_citations: bool = False
+    cited_chunk_ids: list[str] = Field(default_factory=list)
+    retrieved_chunk_ids: list[str] = Field(default_factory=list)
+    #: retrieved | no_relevant_source | retrieval_failed; None = retrieval never reported.
+    rag_outcome: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
@@ -51,7 +56,10 @@ class GuardrailInput(StrictModel):
             approval_required=state.approval_required,
             confidence=state.confidence,
             has_market_context=state.market_context is not None,
-            has_citations=bool(state.citations or state.retrieved_context),
+            has_citations=bool(state.cited_chunk_ids),
+            cited_chunk_ids=[str(item) for item in state.cited_chunk_ids],
+            retrieved_chunk_ids=[str(c.chunk_id) for c in state.retrieved_context],
+            rag_outcome=state.rag_outcome,
             metadata={
                 "intent": state.intent.value,
                 "message_class": state.message_class.value,
