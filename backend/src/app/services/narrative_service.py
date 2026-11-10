@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import structlog
 
+from app.core.prompt_registry import load_prompt_record
 from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET, verify_cited_chunk_ids
 from app.guardrails.context_sanitizer import sanitize_retrieved_snippet
 from app.guardrails.narrative_validation import NarrativeValidationGuardrail
@@ -23,7 +23,6 @@ from app.schemas.usage import UsageEvent
 
 logger = structlog.get_logger(__name__)
 
-_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 _NARRATIVE_TASK_MARKER = "__narrative_task__:"
 
 
@@ -300,10 +299,8 @@ def narrative_response_format() -> dict[str, Any]:
 
 
 def load_prompt(name: str) -> str:
-    path = _PROMPTS_DIR / f"{name}.txt"
-    if not path.is_file():
-        raise FileNotFoundError(f"Prompt not found: {path}")
-    return path.read_text(encoding="utf-8")
+    """Prompt body with its version header stripped (see ``app.core.prompt_registry``)."""
+    return load_prompt_record(name).text
 
 
 def build_sanitized_narrative_context(
