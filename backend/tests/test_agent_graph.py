@@ -183,3 +183,36 @@ def test_agent_state_uses_typed_schema() -> None:
 
     with pytest.raises(ValidationError):
         AgentState.model_validate({**state.model_dump(), "smuggled": True})
+
+
+def test_graph_registers_each_of_the_25_nodes_once() -> None:
+    from app.agents.graph import build_agent_graph
+
+    graph = build_agent_graph(_service().runtime)
+    assert list(graph.nodes) == [
+        "receive_request",
+        "auth_context",
+        "quota_check",
+        "rate_limit_check",
+        "prompt_injection_check",
+        "moderation_check",
+        "message_classification",
+        "intent_classification",
+        "context_retrieval",
+        "strategy_workflow_tools",
+        "paper_action",
+        "trading_analytics_retrieval",
+        "market_context_retrieval",
+        "indicator_calculation",
+        "strategy_module_execution",
+        "trade_proposal_generation",
+        "trading_policy_check",
+        "deterministic_risk_gate",
+        "approval_decision",
+        "tool_execution_if_allowed",
+        "memory_update",
+        "usage_tracking",
+        "final_response",
+        "narrative_enhancement",
+        "output_validation",
+    ]
