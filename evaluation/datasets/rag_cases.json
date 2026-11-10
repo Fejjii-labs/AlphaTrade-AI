@@ -1,67 +1,142 @@
 [
   {
     "id": "risk_policy_stop_loss",
-    "query": "What is the stop loss requirement?",
-    "expected_source_type": "risk_policy",
-    "expected_document_title": "Risk Policy",
-    "expected_chunk_ids": [],
-    "expected_answer_points": [
-      "stop loss required",
-      "capital preservation"
+    "kind": "retrieval",
+    "query": "What is the stop loss requirement before entry?",
+    "expected_document_keys": [
+      "risk_stop_loss"
     ],
     "difficulty": "easy",
-    "notes": "Should retrieve risk policy chunks, not generate trade signals."
+    "notes": "Must beat the 'moving the stop' mistake entry."
   },
   {
     "id": "playbook_approval",
-    "query": "When is human approval required?",
-    "expected_source_type": "trading_playbook",
-    "expected_document_title": "Trading Playbook",
-    "expected_chunk_ids": [],
-    "expected_answer_points": [
-      "human approval",
-      "no autonomous execution"
+    "kind": "retrieval",
+    "query": "When is human approval required before an order?",
+    "expected_document_keys": [
+      "playbook_approval"
     ],
     "difficulty": "easy",
-    "notes": "Playbook grounding for approval workflow."
+    "notes": "Must beat the leverage policy, which also mentions approval."
   },
   {
     "id": "journal_lesson_revenge",
+    "kind": "retrieval",
     "query": "What lesson applies after a revenge trade?",
-    "expected_source_type": "trade_journal",
-    "expected_document_title": "Trade Journal — Revenge Trade",
-    "expected_chunk_ids": [],
-    "expected_answer_points": [
-      "cooldown",
-      "emotional trading"
+    "expected_document_keys": [
+      "journal_revenge"
     ],
     "difficulty": "medium",
-    "notes": "Journal lesson retrieval for coaching."
+    "notes": "Other journal entries also carry lessons."
+  },
+  {
+    "id": "mistakes_fomo",
+    "kind": "retrieval",
+    "query": "Common mistake when chasing green candles",
+    "expected_document_keys": [
+      "mistake_fomo"
+    ],
+    "difficulty": "medium",
+    "notes": "BTC late-entry journal also mentions chasing."
+  },
+  {
+    "id": "risk_leverage_cap",
+    "kind": "retrieval",
+    "query": "What is the maximum leverage allowed on demo accounts?",
+    "expected_document_keys": [
+      "risk_leverage"
+    ],
+    "difficulty": "medium",
+    "notes": "Overleverage mistake entry is the near neighbour."
+  },
+  {
+    "id": "risk_position_size",
+    "kind": "retrieval",
+    "query": "How much of my account equity can I risk per trade?",
+    "expected_document_keys": [
+      "risk_position_size"
+    ],
+    "difficulty": "medium",
+    "notes": "Daily loss limit also mentions account equity."
+  },
+  {
+    "id": "ticker_solusdt",
+    "kind": "retrieval",
+    "query": "SOLUSDT trades per session",
+    "expected_document_keys": [
+      "journal_sol_overtrading"
+    ],
+    "difficulty": "easy",
+    "notes": "Exact-term ticker query."
+  },
+  {
+    "id": "ticker_ethusdt_breakout",
+    "kind": "retrieval",
+    "query": "ETHUSDT breakout above the weekly high",
+    "expected_document_keys": [
+      "journal_eth_breakout"
+    ],
+    "difficulty": "hard",
+    "notes": "Exact-term ticker; breakout retest template and ETH templates are distractors."
+  },
+  {
+    "id": "eth_range_rules",
+    "kind": "retrieval",
+    "query": "Range reversion rules for ETH",
+    "expected_document_keys": [
+      "tpl_eth_range"
+    ],
+    "difficulty": "medium",
+    "notes": "ETH pullback template is the near neighbour."
+  },
+  {
+    "id": "playbook_news",
+    "kind": "retrieval",
+    "query": "Should I trade around CPI or FOMC news releases?",
+    "expected_document_keys": [
+      "playbook_news"
+    ],
+    "difficulty": "easy",
+    "notes": ""
+  },
+  {
+    "id": "risk_daily_loss",
+    "kind": "retrieval",
+    "query": "When does the kill switch stop trading after a drawdown?",
+    "expected_document_keys": [
+      "risk_daily_loss"
+    ],
+    "difficulty": "medium",
+    "notes": ""
   },
   {
     "id": "strategy_tag_filter",
-    "query": "Pullback entry rules for BTC",
-    "expected_source_type": "strategy_template",
-    "expected_document_title": "HTF Trend Pullback Template",
-    "expected_chunk_ids": [],
-    "expected_answer_points": [
-      "pullback",
-      "higher timeframe trend"
+    "kind": "filter",
+    "query": "Pullback entry rules",
+    "expected_document_keys": [
+      "tpl_btc_pullback"
     ],
     "difficulty": "medium",
-    "notes": "Tag-filtered retrieval for strategy-specific notes."
+    "notes": "Filter-behaviour case: strategy_tag + symbol_tag must exclude the ETH pullback template.",
+    "filters": {
+      "strategy_tag": "htf_trend_pullback",
+      "symbol_tag": "BTCUSDT"
+    }
   },
   {
-    "id": "mistakes_database",
-    "query": "Common mistake when chasing green candles",
-    "expected_source_type": "mistakes_database",
-    "expected_document_title": "Mistakes Database",
-    "expected_chunk_ids": [],
-    "expected_answer_points": [
-      "FOMO",
-      "green day guard"
-    ],
-    "difficulty": "hard",
-    "notes": "Cross-document lesson retrieval."
+    "id": "no_relevant_pizza",
+    "kind": "no_relevant_source",
+    "query": "What is the best pizza recipe for dinner?",
+    "expected_document_keys": [],
+    "difficulty": "easy",
+    "notes": "Nothing in the corpus is relevant; expects zero hits after the relevance floor."
+  },
+  {
+    "id": "no_relevant_translation",
+    "kind": "no_relevant_source",
+    "query": "Translate this sentence into French",
+    "expected_document_keys": [],
+    "difficulty": "easy",
+    "notes": "Expects zero hits after the relevance floor."
   }
 ]

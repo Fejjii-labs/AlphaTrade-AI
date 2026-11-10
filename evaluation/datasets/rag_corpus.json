@@ -1,0 +1,124 @@
+[
+  {
+    "key": "risk_stop_loss",
+    "source_type": "risk_policy",
+    "title": "Risk Policy — Stop Loss",
+    "text": "Capital preservation first. Every trade requires a stop loss placed at the invalidation level before entry. No position without defined invalidation.",
+    "risk_tag": "stop_loss"
+  },
+  {
+    "key": "risk_leverage",
+    "source_type": "risk_policy",
+    "title": "Risk Policy — Leverage Limits",
+    "text": "Leverage is capped at 5x on paper and demo accounts. Raising leverage requires owner approval and a written reason. Isolated margin only.",
+    "risk_tag": "leverage"
+  },
+  {
+    "key": "risk_position_size",
+    "source_type": "risk_policy",
+    "title": "Risk Policy — Position Sizing",
+    "text": "Risk at most 1% of account equity per trade. Position size is derived from the distance between entry and stop. Reduce size after two consecutive losses.",
+    "risk_tag": "position_size"
+  },
+  {
+    "key": "risk_daily_loss",
+    "source_type": "risk_policy",
+    "title": "Risk Policy — Daily Loss Limit",
+    "text": "Stop trading for the day after a 3% drawdown in account equity. The kill switch halts new paper orders until the next session.",
+    "risk_tag": "daily_loss"
+  },
+  {
+    "key": "playbook_approval",
+    "source_type": "trading_playbook",
+    "title": "Trading Playbook — Human Approval",
+    "text": "Human approval is required before any executable order. The agent must not bypass approval or risk checks."
+  },
+  {
+    "key": "playbook_session",
+    "source_type": "trading_playbook",
+    "title": "Trading Playbook — Session Routine",
+    "text": "Before the London open review the higher timeframe levels, mark liquidity zones and write the day's bias in the journal."
+  },
+  {
+    "key": "playbook_news",
+    "source_type": "trading_playbook",
+    "title": "Trading Playbook — News Events",
+    "text": "Do not open new positions fifteen minutes before or after high impact news such as CPI or FOMC releases. Flatten scalps ahead of scheduled announcements."
+  },
+  {
+    "key": "journal_revenge",
+    "source_type": "trade_journal",
+    "title": "Trade Journal — Revenge Trade",
+    "text": "Lesson: after a revenge trade, enforce a cooldown period. Emotional trading violates the playbook."
+  },
+  {
+    "key": "journal_eth_breakout",
+    "source_type": "trade_journal",
+    "title": "Trade Journal — ETH Breakout Win",
+    "text": "ETHUSDT breakout above the weekly high held on retest. Took partial profit at 2R and trailed the remainder.",
+    "symbol_tag": "ETHUSDT"
+  },
+  {
+    "key": "journal_sol_overtrading",
+    "source_type": "trade_journal",
+    "title": "Trade Journal — SOL Overtrading",
+    "text": "Took nine SOLUSDT scalps in one afternoon. Fees ate the gains. Lesson: cap the number of trades per session.",
+    "symbol_tag": "SOLUSDT"
+  },
+  {
+    "key": "journal_btc_late_entry",
+    "source_type": "trade_journal",
+    "title": "Trade Journal — BTC Late Entry",
+    "text": "Entered a BTCUSDT long after the move was extended and the stop was too wide. Lesson: wait for the pullback instead of chasing.",
+    "symbol_tag": "BTCUSDT"
+  },
+  {
+    "key": "tpl_btc_pullback",
+    "source_type": "strategy_template",
+    "title": "HTF Trend Pullback Template",
+    "text": "Pullback entry rules: trade only with higher timeframe trend alignment. Wait for pullback into value on BTC setups.",
+    "strategy_tag": "htf_trend_pullback",
+    "symbol_tag": "BTCUSDT"
+  },
+  {
+    "key": "tpl_eth_pullback",
+    "source_type": "strategy_template",
+    "title": "ETH Trend Pullback Template",
+    "text": "Trend pullback entry rules for ETH: enter on a pullback to the 4h moving average when the daily trend is up.",
+    "strategy_tag": "htf_trend_pullback",
+    "symbol_tag": "ETHUSDT"
+  },
+  {
+    "key": "tpl_eth_range",
+    "source_type": "strategy_template",
+    "title": "ETH Range Reversion Template",
+    "text": "Range reversion rules for ETH: fade the range extremes only when volume declines. Exit at the range midpoint.",
+    "strategy_tag": "range_reversion",
+    "symbol_tag": "ETHUSDT"
+  },
+  {
+    "key": "tpl_breakout",
+    "source_type": "strategy_template",
+    "title": "Breakout Retest Template",
+    "text": "Breakout retest entry rules: wait for a candle close above resistance and enter on the retest with the stop below the breakout level.",
+    "strategy_tag": "breakout_retest"
+  },
+  {
+    "key": "mistake_fomo",
+    "source_type": "mistakes_database",
+    "title": "Mistakes Database — FOMO",
+    "text": "Common mistake: chasing green candles due to FOMO. Apply green day guard before adding risk."
+  },
+  {
+    "key": "mistake_moving_stop",
+    "source_type": "mistakes_database",
+    "title": "Mistakes Database — Moving the Stop",
+    "text": "Common mistake: widening the stop loss after entry to avoid being stopped out. Never move a stop further from entry."
+  },
+  {
+    "key": "mistake_overleverage",
+    "source_type": "mistakes_database",
+    "title": "Mistakes Database — Overleverage",
+    "text": "Common mistake: using maximum leverage on low conviction setups. Leverage magnifies small errors into account damage."
+  }
+]
