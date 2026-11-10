@@ -50,6 +50,8 @@ uv run python ../evaluation/evaluate_rag.py
 uv run python ../evaluation/evaluate_guardrails.py
 ```
 
+`evaluate_rag.py` ingests a corpus with several same-type documents per source type, runs 14 cases without a source-type pre-filter and reports recall@1/3/5 and MRR over stable document keys, plus no-relevant-source cases that must return zero hits after the relevance floor. It exits non-zero below recall@3 0.80, MRR 0.70, no-relevant accuracy 1.0 or on a failed filter case (`--min-recall-at-3`, `--min-mrr`, `--min-no-relevant-accuracy`). The default `--embeddings lexical` is a deterministic lexical baseline: it tests the retrieval pipeline, not OpenAI semantic quality. `--embeddings hash` (the app's SHA-256 mock) is expected to fail. `--embeddings provider` uses the configured OpenAI embeddings, costs money and is never run in CI.
+
 These commands are a reference, not test results from this documentation task. Dataset completeness and actual model/provider evaluation need separate evidence.
 
 ## Product acceptance and statistical limits
