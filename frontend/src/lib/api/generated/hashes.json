@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "35c2b7425aca7364ab31ec02ab1444670a8b9272bdc074049b77b2e1df1d22ee",
-  "pilot_sha256": "48e68b02634794fc455d6f86d561e332651741dfdbe697c6fb01c09f8aca76ef",
+  "openapi_sha256": "461e68ea4f987857c03c741b0eb2b43082203e68832313e5ac3b29d039c6e883",
+  "pilot_sha256": "2d3d2dd7e1d69d680dd184abff6379527bafe4b582efffc4457dcfe507f8cbfd",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -11,7 +11,7 @@
     "AgentMessageResponse": "a97dd43466983d5bfd3d0d9a5b633ae9574fb422901b6c2bc5cf451a23c48fa5",
     "AgentPaperResult": "44e39667634c68b184bd2f056378ab9076a69ac76873e0f7fd1a15d4754300ae",
     "AgentTurnRequest": "ec63a12f0c22cc30928f1e61ea064762331035acc5dd8c1ea1e46ae4bfef1b10",
-    "AgentTurnResult": "410b2b1edda4499fe8d0f30a82eafacab8f330046aa3c57a2c0ea6e79af1b9ef",
+    "AgentTurnResult": "7b27e11ce3b09ea5bce5afdd4a19f7354b5d99b89373d7cdb5df5431ab2cde29",
     "ArtifactKind": "25a50b4372c51a51edd5ad759f7583f0a48912f54b800e58a6188166ffd63729",
     "AttentionCategory": "6b963c351aa9bee11b5d6fc3c0e2d5259b1538d26bcb158145a09b8d660f1103",
     "AttentionItem": "b4b812acdc11fb8113d2fe4164595afa7c63d74b5a68daff5fa4def71911d38a",
