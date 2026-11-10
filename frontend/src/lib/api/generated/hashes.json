@@ -1,6 +1,6 @@
 {
-  "openapi_sha256": "16dc6c5ef7aceb6545ff4c42fb18f248eb886af0b600e4608c086e9c8aabdcde",
-  "pilot_sha256": "92e4b853a7c3f222a4bad4f156468c9e7234df22801034364228c43e9d08da6b",
+  "openapi_sha256": "35c2b7425aca7364ab31ec02ab1444670a8b9272bdc074049b77b2e1df1d22ee",
+  "pilot_sha256": "48e68b02634794fc455d6f86d561e332651741dfdbe697c6fb01c09f8aca76ef",
   "schemas": {
     "AccountMode": "0d7a38d0433240925513df0814ac36c497880945d49b5e563ad77ee16c3be2f1",
     "ActionRequest": "3f1f59fc3e48b3482b6d6ab4166719d64a93ec682a89555b139463942fba145a",
@@ -175,7 +175,7 @@
     "TradeDirection": "836e1c42017dad62486bfd3f5b11af622065b5f70cc1146c5c6b61f0f228cd26",
     "TradePlanRevision": "2b8ec8ce5b759962d1f5c2f93b44d9ca67920b50559d49476993e04c5b9a1132",
     "TradingAnalysisDetail": "90421c421dd35cea1479e692ed9906177e182075233345e55b7ce03c17baaaf7",
-    "TradingNarrativeDetail": "28a593b007fa1a8095abedb999912324c4aaadd87298c4f0a4e8b1b156b93d6d",
+    "TradingNarrativeDetail": "0b7b68677f8553eb570710e846a132b2360cf378d494a68eccc5ad5540f0c189",
     "TrendPulseEvidenceReference": "dcb0091e6d429aac7d3ddcc1320c6bd8977c9356a0f0b4ae8d66ea8e81b1ed1c",
     "TrendPulseScreeningCreate": "fad51ae7fec883c354ba4e3d9c850ebf8e5522956c4cad44241a6fa92b027d89",
     "TrendPulseScreeningDetail": "e94e4ea868612ab6cbca2e42f5b494b7ec74310ea4bea18de13e35d34f2a3fef",

@@ -4708,6 +4708,11 @@ export interface components {
             caution_notes?: string[];
             /** Citations Used */
             citations_used?: string[];
+            /**
+             * Cited Chunk Ids
+             * @description chunk_id values, copied from the supplied citations, that support this narrative. Ids outside the retrieved set are rejected.
+             */
+            cited_chunk_ids?: string[];
             /** Evidence Explanation */
             evidence_explanation: string;
             /** Invalidation Explanation */
