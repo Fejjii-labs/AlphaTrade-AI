@@ -38,6 +38,8 @@ from app.services.model_router import ModelRouter
 ORG = uuid.UUID("00000000-0000-0000-0000-00000000d001")
 USER = uuid.UUID("00000000-0000-0000-0000-00000000d002")
 MODEL = "gpt-6-luna"
+# interactive_agent_system v2 body ([Kn] citation instruction); v1 was 26d09c9b...
+INTERACTIVE_V2_SHA256 = "d3435fa4d1eef3e770700c4182f03117aa1c274dd357be48e0735626123f4112"
 
 
 def _sha(text: str) -> str:
@@ -131,10 +133,11 @@ def test_hash_matches_system_text_passed_to_provider_and_is_persisted(session: S
     assert sent == [prompt.text]
     attempt = result.attempts[0]
     assert attempt.system_prompt_sha256 == _sha(sent[0]) == prompt.sha256
-    assert (attempt.prompt_id, attempt.prompt_version) == ("interactive_agent_system", 1)
+    assert attempt.system_prompt_sha256 == INTERACTIVE_V2_SHA256
+    assert (attempt.prompt_id, attempt.prompt_version) == ("interactive_agent_system", 2)
     row = session.scalars(select(ModelCallAttemptRow)).one()
     assert row.system_prompt_sha256 == _sha(sent[0])
-    assert (row.prompt_id, row.prompt_version) == ("interactive_agent_system", 1)
+    assert (row.prompt_id, row.prompt_version) == ("interactive_agent_system", 2)
 
 
 def test_no_system_prompt_records_none(session: Session) -> None:
@@ -201,7 +204,7 @@ def test_conversation_and_capture_callers_send_their_prompt_ids() -> None:
                 organization_id=ORG, user_id=USER, conversation_id=uuid.uuid4(), content={}
             )
     assert [(r.prompt_id, r.prompt_version) for r in seen] == [
-        ("interactive_agent_system", 1),
+        ("interactive_agent_system", 2),
         ("agent_capture_system", 1),
     ]
     prompt_ids = ("interactive_agent_system", "agent_capture_system")

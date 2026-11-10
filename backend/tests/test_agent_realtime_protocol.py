@@ -463,3 +463,53 @@ async def test_server_vad_barge_in_lets_provider_cancel_and_create(voice_limits)
     assert ("provider_response", "new") in ledger.events
     assert session.responses_used == 2
     await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_citation_audit_notes_reach_the_client_result_but_not_the_realtime_model(
+    voice_limits,
+):
+    from app.interactive_agent.conversation import UNCITED_SOURCES_NOTE
+
+    removed = "Removed source markers not supplied this turn (K9); reason: x."
+    limitations = ["Fees unavailable.", UNCITED_SOURCES_NOTE, removed]
+
+    def turn(_ledger, _key, body):
+        return {
+            "reply": "Fees are unavailable.",
+            "conversation_id": body["conversation_id"],
+            "limitations": list(limitations),
+        }
+
+    session, ledger, sent, upstream = session_for(voice_limits, turn)
+    await session._respond()
+    await session.provider({"type": "response.created", "response": {"id": "tool"}})
+    await session.provider(
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": "tool",
+            "name": "alpha_trade_turn",
+            "call_id": "call",
+            "arguments": json.dumps({"message": "What did my notes say about fees?"}),
+        }
+    )
+    await session.provider(
+        {"type": "response.done", "response": {"id": "tool", "status": "completed", "usage": None}}
+    )
+    for _ in range(200):
+        if any(e["type"] == "turn.pending" for e in sent):
+            break
+        await asyncio.sleep(0.001)
+    pending = next(e for e in sent if e["type"] == "turn.pending")
+    await session.client({"type": "turn.accept", "request_key": pending["request_key"]})
+    await session.tool_task
+    outputs = [
+        json.loads(e["item"]["output"])
+        for e in upstream
+        if e.get("type") == "conversation.item.create"
+        and e["item"]["type"] == "function_call_output"
+    ]
+    assert outputs == [{"canonical_reply": "Fees are unavailable.", "limitations": limitations[:1]}]
+    result = next(e for e in sent if e["type"] == "turn.result")["result"]
+    assert result["limitations"] == limitations
+    assert ("committed", "call", result) in ledger.events
