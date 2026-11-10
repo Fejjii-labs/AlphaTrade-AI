@@ -17,6 +17,7 @@ from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMMess
 from app.schemas.agent import AgentState, Intent
 from app.schemas.analysis import TradingAnalysisDetail
 from app.schemas.narrative import NarrativeMetadata, TradingNarrativeDetail
+from app.schemas.strict_json_schema import strict_response_format
 from app.schemas.usage import UsageEvent
 
 logger = structlog.get_logger(__name__)
@@ -243,7 +244,7 @@ class NarrativeService:
                     caller_organization_id=agent.organization_id,
                     caller_user_id=agent.user_id,
                     temperature=0.0,
-                    response_format={"type": "json_object"},
+                    response_format=narrative_response_format(),
                 ),
                 messages,
             )
@@ -264,9 +265,14 @@ class NarrativeService:
                 model=self._model,
                 temperature=0.0,
                 max_tokens=900,
-                response_format={"type": "json_object"},
+                response_format=narrative_response_format(),
             )
         )
+
+
+def narrative_response_format() -> dict[str, Any]:
+    """Strict json_schema for TradingNarrativeDetail; parse + fallback stay as defense in depth."""
+    return strict_response_format("narrative", TradingNarrativeDetail)
 
 
 def load_prompt(name: str) -> str:
