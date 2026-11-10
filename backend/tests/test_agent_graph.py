@@ -188,7 +188,7 @@ def test_agent_state_uses_typed_schema() -> None:
 def test_graph_registers_each_of_the_25_nodes_once() -> None:
     from app.agents.graph import build_agent_graph
 
-    graph = build_agent_graph(_service().runtime)
+    graph = build_agent_graph()
     assert list(graph.nodes) == [
         "receive_request",
         "auth_context",

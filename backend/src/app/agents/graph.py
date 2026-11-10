@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any, cast
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from app.agents import nodes
 from app.agents.routing import (
@@ -17,23 +20,38 @@ from app.agents.routing import (
 )
 from app.agents.runtime import AgentRuntime
 
+# Per-request dependencies travel in the invoke config, never in the compiled graph.
+RUNTIME_CONFIG_KEY = "agent_runtime"
+
+_compiled: CompiledStateGraph[Any, Any, Any, Any] | None = None
+_compile_lock = threading.Lock()
+
+
+def _invoke_runtime(config: RunnableConfig) -> AgentRuntime:
+    runtime = (config.get("configurable") or {}).get(RUNTIME_CONFIG_KEY)
+    if not isinstance(runtime, AgentRuntime):
+        raise RuntimeError("Agent graph invoked without an AgentRuntime; use invoke_agent_graph.")
+    return runtime
+
 
 def _wrap(
-    node_fn: Callable[[dict[str, Any], AgentRuntime], dict[str, Any]], runtime: AgentRuntime
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    def _node(state: dict[str, Any]) -> dict[str, Any]:
+    node_fn: Callable[[dict[str, Any], AgentRuntime], dict[str, Any]],
+) -> Callable[[dict[str, Any], RunnableConfig], dict[str, Any]]:
+    def _node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
         from app.services.turn_context import current_turn
 
         turn = current_turn()
+        # A durable chat turn scopes each node to its own phase runtime (session,
+        # quota and provider ports); it takes precedence over the invoke runtime.
         if turn is not None and turn.node_scope is not None:
             with turn.node_scope(node_fn.__name__) as phase_runtime:
                 return node_fn(state, phase_runtime)
-        return node_fn(state, runtime)
+        return node_fn(state, _invoke_runtime(config))
 
     return _node
 
 
-def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
+def build_agent_graph() -> StateGraph[Any, Any, Any, Any]:
     """Construct the uncompiled StateGraph with all workflow nodes wired."""
     graph: StateGraph = StateGraph(dict)
 
@@ -66,7 +84,7 @@ def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
     }
     for name, node_fn in node_fns.items():
         # This established dict graph predates LangGraph's typed StateLike bound.
-        graph.add_node(name, cast(Any, _wrap(node_fn, runtime)))
+        graph.add_node(name, cast(Any, _wrap(node_fn)))
 
     graph.set_entry_point("receive_request")
     graph.add_edge("receive_request", "auth_context")
@@ -139,6 +157,24 @@ def build_agent_graph(runtime: AgentRuntime) -> StateGraph:
     return graph
 
 
-def compile_agent_graph(runtime: AgentRuntime):
-    """Return a compiled graph ready for ``invoke``."""
-    return build_agent_graph(runtime).compile()
+def compile_agent_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
+    """Compile a fresh graph. Callers normally want the shared :func:`get_agent_graph`."""
+    return build_agent_graph().compile()
+
+
+def get_agent_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
+    """Process-wide compiled graph. It holds no per-request state, so threads share it."""
+    global _compiled
+    graph = _compiled
+    if graph is None:
+        with _compile_lock:
+            if _compiled is None:
+                _compiled = compile_agent_graph()
+            graph = _compiled
+    return graph
+
+
+def invoke_agent_graph(state: dict[str, Any], runtime: AgentRuntime) -> dict[str, Any]:
+    """Run one turn on the shared graph with this request's runtime."""
+    config: RunnableConfig = {"configurable": {RUNTIME_CONFIG_KEY: runtime}}
+    return cast(dict[str, Any], get_agent_graph().invoke(state, config=config))
