@@ -2147,7 +2147,7 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
         "cited_chunk_ids": result.narrative.cited_chunk_ids,
         "citation_violations": list(result.citation_violations),
     }
-    if result.citation_violations:
+    if result.citation_violations and runtime.observability is not None:
         updates["audit_events"] = [
             *agent.audit_events,
             runtime.observability.emit_narrative_fallback(

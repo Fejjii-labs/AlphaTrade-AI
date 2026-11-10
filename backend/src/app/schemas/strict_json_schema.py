@@ -16,7 +16,8 @@ from pydantic import BaseModel
 
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     """Return ``model``'s JSON schema rewritten for OpenAI ``strict: true``."""
-    return _strict_node(model.model_json_schema())
+    schema: dict[str, Any] = _strict_node(model.model_json_schema())
+    return schema
 
 
 def strict_response_format(name: str, model: type[BaseModel]) -> dict[str, Any]:
