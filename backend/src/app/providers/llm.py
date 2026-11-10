@@ -690,6 +690,15 @@ class OpenAILLMProvider:
         return True, "generation_ok"
 
 
+def responses_instructions(messages: list[LLMMessage]) -> str | None:
+    """Exact system/instructions text sent upstream (system+developer parts, ``\n\n``-joined).
+
+    Chat Completions sends the same parts as separate system messages; for the usual
+    single system message both paths carry this exact text.
+    """
+    return _split_messages_for_responses(messages)[0]
+
+
 def _split_messages_for_responses(
     messages: list[LLMMessage],
 ) -> tuple[str | None, list[dict[str, str]]]:

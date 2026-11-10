@@ -69,6 +69,8 @@ class CaptureModel:
                 correlation_id=_correlation("capture"),
                 reasoning_effort=self.settings.agent_reasoning_effort,
                 max_output_tokens=self.settings.agent_max_output_tokens,
+                prompt_id=SYSTEM_PROMPT.id,
+                prompt_version=SYSTEM_PROMPT.version,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {"name": "agent_capture", "strict": True, "schema": schema},
