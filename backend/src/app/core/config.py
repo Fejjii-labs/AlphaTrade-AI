@@ -581,6 +581,10 @@ class Settings(BaseSettings):
     embeddings_model: str = "text-embedding-3-small"
     # None = auto (384 mock; OpenAI model native size when key configured).
     embeddings_dimensions: int | None = Field(default=None, ge=1)
+    # Vectors carry the `embedding_model` that produced them. Search refuses hits
+    # from a different model (no mixed-space results). Legacy points without the
+    # field are allowed with a warning unless strict; reindex to backfill it.
+    rag_embedding_model_strict: bool = False
 
     # --- Market data (read-only; Binance public API, no key required) ---
     market_data_enabled: bool = True

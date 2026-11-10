@@ -425,6 +425,7 @@ class QdrantVectorStore:
         "symbol_tag",
         "timeframe_tag",
         "risk_tag",
+        "embedding_model",
     )
 
     def _ensure_payload_indexes(self, collection: str) -> None:
