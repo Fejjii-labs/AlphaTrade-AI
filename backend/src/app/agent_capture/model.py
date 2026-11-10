@@ -17,6 +17,7 @@ from app.schemas.model_routing import (
     ModelRoutingPurpose,
     ModelTaskRequest,
 )
+from app.schemas.strict_json_schema import strict_response_format
 from app.services.model_call_telemetry import ModelCallTelemetryService
 from app.services.model_router import ModelRouter
 
@@ -50,7 +51,6 @@ class CaptureModel:
             fail_closed=True,
             telemetry=ModelCallTelemetryService(None),
         )
-        schema = CapturePlan.model_json_schema()
         result = router.complete(
             ModelTaskRequest(
                 purpose=ModelRoutingPurpose.GENERAL_AGENT_SYNTHESIS,
@@ -71,10 +71,8 @@ class CaptureModel:
                 max_output_tokens=self.settings.agent_max_output_tokens,
                 prompt_id=SYSTEM_PROMPT.id,
                 prompt_version=SYSTEM_PROMPT.version,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {"name": "agent_capture", "strict": True, "schema": schema},
-                },
+                # Strict-compatible by construction, even if a defaulted field is added later.
+                response_format=strict_response_format("agent_capture", CapturePlan),
             ),
             [
                 LLMMessage(role="system", content=SYSTEM),
