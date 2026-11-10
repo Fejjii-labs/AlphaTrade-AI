@@ -119,3 +119,14 @@ OpenAPI regen), capture strict schema.
   after 5s instead of queueing traffic behind it. Rerun the deploy once the blocking transaction
   is gone. The ordering problem remains: new app code needs the migration applied before it
   serves traffic, and that is an operational condition.
+- **C3.** `strict_json_schema` emits only keywords that OpenAI strict mode supports. It drops
+  `minLength`/`maxLength`/`uniqueItems`/`contains`/`min|maxContains`/`min|maxProperties`/
+  `patternProperties`/`propertyNames`/`unevaluated*`/`dependent*` and any `format` outside
+  {date-time, time, date, duration, email, hostname, ipv4, ipv6, uuid}. It raises
+  `UnsupportedStrictSchemaError` at build time for `allOf`/`not`/`if`/`then`/`else`. A
+  single-element `allOf` is collapsed into its node instead (Pydantic 2.13 emits none for
+  capture or narrative). `enum`/`const`/`examples` values are copied verbatim. Constraint
+  enforcement now relies on server-side Pydantic validation:
+  `CapturePlan.model_validate_json` and `TradingNarrativeDetail.model_validate` still reject
+  an over-long title. The capture request body therefore changes: `minLength`/`maxLength` are
+  gone.
