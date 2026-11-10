@@ -106,7 +106,7 @@ def run_chat(
 
     turn.node_scope = scope
     try:
-        agent = parse_state(service._graph.invoke(state_to_dict(initial)))
+        agent = parse_state(service.invoke_graph(state_to_dict(initial)))
         service.runtime.observability.emit_agent_run_completed(
             agent, latency_ms=(time.perf_counter() - graph_started) * 1000
         )
