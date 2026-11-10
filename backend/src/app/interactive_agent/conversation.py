@@ -127,6 +127,8 @@ class ModelConversationalResponder:
                     temperature=0.0,
                     reasoning_effort=self._settings.agent_reasoning_effort,
                     max_output_tokens=self._settings.agent_max_output_tokens,
+                    prompt_id=_SYSTEM_PROMPT.id,
+                    prompt_version=_SYSTEM_PROMPT.version,
                 ),
                 [
                     LLMMessage(role="system", content=_SYSTEM),

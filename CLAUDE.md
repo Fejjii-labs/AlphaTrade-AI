@@ -13,3 +13,12 @@ section in `AGENTS.md`. Claude Code branches use the `claude/` prefix.
 `EMBEDDINGS_MODEL=text-embedding-3-small`. `.env.example` mirrors those defaults
 (`backend/tests/test_model_defaults_consistency.py` enforces it). Docs must not restate a
 different default; dated evidence of what an environment ran at the time must say so.
+
+## Prompt provenance
+
+Every model call records the SHA-256 of its system prompt.
+It is stored on `ModelCallAttempt.system_prompt_sha256` (with `prompt_id` / `prompt_version`), computed by
+`ModelRouter` from the exact instructions text sent; calls without a system prompt record NULL.
+System prompts live in `backend/prompts/*.txt` with a `# prompt-id:` / `# version:` / `---` header
+(`app/core/prompt_registry.py`); bump `# version` whenever the body or a fragment composed into it
+changes, and pass the record's `id`/`version` on `ModelTaskRequest`.

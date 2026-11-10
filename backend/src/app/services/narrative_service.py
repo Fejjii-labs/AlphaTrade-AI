@@ -233,7 +233,8 @@ class NarrativeService:
         context: dict[str, Any],
         agent: AgentState,
     ) -> LLMCompletionResult:
-        template = load_prompt(prompt_name)
+        prompt = load_prompt_record(prompt_name)
+        template = prompt.text
         context_json = json.dumps(redact_mapping(context), default=str)
         filled = template.replace("{{context_json}}", context_json)
         system_content = f"{_NARRATIVE_TASK_MARKER}{prompt_name}\n{filled}"
@@ -268,6 +269,8 @@ class NarrativeService:
                     caller_user_id=agent.user_id,
                     temperature=0.0,
                     response_format=narrative_response_format(),
+                    prompt_id=prompt.id,
+                    prompt_version=prompt.version,
                 ),
                 messages,
             )

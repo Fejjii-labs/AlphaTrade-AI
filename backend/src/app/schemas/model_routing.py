@@ -136,6 +136,9 @@ class ModelTaskRequest(StrictModel):
     model_override: str | None = Field(default=None, max_length=80)
     prompt_policy_version: str | None = Field(default=None, max_length=80)
     prompt_template_version: str | None = Field(default=None, max_length=80)
+    # Versioned prompt file (app.core.prompt_registry) behind the system message, if any.
+    prompt_id: str | None = Field(default=None, max_length=80)
+    prompt_version: int | None = Field(default=None, ge=1)
 
 
 class ModelCallAttempt(StrictModel):
@@ -169,6 +172,10 @@ class ModelCallAttempt(StrictModel):
     resource_id: UUID | None = None
     retention_category: ModelRetentionCategory = ModelRetentionCategory.STANDARD
     usage_event_id: UUID | None = None
+    # SHA-256 hex of the exact system/instructions text sent; None when the call had none.
+    system_prompt_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    prompt_id: str | None = None
+    prompt_version: int | None = None
     started_at: datetime
     completed_at: datetime
     mutation_allowed: bool = False
