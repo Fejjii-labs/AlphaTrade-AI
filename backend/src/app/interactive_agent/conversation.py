@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.prompt_registry import load_prompt_record
 from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET
+from app.interactive_agent.contracts import REMOVED_MARKERS_PREFIX, UNCITED_SOURCES_NOTE
 from app.interactive_agent.presentation import readable_number
 from app.providers.factory import resolve_providers
 from app.providers.llm import LLMMessage, LLMProvider, OpenAILLMProvider
@@ -52,10 +53,6 @@ _ABBREVIATIONS = frozenset({"e.g.", "i.e.", "etc.", "vs.", "mr.", "mrs.", "dr.",
 # Facts beyond this bound are not sent to the model (see compose()).
 _FACT_LIMIT = 16000
 _KNOWLEDGE_MARKER = re.compile(r"([ \t]*)\[(K\d+(?:\s*,\s*K\d+)*)\]")
-UNCITED_SOURCES_NOTE = (
-    "The reply cites none of the supplied source passages; it is not presented as grounded "
-    "in them. Check Stored evidence."
-)
 
 _SYSTEM_PROMPT = load_prompt_record("interactive_agent_system")
 _SYSTEM = _SYSTEM_PROMPT.text
@@ -232,7 +229,7 @@ def verify_source_markers(
     notes: list[str] = []
     if unknown:
         notes.append(
-            f"Removed source markers not supplied this turn ({', '.join(unknown)}); "
+            f"{REMOVED_MARKERS_PREFIX} ({', '.join(unknown)}); "
             f"reason: {CITATION_NOT_IN_RETRIEVED_SET}."
         )
     if supplied and not cited:

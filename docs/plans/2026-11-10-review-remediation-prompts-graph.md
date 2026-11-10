@@ -100,3 +100,15 @@ OpenAPI regen), capture strict schema.
 - `ModelTaskRequest.prompt_template_version` (pre-existing, unused) was left in place. The new
   `prompt_id` / `prompt_version` are the populated fields.
 - `backend/src/app/agents/prompts/system.md` is unreferenced (pre-existing) and was not touched.
+
+## Griller conditions (review of eec8d05b)
+
+- **C1.** `interactive_agent_system` is now **v2**. One sentence changed: bracket labels such as
+  `[K1]` are cited inline, only for labels that were supplied, and detailed chunk ids and
+  identities stay in Stored evidence. Every other sentence is byte-identical to v1, and a test
+  checks v2 == v1 with that one edit. The knowledge facts prefix asks for the same bracket form.
+  Citation-audit limitations (the uncited-sources note and the removed-marker note) are filtered
+  out of what the voice model receives by `contracts.speech_limitations`. That covers the live
+  commentary and the realtime `function_call_output`. The durable result, the `turn.result`
+  client event and the ledger keep them. This supersedes "No voice code was changed" in
+  decision 6.

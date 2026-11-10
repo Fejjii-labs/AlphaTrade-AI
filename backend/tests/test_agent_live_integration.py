@@ -601,6 +601,32 @@ async def test_missing_transcript_and_finalization_do_not_invent_a_turn(live_lim
     await session.stop()
 
 
+@pytest.mark.asyncio
+async def test_citation_audit_notes_reach_the_client_result_but_are_never_spoken(live_limits):
+    from app.interactive_agent.conversation import UNCITED_SOURCES_NOTE
+
+    removed = "Removed source markers not supplied this turn (K9); reason: x."
+    limitations = ["Fees unavailable.", UNCITED_SOURCES_NOTE, removed]
+    session, ledger, sent, upstream = live_session(
+        live_limits,
+        lambda _ledger, _key, body: {
+            "reply": "Fees are unavailable.",
+            "conversation_id": body["conversation_id"],
+            "limitations": list(limitations),
+        },
+    )
+    await ready(session)
+    await fragment(session, "f0", "What did my notes say about fees?", 1000)
+    await delegate(session, sent, "d0", 1000)
+    spoken = "".join(e["content"] for e in upstream if e["type"] == "session.commentary.append")
+    assert "Limitations: Fees unavailable.\n" in spoken and "Fees are unavailable." in spoken
+    assert UNCITED_SOURCES_NOTE not in spoken and "Removed source markers" not in spoken
+    result = next(e for e in sent if e["type"] == "turn.result")["result"]
+    assert result["limitations"] == limitations
+    assert ledger.events[-1] == ("acknowledged", "d0", result)
+    await session.stop()
+
+
 def test_context_append_chunks_preserve_unicode_and_all_limitations():
     text = "Saved interpretation is uncertain. " + "界" * 900
     parts = context_parts(text)
