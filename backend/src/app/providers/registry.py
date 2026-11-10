@@ -342,6 +342,11 @@ class _VectorStoreAdapter:
     def status(self) -> ProviderStatus:
         return self._inner.status()
 
+    def probe_collection_compatibility(self) -> str | None:
+        """Live collection vector-size check; ``None`` for stores without a live collection."""
+        probe = getattr(self._inner, "probe_collection_compatibility", None)
+        return probe() if callable(probe) else None
+
 
 class _EmailProviderAdapter:
     def __init__(self, inner) -> None:

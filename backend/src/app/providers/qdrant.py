@@ -16,6 +16,11 @@ from app.providers.embedding_dimensions import MOCK_EMBEDDINGS_DIMENSIONS
 
 logger = structlog.get_logger(__name__)
 
+#: The single knowledge collection used by RAG ingestion, indexing and search.
+KNOWLEDGE_COLLECTION = "alphatrade_knowledge"
+#: Readiness re-probes the live collection at most this often (seconds).
+COLLECTION_PROBE_TTL_SECONDS = 60.0
+
 
 class VectorDimensionMismatchError(RuntimeError):
     """Raised when vectors do not match an existing Qdrant collection size."""
@@ -339,6 +344,9 @@ class QdrantVectorStore:
         self._client: Any = None
         self._using_qdrant = False
         self._dimension_mismatch: tuple[str, int, int] | None = None
+        # Set by the read-side probe (readiness/startup), independent of writes.
+        self._live_dimension_mismatch: tuple[str, int, int] | None = None
+        self._collection_probes: dict[str, tuple[float, str]] = {}
         self._payload_indexes_ready: set[str] = set()
         self._reconnect_failures = 0
         self._next_reconnect_at = 0.0
@@ -404,6 +412,47 @@ class QdrantVectorStore:
         except Exception:
             return None
         return _collection_vector_size_from_info(info)
+
+    def probe_collection_compatibility(self, collection: str = KNOWLEDGE_COLLECTION) -> str:
+        """Compare the live collection vector size with the configured embeddings size.
+
+        Returns ``compatible``, ``missing`` (created on first write, so fine),
+        ``mismatch``, ``unreachable`` or ``not_connected``. Results are cached for
+        ``COLLECTION_PROBE_TTL_SECONDS``; the client timeout bounds a cold probe.
+        A mismatch degrades ``status()`` until a later probe sees a compatible size.
+        """
+        now = time.monotonic()
+        cached = self._collection_probes.get(collection)
+        if cached is not None and now - cached[0] < COLLECTION_PROBE_TTL_SECONDS:
+            return cached[1]
+        outcome = self._probe_collection(collection)
+        self._collection_probes[collection] = (now, outcome)
+        return outcome
+
+    def _probe_collection(self, collection: str) -> str:
+        if not self._using_qdrant or self._client is None:
+            return "not_connected"
+        try:
+            info = self._client.get_collection(collection)
+        except Exception as exc:
+            if getattr(exc, "status_code", None) == 404 or "not found" in str(exc).lower():
+                return "missing"
+            logger.warning("qdrant_collection_probe_failed", error_type=type(exc).__name__)
+            return "unreachable"
+        actual = _collection_vector_size_from_info(info)
+        if actual is None:
+            return "unreachable"
+        if actual != self._vector_size:
+            self._live_dimension_mismatch = (collection, self._vector_size, actual)
+            logger.error(
+                "qdrant_collection_vector_size_mismatch",
+                collection=collection,
+                expected=self._vector_size,
+                actual=actual,
+            )
+            return "mismatch"
+        self._live_dimension_mismatch = None
+        return "compatible"
 
     def assert_compatible(self, collection: str, vector_size: int) -> None:
         """Raise if an existing collection has a different vector size."""
@@ -754,8 +803,9 @@ class QdrantVectorStore:
         # The hosted Qdrant URL is intentionally omitted from `detail`: this
         # status is served publicly via the unauthenticated /providers/status
         # endpoint. The endpoint is logged server-side at connect time instead.
-        if self._dimension_mismatch is not None:
-            collection, expected, actual = self._dimension_mismatch
+        mismatch = self._dimension_mismatch or self._live_dimension_mismatch
+        if mismatch is not None:
+            collection, expected, actual = mismatch
             return ProviderStatus(
                 name=self.name,
                 kind=ProviderKind.VECTOR,

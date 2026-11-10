@@ -32,6 +32,8 @@ def _connected_store(
     store._using_qdrant = True
     store._dimension_mismatch = None
     store._payload_indexes_ready = set()
+    store._live_dimension_mismatch = None
+    store._collection_probes = {}
 
     if existing_size is None:
 

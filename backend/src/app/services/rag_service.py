@@ -25,6 +25,7 @@ from app.providers.embeddings import (
 )
 from app.providers.factory import resolve_providers
 from app.providers.qdrant import (
+    KNOWLEDGE_COLLECTION,
     InMemoryVectorStore,
     QdrantVectorStore,
     VectorSearchFilters,
@@ -61,7 +62,7 @@ from app.services.usage_service import UsageService
 
 logger = structlog.get_logger(__name__)
 
-RAG_COLLECTION = "alphatrade_knowledge"
+RAG_COLLECTION = KNOWLEDGE_COLLECTION
 
 
 class RagService:
