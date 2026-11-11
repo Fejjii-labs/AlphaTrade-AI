@@ -185,6 +185,8 @@ class Settings(BaseSettings):
     knowledge_indexing_enabled: bool = False
     worker_mode: str = "process"  # process | in_process
     worker_name: str = "alphatrade-worker"
+    # Immutable user UUIDs; empty denies all shared-worker control requests.
+    platform_operator_user_ids: Annotated[list[UUID], NoDecode] = Field(default_factory=list)
     worker_scan_interval_seconds: int = Field(default=60, ge=5, le=86400)
     worker_lock_ttl_seconds: int = Field(default=120, ge=5, le=3600)
     worker_heartbeat_interval_seconds: int = Field(default=30, ge=5, le=3600)
@@ -799,6 +801,13 @@ class Settings(BaseSettings):
         if url.startswith("postgresql://") and "+psycopg" not in url:
             return "postgresql+psycopg://" + url[len("postgresql://") :]
         return url
+
+    @field_validator("platform_operator_user_ids", mode="before")
+    @classmethod
+    def _split_platform_operator_user_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -19,6 +19,23 @@ class WorkerHeartbeatRepository:
     def get_by_name(self, worker_name: str) -> WorkerHeartbeat | None:
         stmt = select(WorkerHeartbeat).where(WorkerHeartbeat.worker_name == worker_name)
         return self._session.scalars(stmt).first()
+
+    def set_paused(self, *, worker_name: str, paused: bool) -> WorkerHeartbeat:
+        """Change control state without claiming a worker heartbeat or cycle status."""
+        row = self.get_by_name(worker_name)
+        if row is None:
+            row = WorkerHeartbeat(
+                worker_name=worker_name,
+                status="unknown",
+                # The schema requires a timestamp; epoch is deliberately stale.
+                last_beat_at=datetime(1970, 1, 1, tzinfo=UTC),
+                paused=paused,
+            )
+            self._session.add(row)
+        else:
+            row.paused = paused
+        self._session.flush()
+        return row
 
     def upsert(
         self,

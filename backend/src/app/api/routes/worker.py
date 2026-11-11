@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.core.dependencies import SessionDep, SettingsDep
+from app.observability.context import get_or_create_trace_id
+from app.schemas.audit import AuditRecordCreate
+from app.schemas.common import ActorType, AuditEventType
 from app.schemas.worker import WorkerControlResponse, WorkerHealthResponse
 from app.security.rate_limit import tenant_rate_limit_dependency
-from app.security.rbac import OwnerDep, ReaderDep
+from app.security.rbac import PlatformOperatorDep, ReaderDep
+from app.security.tenant import TenantContext
+from app.services.audit_service import AuditService
 from app.workers.repository import MarketScanRunRepository, WorkerHeartbeatRepository
 
 router = APIRouter(prefix="/worker", tags=["worker"])
@@ -79,11 +84,12 @@ async def worker_health(
     dependencies=[_WORKER_WRITE_LIMIT],
 )
 async def worker_pause(
-    _tenant: OwnerDep,
+    request: Request,
+    tenant: PlatformOperatorDep,
     settings: SettingsDep,
     session: SessionDep,
 ) -> WorkerControlResponse:
-    return _set_paused(session, settings.worker_name, paused=True)
+    return _set_paused(session, settings.worker_name, request=request, tenant=tenant, paused=True)
 
 
 @router.post(
@@ -93,20 +99,37 @@ async def worker_pause(
     dependencies=[_WORKER_WRITE_LIMIT],
 )
 async def worker_resume(
-    _tenant: OwnerDep,
+    request: Request,
+    tenant: PlatformOperatorDep,
     settings: SettingsDep,
     session: SessionDep,
 ) -> WorkerControlResponse:
-    return _set_paused(session, settings.worker_name, paused=False)
+    return _set_paused(session, settings.worker_name, request=request, tenant=tenant, paused=False)
 
 
-def _set_paused(session: SessionDep, worker_name: str, *, paused: bool) -> WorkerControlResponse:
+def _set_paused(
+    session: SessionDep,
+    worker_name: str,
+    *,
+    request: Request,
+    tenant: TenantContext,
+    paused: bool,
+) -> WorkerControlResponse:
     repo = WorkerHeartbeatRepository(session)
-    row = repo.upsert(
-        worker_name=worker_name,
-        status="paused" if paused else "running",
-        last_beat_at=datetime.now(UTC),
-        paused=paused,
+    row = repo.set_paused(worker_name=worker_name, paused=paused)
+    # Fail closed if the audit cannot persist, committing it with the control change.
+    AuditService(session, strict_mode=True).record(
+        AuditRecordCreate(
+            request_id=getattr(request.state, "request_id", ""),
+            trace_id=get_or_create_trace_id(),
+            event_type=AuditEventType.WORKER_PAUSED if paused else AuditEventType.WORKER_RESUMED,
+            resource_type="worker",
+            resource_id=worker_name,
+            actor_type=ActorType.USER,
+            user_id=tenant.user_id,
+            organization_id=tenant.organization_id,
+            metadata={"worker_name": worker_name, "paused": paused},
+        )
     )
     session.commit()
     return WorkerControlResponse(worker_name=row.worker_name, paused=row.paused, status=row.status)

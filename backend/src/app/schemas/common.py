@@ -330,6 +330,8 @@ class AuditEventType(StrEnum):
     KILL_SWITCH_TRIGGERED = "kill_switch_triggered"
     KILL_SWITCH_ACTIVATED = "kill_switch_activated"
     KILL_SWITCH_DEACTIVATED = "kill_switch_deactivated"
+    WORKER_PAUSED = "worker_paused"
+    WORKER_RESUMED = "worker_resumed"
     SIGNAL_CREATED = "signal_created"
     PROVIDER_FAILURE = "provider_failure"
     RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
