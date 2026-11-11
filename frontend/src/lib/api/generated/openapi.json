@@ -3920,6 +3920,8 @@
           "kill_switch_triggered",
           "kill_switch_activated",
           "kill_switch_deactivated",
+          "worker_paused",
+          "worker_resumed",
           "signal_created",
           "provider_failure",
           "rate_limit_exceeded",
