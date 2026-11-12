@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.agents import graph as agent_graph
+from app.agents import nodes
 from app.agents.runtime import AgentRuntime
 from app.agents.state_utils import state_to_dict
 from app.core.config import Settings
@@ -136,3 +137,21 @@ def test_turn_node_scope_runtime_takes_precedence_per_node() -> None:
     assert result["safety_verdict"] == "block"
     assert scoped[:3] == ["receive_request", "auth_context", "quota_check"]
     engine.dispose()
+
+
+def test_node_replaced_after_compile_is_the_one_that_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nodes resolve from app.agents.nodes per call; compile-once must not pin them."""
+    agent_graph.get_agent_graph()  # Compiled before the replacement below.
+    original = nodes.context_retrieval
+    seen: list[str] = []
+
+    def replaced(state: dict, runtime: AgentRuntime) -> dict:
+        seen.append(state["request_id"])
+        return original(state, runtime)
+
+    monkeypatch.setattr(nodes, "context_retrieval", replaced)
+    context = _context()
+    AgentService(runtime=_runtime()).run("hello there", context)
+    assert seen == [context.request_id]
