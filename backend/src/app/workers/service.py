@@ -66,10 +66,8 @@ class WorkerService:
         """Manually pause or resume scanning (persisted on the heartbeat)."""
         with self._session_factory() as session:
             repo = WorkerHeartbeatRepository(session)
-            repo.upsert(
+            repo.set_paused(
                 worker_name=self._worker_name,
-                status="paused" if paused else "running",
-                last_beat_at=self._clock(),
                 paused=paused,
             )
             session.commit()

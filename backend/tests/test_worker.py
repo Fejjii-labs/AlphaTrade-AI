@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from pydantic import ValidationError
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import Settings
 from app.db.base import Base
+from app.db.models import AuditLog, Membership
+from app.repositories.audit import AuditRepository
+from app.schemas.common import ActorType, AuditEventType, MembershipRole
+from app.services.audit_service import AuditPersistenceError
 from app.workers.lock import InMemoryWorkerLock
 from app.workers.repository import MarketScanRunRepository, WorkerHeartbeatRepository
 from app.workers.runner import WorkerLoopDriver
-from app.workers.service import WorkerService
+from app.workers.service import Scanner, WorkerService
+from tests.test_workflows import ORG_ID, USER_ID
 
 WORKER = "test-worker"
 
@@ -31,7 +40,7 @@ def factory() -> Iterator[sessionmaker[Session]]:
     engine.dispose()
 
 
-def _service(factory: sessionmaker[Session], scanner=None) -> WorkerService:
+def _service(factory: sessionmaker[Session], scanner: Scanner | None = None) -> WorkerService:
     return WorkerService(
         factory,
         InMemoryWorkerLock("k", ttl_seconds=60),
@@ -55,6 +64,7 @@ def test_in_memory_lock_is_single_runner() -> None:
 def test_lock_release_requires_matching_token() -> None:
     lock = InMemoryWorkerLock("k", ttl_seconds=60)
     token = lock.try_acquire()
+    assert token is not None
     lock.release("wrong-token")
     assert lock.try_acquire() is None  # still held by original token
     lock.release(token)
@@ -136,7 +146,14 @@ def test_resume_clears_pause(factory: sessionmaker[Session]) -> None:
     assert service.is_paused() is True
     service.set_paused(False)
     assert service.is_paused() is False
+    with factory() as session:
+        row = WorkerHeartbeatRepository(session).get_by_name(WORKER)
+        assert row is not None
+        assert row.last_beat_at.replace(tzinfo=UTC) == datetime(1970, 1, 1, tzinfo=UTC)
     assert service.run_cycle().status == "success"
+    with factory() as session:
+        row = WorkerHeartbeatRepository(session).get_by_name(WORKER)
+        assert row is not None and row.last_beat_at.year > 1970
 
 
 def test_lock_held_elsewhere_skips_cycle(factory: sessionmaker[Session]) -> None:
@@ -175,7 +192,12 @@ def test_loop_driver_stops_on_should_continue(factory: sessionmaker[Session]) ->
 # --- HTTP endpoints --------------------------------------------------------
 
 
-def test_worker_health_and_control_endpoints(client_with_workflow_db: TestClient) -> None:
+def test_worker_health_and_control_endpoints(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    factory, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
     # No heartbeat yet -> unknown but 200.
     initial = client_with_workflow_db.get("/worker/health")
     assert initial.status_code == 200
@@ -188,7 +210,187 @@ def test_worker_health_and_control_endpoints(client_with_workflow_db: TestClient
 
     after = client_with_workflow_db.get("/worker/health")
     assert after.json()["paused"] is True
+    assert after.json()["running"] is False
+    assert after.json()["last_beat_at"].startswith("1970-01-01")
 
     resumed = client_with_workflow_db.post("/worker/resume")
     assert resumed.status_code == 200
     assert resumed.json()["paused"] is False
+
+    health = client_with_workflow_db.get("/worker/health").json()
+    assert health["running"] is False
+    assert health["status"] == "unknown"
+    assert health["last_beat_at"] == after.json()["last_beat_at"]
+    with factory() as session:
+        row = WorkerHeartbeatRepository(session).get_by_name(settings.worker_name)
+        assert row is not None and row.paused is False
+        events = session.scalars(
+            select(AuditLog).where(AuditLog.resource_type == "worker").order_by(AuditLog.event_at)
+        ).all()
+        assert [event.action for event in events] == [
+            AuditEventType.WORKER_PAUSED,
+            AuditEventType.WORKER_RESUMED,
+        ]
+        for event, expected_paused in zip(events, (True, False), strict=True):
+            assert event.user_id == USER_ID
+            assert event.organization_id == ORG_ID
+            assert event.actor_type == ActorType.USER
+            assert event.actor == str(USER_ID)
+            assert event.resource_id == settings.worker_name
+            assert event.redacted_metadata == {
+                "worker_name": settings.worker_name,
+                "paused": expected_paused,
+            }
+
+
+def test_resume_before_first_worker_beat_stays_unhealthy(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+) -> None:
+    _, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
+    assert client_with_workflow_db.post("/worker/resume").status_code == 200
+    health = client_with_workflow_db.get("/worker/health").json()
+    assert health["running"] is False
+    assert health["paused"] is False
+    assert health["status"] == "unknown"
+    assert health["last_beat_at"].startswith("1970-01-01")
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_worker_control_requires_authentication(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+    action: str,
+) -> None:
+    _, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
+    client_with_workflow_db.headers.pop("Authorization")
+    assert client_with_workflow_db.post(f"/worker/{action}").status_code == 401
+
+
+@pytest.mark.parametrize("allowlist", [[], [UUID(int=999)]], ids=["empty", "other-user"])
+@pytest.mark.parametrize("action,initial_paused", [("pause", False), ("resume", True)])
+@pytest.mark.parametrize("seed_heartbeat", [False, True])
+def test_owner_without_operator_authorization_cannot_control_worker(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+    allowlist: list[UUID],
+    action: str,
+    initial_paused: bool,
+    seed_heartbeat: bool,
+) -> None:
+    factory, settings = workflow_db
+    settings.platform_operator_user_ids = allowlist
+    beat = datetime(2020, 1, 1, tzinfo=UTC)
+    if seed_heartbeat:
+        with factory() as session:
+            WorkerHeartbeatRepository(session).upsert(
+                worker_name=settings.worker_name,
+                status="error",
+                last_beat_at=beat,
+                paused=initial_paused,
+            )
+            session.commit()
+    response = client_with_workflow_db.post(f"/worker/{action}")
+    assert response.status_code == 403
+    assert "Platform operator" in response.json()["error"]["message"]
+    assert client_with_workflow_db.get("/worker/health").status_code == 200
+    with factory() as session:
+        row = WorkerHeartbeatRepository(session).get_by_name(settings.worker_name)
+        if seed_heartbeat:
+            assert row is not None
+            assert row.paused is initial_paused
+            assert row.status == "error"
+            assert row.last_beat_at.replace(tzinfo=UTC) == beat
+        else:
+            assert row is None
+        assert (
+            session.scalars(select(AuditLog).where(AuditLog.resource_type == "worker")).all() == []
+        )
+
+
+@pytest.mark.parametrize("status", ["running", "error"])
+@pytest.mark.parametrize("stale", [False, True])
+def test_operator_controls_preserve_heartbeat_and_cycle_status(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+    status: str,
+    stale: bool,
+) -> None:
+    factory, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
+    beat = datetime.now(UTC) - timedelta(days=1 if stale else 0)
+    with factory() as session:
+        WorkerHeartbeatRepository(session).upsert(
+            worker_name=settings.worker_name, status=status, last_beat_at=beat, cycle_count=7
+        )
+        session.commit()
+    for action, paused in (("pause", True), ("resume", False)):
+        response = client_with_workflow_db.post(f"/worker/{action}")
+        assert response.status_code == 200
+        assert response.json()["paused"] is paused
+        with factory() as session:
+            row = WorkerHeartbeatRepository(session).get_by_name(settings.worker_name)
+            assert row is not None
+            assert row.last_beat_at.replace(tzinfo=UTC) == beat
+            assert row.status == status
+            assert row.cycle_count == 7
+        health = client_with_workflow_db.get("/worker/health").json()
+        assert health["running"] is (not paused and not stale and status != "error")
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_allowlisted_operator_still_requires_owner_role(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+    action: str,
+) -> None:
+    factory, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
+    with factory() as session:
+        membership = session.scalars(select(Membership).where(Membership.user_id == USER_ID)).one()
+        membership.role = MembershipRole.TRADER
+        session.commit()
+    assert client_with_workflow_db.post(f"/worker/{action}").status_code == 403
+
+
+@pytest.mark.parametrize("action,initial_paused", [("pause", False), ("resume", True)])
+def test_failed_audit_rolls_back_worker_control(
+    client_with_workflow_db: TestClient,
+    workflow_db: tuple[sessionmaker[Session], Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    initial_paused: bool,
+) -> None:
+    factory, settings = workflow_db
+    settings.platform_operator_user_ids = [USER_ID]
+    with factory() as session:
+        WorkerHeartbeatRepository(session).set_paused(
+            worker_name=settings.worker_name, paused=initial_paused
+        )
+        session.commit()
+
+    def fail_audit(_self: AuditRepository, _entity: AuditLog) -> None:
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(AuditRepository, "add", fail_audit)
+    with pytest.raises(AuditPersistenceError):
+        client_with_workflow_db.post(f"/worker/{action}")
+    with factory() as session:
+        row = WorkerHeartbeatRepository(session).get_by_name(settings.worker_name)
+        assert row is not None and row.paused is initial_paused
+
+
+def test_platform_operator_ids_parse_csv_and_default_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PLATFORM_OPERATOR_USER_IDS", raising=False)
+    assert Settings(_env_file=None).platform_operator_user_ids == []
+    monkeypatch.setenv("PLATFORM_OPERATOR_USER_IDS", f" {USER_ID}, , {UUID(int=999)} ")
+    assert Settings(_env_file=None).platform_operator_user_ids == [USER_ID, UUID(int=999)]
+    monkeypatch.setenv("PLATFORM_OPERATOR_USER_IDS", " , ")
+    assert Settings(_env_file=None).platform_operator_user_ids == []
+    monkeypatch.setenv("PLATFORM_OPERATOR_USER_IDS", "invalid-user-id")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
