@@ -216,7 +216,11 @@ def test_repeated_refusals_after_contact_block_until_swept_and_charged(live_data
     first.provider_contact_may_start()
     first.close(CONNECT_REFUSED)
 
-    with pytest.raises(VoiceUnavailableError, match="voice_monthly_token_quota_exhausted"):
+    # Provider contact leaves an unaccounted hold until the expiry sweep charges it.
+    held = row(database, first)
+    assert (held.status, held.accounted_cost) == ("uncertain", None)
+    assert charges(database, first) is None
+    with pytest.raises(VoiceUnavailableError, match=r"^voice_budget_held_by_pending_sessions$"):
         ledger_for(database, limits=roomy(database)).reserve()
 
     assert sweep(database, datetime.now(UTC)) == 0  # inside the close margin

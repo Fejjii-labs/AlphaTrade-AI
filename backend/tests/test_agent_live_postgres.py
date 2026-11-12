@@ -121,11 +121,8 @@ def test_competing_live_reservations_respect_committed_budget_and_quota(live_dat
         futures = [workers.submit(reserve) for _ in range(2)]
         results = [future.result(timeout=10) for future in futures]
     assert len(pids) == len(set(pids)) == 2
-    reason = {
-        "budget": "voice_approved_budget_exhausted",
-        "monthly_cost": "voice_monthly_cost_quota_exhausted",
-        "monthly_tokens": "voice_monthly_token_quota_exhausted",
-    }.get(boundary)
+    # The winner committed an open hold, without spending any budget or quota.
+    reason = None if boundary == "both_fit" else "voice_budget_held_by_pending_sessions"
     accepted = 2 if boundary == "both_fit" else 1
     assert sorted(result for _, result in results) == (
         ["reserved", "reserved"] if reason is None else sorted(["reserved", reason])
@@ -134,6 +131,7 @@ def test_competing_live_reservations_respect_committed_budget_and_quota(live_dat
         rows = list(fresh.scalars(select(VoiceSessionReservation)).all())
         assert len(rows) == accepted
         usage = QuotaService(fresh).get_status(database.organization_id).usage
+        assert usage.monthly_cost_used == 0 and usage.monthly_tokens_used == 0
         assert usage.monthly_cost_reserved == sum(row.reserved_cost for row in rows)
         assert usage.monthly_tokens_reserved == sum(row.reserved_tokens for row in rows)
     if boundary == "both_fit":
