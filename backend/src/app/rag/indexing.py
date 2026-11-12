@@ -21,11 +21,16 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings
 from app.core.provider_policy import provider_fail_closed, requires_authoritative_qdrant
 from app.db.models import Chunk, Document, KnowledgeIndexingJob
-from app.providers.embeddings import EmbeddingsProvider
-from app.providers.qdrant import QdrantVectorStore, VectorPoint, VectorStore
+from app.providers.embeddings import EmbeddingsProvider, vector_space_model
+from app.providers.qdrant import (
+    KNOWLEDGE_COLLECTION,
+    QdrantVectorStore,
+    VectorPoint,
+    VectorStore,
+)
 from app.schemas.rag import ChunkMetadata, DocumentIngestionMetadata, IndexingObservation
 
-COLLECTION = "alphatrade_knowledge"
+COLLECTION = KNOWLEDGE_COLLECTION
 MAX_ATTEMPTS = 5
 MAX_CHUNKS = 2048
 BATCH_SIZE = 32
@@ -412,6 +417,7 @@ class IndexingRunner:
                     if provider_fail_closed(self.settings) and result.fallback_used:
                         raise IndexingError("embeddings_fallback_refused")
                     fallback |= result.fallback_used
+                    embedding_model = vector_space_model(result)
                     points = []
                     for row, vector in zip(batch, result.vectors, strict=True):
                         metadata = ChunkMetadata.model_validate(row.metadata)
@@ -431,6 +437,7 @@ class IndexingRunner:
                                     "generation": str(claim.id),
                                     "source_hash": claim.source_hash,
                                     "document_version": claim.version,
+                                    "embedding_model": embedding_model,
                                     **metadata.model_dump(mode="json"),
                                 },
                             )

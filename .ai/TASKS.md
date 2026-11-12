@@ -529,7 +529,7 @@ handoff. Preserve running full backend CI, history, risk and execution authority
 - Priority: P0 · Status: DONE · Dependencies: none · Risk: Medium (ops + provider config)
 - Validation: Staging OpenAI + Qdrant active (paper-only). Commit `5f2d7cf` deployed;
   `/knowledge/search` returns semantic chunks; `provider-validation --remote --ingest` OK;
-  verify-safety / portfolio / exchange-demo smokes OK. Providers: `gpt-5.6-sol`,
+  verify-safety / portfolio / exchange-demo smokes OK. Providers (as configured then): `gpt-5.6-sol`,
   `text-embedding-3-large` 1536-d, Qdrant healthy; `execution_mode=paper`,
   `real_trading=false`, `EXCHANGE_MODE=paper_exchange_demo`.
 - Recommended model: Opus 4.8
@@ -591,7 +591,8 @@ handoff. Preserve running full backend CI, history, risk and execution authority
 ### AT-013B — GPT-5.6 Sol Responses API + staging chat reliability
 - Priority: P0 · Status: DONE · Dependencies: AT-013 · Risk: Medium (provider)
 - Safety classification: Provider / chat
-- Goal: Route `gpt-5.6-sol` through OpenAI Responses API; generation health probe must
+- Goal: Route `gpt-5.6-sol` (the staging model at that time; current default `LLM_MODEL` is
+  `gpt-6-luna`, see `backend/src/app/core/config.py`) through OpenAI Responses API; generation health probe must
   reflect real generation; `/chat/message` must not 503 on staging.
 - Branch: `feat/at-013b-gpt56-sol-responses-api` (merged via PR #5)
 - Validation: PR #5 CI run 29922248754 success; merged `19d53a4`; post-merge main CI
@@ -600,7 +601,7 @@ handoff. Preserve running full backend CI, history, risk and execution authority
   provider-validation `--remote` + `--remote --ingest` OK; verify-safety / portfolio /
   validate-exchange-demo-staging OK; chat HTTP 200 (5/5 flake retest); paper posture
   preserved (`execution_mode=paper`, `real_trading_enabled=false`,
-  `EXCHANGE_MODE=paper_exchange_demo`, `LLM_MODEL=gpt-5.6-sol`).
+  `EXCHANGE_MODE=paper_exchange_demo`, `LLM_MODEL=gpt-5.6-sol` at that time).
 - Recommended model: Composer 2.5
 - Completion evidence: merge `19d53a4`, PR https://github.com/Fejjii/AlphaTrade-AI/pull/5;
   follow-up main commits `5c7c9a7`, `d71bd20`, `4956aa4` (probe + usage-tracking token
@@ -624,7 +625,7 @@ handoff. Preserve running full backend CI, history, risk and execution authority
 - Recommended model: Composer 2.5 (impl) · Grok 4.5 (architecture/safety review)
 - Completion evidence: PR #6 CI run 29944975929 success; merged `1f3dde0`; post-merge main
   CI run 29949893898 success; staging API `git_sha=1f3dde0`; `/health` + `/health/ready`
-  pass; `/providers/status` openai-llm (gpt-5.6-sol), openai-embeddings, qdrant healthy
+  pass; `/providers/status` openai-llm (gpt-5.6-sol at that time), openai-embeddings, qdrant healthy
   (`is_mock=false`, no fallback); verify-safety / provider-validation `--remote` +
   `--remote --ingest` / portfolio-smoke / validate-exchange-demo-staging (17/17) OK;
   isolated staging narrative quota test (limit_agent_narrative=0 → quota fallback, restore →
@@ -632,7 +633,7 @@ handoff. Preserve running full backend CI, history, risk and execution authority
   local pytest `test_at015_provider_mode_quotas.py` + `test_deployment_safety.py` +
   `test_at013_provider_fail_closed.py` pass; paper posture preserved
   (`EXECUTION_MODE=paper`, `ENABLE_REAL_TRADING=false`, `EXCHANGE_MODE=paper_exchange_demo`,
-  `LLM_MODEL=gpt-5.6-sol`).
+  `LLM_MODEL=gpt-5.6-sol` at that time).
 
 ### AT-025 — Wire narrative quota for sessionless AgentRuntime
 - Priority: P2 · Status: TODO · Dependencies: AT-015 · Risk: Low

@@ -581,6 +581,18 @@ class Settings(BaseSettings):
     embeddings_model: str = "text-embedding-3-small"
     # None = auto (384 mock; OpenAI model native size when key configured).
     embeddings_dimensions: int | None = Field(default=None, ge=1)
+    # Vectors carry the `embedding_model` that produced them. Search refuses hits
+    # from a different model (no mixed-space results). Legacy points without the
+    # field are allowed with a warning unless strict; reindex to backfill it.
+    rag_embedding_model_strict: bool = False
+    # Minimum relevance for a retrieved chunk, on the normalized cosine scale
+    # [0, 1] (0.5 = orthogonal, raw cosine c maps to (c + 1) / 2). Hits below it
+    # are dropped after vector search in RagService.search (every retrieval path).
+    # 0.55 = raw cosine 0.10: OpenAI text-embedding-3 relevant passages usually
+    # score raw ~0.25-0.6 (normalized ~0.62-0.8), unrelated text ~0.0-0.15
+    # (~0.50-0.58). A floor above ~0.6 risks emptying staging retrieval; raise it
+    # per environment only after checking `rag_relevance_filter` score logs.
+    rag_min_relevance_score: float = Field(default=0.55, ge=0.0, le=1.0)
 
     # --- Market data (read-only; Binance public API, no key required) ---
     market_data_enabled: bool = True

@@ -18,12 +18,18 @@ from app.core.provider_policy import provider_fail_closed, requires_authoritativ
 from app.db.models import Chunk as ChunkModel
 from app.db.models import Document as DocumentModel
 from app.db.session import run_in_savepoint_when_active
-from app.providers.embeddings import EmbeddingsProvider, MockEmbeddingsProvider
+from app.providers.embeddings import (
+    EmbeddingsProvider,
+    MockEmbeddingsProvider,
+    vector_space_model,
+)
 from app.providers.factory import resolve_providers
 from app.providers.qdrant import (
+    KNOWLEDGE_COLLECTION,
     InMemoryVectorStore,
     QdrantVectorStore,
     VectorSearchFilters,
+    VectorSearchHit,
     VectorStore,
 )
 from app.rag.text_processing import (
@@ -56,7 +62,7 @@ from app.services.usage_service import UsageService
 
 logger = structlog.get_logger(__name__)
 
-RAG_COLLECTION = "alphatrade_knowledge"
+RAG_COLLECTION = KNOWLEDGE_COLLECTION
 
 
 class RagService:
@@ -447,6 +453,21 @@ class RagService:
                     details={"reason": "vector_search_failed"},
                 ) from exc
             raise
+        hits, mismatched_models = self._screen_embedding_models(
+            hits, expected=vector_space_model(embed_result)
+        )
+        min_score = self._relevance_floor(query)
+        relevant = [hit for hit in hits if hit.score >= min_score]
+        below_min_score = len(hits) - len(relevant)
+        if below_min_score:
+            logger.info(
+                "rag_relevance_filter",
+                dropped=below_min_score,
+                kept=len(relevant),
+                min_score=min_score,
+                best_dropped_score=round(max(h.score for h in hits if h.score < min_score), 4),
+            )
+        hits = relevant
 
         def hit_chunk_id(hit: Any) -> UUID | None:
             try:
@@ -533,6 +554,7 @@ class RagService:
             or vector_status.using_fallback
             or vector_status.health.value != "healthy"
             or unverified_hits
+            or mismatched_models
         )
         return RagSearchResponse(
             query=query.query,
@@ -541,14 +563,74 @@ class RagService:
             degraded=degraded,
             fallback_used=embed_result.fallback_used or vector_status.using_fallback,
             vector_backend=self._vector_store.name,
+            min_score=min_score,
+            below_min_score=below_min_score,
+            no_relevant_source=not retrieved,
             detail=(
-                "Some vector hits could not be verified against current scoped SQL content."
+                f"embedding_model_mismatch: {mismatched_models} hit(s) from another embedding "
+                "model were withheld; reindex the knowledge base."
+                if mismatched_models
+                else "Some vector hits could not be verified against current scoped SQL content."
                 if unverified_hits
                 else vector_status.detail
                 if degraded
                 else None
             ),
         )
+
+    def _relevance_floor(self, query: RagQuery) -> float:
+        """Configured floor; a per-request ``min_score`` may only raise it."""
+        floor = self._settings.rag_min_relevance_score
+        return max(floor, query.min_score) if query.min_score is not None else floor
+
+    def _screen_embedding_models(
+        self, hits: list[VectorSearchHit], *, expected: str
+    ) -> tuple[list[VectorSearchHit], int]:
+        """Withhold hits whose vectors came from a different embedding model.
+
+        Scores across embedding spaces are meaningless, so a hit labelled with
+        another model is never returned. When every labelled hit mismatches (the
+        configured model changed without a reindex) search refuses with a typed
+        ``embedding_model_mismatch`` instead of answering "no relevant source".
+        Legacy points without the label are kept (with a warning) unless
+        ``rag_embedding_model_strict`` treats them as mismatches.
+        """
+        strict = self._settings.rag_embedding_model_strict
+        kept: list[VectorSearchHit] = []
+        mismatched = legacy = 0
+        for hit in hits:
+            model = hit.payload.get("embedding_model")
+            if model is None and not strict:
+                legacy += 1
+                kept.append(hit)
+            elif model == expected:
+                kept.append(hit)
+            else:
+                mismatched += 1
+        if legacy:
+            logger.warning(
+                "rag_hits_without_embedding_model", count=legacy, expected_model=expected
+            )
+        if not mismatched:
+            return kept, 0
+        logger.error(
+            "rag_embedding_model_mismatch",
+            mismatched=mismatched,
+            kept=len(kept),
+            expected_model=expected,
+            strict=strict,
+        )
+        if not kept:
+            raise ServiceUnavailableError(
+                "Knowledge search refused: indexed vectors come from a different embedding "
+                "model. Reindex the knowledge base.",
+                details={
+                    "reason": "embedding_model_mismatch",
+                    "expected_model": expected,
+                    "mismatched_hits": mismatched,
+                },
+            )
+        return kept, mismatched
 
     def _assert_ingest_embeddings_allowed(self, fallback_used: bool) -> None:
         if not provider_fail_closed(self._settings):

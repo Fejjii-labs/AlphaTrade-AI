@@ -19,6 +19,7 @@ from app.agents.runtime import AgentRuntime
 from app.agents.state_utils import dump_partial, parse_state, patch_state
 from app.core.operation_policy import set_operation_decision
 from app.guardrails.apply import build_guardrail_updates, merge_safety_verdict
+from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET
 from app.guardrails.testing import FORCE_INVALID_OUTPUT
 from app.guardrails.types import GuardrailInput
 from app.schemas.agent import AgentState, Intent, OperationClass
@@ -1464,7 +1465,6 @@ def trading_analytics_retrieval(state: dict, runtime: AgentRuntime) -> dict:
 def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     """RAG via tool boundary — rules, lessons, and policy context only."""
     agent = parse_state(state)
-    from app.schemas.common import DocumentSourceType
 
     source_types = [
         DocumentSourceType.TRADING_PLAYBOOK,
@@ -1504,6 +1504,7 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
     )
     citations: list[dict] = list(agent.citations)
     retrieved: list[dict] = list(agent.retrieved_context)
+    rag_outcome = "retrieval_failed"
     if output.success and output.result:
         raw_citations = output.result.get("citations", [])
         for raw in raw_citations:
@@ -1511,6 +1512,8 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
             dumped = dump_partial(citation)
             citations.append(dumped)
             retrieved.append(dumped)
+        # Citations come only from hits that passed the relevance floor.
+        rag_outcome = "retrieved" if raw_citations else "no_relevant_source"
     return patch_state(
         state,
         {
@@ -1518,6 +1521,7 @@ def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
             "tool_outputs": [*agent.tool_outputs, dump_partial(output)],
             "retrieved_context": retrieved,
             "citations": citations,
+            "rag_outcome": rag_outcome,
             "audit_events": [*agent.audit_events, tool_audit],
         },
     )
@@ -1546,7 +1550,30 @@ def data_gap_note(agent: AgentState) -> str:
     )
 
 
+NO_RELEVANT_SOURCE_NOTE = (
+    "Knowledge sources: no relevant source was found in your knowledge base for this "
+    "question, so no source is cited."
+)
+
+
+RETRIEVAL_UNAVAILABLE_NOTE = (
+    "Knowledge sources: knowledge retrieval was unavailable for this turn, so no source is cited."
+)
+
+
+def knowledge_source_note(agent: AgentState) -> str:
+    """Explicit user-visible wording when retrieval found nothing relevant."""
+    if agent.rag_outcome == "no_relevant_source":
+        return "\n" + NO_RELEVANT_SOURCE_NOTE
+    if agent.rag_outcome == "retrieval_failed":
+        return "\n" + RETRIEVAL_UNAVAILABLE_NOTE
+    return ""
+
+
 def _with_gap_note(answer: str, agent: AgentState) -> str:
+    source_note = knowledge_source_note(agent)
+    if source_note and source_note.strip() not in answer:
+        answer += source_note
     note = data_gap_note(agent)
     if not note or note.strip() in answer:
         return answer
@@ -1942,23 +1969,12 @@ def tool_execution_if_allowed(state: dict, runtime: AgentRuntime) -> dict:
 
 
 def memory_update(state: dict, runtime: AgentRuntime) -> dict:
-    """NON_DOMAIN_MEMORY only: in-process citation note, no domain persistence."""
-    agent = parse_state(state)
-    summary = f"intent={agent.intent.value}; class={agent.message_class.value}"
-    if agent.intent_decision is not None:
-        summary = (
-            f"intent={agent.intent_decision.intent.value}; "
-            f"op={agent.intent_decision.operation_class.value}"
-        )
-    citation = dump_partial(
-        Citation(
-            chunk_id=uuid.uuid4(),
-            document_id=uuid.uuid4(),
-            source_type=DocumentSourceType.TRADING_PLAYBOOK,
-            snippet=f"Session memory: {summary}",
-        )
-    )
-    return patch_state(state, {"citations": [*agent.citations, citation]})
+    """NON_DOMAIN_MEMORY only: no domain persistence.
+
+    This node used to append a "Session memory" pseudo-citation with random ids,
+    which made every turn look cited. Citations now come only from retrieval.
+    """
+    return patch_state(state, {})
 
 
 def usage_tracking(state: dict, runtime: AgentRuntime) -> dict:
@@ -2028,11 +2044,14 @@ def final_response(state: dict, runtime: AgentRuntime) -> dict:
             state,
             {
                 "analysis_detail": dump_partial(detail),
+                # The response's citations are the retrieved chunks by construction.
+                "cited_chunk_ids": [c.chunk_id for c in agent.retrieved_context],
             },
         )
 
     detail = build_trading_analysis(agent, runtime)
     answer = format_reply_from_analysis(detail)
+    cited = [c.chunk_id for c in agent.retrieved_context]
     if agent.citations:
         answer += f"\nCitations: {len(agent.citations)} reference(s) attached."
     answer = _with_gap_note(answer, agent)
@@ -2043,6 +2062,7 @@ def final_response(state: dict, runtime: AgentRuntime) -> dict:
         {
             "analysis_detail": dump_partial(detail),
             "final_answer": answer,
+            "cited_chunk_ids": cited,
         },
     )
 
@@ -2091,6 +2111,7 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
                     "narrative_detail": dump_partial(fallback),
                     "narrative_metadata": dump_partial(meta),
                     "final_answer": answer,
+                    "cited_chunk_ids": fallback.cited_chunk_ids,
                 },
             )
 
@@ -2123,14 +2144,25 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
         "narrative_detail": dump_partial(result.narrative),
         "narrative_metadata": dump_partial(result.metadata),
         "final_answer": answer,
+        "cited_chunk_ids": result.narrative.cited_chunk_ids,
+        "citation_violations": list(result.citation_violations),
     }
+    if result.citation_violations and runtime.observability is not None:
+        updates["audit_events"] = [
+            *agent.audit_events,
+            runtime.observability.emit_narrative_fallback(
+                agent,
+                provider=result.metadata.provider,
+                rules=[CITATION_NOT_IN_RETRIEVED_SET],
+            ),
+        ]
     if result.used_llm and not result.metadata.validation_passed:
         fallback_audit = runtime.observability.emit_narrative_fallback(
             agent,
             provider=result.metadata.provider,
             rules=["narrative_validation_failed"],
         )
-        updates["audit_events"] = [*agent.audit_events, fallback_audit]
+        updates["audit_events"] = [*updates.get("audit_events", agent.audit_events), fallback_audit]
 
     if result.usage is not None and agent.usage_metadata is None:
         updates["usage_metadata"] = dump_partial(result.usage)

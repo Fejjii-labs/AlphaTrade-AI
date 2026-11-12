@@ -42136,6 +42136,20 @@
             "title": "Include Shared",
             "type": "boolean"
           },
+          "min_score": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional per-request relevance floor (normalized cosine, 0-1). It can only raise the configured RAG_MIN_RELEVANCE_SCORE, never lower it.",
+            "title": "Min Score"
+          },
           "organization_id": {
             "anyOf": [
               {
@@ -42235,6 +42249,13 @@
         "additionalProperties": false,
         "description": "Retrieval results with citations.",
         "properties": {
+          "below_min_score": {
+            "default": 0,
+            "description": "Vector hits dropped for scoring below min_score.",
+            "minimum": 0.0,
+            "title": "Below Min Score",
+            "type": "integer"
+          },
           "chunks": {
             "items": {
               "$ref": "#/components/schemas/RetrievedChunk"
@@ -42268,6 +42289,24 @@
           "fallback_used": {
             "default": false,
             "title": "Fallback Used",
+            "type": "boolean"
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Relevance floor applied to this search (normalized cosine).",
+            "title": "Min Score"
+          },
+          "no_relevant_source": {
+            "default": false,
+            "description": "True when no chunk survived relevance and scope checks.",
+            "title": "No Relevant Source",
             "type": "boolean"
           },
           "query": {
@@ -52901,6 +52940,14 @@
               "type": "string"
             },
             "title": "Citations Used",
+            "type": "array"
+          },
+          "cited_chunk_ids": {
+            "description": "chunk_id values, copied from the supplied citations, that support this narrative. Ids outside the retrieved set are rejected.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Cited Chunk Ids",
             "type": "array"
           },
           "evidence_explanation": {

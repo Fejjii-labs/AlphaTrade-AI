@@ -109,6 +109,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.vector_store = get_process_vector_store()
     resolved = resolve_providers(settings)
     app.state.resolved_providers = resolved
+    from app.api.routes.health import probe_vector_collections
+
+    # One live vector-size check at boot so /providers/status shows a mismatch at
+    # once. A mismatch logs and degrades readiness; it does not refuse boot.
+    logger.info(
+        "vector_collection_startup_check",
+        outcomes=probe_vector_collections(app.state.provider_registry),
+    )
     from app.security.rate_limit import get_rate_limiter
 
     limiter = get_rate_limiter(settings)

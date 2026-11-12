@@ -10,6 +10,7 @@ from typing import Any
 
 import structlog
 
+from app.guardrails.citations import CITATION_NOT_IN_RETRIEVED_SET, verify_cited_chunk_ids
 from app.guardrails.context_sanitizer import sanitize_retrieved_snippet
 from app.guardrails.narrative_validation import NarrativeValidationGuardrail
 from app.guardrails.redaction import redact_mapping
@@ -17,6 +18,7 @@ from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMMess
 from app.schemas.agent import AgentState, Intent
 from app.schemas.analysis import TradingAnalysisDetail
 from app.schemas.narrative import NarrativeMetadata, TradingNarrativeDetail
+from app.schemas.strict_json_schema import strict_response_format
 from app.schemas.usage import UsageEvent
 
 logger = structlog.get_logger(__name__)
@@ -31,6 +33,7 @@ class NarrativeEnhancementResult:
     metadata: NarrativeMetadata
     usage: UsageEvent | None
     used_llm: bool
+    citation_violations: tuple[str, ...] = ()
 
 
 class NarrativeService:
@@ -139,6 +142,28 @@ class NarrativeService:
                 used_llm=False,
             )
 
+        retrieved_ids = [c.chunk_id for c in agent.retrieved_context]
+        citations = verify_cited_chunk_ids(narrative.cited_chunk_ids, retrieved_ids)
+        if citations.unknown or (retrieved_ids and not citations.grounded):
+            # Foreign ids, or retrieved sources the narrative did not cite: reject
+            # the LLM text; the deterministic narrative cites by construction.
+            logger.info(
+                "narrative_fallback_citation_check",
+                request_id=agent.request_id,
+                rule=CITATION_NOT_IN_RETRIEVED_SET if citations.unknown else "no_cited_source",
+                unknown_count=len(citations.unknown),
+            )
+            return NarrativeEnhancementResult(
+                narrative=fallback,
+                metadata=fallback_meta.model_copy(
+                    update={"fallback_used": True, "validation_passed": False}
+                ),
+                usage=usage,
+                used_llm=False,
+                citation_violations=citations.unknown,
+            )
+        narrative = narrative.model_copy(update={"cited_chunk_ids": list(citations.valid)})
+
         meta = NarrativeMetadata(
             source="llm",
             provider=llm_result.provider,
@@ -158,10 +183,9 @@ class NarrativeService:
         self, analysis: TradingAnalysisDetail, agent: AgentState
     ) -> TradingNarrativeDetail:
         """Deterministic fallback narrative — mirrors authoritative analysis fields."""
-        citations_used = [
-            f"{c.title or c.document_id}: {(c.snippet or '')[:80]}"
-            for c in (agent.citations or [])[:5]
-        ]
+        # Citations by construction: only chunks retrieved (and above the floor).
+        cited = agent.retrieved_context[:5]
+        citations_used = [f"{c.title or c.document_id}: {(c.snippet or '')[:80]}" for c in cited]
         caution = [
             "Deterministic risk engine and approval workflow are the decision authority.",
             "This explanation does not constitute financial advice.",
@@ -201,6 +225,7 @@ class NarrativeService:
             paper_mode_disclaimer=analysis.paper_mode_disclaimer
             or "Paper mode only — no real exchange execution.",
             citations_used=citations_used,
+            cited_chunk_ids=[str(c.chunk_id) for c in cited],
         )
 
     def _call_llm(
@@ -243,7 +268,7 @@ class NarrativeService:
                     caller_organization_id=agent.organization_id,
                     caller_user_id=agent.user_id,
                     temperature=0.0,
-                    response_format={"type": "json_object"},
+                    response_format=narrative_response_format(),
                 ),
                 messages,
             )
@@ -264,9 +289,14 @@ class NarrativeService:
                 model=self._model,
                 temperature=0.0,
                 max_tokens=900,
-                response_format={"type": "json_object"},
+                response_format=narrative_response_format(),
             )
         )
+
+
+def narrative_response_format() -> dict[str, Any]:
+    """Strict json_schema for TradingNarrativeDetail; parse + fallback stay as defense in depth."""
+    return strict_response_format("narrative", TradingNarrativeDetail)
 
 
 def load_prompt(name: str) -> str:
@@ -295,7 +325,7 @@ def build_sanitized_narrative_context(
                 else "reference"
             ),
         }
-        for c in (agent.citations or agent.retrieved_context or [])[:8]
+        for c in agent.retrieved_context[:8]
     ]
     return {
         "deterministic_analysis": analysis.model_dump(mode="json"),

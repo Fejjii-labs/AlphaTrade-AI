@@ -97,6 +97,18 @@ def _clear_inherited_venue_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None
 
 
 @pytest.fixture(autouse=True)
+def _hash_embedding_relevance_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit test config: no relevance floor for SHA-256 mock embeddings.
+
+    Mock embeddings are hash vectors with no semantic signal (normalized cosine
+    ~0.5 for any non-identical text), so suites exercising ingest/scope/filter
+    plumbing would retrieve nothing under the production floor. Tests of the
+    floor itself pass ``rag_min_relevance_score`` to ``Settings`` explicitly.
+    """
+    monkeypatch.setenv("RAG_MIN_RELEVANCE_SCORE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_rate_limiter() -> Iterator[None]:
     """Reset shared in-memory rate limit state so tests do not cross-contaminate."""
     reset_rate_limiter()

@@ -30,7 +30,7 @@ It is **not ready for real-money exposure**. Critical API surface gaps (unauthen
 | Staging `/health` | `execution_mode=paper`, `real_trading_enabled=false`, `environment=staging`, `git_sha=5f2d7cf…` |
 | Staging `/health/ready` | `ready=true`, `providers_unavailable=0` |
 | Staging `verify-safety.sh` | Pass (2026-07-21): paper, real trading false, blofin-demo-account, mock billing |
-| Staging providers | openai-llm healthy (`gpt-5.6-sol`); embeddings healthy (`text-embedding-3-large`, 1536-d); qdrant healthy |
+| Staging providers | openai-llm healthy (`gpt-5.6-sol`, the staging model on 2026-07-21; current default is `gpt-6-luna`); embeddings healthy (`text-embedding-3-large`, 1536-d); qdrant healthy |
 | Unauth probes | `GET /tools` → **200**; `GET /docs` → **200**; `POST /risk/check` → **422** (no auth) |
 | Pytest pass count | UNKNOWN (suite exited 0; exact count truncated in log) |
 | Full CI re-run this session | Not re-run (last known green after AT-009) |

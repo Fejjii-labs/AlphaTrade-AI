@@ -11,10 +11,12 @@ RULES (mandatory):
 - Include invalidation explanation when a trade proposal exists.
 - Include paper-mode disclaimer; real exchange execution is disabled.
 - Citations_used must only reference citation ids/snippets provided in context — do not invent sources.
+- cited_chunk_ids must list the exact chunk_id values of the context citations you relied on.
+  Never invent or alter ids; use an empty array only when the context has no citations.
 
 Required JSON keys:
 summary, setup_interpretation, evidence_explanation, risk_explanation, invalidation_explanation,
-next_decision_point, caution_notes (array), limitations (array), paper_mode_disclaimer, citations_used (array)
+next_decision_point, caution_notes (array), limitations (array), paper_mode_disclaimer, citations_used (array), cited_chunk_ids (array)
 
 Structured context (JSON):
 {{context_json}}

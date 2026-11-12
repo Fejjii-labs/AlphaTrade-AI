@@ -262,6 +262,13 @@ class AgentState(BaseModel):
     )
     strategy_signals: list[StrategySignal] = Field(default_factory=list)
     retrieved_context: list[Citation] = Field(default_factory=list)
+    rag_outcome: Literal["retrieved", "no_relevant_source", "retrieval_failed"] | None = Field(
+        default=None,
+        description=(
+            "Knowledge retrieval result for this turn. no_relevant_source means nothing "
+            "passed the relevance floor; the answer must say so and cite nothing."
+        ),
+    )
 
     # Tooling
     tool_calls: list[ToolInput] = Field(default_factory=list)
@@ -281,6 +288,14 @@ class AgentState(BaseModel):
 
     # Output
     citations: list[Citation] = Field(default_factory=list)
+    cited_chunk_ids: list[UUID] = Field(
+        default_factory=list,
+        description="Retrieved chunk ids the final answer cites (verified subset).",
+    )
+    citation_violations: list[str] = Field(
+        default_factory=list,
+        description="Ids an LLM cited that were not retrieved; that output was rejected.",
+    )
     paper_execution: AgentPaperResult | None = None
     final_answer: str | None = None
     analysis_detail: TradingAnalysisDetail | None = None

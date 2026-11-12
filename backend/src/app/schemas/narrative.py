@@ -20,6 +20,13 @@ class TradingNarrativeDetail(StrictModel):
     limitations: list[str] = Field(default_factory=list)
     paper_mode_disclaimer: str
     citations_used: list[str] = Field(default_factory=list)
+    cited_chunk_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "chunk_id values, copied from the supplied citations, that support this "
+            "narrative. Ids outside the retrieved set are rejected."
+        ),
+    )
 
 
 class NarrativeMetadata(StrictModel):

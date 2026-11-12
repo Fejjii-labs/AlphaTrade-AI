@@ -59,6 +59,9 @@ SETTINGS = Settings(
     enable_real_trading=False,
     rate_limit_use_redis=False,
     market_data_cache_use_redis=False,
+    # Built at import, before the conftest env fixture: SHA-256 mock embeddings
+    # have no semantic signal, so these lineage tests run without a relevance floor.
+    rag_min_relevance_score=0.0,
 )
 
 

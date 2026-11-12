@@ -34,6 +34,19 @@ class EmbeddingResult:
     dimensions: int = 0
 
 
+MOCK_EMBEDDINGS_MODEL = "mock-embeddings"
+
+
+def vector_space_model(result: EmbeddingResult) -> str:
+    """Model id that actually produced ``result.vectors``.
+
+    Fallback results keep the configured model in ``result.model`` for usage
+    accounting, but their vectors are hash vectors from the mock provider, so
+    stored points and query vectors must be labelled with the mock model.
+    """
+    return MOCK_EMBEDDINGS_MODEL if result.fallback_used else result.model
+
+
 @runtime_checkable
 class EmbeddingsProvider(Protocol):
     """Generate vector embeddings for retrieval."""
@@ -100,7 +113,7 @@ class MockEmbeddingsProvider(BaseMockProvider):
         vectors = [_deterministic_vector(text, dimensions=self._dimensions) for text in texts]
         return EmbeddingResult(
             vectors=vectors,
-            model="mock-embeddings",
+            model=MOCK_EMBEDDINGS_MODEL,
             provider=self.name,
             input_tokens=max(sum(len(t) for t in texts) // 4, len(texts)),
             latency_ms=1.0,

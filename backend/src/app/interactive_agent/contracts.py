@@ -24,6 +24,12 @@ SCHEMA_VERSION: Literal["InteractiveAgent/v1"] = "InteractiveAgent/v1"
 PAYLOAD_KEY = "interactive_agent"
 
 
+#: Retrieval limitation when vector search ran but nothing passed the relevance floor.
+NO_RELEVANT_SOURCE_NOTE = (
+    "No relevant source: no knowledge passage met the minimum relevance score."
+)
+
+
 class AgentCapability(StrEnum):
     """User-facing capabilities. One primary capability is chosen per turn."""
 

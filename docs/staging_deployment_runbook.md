@@ -337,6 +337,8 @@ BASE_URL=https://your-api.onrender.com ./scripts/verify-safety.sh
 | Login 401 after Vercel deploy | CORS or cookie SameSite | `CORS_ORIGINS`, `AUTH_COOKIE_SAMESITE=none`, redeploy both |
 | Refresh fails cross-domain | Cookie mode off on frontend | `NEXT_PUBLIC_AUTH_COOKIE_MODE=true` + rebuild |
 | `/health/ready` degraded | Qdrant/OpenAI down | Expected with fallback; use `ALLOW_DEGRADED_READY=true` or fix Qdrant URL |
+| `/health/ready` `ready=false`, `qdrant` in `degraded_providers` | Live collection vector size differs from `EMBEDDINGS_DIMENSIONS`/model | Do not waive with `ALLOW_DEGRADED_READY`; fix the embeddings config or run the reviewed collection recreate + reingest. `/health` stays up. |
+| `/knowledge/search` 503 `embedding_model_mismatch` | `EMBEDDINGS_MODEL` changed without a reindex | Revert the model or reindex every document. |
 | Migrations fail | Wrong `DATABASE_URL` | SSL params; user permissions |
 | CORS error in browser | Origin mismatch | Exact Vercel URL in `CORS_ORIGINS` |
 | 429 on chat | Quota / rate limit | Check usage; Redis connectivity |

@@ -13,7 +13,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import Chunk, Document, UsageEvent
-from app.interactive_agent.contracts import KnowledgeHit, ProvenanceSource
+from app.interactive_agent.contracts import (
+    NO_RELEVANT_SOURCE_NOTE,
+    KnowledgeHit,
+    ProvenanceSource,
+)
 from app.providers.embeddings import EmbeddingsProvider
 from app.providers.factory import resolve_providers
 from app.repositories.chunks import ChunkRepository
@@ -200,6 +204,8 @@ class AgentVectorAdapter:
             )
         )
         self.notes = ["Vector retrieval uses the existing RagService and verifies SQL scope."]
+        if result.no_relevant_source and not result.degraded:
+            self.notes.append(NO_RELEVANT_SOURCE_NOTE)
         if result.detail:
             self.notes.append(result.detail)
         if result.degraded or result.fallback_used:

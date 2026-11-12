@@ -7,6 +7,7 @@ on aggregated provider status.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import structlog
@@ -23,6 +24,7 @@ from app.persistence.worker_runtime_state import (
     project_worker_effective,
 )
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
+from app.providers.registry import ProviderRegistry
 from app.schemas.health import (
     ArmingRefusalObservation,
     HealthResponse,
@@ -428,14 +430,44 @@ def readiness_projection(
     return ready, label, unavailable, degraded
 
 
+def probe_vector_collections(registry: ProviderRegistry) -> dict[str, str]:
+    """Run each vector provider's cached live collection vector-size check.
+
+    Missing collections are fine (created on first write). A mismatch marks the
+    provider degraded in ``/providers/status`` and makes ``/health/ready`` not
+    ready. ``/health`` (Render liveness) never runs this, and boot is not refused,
+    so a mismatch is discovered at deploy without a crash loop.
+    """
+    outcomes: dict[str, str] = {}
+    for provider in registry.all():
+        probe = getattr(provider, "probe_collection_compatibility", None)
+        if provider.kind is not ProviderKind.VECTOR or not callable(probe):
+            continue
+        try:
+            outcome = probe()
+        except Exception as exc:  # defensive: readiness must answer
+            structlog.get_logger(__name__).warning(
+                "vector_collection_probe_failed", error_type=type(exc).__name__
+            )
+            outcome = "unreachable"
+        if outcome is not None:
+            outcomes[provider.name] = outcome
+    return outcomes
+
+
 @router.get("/health/ready", response_model=ReadinessResponse, summary="Readiness probe")
 async def readiness(registry: ProviderRegistryDep, settings: SettingsDep) -> ReadinessResponse:
     from app.core.provider_policy import provider_fail_closed
 
+    probes = await asyncio.to_thread(probe_vector_collections, registry)
     statuses = registry.statuses()
     ready, label, unavailable, degraded = readiness_projection(
         statuses, fail_closed=provider_fail_closed(settings)
     )
+    mismatched = tuple(name for name, outcome in probes.items() if outcome == "mismatch")
+    if mismatched:
+        ready, label = False, "degraded"
+        degraded = (*degraded, *(name for name in mismatched if name not in degraded))
     return ReadinessResponse(
         status=label,
         ready=ready,

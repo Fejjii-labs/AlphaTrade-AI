@@ -8,6 +8,7 @@ The public :class:`LLMProvider` interface stays OpenAI-agnostic.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -174,6 +175,7 @@ class MockLLMProvider(BaseMockProvider):
                 "limitations": [],
                 "paper_mode_disclaimer": "Paper mode.",
                 "citations_used": [],
+                "cited_chunk_ids": [],
             }
 
         approval_status = "not_required"
@@ -231,6 +233,8 @@ class MockLLMProvider(BaseMockProvider):
                 "Approval required for sensitive actions."
             ),
             "citations_used": ["mock-citation-1: playbook excerpt"],
+            # Cite only ids present in the supplied context, like a compliant model.
+            "cited_chunk_ids": re.findall(r'"chunk_id": "([0-9a-f-]{36})"', system_text)[:3],
         }
 
 
