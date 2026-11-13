@@ -42,6 +42,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Recorded provenance cannot be erased by an application rollback (retained
+    # schema rollback instead). Refusing here, before any DDL, also keeps a longer
+    # downgrade atomic: a27obsretention001's autocommit block would otherwise
+    # commit these drops before an older revision's guard refuses the rest.
+    # Empty disposable databases still support a roundtrip.
+    if not op.get_context().as_sql and op.get_bind().scalar(
+        sa.text(
+            f"SELECT EXISTS (SELECT 1 FROM {_TABLE} WHERE system_prompt_sha256 IS NOT NULL"
+            " OR prompt_id IS NOT NULL OR prompt_version IS NOT NULL)"
+        )
+    ):
+        raise RuntimeError("Populated prompt provenance requires retained schema rollback.")
     _set_lock_timeout("'5s'")
     op.drop_column(_TABLE, "prompt_version")
     op.drop_column(_TABLE, "prompt_id")

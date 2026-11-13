@@ -24,9 +24,21 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.db.models import KillSwitchState, Organization, User, UserStrategy, UserStrategyVersion
+from app.db.models import (
+    KillSwitchState,
+    ModelCallAttempt,
+    Organization,
+    User,
+    UserStrategy,
+    UserStrategyVersion,
+)
 from app.db.voice_realtime import VoiceSessionReservation
 from app.db.watcher_assignments import WatcherAssignmentReceiptRow, WatcherStrategyAssignmentRow
+from app.schemas.model_routing import (
+    ModelFallbackPolicy,
+    ModelRoutingPurpose,
+    ModelRoutingTier,
+)
 from app.schemas.usage import OrganizationQuotaUpdate
 from app.services.quota_service import QuotaService
 from tests.support.alembic_heads import (
@@ -78,6 +90,7 @@ TABLES = (
     "watcher_watchlists",
     "kill_switch_states",
     "organization_quotas",
+    "model_call_attempts",
 )
 
 
@@ -342,6 +355,27 @@ def _seed_feature_retention(engine):
                 updated_at=now,
             )
         )
+        session.add(
+            ModelCallAttempt(
+                organization_id=org,
+                user_id=user,
+                correlation_id="retained-prompt-provenance",
+                purpose=ModelRoutingPurpose.INTENT_CLASSIFICATION,
+                tier=ModelRoutingTier.TIER_B,
+                provider="synthetic",
+                requested_model="synthetic-model",
+                resolved_model="synthetic-model",
+                policy_version="model-router/v1",
+                fallback_policy=ModelFallbackPolicy.DETERMINISTIC_FACTS,
+                success=True,
+                system_prompt_sha256="c" * 64,
+                prompt_id="interactive_agent_system",
+                prompt_version=2,
+                started_at=now,
+                completed_at=now,
+                event_at=now,
+            )
+        )
         QuotaService(session).update_quota(
             org,
             OrganizationQuotaUpdate(
@@ -474,6 +508,7 @@ def test_migration_aware_rollback_retains_documents_jobs_and_native_history(tmp_
         assert len(retained["watcher_strategy_assignments"]) == 1
         assert len(retained["watcher_assignment_receipts"]) == 1
         assert len(retained["voice_session_reservations"]) == 1
+        assert len(retained["model_call_attempts"]) == 1
         with pytest.raises(RuntimeError, match="requires retained schema rollback"):
             command.downgrade(config, "a12trendpulsescreen001")
         assert _snapshot(engine) == retained
