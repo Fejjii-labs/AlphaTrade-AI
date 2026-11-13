@@ -111,17 +111,28 @@ class ShortTtlSingleflight:
                     self._flights.pop(key, None)
 
     def _get_unlocked(self, key: Hashable) -> Any | None:
+        self._expire_unlocked()
         item = self._entries.get(key)
         if item is None:
             return None
-        stored_at, value = item
-        if self._clock() - stored_at > self.ttl_seconds:
-            self._entries.pop(key, None)
-            return None
+        _, value = item
         self._entries.move_to_end(key)
         return value
 
+    def _expire_unlocked(self) -> None:
+        # Page/window keys change each scan. Looking up only the requested key
+        # leaves expired raw payloads resident until the LRU cap is reached.
+        now = self._clock()
+        expired = [
+            key
+            for key, (stored_at, _) in self._entries.items()
+            if now - stored_at > self.ttl_seconds
+        ]
+        for key in expired:
+            self._entries.pop(key, None)
+
     def _put_unlocked(self, key: Hashable, value: Any) -> None:
+        self._expire_unlocked()
         if value is None:
             return
         self._entries[key] = (self._clock(), value)
