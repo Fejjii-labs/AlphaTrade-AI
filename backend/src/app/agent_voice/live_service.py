@@ -18,7 +18,7 @@ from app.agent_voice.live_accounting import LiveLedger
 from app.agent_voice.live_protocol import context_parts, session_start
 from app.agent_voice.protocol import checked_audio
 from app.agent_voice.service import shared_turn
-from app.interactive_agent.contracts import AgentTurnRequest
+from app.interactive_agent.contracts import AgentTurnRequest, speech_limitations
 from app.schemas.common import StrictModel
 
 _LIVE_CLIENT_EVENT = TypeAdapter(ClientEventParam)
@@ -347,7 +347,7 @@ class LiveSession:
             if self.closing:
                 return
             content = "Canonical Agent result (transcript may be incomplete):\n"
-            limitations = result.get("limitations", [])
+            limitations = speech_limitations(result.get("limitations", []))
             if limitations:
                 content += "Limitations: " + "; ".join(limitations) + "\n"
             content += result["reply"]

@@ -183,3 +183,71 @@ def test_agent_state_uses_typed_schema() -> None:
 
     with pytest.raises(ValidationError):
         AgentState.model_validate({**state.model_dump(), "smuggled": True})
+
+
+def test_graph_registers_each_of_the_25_nodes_once() -> None:
+    from app.agents.graph import build_agent_graph
+
+    graph = build_agent_graph()
+    assert list(graph.nodes) == [
+        "receive_request",
+        "auth_context",
+        "quota_check",
+        "rate_limit_check",
+        "prompt_injection_check",
+        "moderation_check",
+        "message_classification",
+        "intent_classification",
+        "context_retrieval",
+        "strategy_workflow_tools",
+        "paper_action",
+        "trading_analytics_retrieval",
+        "market_context_retrieval",
+        "indicator_calculation",
+        "strategy_module_execution",
+        "trade_proposal_generation",
+        "trading_policy_check",
+        "deterministic_risk_gate",
+        "approval_decision",
+        "tool_execution_if_allowed",
+        "memory_update",
+        "usage_tracking",
+        "final_response",
+        "narrative_enhancement",
+        "output_validation",
+    ]
+
+
+def test_graph_state_keys_match_agent_state() -> None:
+    """A dropped or renamed AgentState field must not silently lose its graph channel."""
+    from typing import get_type_hints
+
+    from app.agents.graph import build_agent_graph
+    from app.agents.graph_state import AgentGraphState
+    from app.schemas.agent import AgentState
+
+    hints = get_type_hints(AgentGraphState, include_extras=True)
+    assert set(hints) == set(AgentState.model_fields)
+    assert set(build_agent_graph().channels) >= set(AgentState.model_fields)
+    # Replacement semantics: nodes return full lists, so no reducer may be declared.
+    assert not any(hasattr(hint, "__metadata__") for hint in hints.values())
+
+
+def test_typed_channels_keep_replacement_semantics_for_lists() -> None:
+    """Seeded list channels pass through 20+ full-state node returns without duplication."""
+    from app.agents.graph import invoke_agent_graph
+    from app.agents.state_utils import parse_state, state_to_dict
+    from app.schemas.agent import AgentState, ConversationTurn
+
+    context = _context()
+    initial = AgentState(
+        request_id="replacement",
+        user_id=context.user_id,
+        organization_id=context.organization_id,
+        message="hello there",
+        conversation_history=[ConversationTurn(role="user", content="earlier")],
+        market_data_gaps=["funding"],
+    )
+    final = parse_state(invoke_agent_graph(state_to_dict(initial), _service().runtime))
+    assert [turn.content for turn in final.conversation_history] == ["earlier"]
+    assert final.market_data_gaps.count("funding") == 1

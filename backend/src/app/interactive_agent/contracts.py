@@ -29,6 +29,30 @@ NO_RELEVANT_SOURCE_NOTE = (
     "No relevant source: no knowledge passage met the minimum relevance score."
 )
 
+#: Citation-audit limitations from ``conversation.verify_source_markers``.
+UNCITED_SOURCES_NOTE = (
+    "The reply cites none of the supplied source passages; it is not presented as grounded "
+    "in them. Check Stored evidence."
+)
+REMOVED_MARKERS_PREFIX = "Removed source markers not supplied this turn"
+
+
+def speech_limitations(limitations: object) -> list[str]:
+    """Limitations a voice model may speak: citation-audit notes are dropped.
+
+    The uncited-sources note and the removed-marker note describe the written
+    reply's ``[Kn]`` markers, which voice never speaks. They stay in the durable
+    turn result, the ``turn.result`` client event and the ledger.
+    """
+    if not isinstance(limitations, list):
+        return []
+    return [
+        note
+        for note in limitations
+        if note != UNCITED_SOURCES_NOTE
+        and not (isinstance(note, str) and note.startswith(REMOVED_MARKERS_PREFIX))
+    ]
+
 
 class AgentCapability(StrEnum):
     """User-facing capabilities. One primary capability is chosen per turn."""
@@ -273,6 +297,10 @@ class AgentTurnResult(StrictModel):
     reply: str = Field(min_length=1, max_length=4000)
     recorded_evidence: str | None = Field(default=None, max_length=16000)
     full_reply: str | None = Field(default=None, max_length=16000)
+    # Knowledge chunks the model prose cites via [Kn] markers that were supplied this turn.
+    cited_chunk_ids: list[UUID] = Field(default_factory=list)
+    # Markers the prose used that were not supplied (stripped; citation_not_in_retrieved_set).
+    citation_violations: list[str] = Field(default_factory=list)
     proposals: list[StructuredActionProposal] = Field(default_factory=list)
     knowledge: list[KnowledgeHit] = Field(default_factory=list)
     strategies: list[StrategyHit] = Field(default_factory=list)

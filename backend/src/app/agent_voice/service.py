@@ -38,7 +38,11 @@ from app.agent_voice.retrieval import (
     embedding_limitation,
 )
 from app.core.config import Settings
-from app.interactive_agent.contracts import AgentTurnRequest, AgentTurnResult
+from app.interactive_agent.contracts import (
+    AgentTurnRequest,
+    AgentTurnResult,
+    speech_limitations,
+)
 from app.interactive_agent.turn_runtime import run_interactive
 from app.providers.base import ProviderHealth, ProviderStatus
 from app.providers.factory import resolve_providers
@@ -461,7 +465,10 @@ class RealtimeSession:
             await asyncio.to_thread(self.ledger.tool_done, call_id, result)
             await self.send({"type": "turn.result", "request_key": key, "result": result})
             serialized = json.dumps(
-                {"canonical_reply": result["reply"], "limitations": result.get("limitations", [])}
+                {
+                    "canonical_reply": result["reply"],
+                    "limitations": speech_limitations(result.get("limitations", [])),
+                }
             )
             self.context_bytes += len(request.message.encode()) + len(serialized.encode())
             self._context_limit()

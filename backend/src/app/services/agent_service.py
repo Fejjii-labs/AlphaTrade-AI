@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.graph import compile_agent_graph
+from app.agents.graph import invoke_agent_graph
 from app.agents.runtime import AgentRuntime
 from app.agents.state_utils import parse_state, state_to_dict
 from app.core.config import Settings, get_settings
@@ -75,11 +76,14 @@ class AgentService:
                 rag_service=rag,
             )
         self._runtime = runtime
-        self._graph = compile_agent_graph(self._runtime)
 
     @property
     def runtime(self) -> AgentRuntime:
         return self._runtime
+
+    def invoke_graph(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Run the shared compiled graph with this service's runtime (compiled once per process)."""
+        return invoke_agent_graph(state, self._runtime)
 
     def run(
         self,
@@ -156,7 +160,7 @@ class AgentService:
         self._runtime.observability.emit_agent_run_started(initial)
         started = time.perf_counter()
         try:
-            result_dict = self._graph.invoke(state_to_dict(initial))
+            result_dict = self.invoke_graph(state_to_dict(initial))
             agent = parse_state(result_dict)
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
             self._runtime.observability.emit_agent_run_completed(agent, latency_ms=elapsed_ms)

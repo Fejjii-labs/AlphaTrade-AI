@@ -1645,6 +1645,21 @@
             "title": "Capture Status",
             "type": "string"
           },
+          "citation_violations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Citation Violations",
+            "type": "array"
+          },
+          "cited_chunk_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Cited Chunk Ids",
+            "type": "array"
+          },
           "connections": {
             "items": {
               "$ref": "#/components/schemas/ConnectionRef"

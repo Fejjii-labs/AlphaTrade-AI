@@ -28,6 +28,7 @@ from app.interactive_agent.conversation import (
     MODEL_REPLY_UNAVAILABLE,
     ModelConversationalResponder,
     compose_visible_reply,
+    verify_source_markers,
 )
 from app.interactive_agent.parsing import extract_symbol
 from app.interactive_agent.service import InteractiveAgentService
@@ -277,6 +278,7 @@ def run_interactive(
             ordinary_capture=True,
         )
         warnings = service.pending_reply_warnings
+        references = service.supplied_references
         if deferred.inputs is None:
             row = session.get(ConversationMessage, reservation.turn_id)
             assert row is not None
@@ -313,12 +315,25 @@ def run_interactive(
             reservation_row = coordinator.guard(session, reservation, revision=revision)
             assistant = session.get(ConversationMessage, result.assistant_message_id)
             assert assistant is not None
+            citations: dict[str, list[str]] = {}
             if model_text != MODEL_REPLY_UNAVAILABLE:
+                marker_check = verify_source_markers(
+                    model_text,
+                    factual_context=deferred.inputs["factual_context"],
+                    references=references,
+                )
+                model_text = marker_check.text
                 result.full_reply = model_text
                 result.reply = compose_visible_reply(
                     model_text, deferred.inputs["factual_context"], required_warnings=warnings
                 )
                 result.limitations = [n for n in result.limitations if n != MODEL_REPLY_UNAVAILABLE]
+                result.limitations.extend(
+                    note for note in marker_check.limitations if note not in result.limitations
+                )
+                result.cited_chunk_ids = list(marker_check.cited_chunk_ids)
+                result.citation_violations = list(marker_check.unknown_markers)
+                citations = marker_check.payload()
             result.model_usage = [responder.last_usage] if responder.last_usage else []
             if supplemental_facts:
                 result.recorded_evidence = deferred.inputs["factual_context"]
@@ -328,7 +343,7 @@ def run_interactive(
             )
             assistant.content = result.reply
             detail = dict(assistant.payload[PAYLOAD_KEY])
-            detail.update(full_reply=result.full_reply, model_usage=result.model_usage)
+            detail.update(full_reply=result.full_reply, model_usage=result.model_usage, **citations)
             if supplemental_facts:
                 detail["recorded_evidence"] = result.recorded_evidence
             assistant.payload = {**assistant.payload, PAYLOAD_KEY: detail}

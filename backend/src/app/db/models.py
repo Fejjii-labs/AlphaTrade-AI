@@ -3378,6 +3378,11 @@ class ModelCallAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     mutation_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Prompt provenance: SHA-256 hex of the exact system text sent (NULL = no system
+    # prompt, or a row written before a28promptsha001) and its versioned prompt file.
+    system_prompt_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    prompt_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

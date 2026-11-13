@@ -16,9 +16,16 @@ from typing import Any
 import structlog
 
 from app.core.errors import ForbiddenError, ServiceUnavailableError, ValidationAppError
+from app.core.prompt_registry import prompt_sha256
 from app.core.provider_policy import provider_fail_closed
 from app.observability.metrics import MODEL_ROUTER_TIER_A_TIMEOUT_FALLBACK_TOTAL
-from app.providers.llm import LLMCompletionRequest, LLMCompletionResult, LLMMessage, LLMProvider
+from app.providers.llm import (
+    LLMCompletionRequest,
+    LLMCompletionResult,
+    LLMMessage,
+    LLMProvider,
+    responses_instructions,
+)
 from app.schemas.common import CostSource, UsageStatus
 from app.schemas.model_routing import (
     TIER_A_PURPOSES,
@@ -212,6 +219,8 @@ class ModelRouter:
         self._assert_no_secrets(messages)
         decision = self.decide(request)
         attempts: list[ModelCallAttempt] = []
+        instructions = responses_instructions(messages)
+        system_sha256 = prompt_sha256(instructions) if instructions is not None else None
 
         models_to_try = [decision.selected_model]
         if (
@@ -290,6 +299,7 @@ class ModelRouter:
                     category=category,
                     started_at=attempt_started,
                     attempt_number=index,
+                    system_prompt_sha256=system_sha256,
                 )
                 attempts.append(attempt)
                 if telemetry_error is not None:
@@ -316,6 +326,7 @@ class ModelRouter:
                 category=ModelFailureCategory.NONE,
                 started_at=attempt_started,
                 attempt_number=index,
+                system_prompt_sha256=system_sha256,
             )
             attempts.append(attempt)
             if telemetry_error is not None:
@@ -378,6 +389,7 @@ class ModelRouter:
         category: ModelFailureCategory,
         started_at: datetime,
         attempt_number: int = 0,
+        system_prompt_sha256: str | None = None,
     ) -> tuple[ModelCallAttempt, ModelTelemetryPersistenceError | None]:
         completed = datetime.now(UTC)
         input_tokens = llm_result.input_tokens if llm_result is not None else 0
@@ -429,6 +441,9 @@ class ModelRouter:
             resource_type=request.context.resource_type,
             resource_id=request.context.resource_id,
             retention_category=decision.retention_category,
+            system_prompt_sha256=system_prompt_sha256,
+            prompt_id=request.prompt_id,
+            prompt_version=request.prompt_version,
             started_at=started_at,
             completed_at=completed,
             mutation_allowed=False,
