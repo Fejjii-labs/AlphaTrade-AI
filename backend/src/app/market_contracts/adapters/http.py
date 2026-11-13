@@ -299,6 +299,10 @@ class ReadOnlyHttpGetClient:
             self._reject_if_gate_closed()
             self._wait_for_spacing(normalized_path)
             self._budget.acquire(weight, sleeper=self._weight_sleeper())
+            # Another component can close the gate while spacing or budget
+            # acquisition sleeps. Never send a queued read through that pause.
+            self._reject_if_gate_closed()
+            self._raise_if_past_deadline()
             try:
                 response = self._exchange_get(url, params)
             except httpx.TransportError as exc:

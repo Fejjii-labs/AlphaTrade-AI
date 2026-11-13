@@ -71,6 +71,30 @@ def _client(recorder: Recorder, gate: BinanceRestGate, **kw: object) -> ReadOnly
     )
 
 
+@pytest.mark.parametrize("wait_stage", ["spacing", "budget"])
+@pytest.mark.parametrize("kind", ["ban", "rate_limit"])
+def test_gate_closed_during_request_wait_prevents_send(monkeypatch, wait_stage, kind) -> None:
+    clock = Clock()
+    gate = _gate(clock)
+    recorder = Recorder([])
+    client = _client(recorder, gate, max_retries=0)
+
+    def close_gate(*_args, **_kwargs):
+        gate.note_failure(kind, 300.0)
+
+    if wait_stage == "spacing":
+        monkeypatch.setattr(client, "_wait_for_spacing", close_gate)
+    else:
+        monkeypatch.setattr(client.budget, "acquire", close_gate)
+    try:
+        expected = UpstreamBanError if kind == "ban" else RateLimitedError
+        with pytest.raises(expected):
+            client.get_json("/fapi/v1/aggTrades", CLOSED)
+        assert recorder.calls == 0
+    finally:
+        client.close()
+
+
 def test_418_sets_ban_window_and_blocks_every_client_in_process() -> None:
     clock = Clock()
     gate = _gate(clock)
