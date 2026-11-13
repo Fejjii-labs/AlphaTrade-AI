@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,9 +25,13 @@ class CacheResult:
 class MarketDataCache:
     """Short-TTL cache for ticker and OHLCV responses."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, max_entries: int = 128) -> None:
+        if max_entries < 1:
+            raise ValueError("market cache must keep at least one entry.")
         self._settings = settings
-        self._memory: dict[str, tuple[float, str]] = {}
+        self._max_entries = max_entries
+        self._memory: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._memory_lock = threading.Lock()
         self._redis: Any | None = None
         self._using_redis = False
 
@@ -69,13 +75,13 @@ class MarketDataCache:
             except Exception as exc:
                 logger.warning("market_cache_redis_get_failed", error=str(exc))
 
-        entry = self._memory.get(key)
-        if entry is None:
-            return CacheResult(hit=False)
-        expires_at, payload = entry
-        if time.monotonic() > expires_at:
-            del self._memory[key]
-            return CacheResult(hit=False)
+        with self._memory_lock:
+            self._expire_memory()
+            entry = self._memory.get(key)
+            if entry is None:
+                return CacheResult(hit=False)
+            self._memory.move_to_end(key)
+            _, payload = entry
         return CacheResult(hit=True, value=json.loads(payload))
 
     def set(self, key: str, value: Any, *, ttl_seconds: int) -> None:
@@ -87,4 +93,17 @@ class MarketDataCache:
             except Exception as exc:
                 logger.warning("market_cache_redis_set_failed", error=str(exc))
 
-        self._memory[key] = (time.monotonic() + ttl_seconds, payload)
+        with self._memory_lock:
+            self._expire_memory()
+            self._memory[key] = (time.monotonic() + ttl_seconds, payload)
+            self._memory.move_to_end(key)
+            while len(self._memory) > self._max_entries:
+                self._memory.popitem(last=False)
+
+    def _expire_memory(self) -> None:
+        """Prune under the fallback lock, including keys never requested again."""
+
+        now = time.monotonic()
+        expired = [key for key, (expires_at, _) in self._memory.items() if now > expires_at]
+        for key in expired:
+            self._memory.pop(key, None)
