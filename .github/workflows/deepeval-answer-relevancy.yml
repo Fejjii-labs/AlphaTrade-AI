@@ -1,0 +1,63 @@
+name: DeepEval answer relevancy (non-blocking)
+
+# LLM-judge eval. Manual and nightly only: it never runs on pull_request or push,
+# so it can't be a required check, and it doesn't touch ci.yml's deterministic
+# recall@k / MRR gate. Calls the paid OpenAI API, capped by DEEPEVAL_MAX_USD.
+on:
+  workflow_dispatch:
+    inputs:
+      max_usd:
+        description: Hard spend cap for this run in USD
+        type: string
+        required: false
+        default: "1.00"
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  answer-relevancy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPEVAL_JUDGE_MODEL: ${{ vars.DEEPEVAL_JUDGE_MODEL }}
+      DEEPEVAL_MAX_USD: ${{ inputs.max_usd || '1.00' }}
+      DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check judge credentials
+        id: creds
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::notice::OPENAI_API_KEY is not configured; skipping the DeepEval run."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@v5
+        if: steps.creds.outputs.skip != 'true'
+        with:
+          enable-cache: true
+      - name: Install backend and eval-only deps
+        if: steps.creds.outputs.skip != 'true'
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv pip install -r ../evaluation/requirements-deepeval.txt
+      - name: Evaluate answer relevancy
+        if: steps.creds.outputs.skip != 'true'
+        working-directory: backend
+        run: >-
+          uv run --no-sync python ../evaluation/deepeval_answer_relevancy.py
+          --output "$RUNNER_TEMP/answer_relevancy.json"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.creds.outputs.skip != 'true'
+        with:
+          name: answer-relevancy
+          path: ${{ runner.temp }}/answer_relevancy.json
+          if-no-files-found: ignore
