@@ -44,7 +44,7 @@ class PostgresPaperEvaluationStore:
         row = self._session.get(PaperEvaluationObservationRow, observation_id)
         if row is None or row.organization_id != organization_id:
             return None
-        return _from_row(row)
+        return observation_from_row(row)
 
     def find(
         self,
@@ -62,7 +62,7 @@ class PostgresPaperEvaluationStore:
                 PaperEvaluationObservationRow.source_event_version == source_event_version,
             )
         ).first()
-        return None if row is None else _from_row(row)
+        return None if row is None else observation_from_row(row)
 
     def put(self, observation: PaperEvaluationObservation) -> PaperEvaluationObservation:
         if observation.organization_id is None:
@@ -90,7 +90,7 @@ class PostgresPaperEvaluationStore:
                     raise CrossTenantPaperEvaluationError()
                 row.narrative_explanation = observation.narrative_explanation
                 self._session.flush()
-                return _from_row(row)
+                return observation_from_row(row)
             return existing
         row = _to_row(observation)
         try:
@@ -114,7 +114,7 @@ class PostgresPaperEvaluationStore:
                     details={"reason": "conflicting_source_identity"},
                 ) from exc
             return loaded
-        return _from_row(row)
+        return observation_from_row(row)
 
     def list_for_organization(
         self, organization_id: UUID, *, limit: int | None = None
@@ -129,14 +129,14 @@ class PostgresPaperEvaluationStore:
                     PaperEvaluationObservationRow.observation_id,
                 )
             ).all()
-            return tuple(_from_row(row) for row in rows)
+            return tuple(observation_from_row(row) for row in rows)
         newest = self._session.scalars(
             statement.order_by(
                 PaperEvaluationObservationRow.occurred_at.desc(),
                 PaperEvaluationObservationRow.observation_id.desc(),
             ).limit(max(limit, 0))
         ).all()
-        return tuple(_from_row(row) for row in reversed(newest))
+        return tuple(observation_from_row(row) for row in reversed(newest))
 
 
 # Every model field has its own column except these. Decimals stay in the
@@ -246,7 +246,9 @@ def _to_row(observation: PaperEvaluationObservation) -> PaperEvaluationObservati
     )
 
 
-def _from_row(row: PaperEvaluationObservationRow) -> PaperEvaluationObservation:
+def observation_from_row(row: PaperEvaluationObservationRow) -> PaperEvaluationObservation:
+    """Decode compact and legacy full payloads; never validate ``row.payload`` directly."""
+
     stored = dict(row.payload)
     if stored.pop("compact", None):
         body: dict[str, Any] = {name: getattr(row, name) for name in _COLUMN_FIELDS}
