@@ -21,7 +21,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
-from uuid import UUID
 
 import httpx
 import pytest
@@ -103,16 +102,27 @@ def test_flag_on_submits_a_ladder_as_a_plain_market_entry_without_attached_tp_or
     from tests.test_governed_blofin_demo import Venue
 
     venue = Venue(Decimal("100000"))
+    posts: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        # The shared simulated venue asserts attached protection on every
+        # entry; a ladder entry deliberately has none, so capture it here.
+        if request.method == "POST" and request.url.path == "/api/v1/trade/order":
+            posts.append(json.loads(request.content))
+            data = [{"orderId": "demo-1", "clientOrderId": posts[-1]["clientOrderId"]}]
+            return httpx.Response(200, json={"code": "0", "data": data})
+        return venue.handle(request)
+
     plan = _ladder_plan(runner=runner)
-    provider = _submit_provider(venue.handle, partial_exits=True)
+    provider = _submit_provider(handle, partial_exits=True)
     assert provider.submit(plan=plan, client_order_id="ladder-entry", before_post=Mock())
-    assert venue.post_count == 1
-    assert venue.order is not None
-    assert venue.order["orderType"] == "market"
-    assert venue.order["size"] == str(plan.quantity.value)
+    (order,) = posts
+    assert order["orderType"] == "market"
+    assert order["positionSide"] == "net"
+    assert order["size"] == str(plan.quantity.value)
     for key in ("tpTriggerPrice", "tpOrderPrice", "slTriggerPrice", "slOrderPrice"):
-        assert key not in venue.order
-    assert "reduceOnly" not in venue.order
+        assert key not in order
+    assert "reduceOnly" not in order
 
 
 @pytest.mark.parametrize("partial_exits", [False, True])
@@ -268,10 +278,14 @@ def test_adapter_refuses_the_entry_side_for_a_long(side: str) -> None:
 
 
 def test_adapter_refuses_a_non_demo_host_before_any_request() -> None:
-    venue, recorder, identity = _adapter({}, base_url="https://openapi.blofin.com")
+    # BloFinClient itself refuses a production host in demo mode; the adapter
+    # checks again so a differently built client still cannot send a close.
+    client = Mock(base_url="https://openapi.blofin.com")
+    identity = Mock()
+    venue = BloFinDemoReduceOnlyVenue(client, plan=_plan_stub(), require_identity=identity)
     with pytest.raises(ValueError):
         venue.place_reduce_only_market(client_order_id="pe1t1n0", side="sell", size=Decimal("1"))
-    assert recorder.requests == []
+    client.request.assert_not_called()
     identity.assert_not_called()
 
 
@@ -407,7 +421,7 @@ def _loop(settings: Settings, venue: SimVenue | None, *, hold: str | None = None
         provider=provider,  # type: ignore[arg-type]
     )
     store = MemoryStore()
-    loop._demo_ladder_store = lambda session, command: store  # type: ignore[method-assign]
+    loop._demo_ladder_store = lambda session, command, terms: store  # type: ignore[method-assign]
     loop._demo_ladder_hold = lambda session, command: hold  # type: ignore[method-assign]
     return loop, store
 
@@ -464,9 +478,7 @@ def test_loop_hold_sends_no_close(reason: str) -> None:
     venue = LoopVenue(mark=Decimal("150"))
     loop, _store = _loop(_demo_settings(True), venue, hold=reason)
     plan, command, evidence = _ladder_inputs()
-    assert loop._manage_demo_ladder(None, command, plan, evidence) == (
-        f"demo_ladder_held_{reason}"
-    )
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == (f"demo_ladder_held_{reason}")
     assert venue.calls == []
 
 
