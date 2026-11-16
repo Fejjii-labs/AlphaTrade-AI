@@ -340,7 +340,10 @@ class Settings(BaseSettings):
     retention_audit_log_days: int = Field(default=90, ge=30, le=3650)
     retention_brain_observation_hours: int = Field(default=24, ge=24, le=8760)
     retention_public_market_hours: int = Field(default=24, ge=24, le=8760)
-    retention_demo_snapshot_days: int = Field(default=30, ge=7, le=365)
+    # BloFin demo snapshots: the newest row per UTC day is kept forever by
+    # default (0 or unset) for the daily P&L calendar. A positive value (>= 7)
+    # also drops daily rows older than that many days.
+    retention_demo_snapshot_days: int = Field(default=0, ge=0, le=3650)
     # Run VACUUM (ANALYZE) on each table the pass deleted rows from.
     retention_vacuum_analyze: bool = False
     # Repeated degraded or refused exit-monitor cycles raise a structured
@@ -1037,6 +1040,13 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("retention_demo_snapshot_days", mode="before")
+    @classmethod
+    def _demo_snapshot_days_unset_is_unlimited(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 0
+        return value
+
     @model_validator(mode="after")
     def _validate_retention_windows(self) -> Settings:
         """Error watcher events must outlive normal noise, never the reverse (C-B4)."""
@@ -1046,6 +1056,11 @@ class Settings(BaseSettings):
                 f"({self.retention_watcher_error_events_hours}) must be >= "
                 f"RETENTION_WATCHER_EVENTS_HOURS ({self.retention_watcher_events_hours}); "
                 "error events would otherwise be pruned before normal events."
+            )
+        if 0 < self.retention_demo_snapshot_days < 7:
+            raise ValueError(
+                f"RETENTION_DEMO_SNAPSHOT_DAYS ({self.retention_demo_snapshot_days}) must be "
+                "0 (keep one snapshot per UTC day forever) or at least 7."
             )
         if self.retention_telegram_notifications_hours < self.retention_candidate_days * 24:
             raise ValueError(

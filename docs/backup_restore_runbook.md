@@ -245,7 +245,7 @@ Hour windows have a 24-hour floor (maximum 8760); settings reject anything short
 | terminal `watcher_scan_lineages` with their attempts and `watcher_scheduled_scans` | 8 days (`RETENTION_WATCHER_LINEAGE_HOURS=192`, minimum 192) | non-terminal lineages. Scheduled-scan keys are bucketed by the closed bar and can recur for one bar (up to 1w), so a shorter window could re-run a replayed scan. |
 | `strategy_brain_setup_events`, `kind = system_observation` | 24 h (`RETENTION_BRAIN_OBSERVATION_HOURS`) | observations of setups that are still live (not terminal and not expired); every other kind (`paper_decision`, `paper_trade_*`, ...) |
 | `public_market_observations` | 24 h (`RETENTION_PUBLIC_MARKET_HOURS`), widened to the longest stored SFP read horizon | bars inside any SFP version's re-read window (`level_lookback + expiry_bars + quality_lookback + 2·pivot_width + 1` bars), so detector input never changes; rows without `bar_start` |
-| `blofin_demo_sync_snapshots` | newest per UTC day for 30 days (`RETENTION_DEMO_SNAPSHOT_DAYS`) | the newest and the newest successful snapshot per organization and user |
+| `blofin_demo_sync_snapshots` | intra-day rows after 24 h; the newest row of each UTC day is kept **forever** (`RETENTION_DEMO_SNAPSHOT_DAYS=0`, the default; a positive value ≥ 7 also drops daily rows older than that many days) | the newest and the newest successful snapshot per organization and user; one row per UTC day for the dashboard's daily P&L / win-rate calendar |
 
 An event counts as an error when its name contains `fail`, `error`, `blocked`, `degraded`, `stale`
 or `reject`, or when `fields.evaluation_status` is `failed`, `degraded` or `blocked`. Errors and

@@ -15,8 +15,9 @@ Pruned:
   evaluation rows, Brain ``system_observation`` events of finished setups and
   public market receipts older than the longest SFP read horizon.
 - Terminal watcher lineages after ``retention_watcher_lineage_hours`` (8 days).
-- BloFin demo snapshots: newest per org, newest successful per org, and the
-  newest per UTC day for 30 days.
+- BloFin demo snapshots: intra-day rows after 24h. Kept: the newest and the
+  newest successful per (org, user), and the newest per UTC day forever
+  (``retention_demo_snapshot_days`` = 0; a positive value caps the daily rows).
 
 Each policy deletes in small batches by primary key so no statement holds a
 long lock on a hot table. Dry-run counts what would go and writes nothing.
@@ -27,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial
 
 import structlog
 from sqlalchemy import Engine, text
@@ -166,7 +168,7 @@ def _lineage_done(alias: str) -> str:
     )
 
 
-def _blofin_thinning(dialect: str) -> str:
+def _blofin_thinning(dialect: str, *, horizon: bool = False) -> str:
     same_day = f"{_utc_day('n.synced_at', dialect)} = {_utc_day('t.synced_at', dialect)}"
     same_user = (
         "n.user_id IS NOT DISTINCT FROM t.user_id"
@@ -185,8 +187,11 @@ def _blofin_thinning(dialect: str) -> str:
         # Never the newest successful row (successful_only readers).
         f"AND NOT (COALESCE(t.health_status, 'ok') IN {_SUCCESSFUL_SNAPSHOT} "
         f"AND NOT EXISTS ({newer} AND COALESCE(n.health_status, 'ok') IN {_SUCCESSFUL_SNAPSHOT})) "
-        # Older than the horizon, or not the newest row of its UTC day.
+    ) + (
+        # Not the newest row of its UTC day; with a horizon, also older daily rows.
         f"AND (t.synced_at < :horizon OR EXISTS ({newer} AND {same_day}))"
+        if horizon
+        else f"AND EXISTS ({newer} AND {same_day})"
     )
 
 
@@ -225,6 +230,7 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
     """The pruned tables and their windows. Anything not listed is kept forever."""
 
     error_event = _watcher_error_event_sql()
+    demo_days = settings.retention_demo_snapshot_days
     attempts = timedelta(hours=settings.retention_watcher_attempts_hours)
     lineages = timedelta(hours=settings.retention_watcher_lineage_hours)
     candidates = timedelta(days=settings.retention_candidate_days)
@@ -391,13 +397,15 @@ def retention_policies(settings: Settings) -> tuple[RetentionPolicy, ...]:
                 "WHERE m.audit_event_id = t.id)"
             ),
         ),
+        # Intra-day rows go after 24h; the newest row of each UTC day is kept
+        # forever (dashboard daily P&L calendar) unless a horizon is set.
         RetentionPolicy(
             table="blofin_demo_sync_snapshots",
             primary_key="id",
             timestamp="synced_at",
-            window=timedelta(0),
-            keep_predicate=_blofin_thinning,
-            extra_cutoffs=(("horizon", timedelta(days=settings.retention_demo_snapshot_days)),),
+            window=timedelta(hours=24),
+            keep_predicate=partial(_blofin_thinning, horizon=demo_days > 0),
+            extra_cutoffs=(("horizon", timedelta(days=demo_days)),) if demo_days > 0 else (),
         ),
     )
 

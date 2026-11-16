@@ -162,6 +162,8 @@ def _seed(factory) -> None:
         "VALUES (:id, :org, :at)",
         [
             {"id": "a-old-1", "org": org_a, "at": old - timedelta(days=2)},
+            # Same UTC day as a-old-2 and older than 24h: thinned.
+            {"id": "a-old-2-early", "org": org_a, "at": old - timedelta(hours=1)},
             {"id": "a-old-2", "org": org_a, "at": old},
             {"id": "a-new", "org": org_a, "at": fresh},
             # org B's only snapshot is old: it is the newest, so it stays.
@@ -202,7 +204,8 @@ def test_prune_keeps_trade_evidence_newest_snapshot_and_other_tables(factory) ->
             session.execute(text("SELECT id FROM blofin_demo_sync_snapshots")).scalars().all()
         )
     assert kept == {"trade-old", "plan-old", "scan-new"}
-    assert snapshots == {"a-new", "b-only"}
+    # The newest row of each UTC day is kept forever by default.
+    assert snapshots == {"a-old-1", "a-old-2", "a-new", "b-only"}
     assert _count(factory, "conversations") == 1
 
 
@@ -510,7 +513,7 @@ def test_retention_daily_cycle_windows_and_restart(factory, dry_run) -> None:
     assert result.status == ("dry_run" if dry_run else "pruned")
     assert _count(factory, "watcher_observability_events") == (255 if dry_run else 5)
     assert _count(factory, "paper_evaluation_observations") == (4 if dry_run else 3)
-    assert _count(factory, "blofin_demo_sync_snapshots") == (4 if dry_run else 2)
+    assert _count(factory, "blofin_demo_sync_snapshots") == (5 if dry_run else 4)
     assert _count(factory, "conversations") == 1
     if dry_run:
         assert not [s for s in mutations if "controlled_runtime_status" not in s]
