@@ -33,7 +33,7 @@ from app.services.canonical_strategy_evaluation import resolve_executable_strate
 from app.watcher.contracts import EvaluationCommand, EvaluationMode, ScanRequest, ScanTrigger
 from app.watcher.errors import WatcherEvidenceUnavailableError
 from app.watcher.hashing import evaluation_input_hash, scan_request_hash
-from app.workers.watcher_market import WatchlistContractDiscovery
+from app.workers.watcher_market import SymbolMarketFactory, WatchlistContractDiscovery
 from app.workers.watcher_paper_targets import list_watchlist_scan_targets
 from tests.test_nested_timeframes import native_source
 from tests.test_strategy_brain_nested import approved
@@ -255,6 +255,62 @@ def _fetch(source: BinanceUsdmPerpetualSource, at: datetime, bars: int):
         min_final_bars=bars,
         evaluated_at=at,
     )
+
+
+def test_five_symbol_factory_and_exit_loader_share_one_weight_budget(monkeypatch) -> None:
+    from app.market_contracts.adapters.evidence_pool import reset_shared_binance_evidence_pools
+    from app.market_contracts.errors import RateLimitedError
+    from app.services.paper_exit_candles import build_candle_source
+
+    reset_shared_binance_evidence_pools()
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=[])
+
+    settings = _settings(binance_request_weight_per_minute=20)
+    factory = SymbolMarketFactory(settings, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(factory.discovery, "require", lambda *_args: None)
+    sources = [factory.composition(symbol)[3][0] for symbol in WATCHLIST]
+    exit_source = build_candle_source(settings, "binance_usdm", "process")
+    try:
+        budget = sources[0].request_budget
+        budget.max_wait_seconds = 0
+        assert all(source.request_budget is budget for source in [*sources, exit_source])
+        sources[0]._get("/fapi/v1/aggTrades", {"symbol": WATCHLIST[0], "limit": 1000})
+        with pytest.raises(RateLimitedError):
+            sources[1]._get("/fapi/v1/aggTrades", {"symbol": WATCHLIST[1], "limit": 1000})
+        assert len(calls) == 1
+    finally:
+        factory.retain([])
+        exit_source.close()
+        reset_shared_binance_evidence_pools()
+
+
+def test_separate_factories_reuse_confirmed_closed_candles(monkeypatch) -> None:
+    from app.market_contracts.adapters.evidence_pool import reset_shared_binance_evidence_pools
+
+    reset_shared_binance_evidence_pools()
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=_kline_rows(BOUNDARY, 102))
+
+    transport = httpx.MockTransport(handler)
+    factories = [SymbolMarketFactory(_settings(), transport=transport) for _ in range(2)]
+    try:
+        for factory in factories:
+            monkeypatch.setattr(factory.discovery, "require", lambda *_args: None)
+            source = factory.composition("BTCUSDT")[3][0]
+            series = _fetch(source, BOUNDARY + timedelta(seconds=20), 100)
+            assert series.bars[-1].interval_end == BOUNDARY
+        assert len(calls) == 2  # One confirmation pair across both compositions.
+    finally:
+        for factory in factories:
+            factory.retain([])
+        reset_shared_binance_evidence_pools()
 
 
 def test_many_scopes_on_one_symbol_timeframe_share_one_kline_read() -> None:

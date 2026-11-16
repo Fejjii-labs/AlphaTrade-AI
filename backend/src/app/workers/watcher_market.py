@@ -333,7 +333,7 @@ class SymbolMarketFactory:
             return entry
         catalog = catalog_for_symbols([symbol], venue=venue)
         source = resolve_perpetual_evidence_source(
-            self.settings, catalog=catalog, symbol=symbol, transport=self.transport
+            self.settings, catalog=catalog, symbol=symbol, transport=self.transport, shared=True
         )
         if isinstance(source, FailoverPerpetualSource):
             raw = [source._primary, source._secondary]
