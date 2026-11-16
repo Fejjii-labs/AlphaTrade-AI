@@ -146,7 +146,8 @@ def test_registration_immutable_approval_and_tenant_binding(store, bearish):
     assert version.card["brain"]["family"] == "sfp"
     assert version.card["brain"]["alert_rules"] == []
     assert version.pattern_spec == configuration.model_dump(mode="json")
-    with pytest.raises(StrategyEvaluationPolicyError, match="organization"):
+    # A foreign strategy ID must remain indistinguishable from a missing ID.
+    with pytest.raises(NotFoundError, match="Strategy version not found"):
         resolve_executable_strategy_policy(
             session, organization_id=uuid4(), strategy_version_id=version.id
         )

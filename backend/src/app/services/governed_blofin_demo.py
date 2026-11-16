@@ -2,7 +2,7 @@
 
 Uses the existing eligibility, risk, plan, approval, reservation, dispatch fence,
 immutable fill, Journal and learning authorities. The separate staging arm and
-principal pins never grant real execution. SFP keeps its existing refusal.
+principal pins never grant real execution. SFP requires a separate default-off planning opt-in.
 """
 
 from __future__ import annotations
@@ -688,7 +688,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
     ) -> AutomatedPaperLoopProof:
         from app.strategy_brain.sfp.contracts import SfpSpec
 
-        if isinstance(getattr(policy, "authored_spec", None), SfpSpec):
+        if isinstance(getattr(policy, "authored_spec", None), SfpSpec) and not getattr(
+            self._settings, "governed_demo_sfp_enabled", False
+        ):
             return _proof(candidate, "skipped", "sfp_execution_plan_not_authorized")
         existing = self._runtime.plan_store.get_by_candidate_scope(
             organization_id=target.organization_id,
@@ -788,7 +790,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         except Exception:
             return _proof(candidate, "blocked", "risk_limits_unverified")
-        return super()._bound(
+        proof = super()._bound(
             session,
             target=target,
             candidate=candidate,
@@ -798,6 +800,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             policy=policy,
             account=account,
         )
+
+        if isinstance(getattr(policy, "authored_spec", None), SfpSpec) and proof.stage == "skipped":
+            from app.schemas.common import AuditEventType, AuditResult
+
+            self._audit(
+                session,
+                target=target,
+                candidate=candidate,
+                event_type=AuditEventType.RISK_BLOCK,
+                result=AuditResult.BLOCKED,
+                metadata={"reason_code": proof.reason_code, "execution_venue": "BLOFIN_DEMO"},
+            )
+        return proof
 
     def _eligibility_command(
         self,
@@ -863,10 +878,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # minimum is not a gate once a profile is active: that plan is sized
         # below with size_for_profile. Leverage and margin-mode reads still
         # refuse, and this method does not write the venue.
-        # SFP execution stays unauthorized on this path. Shared _plan_terms
-        # refuses it unless the internal paper loop opts in. This call also
-        # leaves side-aware fill and the ATR floor off: the demo book below
-        # replaces the entry, and a haircut here would move the evidence price.
+        from app.strategy_brain.sfp.contracts import SfpSpec
+
+        sfp = isinstance(getattr(policy, "authored_spec", None), SfpSpec)
+        if sfp and not self._settings.governed_demo_sfp_enabled:
+            return "sfp_execution_plan_not_authorized"
+        # Read structure with the same ATR floor, without changing the evidence
+        # quote. Only the rounded executable demo book sets the final entry.
         terms = _plan_terms(
             candidate=candidate,
             assembled=assembled,
@@ -876,7 +894,15 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
-            accept_unprofiled_minimum=active_profile is not None,
+            accept_unprofiled_minimum=active_profile is not None or sfp,
+            **(
+                {
+                    "governed_demo_sfp": True,
+                    "min_stop_atr_floor": self._settings.sfp_min_stop_atr_multiple,
+                }
+                if sfp
+                else {}
+            ),
         )
         if isinstance(terms, str):
             return terms
@@ -894,6 +920,12 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         entry = snapshot.price
         if (is_long and not stop < entry < target) or (not is_long and not target < entry < stop):
             return "demo_price_invalidates_setup"
+        if sfp:
+            from app.services.automated_paper_loop import _sfp_quote_refusal
+
+            refusal = _sfp_quote_refusal(quote=entry, stop=stop, target=target, is_long=is_long)
+            if refusal is not None:
+                return refusal
         # A binding configured leverage is either written after this plan passes
         # (sized at the configured values; the write reads them back exactly) or,
         # without the write, must already read back exactly. Otherwise the plan
@@ -918,6 +950,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if loss_floor is None or loss_ceiling is None:
             return "stop_loss_band_invalid"
         risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
+        sfp_stop_cap = None
+        if sfp and active_profile is None:
+            # Paper risk is stop-distance cash; fees remain reserved below.
+            percent = fixed_risk_percent if fixed_risk_percent is not None else Decimal("1")
+            if not percent.is_finite() or not 0 < percent <= 5:
+                return "risk_limits_unverified"
+            sfp_stop_cap = equity * percent / Decimal("100")
         if not account_leverage.is_finite() or account_leverage <= 0:
             return "demo_account_leverage_unreadable"
         if account_leverage > demo_max_leverage(self._settings):
@@ -954,6 +993,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             raw = (
                 min(
                     risk_cap / (abs(entry - stop) + cost_per_base),
+                    sfp_stop_cap / abs(entry - stop)
+                    if sfp_stop_cap is not None
+                    else notional_cap / entry,
                     notional_cap / entry,
                 )
                 / snapshot.multiplier
@@ -1071,6 +1113,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             funding_rate=profile_funding_rate,
             funding_periods=profile_funding_periods,
         )
+        if sfp_stop_cap is not None and base * abs(adverse_entry - stop) > sfp_stop_cap:
+            return "demo_depth_exceeds_risk_limit"
         if base * upper > notional_cap:
             return "demo_depth_exceeds_size_limit"
         if profile_leverage is not None:
