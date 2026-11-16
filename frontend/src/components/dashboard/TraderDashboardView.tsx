@@ -5,7 +5,6 @@ import Link from "next/link";
 import { NativeActivity } from "@/components/activity/NativeActivity";
 import { useAuth } from "@/contexts/AuthContext";
 import { useResolvedTimezone } from "@/hooks/useResolvedTimezone";
-import { TIMEZONE_SOURCE_LABELS } from "@/lib/timezone";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 import { AttentionCard } from "./AttentionCard";
@@ -205,7 +204,6 @@ export function TraderDashboardView({
     <div className="page-sections" data-testid="trader-dashboard">
       <PageHeader
         title="Dashboard"
-        description="Journal performance, BloFin demo account, recent activity, and attention areas."
         actions={
           <>
             <Link
@@ -259,7 +257,6 @@ export function TraderDashboardView({
         refreshKey={demoRefreshKey}
         scope={venue}
         timezone={dayZone}
-        timezoneLabel={TIMEZONE_SOURCE_LABELS[zone.source]}
       />
 
       {!demo && !simulator ? (
@@ -274,7 +271,7 @@ export function TraderDashboardView({
       {demo && user && organization ? (
         <div key={accountContext} className="page-sections">
           <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
-          <NativeActivity statistics refreshKey={demoRefreshKey} />
+          <NativeActivity compact refreshKey={demoRefreshKey} />
         </div>
       ) : null}
       {simulator ? (
