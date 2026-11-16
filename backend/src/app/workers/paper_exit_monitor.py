@@ -10,8 +10,11 @@ same method as ``POST /paper-plan/close``. No exchange write is added.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from types import SimpleNamespace
+from typing import Protocol
 from uuid import UUID
 
 import structlog
@@ -24,6 +27,7 @@ from app.runtime.canonical import ProductionCanonicalRuntime
 from app.schemas.execution_protocol import ClosePaperPlanRequest, ClosePaperPlanResult
 from app.services.paper_exit_candles import PaperExitCandleLoader
 from app.services.paper_exit_monitor import (
+    INTERNAL_PAPER_VENUE,
     STATUS_BACKING_OFF,
     CloseFailureBackoff,
     DegradationStreak,
@@ -32,12 +36,16 @@ from app.services.paper_exit_monitor import (
     MonitorReport,
     OpenInternalPaperTrade,
     PaperExitCloser,
+    PartialExitRecorder,
+    PartialExitStep,
     build_clock_alert,
     clock_refusal_reason,
     load_open_internal_paper_trades,
     observe_repeated_degradation,
+    partial_close_request_for,
     run_paper_exit_monitor,
 )
+from app.services.partial_exits.position import ExitFill, StopMove
 from app.workers.paper_worker import CycleOutcome
 
 logger = structlog.get_logger(__name__)
@@ -84,6 +92,174 @@ class ExecutionServicePaperExitCloser(PaperExitCloser):
             session.close()
 
 
+class _ExecutionKillSwitch(Protocol):
+    def is_execution_blocked(self, *, organization_id: UUID) -> bool: ...
+
+
+def partial_hold_reason(
+    organization_id: UUID,
+    *,
+    kill_switch: _ExecutionKillSwitch,
+    paused: Callable[[], bool],
+) -> str | None:
+    """Why partial-exit management is held for this organization, or None.
+
+    The kill switch and a paused worker both hold every reduction and stop
+    move. An unreadable state holds too (fail closed).
+    """
+
+    try:
+        if kill_switch.is_execution_blocked(organization_id=organization_id):
+            return "kill_switch_active"
+        if paused():
+            return "worker_paused"
+    except Exception:
+        return "hold_state_unavailable"
+    return None
+
+
+def _partial_hold_gate(
+    factory: sessionmaker[Session], settings: Settings
+) -> Callable[[UUID], str | None]:
+    """One read per organization per pass."""
+
+    from app.services.audit_service import AuditService
+    from app.services.risk.kill_switch import KillSwitchService
+    from app.workers.repository import WorkerHeartbeatRepository
+
+    seen: dict[UUID, str | None] = {}
+
+    def gate(organization_id: UUID) -> str | None:
+        if organization_id in seen:
+            return seen[organization_id]
+        session = factory()
+        try:
+
+            def paused() -> bool:
+                row = WorkerHeartbeatRepository(session).get_by_name(settings.worker_name)
+                return bool(row is not None and row.paused)
+
+            reason = partial_hold_reason(
+                organization_id,
+                kill_switch=KillSwitchService(session, AuditService(session), settings),
+                paused=paused,
+            )
+        except Exception:
+            reason = "hold_state_unavailable"
+        finally:
+            session.rollback()
+            session.close()
+        seen[organization_id] = reason
+        return reason
+
+    return gate
+
+
+class DatabasePartialExitRecorder(PartialExitRecorder):
+    """Partial-exit records in PostgreSQL; the final close in the same transaction.
+
+    The open journal row is locked first. A row that is no longer OPEN (for
+    example closed by a human) refuses with ``already_closed``, so a ladder
+    can never close a position twice.
+    """
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        *,
+        close: Callable[[Session, ClosePaperPlanRequest], object] | None = None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._settings = settings
+        self._close = close
+        self._runtime: ProductionCanonicalRuntime | None = None
+
+    def load(
+        self, trade: OpenInternalPaperTrade
+    ) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
+        from app.repositories.position_exit_events import PositionExitEventRepository
+
+        session = self._session_factory()
+        try:
+            return PositionExitEventRepository(session).load(
+                organization_id=trade.organization_id,
+                execution_lifecycle_id=trade.command_id,
+                venue=INTERNAL_PAPER_VENUE,
+            )
+        finally:
+            session.rollback()
+            session.close()
+
+    def record(self, trade: OpenInternalPaperTrade, step: PartialExitStep) -> object:
+        from sqlalchemy import select
+
+        from app.core.errors import ValidationAppError
+        from app.db.models import JournalTrade
+        from app.repositories.position_exit_events import PositionExitEventRepository
+        from app.schemas.common import JournalTradeStatus
+
+        if trade.partial is None:
+            raise ValueError("record requires a ladder trade")
+        session = self._session_factory()
+        try:
+            query = select(JournalTrade).where(
+                JournalTrade.id == trade.journal_trade_id,
+                JournalTrade.organization_id == trade.organization_id,
+            )
+            bind = session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                query = query.with_for_update()
+            row = session.scalar(query)
+            if row is None or row.status is not JournalTradeStatus.OPEN:
+                raise ValidationAppError(
+                    "Paper trade is no longer open; partial exit not recorded.",
+                    details={"reason": "already_closed"},
+                )
+            state = PositionExitEventRepository(session).append(
+                organization_id=trade.organization_id,
+                execution_lifecycle_id=trade.command_id,
+                venue=INTERNAL_PAPER_VENUE,
+                base=trade.partial.open_state(),
+                fills=step.fills,
+                stop_moves=step.stop_moves,
+                evidence=step.evidence,
+            )
+            result: object = SimpleNamespace(replayed=False)
+            if state.is_closed:
+                request = partial_close_request_for(trade, replace(step, state=state))
+                result = (self._close or self._service_close)(session, request)
+            session.commit()
+            from app.services.safety_alerts import deliver_queued_safety_alerts
+
+            deliver_queued_safety_alerts(session)
+            return result
+        except Exception:
+            session.rollback()
+            from app.services.safety_alerts import discard_queued_safety_alerts
+
+            discard_queued_safety_alerts(session)
+            raise
+        finally:
+            session.close()
+
+    def _service_close(self, session: Session, request: ClosePaperPlanRequest) -> object:
+        from app.runtime.canonical import build_production_canonical_runtime
+        from app.services.audit_service import AuditService
+        from app.services.execution_service import ExecutionService
+
+        if self._runtime is None:
+            self._runtime = build_production_canonical_runtime(
+                self._session_factory, settings=self._settings
+            )
+        return ExecutionService(
+            session,
+            self._settings,
+            AuditService(session),
+            canonical_runtime=self._runtime,
+        ).close_canonical_paper_plan(request)
+
+
 def read_database_now(session: Session) -> datetime | None:
     """Database ``now()``, or None when the session cannot return an aware time."""
 
@@ -105,6 +281,8 @@ def run_configured_exit_monitor(
     close_failures: dict[UUID, CloseFailureBackoff] | None = None,
     loader: PaperExitCandleLoader | None = None,
     bar_gate: dict[UUID, tuple[datetime, datetime]] | None = None,
+    partial_recorder: PartialExitRecorder | None = None,
+    partial_hold: Callable[[UUID], str | None] | None = None,
 ) -> MonitorReport:
     """One monitor pass. The flag off returns before any database or market read.
 
@@ -126,6 +304,9 @@ def run_configured_exit_monitor(
         return MonitorReport(status="refused", error=refusal)
     if shutdown is not None and shutdown():
         return MonitorReport(status="stopped")
+    from app.services.partial_exits.flags import PAPER_INTERNAL_VENUE, partial_exits_enabled
+
+    partial_enabled = partial_exits_enabled(settings, PAPER_INTERNAL_VENUE)
     factory = session_factory or _session_factory()
     wall = clock() if clock is not None else datetime.now(UTC)
     max_skew = timedelta(seconds=int(settings.paper_exit_monitor_max_clock_skew_seconds))
@@ -166,7 +347,12 @@ def run_configured_exit_monitor(
                 organization_ids=tuple(dict.fromkeys(trade.organization_id for trade in trades)),
             )
         evaluated_at = trusted[0]
-        trades, rejected = load_open_internal_paper_trades(session)
+        # Flag off keeps the original call exactly; ladder rows stay rejected.
+        trades, rejected = (
+            load_open_internal_paper_trades(session, partial_exits_enabled=True)
+            if partial_enabled
+            else load_open_internal_paper_trades(session)
+        )
         session.rollback()
     finally:
         session.close()
@@ -198,6 +384,14 @@ def run_configured_exit_monitor(
         shutdown=shutdown,
         settling_streaks=settling_streaks,
         close_failures=close_failures,
+        partial=(
+            partial_recorder or DatabasePartialExitRecorder(factory, settings)
+            if partial_enabled
+            else None
+        ),
+        partial_hold=(partial_hold or _partial_hold_gate(factory, settings))
+        if partial_enabled
+        else None,
     )
 
 

@@ -201,9 +201,8 @@ def _offline_sql(direction: str, revisions: str, monkeypatch: pytest.MonkeyPatch
 
 
 def test_migration_is_a_single_reversible_revision(monkeypatch: pytest.MonkeyPatch) -> None:
-    from alembic.script import ScriptDirectory
-
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
 
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
@@ -362,3 +361,131 @@ def test_hold_reason_reads_kill_switch_then_pause_and_fails_closed() -> None:
         partial_hold_reason(ORG, kill_switch=_KillSwitch(False), paused=paused(RuntimeError()))
         == "hold_state_unavailable"
     )
+
+
+# Worker recorder: one transaction for records and the final close.
+
+
+@pytest.fixture
+def full_db() -> sessionmaker[Session]:
+    from app.db.base import Base
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _open_journal(factory: sessionmaker[Session], status: str = "open") -> None:
+    from app.db.models import JournalTrade
+    from app.schemas.common import JournalTradeSource, JournalTradeStatus
+    from tests.test_paper_exit_monitor import ENTRY, JOURNAL
+    from tests.test_paper_exit_monitor import ORG as MONITOR_ORG
+    from tests.test_paper_exit_monitor import USER as MONITOR_USER
+
+    with factory() as session:
+        session.add(
+            JournalTrade(
+                id=JOURNAL,
+                organization_id=MONITOR_ORG,
+                user_id=MONITOR_USER,
+                source=JournalTradeSource.PAPER_EXECUTION,
+                status=JournalTradeStatus(status),
+                symbol="BTCUSDT",
+                timeframe="15m",
+                direction=TradeDirection.LONG,
+                entry_time=ENTRY,
+            )
+        )
+        session.commit()
+
+
+def _settings() -> object:
+    from app.core.config import Settings
+
+    return Settings(_env_file=None, paper_partial_exits_enabled=True)  # type: ignore[call-arg]
+
+
+def _event_count(factory: sessionmaker[Session]) -> int:
+    with factory() as session:
+        return session.query(PositionExitEventRow).count()
+
+
+def test_recorder_writes_a_reduction_once_and_leaves_the_trade_open(
+    full_db: sessionmaker[Session],
+) -> None:
+    from app.workers.paper_exit_monitor import DatabasePartialExitRecorder
+    from tests.test_partial_exit_paper_monitor import _bars, _decide, _ladder_trade
+
+    _open_journal(full_db)
+    closes: list[ClosePaperPlanRequest] = []
+    recorder = DatabasePartialExitRecorder(
+        full_db,
+        _settings(),
+        close=lambda _s, request: closes.append(request),  # type: ignore[arg-type]
+    )
+    trade = _ladder_trade()
+    step = _decide(trade, _bars(("101", "110")))
+    recorder.record(trade, step)
+    recorder.record(trade, step)
+    assert _event_count(full_db) == 2  # TP1 fill + breakeven move, written once
+    fills, moves = recorder.load(trade)
+    assert [fill.leg_order for fill in fills] == [1]
+    assert [move.key for move in moves] == ["breakeven"]
+    assert closes == []
+
+
+def test_recorder_closes_with_every_fill_in_the_same_transaction(
+    full_db: sessionmaker[Session],
+) -> None:
+    from app.workers.paper_exit_monitor import DatabasePartialExitRecorder
+    from tests.test_partial_exit_paper_monitor import _bars, _decide, _ladder_trade
+
+    _open_journal(full_db)
+    closes: list[ClosePaperPlanRequest] = []
+    recorder = DatabasePartialExitRecorder(
+        full_db,
+        _settings(),
+        close=lambda _s, request: closes.append(request),  # type: ignore[arg-type]
+    )
+    trade = _ladder_trade()
+    step = _decide(trade, _bars(("101", "121"), ("118", "125"), ("122", "128"), ("117", "126")))
+    recorder.record(trade, step)
+    assert len(closes) == 1
+    assert closes[0].exit_fills is not None
+    assert sum(fill.quantity for fill in closes[0].exit_fills) == Decimal("1.000")
+
+
+def test_failed_close_rolls_back_the_records(full_db: sessionmaker[Session]) -> None:
+    from app.workers.paper_exit_monitor import DatabasePartialExitRecorder
+    from tests.test_partial_exit_paper_monitor import _bars, _decide, _ladder_trade
+
+    _open_journal(full_db)
+
+    def failing(_session: Session, _request: ClosePaperPlanRequest) -> object:
+        raise RuntimeError("close failed")
+
+    recorder = DatabasePartialExitRecorder(full_db, _settings(), close=failing)  # type: ignore[arg-type]
+    trade = _ladder_trade()
+    step = _decide(trade, _bars(("101", "121"), ("118", "125"), ("122", "128"), ("117", "126")))
+    with pytest.raises(RuntimeError):
+        recorder.record(trade, step)
+    assert _event_count(full_db) == 0
+
+
+def test_closed_journal_row_refuses_so_a_ladder_cannot_close_twice(
+    full_db: sessionmaker[Session],
+) -> None:
+    from app.workers.paper_exit_monitor import DatabasePartialExitRecorder
+    from tests.test_partial_exit_paper_monitor import _bars, _decide, _ladder_trade
+
+    _open_journal(full_db, status="closed")
+    recorder = DatabasePartialExitRecorder(full_db, _settings())  # type: ignore[arg-type]
+    trade = _ladder_trade()
+    with pytest.raises(ValidationAppError) as raised:
+        recorder.record(trade, _decide(trade, _bars(("101", "110"))))
+    assert raised.value.details["reason"] == "already_closed"
+    assert _event_count(full_db) == 0
