@@ -37,9 +37,8 @@ export default function LoginPage() {
     <div className="mx-auto flex min-h-screen max-w-md flex-col justify-start gap-3 px-4 py-4 [@media(min-height:600px)]:justify-center [@media(min-height:600px)]:gap-6 [@media(min-height:600px)]:py-10">
       <div>
         <h1 className="text-2xl font-semibold text-zinc-50">Sign in</h1>
-        <p className="text-sm text-zinc-400">Paper-only trading workspace. Real execution remains disabled.</p>
       </div>
-      <PaperModeBanner />
+      <PaperModeBanner compact />
       <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-5">
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
