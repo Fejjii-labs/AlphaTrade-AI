@@ -22,16 +22,23 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.display_names import display_name, family_label
 from app.services.strategy_library_service import StrategyLibraryService
 from app.services.strategy_versioning import StrategyVersioningService
+from app.strategy_brain.dline.contracts import DLINE_KIND, DlineSpec
 from app.strategy_brain.records import NESTED_FAMILY, aware
 from app.strategy_brain.sfp.contracts import SFP_KIND, SfpSpec
 
-BrainFamily = Literal["nested_continuation", "sfp"]
+BrainFamily = Literal["nested_continuation", "sfp", "d_line"]
 
 
-def template_name(spec: NestedContinuationSpec | SfpSpec) -> str:
+def template_name(spec: NestedContinuationSpec | SfpSpec | DlineSpec) -> str:
     """Shared identity for a preview and explicit idempotent template creation."""
     signature = canonical_sha256(spec.model_dump(mode="json"))[:12]
-    family_name = "SFP" if isinstance(spec, SfpSpec) else "Nested"
+    family_name = (
+        "D-line"
+        if isinstance(spec, DlineSpec)
+        else "SFP"
+        if isinstance(spec, SfpSpec)
+        else "Nested"
+    )
     return (
         f"{family_name} {spec.symbol} {spec.direction.value} "
         f"{spec.trigger_timeframe.value} {signature}"
@@ -43,7 +50,7 @@ def create_template(
     *,
     organization_id: UUID,
     user_id: UUID,
-    spec: NestedContinuationSpec | SfpSpec,
+    spec: NestedContinuationSpec | SfpSpec | DlineSpec,
 ) -> dict[str, Any]:
     name = template_name(spec)
     sfp = isinstance(spec, SfpSpec)
@@ -65,7 +72,9 @@ def create_template(
                 "version_id": version.id,
                 "version": version.version,
                 "lifecycle": latest.new_state.value if latest else "draft",
-                "execution_permission": "existing_paper_gates_only",
+                "execution_permission": "none"
+                if isinstance(spec, DlineSpec)
+                else "existing_paper_gates_only",
                 "parameters": spec.parameters.model_dump(mode="json"),
             }
     card = StrategyCard(
@@ -116,12 +125,35 @@ def create_template(
                 ),
             }
         )
+    if isinstance(spec, DlineSpec):
+        card = card.model_copy(
+            update={
+                "entry_conditions": ["Closed close beyond a confirmed pivot-fitted D-line"],
+                "confirmation_conditions": ["Closed canonical candles; causal HTF bias"],
+                "invalidation": ["Structural low/high or broken parent trendline"],
+                "stop_loss": ["Recent confirmed swing; intact Nested 2 overrides"],
+                "take_profit_plan": ["Fib plus sourced levels; research reference only"],
+                "position_sizing": ["Research risk fraction <= 3%; no orders"],
+                "brain": StrategyBrainDefinition(
+                    family="d_line",
+                    structure_conditions=["confirmed pivots", "closed break"],
+                    setup_conditions=["draft research only"],
+                    alert_rules=[],
+                    execution_constraints=["draft_only", "no_execution_capability"],
+                    learning_notes=["No automated OB/POC provider in v1."],
+                ),
+            }
+        )
     strategy = StrategyLibraryService(session).create(
         UserStrategyCreate(
             organization_id=organization_id,
             user_id=user_id,
             name=card.strategy_name,
-            setup_type=StrategyId.SFP if sfp else StrategyId.NESTED_CONTINUATION,
+            setup_type=StrategyId.D_LINE
+            if isinstance(spec, DlineSpec)
+            else StrategyId.SFP
+            if sfp
+            else StrategyId.NESTED_CONTINUATION,
             card=card,
             pattern_spec=spec.model_dump(mode="json"),
         )
@@ -238,7 +270,7 @@ def overview(
         if (
             version is None
             or not version.pattern_spec
-            or version.pattern_spec.get("kind") not in {NESTED_KIND, SFP_KIND}
+            or version.pattern_spec.get("kind") not in {NESTED_KIND, SFP_KIND, DLINE_KIND}
         ):
             continue
         lifecycle = StrategyVersioningService(session).latest_lifecycle_event_for_version(
@@ -270,7 +302,9 @@ def overview(
                 else None,
                 "created_at": aware(version.created_at).isoformat(),
                 "created_from": version.change_source.value,
-                "execution_permission": "sfp_plan_path_unavailable"
+                "execution_permission": "none"
+                if version.pattern_spec.get("kind") == DLINE_KIND
+                else "sfp_plan_path_unavailable"
                 if version.pattern_spec.get("kind") == SFP_KIND
                 else "paper_gates_required",
                 "historical_expectancy": "insufficient_history",

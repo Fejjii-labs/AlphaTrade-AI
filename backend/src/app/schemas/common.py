@@ -232,6 +232,7 @@ class StrategyId(StrEnum):
     MENTAL_CAPITAL_GUARD = "mental_capital_guard"
     NESTED_CONTINUATION = "nested_continuation"
     SFP = "sfp"
+    D_LINE = "d_line"
     MANUAL_REVIEW = "manual_review"
 
 

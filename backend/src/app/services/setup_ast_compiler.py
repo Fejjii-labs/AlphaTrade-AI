@@ -832,6 +832,20 @@ def compile_from_authored(
         return compile_pattern(pattern).model_copy(
             update={"strategy_version_id": strategy_version_id, "organization_id": organization_id}
         )
+    # Detection-only research cannot produce any executable AST, including shorts.
+    if isinstance(pattern_spec, dict) and pattern_spec.get("kind") == "d_line/v1":
+        return CompileResult(
+            status=SetupCompileStatus.NON_EXECUTABLE.value,
+            failures=[
+                _fail(
+                    "dline_draft_only",
+                    "D-line detection has no execution capability.",
+                    "pattern_spec",
+                )
+            ],
+            strategy_version_id=strategy_version_id,
+            organization_id=organization_id,
+        )
     if isinstance(pattern_spec, FirstSliceAuthoredPatternSpec):
         spec = pattern_spec
     else:
