@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 
 from app.core.errors import ValidationAppError
 from app.schemas.common import TradeDirection, TradeResult
@@ -54,6 +55,77 @@ def paper_close_pnl(
     gross = _money(delta * quantity)
     net = _money(gross - fee_cost - funding_cost - slippage_cost)
     return PaperCloseEconomics(gross_pnl=gross, net_pnl=net, result=_result_for(net))
+
+
+@dataclass(frozen=True, slots=True)
+class ExitFillInput:
+    """One partial exit with the costs already attributed to it."""
+
+    quantity: Decimal
+    price: Decimal
+    fees: Decimal = Decimal("0")
+    funding: Decimal = Decimal("0")
+    slippage: Decimal = Decimal("0")
+
+
+def allocate_by_quantity(total: Decimal, quantities: Sequence[Decimal]) -> tuple[Decimal, ...]:
+    """Split a cost pro rata. Each share rounds down; the last takes the remainder.
+
+    The shares always sum to ``total`` exactly.
+    """
+
+    amount = _non_negative_money(total, field="total")
+    size = sum(quantities, Decimal("0"))
+    if not quantities or size <= 0 or any(quantity <= 0 for quantity in quantities):
+        raise ValidationAppError(
+            "Cost allocation needs positive quantities.",
+            details={"reason": "invalid_allocation"},
+        )
+    shares = [
+        (amount * quantity / size).quantize(_QUANT, rounding=ROUND_FLOOR)
+        for quantity in quantities[:-1]
+    ]
+    shares.append(amount - sum(shares, Decimal("0")))
+    return tuple(shares)
+
+
+def paper_close_pnl_from_fills(
+    *,
+    direction: TradeDirection,
+    entry_price: Decimal,
+    size: Decimal,
+    fills: Sequence[ExitFillInput],
+) -> tuple[PaperCloseEconomics, tuple[PaperCloseEconomics, ...]]:
+    """Total and per-fill PnL. The total is the exact sum of the fills.
+
+    Fill quantities must sum to the recorded size, so a partial set cannot
+    close the trade and an overlapping set cannot close it twice.
+    """
+
+    quantity = _positive_money(size, field="size")
+    if not fills or sum((fill.quantity for fill in fills), Decimal("0")) != quantity:
+        raise ValidationAppError(
+            "Exit fills must add up to the recorded position size.",
+            details={"reason": "exit_fills_do_not_match_size"},
+        )
+    per_fill = tuple(
+        paper_close_pnl(
+            direction=direction,
+            entry_price=entry_price,
+            exit_price=fill.price,
+            size=fill.quantity,
+            fees=fill.fees,
+            funding=fill.funding,
+            slippage=fill.slippage,
+        )
+        for fill in fills
+    )
+    gross = sum((row.gross_pnl for row in per_fill), Decimal("0"))
+    net = sum((row.net_pnl for row in per_fill), Decimal("0"))
+    total = PaperCloseEconomics(
+        gross_pnl=_money(gross), net_pnl=_money(net), result=_result_for(net)
+    )
+    return total, per_fill
 
 
 def _result_for(net_pnl: Decimal) -> TradeResult:
