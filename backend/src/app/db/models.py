@@ -103,6 +103,7 @@ from app.db.paper_evaluation import PaperEvaluationObservationRow  # noqa: F401
 from app.db.paper_evaluation import (
     register_paper_evaluation_immutability as _register_paper_evaluation_immutability,
 )
+from app.db.position_exit_events import PositionExitEventRow  # noqa: F401
 from app.db.public_market_observations import PublicMarketObservationRow  # noqa: F401
 from app.db.risk_policy import (  # noqa: F401
     RiskPolicyBreakerInterval,
