@@ -1522,6 +1522,7 @@ def _plan_terms(
     accept_unprofiled_minimum: bool = False,
     fixed_risk_percent: Decimal | None = None,
     internal_paper_sfp: bool = False,
+    governed_demo_sfp: bool = False,
     side_aware_fill: bool = False,
     spread_haircut: Decimal = Decimal("0"),
     min_stop_atr_floor: Decimal = Decimal("0"),
@@ -1532,9 +1533,8 @@ def _plan_terms(
     from app.strategy_brain.sfp.contracts import SfpSpec
 
     spec = policy.authored_spec
-    # BloFin demo and every other caller keep this refusal. Only the internal
-    # paper loop opts in, and it still cannot route the plan to a live venue.
-    if isinstance(spec, SfpSpec) and not internal_paper_sfp:
+    # Only the two explicitly authorized paper/demo callers opt in.
+    if isinstance(spec, SfpSpec) and not (internal_paper_sfp or governed_demo_sfp):
         return "sfp_execution_plan_not_authorized"
     quote = assembled.current_price
     if quote is None:
@@ -1589,7 +1589,7 @@ def _plan_terms(
         if is_long
         else _ceil_to_tick(stop, assembled.bundle.tick_size)
     )
-    if sfp:
+    if sfp and not governed_demo_sfp:
         if sfp_target is None:
             return "sfp_trade_plan_invalid"
         refusal = _sfp_quote_refusal(

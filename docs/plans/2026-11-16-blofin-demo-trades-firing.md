@@ -111,3 +111,28 @@ No implementation starts until Griller GO and Sofien approves this plan, or the
 user explicitly overrides that repository plan gate. No such approval of this
 saved plan exists at creation. Record later deviations here; retain the approved
 plan unchanged as the original record.
+
+### Implementation record — 2026-11-16
+
+The user explicitly cleared the plan gate and supplied Griller's GO WITH
+CONDITIONS review at `/workspace/griller/alphatrade-trades-fix-plan-review-2026-11-16.md`.
+The original plan above is retained unchanged. The implementation follows all
+additional test-first, default-off, rounded-price, safety and local-only conditions.
+
+Duplicate investigation deviation: identical re-scans did not reproduce the
+staging failure. Following Griller's explicit fallback, retain strict receipt
+validation and add allowlisted market/exception diagnostics. A corrupt-source-hash
+fixture reproduces the exact undiagnosed wrapper for HYPEUSDT 15m; it is fault
+injection, not evidence that staging has corrupt hashes. Root cause remains
+unknown until the enriched diagnostic is observed. No duplicate exception is
+swallowed and no immutable receipt is overwritten.
+
+Execution regressions use isolated serial SQLite storage with timestamp result
+normalization and a single connection to exercise the real watcher and canonical
+authorities without a PostgreSQL database change. This does not prove concurrent
+PostgreSQL fencing; that remains part of the later full merge gate.
+
+Validation-only deviation: the requested selection exposed two existing SFP
+registration tests expecting a policy error for a foreign tenant's version. The
+resolver already deliberately returns NotFoundError. Correct those test
+expectations to preserve non-disclosure; do not change the resolver behavior.

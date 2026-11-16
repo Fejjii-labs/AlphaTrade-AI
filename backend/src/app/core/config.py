@@ -276,6 +276,7 @@ class Settings(BaseSettings):
     # is pinned to one tenant/user/account; defaults never construct a client.
     manual_blofin_demo_enabled: bool = False
     governed_blofin_demo_enabled: bool = False
+    governed_demo_sfp_enabled: bool = False
     # Per-trade stop-loss band as a percent of total portfolio equity. A demo
     # plan is sized so its stop-distance loss lands inside [min, max]; a plan
     # that cannot fit is refused. Adjustable, not a fixed rule.
@@ -774,6 +775,19 @@ class Settings(BaseSettings):
     billing_checkout_success_url: str = "http://localhost:3000/billing?checkout=success"
     billing_checkout_cancel_url: str = "http://localhost:3000/billing?checkout=cancel"
     billing_portal_return_url: str = "http://localhost:3000/billing"
+
+    @field_validator("governed_demo_sfp_enabled", mode="before")
+    @classmethod
+    def _governed_demo_sfp_flag(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if token in {"", "false"}:
+                return False
+            if token == "true":
+                return True
+        raise ValueError("GOVERNED_DEMO_SFP_ENABLED must be true or false.")
 
     @field_validator("email_provider", mode="before")
     @classmethod

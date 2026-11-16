@@ -77,11 +77,21 @@ def encoded(bars):
 
 
 def load(session, policy, bars, *, now):
-    source = ScriptedPerpetualSource(replay=False, bars_15m=list(bars))
+    from app.market_contracts.catalog import PerpetualInstrumentCatalog
+
+    source = ScriptedPerpetualSource(
+        replay=False, bars_15m=list(bars), instrument=bars[0].instrument
+    )
     port = AssemblingWatcherScanEvidence(
-        FirstSliceEvidenceAssembler(source, replay=False, clock=lambda: now),
+        FirstSliceEvidenceAssembler(
+            source,
+            replay=False,
+            clock=lambda: now,
+            catalog=PerpetualInstrumentCatalog(enabled=(bars[0].instrument,)),
+        ),
         session=session,
         executable_resolver=lambda _: policy,
+        symbol=policy.authored_spec.symbol,
     )
     result = port.load(_evaluation_command(policy.organization_id))
     assert result is not None
@@ -205,3 +215,42 @@ def test_wrapper_logs_only_allowlisted_failure_category(diagnostic_logs):
         }
     ]
     assert secret not in repr(diagnostic_logs)
+
+
+def test_undiagnosed_duplicate_signature_has_safe_market_context(store, diagnostic_logs):
+    """Fault injection reproduces the wrapper, not a claimed staging root cause."""
+    from app.market_contracts.first_slice import first_slice_identity
+    from app.market_contracts.identity import binance_usdm_perpetual
+    from app.market_contracts.ohlcv import kline_source_event_id
+    from app.schemas.common import Timeframe
+
+    session, org, user, _ = store
+    policy = approve(session, org, user, spec().model_copy(update={"symbol": "HYPEUSDT"}))
+    bars, _ = padded_evidence()
+    instrument = binance_usdm_perpetual("HYPEUSDT")
+    identity = first_slice_identity(timeframe=Timeframe.M15, replay=False, instrument=instrument)
+    bars = tuple(
+        with_content_hash(
+            b.model_copy(
+                update={
+                    "instrument": instrument,
+                    "source_event_id": kline_source_event_id(
+                        instrument.instrument_id, b.timeframe, b.interval_start
+                    ),
+                    "adapter_version": identity.source.adapter_version,
+                }
+            )
+        )
+        for b in bars
+    )
+    bad = (*bars[:-1], bars[-1].model_copy(update={"content_hash": "0" * 64}))
+    now = bars[-1].interval_end + timedelta(seconds=5)
+    with pytest.raises(WatcherEvidenceUnavailableError) as failure:
+        load(session, policy, bad, now=now)
+    assert isinstance(failure.value.__cause__, DuplicateDataError)
+    assert failure.value.reason_code == "canonical_contract_invalid_contract"
+    event = next(e for e in diagnostic_logs if e["event"] == "canonical_evidence_contract_rejected")
+    assert event["failure_reason"] == "duplicate"
+    assert event["exception_class"] == "DuplicateDataError"
+    assert event["symbol"] == "HYPEUSDT" and event["timeframe"] == "15m"
+    assert "payload" not in event and "exception" not in event
