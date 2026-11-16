@@ -315,6 +315,9 @@ class Settings(BaseSettings):
     # Only an explicit true/false parses; anything else refuses to load. Never
     # enables a real-money venue (services/partial_exits/flags.py).
     paper_partial_exits_enabled: bool = False
+    # BloFin DEMO only (EXCHANGE_MODE=paper_exchange_demo, real trading off):
+    # a ladder is entered without attached TP/SL and every exit is a
+    # bot-managed market reduceOnly close (services/partial_exits/demo.py).
     governed_demo_partial_exits_enabled: bool = False
     # Retention for append-only runtime logs (H5): watcher observability
     # events, watcher scan attempts, scan-stage paper evaluation rows, paper

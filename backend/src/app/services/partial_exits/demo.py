@@ -1,31 +1,37 @@
 """Partial-exit management for one governed BloFin demo position.
 
-Venue-agnostic: the venue port only exposes reduce-only orders on the closing
-side, so no call here can open or add to a position. One ``step``:
+Bot-managed: no exchange-side TP/SL is used for a ladder, because BloFin does
+not document how an attached or standalone TP/SL is sized after the position
+is partly reduced. Each step reads the mark and closes with market
+``reduceOnly`` orders on the closing side only, so no call here can open or
+add to a position. One ``step``:
 
 1. Gates first, before any venue call: the demo flag (which also requires the
-   demo exchange mode and real trading off), then the kill switch and worker
-   pause. A gated step reads and writes nothing.
-2. Venue closing fills are folded into the durable state. A duplicate fill
-   counts once and arrival order does not matter. A fill that would overfill
-   a leg or the position, or that no order of ours explains, holds the
-   position with an alert and no venue mutation.
-3. The protective stop is kept at the planned level (initial, breakeven after
-   a complete TP1, then the closed-candle runner trail) and sized to the
-   remaining position. A change places the new reduce-only stop first and
-   cancels the old one only after the new one exists. A failed placement keeps
-   the old stop; a failed cancel leaves two reduce-only stops and is retried.
-   A level the mark has already crossed is held and alerted; it is never
-   replaced by a market close.
-4. Missing TP legs are placed as reduce-only limits with their exact sizes.
+   demo exchange mode and real trading off), then the hold (kill switch,
+   worker pause, daily loss lock). A gated step reads and writes nothing.
+2. Our closing orders (client id prefix) and their fills are folded into the
+   durable state. A duplicate fill counts once and arrival order does not
+   matter. An order of ours that is not reduce-only on the closing side, an
+   unknown client id, or a fill that would overfill a leg or the position
+   holds with no venue mutation. A close still live at the venue holds too.
+3. The planned stop is computed: initial, breakeven plus costs after a
+   complete TP1, then the closed-candle runner trail. Moves are recorded and
+   never loosen.
+4. The venue position must equal the recorded remainder, or the step holds.
+   Then a crossed stop closes the whole remainder; otherwise every pending
+   target leg whose price is reached is closed for its unfilled quantity.
 
-Client order ids are derived from the command and the order's content, so a
-restart adopts an order it already placed instead of placing it twice.
+Client order ids are ``pe`` + 20 hex of SHA-256(command id) + ``t<leg>`` or ``x`` +
+``n<attempt>``, where the attempt counts our earlier orders for that leg. A
+restart therefore reuses the id of a close that was never accepted, and a
+close that was accepted but only partly filled is completed by the next
+attempt for the unfilled remainder only.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -48,16 +54,20 @@ from app.services.partial_exits.position import (
 )
 from app.services.partial_exits.runner import ClosedBar, trail_runner_stop
 
+CloseState = Literal["live", "partially_filled", "filled", "canceled"]
+_IN_FLIGHT: frozenset[str] = frozenset({"live", "partially_filled"})
+_SUFFIX = re.compile(r"(?:t(?P<leg>[1-9][0-9]?)|x)n(?P<attempt>[0-9]{1,3})")
+
 
 @dataclass(frozen=True, slots=True)
-class VenueOrder:
+class VenueCloseOrder:
     order_id: str
     client_order_id: str
-    kind: Literal["limit", "stop"]
     side: str
     size: Decimal
-    price: Decimal
+    filled: Decimal
     reduce_only: bool
+    state: CloseState
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,30 +81,25 @@ class VenueExitFill:
 
 
 class DemoReduceOnlyVenue(Protocol):
-    def open_orders(self) -> tuple[VenueOrder, ...]: ...
+    def closing_orders(self, client_prefix: str) -> tuple[VenueCloseOrder, ...]: ...
 
-    def exit_fills(self) -> tuple[VenueExitFill, ...]: ...
+    def exit_fills(self, order_ids: tuple[str, ...]) -> tuple[VenueExitFill, ...]: ...
+
+    def position_quantity(self) -> Decimal:
+        """Signed net position on the plan's instrument (short is negative)."""
+        ...
 
     def mark_price(self) -> Decimal: ...
 
-    def place_reduce_only_limit(
-        self, *, client_order_id: str, side: str, size: Decimal, price: Decimal
+    def place_reduce_only_market(
+        self, *, client_order_id: str, side: str, size: Decimal
     ) -> str: ...
-
-    def place_reduce_only_stop(
-        self, *, client_order_id: str, side: str, size: Decimal, trigger_price: Decimal
-    ) -> str: ...
-
-    def cancel_stop(self, *, order_id: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class DemoExitRecord:
     fills: tuple[ExitFill, ...] = ()
     stop_moves: tuple[StopMove, ...] = ()
-    active_stop_order_id: str | None = None
-    stop_order_ids: tuple[str, ...] = ()
-    pending_cancel: tuple[str, ...] = ()
 
 
 class DemoExitStore(Protocol):
@@ -108,7 +113,6 @@ class DemoLadderPosition:
     organization_id: UUID
     command_id: UUID
     terms: PartialExitTerms
-    entry_stop_order_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +120,7 @@ class DemoStepReport:
     status: Literal["disabled", "held", "managed", "closed"]
     reason: str = ""
     alerts: tuple[str, ...] = ()
+    placed: tuple[str, ...] = ()
 
 
 class GovernedDemoPartialExitManager:
@@ -133,12 +138,15 @@ class GovernedDemoPartialExitManager:
         self._hold = hold
 
     @staticmethod
-    def client_order_id(command_id: UUID, suffix: str) -> str:
-        return f"pe{command_id.hex[:16]}{suffix}"
+    def client_prefix(command_id: UUID) -> str:
+        # A digest of the whole id: two commands never share a prefix by
+        # sharing their leading UUID digits. 26 characters at most in all.
+        return f"pe{hashlib.sha256(command_id.bytes).hexdigest()[:20]}"
 
-    def _stop_client_id(self, command_id: UUID, trigger: Decimal, size: Decimal) -> str:
-        digest = hashlib.sha256(f"{trigger.normalize()}|{size.normalize()}".encode()).hexdigest()
-        return self.client_order_id(command_id, f"s{digest[:8]}")
+    @classmethod
+    def close_client_id(cls, command_id: UUID, leg: str, attempt: int) -> str:
+        """``leg`` is ``t<order>`` for a target leg or ``x`` for a stop close."""
+        return f"{cls.client_prefix(command_id)}{leg}n{attempt}"
 
     def step(
         self,
@@ -153,88 +161,120 @@ class GovernedDemoPartialExitManager:
         if reason is not None:
             return DemoStepReport("held", reason)
         terms = position.terms
-        record = self._store.load(position.command_id)
+        command_id = position.command_id
+        record = self._store.load(command_id)
         state = rebuild_position_state(
             terms.open_state(), fills=record.fills, stop_moves=record.stop_moves
         )
-        close_side = "sell" if terms.direction is TradeDirection.LONG else "buy"
-        orders = self._venue.open_orders()
-        ours = [order for order in orders if self._is_ours(position, record, order)]
-        if any(not order.reduce_only or order.side != close_side for order in ours):
-            return DemoStepReport("held", "order_shape_unexpected")
+        long = terms.direction is TradeDirection.LONG
+        close_side = "sell" if long else "buy"
+        prefix = self.client_prefix(command_id)
 
-        stop_ids = set(record.stop_order_ids)
-        if position.entry_stop_order_id:
-            stop_ids.add(position.entry_stop_order_id)
-        stop_ids.update(order.order_id for order in ours if order.kind == "stop")
-        leg_by_client = {
-            self.client_order_id(position.command_id, f"tp{leg.order}"): leg.order
-            for leg in terms.ladder.target_legs
-        }
-        for venue_fill in sorted(
-            self._venue.exit_fills(), key=lambda item: (item.occurred_at, item.trade_id)
-        ):
-            leg_order = leg_by_client.get(venue_fill.client_order_id)
-            if leg_order is None and venue_fill.order_id not in stop_ids:
-                self._store.save(position.command_id, replace(record, fills=state.fills))
+        # Our closing orders: every one must be a reduce-only close we can name.
+        orders = self._venue.closing_orders(prefix)
+        leg_of: dict[str, int | None] = {}
+        for order in orders:
+            if not order.client_order_id.startswith(prefix):
+                return DemoStepReport("held", "unexplained_order")
+            match = _SUFFIX.fullmatch(order.client_order_id[len(prefix) :])
+            if match is None:
+                return DemoStepReport("held", "unexplained_order")
+            if not order.reduce_only or order.side != close_side:
+                return DemoStepReport("held", "order_shape_unexpected")
+            leg = int(match["leg"]) if match["leg"] else None
+            if leg is not None and terms.ladder.leg(leg) is None:
+                return DemoStepReport("held", "unexplained_order")
+            leg_of[order.order_id] = leg
+
+        filled_ids = tuple(order.order_id for order in orders if order.filled > 0)
+        venue_fills = self._venue.exit_fills(filled_ids) if filled_ids else ()
+        for venue_fill in sorted(venue_fills, key=lambda item: (item.occurred_at, item.trade_id)):
+            if venue_fill.order_id not in leg_of:
+                self._store.save(command_id, replace(record, fills=state.fills))
                 return DemoStepReport("held", "unexplained_fill")
+            leg = leg_of[venue_fill.order_id]
             fill = ExitFill(
                 fill_id=f"demo:{venue_fill.order_id}:{venue_fill.trade_id}",
                 kind="target"
-                if leg_order is not None
+                if leg is not None
                 else "stop"
                 if state.pending_target_legs()
                 else "runner_stop",
-                leg_order=leg_order,
+                leg_order=leg,
                 quantity=venue_fill.quantity,
                 price=venue_fill.price,
                 occurred_at=venue_fill.occurred_at,
             )
             outcome = apply_fill(state, fill)
             if outcome.status == "refused":
-                self._store.save(position.command_id, replace(record, fills=state.fills))
+                self._store.save(command_id, replace(record, fills=state.fills))
                 return DemoStepReport("held", f"fill_refused:{outcome.reason}")
             state = outcome.state
         record = replace(record, fills=state.fills)
+        if any(order.state in _IN_FLIGHT for order in orders):
+            self._store.save(command_id, record)
+            return DemoStepReport("held", "close_in_flight")
         if state.is_closed:
-            self._store.save(position.command_id, record)
+            self._store.save(command_id, record)
             return DemoStepReport("closed")
 
-        alerts: list[str] = []
-        planned, moves = self._planned_stop(state, terms, bars, evaluated_at)
+        for move in self._planned_moves(state, terms, bars, evaluated_at):
+            state = apply_stop_move(state, move).state
+        record = replace(record, stop_moves=state.stop_moves)
+        self._store.save(command_id, record)
+
+        expected = state.remaining_quantity if long else -state.remaining_quantity
+        if self._venue.position_quantity() != expected:
+            return DemoStepReport("held", "venue_position_mismatch")
         mark = self._venue.mark_price()
-        crossed = mark <= planned if terms.direction is TradeDirection.LONG else mark >= planned
-        if planned != state.current_stop and crossed:
-            alerts.append("protection_crossed")
-            planned, moves = state.current_stop, ()
-        record, placed_alerts = self._protect(
-            position, record, ours, planned, state.remaining_quantity, close_side
-        )
-        alerts.extend(placed_alerts)
-        if "stop_place_failed" not in placed_alerts:
-            for move in moves:
-                state = apply_stop_move(state, move).state
-            record = replace(record, stop_moves=state.stop_moves)
-        self._place_legs(position, state, orders, close_side)
-        self._store.save(position.command_id, record)
-        return DemoStepReport("managed", alerts=tuple(alerts))
+        stop = state.current_stop
+        attempts: dict[int | None, int] = {}
+        for leg in leg_of.values():
+            attempts[leg] = attempts.get(leg, 0) + 1
 
-    def _is_ours(
-        self, position: DemoLadderPosition, record: DemoExitRecord, order: VenueOrder
-    ) -> bool:
-        return (
-            order.client_order_id.startswith(self.client_order_id(position.command_id, ""))
-            or order.order_id == position.entry_stop_order_id
-            or order.order_id in record.stop_order_ids
-        )
+        closes: list[tuple[str, Decimal]] = []
+        if (mark <= stop) if long else (mark >= stop):
+            closes.append(
+                (
+                    self.close_client_id(command_id, "x", attempts.get(None, 0)),
+                    state.remaining_quantity,
+                )
+            )
+        else:
+            for leg_order in state.pending_target_legs():
+                ladder_leg = state.ladder.leg(leg_order)
+                if ladder_leg is None or ladder_leg.price is None:
+                    continue
+                if not ((mark >= ladder_leg.price) if long else (mark <= ladder_leg.price)):
+                    break
+                closes.append(
+                    (
+                        self.close_client_id(
+                            command_id, f"t{leg_order}", attempts.get(leg_order, 0)
+                        ),
+                        ladder_leg.quantity - state.leg_filled(leg_order),
+                    )
+                )
+        placed: list[str] = []
+        alerts: list[str] = []
+        for client_id, size in closes:
+            try:
+                self._venue.place_reduce_only_market(
+                    client_order_id=client_id, side=close_side, size=size
+                )
+            except Exception:
+                alerts.append("close_place_failed")
+                break
+            placed.append(client_id)
+        return DemoStepReport("managed", alerts=tuple(alerts), placed=tuple(placed))
 
-    def _planned_stop(
-        self,
+    @staticmethod
+    def _planned_moves(
         state: PositionExitState,
         terms: PartialExitTerms,
         bars: Sequence[ClosedBar],
         evaluated_at: datetime | None,
-    ) -> tuple[Decimal, tuple[StopMove, ...]]:
+    ) -> tuple[StopMove, ...]:
         moves: list[StopMove] = []
         working = state
         breakeven = plan_breakeven_move(working)
@@ -242,111 +282,39 @@ class GovernedDemoPartialExitManager:
             working = apply_stop_move(working, breakeven).state
             moves.append(breakeven)
         if (
-            terms.runner_rule is not None
-            and not working.pending_target_legs()
-            and bars
-            and evaluated_at is not None
+            terms.runner_rule is None
+            or working.pending_target_legs()
+            or not bars
+            or evaluated_at is None
         ):
-            closed = [bar for bar in bars if bar.interval_end <= evaluated_at]
-            trailed = trail_runner_stop(
-                rule=terms.runner_rule,
-                direction=terms.direction,
-                current_stop=working.current_stop,
-                bars=closed,
-                evaluated_at=evaluated_at,
+            return tuple(moves)
+        closed = [bar for bar in bars if bar.interval_end <= evaluated_at]
+        trailed = trail_runner_stop(
+            rule=terms.runner_rule,
+            direction=terms.direction,
+            current_stop=working.current_stop,
+            bars=closed,
+            evaluated_at=evaluated_at,
+        )
+        if closed and trailed != working.current_stop:
+            last = max(bar.interval_end for bar in closed)
+            # Replay sorts moves by effective time; a trail must never sort
+            # before the move it tightens or a fill it follows.
+            effective = max(
+                (
+                    last,
+                    *(move.effective_at for move in working.stop_moves),
+                    *(fill.occurred_at for fill in working.fills),
+                )
             )
-            if closed and trailed != working.current_stop:
-                last = max(bar.interval_end for bar in closed)
-                trail = StopMove(
+            moves.append(
+                StopMove(
                     key=f"trail:{last.isoformat()}",
                     reason="trail",
                     previous_stop=working.current_stop,
                     new_stop=trailed,
-                    effective_at=last,
+                    effective_at=effective,
                     tightened=True,
                 )
-                working = apply_stop_move(working, trail).state
-                moves.append(trail)
-        return working.current_stop, tuple(moves)
-
-    def _protect(
-        self,
-        position: DemoLadderPosition,
-        record: DemoExitRecord,
-        ours: Sequence[VenueOrder],
-        trigger: Decimal,
-        size: Decimal,
-        close_side: str,
-    ) -> tuple[DemoExitRecord, list[str]]:
-        alerts: list[str] = []
-        by_id = {order.order_id: order for order in ours}
-        active_id = record.active_stop_order_id or position.entry_stop_order_id
-        active = by_id.get(active_id) if active_id else None
-        pending = list(record.pending_cancel)
-        if active is None or (active.price, active.size) != (trigger, size):
-            client_id = self._stop_client_id(position.command_id, trigger, size)
-            adopted = next((order for order in ours if order.client_order_id == client_id), None)
-            if adopted is not None:
-                new_id = adopted.order_id
-            else:
-                try:
-                    new_id = self._venue.place_reduce_only_stop(
-                        client_order_id=client_id,
-                        side=close_side,
-                        size=size,
-                        trigger_price=trigger,
-                    )
-                except Exception:
-                    return record, ["stop_place_failed"]
-            if active_id and active_id != new_id:
-                pending.append(active_id)
-            record = replace(
-                record,
-                active_stop_order_id=new_id,
-                stop_order_ids=tuple(dict.fromkeys((*record.stop_order_ids, new_id))),
             )
-        elif record.active_stop_order_id is None:
-            # Adopt the entry's attached stop; it must never look stale.
-            record = replace(record, active_stop_order_id=active.order_id)
-        # Every stop of ours other than the active one is stale. Cancel only
-        # now, after the active stop is known to exist.
-        active_now = record.active_stop_order_id
-        stale = [
-            order.order_id
-            for order in ours
-            if order.kind == "stop" and order.order_id != active_now
-        ]
-        remaining: list[str] = []
-        for order_id in dict.fromkeys((*pending, *stale)):
-            if order_id == active_now or (order_id not in by_id and order_id not in stale):
-                continue
-            try:
-                self._venue.cancel_stop(order_id=order_id)
-            except Exception:
-                remaining.append(order_id)
-                if "stop_cancel_failed" not in alerts:
-                    alerts.append("stop_cancel_failed")
-        return replace(record, pending_cancel=tuple(remaining)), alerts
-
-    def _place_legs(
-        self,
-        position: DemoLadderPosition,
-        state: PositionExitState,
-        orders: Sequence[VenueOrder],
-        close_side: str,
-    ) -> None:
-        open_clients = {order.client_order_id for order in orders}
-        for order in state.pending_target_legs():
-            leg = state.ladder.leg(order)
-            if leg is None or leg.price is None:
-                continue
-            client_id = self.client_order_id(position.command_id, f"tp{order}")
-            if client_id in open_clients or state.leg_filled(order) > 0:
-                # A partly filled leg keeps its resting remainder at the venue.
-                continue
-            self._venue.place_reduce_only_limit(
-                client_order_id=client_id,
-                side=close_side,
-                size=leg.quantity,
-                price=leg.price,
-            )
+        return tuple(moves)

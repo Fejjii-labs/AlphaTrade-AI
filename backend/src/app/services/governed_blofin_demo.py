@@ -43,6 +43,7 @@ from app.providers.exchange.demo_preflight import failure_diagnostics
 from app.providers.exchange.factory import build_blofin_client
 from app.providers.exchange.governed_blofin import (
     CONFIGURED_DEMO_MARGIN_ASSUMPTION,
+    DemoOrderEvidence,
     DemoVenueSnapshot,
     GovernedBloFinDemoProvider,
     demo_plan_leverage,
@@ -65,6 +66,7 @@ from app.schemas.trade_plan import (
     EntrySide,
     TradePlanRevisionCreate,
 )
+from app.schemas.trade_plan import TradePlanRevision as PlanRevision
 from app.security.tenant import TenantContext
 from app.services.approval_service import (
     CHANNEL_MISMATCH_REASON,
@@ -93,6 +95,20 @@ from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
 from app.services.paper_alert_service import PaperAlertService
+from app.services.partial_exits.demo import (
+    DemoExitStore,
+    DemoLadderPosition,
+    GovernedDemoPartialExitManager,
+)
+from app.services.partial_exits.demo_wiring import (
+    OPERATOR_HOLD_REASONS,
+    PositionExitDemoStore,
+    demo_entry_terms,
+    demo_ladder_hold_reason,
+)
+from app.services.partial_exits.flags import BLOFIN_DEMO_VENUE, partial_exits_enabled
+from app.services.partial_exits.ladder import LadderRefusal
+from app.services.partial_exits.paper_terms import PartialExitTerms
 from app.services.planned_reward_risk import PlannedRewardRiskError, planned_reward_risk
 from app.services.risk.kill_switch import KillSwitchService
 from app.services.risk.settings_service import RiskSettingsService
@@ -653,7 +669,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
     def _get_provider(self) -> GovernedBloFinDemoProvider:
         if self._provider is None:
-            self._provider = GovernedBloFinDemoProvider(build_blofin_client(self._settings))
+            self._provider = GovernedBloFinDemoProvider(
+                build_blofin_client(self._settings),
+                partial_exits=partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE),
+            )
         return self._provider
 
     def _account(self, session: Session, target: PaperScanTarget) -> ExecutionAccount | None:
@@ -1912,6 +1931,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                         )
                         session.commit()  # Preserve previously committed entry facts.
                         return "demo_exit_projection_operator_hold"
+                # A ladder entry has no attached TP/SL; the bot manages its exits.
+                ladder_reason = self._manage_demo_ladder(session, command, envelope.plan, evidence)
+                if ladder_reason is not None:
+                    effect.reconciliation_disposition = (
+                        "DEMO_LADDER_" + (ladder_reason.removeprefix("demo_ladder_").upper()[:68])
+                    )
+                    session.commit()
+                    return ladder_reason
             self._safety(session).lock_epoch(
                 organization_id=command.organization_id, account_id=command.account_id
             )
@@ -1948,6 +1975,124 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 )
             session.commit()
             return reason
+
+    def _demo_ladder_hold(self, session: Session, command: ExecutionCommand) -> str | None:
+        from app.db.models import AccountRiskAccountingState
+        from app.workers.repository import WorkerHeartbeatRepository
+
+        kill_switch = KillSwitchService(session, AuditService(session), self._settings)
+
+        def paused() -> bool:
+            row = WorkerHeartbeatRepository(session).get_by_name(self._settings.worker_name)
+            return bool(row is not None and row.paused)
+
+        def daily_locked() -> bool:
+            return bool(
+                session.scalar(
+                    select(AccountRiskAccountingState.daily_locked).where(
+                        AccountRiskAccountingState.organization_id == command.organization_id,
+                        AccountRiskAccountingState.account_id == command.account_id,
+                    )
+                )
+            )
+
+        return demo_ladder_hold_reason(
+            kill_blocked=lambda: kill_switch.is_execution_blocked(
+                organization_id=command.organization_id
+            ),
+            paused=paused,
+            daily_locked=daily_locked,
+        )
+
+    def _demo_ladder_store(
+        self, session: Session, command: ExecutionCommand, terms: PartialExitTerms
+    ) -> DemoExitStore:
+        return PositionExitDemoStore(
+            session, organization_id=command.organization_id, base=terms.open_state()
+        )
+
+    def _manage_demo_ladder(
+        self,
+        session: Session,
+        command: ExecutionCommand,
+        plan: PlanRevision,
+        evidence: DemoOrderEvidence,
+    ) -> str | None:
+        """One bot-managed partial-exit step, or None for the existing path.
+
+        None unless the demo partial-exit flag is on and the plan is a ladder,
+        so with the flag off nothing here reads or writes anything.
+        """
+
+        if not partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE):
+            return None
+        terms = demo_entry_terms(plan, evidence.fills)
+        if terms is None:
+            return None
+        if evidence.status not in {"filled", "canceled", "cancelled", "expired"}:
+            return "demo_ladder_entry_open"  # a live entry remainder can still add size
+        if isinstance(terms, LadderRefusal):
+            self._arm_ladder_kill_switch(session, command, f"ladder unmanageable: {terms.reason}")
+            return "demo_ladder_unmanageable_operator_hold"
+        hold = self._demo_ladder_hold(session, command)
+        if hold is not None:
+            return f"demo_ladder_held_{hold}"
+        try:
+            venue = self._get_provider().partial_exit_venue(plan)
+            bars: tuple[object, ...] = ()
+            now = self._clock.now()
+            if terms.runner_rule is not None:
+                try:
+                    bars = venue.closed_bars(
+                        evaluated_at=now, limit=terms.runner_rule.lookback_bars + 2
+                    )
+                except Exception:
+                    logger.warning("demo_ladder_bars_unavailable command_id=%s", command.id)
+            manager = GovernedDemoPartialExitManager(
+                settings=self._settings,
+                venue=venue,
+                store=self._demo_ladder_store(session, command, terms),
+                hold=lambda organization_id: self._demo_ladder_hold(session, command),
+            )
+            report = manager.step(
+                DemoLadderPosition(command.organization_id, command.id, terms),
+                bars=bars,  # type: ignore[arg-type]
+                evaluated_at=now,
+            )
+        except Exception:
+            logger.warning("demo_ladder_step_failed command_id=%s", command.id, exc_info=True)
+            session.rollback()
+            return "demo_ladder_unavailable"
+        logger.info(
+            "demo_ladder_step command_id=%s status=%s reason=%s placed=%s alerts=%s",
+            command.id,
+            report.status,
+            report.reason,
+            ",".join(report.placed),
+            ",".join(report.alerts),
+        )
+        if report.status == "held":
+            reason = report.reason.split(":", 1)[0]
+            if reason in OPERATOR_HOLD_REASONS or reason == "fill_refused":
+                self._arm_ladder_kill_switch(session, command, f"ladder held: {report.reason}")
+                return "demo_ladder_operator_hold"
+            return f"demo_ladder_held_{reason}"
+        if report.status == "closed":
+            return "demo_ladder_flat_awaiting_exit_proof"
+        return f"demo_ladder_{report.status}"
+
+    def _arm_ladder_kill_switch(
+        self, session: Session, command: ExecutionCommand, detail: str
+    ) -> None:
+        KillSwitchService(session, AuditService(session), self._settings).activate(
+            organization_id=command.organization_id,
+            actor_user_id=command.user_id,
+            payload=KillSwitchMutationRequest(
+                confirm=True,
+                reason=f"BloFin demo partial exits need operator review; {detail}"[:200],
+            ),
+            source="demo_protection",
+        )
 
     def _finish_closed(self, session: Session, command: ExecutionCommand, reason: str) -> str:
         """Retry stored admission after a durable close, including worker restart."""
