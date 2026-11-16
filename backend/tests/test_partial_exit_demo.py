@@ -356,7 +356,7 @@ def test_duplicate_and_out_of_order_fills_count_once() -> None:
     manager.step(_position())
     record = store.load(COMMAND)
     assert sorted(fill.quantity for fill in record.fills) == [Decimal("0.300"), Decimal("0.500")]
-    assert [move.effective_at for move in record.stop_moves][0] == T0 + timedelta(minutes=3)
+    assert record.stop_moves[0].effective_at == T0 + timedelta(minutes=3)
 
 
 def test_overfill_holds_without_any_venue_mutation() -> None:
