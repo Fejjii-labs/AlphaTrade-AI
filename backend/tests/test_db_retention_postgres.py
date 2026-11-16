@@ -220,3 +220,59 @@ def test_postgres_keeps_old_attempts_of_a_failed_lineage(pg_factory) -> None:
         str(first),
         str(last),
     }
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_retention_daily_postgres_lock_restart_and_windows(pg_factory, dry_run) -> None:
+    from app.workers.db_retention import _LOCK_KEY, DbRetentionCycle
+
+    events = [
+        _event("watcher_scan_scheduled", 25),
+        _event("watcher_scan_scheduled", 24),  # exact cutoff is kept
+        _event("watcher_schedule_blocked", 25),
+        _event("watcher_schedule_blocked", 73),
+        _event("watcher_schedule_blocked", 72),
+    ]
+    _exec(
+        pg_factory,
+        "INSERT INTO watcher_observability_events "
+        "(event_id, name, at, organization_id, fields) "
+        "VALUES (:id, :name, :at, :org, CAST(:fields AS json))",
+        events,
+    )
+    settings = Settings(_env_file=None, retention_enabled=True, retention_dry_run=dry_run)  # type: ignore[call-arg]
+    cycle = DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)
+    # An active pass blocks peers, including a different day's invocation.
+    with pg_factory() as holder, holder.begin():
+        holder.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _LOCK_KEY})
+        assert cycle().status == "busy"
+        tomorrow = DbRetentionCycle(
+            settings, session_factory=pg_factory, now=lambda: NOW + timedelta(days=1)
+        )
+        assert tomorrow().status == "busy"
+    assert cycle().status == ("dry_run" if dry_run else "pruned")
+    assert len(_ids(pg_factory, "SELECT event_id FROM watcher_observability_events")) == (
+        5 if dry_run else 3
+    )
+    # New helper + new DB session must see the committed daily claim.
+    restarted = DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)
+    assert restarted().status == "already_ran"
+
+
+def test_retention_postgres_pass_holds_lock_through_batches(pg_factory, monkeypatch) -> None:
+    from app.workers.db_retention import DbRetentionCycle
+
+    def running(factory, settings, **kwargs):
+        peer = DbRetentionCycle(settings, session_factory=factory, now=lambda: NOW)
+        assert peer().status == "busy"
+        raise RuntimeError("simulated process failure after durable claim")
+
+    monkeypatch.setattr("app.services.db_retention.run_retention", running)
+    settings = Settings(_env_file=None, retention_enabled=True)  # type: ignore[call-arg]
+    assert DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)().status == (
+        "failed"
+    )
+    # Failure releases the advisory lock but preserves the claimed day.
+    assert DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)().status == (
+        "already_ran"
+    )

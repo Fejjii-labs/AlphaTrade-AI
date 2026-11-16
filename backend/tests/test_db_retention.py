@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -37,10 +37,13 @@ _DDL = (
     "CREATE TABLE watcher_scan_attempts (attempt_id TEXT PRIMARY KEY, lineage_id TEXT, "
     "started_at TIMESTAMP)",
     "CREATE TABLE paper_evaluation_observations (observation_id TEXT PRIMARY KEY, "
-    "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN)",
+    "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN, "
+    "stage TEXT)",
     "CREATE TABLE blofin_demo_sync_snapshots (id TEXT PRIMARY KEY, organization_id TEXT, "
-    "synced_at TIMESTAMP)",
-    "CREATE TABLE telegram_paper_notifications (intent_id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "synced_at TIMESTAMP, health_status TEXT DEFAULT 'ok', provenance JSON DEFAULT '{}')",
+    "CREATE TABLE telegram_paper_notifications (intent_id TEXT PRIMARY KEY, created_at TIMESTAMP, "
+    "candidate_id TEXT)",
+    "CREATE TABLE trade_candidate_summaries (candidate_id TEXT PRIMARY KEY)",
     "CREATE TABLE telegram_security_outbox (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
     # A table that must never be touched.
     "CREATE TABLE journal_trades (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
@@ -55,6 +58,9 @@ def factory():
     with engine.begin() as conn:
         for ddl in _DDL:
             conn.execute(text(ddl))
+    from app.db.runtime_status import ControlledRuntimeStatusRow
+
+    ControlledRuntimeStatusRow.__table__.create(engine)
     yield sessionmaker(bind=engine, expire_on_commit=False)
     engine.dispose()
 
@@ -86,18 +92,24 @@ def _seed(factory) -> None:
     )
     _insert(
         factory,
-        "INSERT INTO paper_evaluation_observations VALUES (:id, :at, :trade, :filled, :plan)",
+        "INSERT INTO paper_evaluation_observations "
+        "VALUES (:id, :at, :trade, :filled, :plan, :stage)",
         [
-            {"id": "scan-old", "at": old, "trade": None, "filled": False, "plan": False},
-            {"id": "trade-old", "at": old, "trade": "t1", "filled": True, "plan": True},
-            {"id": "plan-old", "at": old, "trade": None, "filled": False, "plan": True},
-            {"id": "scan-new", "at": fresh, "trade": None, "filled": False, "plan": False},
+            {"id": "scan-old", "at": old, "trade": None, "filled": False, "plan": False,
+             "stage": "watcher_scan"},
+            {"id": "trade-old", "at": old, "trade": "t1", "filled": True, "plan": True,
+             "stage": "paper_trade"},
+            {"id": "plan-old", "at": old, "trade": None, "filled": False, "plan": True,
+             "stage": "paper_decision"},
+            {"id": "scan-new", "at": fresh, "trade": None, "filled": False, "plan": False,
+             "stage": "watcher_scan"},
         ],
     )
     org_a, org_b = str(uuid4()), str(uuid4())
     _insert(
         factory,
-        "INSERT INTO blofin_demo_sync_snapshots VALUES (:id, :org, :at)",
+        "INSERT INTO blofin_demo_sync_snapshots (id, organization_id, synced_at) "
+        "VALUES (:id, :org, :at)",
         [
             {"id": "a-old-1", "org": org_a, "at": old - timedelta(days=2)},
             {"id": "a-old-2", "org": org_a, "at": old},
@@ -154,20 +166,25 @@ def test_batches_are_bounded_per_pass(factory) -> None:
     assert _count(factory, "watcher_observability_events") == 55
 
 
-def test_policies_never_name_trade_audit_or_strategy_tables() -> None:
+def test_policies_name_only_the_approved_tables() -> None:
     tables = {p.table for p in retention_policies(_settings())}
     assert tables == {
         "watcher_observability_events",
         "watcher_subscription_eval_attempts",
         "watcher_source_fetch_attempts",
         "watcher_scan_attempts",
+        "watcher_scheduled_scans",
+        "watcher_scan_lineages",
         "paper_evaluation_observations",
         "telegram_paper_notifications",
         "blofin_demo_sync_snapshots",
+        "strategy_brain_setup_events",
+        "public_market_observations",
+        "audit_logs",
     }
 
 
-def test_error_events_are_kept_three_days_and_the_rest_one_day(factory) -> None:
+def test_a_longer_error_window_keeps_error_events_and_drops_the_rest(factory) -> None:
     rows = [
         # 48 h old: past the 24 h window, inside the 72 h error window.
         ("routine-2d", "watcher_scan_scheduled", 48, {}),
@@ -189,7 +206,8 @@ def test_error_events_are_kept_three_days_and_the_rest_one_day(factory) -> None:
             for i, n, h, f in rows
         ],
     )
-    results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    settings = _settings(retention_dry_run=False, retention_watcher_error_events_hours=72)
+    results = run_retention(factory, settings, now=NOW)
     by_policy = {r.policy: r for r in results}
     assert by_policy["watcher_observability_events"].deleted == 2
     assert by_policy["watcher_observability_events:error"].deleted == 2
@@ -250,13 +268,20 @@ def test_scan_attempts_keep_terminal_unfinished_and_recent_lineages(factory) -> 
     assert lineages == 5
 
 
-def test_telegram_notifications_go_after_24_hours_and_the_outbox_stays(factory) -> None:
-    old, fresh = NOW - timedelta(hours=25), NOW - timedelta(hours=23)
+def test_telegram_notifications_go_after_7_days_and_the_outbox_stays(factory) -> None:
+    old, fresh = NOW - timedelta(days=7, hours=1), NOW - timedelta(days=6, hours=23)
     _insert(
         factory,
-        "INSERT INTO telegram_paper_notifications VALUES (:id, :at)",
-        [{"id": "old", "at": old}, {"id": "fresh", "at": fresh}],
+        "INSERT INTO telegram_paper_notifications VALUES (:id, :at, :cand)",
+        [
+            {"id": "old", "at": old, "cand": None},
+            {"id": "fresh", "at": fresh, "cand": None},
+            # A candidate alert waits for its kept-forever summary row.
+            {"id": "unsummarized", "at": old, "cand": "c-1"},
+            {"id": "summarized", "at": old, "cand": "c-2"},
+        ],
     )
+    _insert(factory, "INSERT INTO trade_candidate_summaries VALUES (:id)", [{"id": "c-2"}])
     _insert(
         factory,
         "INSERT INTO telegram_security_outbox VALUES (:id, :at)",
@@ -269,7 +294,7 @@ def test_telegram_notifications_go_after_24_hours_and_the_outbox_stays(factory) 
             .scalars()
             .all()
         )
-    assert kept == {"fresh"}
+    assert kept == {"fresh", "unsummarized"}
     assert _count(factory, "telegram_security_outbox") == 1
 
 
@@ -288,13 +313,21 @@ def test_retention_is_off_and_dry_run_by_default() -> None:
 def test_windows_are_hours_with_a_24_hour_floor() -> None:
     settings = Settings(_env_file=None)
     assert settings.retention_watcher_events_hours == 24
-    assert settings.retention_watcher_error_events_hours == 72
+    assert settings.retention_watcher_error_events_hours == 24
     assert settings.retention_watcher_attempts_hours == 24
     assert settings.retention_paper_evaluation_hours == 24
-    assert settings.retention_telegram_notifications_hours == 24
-    windows = {p.table: p.window for p in retention_policies(settings)}
+    assert settings.retention_telegram_notifications_hours == 168
+    assert settings.retention_candidate_days == 7
+    assert settings.retention_audit_log_days == 90
+    assert settings.retention_brain_observation_hours == 24
+    assert settings.retention_public_market_hours == 24
+    assert settings.retention_vacuum_analyze is False
+    windows = {p.label: p.window for p in retention_policies(settings)}
     assert windows["paper_evaluation_observations"] == timedelta(hours=24)
-    assert windows["blofin_demo_sync_snapshots"] == timedelta(days=30)
+    assert windows["paper_evaluation_observations:candidate"] == timedelta(days=7)
+    assert windows["telegram_paper_notifications"] == timedelta(days=7)
+    assert windows["audit_logs"] == timedelta(days=90)
+    assert windows["strategy_brain_setup_events:system_observation"] == timedelta(hours=24)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, retention_watcher_events_hours=23)  # type: ignore[call-arg]
 
@@ -306,7 +339,8 @@ def test_windows_are_hours_with_a_24_hour_floor() -> None:
         "retention_watcher_error_events_hours",
         "retention_watcher_attempts_hours",
         "retention_paper_evaluation_hours",
-        "retention_telegram_notifications_hours",
+        "retention_brain_observation_hours",
+        "retention_public_market_hours",
     ],
 )
 def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
@@ -314,6 +348,31 @@ def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
         with pytest.raises(ValidationError):
             Settings(_env_file=None, **{field: too_short})  # type: ignore[arg-type]
     assert getattr(Settings(_env_file=None, **{field: 24}), field) == 24  # type: ignore[arg-type]
+
+
+def test_notifications_cannot_go_before_their_candidate_summary() -> None:
+    with pytest.raises(ValidationError, match="RETENTION_TELEGRAM_NOTIFICATIONS_HOURS"):
+        Settings(_env_file=None, retention_telegram_notifications_hours=24)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, retention_candidate_days=6)  # type: ignore[call-arg]
+
+
+def test_one_failing_policy_does_not_stop_the_others(factory, monkeypatch) -> None:
+    import app.services.db_retention as service
+
+    _seed(factory)
+    real = service.prune_table
+
+    def flaky(session_factory, policy, **kwargs):
+        if policy.table == "paper_evaluation_observations":
+            raise RuntimeError("boom")
+        return real(session_factory, policy, **kwargs)
+
+    monkeypatch.setattr(service, "prune_table", flaky)
+    results = run_retention(factory, _settings(retention_dry_run=False), now=NOW)
+    assert "paper_evaluation_observations" not in {r.table for r in results}
+    assert _count(factory, "watcher_observability_events") == 5
+    assert _count(factory, "paper_evaluation_observations") == 4
 
 
 def test_error_event_window_cannot_be_shorter_than_normal_window() -> None:
@@ -331,19 +390,72 @@ def test_error_event_window_cannot_be_shorter_than_normal_window() -> None:
     assert equal.retention_watcher_error_events_hours == equal.retention_watcher_events_hours
 
 
-def test_cycle_waits_one_interval_then_runs_once_per_interval(factory) -> None:
+def test_retention_schedule_defaults_and_bounds() -> None:
+    assert _settings().retention_schedule_hour_utc == 2
+    for hour in (-1, 24):
+        with pytest.raises(ValidationError):
+            _settings(retention_schedule_hour_utc=hour)
+
+
+def test_retention_cycle_disabled_does_not_open_database() -> None:
+    def forbidden():
+        pytest.fail("disabled retention opened the database")
+
+    cycle = DbRetentionCycle(_settings(), session_factory=forbidden, now=lambda: NOW)
+    assert cycle().status == "disabled"
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_retention_daily_cycle_windows_and_restart(factory, dry_run) -> None:
     _seed(factory)
-    ticks = {"now": 0.0}
-    cycle = DbRetentionCycle(
-        _settings(retention_dry_run=False, retention_interval_seconds=600),
-        session_factory=factory,
-        monotonic=lambda: ticks["now"],
+    settings = _settings(retention_enabled=True, retention_dry_run=dry_run)
+    clock = {"now": NOW.replace(hour=1)}
+    mutations = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        # A durable scheduling claim is required even for a dry run. Operational
+        # retention tables must never receive DELETE/UPDATE in dry mode.
+        if statement.lstrip().upper().startswith(("DELETE", "UPDATE")):
+            mutations.append(statement)
+
+    event.listen(factory.kw["bind"], "before_cursor_execute", capture)
+    cycle = DbRetentionCycle(settings, session_factory=factory, now=lambda: clock["now"])
+    assert cycle().status == "waiting"
+    clock["now"] = NOW
+    result = cycle()
+    assert result.status == ("dry_run" if dry_run else "pruned")
+    assert _count(factory, "watcher_observability_events") == (255 if dry_run else 5)
+    assert _count(factory, "paper_evaluation_observations") == (4 if dry_run else 3)
+    assert _count(factory, "blofin_demo_sync_snapshots") == (4 if dry_run else 2)
+    assert _count(factory, "journal_trades") == 1
+    if dry_run:
+        assert not [s for s in mutations if "controlled_runtime_status" not in s]
+    restarted = DbRetentionCycle(settings, session_factory=factory, now=lambda: clock["now"])
+    assert restarted().status == "already_ran"
+    clock["now"] += timedelta(days=1)
+    assert restarted().status == ("dry_run" if dry_run else "pruned")
+    restarted.request_stop()
+    assert restarted().status == "stopped"
+
+
+def test_retention_cycle_failure_isolated_and_day_consumed(factory, monkeypatch) -> None:
+    def fail(*args, **kwargs):
+        raise RuntimeError("must not escape or be logged verbatim")
+
+    monkeypatch.setattr("app.services.db_retention.run_retention", fail)
+    settings = _settings(retention_enabled=True)
+    cycle = DbRetentionCycle(settings, session_factory=factory, now=lambda: NOW)
+    assert cycle().status == "failed"
+    assert DbRetentionCycle(settings, session_factory=factory, now=lambda: NOW)().status == (
+        "already_ran"
     )
-    assert cycle().status == "waiting"
-    ticks["now"] = 600.0
-    outcome = cycle()
-    assert outcome.status == "pruned"
-    assert outcome.delivered >= 250
-    assert cycle().status == "waiting"
-    cycle.request_stop()
-    assert cycle().status == "stopped"
+
+
+def test_retention_cycle_database_failure_isolated() -> None:
+    def fail():
+        raise RuntimeError("connection details must not be logged")
+
+    cycle = DbRetentionCycle(
+        _settings(retention_enabled=True), session_factory=fail, now=lambda: NOW
+    )
+    assert cycle().status == "failed"
