@@ -1,12 +1,19 @@
-"""Governed BloFin demo partial-exit manager (Griller conditions 2, 3, 4, 5, 8).
+"""Governed BloFin demo partial exits: bot-managed reduce-only market closes.
 
-Against a simulated reduce-only venue: every order is reduce-only on the
-closing side; TP legs are placed with exact leg sizes; the protective stop is
-always replaced by placing the new one first and cancelling the old one only
-after the new one exists; a failed placement keeps the old stop; a crossed
-level is held and alerted, never market-closed; restarts adopt orders by
-client id instead of placing twice; the flag, the demo exchange mode, the
-kill switch and the worker pause gate every venue call.
+BloFin does not document how an entry's attached TP/SL is sized after the
+position is partly reduced, so a ladder entry carries no exchange-side TP/SL.
+The manager watches the price and closes each leg, the breakeven stop and the
+runner trail with market reduce-only orders. Against a simulated venue:
+
+- TP1 is closed at its exact size; the stop then moves to breakeven plus costs;
+- TP2-TP4 are closed once each, also on a gap that reaches two levels;
+- the runner trails the closed-candle swing and is closed when the mark crosses it;
+- a restart mid-ladder never sends a second close for the same leg;
+- a partly filled close is completed by a new attempt for the remainder only;
+- no close is ever larger than the venue position, and a venue position that
+  differs from the recorded state holds with no order;
+- the flag, the demo mode, the kill switch, the worker pause and the daily loss
+  lock gate every venue call.
 """
 
 from __future__ import annotations
@@ -25,11 +32,10 @@ from app.services.partial_exits.demo import (
     DemoExitRecord,
     DemoLadderPosition,
     GovernedDemoPartialExitManager,
+    VenueCloseOrder,
     VenueExitFill,
-    VenueOrder,
 )
 from app.services.partial_exits.paper_terms import PartialExitTerms, parse_partial_exit_terms
-from tests.test_partial_exit_paper_monitor import _ladder_payload
 
 ORG = UUID("10000000-0000-4000-8000-0000000000d1")
 COMMAND = UUID("50000000-0000-4000-8000-0000000000d5")
@@ -44,9 +50,52 @@ def _settings(**overrides: object) -> Settings:
     return settings.model_copy(update={"exchange_mode": ExchangeMode.PAPER_EXCHANGE_DEMO})
 
 
+def four_target_payload(direction: TradeDirection = TradeDirection.LONG) -> dict[str, object]:
+    """TP1-TP4 at 30/20/20/10 % plus a 20 % closed-candle runner; entry 100, stop 95/105."""
+
+    long = direction is TradeDirection.LONG
+    prices = ("110", "120", "130", "140") if long else ("90", "80", "70", "60")
+    fractions = ("0.3", "0.2", "0.2", "0.1")
+    return {
+        "timeframe": "15m",
+        "instrument_rules": {
+            "contract_multiplier": "1",
+            "tick_size": "0.1",
+            "lot_size": "0.001",
+            "minimum_quantity": "0.001",
+            "minimum_notional": "0",
+        },
+        "risk_and_exits": {
+            "stop": {"value": "95" if long else "105", "unit": "USDT"},
+            "targets": [
+                {
+                    "order": index,
+                    "price": {"value": price, "unit": "USDT"},
+                    "quantity_fraction": fraction,
+                    "derivation": {"formula_id": "fixture", "formula_version": "1"},
+                }
+                for index, (price, fraction) in enumerate(
+                    zip(prices, fractions, strict=True), start=1
+                )
+            ],
+            "runner": {
+                "enabled": True,
+                "activation_target_order": 4,
+                "remaining_quantity_fraction": "0.2",
+                "rule_id": "closed-candle-trail",
+                "rule_version": "1",
+                "expression": "lookback_bars=2",
+            },
+            "fee_allowance": {"value": "0.5", "unit": "USDT"},
+            "funding_allowance": {"value": "0", "unit": "USDT"},
+            "slippage_allowance": {"value": "0", "unit": "USDT"},
+        },
+    }
+
+
 def _terms(direction: TradeDirection = TradeDirection.LONG) -> PartialExitTerms:
     terms = parse_partial_exit_terms(
-        _ladder_payload(direction=direction),
+        four_target_payload(direction),
         direction=direction,
         entry_price=Decimal("100"),
         position_size=Decimal("1.000"),
@@ -56,100 +105,94 @@ def _terms(direction: TradeDirection = TradeDirection.LONG) -> PartialExitTerms:
 
 
 @dataclass
-class FakeVenue:
-    side_long: bool = True
+class SimVenue:
+    """Net-mode demo account holding one position; market closes are reduce-only.
+
+    ``fill_ratio`` fills that share of each close and cancels the rest (IOC
+    remainder). ``defer`` leaves a placed close live and unfilled.
+    """
+
+    long: bool = True
     mark: Decimal = Decimal("105")
-    fail_place_stop: bool = False
-    fail_cancel: bool = False
-    orders: dict[str, VenueOrder] = field(default_factory=dict)
+    position: Decimal = Decimal("1.000")
+    fill_ratio: Decimal = Decimal("1")
+    defer: bool = False
+    fail_place: bool = False
+    orders: dict[str, VenueCloseOrder] = field(default_factory=dict)
     fills: list[VenueExitFill] = field(default_factory=list)
     calls: list[tuple[str, str]] = field(default_factory=list)
-    _next: int = 0
+    placed: list[tuple[str, str, Decimal]] = field(default_factory=list)
+    minute: int = 0
 
     def __post_init__(self) -> None:
-        stop = Decimal("95") if self.side_long else Decimal("105")
-        self.orders["entry-sl"] = VenueOrder(
-            order_id="entry-sl",
-            client_order_id="entry-attached",
-            kind="stop",
-            side=self.close_side,
-            size=Decimal("1.000"),
-            price=stop,
-            reduce_only=True,
-        )
+        if not self.long:
+            self.position = -self.position
 
     @property
     def close_side(self) -> str:
-        return "sell" if self.side_long else "buy"
+        return "sell" if self.long else "buy"
 
-    def _id(self) -> str:
-        self._next += 1
-        return f"ord-{self._next}"
+    def closing_orders(self, client_prefix: str) -> tuple[VenueCloseOrder, ...]:
+        self.calls.append(("closing_orders", client_prefix))
+        return tuple(
+            order
+            for order in self.orders.values()
+            if order.client_order_id.startswith(client_prefix)
+        )
 
-    def open_orders(self) -> tuple[VenueOrder, ...]:
-        return tuple(self.orders.values())
+    def exit_fills(self, order_ids: tuple[str, ...]) -> tuple[VenueExitFill, ...]:
+        self.calls.append(("exit_fills", ",".join(order_ids)))
+        return tuple(fill for fill in self.fills if fill.order_id in order_ids)
 
-    def exit_fills(self) -> tuple[VenueExitFill, ...]:
-        return tuple(self.fills)
+    def position_quantity(self) -> Decimal:
+        self.calls.append(("position", ""))
+        return self.position
 
     def mark_price(self) -> Decimal:
+        self.calls.append(("mark", ""))
         return self.mark
 
-    def place_reduce_only_limit(
-        self, *, client_order_id: str, side: str, size: Decimal, price: Decimal
-    ) -> str:
-        order_id = self._id()
-        self.calls.append(("place_limit", client_order_id))
-        self.orders[order_id] = VenueOrder(
-            order_id, client_order_id, "limit", side, size, price, True
+    def place_reduce_only_market(self, *, client_order_id: str, side: str, size: Decimal) -> str:
+        self.calls.append(("place", client_order_id))
+        if self.fail_place:
+            raise RuntimeError("venue rejected close")
+        # A reduce-only close can never exceed the open position or flip it.
+        assert side == self.close_side
+        assert 0 < size <= abs(self.position)
+        order_id = f"ord-{len(self.orders) + 1}"
+        self.placed.append((client_order_id, side, size))
+        self.orders[order_id] = VenueCloseOrder(
+            order_id, client_order_id, side, size, Decimal("0"), True, "live"
         )
+        if not self.defer:
+            self.settle(order_id)
         return order_id
 
-    def place_reduce_only_stop(
-        self, *, client_order_id: str, side: str, size: Decimal, trigger_price: Decimal
-    ) -> str:
-        self.calls.append(("place_stop", client_order_id))
-        if self.fail_place_stop:
-            raise RuntimeError("venue rejected stop")
-        order_id = self._id()
-        self.orders[order_id] = VenueOrder(
-            order_id, client_order_id, "stop", side, size, trigger_price, True
-        )
-        return order_id
-
-    def cancel_stop(self, *, order_id: str) -> None:
-        self.calls.append(("cancel_stop", order_id))
-        if self.fail_cancel:
-            raise RuntimeError("cancel failed")
-        self.orders.pop(order_id, None)
-
-    def fill(
-        self, client_order_id: str, quantity: str, price: str, minutes: int, trade: str
-    ) -> None:
-        order = next(o for o in self.orders.values() if o.client_order_id == client_order_id)
-        self.fills.append(
-            VenueExitFill(
-                order_id=order.order_id,
-                trade_id=trade,
-                client_order_id=client_order_id,
-                quantity=Decimal(quantity),
-                price=Decimal(price),
-                occurred_at=T0 + timedelta(minutes=minutes),
+    def settle(self, order_id: str, *, price: Decimal | None = None) -> None:
+        order = self.orders[order_id]
+        filled = (order.size * self.fill_ratio).quantize(Decimal("0.001"))
+        self.minute += 1
+        if filled > 0:
+            self.fills.append(
+                VenueExitFill(
+                    order_id=order_id,
+                    trade_id=f"tr-{order_id}",
+                    client_order_id=order.client_order_id,
+                    quantity=filled,
+                    price=price or self.mark,
+                    occurred_at=T0 + timedelta(minutes=self.minute),
+                )
             )
+            self.position += -filled if self.long else filled
+        self.orders[order_id] = VenueCloseOrder(
+            order_id,
+            order.client_order_id,
+            order.side,
+            order.size,
+            filled,
+            True,
+            "filled" if filled == order.size else "canceled",
         )
-        remaining = order.size - Decimal(quantity)
-        if remaining == 0:
-            del self.orders[order.order_id]
-        else:
-            self.orders[order.order_id] = VenueOrder(
-                order.order_id,
-                order.client_order_id,
-                order.kind,
-                order.side,
-                remaining,
-                order.price,
-                True,
-            )
 
 
 @dataclass
@@ -164,7 +207,7 @@ class MemoryStore:
 
 
 def _manager(
-    venue: FakeVenue,
+    venue: SimVenue,
     store: MemoryStore,
     *,
     settings: Settings | None = None,
@@ -179,205 +222,11 @@ def _manager(
 
 
 def _position(direction: TradeDirection = TradeDirection.LONG) -> DemoLadderPosition:
-    return DemoLadderPosition(
-        organization_id=ORG,
-        command_id=COMMAND,
-        terms=_terms(direction),
-        entry_stop_order_id="entry-sl",
-    )
+    return DemoLadderPosition(organization_id=ORG, command_id=COMMAND, terms=_terms(direction))
 
 
-def _tp_client(manager: GovernedDemoPartialExitManager, order: int) -> str:
-    return manager.client_order_id(COMMAND, f"tp{order}")
-
-
-# Condition 8: gates before any venue call.
-
-
-@pytest.mark.parametrize(
-    "settings",
-    [
-        Settings(_env_file=None),  # type: ignore[call-arg]
-        Settings(_env_file=None, governed_demo_partial_exits_enabled=True),  # type: ignore[call-arg]
-        _settings().model_copy(update={"enable_real_trading": True}),
-    ],
-    ids=["flag_off", "not_demo_mode", "real_trading"],
-)
-def test_disabled_or_live_configuration_makes_no_venue_call(settings: Settings) -> None:
-    venue = FakeVenue()
-    report = _manager(venue, MemoryStore(), settings=settings).step(_position())
-    assert report.status == "disabled"
-    assert venue.calls == []
-
-
-@pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused"])
-def test_kill_switch_and_pause_hold_every_venue_call(reason: str) -> None:
-    venue = FakeVenue()
-    report = _manager(venue, MemoryStore(), hold=reason).step(_position())
-    assert report.status == "held"
-    assert report.reason == reason
-    assert venue.calls == []
-
-
-# Condition 4: reduce-only legs, exact sizes, protection first.
-
-
-def test_first_step_places_reduce_only_legs_with_exact_sizes() -> None:
-    venue = FakeVenue()
-    manager = _manager(venue, MemoryStore())
-    report = manager.step(_position())
-    assert report.status == "managed"
-    limits = [order for order in venue.orders.values() if order.kind == "limit"]
-    assert sorted((order.price, order.size) for order in limits) == [
-        (Decimal("110"), Decimal("0.500")),
-        (Decimal("120"), Decimal("0.300")),
-    ]
-    assert all(order.reduce_only and order.side == "sell" for order in venue.orders.values())
-    # The entry stop still covers the whole position; nothing was cancelled.
-    assert ("cancel_stop", "entry-sl") not in venue.calls
-
-
-def test_second_step_is_idempotent() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    _manager(venue, store).step(_position())
-    calls = list(venue.calls)
-    _manager(venue, store).step(_position())
-    assert venue.calls == calls
-
-
-def test_partial_tp1_fill_resizes_the_stop_without_moving_it() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.200", "110", 1, "t1")
-    manager.step(_position())
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    assert [(stop.price, stop.size) for stop in stops] == [(Decimal("95"), Decimal("0.800"))]
-    place = venue.calls.index(("place_stop", stops[0].client_order_id))
-    cancel = venue.calls.index(("cancel_stop", "entry-sl"))
-    assert place < cancel
-
-
-def test_completed_tp1_places_breakeven_before_cancelling_the_old_stop() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    manager.step(_position())
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    assert [(stop.price, stop.size) for stop in stops] == [(Decimal("100.5"), Decimal("0.500"))]
-    new_stop = stops[0]
-    assert venue.calls.index(("place_stop", new_stop.client_order_id)) < venue.calls.index(
-        ("cancel_stop", "entry-sl")
-    )
-    record = store.load(COMMAND)
-    assert [move.key for move in record.stop_moves] == ["breakeven"]
-    assert record.active_stop_order_id == new_stop.order_id
-
-
-def test_failed_stop_placement_keeps_the_old_stop_and_records_nothing() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    venue.fail_place_stop = True
-    report = manager.step(_position())
-    assert "stop_place_failed" in report.alerts
-    assert "entry-sl" in venue.orders
-    assert ("cancel_stop", "entry-sl") not in venue.calls
-    assert store.load(COMMAND).stop_moves == ()
-    venue.fail_place_stop = False
-    manager.step(_position())
-    assert [move.key for move in store.load(COMMAND).stop_moves] == ["breakeven"]
-    assert "entry-sl" not in venue.orders
-
-
-def test_failed_cancel_leaves_two_reduce_only_stops_and_retries() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    venue.fail_cancel = True
-    report = manager.step(_position())
-    assert "stop_cancel_failed" in report.alerts
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    assert len(stops) == 2 and all(stop.reduce_only for stop in stops)
-    venue.fail_cancel = False
-    manager.step(_position())
-    assert [order.price for order in venue.orders.values() if order.kind == "stop"] == [
-        Decimal("100.5")
-    ]
-
-
-def test_restart_adopts_the_placed_breakeven_stop_instead_of_placing_twice() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    manager.step(_position())
-    placed = [call for call in venue.calls if call[0] == "place_stop"]
-    _manager(venue, store).step(_position())
-    assert [call for call in venue.calls if call[0] == "place_stop"] == placed
-
-
-def test_crossed_breakeven_is_held_and_never_market_closed() -> None:
-    venue = FakeVenue(mark=Decimal("100.2"))
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    report = manager.step(_position())
-    assert "protection_crossed" in report.alerts
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    # The resize to the remaining size still happens at the old, uncrossed level.
-    assert [(stop.price, stop.size) for stop in stops] == [(Decimal("95"), Decimal("0.500"))]
-    assert all(call[0] != "place_market" for call in venue.calls)
-    assert store.load(COMMAND).stop_moves == ()
-
-
-# Condition 3: duplicate, out-of-order and overfilling venue fills.
-
-
-def test_duplicate_and_out_of_order_fills_count_once() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    venue.fill(_tp_client(manager, 2), "0.300", "120", 9, "t2")
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 3, "t1")
-    venue.fills.append(venue.fills[0])
-    manager.step(_position())
-    manager.step(_position())
-    record = store.load(COMMAND)
-    assert sorted(fill.quantity for fill in record.fills) == [Decimal("0.300"), Decimal("0.500")]
-    assert record.stop_moves[0].effective_at == T0 + timedelta(minutes=3)
-
-
-def test_overfill_holds_without_any_venue_mutation() -> None:
-    venue = FakeVenue()
-    store = MemoryStore()
-    manager = _manager(venue, store)
-    manager.step(_position())
-    tp1 = next(o for o in venue.orders.values() if o.client_order_id == _tp_client(manager, 1))
-    venue.fills.append(
-        VenueExitFill(
-            tp1.order_id, "bad", tp1.client_order_id, Decimal("0.600"), Decimal("110"), T0
-        )
-    )
-    calls = list(venue.calls)
-    report = manager.step(_position())
-    assert report.status == "held"
-    assert report.reason == "fill_refused:leg_overfill"
-    assert venue.calls == calls
-
-
-# Condition 5 on demo: runner trail from closed bars only.
+def _client(leg: str, attempt: int = 0) -> str:
+    return GovernedDemoPartialExitManager.close_client_id(COMMAND, leg, attempt)
 
 
 def _bar(index: int, low: str, high: str) -> ExitBar:
@@ -394,30 +243,281 @@ def _bar(index: int, low: str, high: str) -> ExitBar:
     )
 
 
-def test_runner_trail_replaces_the_stop_from_closed_bars_only() -> None:
-    venue = FakeVenue(mark=Decimal("125"))
+def _stop(store: MemoryStore) -> Decimal:
+    moves = store.load(COMMAND).stop_moves
+    return moves[-1].new_stop if moves else Decimal("95")
+
+
+# Gates: flag off, live configuration, kill switch, pause, loss lock.
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        Settings(_env_file=None),  # type: ignore[call-arg]
+        Settings(_env_file=None, governed_demo_partial_exits_enabled=True),  # type: ignore[call-arg]
+        _settings().model_copy(update={"enable_real_trading": True}),
+    ],
+    ids=["flag_off", "not_demo_mode", "real_trading"],
+)
+def test_flag_off_or_live_configuration_sends_no_closing_order(settings: Settings) -> None:
+    venue = SimVenue(mark=Decimal("150"))
+    report = _manager(venue, MemoryStore(), settings=settings).step(_position())
+    assert report.status == "disabled"
+    assert venue.calls == []
+
+
+@pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused", "daily_loss_lock"])
+def test_kill_switch_pause_and_loss_lock_hold_every_venue_call(reason: str) -> None:
+    venue = SimVenue(mark=Decimal("150"))
+    store = MemoryStore()
+    report = _manager(venue, store, hold=reason).step(_position())
+    assert (report.status, report.reason) == ("held", reason)
+    assert venue.calls == []
+    assert store.records == {}
+    # Released: management resumes from the venue state, nothing was lost.
+    assert _manager(venue, store).step(_position()).status == "managed"
+    assert venue.placed[0][0] == _client("t1")
+
+
+def test_no_level_reached_sends_nothing() -> None:
+    venue = SimVenue(mark=Decimal("105"))
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert report.status == "managed"
+    assert venue.placed == []
+
+
+# TP1 then breakeven plus fees.
+
+
+def test_tp1_closes_its_exact_size_then_the_stop_moves_to_breakeven_plus_fees() -> None:
+    venue = SimVenue(mark=Decimal("110"))
+    store = MemoryStore()
+    manager = _manager(venue, store)
+    report = manager.step(_position())
+    assert venue.placed == [(_client("t1"), "sell", Decimal("0.300"))]
+    assert report.placed == (_client("t1"),)
+    # The fill is read on the next step; only then is TP1 confirmed.
+    manager.step(_position())
+    assert _stop(store) == Decimal("100.5")  # entry 100 + 0.5 fees per unit
+    moves = store.load(COMMAND).stop_moves
+    assert [(move.key, move.previous_stop, move.new_stop) for move in moves] == [
+        ("breakeven", Decimal("95"), Decimal("100.5"))
+    ]
+    assert len(venue.placed) == 1
+    # The mark falls back through breakeven: the remainder is closed once.
+    venue.mark = Decimal("100.5")
+    manager.step(_position())
+    assert venue.placed[1] == (_client("x"), "sell", Decimal("0.700"))
+    assert manager.step(_position()).status == "closed"
+    assert len(venue.placed) == 2
+
+
+def test_initial_stop_closes_everything_before_tp1() -> None:
+    venue = SimVenue(mark=Decimal("94.9"))
     store = MemoryStore()
     manager = _manager(venue, store)
     manager.step(_position())
-    venue.fill(_tp_client(manager, 1), "0.500", "110", 1, "t1")
-    venue.fill(_tp_client(manager, 2), "0.300", "120", 2, "t2")
-    bars = (_bar(0, "118", "125"), _bar(1, "121", "126"), _bar(2, "130", "140"))
-    manager.step(_position(), bars=bars, evaluated_at=bars[1].interval_end + STEP / 2)
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    assert [(stop.price, stop.size) for stop in stops] == [(Decimal("118"), Decimal("0.200"))]
+    assert venue.placed == [(_client("x"), "sell", Decimal("1.000"))]
+    assert manager.step(_position()).status == "closed"
+    assert [fill.kind for fill in store.load(COMMAND).fills] == ["stop"]
+
+
+# TP2-TP4 partials.
+
+
+def test_tp2_to_tp4_close_once_each_with_exact_sizes() -> None:
+    venue = SimVenue()
+    store = MemoryStore()
+    manager = _manager(venue, store)
+    for mark in ("110", "110", "120", "120", "130", "130", "140", "140", "140"):
+        venue.mark = Decimal(mark)
+        manager.step(_position())
+    assert venue.placed == [
+        (_client("t1"), "sell", Decimal("0.300")),
+        (_client("t2"), "sell", Decimal("0.200")),
+        (_client("t3"), "sell", Decimal("0.200")),
+        (_client("t4"), "sell", Decimal("0.100")),
+    ]
+    assert venue.position == Decimal("0.200")  # the runner stays open
+    state_fills = store.load(COMMAND).fills
+    assert [(fill.leg_order, fill.quantity) for fill in state_fills] == [
+        (1, Decimal("0.300")),
+        (2, Decimal("0.200")),
+        (3, Decimal("0.200")),
+        (4, Decimal("0.100")),
+    ]
+
+
+def test_a_gap_through_two_targets_closes_both_legs_without_exceeding_the_position() -> None:
+    venue = SimVenue(mark=Decimal("125"))
+    manager = _manager(venue, MemoryStore())
+    manager.step(_position())
+    assert venue.placed == [
+        (_client("t1"), "sell", Decimal("0.300")),
+        (_client("t2"), "sell", Decimal("0.200")),
+    ]
+
+
+# Runner trails the last closed swing.
+
+
+def test_runner_trails_the_last_closed_swing_and_closes_when_crossed() -> None:
+    venue = SimVenue()
+    store = MemoryStore()
+    manager = _manager(venue, store)
+    for mark in ("140", "140"):
+        venue.mark = Decimal(mark)
+        manager.step(_position())
+    assert venue.position == Decimal("0.200")
+    bars = (_bar(0, "128", "141"), _bar(1, "133", "142"), _bar(2, "120", "143"))
+    evaluated_at = bars[1].interval_end + STEP / 2  # bar 2 is still forming
+    venue.mark = Decimal("135")
+    manager.step(_position(), bars=bars, evaluated_at=evaluated_at)
+    # Lowest low of the last two closed bars; the forming bar's 120 is ignored.
+    assert _stop(store) == Decimal("128")
+    assert len(venue.placed) == 4
+    venue.mark = Decimal("127.9")
+    manager.step(_position(), bars=bars, evaluated_at=evaluated_at)
+    assert venue.placed[-1] == (_client("x"), "sell", Decimal("0.200"))
+    assert manager.step(_position()).status == "closed"
+    assert store.load(COMMAND).fills[-1].kind == "runner_stop"
+
+
+def test_trail_never_loosens() -> None:
+    venue = SimVenue()
+    store = MemoryStore()
+    manager = _manager(venue, store)
+    for _ in range(2):
+        venue.mark = Decimal("140")
+        manager.step(_position())
+    high = (_bar(0, "130", "141"), _bar(1, "131", "142"))
+    manager.step(_position(), bars=high, evaluated_at=high[1].interval_end)
+    low = (*high, _bar(2, "110", "143"), _bar(3, "111", "144"))
+    manager.step(_position(), bars=low, evaluated_at=low[3].interval_end)
+    assert _stop(store) == Decimal("130")
+
+
+# Restart and retries.
+
+
+def test_restart_mid_ladder_with_a_close_in_flight_never_sends_a_duplicate() -> None:
+    venue = SimVenue(mark=Decimal("110"), defer=True)
+    store = MemoryStore()
+    _manager(venue, store).step(_position())
+    assert len(venue.placed) == 1
+    # Worker restarts while the TP1 close is still live at the venue.
+    report = _manager(venue, store).step(_position())
+    assert (report.status, report.reason) == ("held", "close_in_flight")
+    assert len(venue.placed) == 1
+    venue.settle(next(iter(venue.orders)))
+    _manager(venue, store).step(_position())
+    assert len(venue.placed) == 1
+    assert _stop(store) == Decimal("100.5")
+
+
+def test_restart_with_an_empty_store_rebuilds_from_venue_fills_without_reclosing() -> None:
+    venue = SimVenue(mark=Decimal("120"))
+    manager = _manager(venue, MemoryStore())
+    manager.step(_position())
+    manager.step(_position())
+    placed = list(venue.placed)
+    fresh = MemoryStore()
+    _manager(venue, fresh).step(_position())
+    assert venue.placed == placed
+    assert [fill.leg_order for fill in fresh.load(COMMAND).fills] == [1, 2]
+    assert _stop(fresh) == Decimal("100.5")
+
+
+def test_partial_fill_of_a_close_is_completed_by_a_second_attempt_for_the_remainder() -> None:
+    venue = SimVenue(mark=Decimal("110"), fill_ratio=Decimal("1") / Decimal("3"))
+    store = MemoryStore()
+    manager = _manager(venue, store)
+    manager.step(_position())
+    assert venue.placed == [(_client("t1"), "sell", Decimal("0.300"))]
+    assert venue.position == Decimal("0.900")
+    venue.fill_ratio = Decimal("1")
+    manager.step(_position())
+    # TP1 is not complete yet, so the stop has not moved.
+    assert venue.placed[1] == (_client("t1", 1), "sell", Decimal("0.200"))
+    assert store.load(COMMAND).stop_moves == ()
+    manager.step(_position())
+    assert _stop(store) == Decimal("100.5")
+    assert len(venue.placed) == 2
+
+
+def test_failed_placement_records_nothing_and_retries_the_same_client_id() -> None:
+    venue = SimVenue(mark=Decimal("110"), fail_place=True)
+    store = MemoryStore()
+    report = _manager(venue, store).step(_position())
+    assert "close_place_failed" in report.alerts
+    assert store.load(COMMAND).fills == ()
+    venue.fail_place = False
+    _manager(venue, store).step(_position())
+    assert venue.placed == [(_client("t1"), "sell", Decimal("0.300"))]
+    assert [call for call in venue.calls if call[0] == "place"] == [
+        ("place", _client("t1")),
+        ("place", _client("t1")),
+    ]
+
+
+# Never increase exposure.
+
+
+@pytest.mark.parametrize("venue_position", ["1.200", "0.700", "0", "-0.500"])
+def test_venue_position_that_differs_from_the_record_holds_with_no_order(
+    venue_position: str,
+) -> None:
+    venue = SimVenue(mark=Decimal("150"))
+    venue.position = Decimal(venue_position)
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "venue_position_mismatch")
+    assert venue.placed == []
+
+
+def test_an_unknown_order_under_our_prefix_holds() -> None:
+    venue = SimVenue(mark=Decimal("150"))
+    prefix = GovernedDemoPartialExitManager.close_client_id(COMMAND, "", 0)[:-2]
+    venue.orders["odd"] = VenueCloseOrder(
+        "odd", prefix + "zz", "sell", Decimal("0.1"), Decimal("0"), True, "canceled"
+    )
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "unexplained_order")
+    assert venue.placed == []
+
+
+def test_a_non_reduce_only_or_wrong_side_order_of_ours_holds() -> None:
+    venue = SimVenue(mark=Decimal("150"))
+    venue.orders["bad"] = VenueCloseOrder(
+        "bad", _client("t1"), "buy", Decimal("0.3"), Decimal("0"), False, "canceled"
+    )
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "order_shape_unexpected")
+    assert venue.placed == []
+
+
+def test_client_ids_are_short_alphanumeric_and_derived_from_command_leg_and_attempt() -> None:
+    ids = {_client("t1"), _client("t1", 1), _client("t4"), _client("x"), _client("x", 2)}
+    assert len(ids) == 5
+    assert all(value.isalnum() and len(value) <= 32 for value in ids)
+    other = GovernedDemoPartialExitManager.close_client_id(
+        UUID("50000000-0000-4000-8000-0000000000d6"), "t1", 0
+    )
+    assert other != _client("t1")
 
 
 # Shorts mirror.
 
 
-def test_short_ladder_uses_buy_side_reduce_only_and_rounds_breakeven_down() -> None:
-    venue = FakeVenue(side_long=False, mark=Decimal("95"))
+def test_short_ladder_closes_with_buy_and_moves_breakeven_down() -> None:
+    venue = SimVenue(long=False, mark=Decimal("90"))
     store = MemoryStore()
     manager = _manager(venue, store)
     position = _position(TradeDirection.SHORT)
     manager.step(position)
-    assert all(order.side == "buy" and order.reduce_only for order in venue.orders.values())
-    venue.fill(_tp_client(manager, 1), "0.500", "90", 1, "t1")
+    assert venue.placed == [(_client("t1"), "buy", Decimal("0.300"))]
     manager.step(position)
-    stops = [order for order in venue.orders.values() if order.kind == "stop"]
-    assert [(stop.price, stop.size) for stop in stops] == [(Decimal("99.5"), Decimal("0.500"))]
+    assert _stop(store) == Decimal("99.5")
+    venue.mark = Decimal("99.5")
+    manager.step(position)
+    assert venue.placed[-1] == (_client("x"), "buy", Decimal("0.700"))
