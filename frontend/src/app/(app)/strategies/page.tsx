@@ -27,6 +27,7 @@ const families = [
     kind: "operational_nested_continuation/v1",
   },
   { id: "sfp", name: "SFP", kind: "swing_failure_pattern/v1", detectionFamily: "sfp" },
+  { id: "dline", name: "D-line", kind: "d_line/v1", detectionFamily: "d_line" },
 ] satisfies { id: string; name: string; kind: string; detectionFamily: BrainFamily }[];
 // The server bounds setups to 20 rows; setup_count is the family's full total.
 function recentOf(view: BrainOverview) {
@@ -49,17 +50,19 @@ function StrategiesWorkspace() {
   const loader = useCallback(async () => {
     // One bounded read per family, so a busy SFP week cannot push Nested detections out.
     const since = new Date(Date.now() - 7 * 86400000).toISOString();
-    const [nested, sfp, library, drafts] = await Promise.allSettled([
+    const [nested, sfp, dline, library, drafts] = await Promise.allSettled([
       api.strategyBrain.overview({ family: "nested_continuation", since }),
       api.strategyBrain.overview({ family: "sfp", since }),
+      api.strategyBrain.overview({ family: "d_line", since }),
       api.strategies.list({ limit: 50 }),
       savedEntries.list({ category: "strategies", limit: 6 }),
     ]);
-    const brain = [nested, sfp].find((r) => r.status === "fulfilled");
+    const brain = [nested, sfp, dline].find((r) => r.status === "fulfilled");
     return {
       brain: brain?.status === "fulfilled" ? brain.value : null,
       recent: {
         nested_continuation: nested.status === "fulfilled" ? recentOf(nested.value) : null,
+        d_line: dline.status === "fulfilled" ? recentOf(dline.value) : null,
         sfp: sfp.status === "fulfilled" ? recentOf(sfp.value) : null,
       } as Record<BrainFamily, { setups: BrainSetup[]; count: number } | null>,
       library: library.status === "fulfilled" ? library.value.items : null,
@@ -96,6 +99,7 @@ function StrategiesWorkspace() {
           >
             ← Back to Strategies
           </Link>
+          {family.id === "dline" && <p>Draft research only. No execution or alerts are authorized.</p>}
           {data?.brain?.strategies
             .filter((s) => s.spec.kind === family.kind)
             .map((s) => (

@@ -191,3 +191,17 @@ Review before implementation: the slope band is an uncalibrated proxy for chart 
 Ranked implementation risks: (1) partial-exit accounting/protection integrity; (2) false historical knowledge in pivots/HTF/OB/POC; (3) duplicate attempts across workers, sliding windows and versions; (4) insufficient causal level data/provider budget; (5) screenshot ambiguity/overfitting and stop width versus 2R; (6) accidental family fallthrough or scope/approval bypass. Mitigate with capability refusal, original receipt proofs, transactional persistence, deterministic fake-provider tests, conservative fills and final-head safety regression review. No expected return is asserted.
 
 Planning validation: source/code and all supplied images reviewed; application code and tests unchanged. Backend tests, ruff, migrations, workers, network market acquisition and trading were not run for this documentation-only task. Next action: review this local plan, then authorize publication/plan approval before implementation. Record deviations here after approval rather than silently changing the accepted plan.
+
+## Detection-only implementation scope amendment (2026-11-16)
+
+Sofien's implementation task clears the plan gate with Griller's conditions.
+Only draft detection, confluences, would-be plan recording, existing Brain JSON
+persistence and family/detail presentation are authorized. No watcher/Telegram
+registration, lifecycle approval, paper/demo actionability or partial-exit code.
+The full plan above remains the original record. `docs/dline_detection.md` records
+v1 assumptions/defaults, the automated OB/POC provider gap and a documentation-only
+walk-forward/out-of-sample TODO with sample-size floor. The ranging implementation
+uses a configurable efficiency-ratio proxy instead of the proposed ADX. Symbols
+are restricted to BTCUSDT in v1. Attempt counts are research crossings reconstructed
+from episode history, not fills or stop-out reservations. These deliberate phase
+boundaries require a separate reviewed actionability task later.
