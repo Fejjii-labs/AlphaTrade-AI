@@ -80,7 +80,7 @@ it("labels unavailable saved notes independently without claiming an empty histo
   render(<StrategiesPage />);
   expect(await screen.findByText("Captured notes unavailable.")).toBeInTheDocument();
   expect(screen.queryByText("No captured strategy notes yet.")).not.toBeInTheDocument();
-  expect(screen.getAllByTestId("strategy-family")).toHaveLength(2);
+  expect(screen.getAllByTestId("strategy-family")).toHaveLength(3);
 });
 
 it("cancels the rendered account scope before an old account read can complete", async () => {
@@ -144,4 +144,11 @@ it("shows the server total when a family has more detections than the 20-row bou
   expect(within(nested).getByTestId("family-count")).toHaveTextContent("1 in 7 days");
   expect(within(sfp).getByText("Bars and list cover the latest 20.")).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "Recent detections →" })).not.toBeInTheDocument();
+});
+
+it("registers D-line as a separate draft research family", async () => {
+  render(<StrategiesPage />);
+  await screen.findByTestId("captured-strategy-note");
+  expect(screen.getByText("D-line", { selector: "h2" })).toBeInTheDocument();
+  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "d_line", since: expect.any(String) });
 });
