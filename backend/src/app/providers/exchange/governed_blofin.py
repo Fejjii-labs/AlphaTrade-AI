@@ -561,6 +561,15 @@ class GovernedBloFinDemoProvider:
         self, *, plan: TradePlanRevision, client_order_id: str, before_post: Callable[[], None]
     ) -> str:
         """One POST, with stop and target attached to the entry order."""
+        exits = plan.risk_and_exits
+        if (
+            len(exits.targets) != 1
+            or exits.targets[0].quantity_fraction != 1
+            or exits.runner.enabled
+        ):
+            # The attached TP closes the whole position at targets[0]. A ladder
+            # must never be coerced into that; partial exits are not dispatched.
+            raise ValueError("Demo entry supports one full-size target; ladder refused.")
         # Read only: no leverage or margin-mode write here. A configured leverage
         # was set and read back just before the claim, so any drift refuses; other
         # plans trade at the account's existing leverage.

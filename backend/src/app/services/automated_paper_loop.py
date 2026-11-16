@@ -253,13 +253,11 @@ class AutomatedPaperLoop:
         evidence = _evidence_refusal(assembled, now=self._clock.now())
         if evidence is not None:
             return _proof(candidate, "skipped", evidence)
-        from app.schemas.nested_continuation import NestedContinuationSpec
-        from app.strategy_brain.sfp.contracts import SfpSpec
-
-        if candidate.direction is not TradeDirection.SHORT and not isinstance(
-            policy.authored_spec, (NestedContinuationSpec, SfpSpec)
-        ):
-            return _proof(candidate, "skipped", "direction_not_paper_executable")
+        refusal = paper_spec_refusal(
+            policy.authored_spec, policy.evaluation_params, candidate.direction
+        )
+        if refusal is not None:
+            return _proof(candidate, "skipped", refusal)
         return None
 
     def _fresh_sfp_fill_evidence(
@@ -1502,6 +1500,38 @@ def _sfp_quote_refusal(
     return None
 
 
+def paper_spec_refusal(
+    spec: object,
+    evaluation_params: object,
+    direction: TradeDirection | None,
+) -> str | None:
+    """Refuse every family the paper and demo plan builders do not know.
+
+    Nested and SFP run in both directions. First-slice runs shorts only, with
+    its own evaluation params. Anything else, in either direction, is
+    ``spec_not_paper_executable``: it is never coerced into first-slice and
+    never reduced to a single-target plan. ``direction=None`` checks the
+    family only.
+    """
+
+    from app.schemas.nested_continuation import NestedContinuationSpec
+    from app.schemas.strategy_pattern_spec import FirstSliceAuthoredPatternSpec
+    from app.signal_fusion.first_slice_adapter import FirstSliceEvaluationParams
+    from app.strategy_brain.sfp.contracts import SfpSpec
+
+    if isinstance(spec, (NestedContinuationSpec, SfpSpec)):
+        return None
+    if not isinstance(spec, FirstSliceAuthoredPatternSpec):
+        return "spec_not_paper_executable"
+    if direction is None:
+        return None
+    if direction is not TradeDirection.SHORT:
+        return "direction_not_paper_executable"
+    if not isinstance(evaluation_params, FirstSliceEvaluationParams):
+        return "execution_policy_unsupported"
+    return None
+
+
 def _plan_terms(
     *,
     candidate: Candidate,
@@ -1536,6 +1566,9 @@ def _plan_terms(
     # paper loop opts in, and it still cannot route the plan to a live venue.
     if isinstance(spec, SfpSpec) and not internal_paper_sfp:
         return "sfp_execution_plan_not_authorized"
+    if paper_spec_refusal(spec, policy.evaluation_params, None) is not None:
+        # Unknown families are refused here too, never coerced to first-slice.
+        return "spec_not_paper_executable"
     quote = assembled.current_price
     if quote is None:
         return "evidence_unavailable"
