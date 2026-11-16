@@ -1566,7 +1566,7 @@ def _plan_terms(
     # Only the two explicitly authorized paper/demo callers opt in.
     if isinstance(spec, SfpSpec) and not (internal_paper_sfp or governed_demo_sfp):
         return "sfp_execution_plan_not_authorized"
-    if paper_spec_refusal(spec, policy.evaluation_params, None) is not None:
+    if paper_spec_refusal(spec, None, None) is not None:
         # Unknown families are refused here too, never coerced to first-slice.
         return "spec_not_paper_executable"
     quote = assembled.current_price
