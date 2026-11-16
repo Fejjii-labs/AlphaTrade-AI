@@ -38,7 +38,9 @@ def test_ambiguous_flag_values_fail_closed(
 
 
 @pytest.mark.parametrize("raw", ["true", "TRUE", "True"])
-def test_explicit_true_enables_only_its_own_venue(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+def test_explicit_true_enables_only_its_own_venue(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
     monkeypatch.setenv("PAPER_PARTIAL_EXITS_ENABLED", raw)
     settings = _settings()
     assert partial_exits_enabled(settings, PAPER_INTERNAL_VENUE) is True

@@ -159,9 +159,7 @@ def test_breakeven_survives_a_restart_from_durable_records_in_any_order() -> Non
     assert move is not None
     state = apply_stop_move(state, move).state
 
-    restarted = rebuild_position_state(
-        _state(), fills=tuple(reversed(fills)), stop_moves=(move,)
-    )
+    restarted = rebuild_position_state(_state(), fills=tuple(reversed(fills)), stop_moves=(move,))
     assert restarted == state
     assert restarted.current_stop == move.new_stop
     assert plan_breakeven_move(restarted) is None
