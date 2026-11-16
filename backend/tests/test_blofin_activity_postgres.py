@@ -20,6 +20,7 @@ from app.core.errors import ValidationAppError, register_exception_handlers
 from app.db.blofin_activity import BloFinActivityAccount, BloFinActivityCursor, BloFinActivityFact
 from app.db.models import Organization
 from app.db.session import get_session
+from app.providers.exchange.errors import ExchangeRequestError, VenueErrorDetails
 from app.schemas.common import MembershipRole
 from app.security.tenant import TenantContext
 from app.services.blofin_activity_config import (
@@ -265,6 +266,61 @@ def test_rate_limit_backoff_persists_and_stops_network(world):
     result = page(world)
     assert result.coverage[1].next_retry_at == NOW + timedelta(seconds=300)
     assert result.coverage[1].last_successful_sync is None
+
+
+def test_bad_order_page_does_not_starve_valid_fill_history(world, monkeypatch):
+    """A parser failure on the first stream used to block both streams forever."""
+    provider = world[4].provider()
+    original_page = provider.page
+
+    def broken_orders(kind, **kwargs):
+        if kind == "order":
+            raise ExchangeRequestError("Invalid completed native order.")
+        return original_page(kind, **kwargs)
+
+    monkeypatch.setattr(provider, "page", broken_orders)
+    result = run_activity_sync(world[0], world[1], world[2], provider=provider, clock=lambda: NOW)
+    assert result.status == "failed"
+    assert result.error_code == "provider_unavailable"
+    assert [item.trade_id for item in page(world).items] == ["f1"]
+    with Session(world[0]) as session:
+        order_cursor = session.get(BloFinActivityCursor, (*world[3].key(), "order"))
+        fill_cursor = session.get(BloFinActivityCursor, (*world[3].key(), "fill"))
+        assert order_cursor.last_error_code == "provider_unavailable"
+        assert fill_cursor.last_error_code is None
+
+
+def test_provider_unavailable_logs_safe_endpoint_and_numeric_codes(world, monkeypatch):
+    import app.services.blofin_activity_service as service
+
+    events = []
+    monkeypatch.setattr(service.logger, "warning", lambda event, **kw: events.append((event, kw)))
+    provider = world[4].provider()
+
+    def unavailable(*args, **kwargs):
+        raise ExchangeRequestError(
+            "fixture-secret raw venue payload",
+            details=VenueErrorDetails(
+                endpoint_name="orders_history",
+                http_status=400,
+                venue_error_code="152001",
+                venue_error_message="fixture-key",
+            ),
+        )
+
+    monkeypatch.setattr(provider, "page", unavailable)
+    assert (
+        run_activity_sync(
+            world[0], world[1], world[2], provider=provider, clock=lambda: NOW
+        ).error_code
+        == "provider_unavailable"
+    )
+    diagnostics = [fields for event, fields in events if event == "blofin_activity_provider_failed"]
+    assert diagnostics and diagnostics[0]["stream"] == "order"
+    assert diagnostics[0]["http_status"] == 400
+    assert diagnostics[0]["venue_error_code"] == "152001"
+    assert diagnostics[0]["error_type"] == "ExchangeRequestError"
+    assert "fixture-secret" not in repr(events) and "fixture-key" not in repr(events)
 
 
 def test_account_lock_refuses_competing_worker_without_network(world):
