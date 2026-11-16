@@ -52,13 +52,34 @@ async function storedHistory(page: Page, baseURL: string) {
   return { state, requests };
 }
 
-test("compact native Dashboard keeps exact units and fill counts at 320px", async ({ page, baseURL }) => {
+test("compact native Dashboard shows readable rows without coverage diagnostics at 320px", async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   const fixture = await storedHistory(page, baseURL!);
   await page.goto("/");
   const activity = page.getByTestId("native-activity");
+  const row = activity.getByTestId("native-activity-row");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("BTC-USDT · buy");
+  await expect(row).toContainText("contracts");
+  await expect(row).not.toContainText("0.123456789123456789");
+  await expect(activity.getByTestId("native-activity-last-synced")).toContainText("Last synced");
+  await expect(activity.getByTestId("native-activity-statistics")).toHaveCount(0);
+  await expect(activity).not.toContainText("Stale at read");
+  await expect(activity).not.toContainText("incomplete coverage");
+  await expect(activity).not.toContainText("History coverage");
+  for (const button of await activity.getByRole("button").all()) {
+    if (await button.isVisible()) expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(fixture.requests.every(request => ["GET", "OPTIONS"].includes(request.method))).toBe(true);
+});
+
+test("Journal native history keeps exact units and drill-down detail at 320px", async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  const fixture = await storedHistory(page, baseURL!);
+  await page.goto("/journal");
+  const activity = page.getByTestId("native-activity");
   await expect(activity.getByTestId("native-activity-row")).toHaveCount(1);
-  await expect(activity.getByTestId("native-activity-statistics")).toContainText("Native fills shown1");
   await expect(activity).toContainText("Stale at read");
   await expect(activity).toContainText("incomplete coverage");
   const summary = activity.getByTestId("native-activity-row").locator("summary");

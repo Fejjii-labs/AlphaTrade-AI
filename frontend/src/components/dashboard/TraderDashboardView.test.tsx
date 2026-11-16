@@ -43,10 +43,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Dashboard native integration", () => {
-  it("shows native activity/statistics and keeps internal simulator records out of BloFin", async () => {
+  it("shows simplified native activity and keeps internal simulator records out of BloFin", async () => {
     render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
     await screen.findByTestId("native-activity-row");
-    expect(screen.getByTestId("native-activity-statistics")).toBeInTheDocument();
+    expect(screen.getByTestId("native-activity-last-synced")).toBeInTheDocument();
+    expect(screen.queryByTestId("native-activity-statistics")).not.toBeInTheDocument();
+    expect(screen.queryByText("History coverage & age")).not.toBeInTheDocument();
     expect(screen.queryByText(/SIMULATED/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: "Paper" }));
     expect(screen.queryByTestId("native-activity")).not.toBeInTheDocument();
@@ -64,7 +66,7 @@ describe("Dashboard native integration", () => {
     rerender(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
     expect(screen.queryByTestId("native-activity-row")).not.toBeInTheDocument();
     expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent("1,234.5");
-    await screen.findByText(/No stored fills/);
+    await screen.findByText("No fills yet.");
   });
 
   it("remounts the performance dashboard when the account context changes", () => {
@@ -92,6 +94,14 @@ describe("Dashboard native integration", () => {
     expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "backtest");
     expect(screen.queryByText("Internal simulator")).not.toBeInTheDocument();
     expect(screen.getByTestId("dashboard-venue-no-account")).toHaveTextContent("Backtest trades");
+  });
+
+  it("keeps the header to the title and its two actions", () => {
+    render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Agent" })).toHaveAttribute("href", "/agent");
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.queryByText(/Journal performance, BloFin demo account/)).not.toBeInTheDocument();
   });
 
   it("disables Real unless real trading is verifiably enabled", () => {

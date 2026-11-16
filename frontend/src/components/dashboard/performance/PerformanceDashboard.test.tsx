@@ -170,17 +170,32 @@ describe("PerformanceDashboard", () => {
     );
     render(<PerformanceDashboard now={NOW} />);
     expect(await screen.findByTestId("performance-truncated")).toHaveTextContent("Newest 5000 trades since 2026-05-02");
-    expect(screen.getByTestId("performance-warnings")).toHaveTextContent("most recent closed trades from 2026-05-02");
+    expect(screen.queryByTestId("performance-warnings")).not.toBeInTheDocument();
+    expect(screen.queryByText(/most recent closed trades from 2026-05-02/)).not.toBeInTheDocument();
   });
 
-  it("states that partial exits on open trades are not counted", async () => {
-    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response({ open_trades_excluded: 3 }));
-    render(<PerformanceDashboard now={NOW} />);
-    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
-    expect(screen.getByTestId("performance-scope")).toHaveTextContent(
-      "Partial exits on open trades count only once the trade closes",
+  it("shows only the scope label in the Showing line, without range, zone or caveats", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(
+      response({
+        open_trades_excluded: 3,
+        warnings: [
+          "Only 3 closed trade(s); treat these figures as anecdotal.",
+          "3 closed trade(s) have no recorded net PnL and are excluded from PnL figures.",
+          "Overall score withheld until at least 5 closed trades.",
+        ],
+      }),
     );
-    expect(screen.getByTestId("performance-open-excluded")).toHaveTextContent("3 open trades not counted");
+    render(<PerformanceDashboard now={NOW} timezone="Europe/Paris" />);
+    await waitFor(() => expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("+100.00"));
+    expect(screen.getByTestId("performance-scope")).toHaveTextContent(/^Showing: Demo trades \(BloFin demo\)$/);
+    const panel = screen.getByTestId("performance-dashboard");
+    for (const removed of [
+      /Days in/, /Europe\/Paris/, /→/, /Closed trades only/, /Partial exits/, /open trades not counted/,
+      /anecdotal/, /no recorded net PnL/, /Overall score withheld/,
+    ]) {
+      expect(panel).not.toHaveTextContent(removed);
+    }
+    expect(screen.queryByTestId("performance-warnings")).not.toBeInTheDocument();
   });
 
   it("navigates months and refetches the calendar range", async () => {
@@ -193,15 +208,15 @@ describe("PerformanceDashboard", () => {
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-06-01", date_to: "2026-06-30" }));
   });
 
-  it("waits for the resolved timezone and shows it in the Showing line", async () => {
+  it("waits for the resolved timezone before requesting figures", async () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     const { rerender } = render(<PerformanceDashboard now={NOW} timezone={null} />);
     expect(api.journal.performanceCalendar).not.toHaveBeenCalled();
-    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" timezoneLabel="risk settings" />);
+    rerender(<PerformanceDashboard now={NOW} timezone="Asia/Tokyo" />);
     await waitFor(() => expect(api.journal.performanceCalendar).toHaveBeenCalled());
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls.every((params) => params?.tz === "Asia/Tokyo")).toBe(true);
-    expect(screen.getByTestId("performance-timezone")).toHaveTextContent("Days in Asia/Tokyo (risk settings)");
+    expect(screen.queryByTestId("performance-timezone")).not.toBeInTheDocument();
   });
 
   it("follows a page-owned scope and hides its own scope picker", async () => {
