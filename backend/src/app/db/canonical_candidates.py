@@ -68,6 +68,7 @@ class CanonicalCandidateRow(Base):
         ),
         CheckConstraint("length(content_hash) = 64", name="canonical_candidates_content_hash_len"),
         Index("ix_canonical_candidates_org_state", "organization_id", "state"),
+        Index("ix_canonical_candidates_created_at", "created_at"),
     )
 
     candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)

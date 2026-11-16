@@ -112,7 +112,9 @@ def _delete(engine: Engine, candidate_id: str, *, purge: bool) -> None:
     with engine.begin() as connection:
         if purge:
             connection.execute(
-                text("SELECT set_config('alphatrade.retention_purge', 'canonical_candidates', true)")
+                text(
+                    "SELECT set_config('alphatrade.retention_purge', 'canonical_candidates', true)"
+                )
             )
         connection.execute(
             text("DELETE FROM canonical_candidate_transitions WHERE candidate_id = :id"),
@@ -158,10 +160,15 @@ def test_a29_upgrade_downgrade_reupgrade(monkeypatch: pytest.MonkeyPatch) -> Non
         # History rows still refuse UPDATE even inside the retention purge.
         with pytest.raises(DBAPIError, match="append-only"), engine.begin() as connection:
             connection.execute(
-                text("SELECT set_config('alphatrade.retention_purge', 'canonical_candidates', true)")
+                text(
+                    "SELECT set_config('alphatrade.retention_purge', 'canonical_candidates', true)"
+                )
             )
             connection.execute(
-                text("UPDATE canonical_candidate_transitions SET new_state = 'x' WHERE candidate_id = :id"),
+                text(
+                    "UPDATE canonical_candidate_transitions SET new_state = 'x' "
+                    "WHERE candidate_id = :id"
+                ),
                 {"id": kept},
             )
         # The retention purge (transaction-local setting) may delete.

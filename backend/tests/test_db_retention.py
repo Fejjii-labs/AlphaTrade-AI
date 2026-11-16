@@ -33,20 +33,45 @@ _DDL = (
     "CREATE TABLE watcher_source_fetch_attempts "
     "(fetch_attempt_id TEXT PRIMARY KEY, scan_attempt_id TEXT, created_at TIMESTAMP)",
     "CREATE TABLE watcher_scan_lineages (lineage_id TEXT PRIMARY KEY, "
-    "terminal_attempt_id TEXT, terminal_status TEXT)",
+    "terminal_attempt_id TEXT, terminal_status TEXT, created_at TIMESTAMP)",
     "CREATE TABLE watcher_scan_attempts (attempt_id TEXT PRIMARY KEY, lineage_id TEXT, "
     "started_at TIMESTAMP)",
     "CREATE TABLE paper_evaluation_observations (observation_id TEXT PRIMARY KEY, "
     "occurred_at TIMESTAMP, journal_trade_id TEXT, filled BOOLEAN, plan_approved BOOLEAN, "
-    "stage TEXT)",
+    "stage TEXT, candidate_id TEXT)",
     "CREATE TABLE blofin_demo_sync_snapshots (id TEXT PRIMARY KEY, organization_id TEXT, "
-    "synced_at TIMESTAMP, health_status TEXT DEFAULT 'ok', provenance JSON DEFAULT '{}')",
+    "synced_at TIMESTAMP, health_status TEXT DEFAULT 'ok', provenance JSON DEFAULT '{}', "
+    "user_id TEXT)",
     "CREATE TABLE telegram_paper_notifications (intent_id TEXT PRIMARY KEY, created_at TIMESTAMP, "
     "candidate_id TEXT)",
-    "CREATE TABLE trade_candidate_summaries (candidate_id TEXT PRIMARY KEY)",
     "CREATE TABLE telegram_security_outbox (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
     # A table that must never be touched.
-    "CREATE TABLE journal_trades (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+    "CREATE TABLE conversations (id TEXT PRIMARY KEY, created_at TIMESTAMP)",
+)
+
+
+_ORM_TABLES = (
+    "controlled_runtime_status",
+    "canonical_candidates",
+    "canonical_candidate_creation_keys",
+    "canonical_candidate_transitions",
+    "canonical_candidate_transition_keys",
+    "action_eligibility_evaluations",
+    "canonical_trade_plan_roots",
+    "canonical_trade_plan_lineage",
+    "trade_plan_revisions",
+    "journal_trades",
+    "trade_candidate_summaries",
+    "strategy_brain_setups",
+    "strategy_brain_setup_events",
+    "historical_candles",
+    "public_market_observations",
+    "user_strategy_versions",
+    "audit_logs",
+    "approvals",
+    "governed_demo_lifecycle_resolutions",
+    "manual_demo_lifecycle_resolutions",
+    "watcher_scheduled_scans",
 )
 
 
@@ -58,9 +83,10 @@ def factory():
     with engine.begin() as conn:
         for ddl in _DDL:
             conn.execute(text(ddl))
-    from app.db.runtime_status import ControlledRuntimeStatusRow
+    # Real ORM tables for the policies the narrow stand-ins above do not model.
+    from app.db.base import Base
 
-    ControlledRuntimeStatusRow.__table__.create(engine)
+    Base.metadata.create_all(engine, tables=[Base.metadata.tables[name] for name in _ORM_TABLES])
     yield sessionmaker(bind=engine, expire_on_commit=False)
     engine.dispose()
 
@@ -93,16 +119,40 @@ def _seed(factory) -> None:
     _insert(
         factory,
         "INSERT INTO paper_evaluation_observations "
-        "VALUES (:id, :at, :trade, :filled, :plan, :stage)",
+        "VALUES (:id, :at, :trade, :filled, :plan, :stage, NULL)",
         [
-            {"id": "scan-old", "at": old, "trade": None, "filled": False, "plan": False,
-             "stage": "watcher_scan"},
-            {"id": "trade-old", "at": old, "trade": "t1", "filled": True, "plan": True,
-             "stage": "paper_trade"},
-            {"id": "plan-old", "at": old, "trade": None, "filled": False, "plan": True,
-             "stage": "paper_decision"},
-            {"id": "scan-new", "at": fresh, "trade": None, "filled": False, "plan": False,
-             "stage": "watcher_scan"},
+            {
+                "id": "scan-old",
+                "at": old,
+                "trade": None,
+                "filled": False,
+                "plan": False,
+                "stage": "watcher_scan",
+            },
+            {
+                "id": "trade-old",
+                "at": old,
+                "trade": "t1",
+                "filled": True,
+                "plan": True,
+                "stage": "paper_trade",
+            },
+            {
+                "id": "plan-old",
+                "at": old,
+                "trade": None,
+                "filled": False,
+                "plan": True,
+                "stage": "paper_decision",
+            },
+            {
+                "id": "scan-new",
+                "at": fresh,
+                "trade": None,
+                "filled": False,
+                "plan": False,
+                "stage": "watcher_scan",
+            },
         ],
     )
     org_a, org_b = str(uuid4()), str(uuid4())
@@ -120,7 +170,7 @@ def _seed(factory) -> None:
     )
     _insert(
         factory,
-        "INSERT INTO journal_trades VALUES (:id, :at)",
+        "INSERT INTO conversations VALUES (:id, :at)",
         [{"id": "j1", "at": old - timedelta(days=400)}],
     )
 
@@ -153,7 +203,7 @@ def test_prune_keeps_trade_evidence_newest_snapshot_and_other_tables(factory) ->
         )
     assert kept == {"trade-old", "plan-old", "scan-new"}
     assert snapshots == {"a-new", "b-only"}
-    assert _count(factory, "journal_trades") == 1
+    assert _count(factory, "conversations") == 1
 
 
 def test_batches_are_bounded_per_pass(factory) -> None:
@@ -224,13 +274,13 @@ def test_scan_attempts_keep_terminal_unfinished_and_recent_lineages(factory) -> 
     old, fresh = NOW - timedelta(hours=30), NOW - timedelta(hours=1)
     _insert(
         factory,
-        "INSERT INTO watcher_scan_lineages VALUES (:id, :terminal, :status)",
+        "INSERT INTO watcher_scan_lineages VALUES (:id, :terminal, :status, :at)",
         [
-            {"id": "done", "terminal": "done-2", "status": "succeeded"},
-            {"id": "failed", "terminal": "failed-1", "status": "failed"},
-            {"id": "open", "terminal": None, "status": None},
-            {"id": "recent", "terminal": "recent-2", "status": "succeeded"},
-            {"id": "child", "terminal": "child-2", "status": "succeeded"},
+            {"id": "done", "terminal": "done-2", "status": "succeeded", "at": old},
+            {"id": "failed", "terminal": "failed-1", "status": "failed", "at": old},
+            {"id": "open", "terminal": None, "status": None, "at": old},
+            {"id": "recent", "terminal": "recent-2", "status": "succeeded", "at": old},
+            {"id": "child", "terminal": "child-2", "status": "succeeded", "at": old},
         ],
     )
     _insert(
@@ -281,7 +331,20 @@ def test_telegram_notifications_go_after_7_days_and_the_outbox_stays(factory) ->
             {"id": "summarized", "at": old, "cand": "c-2"},
         ],
     )
-    _insert(factory, "INSERT INTO trade_candidate_summaries VALUES (:id)", [{"id": "c-2"}])
+    _insert(
+        factory,
+        "INSERT INTO canonical_candidates VALUES (:id, 'o', :h, 'v1', 's', 'd', 'f', 'long', "
+        "'binance', 'perp', 'BTCUSDT', '15m', :h, 'a', '{}', '{}', 'published', :at, :at, 1, "
+        "'k', 'c', :h)",
+        [{"id": "c-1", "at": NOW, "h": "a" * 64}],
+    )
+    _insert(
+        factory,
+        "INSERT INTO trade_candidate_summaries (candidate_id, organization_id, symbol, "
+        "detected_at, direction, notified, taken, outcome_source, summarized_at) "
+        "VALUES (:id, 'o', 'BTCUSDT', :at, 'long', 1, 0, 'unavailable', :at)",
+        [{"id": "c-2", "at": NOW}],
+    )
     _insert(
         factory,
         "INSERT INTO telegram_security_outbox VALUES (:id, :at)",
@@ -427,7 +490,7 @@ def test_retention_daily_cycle_windows_and_restart(factory, dry_run) -> None:
     assert _count(factory, "watcher_observability_events") == (255 if dry_run else 5)
     assert _count(factory, "paper_evaluation_observations") == (4 if dry_run else 3)
     assert _count(factory, "blofin_demo_sync_snapshots") == (4 if dry_run else 2)
-    assert _count(factory, "journal_trades") == 1
+    assert _count(factory, "conversations") == 1
     if dry_run:
         assert not [s for s in mutations if "controlled_runtime_status" not in s]
     restarted = DbRetentionCycle(settings, session_factory=factory, now=lambda: clock["now"])

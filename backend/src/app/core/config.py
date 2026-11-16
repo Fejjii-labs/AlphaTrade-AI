@@ -309,25 +309,40 @@ class Settings(BaseSettings):
     # both keys with sync: false and sets no value (Fable audit I5).
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
-    # Retention for append-only runtime logs (H5): watcher observability
-    # events, watcher scan attempts, scan-stage paper evaluation rows, paper
-    # Telegram notification rows and BloFin demo snapshots (newest per org
-    # always kept). Trades, orders, journal, plans, candidates, audit and
-    # strategy rows are never pruned.
+    # Retention (H5 + the approved data policy). Kept forever: strategies,
+    # conversations, journal, trades/orders/fills/plans, paper_decision and
+    # paper_trade_* setup events, knowledge, accounts and settings. Candidates
+    # and Telegram setup notifications go after 7 days (a summary row in
+    # trade_candidate_summaries is written first and kept); audit logs after
+    # 90 days; scan-stage noise after 24 hours; BloFin demo snapshots thin to
+    # the newest per org plus one per UTC day for 30 days.
     # Off by default and dry-run by default: enabling deletion is an explicit
     # operator decision (RETENTION_ENABLED=true and RETENTION_DRY_RUN=false).
-    # Windows are in hours with a 24-hour floor (one year ceiling).
+    # Hour windows have a 24-hour floor (one year ceiling).
     retention_enabled: bool = False
     retention_dry_run: bool = True
+    # The paper worker runs one pass per UTC day, at or after this hour.
+    retention_schedule_hour_utc: int = Field(default=2, ge=0, le=23)
+    # Legacy key, still accepted; the worker now schedules by UTC day.
     retention_interval_seconds: int = Field(default=3600, ge=300, le=86400)
     retention_batch_size: int = Field(default=5000, ge=100, le=50000)
     retention_max_batches_per_table: int = Field(default=50, ge=1, le=1000)
     retention_watcher_events_hours: int = Field(default=24, ge=24, le=8760)
-    retention_watcher_error_events_hours: int = Field(default=72, ge=24, le=8760)
+    retention_watcher_error_events_hours: int = Field(default=24, ge=24, le=8760)
     retention_watcher_attempts_hours: int = Field(default=24, ge=24, le=8760)
+    # Terminal lineages and their scheduled-scan keys. Scheduled-scan keys are
+    # bucketed by the closed bar, so a key can recur for one bar interval (up
+    # to 1w); the default stays above that so a replay never re-runs a scan.
+    retention_watcher_lineage_hours: int = Field(default=192, ge=192, le=8760)
     retention_paper_evaluation_hours: int = Field(default=24, ge=24, le=8760)
-    retention_telegram_notifications_hours: int = Field(default=24, ge=24, le=8760)
+    retention_telegram_notifications_hours: int = Field(default=168, ge=24, le=8760)
+    retention_candidate_days: int = Field(default=7, ge=7, le=365)
+    retention_audit_log_days: int = Field(default=90, ge=30, le=3650)
+    retention_brain_observation_hours: int = Field(default=24, ge=24, le=8760)
+    retention_public_market_hours: int = Field(default=24, ge=24, le=8760)
     retention_demo_snapshot_days: int = Field(default=30, ge=7, le=365)
+    # Run VACUUM (ANALYZE) on each table the pass deleted rows from.
+    retention_vacuum_analyze: bool = False
     # Repeated degraded or refused exit-monitor cycles raise a structured
     # alert after this many seconds. Default 15 minutes, capped at 1 hour,
     # so the wait stays well under the 24-hour backfill horizon. At least
@@ -1031,6 +1046,13 @@ class Settings(BaseSettings):
                 f"({self.retention_watcher_error_events_hours}) must be >= "
                 f"RETENTION_WATCHER_EVENTS_HOURS ({self.retention_watcher_events_hours}); "
                 "error events would otherwise be pruned before normal events."
+            )
+        if self.retention_telegram_notifications_hours < self.retention_candidate_days * 24:
+            raise ValueError(
+                "RETENTION_TELEGRAM_NOTIFICATIONS_HOURS "
+                f"({self.retention_telegram_notifications_hours}) must be >= "
+                f"RETENTION_CANDIDATE_DAYS * 24 ({self.retention_candidate_days * 24}); "
+                "candidate summaries read the notification rows to record what was alerted."
             )
         return self
 

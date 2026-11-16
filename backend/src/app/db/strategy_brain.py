@@ -35,6 +35,7 @@ class BrainSetupEventRow(Base):
     __tablename__ = "strategy_brain_setup_events"
     __table_args__ = (
         Index("ix_brain_event_setup_time", "organization_id", "setup_id", "occurred_at"),
+        Index("ix_brain_event_kind_time", "kind", "occurred_at"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)

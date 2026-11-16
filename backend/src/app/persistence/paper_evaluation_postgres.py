@@ -6,6 +6,7 @@ writer. Caller owns the unit of work. Duplicate source identity converges.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -138,9 +139,55 @@ class PostgresPaperEvaluationStore:
         return tuple(_from_row(row) for row in reversed(newest))
 
 
+# Every model field has its own column except these. Decimals stay in the
+# payload because Numeric(20, 8) would round a longer canonical value.
+_PAYLOAD_DECIMALS = ("net_pnl", "mfe_amount", "mae_amount", "capture_pct", "planned_risk_amount")
+_COLUMN_FIELDS = (
+    "observation_id",
+    "organization_id",
+    "stage",
+    "source_system",
+    "source_event_id",
+    "source_event_version",
+    "occurred_at",
+    "strategy_version_id",
+    "setup_definition_id",
+    "candidate_id",
+    "assessment_id",
+    "journal_trade_id",
+    "scan_status",
+    "reason_code",
+    "assessment_state",
+    "eligibility_state",
+    "data_quality",
+    "replayed",
+    "plan_approved",
+    "rejected",
+    "skipped",
+    "filled",
+    "closed",
+    "executed_outcome",
+    "result",
+    "setup_quality",
+    "execution_quality",
+    "risk_adherence",
+    "trader_behavior",
+    "rule_compliance",
+    "learning_venue_mode",
+)
+
+
+def _compact_payload(observation: PaperEvaluationObservation) -> dict[str, Any]:
+    """Only what the columns cannot hold; rows used to repeat the whole model here."""
+
+    full = observation.model_dump(mode="json")
+    payload: dict[str, Any] = {"compact": 1, "schema_version": full["schema_version"]}
+    payload.update({name: full[name] for name in _PAYLOAD_DECIMALS if full[name] is not None})
+    return payload
+
+
 def _to_row(observation: PaperEvaluationObservation) -> PaperEvaluationObservationRow:
-    payload: dict[str, Any] = observation.model_dump(mode="json")
-    payload.pop("narrative_explanation", None)
+    payload = _compact_payload(observation)
     return PaperEvaluationObservationRow(
         observation_id=observation.observation_id,
         organization_id=observation.organization_id,
@@ -200,7 +247,15 @@ def _to_row(observation: PaperEvaluationObservation) -> PaperEvaluationObservati
 
 
 def _from_row(row: PaperEvaluationObservationRow) -> PaperEvaluationObservation:
-    body = dict(row.payload)
+    stored = dict(row.payload)
+    if stored.pop("compact", None):
+        body: dict[str, Any] = {name: getattr(row, name) for name in _COLUMN_FIELDS}
+        occurred_at: datetime = body["occurred_at"]
+        if occurred_at.tzinfo is None:  # SQLite drops the zone; stored values are UTC.
+            body["occurred_at"] = occurred_at.replace(tzinfo=UTC)
+        body.update(stored)
+    else:
+        body = stored  # rows written before payloads were compact
     body["narrative_explanation"] = row.narrative_explanation
     body["content_hash"] = row.content_hash
     return PaperEvaluationObservation.model_validate(body)

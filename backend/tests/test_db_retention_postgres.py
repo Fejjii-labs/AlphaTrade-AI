@@ -144,24 +144,38 @@ def test_postgres_pass_applies_every_rule_and_leaves_guarded_tables(pg_factory) 
         "content_hash, telegram_revision_id, text, created_at) VALUES (:id, :hash, :org, "
         ":org, :org, 'candidate_active', 'candidate', :org, :hash, :org, 'x', :at)",
         [
-            {"id": old_note, "hash": "b" * 64, "org": ORG, "at": NOW - timedelta(hours=25)},
+            # Telegram setup notifications are kept 7 days.
+            {"id": old_note, "hash": "b" * 64, "org": ORG, "at": NOW - timedelta(days=7, hours=1)},
             {"id": fresh_note, "hash": "c" * 64, "org": ORG, "at": NOW - timedelta(hours=2)},
         ],
     )
 
-    settings = Settings(_env_file=None, retention_dry_run=False, retention_batch_size=100)  # type: ignore[call-arg]
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        retention_dry_run=False,
+        retention_batch_size=100,
+        retention_watcher_error_events_hours=72,
+    )
     results = run_retention(pg_factory, settings, now=NOW)
     by_policy = {r.policy: r for r in results}
 
     # Every policy ran on Postgres; none failed and was skipped.
     assert set(by_policy) == {
+        "canonical_candidates",
         "watcher_observability_events",
         "watcher_observability_events:error",
         "watcher_subscription_eval_attempts",
         "watcher_source_fetch_attempts",
         "watcher_scan_attempts",
+        "watcher_scan_attempts:lineage",
+        "watcher_scheduled_scans",
+        "watcher_scan_lineages",
         "paper_evaluation_observations",
+        "paper_evaluation_observations:candidate",
         "telegram_paper_notifications",
+        "strategy_brain_setup_events:system_observation",
+        "public_market_observations",
+        "audit_logs",
         "blofin_demo_sync_snapshots",
     }
     kept_events = _ids(
@@ -240,7 +254,12 @@ def test_retention_daily_postgres_lock_restart_and_windows(pg_factory, dry_run) 
         "VALUES (:id, :name, :at, :org, CAST(:fields AS json))",
         events,
     )
-    settings = Settings(_env_file=None, retention_enabled=True, retention_dry_run=dry_run)  # type: ignore[call-arg]
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        retention_enabled=True,
+        retention_dry_run=dry_run,
+        retention_watcher_error_events_hours=72,
+    )
     cycle = DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)
     # An active pass blocks peers, including a different day's invocation.
     with pg_factory() as holder, holder.begin():

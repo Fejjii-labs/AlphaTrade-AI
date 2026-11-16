@@ -164,9 +164,7 @@ def _candidate(
             },
         )
         session.execute(
-            text(
-                "INSERT INTO canonical_candidate_creation_keys VALUES (:org, :key, :h, :id)"
-            ),
+            text("INSERT INTO canonical_candidate_creation_keys VALUES (:org, :key, :h, :id)"),
             {"org": world.org, "key": f"create-{candidate_id}", "h": "e" * 64, "id": candidate_id},
         )
         session.execute(
@@ -402,9 +400,7 @@ def test_taken_candidate_is_summarized_with_its_trade_and_never_pruned(pg_factor
     assert summary.planned_entry == Decimal("100")
     # Trade history: the candidate and its decisions stay.
     assert str(taken) in _ids(pg_factory, "SELECT candidate_id FROM canonical_candidates")
-    assert str(taken) in _ids(
-        pg_factory, "SELECT candidate_id FROM action_eligibility_evaluations"
-    )
+    assert str(taken) in _ids(pg_factory, "SELECT candidate_id FROM action_eligibility_evaluations")
     assert _count(pg_factory, "journal_trades") == 1
 
 
@@ -553,10 +549,13 @@ def test_public_market_window_widens_to_the_longest_sfp_read_horizon(pg_factory)
 def test_blofin_snapshots_keep_latest_per_org_and_one_per_day(pg_factory) -> None:
     world_a, world_b = World(pg_factory), World(pg_factory)
 
-    def snap(world: World, at: datetime, health: str = "ok") -> dict[str, object]:
+    def snap(
+        world: World, at: datetime, health: str = "ok", user: UUID | None = None
+    ) -> dict[str, object]:
         return {
             "id": uuid4(),
             "org": world.org,
+            "user": user,
             "at": at,
             "health": health,
             "prov": json.dumps({"connection_binding": "b1"}),
@@ -572,21 +571,23 @@ def test_blofin_snapshots_keep_latest_per_org_and_one_per_day(pg_factory) -> Non
         "a-1d-ok": snap(world_a, NOW - timedelta(days=1)),
         "a-now-down": snap(world_a, NOW - timedelta(minutes=5), "unavailable"),
         "b-only": snap(world_b, NOW - timedelta(days=60)),
+        # Per-user latest readers: a user's only row survives other users' newer rows.
+        "a-user-old": snap(world_a, NOW - timedelta(days=50), user=world_a.user),
     }
     _exec(
         pg_factory,
-        "INSERT INTO blofin_demo_sync_snapshots (id, organization_id, synced_at, health_status, "
-        "provider, exchange_mode, account_snapshot, positions_snapshot, market_context, "
-        "provenance, is_stale, position_count, balance_count, created_at, updated_at) VALUES "
-        "(:id, :org, :at, :health, 'blofin_demo', 'demo', '{}', '{}', '{}', :prov, false, 0, 0, "
-        ":at, :at)",
+        "INSERT INTO blofin_demo_sync_snapshots (id, organization_id, user_id, synced_at, "
+        "health_status, provider, exchange_mode, account_snapshot, positions_snapshot, "
+        "market_context, provenance, is_stale, position_count, balance_count, created_at, "
+        "updated_at) VALUES (:id, :org, :user, :at, :health, 'blofin_demo', 'demo', '{}', '{}', "
+        "'{}', :prov, false, 0, 0, :at, :at)",
         list(rows.values()),
     )
 
     run_retention(pg_factory, _settings(), now=NOW, dry_run=False)
 
     kept = _ids(pg_factory, "SELECT id FROM blofin_demo_sync_snapshots")
-    expected = {"a-5d-late", "a-1d-ok", "a-now-down", "b-only"}
+    expected = {"a-5d-late", "a-1d-ok", "a-now-down", "b-only", "a-user-old"}
     assert kept == {str(rows[name]["id"]) for name in expected}
 
 
@@ -620,3 +621,92 @@ def test_keep_forever_tables_are_never_named_by_any_policy() -> None:
         "trade_candidate_summaries",
         "telegram_security_outbox",
     } <= KEEP_FOREVER_TABLES
+
+
+def test_vacuum_runs_only_on_retention_tables_and_reclaims(pg_factory) -> None:
+    from app.services.db_retention import tables_with_deletes, vacuum_tables
+
+    _exec(
+        pg_factory,
+        "INSERT INTO audit_logs (id, actor, actor_type, action, resource_type, result, "
+        "severity, redacted_metadata, event_at, created_at, updated_at) VALUES (:id, 'sys', "
+        "'SYSTEM', 'BLOFIN_DEMO_SYNC', 'x', 'SUCCESS', 'INFO', '{}', :at, :at, :at)",
+        [{"id": uuid4(), "at": NOW - timedelta(days=200)} for _ in range(20)],
+    )
+    settings = _settings()
+    results = run_retention(pg_factory, settings, now=NOW, dry_run=False)
+    tables = tables_with_deletes(results)
+    assert tables == ("audit_logs",)
+    assert vacuum_tables(pg_factory, settings, tables) == {"audit_logs": "ok"}
+    assert vacuum_tables(pg_factory, settings, tables, full=True) == {"audit_logs": "ok"}
+    with pg_factory() as session:
+        vacuumed = session.execute(
+            text(
+                "SELECT last_vacuum IS NOT NULL FROM pg_stat_user_tables "
+                "WHERE relname = 'audit_logs'"
+            )
+        ).scalar_one()
+    assert vacuumed is True
+    with pytest.raises(ValueError, match="not a retention table"):
+        vacuum_tables(pg_factory, settings, ("journal_trades",))
+
+
+def test_worker_pass_vacuums_after_deleting_when_enabled(pg_factory, monkeypatch) -> None:
+    from app.workers.db_retention import DbRetentionCycle
+
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        "app.services.db_retention.vacuum_tables",
+        lambda factory, settings, tables, full=False: calls.append(tuple(tables)) or {},
+    )
+    _exec(
+        pg_factory,
+        "INSERT INTO audit_logs (id, actor, actor_type, action, resource_type, result, "
+        "severity, redacted_metadata, event_at, created_at, updated_at) VALUES (:id, 'sys', "
+        "'SYSTEM', 'BLOFIN_DEMO_SYNC', 'x', 'SUCCESS', 'INFO', '{}', :at, :at, :at)",
+        [{"id": uuid4(), "at": NOW - timedelta(days=200)}],
+    )
+    settings = _settings(
+        retention_enabled=True, retention_dry_run=False, retention_vacuum_analyze=True
+    )
+    outcome = DbRetentionCycle(settings, session_factory=pg_factory, now=lambda: NOW)()
+    assert outcome.status == "pruned"
+    assert calls == [("audit_logs",)]
+
+
+def test_taken_summary_picks_up_the_result_once_the_trade_closes(pg_factory) -> None:
+    world = World(pg_factory)
+    taken = _candidate(pg_factory, world, age=timedelta(days=9))
+    with pg_factory() as session:
+        trade = JournalTrade(
+            organization_id=world.org,
+            user_id=world.user,
+            source=JournalTradeSource.PAPER_EXECUTION,
+            status=JournalTradeStatus.OPEN,
+            symbol="BTCUSDT",
+            timeframe="15m",
+            direction=TradeDirection.LONG,
+            result=TradeResult.OPEN,
+            candidate_id=taken,
+        )
+        session.add(trade)
+        session.commit()
+        trade_id = trade.id
+
+    run_retention(pg_factory, _settings(), now=NOW, dry_run=False)
+    summary = _summary(pg_factory, taken)
+    assert summary is not None
+    assert (summary.taken, summary.outcome, summary.outcome_source) == (True, None, "trade_open")
+
+    with pg_factory() as session:
+        closed = session.get(JournalTrade, trade_id)
+        assert closed is not None
+        closed.status = JournalTradeStatus.CLOSED
+        closed.result = TradeResult.LOSS
+        closed.net_pnl = Decimal("-4")
+        session.commit()
+    run_retention(pg_factory, _settings(), now=NOW + timedelta(days=1), dry_run=False)
+    summary = _summary(pg_factory, taken)
+    assert summary is not None
+    assert (summary.outcome, summary.outcome_source) == ("loss", "journal_trade")
+    assert summary.realized_net_pnl == Decimal("-4")
