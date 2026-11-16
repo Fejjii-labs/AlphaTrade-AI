@@ -230,6 +230,162 @@ def _drafts(history: list[dict[str, object]], **extra: object) -> object:
     return drafts_from_raw(**payload)  # type: ignore[arg-type]
 
 
+def _five_closes() -> dict:
+    """Synthetic demo-shaped reconciliation cases, not captured account evidence."""
+    bundle = {key: [] for key in ("positions", "history", "fills", "funding", "orders")}
+    opened = int((NOW - timedelta(days=2)).timestamp() * 1000)
+    closed = opened + 86400000
+    for index, (direction, prices) in enumerate(
+        (
+            ("long", (110,)),
+            ("long", (90,)),
+            ("short", (90,)),
+            ("long", (105, 110)),
+            ("long", (110,)),
+        )
+    ):
+        inst = ("BTC", "ETH", "SOL", "XRP", "ADA")[index] + "-USDT"
+        entry_side = "sell" if direction == "short" else "buy"
+        close_side = "buy" if direction == "short" else "sell"
+        for leg, price in enumerate(prices):
+            gross = Decimal(price - 100) * (-1 if direction == "short" else 1)
+            bundle["history"].append(
+                {
+                    "historyId": f"five-h{index}-{leg}",
+                    "positionId": f"five-p{index}",
+                    "instId": inst,
+                    "positionSide": direction,
+                    "side": entry_side,
+                    "closePositions": "1",
+                    "maxPositions": str(len(prices)),
+                    "openAveragePrice": "100",
+                    "closeAveragePrice": str(price),
+                    "createTime": str(opened),
+                    "updateTime": str(closed + leg * 1000),
+                    "realizedPnl": str(gross),
+                    "fee": "0.2",
+                }
+            )
+            bundle["orders"].append(
+                {
+                    "orderId": f"five-close{index}-{leg}",
+                    "positionId": f"five-p{index}",
+                    "instId": inst,
+                    "side": close_side,
+                    "positionSide": direction,
+                    "createTime": str(closed + leg * 1000),
+                    "filledSize": "1",
+                    "averagePrice": str(price),
+                    "pnl": str(gross),
+                    "fee": "0.1",
+                }
+            )
+        bundle["orders"].append(
+            {
+                "orderId": f"five-open{index}",
+                "positionId": f"five-p{index}",
+                "instId": inst,
+                "side": entry_side,
+                "positionSide": direction,
+                "createTime": str(opened),
+                "filledSize": str(len(prices)),
+                "averagePrice": "100",
+                "pnl": "0",
+                "fee": str(Decimal("0.1") * len(prices)),
+            }
+        )
+    bundle["funding"].append(
+        {
+            "billId": "five-funding",
+            "instId": "ADA-USDT",
+            "fundingFee": "-0.5",
+            "fundingTime": str(opened + 1000),
+        }
+    )
+    return bundle
+
+
+def _apply_five(session: Session, bundle: dict) -> object:
+    paths = _paths(bundle)
+    paths["/api/v1/market/instruments"] = [
+        {"instId": inst + "-USDT", "contractValue": "1", "settleCurrency": "USDT"}
+        for inst in ("BTC", "ETH", "SOL", "XRP", "ADA")
+    ]
+    report = BloFinDemoManualMirror(_Client(paths), now=NOW).apply(
+        session, organization_id=ORG, user_id=USER, settings=_settings()
+    )
+    session.commit()
+    return report
+
+
+def test_five_position_closes_reconcile_costs_partial_legs_and_all_dashboard_kpis(session):
+    from app.services.journal_performance_dashboard_service import (
+        JournalPerformanceDashboardService,
+    )
+
+    bundle = _five_closes()
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert len(rows) == 5  # two closing legs are one position/trade
+    assert sorted(row.net_pnl for row in rows) == list(
+        map(Decimal, ("-10.2", "9.3", "9.8", "9.8", "14.6"))
+    )
+    partial = next(row for row in rows if row.symbol == "XRPUSDT")
+    assert partial.gross_pnl == Decimal("15") and partial.fees == Decimal("0.4")
+    assert {tag for tag in partial.tags if tag.startswith("blofin-history:")} == {
+        "blofin-history:five-h3-0",
+        "blofin-history:five-h3-1",
+    }
+    again = _apply_five(session, bundle)
+    assert again.created == 0 and len(_rows(session)) == 5
+    dashboard = JournalPerformanceDashboardService(session, settings=_settings()).compute(
+        organization_id=ORG, user_id=USER, timezone="UTC"
+    )
+    summary = dashboard.summary
+    assert summary.net_pnl == Decimal("33.3") and summary.expectancy == Decimal("6.66")
+    assert summary.win_rate == pytest.approx(0.8)
+    assert summary.profit_factor == pytest.approx(43.5 / 10.2)
+    assert summary.win_loss_ratio == pytest.approx((43.5 / 4) / 10.2)
+    assert dashboard.risk.winning_days == 1 and dashboard.risk.losing_days == 0
+    assert dashboard.days[0].net_pnl == Decimal("33.3")
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.win_rate == Decimal("0.8")
+    assert account.performance.realized_pnl == Decimal("33.3")
+
+
+def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
+    bundle = _five_closes()
+    del bundle["orders"][-1]["fee"]  # missing opening fee for the funding position
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    bad = next(row for row in rows if row.symbol == "ADAUSDT")
+    assert bad.net_pnl is None and bad.exit_reason == "unverified:missing_entry_fee"
+    assert sum(row.net_pnl is not None for row in rows) == 4
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.realized_pnl == Decimal("24")
+    assert account.performance.trade_count == 4 and account.performance.unresolved_round_trips == 1
+    assert account.performance.win_rate == Decimal("0.75")
+
+
+def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
+    bundle = _five_closes()
+    bundle["orders"] = [row for row in bundle["orders"] if row["side"] == "sell"]
+    _apply_five(session, bundle)
+    assert all(row.net_pnl is None for row in _rows(session))
+
+
 def test_long_matches_price_fee_and_paid_funding_and_ignores_fill_pnl(session: Session) -> None:
     report = _apply(session, _FIXTURE["long"])
     assert report.created == 1  # type: ignore[attr-defined]
