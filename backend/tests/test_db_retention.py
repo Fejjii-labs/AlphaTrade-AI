@@ -413,6 +413,27 @@ def test_every_hours_window_has_a_24_hour_floor(field: str) -> None:
     assert getattr(Settings(_env_file=None, **{field: 24}), field) == 24  # type: ignore[arg-type]
 
 
+def test_demo_snapshot_daily_rows_are_kept_forever_by_default() -> None:
+    assert Settings(_env_file=None).retention_demo_snapshot_days == 0
+    assert (
+        Settings(_env_file=None, retention_demo_snapshot_days="").retention_demo_snapshot_days == 0
+    )  # type: ignore[call-arg]
+    assert (
+        Settings(_env_file=None, retention_demo_snapshot_days=30).retention_demo_snapshot_days == 30
+    )  # type: ignore[call-arg]
+    for invalid in (-1, 6):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, retention_demo_snapshot_days=invalid)  # type: ignore[call-arg]
+    policy = next(
+        p
+        for p in retention_policies(Settings(_env_file=None))
+        if p.table == "blofin_demo_sync_snapshots"
+    )
+    # Intra-day rows are thinned only once they are older than 24h.
+    assert policy.window == timedelta(hours=24)
+    assert policy.extra_cutoffs == ()
+
+
 def test_notifications_cannot_go_before_their_candidate_summary() -> None:
     with pytest.raises(ValidationError, match="RETENTION_TELEGRAM_NOTIFICATIONS_HOURS"):
         Settings(_env_file=None, retention_telegram_notifications_hours=24)  # type: ignore[call-arg]

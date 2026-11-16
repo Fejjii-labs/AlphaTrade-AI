@@ -546,8 +546,8 @@ def test_public_market_window_widens_to_the_longest_sfp_read_horizon(pg_factory)
     assert _count(pg_factory, "public_market_observations") == 1
 
 
-def test_blofin_snapshots_keep_latest_per_org_and_one_per_day(pg_factory) -> None:
-    world_a, world_b = World(pg_factory), World(pg_factory)
+def _seed_blofin_snapshots(pg_factory) -> dict[str, dict[str, object]]:
+    world_a, world_b, world_c = World(pg_factory), World(pg_factory), World(pg_factory)
 
     def snap(
         world: World, at: datetime, health: str = "ok", user: UUID | None = None
@@ -568,11 +568,18 @@ def test_blofin_snapshots_keep_latest_per_org_and_one_per_day(pg_factory) -> Non
         "a-5d-early": snap(world_a, day5.replace(hour=1)),
         "a-5d-mid": snap(world_a, day5.replace(hour=8)),
         "a-5d-late": snap(world_a, day5.replace(hour=20)),
-        "a-1d-ok": snap(world_a, NOW - timedelta(days=1)),
+        # Yesterday (UTC): one intra-day row older than 24h, one younger.
+        "a-1d-old": snap(world_a, NOW - timedelta(days=1, hours=1)),
+        "a-1d-recent": snap(world_a, NOW - timedelta(hours=20)),
+        "a-1d-late": snap(world_a, NOW - timedelta(hours=10)),
         "a-now-down": snap(world_a, NOW - timedelta(minutes=5), "unavailable"),
         "b-only": snap(world_b, NOW - timedelta(days=60)),
         # Per-user latest readers: a user's only row survives other users' newer rows.
         "a-user-old": snap(world_a, NOW - timedelta(days=50), user=world_a.user),
+        # Newest successful row is kept although it is an older intra-day row.
+        "c-ok": snap(world_c, (NOW - timedelta(days=3)).replace(hour=1)),
+        "c-down": snap(world_c, (NOW - timedelta(days=3)).replace(hour=5), "unavailable"),
+        "c-now-down": snap(world_c, NOW - timedelta(minutes=5), "unavailable"),
     }
     _exec(
         pg_factory,
@@ -583,12 +590,40 @@ def test_blofin_snapshots_keep_latest_per_org_and_one_per_day(pg_factory) -> Non
         "'{}', :prov, false, 0, 0, :at, :at)",
         list(rows.values()),
     )
+    return rows
+
+
+_BLOFIN_ALWAYS_KEPT = {
+    "a-5d-late",
+    "a-1d-recent",
+    "a-1d-late",
+    "a-now-down",
+    "b-only",
+    "a-user-old",
+    "c-ok",
+    "c-down",
+    "c-now-down",
+}
+
+
+def test_blofin_snapshots_keep_one_per_utc_day_forever(pg_factory) -> None:
+    rows = _seed_blofin_snapshots(pg_factory)
 
     run_retention(pg_factory, _settings(), now=NOW, dry_run=False)
 
     kept = _ids(pg_factory, "SELECT id FROM blofin_demo_sync_snapshots")
-    expected = {"a-5d-late", "a-1d-ok", "a-now-down", "b-only", "a-user-old"}
+    # The 40-day-old daily row survives; intra-day rows older than 24h go.
+    expected = _BLOFIN_ALWAYS_KEPT | {"a-40d-2"}
     assert kept == {str(rows[name]["id"]) for name in expected}
+
+
+def test_blofin_snapshots_optional_horizon_drops_old_daily_rows(pg_factory) -> None:
+    rows = _seed_blofin_snapshots(pg_factory)
+
+    run_retention(pg_factory, _settings(retention_demo_snapshot_days=30), now=NOW, dry_run=False)
+
+    kept = _ids(pg_factory, "SELECT id FROM blofin_demo_sync_snapshots")
+    assert kept == {str(rows[name]["id"]) for name in _BLOFIN_ALWAYS_KEPT}
 
 
 def test_keep_forever_tables_are_never_named_by_any_policy() -> None:
