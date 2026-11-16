@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from app.core.errors import NotFoundError
 from app.db.models import Organization, User
 from app.db.strategy_brain import BrainSetupEventRow, BrainSetupRow
 from app.market_contracts.enums import Finality
@@ -219,7 +220,8 @@ def test_library_version_binding_and_draft_not_executable(tenant_store):
         session, organization_id=org, strategy_version_id=version.id
     )
     assert policy.evaluation_params == policy.authored_spec.parameters
-    with pytest.raises(StrategyEvaluationPolicyError):
+    # Preserve the canonical cross-tenant masking contract.
+    with pytest.raises(NotFoundError):
         resolve_executable_strategy_policy(
             session, organization_id=uuid4(), strategy_version_id=version.id
         )
