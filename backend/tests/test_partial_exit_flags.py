@@ -67,3 +67,15 @@ def test_real_trading_switch_disables_every_venue() -> None:
         update={"enable_real_trading": True}
     )
     assert partial_exits_enabled(settings, PAPER_INTERNAL_VENUE) is False
+
+
+def test_live_configuration_cannot_load_and_a_bypassed_one_still_disables() -> None:
+    """Settings refuse live trading at load; a model_copy bypass is still refused."""
+
+    for live in ({"enable_real_trading": True}, {"exchange_mode": "trade_live"}):
+        with pytest.raises(ValidationError):
+            _settings(paper_partial_exits_enabled=True, **live)
+    bypassed = _settings(
+        paper_partial_exits_enabled=True, governed_demo_partial_exits_enabled=True
+    ).model_copy(update={"exchange_mode": ExchangeMode.TRADE_LIVE})
+    assert partial_exits_enabled(bypassed, BLOFIN_DEMO_VENUE) is False
