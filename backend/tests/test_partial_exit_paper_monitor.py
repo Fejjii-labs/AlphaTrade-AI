@@ -56,10 +56,12 @@ def _ladder_payload(
     runner_rule: str = "closed-candle-trail",
     fractions: tuple[str, ...] = ("0.5", "0.3"),
     fees: str = "0.5",
+    runner_fraction: str | None = None,
 ) -> dict[str, object]:
     long = direction is TradeDirection.LONG
     prices = ("110", "120") if long else ("90", "80")
-    runner_fraction = Decimal("1") - sum(Decimal(fraction) for fraction in fractions)
+    remainder = Decimal("1") - sum(Decimal(fraction) for fraction in fractions)
+    runner_fraction = Decimal(runner_fraction) if runner_fraction is not None else remainder
     return {
         "timeframe": "15m",
         "instrument_rules": {
@@ -78,7 +80,9 @@ def _ladder_payload(
                     "quantity_fraction": fraction,
                     "derivation": {"formula_id": "fixture", "formula_version": "1"},
                 }
-                for index, (price, fraction) in enumerate(zip(prices, fractions), start=1)
+                for index, (price, fraction) in enumerate(
+                    zip(prices, fractions, strict=True), start=1
+                )
             ],
             "runner": {
                 "enabled": runner,
@@ -165,7 +169,7 @@ def test_flag_on_parses_the_ladder() -> None:
     "payload",
     [
         {"runner_rule": "atr-chandelier"},
-        {"fractions": ("0.5", "0.4")},
+        {"fractions": ("0.5", "0.4"), "runner_fraction": "0.2"},
     ],
 )
 def test_unsupported_ladders_are_refused_even_with_the_flag_on(
@@ -317,7 +321,9 @@ def test_resuming_from_durable_records_does_not_repeat_a_reduction() -> None:
     again = _decide(trade, bars, state=restarted)
     assert again.fills == ()
     assert again.stop_moves == ()
-    later = _decide(trade, (*bars, _bar(ENTRY + STEP * 2, low="100.4", high="106")), state=restarted)
+    later = _decide(
+        trade, (*bars, _bar(ENTRY + STEP * 2, low="100.4", high="106")), state=restarted
+    )
     assert [(fill.kind, fill.price) for fill in later.fills] == [("stop", Decimal("100.5"))]
 
 
@@ -348,7 +354,9 @@ class FakeRecorder(PartialExitRecorder):
         self.moves: dict[UUID, tuple[StopMove, ...]] = {}
         self.steps: list[PartialExitStep] = []
 
-    def load(self, trade: OpenInternalPaperTrade) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
+    def load(
+        self, trade: OpenInternalPaperTrade
+    ) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
         return self.fills.get(trade.command_id, ()), self.moves.get(trade.command_id, ())
 
     def record(self, trade: OpenInternalPaperTrade, step: PartialExitStep) -> object:
@@ -359,7 +367,9 @@ class FakeRecorder(PartialExitRecorder):
 
 
 class _ExplodingRecorder(PartialExitRecorder):
-    def load(self, trade: OpenInternalPaperTrade) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
+    def load(
+        self, trade: OpenInternalPaperTrade
+    ) -> tuple[tuple[ExitFill, ...], tuple[StopMove, ...]]:
         raise AssertionError("single-target trades never touch the partial recorder")
 
     def record(self, trade: OpenInternalPaperTrade, step: PartialExitStep) -> object:

@@ -38,10 +38,10 @@ class UnknownFamilySpec:
     [UnknownFamilySpec(), TrendPulseSpec.model_construct()],
     ids=["unknown", "trendpulse"],
 )
-def test_unknown_specs_are_refused_in_both_directions(direction: TradeDirection, spec: object) -> None:
-    assert (
-        paper_spec_refusal(spec, FIRST_SLICE_PARAMS, direction) == "spec_not_paper_executable"
-    )
+def test_unknown_specs_are_refused_in_both_directions(
+    direction: TradeDirection, spec: object
+) -> None:
+    assert paper_spec_refusal(spec, FIRST_SLICE_PARAMS, direction) == "spec_not_paper_executable"
 
 
 def test_first_slice_stays_short_only() -> None:
@@ -68,7 +68,9 @@ def test_nested_and_sfp_keep_both_directions(direction: TradeDirection, spec: ob
 
 def test_plan_terms_else_branch_no_longer_coerces_an_unknown_short_to_first_slice() -> None:
     candidate = SimpleNamespace(direction=TradeDirection.SHORT)
-    policy = SimpleNamespace(authored_spec=UnknownFamilySpec(), evaluation_params=FIRST_SLICE_PARAMS)
+    policy = SimpleNamespace(
+        authored_spec=UnknownFamilySpec(), evaluation_params=FIRST_SLICE_PARAMS
+    )
     # Everything after the spec gate is unreachable: a quote access would raise.
     assembled = SimpleNamespace()
     result = _plan_terms(
@@ -110,7 +112,9 @@ def _multi_target(plan: object, *, runner: bool) -> object:
         }
     )
     return plan.model_copy(  # type: ignore[attr-defined]
-        update={"risk_and_exits": risk.model_copy(update={"targets": targets, "runner": runner_rules})}
+        update={
+            "risk_and_exits": risk.model_copy(update={"targets": targets, "runner": runner_rules})
+        }
     )
 
 

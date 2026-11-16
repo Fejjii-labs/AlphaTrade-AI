@@ -42,7 +42,7 @@ from app.schemas.experiments import ExperimentTransition
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
 from app.services.manual_demo_service import ManualDemoService
 from tests.support.phase6_fusion import ACCOUNT_ID, ORG_ID, USER_ID
-from tests.support.phase7_trade_plan import plan_command, plan_terms
+from tests.support.phase7_trade_plan import plan_command, plan_terms, single_target_exits
 from tests.test_blofin_native_producer_postgres import ProducerWorld
 from tests.test_blofin_native_producer_postgres import producer_engine as producer_engine
 from tests.test_governed_blofin_demo import Venue
@@ -95,6 +95,7 @@ def world(producer_engine, monkeypatch, request):
             terms=plan_terms(
                 plans.candidate,
                 execution_policy_version="governed-blofin-demo/v1",
+                risk_and_exits=single_target_exits(plans.candidate),
                 instrument_rules={
                     **plan_terms(plans.candidate).instrument_rules.model_dump(mode="json"),
                     "contract_multiplier": "0.001",
