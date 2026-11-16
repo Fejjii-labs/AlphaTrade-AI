@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from app.market_contracts.first_slice import first_slice_identity
 from app.schemas.common import Timeframe, TradeDirection
 from app.strategy_brain.dline.contracts import DlineParameters, DlineSpec, SourcedLevel
 from app.strategy_brain.dline.detector import detect_dline
@@ -75,7 +76,9 @@ def test_dline_wicks_and_equality_never_trigger():
         assert not scan([*COIL[:-1], (102, 110, 101, close)]).candidates
 
 
-@pytest.mark.parametrize("changes", [{"slope_min_atr": Decimal("1")}, {"slope_max_atr": Decimal(".001")}])
+@pytest.mark.parametrize(
+    "changes", [{"slope_min_atr": Decimal("1")}, {"slope_max_atr": Decimal(".001")}]
+)
 def test_dline_slope_band_refuses_flat_or_steep(changes):
     assert not scan(config=spec(**changes)).candidates
 
@@ -109,7 +112,12 @@ def test_dline_closed_only_future_receipts_and_prefix_invariance():
 
 def test_dline_short_mirror():
     prices = [
-        (220 - Decimal(str(o)), 220 - Decimal(str(low)), 220 - Decimal(str(h)), 220 - Decimal(str(c)))
+        (
+            220 - Decimal(str(o)),
+            220 - Decimal(str(low)),
+            220 - Decimal(str(h)),
+            220 - Decimal(str(c)),
+        )
         for o, h, low, c in COIL
     ]
     config = spec().model_copy(update={"direction": TradeDirection.SHORT})
@@ -138,6 +146,7 @@ def level(price, kind="poc", **changes):
         price=Decimal(str(price)),
         kind=kind,
         symbol="BTCUSDT",
+        instrument=first_slice_identity(timeframe=Timeframe.M15, replay=True).instrument,
         timeframe=Timeframe.H2,
         source="synthetic manual snapshot",
         evidence_ref="fixture-proof",
@@ -181,10 +190,14 @@ def test_dline_chart5_5m_ob_cap_does_not_target_through_ob():
 
 
 def test_dline_ranging_first_target_must_clear_2r():
-    assert not scan(config=spec(range_lookback=5, range_efficiency_threshold=Decimal("1"))).candidates
+    assert not scan(
+        config=spec(range_lookback=5, range_efficiency_threshold=Decimal("1"))
+    ).candidates
     c = scan(
         config=spec(
-            range_lookback=5, range_efficiency_threshold=Decimal("1"), ranging_first_target_min_rr=Decimal(".5")
+            range_lookback=5,
+            range_efficiency_threshold=Decimal("1"),
+            ranging_first_target_min_rr=Decimal(".5"),
         )
     ).candidates[0]
     assert c.aggressive_tp and len(c.targets) == 1
@@ -209,21 +222,24 @@ def test_dline_missing_htf_and_symbol_or_gap_refused():
 
 def test_dline_delayed_prior_receipt_cannot_backdate_trigger():
     from app.market_contracts.hashing import with_content_hash
+
     bars, obs = evidence(COIL)
     later = bars[-1].interval_end + timedelta(hours=1)
     delayed = list(obs)
-    delayed[4] = with_content_hash(obs[4].model_copy(update={'receive_time': later}))
-    result = detect_dline(bars, tuple(delayed), spec(htf_required=False),
-        evaluated_at=later, tick_size=Decimal('.1'))
+    delayed[4] = with_content_hash(obs[4].model_copy(update={"receive_time": later}))
+    result = detect_dline(
+        bars, tuple(delayed), spec(htf_required=False), evaluated_at=later, tick_size=Decimal(".1")
+    )
     assert not result.candidates
 
 
 def test_dline_chart4_nested_two_is_confirmed_and_sets_stop():
     from app.strategy_brain.dline.confluences import nested_context
     from tests.test_strategy_brain_nested import PRICES
+
     # Rising 1-2 history followed by a small D-line, modeled on chart4.
-    prefix = [(v,v+1,v-1,v) for v in PRICES[:12]]
-    rows = [*prefix, *[(o+10,h+10,low+10,Decimal(str(c))+10) for o,h,low,c in COIL]]
+    prefix = [(v, v + 1, v - 1, v) for v in PRICES[:12]]
+    rows = [*prefix, *[(o + 10, h + 10, low + 10, Decimal(str(c)) + 10) for o, h, low, c in COIL]]
     bars, _ = evidence(rows)
     context = nested_context(bars[:12], spec(), at=bars[11].interval_end)
     assert context is not None and context.pullback_index == 9
@@ -234,20 +250,127 @@ def test_dline_chart4_nested_two_is_confirmed_and_sets_stop():
 
 def test_dline_chart6_parent_line_held_or_broken_and_distinct_line_identity():
     from app.strategy_brain.dline.confluences import htf_context
+
     # Synthetic rising parent support, not chart-derived history.
-    htf_rows = [(90,92,89,91),(90,91,88,90),(92,94,91,93),
-                (93,95,92,94),(94,95,90,94),(96,98,95,97)]
-    htf, obs = evidence(htf_rows, start=START-timedelta(days=1),timeframe=Timeframe.H4)
-    bars,_ = evidence(COIL)
-    aligned, parent, _ = htf_context(htf,obs,spec(),at=START,
-                                    instrument=bars[0].instrument,entry=Decimal(104))
-    assert aligned and parent and parent['held']
-    _, broken, _ = htf_context(htf,obs,spec(),at=START,
-                                    instrument=bars[0].instrument,entry=Decimal(80))
-    assert broken and not broken['held']
-    a=scan().candidates[0].line.line_id
-    shifted=[(o+1,h+1,low+1,Decimal(str(c))+1) for o,h,low,c in COIL]
-    other_bars,other_obs=evidence(shifted,start=START+timedelta(days=1))
-    other=detect_dline(other_bars,other_obs,spec(htf_required=False),
-                      evaluated_at=other_obs[-1].observed_at,tick_size=Decimal('.1'))
+    htf_rows = [
+        (90, 92, 89, 91),
+        (90, 91, 88, 90),
+        (92, 94, 91, 93),
+        (93, 95, 92, 94),
+        (94, 95, 90, 94),
+        (96, 98, 95, 97),
+    ]
+    htf, obs = evidence(htf_rows, start=START - timedelta(days=1), timeframe=Timeframe.H4)
+    bars, _ = evidence(COIL)
+    aligned, parent, _ = htf_context(
+        htf, obs, spec(), at=START, instrument=bars[0].instrument, entry=Decimal(104)
+    )
+    assert aligned and parent and parent["held"]
+    _, broken, _ = htf_context(
+        htf, obs, spec(), at=START, instrument=bars[0].instrument, entry=Decimal(80)
+    )
+    assert broken and not broken["held"]
+    a = scan().candidates[0].line.line_id
+    shifted = [(o + 1, h + 1, low + 1, Decimal(str(c)) + 1) for o, h, low, c in COIL]
+    other_bars, other_obs = evidence(shifted, start=START + timedelta(days=1))
+    other = detect_dline(
+        other_bars,
+        other_obs,
+        spec(htf_required=False),
+        evaluated_at=other_obs[-1].observed_at,
+        tick_size=Decimal(".1"),
+    )
     assert other.candidates[0].line.line_id != a
+
+
+def test_dline_chart4_candidate_uses_larger_nested_two_not_latest_minor_low():
+    prefix = [
+        (v, v + 1, v - 1, v) for v in [90, 85, 80, 85, 100, 120, 145, 130, 115, 100, 105, 110]
+    ]
+    coil = [
+        (118, 128, 110, 118),
+        (120, 132, 110, 120),
+        (116, 118, 108, 116),
+        (114, 116, 107, 114),
+        (114, 122, 108, 115),
+        (108, 112, 105, 108),
+        (107, 109, 104, 107),
+        (108, 112, 105, 109),
+        (105, 107, 103, 105),
+        (105, 107, 104, 105),
+        (105, 109, 104, 106),
+    ]
+    c = scan(
+        [*prefix, *coil], config=spec(htf_required=False, range_efficiency_threshold=Decimal(0))
+    ).candidates[-1]
+    assert c.confluences["nested_1_2"] == "present"
+    assert c.stop < Decimal(99)  # larger 2 at index 9, minor recent low is 103
+    assert c.proofs["nested_1_2"]
+
+
+def test_dline_levels_unavailable_if_future_expired_consumed_or_other_symbol():
+    known = scan().candidates[0]
+    for bad in (
+        level(120).model_copy(update={"known_at": START + timedelta(days=1)}),
+        level(120).model_copy(update={"expires_at": START}),
+        level(120, consumed=True),
+        level(120).model_copy(update={"symbol": "ETHUSDT"}),
+    ):
+        assert scan(levels=(bad,)).candidates[0].targets == known.targets
+
+
+def test_dline_two_touch_is_lower_quality_and_three_can_be_required():
+    two = [*COIL]
+    two[7] = (103, 105, 102, 104)  # does not touch the original line
+    low = scan(two, config=spec(touch_atr=Decimal(0))).candidates[0]
+    assert len(low.line.touches) == 2
+    assert low.quality_points < scan().candidates[0].quality_points
+    assert not scan(two, config=spec(minimum_touches=3, touch_atr=Decimal(0))).candidates
+
+
+def test_dline_htf_future_bars_cannot_change_earlier_candidate():
+    bars, obs = evidence(COIL)
+    htf, hobs = evidence(
+        [(90 + i, 92 + i, 89 + i, 91 + i) for i in range(8)],
+        start=START - timedelta(days=1),
+        timeframe=Timeframe.H4,
+    )
+    now = obs[-1].observed_at
+    candidate = detect_dline(
+        bars,
+        obs,
+        spec(),
+        evaluated_at=now,
+        tick_size=Decimal(".1"),
+        htf_bars=htf,
+        htf_observations=hobs,
+    ).candidates[0]
+    assert candidate == scan().candidates[0]
+
+
+def test_dline_chart3_same_frozen_line_counts_attempts_and_honors_configured_cap():
+    rows = [
+        *COIL,
+        (102, 103, "100.5", 101),
+        (101, 103, "100.5", 102),
+        (100, 101, "98.5", 99),
+        (99, 101, "98.5", 100),
+        (98, 99, "96.5", 97),
+        (97, 99, "96.5", 98),
+    ]
+    default = scan(rows, config=spec(htf_required=False)).candidates
+    assert [c.attempt for c in default] == [1, 2]
+    assert len({c.line.line_id for c in default}) == 1
+    assert len(scan(rows, config=spec(htf_required=False, attempt_cap=1)).candidates) == 1
+    assert len(scan(rows, config=spec(htf_required=False, attempt_cap=3)).candidates) == 3
+
+
+def test_dline_fib_09_orientation_is_authored_not_best_fit():
+    from app.strategy_brain.dline.confluences import fib09
+
+    bars, _ = evidence(COIL[:-1])
+    deep, proof = fib09(bars, spec(), entry=Decimal("101.5"), atr=Decimal(1))
+    opposite, _ = fib09(
+        bars, spec(fib_09_orientation="from_origin"), entry=Decimal("101.5"), atr=Decimal(1)
+    )
+    assert deep is True and opposite is False and len(proof) == 2

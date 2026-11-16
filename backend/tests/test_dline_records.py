@@ -41,6 +41,37 @@ def test_dline_draft_template_restart_persistence_and_tenant_isolation(tmp_path)
             template["version_id"], organization_id=org, user_id=user
         )
         assert result.status == "non_executable"
+        from app.core.errors import ValidationAppError
+        from app.services.canonical_strategy_evaluation import resolve_executable_strategy_policy
+        from app.signal_fusion.errors import StrategyEvaluationPolicyError
+
+        with pytest.raises(ValidationAppError):
+            CompiledSetupService(session).approve_version(
+                template["version_id"],
+                organization_id=org,
+                user_id=user,
+                confirm_message="I confirm",
+            )
+        with pytest.raises(StrategyEvaluationPolicyError):
+            resolve_executable_strategy_policy(
+                session, organization_id=org, strategy_version_id=template["version_id"]
+            )
+
+        from app.schemas.common import TradeDirection
+
+        short_config = config.model_copy(update={"direction": TradeDirection.SHORT})
+        short = create_template(session, organization_id=org, user_id=user, spec=short_config)
+        assert short["lifecycle"] == "draft" and short["execution_permission"] == "none"
+        assert (
+            CompiledSetupService(session)
+            .compile_version(short["version_id"], organization_id=org, user_id=user)
+            .status
+            == "non_executable"
+        )
+        with pytest.raises(StrategyEvaluationPolicyError):
+            resolve_executable_strategy_policy(
+                session, organization_id=org, strategy_version_id=short["version_id"]
+            )
         research = scan(config=config)
         ids = record_dline_scan(
             session,
@@ -101,3 +132,13 @@ def test_dline_draft_template_restart_persistence_and_tenant_isolation(tmp_path)
         with pytest.raises(NotFoundError):
             details(session, organization_id=uuid4(), setup_id=ids[0])
         assert session.get(UserStrategy, template["strategy_id"]).setup_type.value == "d_line"
+        from app.strategy_brain.agent import read_brain
+
+        answer, _, _ = read_brain(
+            session, organization_id=org, user_id=user, message="D-line rules"
+        )
+        assert "D-line" in answer and "draft" in answer
+        nested, _, _ = read_brain(
+            session, organization_id=org, user_id=user, message="Nested rules"
+        )
+        assert "Selected strategy D-line" not in nested
