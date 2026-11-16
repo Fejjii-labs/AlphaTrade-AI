@@ -10,12 +10,13 @@ vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
 afterEach(cleanup);
 
 describe("Settings sub-nav", () => {
-  it("lists the six sections in order", () => {
+  it("lists the seven sections in order", () => {
     render(<SettingsLayout><p>Body</p></SettingsLayout>);
     const subNav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(subNav).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
       ["Account", "/settings"],
       ["Exchange status", "/settings/exchange"],
+      ["Alerts", "/settings/alerts"],
       ["Notifications", "/settings/notifications"],
       ["Watcher", "/settings/watcher"],
       ["Diagnostics", "/settings/diagnostics"],
@@ -29,6 +30,7 @@ describe("Settings sub-nav", () => {
     ["/settings/team", "Account"],
     ["/settings/billing", "Account"],
     ["/settings/exchange", "Exchange status"],
+    ["/settings/alerts", "Alerts"],
     ["/settings/notifications", "Notifications"],
     ["/settings/watcher", "Watcher"],
     ["/settings/diagnostics", "Diagnostics"],
@@ -54,6 +56,6 @@ describe("Settings sub-nav", () => {
   it("does not claim paths outside Settings", () => {
     expect(resolveSettingsSection("/settings-old")).toBeNull();
     expect(resolveSettingsSection("/strategies")).toBeNull();
-    expect(SETTINGS_SECTIONS).toHaveLength(6);
+    expect(SETTINGS_SECTIONS).toHaveLength(7);
   });
 });

@@ -67,6 +67,12 @@ test("compact native Dashboard shows readable rows without coverage diagnostics 
   await expect(activity).not.toContainText("Stale at read");
   await expect(activity).not.toContainText("incomplete coverage");
   await expect(activity).not.toContainText("History coverage");
+  const alerts = page.getByTestId("dashboard-status-strip").getByTestId("dashboard-strip-alerts");
+  await expect(alerts).toHaveText("No alerts");
+  await expect(alerts).toHaveAttribute("href", "/settings/alerts");
+  await expect(page.getByTestId("dashboard-attention")).toHaveCount(0);
+  await expect(page.getByTestId("dashboard-daily-review")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Other trade scopes" })).toHaveCount(0);
   for (const button of await activity.getByRole("button").all()) {
     if (await button.isVisible()) expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
@@ -105,6 +111,7 @@ test("actual Journal mounts native history without statistics or simulated recor
   await expect(activity.getByTestId("native-activity-row")).toHaveCount(1);
   await expect(page.getByTestId("native-activity-statistics")).toHaveCount(0);
   await expect(page.getByText("SIMULATED", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("dashboard-daily-review")).toBeVisible();
   await activity.getByRole("button", { name: "Load older activity" }).click();
   await expect(activity.getByTestId("native-activity-row")).toHaveCount(2);
 });

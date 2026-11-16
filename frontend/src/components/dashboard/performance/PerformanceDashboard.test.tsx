@@ -139,6 +139,8 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("calendar-day-2026-07-02")).toHaveTextContent("+1.20K");
     expect(screen.getByTestId("calendar-day-2026-07-03")).toHaveAttribute("data-tone", "loss");
     expect(screen.queryByTestId("sample-data-badge")).not.toBeInTheDocument();
+    expect(screen.getByTestId("performance-sample-size")).toHaveTextContent(/^Sample: 5 trades$/);
+    expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
 
     const calls = vi.mocked(api.journal.performanceCalendar).mock.calls.map(([params]) => params);
     expect(calls).toContainEqual(expect.objectContaining({ date_from: "2026-07-01", date_to: "2026-07-31" }));
@@ -317,7 +319,12 @@ describe("PerformanceDashboard", () => {
     vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
     render(<PerformanceDashboard now={NOW} />);
     const select = await screen.findByRole("combobox", { name: "Source" });
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toContain("Manually logged");
+    // Only the two BloFin demo sources are offered; backend values are unchanged.
+    expect(within(select).getAllByRole("option").map((o) => [o.textContent, o.getAttribute("value")])).toEqual([
+      ["All", ""],
+      ["BloFin demo (manual)", "blofin_demo_manual"],
+      ["BloFin demo (bot)", "paper_execution"],
+    ]);
     fireEvent.change(select, { target: { value: "blofin_demo_manual" } });
     await waitFor(() =>
       expect(screen.getByTestId("performance-scope")).toHaveTextContent("BloFin demo (manual) only"),
@@ -337,6 +344,28 @@ describe("PerformanceDashboard", () => {
     );
     expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).not.toHaveProperty("source");
     expect(screen.getByTestId("performance-scope")).not.toHaveTextContent("BloFin demo (manual) only");
+  });
+
+  it("labels the bot source BloFin demo (bot) and offers no source filter outside Demo", async () => {
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(response());
+    const { rerender } = render(<PerformanceDashboard now={NOW} scope="demo" />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Source" }), {
+      target: { value: "paper_execution" },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-scope")).toHaveTextContent("BloFin demo (bot) only"),
+    );
+    expect(screen.queryByText(/Paper execution \(bot\)/)).not.toBeInTheDocument();
+    vi.mocked(api.journal.performanceCalendar).mockResolvedValue(
+      response({ filters: { ...response().filters, scope: "paper", included_sources: ["paper_execution", "manual"] } }),
+    );
+    rerender(<PerformanceDashboard now={NOW} scope="paper" />);
+    await waitFor(() =>
+      expect(vi.mocked(api.journal.performanceCalendar).mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ scope: "paper" }),
+      ),
+    );
+    expect(screen.queryByRole("combobox", { name: "Source" })).not.toBeInTheDocument();
   });
 
   it("custom range sends the picked dates and blocks an inverted range", async () => {

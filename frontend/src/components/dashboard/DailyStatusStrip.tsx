@@ -1,9 +1,11 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import type { SourceResult } from "@/components/workflows/sourceResult";
 import type { DashboardSummary } from "@/lib/api/types";
-import { formatCount, humanizeToken } from "@/lib/format";
+import { humanizeToken } from "@/lib/format";
 
 export type KillSwitchDisplay = {
   /** False while the status is loading or could not be refreshed. */
@@ -15,14 +17,18 @@ export type KillSwitchDisplay = {
  * Persistent breaker and discipline strip shown in every dashboard venue, so
  * the trader never reads equity or PnL without today's pause state next to it.
  * The daily loss limit is display only (AT-ADR-152): the account daily equity
- * stop is the brake and it arms the kill switch.
+ * stop is the brake and it arms the kill switch. The trade-count gates still
+ * apply server-side; the strip just doesn't repeat them.
  */
 export function DailyStatusStrip({
   summary,
   killSwitch,
+  alerts,
 }: {
   summary: SourceResult<DashboardSummary>;
   killSwitch?: KillSwitchDisplay;
+  /** Alert count link, so attention items stay visible off the Dashboard. */
+  alerts?: ReactNode;
 }) {
   const daily = summary.available ? summary.data?.daily_discipline ?? null : null;
   return (
@@ -73,12 +79,6 @@ export function DailyStatusStrip({
           {daily.green_day_protection_active ? (
             <Badge variant="warning">Green day protection</Badge>
           ) : null}
-          <span className="font-data">
-            {formatCount(daily.remaining_trades_allowed)} trades remaining
-            {daily.max_trades_per_day != null
-              ? ` of ${formatCount(daily.max_trades_per_day)}`
-              : ""}
-          </span>
           <span className="text-text-muted">
             {daily.date} · {daily.timezone}
           </span>
@@ -86,6 +86,7 @@ export function DailyStatusStrip({
       ) : (
         <span data-testid="dashboard-strip-unavailable">Daily status unavailable</span>
       )}
+      {alerts}
     </section>
   );
 }
