@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { NativeActivityItem, NativeActivityKind } from "@/lib/api/blofin-activity";
 import { nativeIdentity, nativeMoney, nativeTime } from "@/lib/native-activity";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatPrice, formatQuantity } from "@/lib/format";
 import { useNativeActivity } from "./useNativeActivity";
 
 const freshness = { fresh: "Fresh at read", stale: "Stale at read", never_synced: "Not synced", unverified: "Account unverified" };
@@ -49,7 +49,18 @@ function ActivityRow({ item }: { item: NativeActivityItem }) {
   </details>;
 }
 
-export function NativeActivity({ statistics = false, refreshKey = 0 }: { statistics?: boolean; refreshKey?: number }) {
+/** Dashboard row: instrument, side, size, price and time only; full detail lives in Journal. */
+function CompactActivityRow({ item }: { item: NativeActivityItem }) {
+  const price = item.price ?? item.average_price;
+  return <div className="grid min-h-11 gap-1 rounded-control border border-border-subtle px-3 py-3 text-sm sm:grid-cols-[1fr_1fr_auto]" data-testid="native-activity-row">
+    <span className="font-medium">{item.instrument} · {item.side}</span>
+    <span className="tabular-nums">{formatQuantity(item.quantity, { maximumFractionDigits: 8 })} contracts · {price == null ? "—" : formatPrice(price, { maximumFractionDigits: 8 })}</span>
+    <span className="text-xs text-text-secondary">{nativeTime(item.occurred_at_ms)}</span>
+  </div>;
+}
+
+/** `compact` is the Dashboard view: rows and last sync only, no coverage diagnostics. */
+export function NativeActivity({ compact = false, refreshKey = 0 }: { compact?: boolean; refreshKey?: number }) {
   const [kind, setKind] = useState<NativeActivityKind>("fill");
   const { page, busy, error, refresh, more } = useNativeActivity(kind, refreshKey);
   const items = page?.identity_status === "verified" ? page.items.filter(item => item.kind === kind) : [];
@@ -82,24 +93,24 @@ export function NativeActivity({ statistics = false, refreshKey = 0 }: { statist
       <div className="flex flex-wrap items-center gap-2">
         <Button className="h-11" variant={kind === "fill" ? "default" : "outline"} aria-pressed={kind === "fill"} onClick={() => setKind("fill")}>Fills</Button>
         <Button className="h-11" variant={kind === "order" ? "default" : "outline"} aria-pressed={kind === "order"} onClick={() => setKind("order")}>Completed orders</Button>
-        {page ? <Badge variant={page.freshness === "fresh" && !error ? "success" : "warning"}>{error ? "Refresh failed" : freshness[page.freshness]}</Badge> : null}
+        {page && !compact ? <Badge variant={page.freshness === "fresh" && !error ? "success" : "warning"}>{error ? "Refresh failed" : freshness[page.freshness]}</Badge> : null}
       </div>
-      <p className="text-xs text-text-secondary">Stored native BloFin demo history · incomplete coverage. Each fill counts once; matched commands are links.</p>
-      {page ? <p className="text-xs text-text-secondary">Last successful {kind === "fill" ? "fill" : "order"} sync: {lastSync ? formatDateTime(lastSync) : "unknown"} · Read at {formatDateTime(page.generated_at)}</p> : null}
-      {statistics && page?.identity_status === "verified" && kind === "fill" ? <dl className="grid grid-cols-2 gap-3 text-sm" data-testid="native-activity-statistics">
-        <div><dt className="text-xs text-text-secondary">Native fills shown</dt><dd className="font-semibold tabular-nums">{items.length}</dd></div>
-        <div><dt className="text-xs text-text-secondary">Instruments shown</dt><dd className="font-semibold tabular-nums">{new Set(items.map(item => item.instrument)).size}</dd></div>
-      </dl> : null}
+      {compact ? (
+        page ? <p className="text-xs text-text-secondary" data-testid="native-activity-last-synced">{lastSync ? `Last synced ${formatDateTime(lastSync)}` : "Not synced yet"}</p> : null
+      ) : <>
+        <p className="text-xs text-text-secondary">Stored native BloFin demo history · incomplete coverage. Each fill counts once; matched commands are links.</p>
+        {page ? <p className="text-xs text-text-secondary">Last successful {kind === "fill" ? "fill" : "order"} sync: {lastSync ? formatDateTime(lastSync) : "unknown"} · Read at {formatDateTime(page.generated_at)}</p> : null}
+      </>}
       {busy ? <p role="status" className="text-sm">Loading stored activity…</p> : null}
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       {page ? <>
-        {page.identity_status !== "verified" ? <p role="status">Account identity unverified. History is withheld.</p> : items.length ? <ul className="space-y-2">{items.map(item => <li key={nativeIdentity(page, item)}><ActivityRow item={item} /></li>)}</ul> : <p className="text-sm">No stored {kind === "fill" ? "fills" : "completed orders"} in this window. Coverage remains incomplete.</p>}
+        {page.identity_status !== "verified" ? <p role="status">Account identity unverified. History is withheld.</p> : items.length ? <ul className="space-y-2">{items.map(item => <li key={nativeIdentity(page, item)}>{compact ? <CompactActivityRow item={item} /> : <ActivityRow item={item} />}</li>)}</ul> : <p className="text-sm">{compact ? `No ${kind === "fill" ? "fills" : "completed orders"} yet.` : `No stored ${kind === "fill" ? "fills" : "completed orders"} in this window. Coverage remains incomplete.`}</p>}
         {page.identity_status === "verified" && page.next_cursor ? <Button className="h-11" variant="outline" disabled={busy} onClick={more}>Load older activity</Button> : null}
-        <details className="text-xs text-text-secondary"><summary className="flex h-11 cursor-pointer items-center">History coverage &amp; age</summary>
+        {compact ? null : <details className="text-xs text-text-secondary"><summary className="flex h-11 cursor-pointer items-center">History coverage &amp; age</summary>
           <p>Read at {formatDateTime(page.generated_at)}. This read does not synchronize the exchange.</p>
           {page.coverage.map(stream => <p key={stream.kind}>{stream.kind === "fill" ? "Fills" : "Orders"}: last successful sync {stream.last_successful_sync ? formatDateTime(stream.last_successful_sync) : "unknown"}; {stream.selection === "cursor_sweep" ? "completed-order cursor sweep; time coverage unknown" : <>window {nativeTime(stream.window_begin_ms)} – {nativeTime(stream.window_end_ms)}</>}. {stream.gap_detected ? "A history gap was detected." : "Earlier history is not established."}{stream.last_error_code ? " Synchronization reported an error." : ""}</p>)}
           {page.limitations.map(limit => <p key={limit}>{limit}</p>)}
-        </details>
+        </details>}
       </> : !busy && !error ? <p className="text-sm">Sign in to read stored activity.</p> : null}
       </>
       )}

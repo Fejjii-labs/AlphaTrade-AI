@@ -5,17 +5,14 @@ import Link from "next/link";
 import { NativeActivity } from "@/components/activity/NativeActivity";
 import { useAuth } from "@/contexts/AuthContext";
 import { useResolvedTimezone } from "@/hooks/useResolvedTimezone";
-import { TIMEZONE_SOURCE_LABELS } from "@/lib/timezone";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
-import { AttentionCard } from "./AttentionCard";
-import { DailyReviewCard } from "./DailyReviewCard";
+import { AttentionBadge } from "./AttentionCard";
 import { DailyStatusStrip, type KillSwitchDisplay } from "./DailyStatusStrip";
 import { BloFinDemoAccountCard } from "./BloFinDemoAccountCard";
 import { PerformanceDashboard } from "./performance/PerformanceDashboard";
 import {
   DEFAULT_SCOPE,
-  EXTRA_SCOPE_OPTIONS,
   SCOPE_LABELS,
   SCOPE_OPTIONS,
 } from "./performance/performance-model";
@@ -81,7 +78,6 @@ export function DashboardVenueControl({
   // Real is only selectable when the runtime posture verifiably enables it;
   // false or unverified keeps it disabled.
   const realDisabled = realTradingEnabled !== true;
-  const extra = EXTRA_SCOPE_OPTIONS.some((option) => option.value === value);
   return (
     <div
       className="flex flex-wrap items-center gap-3 text-sm"
@@ -90,36 +86,13 @@ export function DashboardVenueControl({
       <span className="text-text-secondary">Venue</span>
       <SegmentedControl
         aria-label="Dashboard venue"
-        value={extra ? ("" as DashboardVenue) : value}
+        value={value}
         onChange={onChange}
         options={SCOPE_OPTIONS.map((option) => ({
           ...option,
           disabled: option.value === "real" && realDisabled,
         }))}
       />
-      <label className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
-        <span className="sr-only sm:not-sr-only">Other</span>
-        <select
-          aria-label="Other trade scopes"
-          value={extra ? value : ""}
-          onChange={(event) =>
-            onChange((event.target.value || DEFAULT_SCOPE) as DashboardVenue)
-          }
-          className="min-h-9 rounded-control border border-border bg-surface-1 px-2 text-xs text-text-primary"
-        >
-          <option value="">—</option>
-          {EXTRA_SCOPE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {realDisabled ? (
-        <span className="text-xs text-text-muted" data-testid="dashboard-venue-real-disabled">
-          Real is unavailable while real trading is disabled.
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -205,7 +178,6 @@ export function TraderDashboardView({
     <div className="page-sections" data-testid="trader-dashboard">
       <PageHeader
         title="Dashboard"
-        description="Journal performance, BloFin demo account, recent activity, and attention areas."
         actions={
           <>
             <Link
@@ -246,7 +218,11 @@ export function TraderDashboardView({
         </p>
       ) : null}
 
-      <DailyStatusStrip summary={data.summary} killSwitch={killSwitch} />
+      <DailyStatusStrip
+        summary={data.summary}
+        killSwitch={killSwitch}
+        alerts={<AttentionBadge key={`attention-${accountContext}`} />}
+      />
 
       <DashboardVenueControl
         value={venue}
@@ -259,7 +235,6 @@ export function TraderDashboardView({
         refreshKey={demoRefreshKey}
         scope={venue}
         timezone={dayZone}
-        timezoneLabel={TIMEZONE_SOURCE_LABELS[zone.source]}
       />
 
       {!demo && !simulator ? (
@@ -274,7 +249,7 @@ export function TraderDashboardView({
       {demo && user && organization ? (
         <div key={accountContext} className="page-sections">
           <BloFinDemoAccountCard refreshKey={demoRefreshKey} />
-          <NativeActivity statistics refreshKey={demoRefreshKey} />
+          <NativeActivity compact refreshKey={demoRefreshKey} />
         </div>
       ) : null}
       {simulator ? (
@@ -342,11 +317,6 @@ export function TraderDashboardView({
           </Card>
         </>
       ) : null}
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <AttentionCard />
-        <DailyReviewCard compact timezone={dayZone} />
-      </div>
 
       {simulator ? (
         <details>
