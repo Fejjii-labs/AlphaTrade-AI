@@ -13,7 +13,7 @@ import type {
   JournalPerformanceDashboardResponse,
   JournalTradeSource,
 } from "@/lib/api/types";
-import { humanizeToken } from "@/lib/format";
+import { formatCount, humanizeToken } from "@/lib/format";
 import { zonedToday } from "@/lib/timezone";
 
 import { CumulativePnlChart } from "./CumulativePnlChart";
@@ -26,6 +26,7 @@ import {
   RANGE_OPTIONS,
   SCOPE_LABELS,
   SCOPE_OPTIONS,
+  DASHBOARD_SOURCE_LABELS,
   SOURCE_LABELS,
   browserTimezone,
   buildSampleDashboard,
@@ -47,6 +48,10 @@ const FIELD =
   "min-h-9 rounded-control border border-border bg-surface-2 px-2 text-xs text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus aria-[invalid=true]:border-danger";
 
 const IDLE: Loadable = { data: null, loading: true, error: false };
+
+function sourceLabel(source: JournalTradeSource): string {
+  return DASHBOARD_SOURCE_LABELS[source] ?? SOURCE_LABELS[source] ?? humanizeToken(source);
+}
 
 function useDashboardRequest(
   params: JournalPerformanceDashboardParams,
@@ -124,7 +129,11 @@ export function PerformanceDashboard({
   }>({ scope, value: "", options: [] });
   const sameScope = sourceState.scope === scope;
   const source = sameScope ? sourceState.value : "";
-  const sourceOptions = sameScope ? sourceState.options : [];
+  // Only the BloFin demo sources are offered here (see DASHBOARD_SOURCE_LABELS).
+  const sourceOptions =
+    sameScope && scope === "demo"
+      ? sourceState.options.filter((option) => option in DASHBOARD_SOURCE_LABELS)
+      : [];
   const setSource = (value: JournalTradeSource | "") =>
     setSourceState((current) => ({ ...current, scope, value }));
   const defaultCustom = useMemo(() => rangeParams("30d", today), [today]);
@@ -195,8 +204,8 @@ export function PerformanceDashboard({
               Sample data · not your trades
             </Badge>
           ) : rangeData ? (
-            <Badge variant="muted" title="Sample-size confidence">
-              {humanizeToken(rangeData.confidence)} confidence
+            <Badge variant="muted" data-testid="performance-sample-size">
+              Sample: {formatCount(rangeData.summary.trade_count)} trades
             </Badge>
           ) : null}
           {!sample && rangeData?.truncated ? (
@@ -296,10 +305,10 @@ export function PerformanceDashboard({
                 onChange={(event) => setSource(event.target.value as JournalTradeSource | "")}
                 className={FIELD}
               >
-                <option value="">All sources in this scope</option>
+                <option value="">All</option>
                 {sourceOptions.map((option) => (
                   <option key={option} value={option}>
-                    {SOURCE_LABELS[option] ?? humanizeToken(option)}
+                    {sourceLabel(option)}
                   </option>
                 ))}
               </select>
@@ -326,7 +335,7 @@ export function PerformanceDashboard({
       {!sample ? (
         <p className="text-sm font-medium text-text-primary" data-testid="performance-scope">
           Showing: {scopeLabel}
-          {source ? ` · ${SOURCE_LABELS[source] ?? humanizeToken(source)} only` : ""}
+          {source ? ` · ${sourceLabel(source)} only` : ""}
         </p>
       ) : null}
 

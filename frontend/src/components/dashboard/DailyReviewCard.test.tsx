@@ -1,9 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TraderDashboardView } from "./TraderDashboardView";
+import { JournalDailyReview } from "@/components/journal/JournalDailyReview";
 import { failedSource } from "@/components/workflows/sourceResult";
-import { describeSafetyPosture } from "@/components/workflows/safetyPostureDisplay";
 
 import { DailyReviewCard, DailyReviewContent } from "./DailyReviewCard";
 import type { DailyReview, ReviewItem } from "@/lib/api/daily-review-types";
@@ -12,7 +11,6 @@ import { expectNoIdentifiers } from "@/test/no-identifiers";
 const dailyReview = vi.fn();
 vi.mock("@/lib/api", () => ({ api: { dashboard: { dailyReview: (...args: unknown[]) => dailyReview(...args) } } }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: null, organization: null }) }));
-vi.mock("./performance/PerformanceDashboard", () => ({ PerformanceDashboard: () => null }));
 
 const source = {
   record_type: "journal_trades", record_id: "trade-1", occurred_at: "2026-10-01T12:00:00Z",
@@ -110,16 +108,13 @@ describe("Daily Review", () => {
     expect(screen.getByText("Win rate: 60.0% · Expectancy: 1.234")).toBeInTheDocument();
     expect(screen.getByText(/Recorded net PnL: Unavailable/)).toBeInTheDocument();
   });
-  it("exposes Daily Review on the existing trader dashboard even when other sources fail", async () => {
+  it("is available from the Journal (Trades) page once the day zone resolves", async () => {
     dailyReview.mockResolvedValue(review);
-    render(<TraderDashboardView data={{
-      portfolio: failedSource("down"),
-      journal: failedSource("down"),
-      summary: failedSource("down"), watcher: failedSource("down"),
-      market: failedSource("down"), alerts: failedSource("down"),
-    }} posture={describeSafetyPosture("paper", false)} />);
+    render(<JournalDailyReview />);
     expect(screen.getByTestId("dashboard-daily-review")).toBeInTheDocument();
+    expect(screen.getByText("Open daily review", { selector: "summary" })).toBeInTheDocument();
     await screen.findByTestId("daily-review-content");
+    expect(dailyReview).toHaveBeenCalledTimes(1);
   });
   it("loads and submits an explicit date and timezone", async () => {
     dailyReview.mockResolvedValue(review);

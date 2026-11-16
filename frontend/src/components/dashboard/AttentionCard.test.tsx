@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AttentionCard, AttentionContent } from "./AttentionCard";
+import { AttentionBadge, AttentionCard, AttentionContent } from "./AttentionCard";
 import type { AttentionItem, AttentionQueue } from "@/lib/api/attention-types";
 import { expectNoIdentifiers } from "@/test/no-identifiers";
 
@@ -82,5 +82,43 @@ describe("Dashboard attention", () => {
     expect(screen.getByText(/Showing 5 of 7/)).toBeInTheDocument();
     expect(screen.getByText(/Review item 0/)).toBeInTheDocument();
     expect(screen.queryByText(/Review item 5/)).not.toBeInTheDocument();
+  });
+  it("shows every item when given no compact limit", () => {
+    render(<AttentionContent limit={Infinity} queue={{ ...queue, items: Array.from({ length: 7 }, (_, i) => ({
+      ...item, item_id: `risk-${i}`, title: `Review item ${i}`,
+    })) }} now={now} />);
+    expect(screen.getByText(/Review item 6/)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Dashboard alert badge", () => {
+  beforeEach(() => attention.mockReset());
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+  it("counts unexpired items and links to Settings > Alerts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    attention.mockResolvedValue({ ...queue, items: [
+      item,
+      { ...item, item_id: "stale-1", severity: "medium" },
+      { ...item, item_id: "gone-1", expires_at: "2026-10-02T11:00:00Z" },
+    ] });
+    render(<AttentionBadge />);
+    const link = await screen.findByTestId("dashboard-strip-alerts");
+    expect(link).toHaveTextContent(/^2 alerts$/);
+    expect(link).toHaveAttribute("href", "/settings/alerts");
+  });
+  it("says No alerts for an empty queue", async () => {
+    attention.mockResolvedValue({ ...queue, items: [] });
+    render(<AttentionBadge />);
+    expect(await screen.findByTestId("dashboard-strip-alerts")).toHaveTextContent(/^No alerts$/);
+  });
+  it.each(["failed", "invalid"])("never goes silent when the queue read is %s", async (kind) => {
+    if (kind === "failed") attention.mockRejectedValueOnce(new Error("offline"));
+    else attention.mockResolvedValueOnce({});
+    render(<AttentionBadge />);
+    const link = await screen.findByTestId("dashboard-strip-alerts");
+    expect(link).toHaveTextContent("Alerts unavailable");
+    expect(link).toHaveAttribute("href", "/settings/alerts");
   });
 });

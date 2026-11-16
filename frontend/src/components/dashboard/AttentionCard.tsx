@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
@@ -9,7 +11,15 @@ import { api } from "@/lib/api";
 import type { AttentionQueue } from "@/lib/api/attention-types";
 import { formatDateTime, humanizeToken } from "@/lib/format";
 
-export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: number }) {
+export function AttentionContent({
+  queue,
+  now,
+  limit = 5,
+}: {
+  queue: AttentionQueue;
+  now: number;
+  limit?: number;
+}) {
   const items = queue.items.filter((item) =>
     item.expires_at == null || Date.parse(item.expires_at) > now,
   );
@@ -22,7 +32,7 @@ export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: n
         <p>No action available from the recorded attention sources.</p>
       ) : (
         <ul className="space-y-3">
-          {items.slice(0, 5).map((item) => (
+          {items.slice(0, limit).map((item) => (
             <li key={item.item_id} className="break-words border-b border-border-subtle pb-3 last:border-0">
               <p className="font-medium">
                 {humanizeToken(item.severity)} · {item.title}{item.symbol ? ` · ${item.symbol}` : ""}
@@ -44,7 +54,7 @@ export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: n
           ))}
         </ul>
       )}
-      {items.length > 5 ? <p className="text-xs text-text-muted">Showing 5 of {items.length} recorded items.</p> : null}
+      {items.length > limit ? <p className="text-xs text-text-muted">Showing {limit} of {items.length} recorded items.</p> : null}
       <details className="text-xs text-text-muted">
         <summary className="cursor-pointer">Coverage</summary>
         <ul className="mt-1 space-y-1">{queue.limitations.map((text) => <li key={text}>{text}</li>)}</ul>
@@ -53,7 +63,35 @@ export function AttentionContent({ queue, now }: { queue: AttentionQueue; now: n
   );
 }
 
-export function AttentionCard() {
+function validQueue(data: AttentionQueue | null | undefined): data is AttentionQueue {
+  return data?.schema_version === "AttentionQueue/v1"
+    && Array.isArray(data.items) && Array.isArray(data.limitations);
+}
+
+/** Compact alert count for the Dashboard strip; opens Settings > Alerts. */
+export function AttentionBadge() {
+  const loader = useCallback(() => api.dashboard.attention(), []);
+  const { data, loading, error } = useAsyncData(loader, []);
+  if (loading) return null;
+  const now = Date.now();
+  const items = !error && validQueue(data)
+    ? data.items.filter((item) => item.expires_at == null || Date.parse(item.expires_at) > now)
+    : null;
+  const urgent = items?.some((item) => item.severity === "critical" || item.severity === "high");
+  return (
+    <Link href="/settings/alerts" data-testid="dashboard-strip-alerts" className="inline-flex">
+      <Badge variant={items == null ? "warning" : items.length === 0 ? "muted" : urgent ? "danger" : "warning"}>
+        {items == null
+          ? "Alerts unavailable"
+          : items.length === 0
+            ? "No alerts"
+            : `${items.length} alert${items.length === 1 ? "" : "s"}`}
+      </Badge>
+    </Link>
+  );
+}
+
+export function AttentionCard({ limit }: { limit?: number } = {}) {
   const loader = useCallback(() => api.dashboard.attention(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [now, setNow] = useState(() => Date.now());
@@ -69,8 +107,7 @@ export function AttentionCard() {
     ));
     return () => clearTimeout(timer);
   }, [data, now]);
-  const valid = data?.schema_version === "AttentionQueue/v1"
-    && Array.isArray(data.items) && Array.isArray(data.limitations);
+  const valid = validQueue(data);
   return (
     <Card data-testid="dashboard-attention">
       <CardHeader className="gap-2 pb-2">
@@ -92,7 +129,7 @@ export function AttentionCard() {
       <CardContent className="card-inner pt-0">
         {loading ? <p role="status">Loading attention…</p> : error || !valid ? (
           <p role="alert">Attention unavailable. Refresh to retry.</p>
-        ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} /> : null}
+        ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} limit={limit} /> : null}
       </CardContent>
     </Card>
   );

@@ -163,6 +163,16 @@ export const SOURCE_LABELS: Record<JournalTradeSource, string> = {
   system: "System",
 };
 
+/**
+ * The Dashboard's source filter: BloFin demo trades only, with trader-facing
+ * names. Inside the Demo scope `paper_execution` rows are the bot's BloFin demo
+ * orders; other sources stay filterable in the Journal.
+ */
+export const DASHBOARD_SOURCE_LABELS: Partial<Record<JournalTradeSource, string>> = {
+  blofin_demo_manual: "BloFin demo (manual)",
+  paper_execution: "BloFin demo (bot)",
+};
+
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Inline validation for the custom range; null when it can be sent. */

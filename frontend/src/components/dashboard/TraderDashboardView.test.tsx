@@ -10,8 +10,10 @@ let identity = { user: { id: "reader-1" }, organization: { id: activityOrganizat
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => identity }));
 vi.mock("@/lib/api/blofin-activity", () => ({ readNativeActivity: vi.fn() }));
 vi.mock("@/lib/api/dashboard-demo-account", () => ({ demoAccountApi: { latest: vi.fn(), refresh: vi.fn() } }));
-vi.mock("./AttentionCard", () => ({ AttentionCard: () => null }));
-vi.mock("./DailyReviewCard", () => ({ DailyReviewCard: () => null }));
+vi.mock("./AttentionCard", () => ({
+  AttentionCard: () => <section data-testid="dashboard-attention" />,
+  AttentionBadge: () => <a data-testid="dashboard-strip-alerts" href="/settings/alerts">2 alerts</a>,
+}));
 const performanceInstances = vi.hoisted(() => ({ next: 0 }));
 vi.mock("./performance/PerformanceDashboard", async () => {
   const { useState } = await import("react");
@@ -90,10 +92,18 @@ describe("Dashboard native integration", () => {
     expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "paper");
     expect(screen.queryByTestId("native-activity")).not.toBeInTheDocument();
     expect(screen.getByText("Internal simulator")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Other trade scopes" }), { target: { value: "backtest" } });
-    expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "backtest");
-    expect(screen.queryByText("Internal simulator")).not.toBeInTheDocument();
-    expect(screen.getByTestId("dashboard-venue-no-account")).toHaveTextContent("Backtest trades");
+    expect(screen.queryByRole("combobox", { name: "Other trade scopes" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Other")).not.toBeInTheDocument();
+  });
+
+  it("shows an alerts link in the status strip instead of the Attention and Daily Review cards", () => {
+    render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
+    const strip = screen.getByTestId("dashboard-status-strip");
+    expect(strip).toContainElement(screen.getByTestId("dashboard-strip-alerts"));
+    expect(screen.getByTestId("dashboard-strip-alerts")).toHaveAttribute("href", "/settings/alerts");
+    expect(screen.queryByTestId("dashboard-attention")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-daily-review")).not.toBeInTheDocument();
+    expect(screen.queryByText("Daily Review")).not.toBeInTheDocument();
   });
 
   it("keeps the header to the title and its two actions", () => {
@@ -107,10 +117,13 @@ describe("Dashboard native integration", () => {
   it("disables Real unless real trading is verifiably enabled", () => {
     const { rerender } = render(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", false)} />);
     expect(screen.getByRole("radio", { name: "Real" })).toBeDisabled();
-    expect(screen.getByTestId("dashboard-venue-real-disabled")).toBeInTheDocument();
+    expect(screen.queryByText(/Real is unavailable/)).not.toBeInTheDocument();
     rerender(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", null)} realTradingEnabled={null} />);
     expect(screen.getByRole("radio", { name: "Real" })).toBeDisabled();
     rerender(<TraderDashboardView data={data} posture={describeSafetyPosture("paper", true)} realTradingEnabled />);
     expect(screen.getByRole("radio", { name: "Real" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("radio", { name: "Real" }));
+    expect(screen.getByTestId("performance-instance")).toHaveAttribute("data-scope", "real");
+    expect(screen.getByTestId("dashboard-venue-no-account")).toHaveTextContent("Real trades");
   });
 });
