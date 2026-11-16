@@ -519,6 +519,7 @@ def _paper_plan(
     grade: Grade = Grade.A_PLUS,
     profile_kind: str = "sofien",
 ) -> object:
+    from app.schemas.strategy_pattern_spec import FirstSliceAuthoredPatternSpec
     from app.services.automated_paper_loop import _plan_terms
     from app.signal_fusion.first_slice_adapter import default_first_slice_evaluation_params
     from tests.support.phase5_market import EVALUATED_AT
@@ -570,7 +571,8 @@ def _paper_plan(
         bundle=SimpleNamespace(bars_15m=[], tick_size=Decimal("0.1")),
     )
     policy = SimpleNamespace(
-        authored_spec=object(),
+        # A real first-slice spec: unknown families are refused, not coerced.
+        authored_spec=FirstSliceAuthoredPatternSpec.model_construct(),
         evaluation_params=default_first_slice_evaluation_params(),
         strategy_id=uuid4(),
         organization_id=world.candidate.organization_id,
