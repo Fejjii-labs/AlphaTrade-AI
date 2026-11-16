@@ -386,6 +386,61 @@ def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
     assert all(row.net_pnl is None for row in _rows(session))
 
 
+def test_replayed_funding_bills_do_not_double_charge(session):
+    bundle = _five_closes()
+    bundle["funding"] *= 2
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "ADAUSDT")
+    assert row.funding == Decimal("0.5") and row.net_pnl == Decimal("9.3")
+
+
+def test_old_partial_slice_rows_are_consolidated_without_deleting_annotations(session):
+    bundle = _five_closes()
+    _apply_five(session, bundle)
+    session.add(
+        JournalTrade(
+            organization_id=ORG,
+            user_id=USER,
+            source=JournalTradeSource.BLOFIN_DEMO_MANUAL,
+            status=JournalTradeStatus.CLOSED,
+            symbol="XRPUSDT",
+            timeframe="manual",
+            direction=TradeDirection.LONG,
+            external_ref="blofin-demo-history:five-h3-1",
+            net_pnl=Decimal("9.8"),
+            result=TradeResult.WIN,
+            notes="keep legacy annotation",
+            tags=["blofin-history:five-h3-1", "pnl-verified"],
+        )
+    )
+    session.commit()
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert sum(row.status is JournalTradeStatus.CLOSED for row in rows) == 5
+    legacy = next(row for row in rows if row.notes == "keep legacy annotation")
+    assert legacy.status is JournalTradeStatus.CANCELLED and legacy.net_pnl is None
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("pnl", "500", "closing_pnl_mismatch"),
+        ("fee", "8", "fee_mismatch"),
+        ("filledSize", "2", "incomplete_position_history"),
+    ],
+)
+def test_only_the_position_with_conflicting_order_evidence_is_excluded(
+    session, field, value, reason
+):
+    bundle = _five_closes()
+    bundle["orders"][0][field] = value
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    bad = next(row for row in rows if row.symbol == "BTCUSDT")
+    assert bad.net_pnl is None and bad.exit_reason == f"unverified:{reason}"
+    assert sum(row.net_pnl is not None for row in rows) == 4
+
+
 def test_long_matches_price_fee_and_paid_funding_and_ignores_fill_pnl(session: Session) -> None:
     report = _apply(session, _FIXTURE["long"])
     assert report.created == 1  # type: ignore[attr-defined]
