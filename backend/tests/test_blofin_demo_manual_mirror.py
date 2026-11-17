@@ -386,6 +386,27 @@ def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
     assert all(row.net_pnl is None for row in _rows(session))
 
 
+def test_reconciliation_tolerance_is_per_position_not_per_partial_leg(session):
+    bundle = _five_closes()
+    for row in bundle["history"]:
+        if row["positionId"] == "five-p3":
+            row["realizedPnl"] = str(Decimal(row["realizedPnl"]) + Decimal("0.009"))
+    for row in bundle["orders"]:
+        if row["positionId"] == "five-p3" and row["side"] == "sell":
+            row["pnl"] = str(Decimal(row["pnl"]) + Decimal("0.009"))
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "XRPUSDT")
+    assert row.net_pnl is None and row.exit_reason == "unverified:pnl_mismatch"
+
+
+def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(session):
+    bundle = _five_closes()
+    bundle["history"][0]["realizedPnl"] = bundle["orders"][0]["pnl"] = "10.005"
+    _apply_five(session, bundle)
+    row = next(row for row in _rows(session) if row.symbol == "BTCUSDT")
+    assert row.gross_pnl == Decimal("10.005") and row.net_pnl == Decimal("9.805")
+
+
 @pytest.mark.parametrize("source", [JournalTradeSource.MANUAL, JournalTradeSource.MANUAL_DEMO_TEST])
 def test_account_card_includes_a_verified_close_reconciled_into_an_existing_journal_row(
     session, source
