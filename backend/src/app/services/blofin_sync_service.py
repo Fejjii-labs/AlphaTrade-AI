@@ -10,7 +10,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -415,8 +415,13 @@ class BloFinSyncService:
             balance_count=balance_count,
         )
         previous = self._snapshots.latest_for_org_user(organization_id, user_id)
-        if previous is not None and _content_hash(previous) == _content_hash(row):
-            # Same account state: refresh the newest row instead of storing a copy.
+        if (
+            previous is not None
+            and _utc_day(previous.synced_at) == _utc_day(now)
+            and _content_hash(previous) == _content_hash(row)
+        ):
+            # Same account state on the same UTC day: refresh the newest row instead
+            # of storing a copy. A new day always gets its own (daily, kept) row.
             row = _refresh(previous, now=now, provenance=provenance)
         else:
             self._snapshots.add(row)
@@ -572,6 +577,10 @@ def _content_hash(row: SnapshotModel) -> str:
     }
     encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _utc_day(value: datetime) -> date:
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).date()
 
 
 def _refresh(row: SnapshotModel, *, now: datetime, provenance: dict[str, Any]) -> SnapshotModel:
