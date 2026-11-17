@@ -83,6 +83,13 @@ def _legacy_partial_rows(session: Session) -> None:
     """Seed the old two-slice layout explicitly; the repaired mirror groups it."""
     _apply(session, _FIXTURE["partial_open"])
     first = session.query(JournalTrade).filter_by(external_ref="blofin-demo-history:h-part-1").one()
+    tracker = (
+        session.query(JournalTrade)
+        .filter_by(external_ref="blofin-demo-open:p-part:1792195200000")
+        .one()
+    )
+    tracker.status = JournalTradeStatus.CANCELLED
+    tracker.exit_reason = "flat_on_venue"
     session.add(
         _row(
             external_ref="blofin-demo-history:h-part-2",

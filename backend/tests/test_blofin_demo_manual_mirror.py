@@ -407,6 +407,21 @@ def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(se
     assert row.gross_pnl == Decimal("10.005") and row.net_pnl == Decimal("9.805")
 
 
+def test_legacy_price_only_verification_does_not_claim_new_order_cost_proof(session):
+    _apply(session, _FIXTURE["long"])
+    row = _rows(session)[0]
+    row.tags = ["blofin-history:h-long", "pnl-verified"]
+    session.commit()
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.realized_pnl is None
+
+
 def test_reused_position_id_in_a_later_lifetime_remains_a_separate_trade(session):
     bundle = _five_closes()
     opened = int(bundle["history"][0]["createTime"])
