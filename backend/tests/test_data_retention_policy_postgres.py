@@ -18,8 +18,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.db.models import (
+    ApprovalRequest,
     JournalTrade,
     Organization,
+    TradeProposal,
     User,
     UserStrategy,
     UserStrategyVersion,
@@ -28,6 +30,7 @@ from app.db.trade_candidate_summaries import TradeCandidateSummaryRow
 from app.schemas.common import (
     JournalTradeSource,
     JournalTradeStatus,
+    RiskSeverity,
     StrategyId,
     TradeDirection,
     TradeResult,
@@ -444,6 +447,56 @@ def test_audit_logs_keep_90_days_and_referenced_rows(pg_factory) -> None:
     run_retention(pg_factory, _settings(), now=NOW, dry_run=False)
 
     assert _ids(pg_factory, "SELECT id FROM audit_logs") == {str(rows[1]["id"])}
+
+
+def test_audit_log_referenced_by_an_approval_outlives_the_window(pg_factory) -> None:
+    # Griller PR 466 round 2, C2: the approvals keep-guard must hold on its own.
+    world = World(pg_factory)
+    referenced, unreferenced = uuid4(), uuid4()
+    _exec(
+        pg_factory,
+        "INSERT INTO audit_logs (id, actor, actor_type, action, resource_type, result, "
+        "severity, redacted_metadata, event_at, created_at, updated_at) VALUES (:id, 'sys', "
+        "'SYSTEM', 'BLOFIN_DEMO_SYNC', 'x', 'SUCCESS', 'INFO', '{}', :at, :at, :at)",
+        [
+            {"id": referenced, "at": NOW - timedelta(days=200)},
+            {"id": unreferenced, "at": NOW - timedelta(days=200)},
+        ],
+    )
+    with pg_factory() as session:
+        proposal = TradeProposal(
+            organization_id=world.org,
+            user_id=world.user,
+            strategy_id=StrategyId.HTF_TREND_PULLBACK,
+            symbol="BTCUSDT",
+            timeframe="4h",
+            direction=TradeDirection.LONG,
+            entry_price=Decimal("60000"),
+            position_size=Decimal("0.1"),
+            leverage=Decimal("3"),
+            stop_loss=Decimal("58000"),
+            invalidation="close below 58000",
+            confidence=0.7,
+            risk_level=RiskSeverity.MEDIUM,
+            rationale="retention fixture",
+        )
+        session.add(proposal)
+        session.flush()
+        session.add(
+            ApprovalRequest(
+                proposal_id=proposal.id,
+                organization_id=world.org,
+                user_id=world.user,
+                risk_level=RiskSeverity.MEDIUM,
+                confidence=0.7,
+                audit_event_id=referenced,
+            )
+        )
+        session.commit()
+
+    run_retention(pg_factory, _settings(), now=NOW, dry_run=False)
+
+    assert _ids(pg_factory, "SELECT id FROM audit_logs") == {str(referenced)}
 
 
 def test_24_hour_policies_prune_noise_and_keep_decisions(pg_factory) -> None:
