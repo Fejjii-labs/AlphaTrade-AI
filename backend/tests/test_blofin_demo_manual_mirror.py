@@ -386,6 +386,38 @@ def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
     assert all(row.net_pnl is None for row in _rows(session))
 
 
+@pytest.mark.parametrize("source", [JournalTradeSource.MANUAL, JournalTradeSource.MANUAL_DEMO_TEST])
+def test_account_card_includes_a_verified_close_reconciled_into_an_existing_journal_row(
+    session, source
+):
+    original = JournalTrade(
+        organization_id=ORG,
+        user_id=USER,
+        source=source,
+        status=JournalTradeStatus.OPEN,
+        symbol="BTCUSDT",
+        timeframe="manual",
+        direction=TradeDirection.LONG,
+        entry_price=Decimal("100"),
+        size=Decimal("0.02"),
+        result=TradeResult.OPEN,
+    )
+    session.add(original)
+    session.commit()
+    _apply(session, _FIXTURE["long"])
+    assert _rows(session)[0].id == original.id and original.source is source
+    account = DashboardDemoAccount(status="ok", message="fixture")
+    publish_mirror_performance(
+        account,
+        session=session,
+        tenant=TenantContext(USER, ORG, "mirror@test.example", MembershipRole.TRADER),
+        settings=_settings(),
+    )
+    assert account.performance.trade_count == 1
+    assert account.performance.win_rate == Decimal("1")
+    assert account.performance.realized_pnl == Decimal("0.186")
+
+
 def test_replayed_funding_bills_do_not_double_charge(session):
     bundle = _five_closes()
     bundle["funding"] *= 2
