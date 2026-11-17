@@ -482,6 +482,15 @@ def test_loop_hold_sends_no_close(reason: str) -> None:
     assert venue.calls == []
 
 
+@pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused", "daily_loss_lock"])
+def test_loop_hold_still_sends_the_stop_close(reason: str) -> None:
+    venue = LoopVenue(mark=Decimal("80"))  # through the 95 stop
+    loop, _store = _loop(_demo_settings(True), venue, hold=reason)
+    plan, command, evidence = _ladder_inputs()
+    loop._manage_demo_ladder(None, command, plan, evidence)
+    assert [(side, size) for _client_id, side, size in venue.placed] == [("sell", Decimal("1.000"))]
+
+
 def test_loop_waits_for_a_terminal_entry_before_any_close() -> None:
     venue = LoopVenue(mark=Decimal("150"))
     loop, _store = _loop(_demo_settings(True), venue)

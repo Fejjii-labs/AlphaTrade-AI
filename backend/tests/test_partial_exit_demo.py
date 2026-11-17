@@ -280,6 +280,18 @@ def test_kill_switch_pause_and_loss_lock_hold_every_venue_call(reason: str) -> N
     assert venue.placed[0][0] == _client("t1")
 
 
+# A hold stops new risk, never risk reduction (Griller PR 467 B1). A ladder has
+# no exchange-side stop, so a crossed stop must still close the remainder.
+
+
+@pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused", "daily_loss_lock"])
+def test_hold_still_closes_the_remainder_when_the_stop_is_crossed(reason: str) -> None:
+    venue = SimVenue(mark=Decimal("80"))  # far through the 95 stop
+    report = _manager(venue, MemoryStore(), hold=reason).step(_position())
+    assert venue.placed == [(_client("x"), "sell", Decimal("1.000"))]
+    assert report.placed == (_client("x"),)
+
+
 def test_no_level_reached_sends_nothing() -> None:
     venue = SimVenue(mark=Decimal("105"))
     report = _manager(venue, MemoryStore()).step(_position())
