@@ -79,6 +79,29 @@ def _row(**values: Any) -> JournalTrade:
     return JournalTrade(**base)
 
 
+def _legacy_partial_rows(session: Session) -> None:
+    """Seed the old two-slice layout explicitly; the repaired mirror groups it."""
+    _apply(session, _FIXTURE["partial_open"])
+    first = session.query(JournalTrade).filter_by(external_ref="blofin-demo-history:h-part-1").one()
+    session.add(
+        _row(
+            external_ref="blofin-demo-history:h-part-2",
+            tags=["blofin-history:h-part-2"],
+            entry_price=first.entry_price,
+            entry_time=first.entry_time,
+            exit_price=Decimal("110"),
+            exit_time=datetime(2026, 10, 17, 12, tzinfo=UTC),
+            size=Decimal("0.01"),
+            gross_pnl=Decimal("0.1"),
+            fees=Decimal("0.002"),
+            funding=Decimal("0.002"),
+            net_pnl=Decimal("0.096"),
+            exit_reason="partially_closed",
+        )
+    )
+    session.commit()
+
+
 def test_partial_closes_plan_one_trade_with_summed_economics() -> None:
     lines, summary = _plan(_FIXTURE["partial_flat"])
     assert [line["action"] for line in lines] == ["create"]
@@ -119,8 +142,7 @@ def test_rerun_against_the_planned_row_is_a_no_op() -> None:
 
 
 def test_legacy_mirror_rows_plan_a_merge_without_any_write(session: Session) -> None:
-    _apply(session, _FIXTURE["partial_open"])
-    _apply(session, _FIXTURE["partial_flat"])
+    _legacy_partial_rows(session)
     statements: list[str] = []
     engine = session.get_bind()
 
@@ -149,8 +171,7 @@ def test_legacy_mirror_rows_plan_a_merge_without_any_write(session: Session) -> 
 
 
 def test_annotated_survivor_wins_and_two_annotated_rows_are_only_listed(session: Session) -> None:
-    _apply(session, _FIXTURE["partial_open"])
-    _apply(session, _FIXTURE["partial_flat"])
+    _legacy_partial_rows(session)
     rows, _ = stored_rows(session, organization_id=ORG, user_id=USER)
     by_ref = {row.external_ref: row for row in rows}
     later = by_ref["blofin-demo-history:h-part-2"]

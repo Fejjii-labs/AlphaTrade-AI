@@ -407,6 +407,32 @@ def test_recorded_venue_gross_is_preserved_within_one_cent_rounding_tolerance(se
     assert row.gross_pnl == Decimal("10.005") and row.net_pnl == Decimal("9.805")
 
 
+def test_reused_position_id_in_a_later_lifetime_remains_a_separate_trade(session):
+    bundle = _five_closes()
+    opened = int(bundle["history"][0]["createTime"])
+    bundle["history"][0]["updateTime"] = bundle["orders"][0]["createTime"] = str(opened + 3600000)
+    history = {**bundle["history"][0], "historyId": "reused-history"}
+    offset = 7200000
+    history["createTime"] = str(int(history["createTime"]) + offset)
+    history["updateTime"] = str(int(history["updateTime"]) + offset)
+    bundle["history"].append(history)
+    for order in list(bundle["orders"]):
+        if order["positionId"] == "five-p0":
+            bundle["orders"].append(
+                {
+                    **order,
+                    "orderId": "reused-" + order["orderId"],
+                    "createTime": str(int(order["createTime"]) + offset),
+                }
+            )
+    _apply_five(session, bundle)
+    assert len(_rows(session)) == 6
+    assert (
+        sum(row.symbol == "BTCUSDT" and row.net_pnl == Decimal("9.8") for row in _rows(session))
+        == 2
+    )
+
+
 @pytest.mark.parametrize("source", [JournalTradeSource.MANUAL, JournalTradeSource.MANUAL_DEMO_TEST])
 def test_account_card_includes_a_verified_close_reconciled_into_an_existing_journal_row(
     session, source
