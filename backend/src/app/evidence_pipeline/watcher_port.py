@@ -29,6 +29,7 @@ from app.market_contracts.errors import (
 )
 from app.market_contracts.evidence_diagnostics import (
     diagnostic_from_exception,
+    exception_class_name,
     reason_for_exception,
 )
 from app.market_contracts.request_progress import notify_market_request_progress
@@ -323,7 +324,6 @@ class AssemblingWatcherScanEvidence:
     ) -> NoReturn:
         # The wrapper retains its public reason codes. Log only the finite
         # diagnostic category, never exception text, provider payloads or URLs.
-        from app.market_contracts import errors
         from app.schemas.common import Timeframe
 
         context: dict[str, str] = {}
@@ -331,13 +331,11 @@ class AssemblingWatcherScanEvidence:
             context["symbol"] = symbol
         if timeframe in {item.value for item in Timeframe}:
             context["timeframe"] = timeframe
-        # Resolve only known contract classes, never an arbitrary provider class
-        # name or exception message. Direct callers retain the old log shape.
+        # Resolve only application/builtin classes, never an arbitrary provider
+        # class name or exception message. Direct callers retain the old log shape.
+        exception_class = exception_class_name(exc)
         if context:
-            context["exception_class"] = next(
-                (cls.__name__ for cls in type(exc).__mro__ if cls.__module__ == errors.__name__),
-                "Exception",
-            )
+            context["exception_class"] = exception_class
         logger.warning(
             "canonical_evidence_contract_rejected",
             failure_reason=reason_for_exception(exc).value,
@@ -362,14 +360,18 @@ class AssemblingWatcherScanEvidence:
                 "Canonical scan evidence is unavailable.",
                 reason_code="forming_candle",
             ) from exc
+        # The catch-all reason codes stay stable for exact-match consumers; the
+        # underlying class travels with them so they no longer hide the cause.
         if isinstance(exc, MarketContractError):
             raise WatcherEvidenceUnavailableError(
-                "Canonical scan evidence is unavailable.",
+                f"Canonical scan evidence is unavailable ({exception_class}).",
                 reason_code="canonical_contract_invalid_contract",
+                details={"exception_class": exception_class},
             ) from exc
         raise WatcherEvidenceUnavailableError(
-            "Canonical contract failed with an unexpected error.",
+            f"Canonical contract failed with an unexpected error ({exception_class}).",
             reason_code="canonical_contract_unexpected_error",
+            details={"exception_class": exception_class},
         ) from exc
 
     def _bind_market(

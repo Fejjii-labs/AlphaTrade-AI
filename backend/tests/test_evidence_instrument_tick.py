@@ -93,9 +93,7 @@ def test_undiagnosed_missing_tick_surfaces_its_reason_code() -> None:
     from app.watcher.errors import WatcherEvidenceUnavailableError
 
     with pytest.raises(MarketContractError) as tick:
-        resolve_bundle_tick_size(
-            symbol="UNKNOWNUSDT", venue=VenueId.BYBIT, book=None, replay=False
-        )
+        resolve_bundle_tick_size(symbol="UNKNOWNUSDT", venue=VenueId.BYBIT, book=None, replay=False)
     with pytest.raises(WatcherEvidenceUnavailableError) as failure:
         AssemblingWatcherScanEvidence._raise_undiagnosed(
             tick.value, symbol="UNKNOWNUSDT", timeframe="15m"

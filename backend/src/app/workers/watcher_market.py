@@ -362,11 +362,12 @@ class SymbolMarketFactory:
         return entry
 
     def _contract_book_for_assembler(self) -> ContractBook:
-        if self._assembler_contract_book is not None:
-            return self._assembler_contract_book
-        if self.discovery.book.contracts:
-            self._assembler_contract_book = self.discovery.book
-        else:
+        # Prefer the latest non-empty discovery book; the first one may predate a
+        # listing. An empty refresh keeps the last good book (or the verified defaults).
+        book = self.discovery.book
+        if book.contracts:
+            self._assembler_contract_book = book
+        elif self._assembler_contract_book is None:
             self._assembler_contract_book = default_contract_book()
         return self._assembler_contract_book
 

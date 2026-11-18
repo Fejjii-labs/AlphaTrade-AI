@@ -5,11 +5,23 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.market_contracts.enums import VenueId
-from app.market_contracts.errors import MarketContractError
+from app.market_contracts.errors import ContractUnavailableError, MarketContractError
 from app.market_contracts.provider_contracts import ContractBook, default_contract_book
 from app.signal_fusion.first_slice_types import FIRST_SLICE_TICK_SIZE
 
 INSTRUMENT_TICK_SIZE_UNAVAILABLE = "instrument_tick_size_unavailable"
+
+
+class InstrumentTickSizeUnavailableError(ContractUnavailableError, MarketContractError):
+    """No verified tick for the symbol on this venue.
+
+    A contract-unavailable refusal with its own reason, so it is not reported as
+    the ``invalid_contract`` catch-all. It stays a ``MarketContractError`` for
+    callers that already handle that family.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(INSTRUMENT_TICK_SIZE_UNAVAILABLE)
 
 
 def resolve_bundle_tick_size(
@@ -31,7 +43,7 @@ def resolve_bundle_tick_size(
     if tick is None:
         tick = _verified_tick_from_book(default_contract_book(), symbol, venue)
     if tick is None:
-        raise MarketContractError(INSTRUMENT_TICK_SIZE_UNAVAILABLE)
+        raise InstrumentTickSizeUnavailableError()
     return tick
 
 
