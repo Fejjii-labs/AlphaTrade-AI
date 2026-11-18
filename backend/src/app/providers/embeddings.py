@@ -281,6 +281,7 @@ class OpenAIEmbeddingsProvider:
                 )
             ):
                 raise ValueError("malformed model listing")
+            model_listed = any(row["id"] == self._model for row in rows)
         except Exception as exc:
             logger.debug("openai_embeddings_status_degraded", error_type=type(exc).__name__)
             return ProviderStatus(
@@ -293,21 +294,31 @@ class OpenAIEmbeddingsProvider:
                 last_success_at=self._last_success,
             )
         proven = self._last_success is not None and not self._last_generation_failed
+        # Nothing embedded since start is "unverified", not a fault: with the
+        # configured model listed and no failed generation it reports healthy
+        # without spending on a probe. A failed generation or an unlisted model
+        # still degrades.
+        unverified_ok = self._last_success is None and not self._last_generation_failed
+        healthy = proven or (unverified_ok and model_listed)
+        if proven:
+            generation = "embedding generation previously succeeded."
+        elif self._last_generation_failed:
+            generation = "the last embedding generation failed."
+        elif model_listed:
+            generation = "embedding generation has not been verified yet."
+        else:
+            generation = (
+                "the configured embedding model is not listed; "
+                "embedding generation has not been verified."
+            )
         return ProviderStatus(
             name=self.name,
             kind=self.kind,
-            health=ProviderHealth.HEALTHY if proven else ProviderHealth.DEGRADED,
+            health=ProviderHealth.HEALTHY if healthy else ProviderHealth.DEGRADED,
             using_fallback=False,
             is_mock=False,
             last_success_at=self._last_success,
-            detail=(
-                "Models endpoint reachable and authorized; "
-                + (
-                    "embedding generation previously succeeded."
-                    if proven
-                    else "embedding generation has not been verified."
-                )
-            ),
+            detail="Models endpoint reachable and authorized; " + generation,
         )
 
 
