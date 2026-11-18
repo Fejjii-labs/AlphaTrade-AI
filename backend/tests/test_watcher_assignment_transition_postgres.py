@@ -228,12 +228,12 @@ def test_explicit_overlay_only_skips_execution_for_its_own_target(factory, monke
 def test_first_assignment_during_load_keeps_original_revision_and_refuses_stale_target(
     factory, monkeypatch
 ):
-    from app.workers import watcher_paper
+    from app.workers import watcher_paper_targets
 
     with factory() as db:
         _, version = _seed_approved_compiled(db)
         original = body(db, [version])
-    loader = watcher_paper.list_watchlist_scan_targets
+    loader = watcher_paper_targets.list_watchlist_scan_targets
 
     def load_then_add(*args, **kwargs):
         targets = loader(*args, **kwargs)
@@ -241,7 +241,7 @@ def test_first_assignment_during_load_keeps_original_revision_and_refuses_stale_
             save(writer, original)
         return targets
 
-    monkeypatch.setattr(watcher_paper, "list_watchlist_scan_targets", load_then_add)
+    monkeypatch.setattr(watcher_paper_targets, "list_watchlist_scan_targets", load_then_add)
     (target,) = load(factory)
     assert target.configuration_revision == 0
     with factory() as fresh:
