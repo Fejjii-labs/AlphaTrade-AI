@@ -185,7 +185,7 @@ def test_records_are_scoped_by_tenant_and_venue(session: Session) -> None:
         ) == ((), ())
 
 
-# Migration: one reversible revision on top of a28promptsha001.
+# Migration: one reversible revision on top of a29datapolicy001.
 
 
 def _offline_sql(direction: str, revisions: str, monkeypatch: pytest.MonkeyPatch) -> str:
@@ -208,16 +208,16 @@ def test_migration_is_a_single_reversible_revision(monkeypatch: pytest.MonkeyPat
     config.set_main_option("script_location", str(MIGRATIONS))
     revision = ScriptDirectory.from_config(config).get_revision("a29partialexit001")
     assert revision is not None
-    assert revision.down_revision == "a28promptsha001"
-    upgrade = _offline_sql("upgrade", "a28promptsha001:a29partialexit001", monkeypatch)
+    assert revision.down_revision == "a29datapolicy001"
+    upgrade = _offline_sql("upgrade", "a29datapolicy001:a29partialexit001", monkeypatch)
     assert "CREATE TABLE position_exit_events" in upgrade
     assert "uq_position_exit_events_key" in upgrade
-    downgrade = _offline_sql("downgrade", "a29partialexit001:a28promptsha001", monkeypatch)
+    downgrade = _offline_sql("downgrade", "a29partialexit001:a29datapolicy001", monkeypatch)
     assert "DROP TABLE position_exit_events" in downgrade
 
 
 def test_migration_columns_match_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    upgrade = _offline_sql("upgrade", "a28promptsha001:a29partialexit001", monkeypatch)
+    upgrade = _offline_sql("upgrade", "a29datapolicy001:a29partialexit001", monkeypatch)
     for column in PositionExitEventRow.__table__.columns:
         assert f"\t{column.name} " in upgrade or f" {column.name} " in upgrade, column.name
 

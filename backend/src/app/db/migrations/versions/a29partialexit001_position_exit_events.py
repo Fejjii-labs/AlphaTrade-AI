@@ -5,7 +5,7 @@ venue, so a partial reduction or a breakeven/trailing stop move is written
 once and survives a worker restart. New table only; no existing row changes.
 
 Revision ID: a29partialexit001
-Revises: a28promptsha001
+Revises: a29datapolicy001
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a29partialexit001"
-down_revision: str | None = "a28promptsha001"
+down_revision: str | None = "a29datapolicy001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
