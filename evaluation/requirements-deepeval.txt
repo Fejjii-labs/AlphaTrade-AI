@@ -1,0 +1,7 @@
+# Optional, eval-only dependency for evaluation/deepeval_answer_relevancy.py.
+# Not a runtime dependency of the backend and not part of backend/uv.lock.
+# Install into the backend environment (from backend/):
+#   uv pip install -r ../evaluation/requirements-deepeval.txt
+# openai stays at the backend's pinned version (backend/pyproject.toml).
+deepeval==4.3.4
+openai==3.28.0
