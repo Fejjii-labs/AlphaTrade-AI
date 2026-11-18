@@ -1,8 +1,9 @@
 """Glue between the governed BloFin demo loop and the partial-exit manager.
 
 - ``demo_ladder_hold_reason``: the kill switch, the worker pause and the daily
-  loss lock hold every close, in the same order entries are refused. An
-  unreadable gate holds (fail closed).
+  loss lock, in the same order entries are refused. They hold target closes;
+  a crossed stop still closes. An unreadable gate holds every close (fail
+  closed).
 - ``demo_entry_terms``: ladder terms from the stored plan and the actual
   entry fills (quantity-weighted entry price, filled size), or None when the
   plan is not a ladder.

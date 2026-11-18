@@ -96,6 +96,7 @@ from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
 from app.services.execution_service import ExecutionService
 from app.services.paper_alert_service import PaperAlertService
 from app.services.partial_exits.demo import (
+    STOP_ONLY_HOLD_REASONS,
     DemoExitStore,
     DemoLadderPosition,
     GovernedDemoPartialExitManager,
@@ -2078,8 +2079,10 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if isinstance(terms, LadderRefusal):
             self._arm_ladder_kill_switch(session, command, f"ladder unmanageable: {terms.reason}")
             return "demo_ladder_unmanageable_operator_hold"
+        # The kill switch, pause and loss lock still let a crossed stop close
+        # (the manager blocks targets only); any other hold touches no venue.
         hold = self._demo_ladder_hold(session, command)
-        if hold is not None:
+        if hold is not None and hold not in STOP_ONLY_HOLD_REASONS:
             return f"demo_ladder_held_{hold}"
         try:
             venue = self._get_provider().partial_exit_venue(plan)

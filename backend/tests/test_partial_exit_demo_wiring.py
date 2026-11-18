@@ -8,8 +8,9 @@
 - The BloFin adapter sends only market ``reduceOnly`` closes on the plan's
   instrument, net position side, only to the allowlisted demo host.
 - The loop runs the manager instead of arming the kill switch for "protection
-  missing" on a ladder entry, and holds on the kill switch, the worker pause
-  or the daily loss lock in the same way entries are refused.
+  missing" on a ladder entry. The kill switch, the worker pause and the daily
+  loss lock hold target closes as entries are refused, but a crossed stop
+  still closes; an unreadable hold gate touches no venue.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from app.providers.exchange.governed_blofin import DemoFill
 from app.providers.exchange.governed_blofin_partial_exits import BloFinDemoReduceOnlyVenue
 from app.schemas.trade_plan import EntrySide
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop, demo_ladder_hold_reason
+from app.services.partial_exits.demo import GovernedDemoPartialExitManager, VenueCloseOrder
 from tests.test_partial_exit_demo import (
     COMMAND,
     ORG,
@@ -474,11 +476,21 @@ def test_loop_manages_a_ladder_from_the_filled_entry() -> None:
 
 
 @pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused", "daily_loss_lock"])
-def test_loop_hold_sends_no_close(reason: str) -> None:
+def test_loop_hold_sends_no_target_close(reason: str) -> None:
     venue = LoopVenue(mark=Decimal("150"))
     loop, _store = _loop(_demo_settings(True), venue, hold=reason)
     plan, command, evidence = _ladder_inputs()
     assert loop._manage_demo_ladder(None, command, plan, evidence) == (f"demo_ladder_held_{reason}")
+    assert venue.placed == []
+
+
+def test_loop_unreadable_hold_touches_no_venue_even_through_the_stop() -> None:
+    venue = LoopVenue(mark=Decimal("80"))
+    loop, _store = _loop(_demo_settings(True), venue, hold="hold_state_unavailable")
+    plan, command, evidence = _ladder_inputs()
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == (
+        "demo_ladder_held_hold_state_unavailable"
+    )
     assert venue.calls == []
 
 
@@ -488,6 +500,21 @@ def test_loop_hold_still_sends_the_stop_close(reason: str) -> None:
     loop, _store = _loop(_demo_settings(True), venue, hold=reason)
     plan, command, evidence = _ladder_inputs()
     loop._manage_demo_ladder(None, command, plan, evidence)
+    assert [(side, size) for _client_id, side, size in venue.placed] == [("sell", Decimal("1.000"))]
+
+
+def test_loop_operator_hold_arms_the_kill_switch_and_still_sends_the_stop_close() -> None:
+    venue = LoopVenue(mark=Decimal("80"))
+    prefix = GovernedDemoPartialExitManager.client_prefix(COMMAND)
+    venue.orders["odd"] = VenueCloseOrder(
+        "odd", prefix + "zz", "sell", Decimal("0.1"), Decimal("0"), True, "canceled"
+    )
+    loop, _store = _loop(_demo_settings(True), venue, hold="kill_switch_active")
+    armed: list[str] = []
+    loop._arm_ladder_kill_switch = lambda session, command, detail: armed.append(detail)
+    plan, command, evidence = _ladder_inputs()
+    assert loop._manage_demo_ladder(None, command, plan, evidence) == "demo_ladder_operator_hold"
+    assert armed == ["ladder held: unexplained_order"]
     assert [(side, size) for _client_id, side, size in venue.placed] == [("sell", Decimal("1.000"))]
 
 

@@ -7,19 +7,27 @@ is partly reduced. Each step reads the mark and closes with market
 add to a position. One ``step``:
 
 1. Gates first, before any venue call: the demo flag (which also requires the
-   demo exchange mode and real trading off), then the hold (kill switch,
-   worker pause, daily loss lock). A gated step reads and writes nothing.
+   demo exchange mode and real trading off), then the hold. The kill switch,
+   the worker pause and the daily loss lock stop new risk, not risk
+   reduction: they block target closes only, and a crossed stop still closes
+   the remainder (a ladder has no exchange-side stop). Any other hold reason,
+   an unreadable gate included, reads and writes nothing.
 2. Our closing orders (client id prefix) and their fills are folded into the
    durable state. A duplicate fill counts once and arrival order does not
    matter. An order of ours that is not reduce-only on the closing side, an
    unknown client id, or a fill that would overfill a leg or the position
-   holds with no venue mutation. A close still live at the venue holds too.
+   holds for an operator; only a crossed stop, at the recorded stop, still
+   closes what is left on our side. A close still live at the venue holds
+   too, with no new order; the stop close follows once it is resolved.
 3. The planned stop is computed: initial, breakeven plus costs after a
    complete TP1, then the closed-candle runner trail. Moves are recorded and
    never loosen.
-4. The venue position must equal the recorded remainder, or the step holds.
-   Then a crossed stop closes the whole remainder; otherwise every pending
-   target leg whose price is reached is closed for its unfilled quantity.
+4. A crossed stop closes the whole remainder. If the venue position differs
+   from the recorded remainder, the step holds, except that a crossed stop
+   still closes what is left of the position on the closing side, up to the
+   remainder. Otherwise, with no hold, every pending target leg whose price is
+   reached is closed for its unfilled quantity. A close the venue refuses
+   (including a failed account identity check) is sent no further.
 
 Client order ids are ``pe`` + 20 hex of SHA-256(command id) + ``t<leg>`` or ``x`` +
 ``n<attempt>``, where the attempt counts our earlier orders for that leg. A
@@ -56,7 +64,16 @@ from app.services.partial_exits.runner import ClosedBar, trail_runner_stop
 
 CloseState = Literal["live", "partially_filled", "filled", "canceled"]
 _IN_FLIGHT: frozenset[str] = frozenset({"live", "partially_filled"})
+# Holds that stop new risk but never risk reduction: a crossed stop still
+# closes. Any other reason (an unreadable gate, for one) holds every call.
+STOP_ONLY_HOLD_REASONS: frozenset[str] = frozenset(
+    {"kill_switch_active", "worker_paused", "daily_loss_lock"}
+)
 _SUFFIX = re.compile(r"(?:t(?P<leg>[1-9][0-9]?)|x)n(?P<attempt>[0-9]{1,3})")
+
+
+def _crossed(mark: Decimal, stop: Decimal, *, long: bool) -> bool:
+    return mark <= stop if long else mark >= stop
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,15 +174,16 @@ class GovernedDemoPartialExitManager:
     ) -> DemoStepReport:
         if not partial_exits_enabled(self._settings, BLOFIN_DEMO_VENUE):
             return DemoStepReport("disabled")
-        reason = self._hold(position.organization_id)
-        if reason is not None:
-            return DemoStepReport("held", reason)
+        hold = self._hold(position.organization_id)
+        if hold is not None and hold not in STOP_ONLY_HOLD_REASONS:
+            return DemoStepReport("held", hold)
         terms = position.terms
         command_id = position.command_id
         record = self._store.load(command_id)
         state = rebuild_position_state(
             terms.open_state(), fills=record.fills, stop_moves=record.stop_moves
         )
+        recorded = state
         long = terms.direction is TradeDirection.LONG
         close_side = "sell" if long else "buy"
         prefix = self.client_prefix(command_id)
@@ -175,15 +193,17 @@ class GovernedDemoPartialExitManager:
         leg_of: dict[str, int | None] = {}
         for order in orders:
             if not order.client_order_id.startswith(prefix):
-                return DemoStepReport("held", "unexplained_order")
+                return self._hold_with_stop(command_id, long, recorded, orders, "unexplained_order")
             match = _SUFFIX.fullmatch(order.client_order_id[len(prefix) :])
             if match is None:
-                return DemoStepReport("held", "unexplained_order")
+                return self._hold_with_stop(command_id, long, recorded, orders, "unexplained_order")
             if not order.reduce_only or order.side != close_side:
-                return DemoStepReport("held", "order_shape_unexpected")
+                return self._hold_with_stop(
+                    command_id, long, recorded, orders, "order_shape_unexpected"
+                )
             leg = int(match["leg"]) if match["leg"] else None
             if leg is not None and terms.ladder.leg(leg) is None:
-                return DemoStepReport("held", "unexplained_order")
+                return self._hold_with_stop(command_id, long, recorded, orders, "unexplained_order")
             leg_of[order.order_id] = leg
 
         filled_ids = tuple(order.order_id for order in orders if order.filled > 0)
@@ -191,7 +211,7 @@ class GovernedDemoPartialExitManager:
         for venue_fill in sorted(venue_fills, key=lambda item: (item.occurred_at, item.trade_id)):
             if venue_fill.order_id not in leg_of:
                 self._store.save(command_id, replace(record, fills=state.fills))
-                return DemoStepReport("held", "unexplained_fill")
+                return self._hold_with_stop(command_id, long, recorded, orders, "unexplained_fill")
             leg = leg_of[venue_fill.order_id]
             fill = ExitFill(
                 fill_id=f"demo:{venue_fill.order_id}:{venue_fill.trade_id}",
@@ -208,7 +228,9 @@ class GovernedDemoPartialExitManager:
             outcome = apply_fill(state, fill)
             if outcome.status == "refused":
                 self._store.save(command_id, replace(record, fills=state.fills))
-                return DemoStepReport("held", f"fill_refused:{outcome.reason}")
+                return self._hold_with_stop(
+                    command_id, long, recorded, orders, f"fill_refused:{outcome.reason}"
+                )
             state = outcome.state
         record = replace(record, fills=state.fills)
         if any(order.state in _IN_FLIGHT for order in orders):
@@ -223,9 +245,15 @@ class GovernedDemoPartialExitManager:
         record = replace(record, stop_moves=state.stop_moves)
         self._store.save(command_id, record)
 
-        expected = state.remaining_quantity if long else -state.remaining_quantity
-        if self._venue.position_quantity() != expected:
-            return DemoStepReport("held", "venue_position_mismatch")
+        venue_quantity = self._venue.position_quantity()
+        held_quantity = venue_quantity if long else -venue_quantity
+        reason = hold
+        stop_size = state.remaining_quantity
+        if held_quantity != state.remaining_quantity:
+            reason = "venue_position_mismatch"
+            # Never more than the venue holds on our side; flat or flipped
+            # leaves nothing of ours to reduce.
+            stop_size = min(held_quantity, state.remaining_quantity)
         mark = self._venue.mark_price()
         stop = state.current_stop
         attempts: dict[int | None, int] = {}
@@ -233,14 +261,12 @@ class GovernedDemoPartialExitManager:
             attempts[leg] = attempts.get(leg, 0) + 1
 
         closes: list[tuple[str, Decimal]] = []
-        if (mark <= stop) if long else (mark >= stop):
-            closes.append(
-                (
-                    self.close_client_id(command_id, "x", attempts.get(None, 0)),
-                    state.remaining_quantity,
+        if _crossed(mark, stop, long=long):
+            if stop_size > 0:
+                closes.append(
+                    (self.close_client_id(command_id, "x", attempts.get(None, 0)), stop_size)
                 )
-            )
-        else:
+        elif reason is None:
             for leg_order in state.pending_target_legs():
                 ladder_leg = state.ladder.leg(leg_order)
                 if ladder_leg is None or ladder_leg.price is None:
@@ -255,18 +281,57 @@ class GovernedDemoPartialExitManager:
                         ladder_leg.quantity - state.leg_filled(leg_order),
                     )
                 )
+        placed, alerts = self._place(closes, close_side)
+        if reason is not None:
+            return DemoStepReport("held", reason, alerts, placed)
+        return DemoStepReport("managed", alerts=alerts, placed=placed)
+
+    def _hold_with_stop(
+        self,
+        command_id: UUID,
+        long: bool,
+        recorded: PositionExitState,
+        orders: Sequence[VenueCloseOrder],
+        reason: str,
+    ) -> DemoStepReport:
+        """Our own orders or fills cannot be explained: hold for an operator.
+
+        A crossed stop still closes, at the recorded stop (moves never loosen)
+        and for what is left on our side up to the recorded remainder. Nothing
+        is sent while any of our closes is in flight.
+        """
+
+        if any(order.state in _IN_FLIGHT for order in orders):
+            return DemoStepReport("held", reason)
+        venue_quantity = self._venue.position_quantity()
+        size = min(venue_quantity if long else -venue_quantity, recorded.remaining_quantity)
+        if size <= 0 or not _crossed(self._venue.mark_price(), recorded.current_stop, long=long):
+            return DemoStepReport("held", reason)
+        prefix = self.client_prefix(command_id)
+        attempt = 0
+        for order in orders:
+            match = _SUFFIX.fullmatch(order.client_order_id.removeprefix(prefix))
+            if order.client_order_id.startswith(prefix) and match and match["leg"] is None:
+                attempt += 1
+        client_id = self.close_client_id(command_id, "x", attempt)
+        placed, alerts = self._place([(client_id, size)], "sell" if long else "buy")
+        return DemoStepReport("held", reason, alerts, placed)
+
+    def _place(
+        self, closes: Sequence[tuple[str, Decimal]], side: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         placed: list[str] = []
         alerts: list[str] = []
         for client_id, size in closes:
             try:
                 self._venue.place_reduce_only_market(
-                    client_order_id=client_id, side=close_side, size=size
+                    client_order_id=client_id, side=side, size=size
                 )
             except Exception:
                 alerts.append("close_place_failed")
                 break
             placed.append(client_id)
-        return DemoStepReport("managed", alerts=tuple(alerts), placed=tuple(placed))
+        return tuple(placed), tuple(alerts)
 
     @staticmethod
     def _planned_moves(

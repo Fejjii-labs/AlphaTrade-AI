@@ -12,8 +12,10 @@ runner trail with market reduce-only orders. Against a simulated venue:
 - a partly filled close is completed by a new attempt for the remainder only;
 - no close is ever larger than the venue position, and a venue position that
   differs from the recorded state holds with no order;
-- the flag, the demo mode, the kill switch, the worker pause and the daily loss
-  lock gate every venue call.
+- the flag, the demo mode and an unreadable hold gate every venue call;
+- the kill switch, the worker pause and the daily loss lock hold every target
+  close, but a crossed stop still closes the remainder: a ladder has no
+  exchange-side stop, and a hold must stop new risk, not risk reduction.
 """
 
 from __future__ import annotations
@@ -268,13 +270,12 @@ def test_flag_off_or_live_configuration_sends_no_closing_order(settings: Setting
 
 
 @pytest.mark.parametrize("reason", ["kill_switch_active", "worker_paused", "daily_loss_lock"])
-def test_kill_switch_pause_and_loss_lock_hold_every_venue_call(reason: str) -> None:
+def test_kill_switch_pause_and_loss_lock_hold_every_target_close(reason: str) -> None:
     venue = SimVenue(mark=Decimal("150"))
     store = MemoryStore()
     report = _manager(venue, store, hold=reason).step(_position())
-    assert (report.status, report.reason) == ("held", reason)
-    assert venue.calls == []
-    assert store.records == {}
+    assert (report.status, report.reason, report.placed) == ("held", reason, ())
+    assert venue.placed == []
     # Released: management resumes from the venue state, nothing was lost.
     assert _manager(venue, store).step(_position()).status == "managed"
     assert venue.placed[0][0] == _client("t1")
@@ -290,6 +291,144 @@ def test_hold_still_closes_the_remainder_when_the_stop_is_crossed(reason: str) -
     report = _manager(venue, MemoryStore(), hold=reason).step(_position())
     assert venue.placed == [(_client("x"), "sell", Decimal("1.000"))]
     assert report.placed == (_client("x"),)
+
+
+def test_hold_after_tp1_closes_the_remainder_at_breakeven_once() -> None:
+    venue = SimVenue(mark=Decimal("110"))
+    store = MemoryStore()
+    _manager(venue, store).step(_position())
+    held = _manager(venue, store, hold="kill_switch_active")
+    held.step(_position())  # reads the TP1 fill, moves the stop to 100.5
+    assert _stop(store) == Decimal("100.5")
+    venue.mark = Decimal("100")
+    report = held.step(_position())
+    assert (report.status, report.reason) == ("held", "kill_switch_active")
+    assert venue.placed[1:] == [(_client("x"), "sell", Decimal("0.700"))]
+    assert held.step(_position()).status == "closed"
+    assert len(venue.placed) == 2
+
+
+def test_hold_never_sends_a_second_stop_close_for_the_same_attempt() -> None:
+    venue = SimVenue(mark=Decimal("80"), defer=True)
+    store = MemoryStore()
+    held = _manager(venue, store, hold="daily_loss_lock")
+    held.step(_position())
+    assert held.step(_position()).reason == "close_in_flight"
+    assert len(venue.placed) == 1
+    venue.fill_ratio = Decimal("0.4")
+    venue.settle(next(iter(venue.orders)))
+    # The partly filled stop close is completed for the remainder only.
+    held.step(_position())
+    assert venue.placed[1] == (_client("x", 1), "sell", Decimal("0.600"))
+
+
+def test_hold_with_a_target_close_in_flight_sends_the_stop_once_it_resolves() -> None:
+    venue = SimVenue(mark=Decimal("110"), defer=True)
+    store = MemoryStore()
+    _manager(venue, store).step(_position())
+    held = _manager(venue, store, hold="kill_switch_active")
+    venue.mark = Decimal("80")
+    report = held.step(_position())
+    assert (report.status, report.reason) == ("held", "close_in_flight")
+    assert len(venue.placed) == 1
+    venue.settle(next(iter(venue.orders)))
+    held.step(_position())
+    assert venue.placed[1] == (_client("x"), "sell", Decimal("0.700"))
+
+
+def test_an_unreadable_hold_gate_touches_no_venue_even_through_the_stop() -> None:
+    venue = SimVenue(mark=Decimal("80"))
+    store = MemoryStore()
+    report = _manager(venue, store, hold="hold_state_unavailable").step(_position())
+    assert (report.status, report.reason) == ("held", "hold_state_unavailable")
+    assert venue.calls == []
+    assert store.records == {}
+
+
+def test_a_failed_identity_check_under_a_hold_sends_no_close() -> None:
+    # The BloFin adapter verifies permissions and the account uid inside
+    # place_reduce_only_market and raises before any POST.
+    venue = SimVenue(mark=Decimal("80"), fail_place=True)
+    report = _manager(venue, MemoryStore(), hold="kill_switch_active").step(_position())
+    assert report.status == "held"
+    assert report.alerts == ("close_place_failed",)
+    assert venue.placed == []
+
+
+@pytest.mark.parametrize("reason", ["unexplained_order", "order_shape_unexpected"])
+def test_an_unexplained_order_holds_but_a_crossed_stop_still_closes(reason: str) -> None:
+    venue = SimVenue(mark=Decimal("80"))
+    prefix = GovernedDemoPartialExitManager.client_prefix(COMMAND)
+    client_id, reduce_only = (
+        (prefix + "zz", True) if reason == "unexplained_order" else (_client("x"), False)
+    )
+    venue.orders["odd"] = VenueCloseOrder(
+        "odd", client_id, "sell", Decimal("0.1"), Decimal("0"), reduce_only, "canceled"
+    )
+    report = _manager(venue, MemoryStore(), hold="kill_switch_active").step(_position())
+    assert (report.status, report.reason) == ("held", reason)
+    # A wrong-shape order of ours already used stop attempt 0.
+    attempt = 0 if reason == "unexplained_order" else 1
+    assert venue.placed == [(_client("x", attempt), "sell", Decimal("1.000"))]
+    assert report.placed == (_client("x", attempt),)
+
+
+def test_an_unexplained_order_sends_no_stop_close_while_a_close_is_in_flight() -> None:
+    venue = SimVenue(mark=Decimal("80"))
+    prefix = GovernedDemoPartialExitManager.client_prefix(COMMAND)
+    venue.orders["odd"] = VenueCloseOrder(
+        "odd", prefix + "zz", "sell", Decimal("0.1"), Decimal("0"), True, "live"
+    )
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "unexplained_order")
+    assert venue.placed == []
+
+
+def test_an_unexplained_fill_holds_but_closes_the_venue_remainder_through_the_stop() -> None:
+    venue = SimVenue(mark=Decimal("80"), position=Decimal("0.800"))
+    prefix = GovernedDemoPartialExitManager.client_prefix(COMMAND)
+    venue.orders["ord-0"] = VenueCloseOrder(
+        "ord-0", _client("t1"), "sell", Decimal("0.3"), Decimal("0.2"), True, "canceled"
+    )
+    # The venue reports a fill on an order that is not among ours.
+    venue.fills.append(
+        VenueExitFill("ord-9", "tr-9", prefix + "t1n0", Decimal("0.2"), Decimal("110"), T0)
+    )
+    venue.exit_fills = lambda order_ids: tuple(venue.fills)  # type: ignore[method-assign]
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "unexplained_fill")
+    # Recorded remainder 1.000, venue 0.800 on our side: only 0.800 is closed.
+    assert venue.placed == [(_client("x"), "sell", Decimal("0.800"))]
+
+
+def test_a_failed_close_under_an_operator_hold_is_reported_and_not_retried() -> None:
+    venue = SimVenue(mark=Decimal("80"), fail_place=True)
+    prefix = GovernedDemoPartialExitManager.client_prefix(COMMAND)
+    venue.orders["odd"] = VenueCloseOrder(
+        "odd", prefix + "zz", "sell", Decimal("0.1"), Decimal("0"), True, "canceled"
+    )
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason, report.alerts) == (
+        "held",
+        "unexplained_order",
+        ("close_place_failed",),
+    )
+    assert venue.placed == []
+
+
+@pytest.mark.parametrize(
+    ("venue_position", "closed"),
+    [("1.200", "1.000"), ("0.700", "0.700"), ("0", None), ("-0.500", None)],
+)
+def test_position_mismatch_still_closes_our_side_when_the_stop_is_crossed(
+    venue_position: str, closed: str | None
+) -> None:
+    venue = SimVenue(mark=Decimal("80"))
+    venue.position = Decimal(venue_position)
+    report = _manager(venue, MemoryStore()).step(_position())
+    assert (report.status, report.reason) == ("held", "venue_position_mismatch")
+    expected = [] if closed is None else [(_client("x"), "sell", Decimal(closed))]
+    assert venue.placed == expected
 
 
 def test_no_level_reached_sends_nothing() -> None:
