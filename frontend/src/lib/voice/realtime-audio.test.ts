@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { decodeAudio, encodeAudio, pcm24, rms } from "./realtime-audio";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { RealtimeAudio, decodeAudio, encodeAudio, pcm24, rms } from "./realtime-audio";
 
 describe("PCM24k protocol (synthetic samples, no microphone acceptance)", () => {
   it("encodes signed little-endian PCM with clipping", () => {
@@ -25,5 +25,19 @@ describe("PCM24k protocol (synthetic samples, no microphone acceptance)", () => 
     expect(rms(new Float32Array([0, 0, 0]))).toBe(0);
     expect(rms(new Float32Array([0.5, -0.5, 0.5, -0.5]))).toBeCloseTo(0.5);
     expect(rms(new Float32Array([2, -2]))).toBe(1);
+  });
+});
+
+describe("Live microphone capture", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks for echo cancellation and noise suppression so the reply is not heard as user speech", async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new Error("stop after constraints"));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.stubGlobal("AudioContext", class {});
+    await expect(new RealtimeAudio().start(() => {})).rejects.toThrow("stop after constraints");
+    expect(getUserMedia).toHaveBeenCalledExactlyOnceWith({
+      audio: expect.objectContaining({ echoCancellation: true, noiseSuppression: true }),
+    });
   });
 });

@@ -4,7 +4,7 @@ import { KnowledgeDocumentCard } from "./KnowledgeDocumentCard";
 import { api } from "@/lib/api";
 import type { RagDocument } from "@/lib/api/types";
 
-vi.mock("@/lib/api", () => ({ api: { knowledge: { retryIndexing: vi.fn() } } }));
+vi.mock("@/lib/api", () => ({ api: { knowledge: { retryIndexing: vi.fn(), deleteDocument: vi.fn() } } }));
 
 const document: RagDocument = {
   id: "document-private-reference", title: "Wait for the close", source_type: "review_note", source_uri: "local://synthetic-lesson",
@@ -70,4 +70,32 @@ it("shows dates only, without file hashes, parser or index internals", () => {
   expect(
     screen.queryByText(/SHA-256|knowledge-file\/v1|qdrant|rules\.txt|a{64}/),
   ).not.toBeInTheDocument();
+});
+
+it("deletes a document only after an explicit confirm step", async () => {
+  vi.mocked(api.knowledge.deleteDocument).mockResolvedValue(undefined);
+  const deleted = vi.fn();
+  render(<KnowledgeDocumentCard document={document} onDeleted={deleted} />);
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(api.knowledge.deleteDocument).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert")).toHaveTextContent("Delete “Wait for the close”?");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("button", { name: "Confirm delete" })).not.toBeInTheDocument();
+  expect(api.knowledge.deleteDocument).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+  await waitFor(() => expect(api.knowledge.deleteDocument).toHaveBeenCalledExactlyOnceWith(document.id));
+  await waitFor(() => expect(deleted).toHaveBeenCalledExactlyOnceWith(document.id));
+});
+
+it("keeps the card and reports a failed delete", async () => {
+  vi.mocked(api.knowledge.deleteDocument).mockRejectedValue(new Error("Delete failed: forbidden"));
+  const deleted = vi.fn();
+  render(<KnowledgeDocumentCard document={document} onDeleted={deleted} />);
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+  expect(await screen.findByText("Delete failed: forbidden")).toBeInTheDocument();
+  expect(deleted).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
 });
