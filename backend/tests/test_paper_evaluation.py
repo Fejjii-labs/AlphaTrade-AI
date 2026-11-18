@@ -535,3 +535,51 @@ def test_list_for_organization_limit_keeps_the_newest_rows_oldest_first() -> Non
     assert store.list_for_organization(ORG_ID, limit=1) == everything[-1:]
     assert store.list_for_organization(ORG_ID, limit=2) == everything[-2:]
     assert store.list_for_organization(ORG_ID, limit=0) == ()
+
+
+def test_postgres_store_writes_a_compact_payload_and_reads_both_shapes(
+    attribution_sessions: sessionmaker[Session],
+) -> None:
+    """The payload no longer repeats the columns; legacy full payloads still load."""
+
+    from app.db.paper_evaluation import PaperEvaluationObservationRow
+    from app.learning_attribution.contracts import ExecutionQuality, PlannedSetupQuality
+    from app.schemas.common import TradeResult
+
+    with attribution_sessions() as session:
+        store = PostgresPaperEvaluationStore(session)
+        scan = store.put(make_observation())
+        trade = store.put(
+            make_observation(
+                stage=PaperEvaluationStage.OUTCOME,
+                candidate_id=CANDIDATE_ID,
+                strategy_version_id=STRATEGY_VERSION_ID,
+                journal_trade_id=uuid4(),
+                filled=True,
+                closed=True,
+                result=TradeResult.WIN,
+                net_pnl=Decimal("12.123456789012"),
+                planned_risk_amount=Decimal("5"),
+                setup_quality=PlannedSetupQuality.CONFIRMED,
+                execution_quality=ExecutionQuality.NOT_APPLICABLE,
+                narrative_explanation="kept on its own column",
+            )
+        )
+        session.commit()
+        for original in (scan, trade):
+            row = session.get(PaperEvaluationObservationRow, original.observation_id)
+            assert row is not None
+            assert "stage" not in row.payload and "organization_id" not in row.payload
+            session.expire_all()
+            loaded = store.get(organization_id=ORG_ID, observation_id=original.observation_id)
+            assert loaded == original
+        # More precision than the Numeric(20, 8) column holds survives the round trip.
+        assert trade.net_pnl == Decimal("12.123456789012")
+        # A row written before this change (full payload) reads unchanged.
+        legacy = make_observation(source_event_id="legacy-row")
+        row = session.get(PaperEvaluationObservationRow, store.put(legacy).observation_id)
+        assert row is not None
+        row.payload = legacy.model_dump(mode="json")
+        session.commit()
+        session.expire_all()
+        assert store.get(organization_id=ORG_ID, observation_id=legacy.observation_id) == legacy

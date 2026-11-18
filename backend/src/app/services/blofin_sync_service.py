@@ -6,9 +6,11 @@ Never places, modifies, or cancels orders. Demo mode only.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -412,7 +414,17 @@ class BloFinSyncService:
             position_count=position_count,
             balance_count=balance_count,
         )
-        self._snapshots.add(row)
+        previous = self._snapshots.latest_for_org_user(organization_id, user_id)
+        if (
+            previous is not None
+            and _utc_day(previous.synced_at) == _utc_day(now)
+            and _content_hash(previous) == _content_hash(row)
+        ):
+            # Same account state on the same UTC day: refresh the newest row instead
+            # of storing a copy. A new day always gets its own (daily, kept) row.
+            row = _refresh(previous, now=now, provenance=provenance)
+        else:
+            self._snapshots.add(row)
         self._audit.record(
             AuditRecordCreate(
                 request_id=request_id or f"blofin-sync-{row.id}",
@@ -540,6 +552,50 @@ class BloFinSyncService:
             position_count=row.position_count,
             balance_count=row.balance_count,
         )
+
+
+# Clock fields change every sync without changing the account state.
+_VOLATILE_PROVENANCE = frozenset({"synced_at", "fetched_at", "first_synced_at"})
+
+
+def _content_hash(row: SnapshotModel) -> str:
+    """SHA-256 of everything a snapshot says about the account, minus sync clocks."""
+
+    provenance = row.provenance if isinstance(row.provenance, dict) else {}
+    body = {
+        "user_id": str(row.user_id) if row.user_id else None,
+        "health_status": str(getattr(row.health_status, "value", row.health_status)),
+        "provider": row.provider,
+        "exchange_mode": row.exchange_mode,
+        "account_snapshot": row.account_snapshot,
+        "positions_snapshot": row.positions_snapshot,
+        "market_context": row.market_context,
+        "provenance": {k: v for k, v in provenance.items() if k not in _VOLATILE_PROVENANCE},
+        "error_summary": row.error_summary,
+        "position_count": row.position_count,
+        "balance_count": row.balance_count,
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _utc_day(value: datetime) -> date:
+    return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).date()
+
+
+def _refresh(row: SnapshotModel, *, now: datetime, provenance: dict[str, Any]) -> SnapshotModel:
+    previous = dict(row.provenance) if isinstance(row.provenance, dict) else {}
+    first = previous.get("first_synced_at") or previous.get("synced_at")
+    refreshed = {**previous, "synced_at": provenance["synced_at"]}
+    if "fetched_at" in provenance:
+        refreshed["fetched_at"] = provenance["fetched_at"]
+    if first:
+        refreshed["first_synced_at"] = first
+    row.provenance = refreshed
+    row.synced_at = now
+    row.is_stale = False
+    row.stale_reason = None
+    return row
 
 
 def _dec(value: Decimal | None) -> str | None:

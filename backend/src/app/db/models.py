@@ -135,6 +135,7 @@ from app.db.telegram_security import (  # noqa: F401
     TelegramOutboxRow,
     TelegramProtocolAuditEventRow,
 )
+from app.db.trade_candidate_summaries import TradeCandidateSummaryRow  # noqa: F401
 from app.db.voice_realtime import VoiceSessionReservation  # noqa: F401
 from app.db.watcher_assignments import (  # noqa: F401
     WatcherAssignmentReceiptRow,
@@ -3496,6 +3497,7 @@ class WebhookEvent(UUIDPrimaryKeyMixin, Base):
 
 class AuditLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "audit_logs"
+    __table_args__ = (Index("ix_audit_logs_event_at", "event_at"),)
 
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True

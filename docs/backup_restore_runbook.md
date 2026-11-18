@@ -207,43 +207,62 @@ Never paste `DATABASE_URL`, API keys, dump contents, or PII into chat, git, or h
 | `scripts/backup-postgres-local.sh` | `pg_dump` via Compose | Local Compose service only |
 | `scripts/restore-postgres-local.sh` | Restore dump into Compose Postgres | `CONFIRM=yes`; local only |
 | `scripts/drill-backup-restore-local.sh` | End-to-end local drill + JSON summary | `CONFIRM=yes`; writes under `.ai/local/` |
-| `backend/scripts/db_retention.py` | Database and largest-table sizes, plus what each runtime-log retention policy would delete | Dry-run unless `--apply`; uses the operator's `DATABASE_URL`; `--apply` on a shared DB needs the owner's OK |
+| `backend/scripts/db_retention.py` | Database and largest-table sizes, plus what each retention policy would delete or summarize | Dry-run unless `--apply`; `--vacuum` / `--reclaim` compact; uses the operator's `DATABASE_URL`; `--apply` or `--reclaim` on a shared DB needs the owner's OK |
 
-### Runtime-log retention (H5)
+### Runtime-log retention (H5) and the data policy
 
-The paper worker can prune append-only operational logs (`backend/src/app/services/db_retention.py`).
-It is **off and dry-run by default**: `RETENTION_ENABLED=true` attaches an hourly pass that only
-counts and logs (`db_retention_table`); deletion also needs `RETENTION_DRY_RUN=false`.
+The paper worker can prune data by the approved data policy (`backend/src/app/services/db_retention.py`,
+`candidate_retention.py`). It is **off and dry-run by default**: `RETENTION_ENABLED=true` attaches a
+daily pass to the existing supervised paper worker (no new service). `RETENTION_SCHEDULE_HOUR_UTC`
+picks the UTC hour (0-23, default `2`); the first poll at or after that hour claims the UTC day in
+`controlled_runtime_status` (component `db_retention_daily`) **before** pruning, so restarts,
+failures and dry runs consume the day and nothing reruns until the next one. A PostgreSQL advisory
+transaction lock spans the pass, so two workers never overlap. Deletion also needs
+`RETENTION_DRY_RUN=false`. Per-table counts are logged as `db_retention_table`; one table failing
+is logged (`db_retention_table_failed`, exception type only) and the others continue; a failed
+pass is caught and never stops the worker. `RETENTION_INTERVAL_SECONDS` is still accepted but no
+longer schedules anything. `RETENTION_VACUUM_ANALYZE=true` runs `VACUUM (ANALYZE)` on each table the
+pass deleted from.
 
-Windows are in hours (`RETENTION_*_HOURS`, minimum 24, maximum 8760). Settings reject a value below
-24 at startup. The demo snapshot window is still in days.
+Hour windows have a 24-hour floor (maximum 8760); settings reject anything shorter at startup.
 
 > [!WARNING]
 > #449 replaced `RETENTION_WATCHER_EVENTS_DAYS`, `RETENTION_WATCHER_ATTEMPT_CHILDREN_DAYS` and
 > `RETENTION_PAPER_EVALUATION_DAYS` with the `*_HOURS` settings below. Settings ignore unknown keys, so the
-> old names are **silently ignored**, and the defaults fall from 7 or 30 days to 24 hours. This matters
-> only once retention is enabled and dry-run is off. `render.yaml` never set the old keys, but a
-> dashboard-only value may still exist. Before you enable retention on any environment, remove the old
-> keys from that service's environment and set the `*_HOURS` values you want.
+> old names are **silently ignored**. Before you enable retention on any environment, remove the old
+> keys from that service's environment.
 
-| Table | Default window | Kept regardless |
-|-------|----------------|-----------------|
-| `watcher_observability_events`, non-error | 24 h (`RETENTION_WATCHER_EVENTS_HOURS`) | — |
-| `watcher_observability_events`, error | 72 h (`RETENTION_WATCHER_ERROR_EVENTS_HOURS`) | — |
+| Data | Default window | Kept regardless |
+|------|----------------|-----------------|
+| `canonical_candidates` with transitions, keys and `action_eligibility_evaluations` | 7 days (`RETENTION_CANDIDATE_DAYS`) | **taken** candidates (any plan root/lineage/revision, journal trade, Brain setup trade link or trade-linked paper evaluation). Every candidate older than the window first gets a kept-forever row in `trade_candidate_summaries`, in the same transaction as the delete. |
+| `telegram_paper_notifications` | 7 days (`RETENTION_TELEGRAM_NOTIFICATIONS_HOURS=168`, must be ≥ candidate days) | a candidate alert until its summary row exists. The security outbox, threads, messages and confirmations are never pruned. |
+| `paper_evaluation_observations`, candidate/eligibility stage | 7 days (`RETENTION_CANDIDATE_DAYS`) | rows with a journal trade, a fill or an approved plan |
+| `paper_evaluation_observations`, watcher_scan/setup_assessment stage | 24 h (`RETENTION_PAPER_EVALUATION_HOURS`) | same |
+| `audit_logs` | 90 days (`RETENTION_AUDIT_LOG_DAYS`) | rows an approval or demo lifecycle resolution references |
+| `watcher_observability_events`, all | 24 h (`RETENTION_WATCHER_EVENTS_HOURS`, `RETENTION_WATCHER_ERROR_EVENTS_HOURS`) | — |
 | `watcher_subscription_eval_attempts`, `watcher_source_fetch_attempts` | 24 h (`RETENTION_WATCHER_ATTEMPTS_HOURS`) | — |
-| `watcher_scan_attempts` | 24 h (`RETENTION_WATCHER_ATTEMPTS_HOURS`) | a lineage's terminal attempt; every attempt of a lineage that did not succeed or has an attempt inside the window; attempts a child row still references. Lineages are never pruned. |
-| `paper_evaluation_observations` | 24 h (`RETENTION_PAPER_EVALUATION_HOURS`) | rows with a journal trade, a fill or an approved plan |
-| `telegram_paper_notifications` | 24 h (`RETENTION_TELEGRAM_NOTIFICATIONS_HOURS`) | — (the security outbox, threads, messages and confirmations are never pruned) |
-| `blofin_demo_sync_snapshots` | 30 days (`RETENTION_DEMO_SNAPSHOT_DAYS`) | the newest snapshot per organization |
+| `watcher_scan_attempts` | 24 h (`RETENTION_WATCHER_ATTEMPTS_HOURS`) | a lineage's terminal attempt; attempts of a lineage that did not succeed or has an attempt inside the window; attempts a child row references |
+| terminal `watcher_scan_lineages` with their attempts and `watcher_scheduled_scans` | 8 days (`RETENTION_WATCHER_LINEAGE_HOURS=192`, minimum 192) | non-terminal lineages. Scheduled-scan keys are bucketed by the closed bar and can recur for one bar (up to 1w), so a shorter window could re-run a replayed scan. |
+| `strategy_brain_setup_events`, `kind = system_observation` | 24 h (`RETENTION_BRAIN_OBSERVATION_HOURS`) | observations of setups that are still live (not terminal and not expired); every other kind (`paper_decision`, `paper_trade_*`, ...) |
+| `public_market_observations` | 24 h (`RETENTION_PUBLIC_MARKET_HOURS`), widened to the longest stored SFP read horizon | bars inside any SFP version's re-read window (`level_lookback + expiry_bars + quality_lookback + 2·pivot_width + 1` bars), so detector input never changes; rows without `bar_start` |
+| `blofin_demo_sync_snapshots` | intra-day rows after 24 h; the newest row of each UTC day is kept **forever** (`RETENTION_DEMO_SNAPSHOT_DAYS=0`, the default; a positive value ≥ 7 also drops daily rows older than that many days) | the newest and the newest successful snapshot per organization and user; one row per UTC day for the dashboard's daily P&L / win-rate calendar |
 
 An event counts as an error when its name contains `fail`, `error`, `blocked`, `degraded`, `stale`
-or `reject` (the markers of the monitoring "recent errors" panel), or when
-`fields.evaluation_status` is `failed`, `degraded` or `blocked`.
+or `reject`, or when `fields.evaluation_status` is `failed`, `degraded` or `blocked`. Errors and
+routine events now share the 24-hour window; set `RETENTION_WATCHER_ERROR_EVENTS_HOURS` higher to
+keep errors longer.
 
-Trades, orders, fills, journal, plans, candidates, strategies, audit logs, P&L and notes are never pruned.
-The main protection is the static allowlist in `db_retention.py`: only the tables above can be pruned, and no
-setting or input can add one. Some plan and candidate tables also have `BEFORE DELETE` triggers in their
-migrations (`canonical_candidates` and its key and transition tables, `trade_plan_revisions`, the
-`canonical_trade_plan_*` tables). The others, such as `candidates`, have none. A candidate or plan window
-would need a migration and the owner's OK first.
-Deletes run in batches (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES_PER_TABLE` per pass).
+Kept forever: strategies and versions, setup definitions, Brain setups, conversations, journal,
+trades, orders, fills, plans, paper_decision and paper_trade_* setup events, knowledge documents,
+accounts, organizations, settings, watchlists, alerts, auth rows and `trade_candidate_summaries`.
+Only the tables above can be pruned (static allowlist; `KEEP_FOREVER_TABLES` is checked by tests).
+Candidate tables keep their append-only triggers: since `a29datapolicy001` they admit a DELETE only
+inside a transaction that set `alphatrade.retention_purge = 'canonical_candidates'`, which only the
+retention pass does; UPDATE stays forbidden and plan tables keep their strict triggers.
+Deletes run in batches (`RETENTION_BATCH_SIZE`, `RETENTION_MAX_BATCHES_PER_TABLE` per pass); a
+backlog carries over to the next day.
+
+Manual runs (`backend/scripts/db_retention.py`) print sizes and per-policy counts; `--apply`
+deletes, `--vacuum` runs `VACUUM (ANALYZE)` on tables that lost rows, and `--reclaim` runs
+`VACUUM (FULL, ANALYZE)` instead (ACCESS EXCLUSIVE lock per table; once, in a quiet window, for the
+first big cleanup). All of them need the owner's OK on a shared database.

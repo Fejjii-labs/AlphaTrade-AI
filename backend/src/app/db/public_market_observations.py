@@ -15,7 +15,10 @@ from app.market_contracts.errors import DuplicateDataError
 class PublicMarketObservationRow(Base):
     __tablename__ = "public_market_observations"
 
-    __table_args__ = (Index("ix_public_observation_identity_time", "identity_hash", "bar_start"),)
+    __table_args__ = (
+        Index("ix_public_observation_identity_time", "identity_hash", "bar_start"),
+        Index("ix_public_observation_bar_start", "bar_start"),
+    )
 
     identity_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     observation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
