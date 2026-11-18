@@ -23,6 +23,7 @@ type KnowledgeDocumentCardProps = {
   expanded?: boolean;
   onToggleExpand?: () => void;
   detailSlot?: ReactNode;
+  onDeleted?: (id: string) => void;
 };
 
 export function KnowledgeDocumentCard({
@@ -32,9 +33,13 @@ export function KnowledgeDocumentCard({
   expanded = false,
   onToggleExpand,
   detailSlot,
+  onDeleted,
 }: KnowledgeDocumentCardProps) {
   const [retryError, setRetryError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const status = document.ingestion_metadata?.indexing?.vector_index_status ?? "unknown";
   const category = knowledgeCategory(document);
   const relationships = resolveKnowledgeRelationships(document);
@@ -75,6 +80,23 @@ export function KnowledgeDocumentCard({
           finally { setRetrying(false); }
         }}>Retry indexing</Button> : null}
         {retryError ? <p role="status">{retryError}</p> : null}
+        {confirmingDelete ? (
+          <div role="alert" className="space-y-2 text-sm">
+            <p>Delete “{document.title}”? This removes the document and its search index entries.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="destructive" type="button" disabled={deleting} onClick={async () => {
+                setDeleting(true); setDeleteError(null);
+                try { await api.knowledge.deleteDocument(document.id); onDeleted?.(document.id); }
+                catch (error) { setDeleteError(error instanceof Error ? error.message : "Delete failed"); setConfirmingDelete(false); }
+                finally { setDeleting(false); }
+              }}>Confirm delete</Button>
+              <Button size="sm" variant="outline" type="button" disabled={deleting} onClick={() => setConfirmingDelete(false)}>Cancel</Button>
+            </div>
+          </div>
+        ) : (
+          <Button size="sm" variant="outline" type="button" onClick={() => { setDeleteError(null); setConfirmingDelete(true); }}>Delete</Button>
+        )}
+        {deleteError ? <p role="status">{deleteError}</p> : null}
         {deepLinkNotices.map((notice) => (
           <p
             key={notice.kind}

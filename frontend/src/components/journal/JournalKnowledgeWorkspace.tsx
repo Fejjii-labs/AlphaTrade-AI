@@ -508,6 +508,7 @@ function JournalWorkspaceContent() {
                       remember();
                       filter("document_id", d.id);
                     }}
+                    onDeleted={() => void reload()}
                   />
                 ))}
               {data?.entries?.length === 0 &&
