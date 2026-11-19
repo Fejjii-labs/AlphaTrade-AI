@@ -19,7 +19,7 @@ router = APIRouter(prefix="/usage", tags=["usage"])
 
 
 @router.get("/events", response_model=PaginatedUsageEvents, summary="List usage events")
-async def list_usage_events(
+def list_usage_events(
     tenant: ReaderDep,
     usage_service: UsageServiceDep,
     request_id: str | None = Query(default=None),
@@ -38,7 +38,7 @@ async def list_usage_events(
 
 
 @router.get("/summary", response_model=UsageSummary, summary="Usage cost summary")
-async def usage_summary(
+def usage_summary(
     tenant: ReaderDep,
     usage_service: UsageServiceDep,
 ) -> UsageSummary:
@@ -50,7 +50,7 @@ async def usage_summary(
     response_model=list[UsageFeatureBreakdown],
     summary="Usage breakdown by feature",
 )
-async def usage_by_feature(
+def usage_by_feature(
     tenant: ReaderDep,
     usage_service: UsageServiceDep,
 ) -> list[UsageFeatureBreakdown]:
@@ -62,7 +62,7 @@ async def usage_by_feature(
     response_model=list[UsageProviderBreakdown],
     summary="Usage breakdown by provider",
 )
-async def usage_by_provider(
+def usage_by_provider(
     tenant: ReaderDep,
     usage_service: UsageServiceDep,
 ) -> list[UsageProviderBreakdown]:
@@ -70,7 +70,7 @@ async def usage_by_provider(
 
 
 @router.get("/quota", response_model=QuotaStatus, summary="Organization quota status")
-async def usage_quota(
+def usage_quota(
     tenant: ReaderDep,
     quota_service: QuotaServiceDep,
 ) -> QuotaStatus:
@@ -78,7 +78,7 @@ async def usage_quota(
 
 
 @router.patch("/quota", response_model=QuotaStatus, summary="Update organization quotas")
-async def update_usage_quota(
+def update_usage_quota(
     body: OrganizationQuotaUpdate,
     tenant: OwnerDep,
     quota_service: QuotaServiceDep,

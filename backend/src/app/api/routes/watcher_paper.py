@@ -43,7 +43,7 @@ _WRITE_LIMIT = Depends(tenant_rate_limit_dependency("watcher:write", limit=60, w
     summary="Paper Watcher runtime status",
     dependencies=[_READ_LIMIT],
 )
-async def watcher_paper_runtime_status(
+def watcher_paper_runtime_status(
     request: Request,
     tenant: ReaderDep,
     settings: SettingsDep,
@@ -81,7 +81,7 @@ async def watcher_paper_runtime_status(
     summary="Paper Watcher watchlist configuration",
     dependencies=[_READ_LIMIT],
 )
-async def read_watcher_watchlist(
+def read_watcher_watchlist(
     request: Request,
     tenant: ReaderDep,
     settings: SettingsDep,
@@ -98,7 +98,7 @@ async def read_watcher_watchlist(
     summary="Replace the paper Watcher watchlist",
     dependencies=[_WRITE_LIMIT],
 )
-async def replace_watcher_watchlist(
+def replace_watcher_watchlist(
     body: WatcherWatchlistReplace,
     request: Request,
     tenant: TraderDep,
@@ -128,7 +128,7 @@ async def replace_watcher_watchlist(
     summary="Per-symbol paper Watcher runtime status",
     dependencies=[_READ_LIMIT],
 )
-async def read_watcher_watchlist_status(
+def read_watcher_watchlist_status(
     request: Request,
     tenant: ReaderDep,
     settings: SettingsDep,

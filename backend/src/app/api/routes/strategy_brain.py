@@ -30,7 +30,7 @@ router = APIRouter(
 
 
 @router.get("/overview")
-async def read_overview(
+def read_overview(
     tenant: ReaderDep,
     session: SessionDep,
     symbol: str | None = None,
@@ -47,14 +47,12 @@ async def read_overview(
 
 
 @router.get("/setups/{setup_id}")
-async def read_setup(setup_id: UUID, tenant: ReaderDep, session: SessionDep) -> dict:
+def read_setup(setup_id: UUID, tenant: ReaderDep, session: SessionDep) -> dict:
     return details(session, organization_id=tenant.organization_id, setup_id=setup_id)
 
 
 @router.post("/templates/nested", status_code=201)
-async def propose_nested(
-    body: NestedContinuationSpec, tenant: TraderDep, session: SessionDep
-) -> dict:
+def propose_nested(body: NestedContinuationSpec, tenant: TraderDep, session: SessionDep) -> dict:
     result = create_template(
         session, organization_id=tenant.organization_id, user_id=tenant.user_id, spec=body
     )
@@ -67,7 +65,7 @@ class NestedSubscriptionPreviewRequest(StrictModel):
 
 
 @router.post("/templates/nested/preview")
-async def preview_nested(
+def preview_nested(
     body: NestedSubscriptionPreviewRequest, tenant: ReaderDep, session: SessionDep
 ) -> dict[str, Any]:
     return preview_nested_subscriptions(
@@ -79,7 +77,7 @@ async def preview_nested(
 
 
 @router.post("/templates/sfp", status_code=201)
-async def propose_sfp(body: SfpSpec, tenant: TraderDep, session: SessionDep) -> dict:
+def propose_sfp(body: SfpSpec, tenant: TraderDep, session: SessionDep) -> dict:
     result = create_template(
         session, organization_id=tenant.organization_id, user_id=tenant.user_id, spec=body
     )
@@ -93,7 +91,7 @@ class ObservationRequest(StrictModel):
 
 
 @router.post("/setups/{setup_id}/observations")
-async def user_observation(
+def user_observation(
     setup_id: UUID, body: ObservationRequest, tenant: TraderDep, session: SessionDep
 ) -> dict:
     details(session, organization_id=tenant.organization_id, setup_id=setup_id)
@@ -133,7 +131,7 @@ class LifecycleRequest(StrictModel):
 
 
 @router.post("/strategies/{strategy_id}/lifecycle")
-async def research_lifecycle(
+def research_lifecycle(
     strategy_id: UUID, body: LifecycleRequest, tenant: TraderDep, session: SessionDep
 ) -> dict:
     service = StrategyVersioningService(session)

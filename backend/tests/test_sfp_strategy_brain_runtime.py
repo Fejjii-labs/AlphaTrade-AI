@@ -1,6 +1,5 @@
 """Focused SFP canonical binding, persistence and governed Candidate integration."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -129,9 +128,7 @@ def persist(session, policy, bars, observations, *, now=None):
 def test_registration_immutable_approval_and_tenant_binding(store, bearish):
     session, org, user, _ = store
     configuration = spec(bearish=bearish, expiry_bars=2000)
-    draft = asyncio.run(
-        propose_sfp(configuration, SimpleNamespace(organization_id=org, user_id=user), session)
-    )
+    draft = propose_sfp(configuration, SimpleNamespace(organization_id=org, user_id=user), session)
     duplicate = create_template(session, organization_id=org, user_id=user, spec=configuration)
     assert draft["version_id"] == duplicate["version_id"]
     assert draft["execution_permission"] == "none"
@@ -281,7 +278,7 @@ def test_persistence_restart_replay_and_grounded_canonical_reads(store):
         row = restarted.get(BrainSetupRow, setup_id)
         assert row.state == "CONFIRMED" and row.candidate_id is None
         tenant = SimpleNamespace(organization_id=org)
-        view = asyncio.run(read_setup(setup_id, tenant, restarted))
+        view = read_setup(setup_id, tenant, restarted)
         assert view["family"] == "sfp"
         assert UUID(view["strategy_version_id"]) == policy.strategy_version_id
         assert view["strategy_version_content_hash"] == policy.strategy_version_content_hash
@@ -300,10 +297,10 @@ def test_persistence_restart_replay_and_grounded_canonical_reads(store):
         for name in ("cvd", "order_flow", "open_interest"):
             assert view["quality"][name]["availability"] == "UNSUPPORTED"
             assert view["quality"][name]["value"] is None
-        summary = asyncio.run(read_overview(tenant, restarted))
+        summary = read_overview(tenant, restarted)
         assert summary["strategies"][0]["spec"]["kind"] == policy.authored_spec.kind
         with pytest.raises(NotFoundError):
-            asyncio.run(read_setup(setup_id, SimpleNamespace(organization_id=uuid4()), restarted))
+            read_setup(setup_id, SimpleNamespace(organization_id=uuid4()), restarted)
         assert overview(restarted, organization_id=uuid4())["setups"] == []
         text, refs, _ = read_brain(restarted, organization_id=org, message=f"SFP {setup_id}")
         assert str(setup_id) in text and "confirmed_sfp" in text and refs
