@@ -1,11 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import StrategiesPage from "./page";
 import { api } from "@/lib/api";
-import type { BrainSetup } from "@/lib/api/brain-types";
-import { savedEntries, type SavedEntry } from "@/lib/api/saved-entries";
+import type { BrainOverview, BrainSetup, BrainStrategy } from "@/lib/api/brain-types";
 import { sessionCleared } from "@/lib/auth/session-events";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 const state = vi.hoisted(() => ({
   params: new URLSearchParams(),
@@ -16,132 +16,101 @@ const state = vi.hoisted(() => ({
 const router = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => state.params, useRouter: () => router }));
 vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => state.identity }));
-vi.mock("@/components/strategies/ExperimentsPanel", () => ({
-  ExperimentsPanel: () => <section aria-label="Bounded experiments" />,
-}));
 
-const note: SavedEntry = {
-  id: "persisted-strategy-note", title: "Wait for a close", summary: "Confirm a closed reclaim before entry.",
-  category: "strategies", revision: 2, conversation_id: "source-conversation", source_message_ids: ["source-message"],
-  source_document_id: null, trade_id: null, tags: [], original_text: "Strategy idea", created_at: "2026-10-11T10:00:00Z",
-  updated_at: "2026-10-11T10:00:00Z", draft: null, undone: false,
-};
+const strategy = (symbol: string, kind: BrainStrategy["spec"]["kind"], version: number, enabled = true) => ({
+  strategy_id: `11111111-1111-4111-8111-${String(version).padStart(12, "0")}`,
+  version_id: `22222222-2222-4222-8222-${String(version).padStart(12, "0")}`,
+  version, name: "Nested", status: "approved", enabled, execution_permission: "paper_gates_required",
+  spec: { kind, symbol, direction: "short", trigger_timeframe: "15m", parameters: {} },
+}) as unknown as BrainStrategy;
+
+const setup = (family: "nested_continuation" | "sfp", i: number) => ({
+  setup_id: `33333333-3333-4333-8333-${String(i).padStart(12, "0")}`, family, symbol: "BTCUSDT", instrument: "BTCUSDT",
+  direction: "long", timeframe: "15m", state: "CONFIRMED", observed_at: new Date(Date.now() - (i + 1) * 60000).toISOString(),
+}) as unknown as BrainSetup;
+
+function view(overrides: Partial<BrainOverview> = {}): BrainOverview {
+  return { strategies: [], setups: [], watched_symbols: [], limitations: [], paper_only: true, ...overrides } as BrainOverview;
+}
 
 beforeEach(() => {
   state.params = new URLSearchParams();
   state.identity = { user: { id: "user-a" }, organization: { id: "org-a" } };
   window.history.replaceState(null, "", "/strategies");
-  vi.spyOn(api.strategyBrain, "overview").mockResolvedValue({ strategies: [], setups: [], watched_symbols: [], limitations: [], paper_only: true });
-  vi.spyOn(api.strategies, "list").mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
-  vi.spyOn(savedEntries, "list").mockResolvedValue({ items: [note], total: 1 });
+  vi.spyOn(api.strategyBrain, "overview").mockResolvedValue(view());
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-it("separates persisted captures from authored configurations with compact expandable details", async () => {
+it("shows confirmed / traded / won per family from its own read, without raw counts or IDs", async () => {
+  const strategies = [
+    strategy("ETHUSDT", "operational_nested_continuation/v1", 3),
+    strategy("BTCUSDT", "operational_nested_continuation/v1", 7, false),
+    strategy("ZECUSDT", "swing_failure_pattern/v1", 2, false),
+  ];
+  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) =>
+    params?.family === "sfp"
+      ? view({ strategies, setups: Array.from({ length: 20 }, (_, i) => setup("sfp", i)), setup_count: 1172, outcomes: { confirmed: 4, traded: 0, won: 0 } })
+      : view({ strategies, setups: [setup("nested_continuation", 0)], setup_count: 1, outcomes: { confirmed: 12, traded: 3, won: 2 } }),
+  );
   render(<StrategiesPage />);
-  const notes = await screen.findByTestId("captured-strategy-note");
-  expect(savedEntries.list).toHaveBeenCalledWith({ category: "strategies", limit: 6 });
-  expect(screen.getByRole("heading", { name: "Captured strategy drafts" })).toBeInTheDocument();
-  expect(notes).not.toHaveAttribute("open");
-  expect(within(notes).getByText(note.title, { selector: "summary" })).toBeVisible();
-  expect(within(notes).getByText(note.summary)).not.toBeVisible();
-  fireEvent.click(within(notes).getByText(note.title, { selector: "summary" }));
-  expect(within(notes).getByText(note.summary)).toBeVisible();
-  expect(within(notes).getByRole("link", { name: "Open saved note" })).toHaveAttribute("href", "/journal?tab=knowledge&category=strategies&saved=persisted-strategy-note");
-  expect(screen.getByRole("link", { name: "All strategy notes" })).toHaveAttribute("href", "/journal?tab=knowledge&category=strategies");
-  expect(screen.getByRole("link", { name: "Discuss a strategy" })).toHaveAttribute("href", "/agent?discuss=strategy");
-  expect(screen.queryByText(note.id)).not.toBeInTheDocument();
-  expect(screen.queryByText(/Draft ·/)).not.toBeInTheDocument();
-  expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  const [nested, sfp] = screen.getAllByTestId("strategy-family");
+  await waitFor(() => expect(within(nested).getByTestId("family-outcomes")).toHaveTextContent("12 confirmed · 3 traded · 2 won"));
+  expect(within(sfp).getByTestId("family-outcomes")).toHaveTextContent("4 confirmed · 0 traded · 0 won");
+  expect(within(nested).getByText("BTCUSDT, ETHUSDT · 15m")).toBeInTheDocument();
+  expect(within(nested).getByTestId("family-enabled")).toHaveTextContent("On");
+  expect(within(sfp).getByTestId("family-enabled")).toHaveTextContent("Off");
+  expect(screen.queryByText(/1172/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/in 7 days/)).not.toBeInTheDocument();
+  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "nested_continuation", since: expect.any(String) });
+  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "sfp", since: expect.any(String) });
+  expectNoIdentifiers();
 });
 
-it("forwards the old Strategies risk anchor to Autonomous and has no risk section", async () => {
+it("has no experiments, captured drafts or other configurations", async () => {
+  render(<StrategiesPage />);
+  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalled());
+  expect(screen.getAllByTestId("strategy-family")).toHaveLength(2);
+  expect(screen.queryByText(/Experiments/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Captured strategy drafts/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Other configurations/)).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Discuss a strategy" })).toHaveAttribute("href", "/agent?discuss=strategy");
+});
+
+it("says results are unavailable when a family read fails", async () => {
+  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) => {
+    if (params?.family === "sfp") throw new Error("down");
+    return view({ outcomes: { confirmed: 1, traded: 0, won: 0 } });
+  });
+  render(<StrategiesPage />);
+  const [, sfp] = screen.getAllByTestId("strategy-family");
+  await waitFor(() => expect(within(sfp).getByTestId("family-outcomes")).toHaveTextContent("Results unavailable"));
+});
+
+it("forwards the old Strategies risk anchor to the bot page", async () => {
   window.history.replaceState(null, "", "/strategies#risk");
   router.replace.mockClear();
   render(<StrategiesPage />);
   expect(router.replace).toHaveBeenCalledExactlyOnceWith("/autonomous#limits");
-  expect(screen.queryByText("Risk policy", { selector: "summary" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: "Configure account limits" })).not.toBeInTheDocument();
-  await screen.findByTestId("captured-strategy-note");
+  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalled());
   window.history.replaceState(null, "", "/strategies");
 });
 
-it("keeps family details and their parent navigation separate from captured notes", async () => {
+it("lists a family's strategies with plain labels and a way back", async () => {
   state.params.set("family", "nested");
+  vi.mocked(api.strategyBrain.overview).mockResolvedValue(view({ strategies: [strategy("ETHUSDT", "operational_nested_continuation/v1", 3)] }));
   render(<StrategiesPage />);
   expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Nested Continuation");
-  expect(screen.getByRole("link", { name: /Back to Strategies/ })).toHaveAttribute("href", "/strategies");
-  expect(screen.queryByTestId("captured-strategy-notes")).not.toBeInTheDocument();
-  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalled());
+  expect(screen.getByRole("link", { name: "← Strategies" })).toHaveAttribute("href", "/strategies");
+  expect(await screen.findByRole("heading", { name: "ETHUSDT · Short · 15m" })).toBeInTheDocument();
+  expect(screen.getByText("On · v3")).toBeInTheDocument();
+  expectNoIdentifiers();
 });
 
-it("labels unavailable saved notes independently without claiming an empty history", async () => {
-  vi.mocked(savedEntries.list).mockRejectedValue(new Error("Unavailable"));
-  render(<StrategiesPage />);
-  expect(await screen.findByText("Captured notes unavailable.")).toBeInTheDocument();
-  expect(screen.queryByText("No captured strategy notes yet.")).not.toBeInTheDocument();
-  expect(screen.getAllByTestId("strategy-family")).toHaveLength(2);
-});
-
-it("cancels the rendered account scope before an old account read can complete", async () => {
-  let finish!: (value: { items: SavedEntry[]; total: number }) => void;
-  vi.mocked(savedEntries.list).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+it("drops the view on session invalidation and skips unauthenticated reads", async () => {
   const { rerender } = render(<StrategiesPage />);
-  state.identity = { user: { id: "user-b" }, organization: { id: "org-b" } };
-  vi.mocked(savedEntries.list).mockResolvedValue({ items: [], total: 0 });
-  rerender(<StrategiesPage />);
-  await screen.findByText("No captured strategy notes yet.");
-  await act(async () => finish({ items: [note], total: 1 }));
-  expect(screen.queryByText(note.title)).not.toBeInTheDocument();
-  expect(savedEntries.list).toHaveBeenCalledTimes(2);
-});
-
-it("clears local notes on a same-account session invalidation and skips unauthenticated reads", async () => {
-  const { rerender } = render(<StrategiesPage />);
-  await screen.findByTestId("captured-strategy-note");
-  vi.mocked(savedEntries.list).mockImplementation(() => new Promise(() => {}));
+  await waitFor(() => expect(api.strategyBrain.overview).toHaveBeenCalledTimes(2));
   act(() => sessionCleared());
-  expect(screen.queryByTestId("captured-strategy-note")).not.toBeInTheDocument();
   state.identity = { user: null, organization: null };
   rerender(<StrategiesPage />);
   expect(screen.queryByTestId("trader-strategies")).not.toBeInTheDocument();
-  expect(savedEntries.list).toHaveBeenCalledTimes(2);
-});
-
-it("counts Nested detections from their own family read, even behind a busy SFP week", async () => {
-  const setup = (family: "nested_continuation" | "sfp", i: number) => ({
-    setup_id: `${family}-${i}`, family, symbol: "BTCUSDT", instrument: "BTCUSDT", direction: "long",
-    timeframe: "15m", state: "CONFIRMED", observed_at: new Date(Date.now() - (i + 1) * 60000).toISOString(),
-  }) as unknown as BrainSetup;
-  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) => ({
-    strategies: [], watched_symbols: [], limitations: [], paper_only: true,
-    setups: params?.family === "nested_continuation"
-      ? [setup("nested_continuation", 0)]
-      : Array.from({ length: 25 }, (_, i) => setup("sfp", i)),
-  }));
-  render(<StrategiesPage />);
-  const [nested, sfp] = screen.getAllByTestId("strategy-family");
-  await waitFor(() => expect(within(nested).getByTestId("family-count")).toHaveTextContent("1 in 7 days"));
-  expect(within(sfp).getByTestId("family-count")).toHaveTextContent("25 in 7 days");
-  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "nested_continuation", since: expect.any(String) });
-  expect(api.strategyBrain.overview).toHaveBeenCalledWith({ family: "sfp", since: expect.any(String) });
-});
-
-it("shows the server total when a family has more detections than the 20-row bound", async () => {
-  const setup = (family: "nested_continuation" | "sfp", i: number) => ({
-    setup_id: `${family}-${i}`, family, symbol: "BTCUSDT", instrument: "BTCUSDT", direction: "long",
-    timeframe: "15m", state: "CONFIRMED", observed_at: new Date(Date.now() - (i + 1) * 60000).toISOString(),
-  }) as unknown as BrainSetup;
-  vi.mocked(api.strategyBrain.overview).mockImplementation(async (params) => ({
-    strategies: [], watched_symbols: [], limitations: [], paper_only: true,
-    ...(params?.family === "sfp"
-      ? { setups: Array.from({ length: 20 }, (_, i) => setup("sfp", i)), setup_count: 37 }
-      : { setups: [setup("nested_continuation", 0)], setup_count: 1 }),
-  }));
-  render(<StrategiesPage />);
-  const [nested, sfp] = screen.getAllByTestId("strategy-family");
-  await waitFor(() => expect(within(sfp).getByTestId("family-count")).toHaveTextContent("37 in 7 days"));
-  expect(within(nested).getByTestId("family-count")).toHaveTextContent("1 in 7 days");
-  expect(within(sfp).getByText("Bars and list cover the latest 20.")).toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: "Recent detections →" })).not.toBeInTheDocument();
 });
