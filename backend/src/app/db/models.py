@@ -2188,7 +2188,7 @@ class BotRiskSettings(Base):
             "AND daily_stop_pct <= 5",
             name="ck_bot_risk_percentages",
         ),
-        CheckConstraint("leverage BETWEEN 1 AND 20", name="ck_bot_risk_leverage"),
+        CheckConstraint("leverage BETWEEN 1 AND 10", name="ck_bot_risk_leverage"),
         CheckConstraint("margin_mode = 'isolated'", name="ck_bot_risk_margin_mode"),
     )
 

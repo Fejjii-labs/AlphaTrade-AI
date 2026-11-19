@@ -684,8 +684,14 @@ def size_for_profile(
     if distance <= 0 or reward <= 0 or entry <= 0:
         return "invalidation_unavailable"
     volatility = _volatility(atr, entry)
+    sizing_profile = active.profile
+    if execution_channel == "demo":
+        from app.services.demo_leverage_config import DEMO_LEVERAGE_CEILING
+
+        # The owner picks demo leverage from 1x to 10x; the profile max does not cap it.
+        sizing_profile = replace(sizing_profile, max_leverage=Decimal(DEMO_LEVERAGE_CEILING))
     decision = decide_trade(
-        profile=active.profile,
+        profile=sizing_profile,
         profile_version_id=active.version_id,
         grade=grade,
         adjusters=AdjusterInputs(

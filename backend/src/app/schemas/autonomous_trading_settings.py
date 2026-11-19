@@ -23,7 +23,7 @@ class AutonomousStrategyOption(StrictModel):
 
 
 class DemoLeverageOverride(StrictModel):
-    leverage: int | None = Field(default=None, ge=1, le=20)
+    leverage: int | None = Field(default=None, ge=1, le=10)
     margin_mode: Literal["isolated", "cross"] | None = None
 
 
@@ -58,7 +58,7 @@ class AutonomousTradingSettingsView(StrictModel):
     demo_margin_mode: Literal["isolated", "cross"] = "isolated"
     demo_leverage_overrides: dict[str, DemoLeverageOverride] = Field(default_factory=dict)
     demo_leverage_using_default: bool = True
-    max_demo_leverage_ceiling: int = 20
+    max_demo_leverage_ceiling: int = 10
 
 
 class AutonomousTradingSettingsUpdate(StrictModel):

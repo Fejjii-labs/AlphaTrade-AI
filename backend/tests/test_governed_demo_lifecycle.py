@@ -833,7 +833,7 @@ def test_demo_risk_settings_require_human_owner_and_audit_changes(
         payload = risk_policy.DemoBotRiskSettings(
             risk_per_trade_pct=Decimal("1"),
             daily_stop_pct=Decimal("4"),
-            leverage=12,
+            leverage=8,
             margin_mode="isolated",
             grade_risk_overrides={Grade.C: Decimal("0.5")},
         )
@@ -856,4 +856,4 @@ def test_demo_risk_settings_require_human_owner_and_audit_changes(
         assert audit is not None
         assert audit.user_id == USER
         assert audit.redacted_metadata["before"]["leverage"] == 10
-        assert audit.redacted_metadata["after"]["leverage"] == 12
+        assert audit.redacted_metadata["after"]["leverage"] == 8

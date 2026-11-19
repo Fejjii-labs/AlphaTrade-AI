@@ -72,14 +72,14 @@ def test_plan_window_has_a_configurable_maximum() -> None:
 
 
 def test_leverage_ceiling_defaults_to_20x_and_is_configurable() -> None:
-    assert demo_max_leverage(Settings(_env_file=None)) == Decimal("20")
-    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("25"))) == 20  # type: ignore[arg-type]
+    assert demo_max_leverage(Settings(_env_file=None)) == Decimal("10")
+    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("25"))) == 10  # type: ignore[arg-type]
     assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("5"))) == Decimal(  # type: ignore[arg-type]
         "5"
     )
     for bad in ("NaN", "0", "-3"):
         assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal(bad))) == 1  # type: ignore[arg-type]
-    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("500"))) == 20  # type: ignore[arg-type]
+    assert demo_max_leverage(SimpleNamespace(governed_demo_max_leverage=Decimal("500"))) == 10  # type: ignore[arg-type]
 
 
 def test_symbol_cap_exempt_matches_written_venue_values() -> None:

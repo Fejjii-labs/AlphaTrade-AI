@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 # leverage and margin mode. The app sets and reads them back after the plan
 # passes and before the entry (or, without the write, they already read back).
 CONFIGURED_DEMO_MARGIN_ASSUMPTION = "configured-demo-leverage"
-_DEMO_LEVERAGE_CEILING = Decimal("20")
+_DEMO_LEVERAGE_CEILING = Decimal("10")
 
 
 def demo_order_margin_mode(margin_assumption_id: str, plan_margin_mode: str | None = None) -> str:

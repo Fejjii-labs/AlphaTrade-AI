@@ -74,6 +74,7 @@ def _plan(*, grade: bool = True) -> SimpleNamespace:
 def _loop(cls: type, monkeypatch: pytest.MonkeyPatch):
     loop = object.__new__(cls)
     loop._clock = SimpleNamespace(now=lambda: NOW)
+    loop._settings = SimpleNamespace(risk_model_v2_enabled=False)  # legacy (flag-off) path
     loop._observed_kill_switch = False
     loop._experiment_context = None
     loop._scan_funding_rate = None

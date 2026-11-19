@@ -856,11 +856,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             # The profile liquidation buffer is isolated-only; refuse before any write.
             if active is not None and config.margin_mode != "isolated":
                 return _proof(candidate, "blocked", "demo_margin_mode_not_isolated")
-            profile_max = getattr(getattr(active, "profile", None), "max_leverage", None)
-            if active is not None and (
-                not isinstance(profile_max, Decimal) or config.leverage_decimal > profile_max
-            ):
-                return _proof(candidate, "blocked", "demo_leverage_exceeds_profile_max")
+            # The profile max_leverage does not cap demo: the owner picks 1x-10x.
             if not write_allowed:
                 # No write: the snapshot (and the action-time re-read) requires the
                 # configured leverage and margin mode to read back exactly.
@@ -2441,15 +2437,15 @@ def _plan_window(settings: Settings) -> timedelta:
     return timedelta(seconds=min(max(10, seconds), ceiling))
 
 
-DEMO_LEVERAGE_HARD_CAP = Decimal("20")
+DEMO_LEVERAGE_HARD_CAP = Decimal("10")
 STOP_LOSS_BAND_FLOOR_PERCENT = Decimal("1")
 STOP_LOSS_BAND_CEILING_PERCENT = Decimal("5")
 
 
 def demo_max_leverage(settings: Settings) -> Decimal:
-    """Configured leverage ceiling for demo plans: hard cap 20x; config may only lower it."""
+    """Configured leverage ceiling for demo plans: hard cap 10x; config may only lower it."""
 
-    raw = getattr(settings, "governed_demo_max_leverage", Decimal("20"))
+    raw = getattr(settings, "governed_demo_max_leverage", DEMO_LEVERAGE_HARD_CAP)
     try:
         value = Decimal(str(raw))
     except Exception:

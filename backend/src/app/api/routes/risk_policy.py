@@ -272,7 +272,7 @@ def apply_risk_policy(
 class DemoBotRiskSettings(StrictModel):
     risk_per_trade_pct: Decimal = Field(gt=0, le=5, max_digits=5, decimal_places=2)
     daily_stop_pct: Decimal = Field(gt=0, le=5, max_digits=5, decimal_places=2)
-    leverage: int = Field(strict=True, ge=1, le=20)
+    leverage: int = Field(strict=True, ge=1, le=10)
     margin_mode: Literal["isolated"]
     grade_risk_overrides: dict[Grade, Decimal] = Field(default_factory=dict)
     grades_gate_entries: bool = False
