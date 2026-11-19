@@ -432,3 +432,39 @@ def test_compute_readiness_rules() -> None:
         warnings=[],
     )
     assert blocked_unhealthy == "blocked"
+
+
+def test_diagnostics_worker_enabled_follows_worker_heartbeat(
+    internal_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The badge reports the dedicated worker, not the API's in-process flag."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from app.persistence import worker_runtime_state
+
+    def _row(age_seconds: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            heartbeat_at=datetime.now(UTC) - timedelta(seconds=age_seconds),
+            autonomy_mode="blofin_demo",
+            watchlist=("BTCUSDT",),
+        )
+
+    headers, _, _ = _register_owner(internal_client, email="worker-fresh@example.com")
+
+    monkeypatch.setattr(worker_runtime_state, "load_worker_runtime_row", lambda: _row(5))
+    fresh = internal_client.get("/exchange/diagnostics/summary", headers=headers).json()
+    assert fresh["worker_effective"]["source"] == "worker"
+    assert fresh["worker_effective"]["stale"] is False
+    assert fresh["worker_enabled"] is True
+
+    monkeypatch.setattr(worker_runtime_state, "load_worker_runtime_row", lambda: _row(600))
+    stale = internal_client.get("/exchange/diagnostics/summary", headers=headers).json()
+    assert stale["worker_effective"]["stale"] is True
+    assert stale["worker_enabled"] is False
+
+    monkeypatch.setattr(worker_runtime_state, "load_worker_runtime_row", lambda: None)
+    absent = internal_client.get("/exchange/diagnostics/summary", headers=headers).json()
+    assert absent["worker_effective"]["source"] == "unavailable"
+    assert absent["worker_enabled"] is False
