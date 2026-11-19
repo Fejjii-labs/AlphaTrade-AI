@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CanonicalJournalTradeListItem } from "@/lib/api/types";
+import { expectNoIdentifiers } from "@/test/no-identifiers";
 
 import { JournalTradesTable } from "./JournalTradesTable";
 
@@ -18,12 +19,15 @@ const base: CanonicalJournalTradeListItem = {
   strategy_label: "Nested",
   entry_time: "2026-11-01T10:00:00Z",
   exit_time: "2026-11-01T12:00:00Z",
+  entry_price: "67000.12345678",
+  exit_price: "67500.5",
+  fees: "0.12345678",
   net_pnl: "12.5",
 };
 
 const trades: CanonicalJournalTradeListItem[] = [
   base,
-  { ...base, id: "t-loss", symbol: "ETHUSDT", direction: "short", net_pnl: "-3.25" },
+  { ...base, id: "t-loss", symbol: "ETHUSDT", direction: "short", source: "blofin_demo_manual", net_pnl: "-3.25" },
   {
     ...base,
     id: "t-open",
@@ -32,6 +36,8 @@ const trades: CanonicalJournalTradeListItem[] = [
     source: "manual_demo_test",
     strategy_label: null,
     exit_time: null,
+    exit_price: null,
+    fees: null,
     net_pnl: null,
   },
 ];
@@ -39,18 +45,22 @@ const trades: CanonicalJournalTradeListItem[] = [
 afterEach(cleanup);
 
 describe("JournalTradesTable", () => {
-  it("renders one row per trade with API-backed columns", () => {
+  it("renders one row per trade with entry, exit, fees and net P&L", () => {
     render(<JournalTradesTable trades={trades} onOpen={() => {}} />);
     const table = screen.getByTestId("data-table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
-      "Trade", "Side", "Status", "Source", "Entry", "Exit", "Net P&L", "Review",
+      "Date", "Coin", "Side", "By", "Entry", "Exit", "Fees", "Net P&L", "Journal",
     ]);
     const win = screen.getByTestId("data-table-row-t-win");
     expect(within(win).getByText("BTCUSDT")).toBeInTheDocument();
-    expect(within(win).getByText("Nested · 15m")).toBeInTheDocument();
+    expect(within(win).getByText("Nested")).toBeInTheDocument();
     expect(within(win).getByText("Long")).toBeInTheDocument();
-    expect(within(win).getByText("closed")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Recorded trades" })).toBeInTheDocument();
+    expect(within(win).getByText("Bot")).toBeInTheDocument();
+    expect(within(win).getByTestId("trade-fees")).toHaveTextContent("0.12");
+    expect(win).not.toHaveTextContent("12345678");
+    expect(within(screen.getByTestId("data-table-row-t-loss")).getByText("Mine")).toBeInTheDocument();
+    expect(within(screen.getByTestId("data-table-row-t-open")).getByText("Open")).toBeInTheDocument();
+    expectNoIdentifiers();
   });
 
   it("colours only signed P&L and shows a dash when there is none", () => {
@@ -63,21 +73,13 @@ describe("JournalTradesTable", () => {
     expect(loss).toHaveClass("text-negative");
     const open = screen.getByTestId("data-table-row-t-open");
     expect(within(open).queryByTestId("trade-net-pnl")).not.toBeInTheDocument();
-    expect(within(open).getByText("No strategy · 15m")).toBeInTheDocument();
+    expect(within(open).getByText("No strategy")).toBeInTheDocument();
   });
 
-  it("marks connectivity tests only for manual_demo_test", () => {
-    render(<JournalTradesTable trades={trades} onOpen={() => {}} />);
-    expect(screen.getAllByTestId("connectivity-test-marker")).toHaveLength(1);
-    expect(
-      within(screen.getByTestId("data-table-row-t-open")).getByText("Connectivity test"),
-    ).toBeInTheDocument();
-  });
-
-  it("links every row to its exact trade with a 44px target and remembers before navigation", () => {
+  it("links every row to its journal page with a 44px target and remembers before navigation", () => {
     const onOpen = vi.fn();
     render(<JournalTradesTable trades={trades} onOpen={onOpen} />);
-    const links = screen.getAllByRole("link", { name: "Open exact trade" });
+    const links = screen.getAllByRole("link", { name: /^Journal/ });
     expect(links.map((l) => l.getAttribute("href"))).toEqual([
       "/journal?trade_id=t-win",
       "/journal?trade_id=t-loss",

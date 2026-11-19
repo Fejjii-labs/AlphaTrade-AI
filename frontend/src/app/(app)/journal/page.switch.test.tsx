@@ -21,8 +21,8 @@ vi.mock("@/components/journal/JournalHubScreen", () => ({
   JournalHubScreen: () => <div>Hub record</div>,
 }));
 
-vi.mock("@/components/journal/JournalKnowledgeWorkspace", () => ({
-  JournalKnowledgeWorkspace: () => <div>Unified journal</div>,
+vi.mock("@/components/journal/TradesScreen", () => ({
+  TradesScreen: () => <div>Trades list</div>,
 }));
 
 vi.mock("@/components/journal/JournalTradeScreen", () => ({
@@ -37,9 +37,9 @@ afterEach(() => {
 });
 
 describe("Journal page switch", () => {
-  it("opens the trader journal by default", () => {
+  it("opens the trades list by default", () => {
     render(<JournalPage />);
-    expect(screen.getByText("Unified journal")).toBeInTheDocument();
+    expect(screen.getByText("Trades list")).toBeInTheDocument();
   });
 
   it("keeps the record hub for view=record and deep links", () => {

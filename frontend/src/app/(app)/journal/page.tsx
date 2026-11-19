@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { JournalHubScreen } from "@/components/journal/JournalHubScreen";
 import { parseJournalQuery } from "@/components/journal/journalContext";
 import { JournalTradeScreen } from "@/components/journal/JournalTradeScreen";
-import { JournalKnowledgeWorkspace } from "@/components/journal/JournalKnowledgeWorkspace";
+import { TradesScreen } from "@/components/journal/TradesScreen";
 import { JournalReturnLink } from "@/components/journal/JournalReturnLink";
 
 export default function JournalPage() {
@@ -39,5 +39,5 @@ export default function JournalPage() {
         <JournalHubScreen />
       </div>
     );
-  return <JournalKnowledgeWorkspace />;
+  return <TradesScreen />;
 }
