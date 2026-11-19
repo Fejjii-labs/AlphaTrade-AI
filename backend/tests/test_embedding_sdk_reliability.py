@@ -97,3 +97,28 @@ def test_health_lists_models_but_does_not_claim_generation(sdk):
     item.embed(["a"])
     assert item.status().health == ProviderHealth.HEALTHY
     assert client.embeddings.create.call_count == 1
+
+
+def test_listed_model_is_healthy_but_unverified_without_paid_probe(sdk):
+    client, _ = sdk
+    client.models.list.return_value.model_dump.return_value = {
+        "data": [{"id": "text-embedding-3-small"}, {"id": "other"}]
+    }
+    item = provider()
+    status = item.status()
+    # Merely unverified (nothing embedded since start) is not Degraded.
+    assert status.health == ProviderHealth.HEALTHY
+    assert "not been verified" in (status.detail or "")
+    client.embeddings.create.assert_not_called()
+
+
+def test_failed_generation_degrades_even_when_model_is_listed(sdk):
+    client, _ = sdk
+    client.models.list.return_value.model_dump.return_value = {
+        "data": [{"id": "text-embedding-3-small"}]
+    }
+    client.embeddings.create.side_effect = RuntimeError("synthetic outage")
+    item = provider()
+    with pytest.raises(ServiceUnavailableError):
+        item.embed(["a"])
+    assert item.status().health == ProviderHealth.DEGRADED

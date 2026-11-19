@@ -12,6 +12,7 @@ from typing import Literal, Protocol
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -448,7 +449,48 @@ class WatcherMonitoringService:
                     reason_code=snapshot.reason_code,
                 )
             )
-        return items, _worst_orchestration_snapshot(snapshots)
+        # Worst-of counts only scopes in the current watchlist target set: a scope
+        # whose lease is no longer renewed (removed strategy, blocked coin, old
+        # projection) stays listed but cannot hold the card on Stale. Unknown or
+        # empty target sets, or no current scope with a lease, count every scope.
+        current = self._current_target_scopes(organization_id)
+        counted = (
+            [item for item in snapshots if item.scan_scope in current]
+            if current is not None
+            else []
+        )
+        return items, _worst_orchestration_snapshot(counted or snapshots)
+
+    def _current_target_scopes(self, organization_id: uuid.UUID) -> frozenset[str] | None:
+        """Scan scopes the paper worker would scan now, or None when unknown."""
+        from app.repositories.watcher_watchlist import WatcherWatchlistRepository
+        from app.workers.watcher_paper_targets import load_watchlist_scan_targets
+        from app.workers.watcher_watchlist import ordered_watch_symbols
+
+        settings = self._settings
+        try:
+            config = WatcherWatchlistRepository(self._session).load(organization_id)
+            loaded = load_watchlist_scan_targets(
+                self._session,
+                symbols=ordered_watch_symbols(config.enabled_symbols()),
+                organization_id=organization_id,
+                limit=settings.watcher_paper_max_scopes_per_cycle,
+                project_timeframes=(
+                    tuple(settings.watcher_scan_timeframes)
+                    if settings.watcher_apply_strategies_to_watchlist
+                    else ()
+                ),
+            )
+        except SQLAlchemyError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "watcher_monitoring_target_scopes_unavailable",
+                organization_id=str(organization_id),
+                error_type=type(exc).__name__,
+            )
+            return None
+        return frozenset(target.scan_scope for target in loaded.targets) or None
 
     def _provider_health(self) -> list[WatcherProviderHealthItem]:
         registry: _ProviderStatusSource = (

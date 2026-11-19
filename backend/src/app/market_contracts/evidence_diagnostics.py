@@ -163,6 +163,15 @@ def reason_for_exception(exc: Exception) -> DiagnosticReason:
     return DiagnosticReason.UNEXPECTED_ERROR
 
 
+def exception_class_name(exc: BaseException) -> str:
+    """The nearest application or builtin class name, so ``invalid_contract`` and
+    ``unexpected_error`` keep their cause. Never a third-party class name or text."""
+    for cls in type(exc).__mro__:
+        if cls.__module__ == "builtins" or cls.__module__.startswith("app."):
+            return cls.__name__
+    return "Exception"
+
+
 def diagnostic_from_exception(exc: Exception) -> EvidenceComponentDiagnostic | None:
     item = getattr(exc, "canonical_component_diagnostic", None)
     return item if isinstance(item, EvidenceComponentDiagnostic) else None
@@ -217,6 +226,7 @@ class EvidenceDiagnostics:
         source_time: datetime | None = None,
         historical: bool = False,
         provider: str | None = None,
+        exception_class: str | None = None,
     ) -> EvidenceComponentDiagnostic:
         name = provider or getattr(self.source, "name", "unknown")
         item = EvidenceComponentDiagnostic(
@@ -240,7 +250,10 @@ class EvidenceDiagnostics:
         self._items.append(item)
         del self._items[:-MAX_COMPONENT_DIAGNOSTICS]
         if status in {DiagnosticStatus.UNAVAILABLE, DiagnosticStatus.SWITCH_REQUIRED}:
-            logger.warning("canonical_evidence_component", **item.model_dump(mode="json"))
+            fields = item.model_dump(mode="json")
+            if exception_class is not None:
+                fields["exception_class"] = exception_class
+            logger.warning("canonical_evidence_component", **fields)
         return item
 
     def run(
@@ -284,6 +297,7 @@ class EvidenceDiagnostics:
                 if reason_for_exception(exc) is DiagnosticReason.STALE
                 else (FreshnessState.UNKNOWN),
                 provider=provider,
+                exception_class=exception_class_name(exc),
             )
             # Preserve existing exception types and all fail-closed validators.
             exc.canonical_component_diagnostic = item
