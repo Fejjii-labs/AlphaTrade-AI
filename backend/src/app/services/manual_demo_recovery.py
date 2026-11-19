@@ -33,7 +33,7 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_claim import conservative_reservation
 from app.services.execution_exposure import linear_quote_exposure
 from app.services.execution_fills import adjust_symbol_map, fill_content_hash
-from app.services.safety_epoch import SafetyEpochService
+from app.services.safety_epoch import SafetyEpochService, release_demo_daily_loss
 
 
 def recorded_exit_facts(session: Session, command: ExecutionCommand) -> list[dict[str, Any]]:
@@ -380,6 +380,8 @@ def resolve_manual_lifecycle(
             account_id=command.account_id,
             user_id=command.user_id,
             exposure_unit=reservation.exposure_unit,
+            now=observation.observed_at,
+            roll_demo_daily_loss=True,
         )
         exposure = sum(
             (
@@ -433,8 +435,10 @@ def resolve_manual_lifecycle(
                 raise TradingPolicyError(
                     "Unfilled reservation budget is inconsistent; release refused."
                 )
-            accounting.reserved_daily_loss -= reservation.daily_loss_allocation
+            release_demo_daily_loss(accounting, reservation)
             accounting.reserved_trade_slots -= reservation.daily_trade_allocation
+        if fills:
+            release_demo_daily_loss(accounting, reservation)
         accounting.version += 1
         reservation.remaining_reserved_notional = Decimal("0")
         reservation.release_state = RiskReservationReleaseState.RELEASED

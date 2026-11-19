@@ -117,6 +117,7 @@ class CanonicalPaperExecutionService:
                 after_idempotency=claim_hooks.after_idempotency,
                 after_epoch_lock=claim_hooks.after_epoch_lock,
                 before_return=claim_hooks.before_return,
+                demo_v2_equity=claim_hooks.demo_v2_equity,
                 revalidate=self._revalidate_canonical_lineage,
             ),
         )

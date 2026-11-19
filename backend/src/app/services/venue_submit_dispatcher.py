@@ -70,7 +70,11 @@ from app.services.execution_fills import (
 from app.services.execution_integrity import ensure_db_transaction, is_fill_fact_unique_violation
 from app.services.execution_transitions import append_transition, apply_projection_transition
 from app.services.mappers.trade_plan_mapper import trade_plan_revision_to_schema
-from app.services.safety_epoch import SafetyEpochService, paper_daily_trade_roll
+from app.services.safety_epoch import (
+    SafetyEpochService,
+    paper_daily_trade_roll,
+    release_demo_daily_loss,
+)
 
 _LEASE_SECONDS = 30
 logger = structlog.get_logger(__name__)
@@ -619,6 +623,7 @@ class VenueSubmitDispatcher:
             roll_daily_trade_slots=paper_daily_trade_roll(
                 plan_row.execution_venue if plan_row is not None else None
             ),
+            roll_demo_daily_loss=plan_row is not None and plan_row.execution_venue == "BLOFIN_DEMO",
         )
         convert_reservation_for_fill(
             reservation=reservation,
@@ -881,6 +886,7 @@ class VenueSubmitDispatcher:
             roll_daily_trade_slots=paper_daily_trade_roll(
                 plan_row.execution_venue if plan_row is not None else None
             ),
+            roll_demo_daily_loss=plan_row is not None and plan_row.execution_venue == "BLOFIN_DEMO",
         )
         accounting.reserved_notional -= unused
         if accounting.reserved_notional < 0:
@@ -888,9 +894,12 @@ class VenueSubmitDispatcher:
         # Partial cancellation terminates only the unfilled remainder. Existing
         # exposure retains its loss budget and converted daily trade count.
         if not reservation.converted_trade_slots:
-            accounting.reserved_daily_loss -= reservation.daily_loss_allocation
-            if accounting.reserved_daily_loss < 0:
-                accounting.reserved_daily_loss = Decimal("0")
+            if plan_row is not None and plan_row.execution_venue == "BLOFIN_DEMO":
+                release_demo_daily_loss(accounting, reservation)
+            else:
+                accounting.reserved_daily_loss = max(
+                    Decimal("0"), accounting.reserved_daily_loss - reservation.daily_loss_allocation
+                )
         accounting.reserved_trade_slots -= max(
             0, int(reservation.daily_trade_allocation) - int(reservation.converted_trade_slots)
         )
