@@ -60,6 +60,7 @@ function KpiCard({
   detail,
   visual,
   testId,
+  unverified = false,
 }: {
   label: string;
   value: string;
@@ -68,6 +69,7 @@ function KpiCard({
   detail?: ReactNode;
   visual?: ReactNode;
   testId: string;
+  unverified?: boolean;
 }) {
   return (
     <div
@@ -77,6 +79,7 @@ function KpiCard({
       )}
       data-testid={testId}
       data-tone={tone}
+      data-unverified={unverified ? "true" : undefined}
     >
       <span className={cn("absolute inset-x-0 top-0 h-1", toneBar[tone])} aria-hidden="true" />
       <div className="min-w-0">
@@ -90,7 +93,9 @@ function KpiCard({
           {label}
         </p>
         <p className={cn("mt-1.5 font-data text-2xl font-semibold tabular-nums", toneText[tone])}>{value}</p>
-        {detail ? <div className="mt-1 text-xs text-text-secondary">{detail}</div> : null}
+        {detail ? (
+          <div className={cn("mt-1 text-xs", unverified ? "text-badge-warning" : "text-text-secondary")}>{detail}</div>
+        ) : null}
       </div>
       {visual ? <div className="shrink-0">{visual}</div> : null}
     </div>
@@ -264,10 +269,14 @@ export function PerformanceKpiCards({
   risk = null,
   loading = false,
   tradeCoverage,
+  unverified = false,
 }: {
   summary: JournalDashboardSummary | null;
   risk?: JournalDashboardRisk | null;
+  /** Short "N of M verified" shown under Net P&L (demo scope). */
   tradeCoverage?: string;
+  /** Some P&L is BloFin's price move of an unreconciled close (before fees). */
+  unverified?: boolean;
   loading?: boolean;
 }) {
   if (loading) return <KpiSkeletons />;
@@ -282,7 +291,16 @@ export function PerformanceKpiCards({
         icon={Wallet}
         value={formatMonetary(s?.net_pnl)}
         tone={moneyTone(s?.net_pnl)}
-        detail={tradeCoverage ?? (s ? `${formatCount(s.trade_count)} closed trades` : "No data")}
+        detail={
+          tradeCoverage ? (
+            <span title={unverified ? "Unverified: BloFin price P&L before fees" : undefined}>{tradeCoverage}</span>
+          ) : s ? (
+            `${formatCount(s.trade_count)} closed trades`
+          ) : (
+            "No data"
+          )
+        }
+        unverified={unverified}
       />
       <KpiCard
         testId="kpi-expectancy"
@@ -290,7 +308,6 @@ export function PerformanceKpiCards({
         icon={Sigma}
         value={formatMonetary(s?.expectancy)}
         tone={moneyTone(s?.expectancy)}
-        detail={tradeCoverage}
       />
       <KpiCard
         testId="kpi-profit-factor"
@@ -320,7 +337,6 @@ export function PerformanceKpiCards({
         icon={Percent}
         value={formatPercent(winRate, 1)}
         tone={winRate === null ? "none" : "neutral"}
-        detail={tradeCoverage}
         visual={
           <WinRateGauge
             wins={s?.wins ?? 0}

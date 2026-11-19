@@ -151,27 +151,12 @@ export const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
   { value: "custom", label: "Custom" },
 ];
 
-/** Plain labels for the optional single-source narrowing inside a scope. */
-export const SOURCE_LABELS: Record<JournalTradeSource, string> = {
-  manual_demo_test: "Manual demo test",
-  blofin_demo_manual: "BloFin demo (manual)",
-  paper_execution: "Paper execution (bot)",
-  paper_validation: "Paper validation",
-  manual: "Manually logged",
-  backtest: "Backtest",
-  imported: "Imported",
-  system: "System",
-};
-
-/**
- * The Dashboard's source filter: BloFin demo trades only, with trader-facing
- * names. Inside the Demo scope `paper_execution` rows are the bot's BloFin demo
- * orders; other sources stay filterable in the Journal.
- */
-export const DASHBOARD_SOURCE_LABELS: Partial<Record<JournalTradeSource, string>> = {
-  blofin_demo_manual: "BloFin demo (manual)",
-  paper_execution: "BloFin demo (bot)",
-};
+/** Dashboard source control (Demo scope). Backend source values are unchanged. */
+export const SOURCE_OPTIONS: Array<{ value: JournalTradeSource | ""; label: string }> = [
+  { value: "", label: "All" },
+  { value: "blofin_demo_manual", label: "My BloFin trades" },
+  { value: "paper_execution", label: "Bot" },
+];
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 

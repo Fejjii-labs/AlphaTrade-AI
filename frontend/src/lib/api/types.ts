@@ -4576,6 +4576,8 @@ export interface JournalDashboardSummary {
   trade_count: number;
   pnl_sample_count: number;
   pnl_trade_coverage?: string | null;
+  /** Trades whose P&L is the BloFin price move of an unreconciled close (not verified). */
+  unverified_pnl_count?: number;
   wins: number;
   losses: number;
   breakeven: number;
@@ -4598,6 +4600,8 @@ export interface JournalDashboardDay {
   wins: number;
   losses: number;
   breakeven: number;
+  /** Trades that day whose P&L is unverified. */
+  unverified_count?: number;
   win_rate: number | null;
 }
 
