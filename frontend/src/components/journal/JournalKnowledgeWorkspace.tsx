@@ -26,7 +26,6 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { isAlphaTradeBloFinExecution } from "@/lib/journal-activity";
 import { NativeActivity } from "@/components/activity/NativeActivity";
-import { JournalDailyReview } from "./JournalDailyReview";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 
 export function SavedEntryDetail({
@@ -369,10 +368,7 @@ function JournalWorkspaceContent() {
       {stats ? <TradeStats /> : <>
       {savedId || documentId ? <JournalReturnLink /> : null}
       {!knowledge && !savedId && !documentId ? (
-        <>
-          <NativeActivity />
-          <JournalDailyReview />
-        </>
+        <NativeActivity />
       ) : null}
       <div
         data-testid="knowledge-filters"

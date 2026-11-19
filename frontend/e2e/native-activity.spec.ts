@@ -111,7 +111,7 @@ test("actual Journal mounts native history without statistics or simulated recor
   await expect(activity.getByTestId("native-activity-row")).toHaveCount(1);
   await expect(page.getByTestId("native-activity-statistics")).toHaveCount(0);
   await expect(page.getByText("SIMULATED", { exact: true })).toHaveCount(0);
-  await expect(page.getByTestId("dashboard-daily-review")).toBeVisible();
+  await expect(page.getByTestId("dashboard-daily-review")).toHaveCount(0);
   await activity.getByRole("button", { name: "Load older activity" }).click();
   await expect(activity.getByTestId("native-activity-row")).toHaveCount(2);
 });
