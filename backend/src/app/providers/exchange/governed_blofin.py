@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from app.core.exchange_safety import BLOFIN_PRODUCTION_HOSTS, is_allowlisted_demo_host
+from app.providers.exchange.base import ExchangeBalance
 from app.providers.exchange.blofin_account import BloFinAccountProvider
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.demo_order_book import DemoOrderBook, parse_demo_book, venue_decimal
@@ -109,6 +110,7 @@ class DemoVenueSnapshot:
     maximum: Decimal
     book: DemoOrderBook
     account_observed_at: datetime
+    venue_equity: Decimal | None = None
     native_account_uid: str | None = None
     # Read from the margin-mode endpoint and leverage-info. Written only by
     # apply_configured_leverage, after the plan passes and before the entry.
@@ -241,6 +243,26 @@ class GovernedBloFinDemoProvider:
             raise ValueError("Demo provider cannot change its expected native account.")
         self._expected_native_uid = native_uid
 
+    def _read_usdt_balance(self) -> ExchangeBalance:
+        with preflight_stage("balance", "GET /api/v1/account/balance"):
+            balances = self._account.get_balances()
+            balance = next((b for b in balances if b.asset == "USDT"), None)
+            if (
+                balance is None
+                or len([b for b in balances if b.asset == "USDT"]) != 1
+                or not balance.available.is_finite()
+                or not balance.total.is_finite()
+                or balance.available <= 0
+                or balance.total <= 0
+            ):
+                raise ValueError("Demo USDT equity unavailable.")
+        return balance
+
+    def read_demo_equity(self) -> Decimal | None:
+        """Read explicit venue equity, including unrealized P&L, even while open."""
+        self.verify_permissions()
+        return self._read_usdt_balance().equity
+
     def snapshot(
         self,
         *,
@@ -321,18 +343,7 @@ class GovernedBloFinDemoProvider:
             tier_sizes = _tier_sizes(tier_rows)
         account_observed_at = self._clock()
         self.verify_flat_account()
-        with preflight_stage("balance", "GET /api/v1/account/balance"):
-            balances = self._account.get_balances()
-            balance = next((b for b in balances if b.asset == "USDT"), None)
-            if (
-                balance is None
-                or len([b for b in balances if b.asset == "USDT"]) != 1
-                or not balance.available.is_finite()
-                or not balance.total.is_finite()
-                or balance.available <= 0
-                or balance.total <= 0
-            ):
-                raise ValueError("Demo USDT equity unavailable.")
+        balance = self._read_usdt_balance()
         with preflight_stage("quote", "GET /api/v1/market/books"):
             started = monotonic()
             data = self._client.request(
@@ -365,6 +376,7 @@ class GovernedBloFinDemoProvider:
             multiplier=multiplier,
             equity=balance.total,
             available=balance.available,
+            venue_equity=balance.equity,
             maximum=maximum,
             book=book,
             account_observed_at=account_observed_at,
@@ -655,6 +667,12 @@ class GovernedBloFinDemoProvider:
             > plan.basis_policy.tolerance_bps
         ):
             raise ValueError("Demo cross-venue basis moved beyond the authorized bound.")
+        if exits.margin_assumption_version == "2":
+            from app.services.demo_risk_v2 import demo_v2_venue_refusal
+
+            refusal = demo_v2_venue_refusal(plan, snapshot, worst_price)
+            if refusal is not None:
+                raise ValueError(refusal)
         if plan.schema_version == "ManualDemoTradePlanV1":
             from app.services.manual_demo_policy import validate_manual_demo
 

@@ -99,6 +99,7 @@ def evaluate_equity_stop(
     equity: object,
     now: datetime,
     first_sight: bool = False,
+    trip_at_threshold: bool = False,
     equity_cause: EquityCause = "equity_unreadable",
 ) -> EquityStopVerdict:
     """Pure verdict for one account. Does not write and does not arm.
@@ -133,7 +134,7 @@ def evaluate_equity_stop(
         return EquityStopVerdict(True, cause, day, None, current, None, current)
     drawdown = (start - current) / start * Decimal("100")
     floor = start * (Decimal("1") - threshold_percent / Decimal("100"))
-    breached = current < floor
+    breached = current <= floor if trip_at_threshold else current < floor
     return EquityStopVerdict(
         breached, "breach" if breached else None, day, start, current, drawdown, None
     )
