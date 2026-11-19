@@ -190,7 +190,10 @@ class AutomatedPaperLoop:
         account = self._account(session, target)
         if account is None:
             return _proof(candidate, "skipped", "execution_account_missing")
-        from app.services.autonomous_trading_guard import autonomous_precheck_refusal
+        from app.services.autonomous_trading_guard import (
+            autonomous_precheck_refusal,
+            load_autonomous_strategy_status,
+        )
         from app.services.autonomous_trading_settings_service import (
             AutonomousTradingSettingsService,
         )
@@ -205,7 +208,16 @@ class AutomatedPaperLoop:
             organization_id=target.organization_id,
             user_id=target.user_id,
         )
-        autonomous_block = autonomous_precheck_refusal(autonomous_settings, target, snapshot)
+        autonomous_block = autonomous_precheck_refusal(
+            autonomous_settings,
+            target,
+            snapshot,
+            strategy_status=(
+                None
+                if autonomous_settings.using_defaults
+                else load_autonomous_strategy_status(session, target)
+            ),
+        )
         if autonomous_block is not None:
             return _proof(candidate, "blocked", autonomous_block)
         self._autonomous_settings = autonomous_settings
@@ -337,6 +349,14 @@ class AutomatedPaperLoop:
                 account_id=account.id,
                 entry_occurred_at=assembled.trigger_bar.interval_end,
             )
+        # A new intent: one open position per coin across every strategy.
+        from app.services.autonomous_trading_guard import open_symbol_position_refusal
+
+        occupied = open_symbol_position_refusal(
+            session, target, candidate_id=candidate.candidate_id
+        )
+        if occupied is not None:
+            return _proof(candidate, "blocked", occupied)
         eligibility = self._eligibility_service().evaluate(
             self._eligibility_command(
                 session,

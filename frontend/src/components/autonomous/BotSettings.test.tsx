@@ -153,7 +153,7 @@ describe("Autonomous trading settings form", () => {
     expect(screen.getByTestId("autonomous-daily-loss-percent")).toHaveValue("3");
     expect(screen.getByTestId("autonomous-max-trades")).toHaveValue("5");
     expect(screen.getByTestId("autonomous-risk-per-trade")).toHaveValue("");
-    expect(screen.getByTestId("autonomous-strategy")).toHaveValue("strategy-1");
+    expect(screen.getByTestId("autonomous-strategy-strategy-1")).toBeChecked();
     expect(screen.getByTestId("autonomous-symbol")).toHaveValue("BTCUSDT");
     expect(screen.getByTestId("autonomous-paper-switch-input")).toBeDisabled();
     expect(screen.getByTestId("autonomous-paper-switch-note")).toHaveTextContent(
@@ -255,7 +255,8 @@ describe("Autonomous trading settings form", () => {
   it("locks bot limits for a trader, names their role, and keeps account limits editable", () => {
     render(<BotSettings />);
     expect(screen.getByTestId("autonomous-max-trades")).toBeDisabled();
-    expect(screen.getByTestId("autonomous-strategy")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-strategy-strategy-1")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-strategy-scope-all")).toBeDisabled();
     expect(screen.getByTestId("risk-max-trades")).toBeEnabled();
     expect(screen.getByTestId("autonomous-save-owner-reason")).toHaveTextContent(
       "Bot limits: Owner only (your role: Trader)",

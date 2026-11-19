@@ -30,8 +30,11 @@ from app.security.passwords import hash_password
 from app.services.audit_service import AuditService
 from app.services.automated_paper_loop import AutomatedPaperLoop, AutomatedPaperLoopProof
 from app.services.autonomous_trading_guard import (
+    AutonomousStrategyStatus,
     autonomous_max_trades_reached,
-    autonomous_precheck_refusal,
+)
+from app.services.autonomous_trading_guard import (
+    autonomous_precheck_refusal as _precheck,
 )
 from app.services.autonomous_trading_settings_service import (
     AutonomousSettingsValidationError,
@@ -399,10 +402,18 @@ def test_enforcement_guards() -> None:
         daily_loss_limit_percent=Decimal("2"),
         max_trades_per_day=2,
         risk_per_trade_percent=None,
-        strategy_id=STRATEGY,
+        strategy_ids=frozenset({STRATEGY}),
+        strategy_scope="selected",
         symbol="BTCUSDT",
         using_defaults=True,
     )
+    eligible = AutonomousStrategyStatus(
+        strategy_id=STRATEGY, enabled=True, approved=True, paper_eligible=True
+    )
+
+    def autonomous_precheck_refusal(*args: object) -> str | None:
+        return _precheck(*args, strategy_status=eligible)  # type: ignore[arg-type]
+
     assert autonomous_precheck_refusal(resolved, _target(), _snapshot()) is None
     assert (
         autonomous_precheck_refusal(
@@ -946,6 +957,14 @@ def test_saved_stops_block_the_loop_and_defaults_do_not(
     settings_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     factory, settings = settings_db
+    # Saved settings also require an enabled, approved, paper-eligible strategy
+    # (tests/test_autonomous_multi_strategy.py covers the refusals).
+    monkeypatch.setattr(
+        "app.services.autonomous_trading_guard.load_autonomous_strategy_status",
+        lambda _session, target: AutonomousStrategyStatus(
+            strategy_id=target.strategy_id, enabled=True, approved=True, paper_eligible=True
+        ),
+    )
     harsh = _snapshot(realized_pnl=Decimal("-400"), trade_count=6)
     unsaved = _run_probe(factory, settings, harsh, monkeypatch)
     assert unsaved.reason_code == "probe_reached_bound"

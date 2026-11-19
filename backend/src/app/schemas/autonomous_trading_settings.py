@@ -10,10 +10,16 @@ from pydantic import Field, StrictBool
 
 from app.schemas.common import StrictModel
 
+AutonomousStrategyScope = Literal["selected", "all_eligible"]
+
 
 class AutonomousStrategyOption(StrictModel):
     strategy_id: UUID
     name: str
+    # Current version lifecycle is approved/active, and the paper gate passed.
+    # The bot only trades a strategy with both; the guard re-checks at decision time.
+    approved: bool = False
+    paper_eligible: bool = False
 
 
 class DemoLeverageOverride(StrictModel):
@@ -27,7 +33,10 @@ class AutonomousTradingSettingsView(StrictModel):
     daily_loss_limit_percent: Decimal
     max_trades_per_day: int
     risk_per_trade_percent: Decimal | None = None
+    # Legacy single strategy: first entry of strategy_ids (deprecated).
     strategy_id: UUID | None = None
+    strategy_ids: list[UUID] = Field(default_factory=list)
+    strategy_scope: AutonomousStrategyScope = "selected"
     symbol: str | None = None
     using_defaults: bool = False
     # Account cap counts all trades; the bot is held to min(bot, account).
@@ -57,7 +66,10 @@ class AutonomousTradingSettingsUpdate(StrictModel):
     max_trades_per_day: int | None = Field(default=None, ge=1, le=1000)
     risk_per_trade_percent: Decimal | None = Field(default=None, gt=0, le=5)
     clear_risk_per_trade_percent: bool = False
+    # Legacy single selection; saved as [strategy_id]. Do not send with strategy_ids.
     strategy_id: UUID | None = None
+    strategy_ids: list[UUID] | None = Field(default=None, max_length=50)
+    strategy_scope: AutonomousStrategyScope | None = None
     symbol: str | None = Field(default=None, min_length=3, max_length=32)
     # Strict: only JSON true/false, never "yes"/1 (Griller #356 review).
     internal_paper_enabled: StrictBool | None = None

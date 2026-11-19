@@ -4284,9 +4284,19 @@
       "AutonomousStrategyOption": {
         "additionalProperties": false,
         "properties": {
+          "approved": {
+            "default": false,
+            "title": "Approved",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "paper_eligible": {
+            "default": false,
+            "title": "Paper Eligible",
+            "type": "boolean"
           },
           "strategy_id": {
             "format": "uuid",
@@ -4465,6 +4475,37 @@
             ],
             "title": "Strategy Id"
           },
+          "strategy_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Ids"
+          },
+          "strategy_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "selected",
+                  "all_eligible"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Scope"
+          },
           "symbol": {
             "anyOf": [
               {
@@ -4600,12 +4641,29 @@
             ],
             "title": "Strategy Id"
           },
+          "strategy_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Strategy Ids",
+            "type": "array"
+          },
           "strategy_options": {
             "items": {
               "$ref": "#/components/schemas/AutonomousStrategyOption"
             },
             "title": "Strategy Options",
             "type": "array"
+          },
+          "strategy_scope": {
+            "default": "selected",
+            "enum": [
+              "selected",
+              "all_eligible"
+            ],
+            "title": "Strategy Scope",
+            "type": "string"
           },
           "symbol": {
             "anyOf": [
