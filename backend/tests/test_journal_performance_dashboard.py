@@ -7,8 +7,8 @@ SQLite (no Postgres).
 from __future__ import annotations
 
 import uuid
-from dataclasses import replace
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -1000,7 +1000,9 @@ def test_unreconciled_mirror_rows_show_venue_price_pnl_flagged_unverified() -> N
 
 def test_verified_rows_are_not_flagged_and_keep_recorded_net() -> None:
     rows = [
-        _row("9.8", datetime(2026, 11, 12, tzinfo=UTC), source=JournalTradeSource.BLOFIN_DEMO_MANUAL),
+        _row(
+            "9.8", datetime(2026, 11, 12, tzinfo=UTC), source=JournalTradeSource.BLOFIN_DEMO_MANUAL
+        ),
         _unverified(datetime(2026, 11, 13, tzinfo=UTC), entry="100", exit_="101", size="1"),
     ]
     result = _build(rows)
