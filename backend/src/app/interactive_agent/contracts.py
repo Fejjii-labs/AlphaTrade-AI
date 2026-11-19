@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.agent_capture.contracts import SavedEntry
 from app.daily_review.contracts import DailyReview
@@ -22,6 +22,7 @@ from app.schemas.strategy_analytics import StrategyAnalyticsFilters, StrategyAna
 
 SCHEMA_VERSION: Literal["InteractiveAgent/v1"] = "InteractiveAgent/v1"
 PAYLOAD_KEY = "interactive_agent"
+RECORDED_EVIDENCE_LIMIT = 16000
 
 
 #: Retrieval limitation when vector search ran but nothing passed the relevance floor.
@@ -295,7 +296,7 @@ class AgentTurnResult(StrictModel):
     operation: TurnOperation
     artifact_kinds: list[ArtifactKind]
     reply: str = Field(min_length=1, max_length=4000)
-    recorded_evidence: str | None = Field(default=None, max_length=16000)
+    recorded_evidence: str | None = Field(default=None, max_length=RECORDED_EVIDENCE_LIMIT)
     full_reply: str | None = Field(default=None, max_length=16000)
     # Knowledge chunks the model prose cites via [Kn] markers that were supplied this turn.
     cited_chunk_ids: list[UUID] = Field(default_factory=list)
@@ -319,6 +320,12 @@ class AgentTurnResult(StrictModel):
     execution_attempted: Literal[False] = False
     real_trading_enabled: Literal[False] = False
     authority_mutated: bool = False
+
+    @field_validator("recorded_evidence", mode="before")
+    @classmethod
+    def bound_recorded_evidence(cls, value: Any) -> Any:
+        # Older voice turns could save evidence beyond the response limit.
+        return value[:RECORDED_EVIDENCE_LIMIT] if isinstance(value, str) else value
 
 
 class CapabilityDescriptor(StrictModel):

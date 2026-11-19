@@ -18,6 +18,7 @@ from app.db.models import ConversationMessage
 from app.interactive_agent.chat_market import ChatMarketQuoteReader
 from app.interactive_agent.contracts import (
     PAYLOAD_KEY,
+    RECORDED_EVIDENCE_LIMIT,
     AgentTurnRequest,
     AgentTurnResult,
     KnowledgeHit,
@@ -336,7 +337,9 @@ def run_interactive(
                 citations = marker_check.payload()
             result.model_usage = [responder.last_usage] if responder.last_usage else []
             if supplemental_facts:
-                result.recorded_evidence = deferred.inputs["factual_context"]
+                result.recorded_evidence = deferred.inputs["factual_context"][
+                    :RECORDED_EVIDENCE_LIMIT
+                ]
             result.capture_status = "unavailable"
             result.capture_error = (
                 "Reply saved. Capture is pending; recover or retry capture if interrupted."

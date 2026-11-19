@@ -3,6 +3,8 @@ import { RealtimeVoiceController, type RealtimeSnapshot } from "./realtime-contr
 import { clearTokens, setTokens } from "@/lib/auth/session";
 import { appConfig } from "@/lib/config";
 import { buildContentSecurityPolicy, resolveApiOrigin } from "@/lib/security-headers";
+import { agentTurnResponse } from "@/lib/api/generated/validators";
+import { agentTurnFixture } from "@/test/pilot-fixtures";
 import type { AgentTurnResult } from "@/lib/api/types";
 import type { TurnBody } from "@/components/agent/turn-recovery";
 
@@ -170,7 +172,8 @@ describe("GPT Live controller (mocked transport, no live provider or microphone)
   });
 
   it("continuously captures after readiness and keeps captions separate from two durable Agent turns", async () => {
-    const f = fixture({ configuration: liveConfiguration() }); await f.controller.start();
+    const acceptResult = vi.fn((_key: string, result: AgentTurnResult) => agentTurnResponse(result));
+    const f = fixture({ configuration: liveConfiguration(), result: acceptResult }); await f.controller.start();
     const capture = f.audio.start.mock.calls[0][0] as (audio: string) => void;
     capture("before-ready"); expect(f.socket.sent).toHaveLength(0);
     f.socket.emit({ type: "session.ready" });
@@ -179,20 +182,26 @@ describe("GPT Live controller (mocked transport, no live provider or microphone)
     f.socket.emit({ type: "input.delta", text: "My BTC ", start_ms: 0, end_ms: 500 });
     f.socket.emit({ type: "input.delta", text: "rule", start_ms: 500, end_ms: 800 });
     f.socket.emit({ type: "reply.delta", text: "Unverified provider caption", start_ms: 0, end_ms: 700 });
-    expect(f.pending).not.toHaveBeenCalled(); expect(f.result).not.toHaveBeenCalled();
+    expect(f.pending).not.toHaveBeenCalled(); expect(acceptResult).not.toHaveBeenCalled();
     expect(f.states.at(-1)).toMatchObject({ state: "listening", transcript: "", inputCaption: "My BTC rule", replyCaption: "Unverified provider caption" });
     for (const requestKey of [key, "33333333-3333-4333-8333-333333333333"]) {
       f.socket.emit({ type: "turn.pending", request_key: requestKey, body });
       expect(f.pending).toHaveBeenLastCalledWith(requestKey, body);
       expect(f.socket.sent.at(-1)).toEqual({ type: "turn.accept", request_key: requestKey });
-      const canonical = { reply: "Grounded Agent result", conversation_id: conversation } as AgentTurnResult;
+      expect(f.states.at(-1)).toMatchObject({ state: "thinking", active: true, error: null });
+      const canonical = {
+        ...agentTurnFixture, reply: "Grounded Agent result", conversation_id: conversation,
+        recorded_evidence: "x".repeat(16_000),
+      };
       f.socket.emit({ type: "turn.result", request_key: requestKey, result: canonical });
-      expect(f.result).toHaveBeenLastCalledWith(requestKey, canonical);
+      expect(acceptResult).toHaveBeenLastCalledWith(requestKey, canonical);
+      expect(acceptResult).toHaveLastReturnedWith(true);
     }
     f.socket.emit({ type: "audio.delta", audio: "spoken-reply", item_id: "live-output" });
     f.socket.emit({ type: "reply.delta", text: " more caption", start_ms: 700, end_ms: 900 });
     f.socket.emit({ type: "response.done" });
-    expect(f.states.at(-1)?.state).toBe("speaking");
+    expect(f.states.at(-1)).toMatchObject({ state: "speaking", active: true, error: null });
+    expect(f.audio.play).toHaveBeenLastCalledWith("spoken-reply", "live-output");
     expect(f.connect).toHaveBeenCalledTimes(1);
   });
 
