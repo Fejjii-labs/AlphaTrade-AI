@@ -200,31 +200,9 @@ def test_agent_routes_position_sizing(slice34_client: tuple[TestClient, sessionm
     assert any(o.tool_name == "position_sizing_tool" for o in response.tool_outputs)
 
 
-def test_agent_routes_manual_levels(slice34_client: tuple[TestClient, sessionmaker]) -> None:
-    client, factory = slice34_client
-    client.post(
-        "/manual-levels",
-        json={
-            "symbol": "BTCUSDT",
-            "exchange": "mock",
-            "level_type": "support",
-            "price": "59000",
-        },
-    )
-    service, _ = _agent_with_session(factory)
-    response = service.run(
-        "What manual levels do I have for this coin?",
-        AgentInvokeContext(
-            request_id="slice34-levels",
-            user_id=USER_ID,
-            organization_id=ORG_ID,
-        ),
-        symbol="BTCUSDT",
-    )
-    assert any(o.tool_name == "manual_levels_tool" for o in response.tool_outputs)
-
-
-def test_agent_routes_human_vs_system(slice34_client: tuple[TestClient, sessionmaker]) -> None:
+def test_agent_reports_parked_trade_comparison(
+    slice34_client: tuple[TestClient, sessionmaker],
+) -> None:
     client, factory = slice34_client
     journal = client.post(
         "/journal/entries",
@@ -247,7 +225,9 @@ def test_agent_routes_human_vs_system(slice34_client: tuple[TestClient, sessionm
             organization_id=ORG_ID,
         ),
     )
-    assert any(o.tool_name == "human_vs_system_tool" for o in response.tool_outputs)
+    assert "Trade comparison is available in the journal." in response.reply
+    assert all(output.tool_name == "rag_retriever" for output in response.tool_outputs)
+    assert response.narrative_meta is None
 
 
 def test_strategy_update_and_version(slice34_client: tuple[TestClient, sessionmaker]) -> None:
@@ -300,26 +280,6 @@ def test_backtest_run_create_and_list(slice34_client: tuple[TestClient, sessionm
     assert detail.status_code == 200
 
 
-def test_paper_validation_start_and_list(slice34_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice34_client
-    create = client.post(
-        "/strategies",
-        json={
-            "name": "Paper Validate",
-            "setup_type": "htf_trend_pullback",
-            "card": _sample_card(validation_status="in_review"),
-        },
-    )
-    strategy_id = create.json()["id"]
-    started = client.post(f"/strategies/{strategy_id}/paper-validation/start")
-    assert started.status_code == 200
-    assert started.json()["status"] == "in_progress"
-
-    summary = client.get(f"/strategies/{strategy_id}/paper-validation")
-    assert summary.status_code == 200
-    assert summary.json()["total"] >= 1
-
-
 def test_loss_acceptance_blocks_paper_execution() -> None:
     proposal = TradeProposal(
         id=uuid.uuid4(),
@@ -355,27 +315,6 @@ def test_loss_acceptance_blocks_paper_execution() -> None:
         request=LossAcceptanceRequest(planned_loss_amount=Decimal("100"), accepted=False),
     )
     assert rejected.can_execute_paper is False
-
-
-def test_human_vs_system_deltas(slice34_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice34_client
-    journal = client.post(
-        "/journal/entries",
-        json={
-            "symbol": "BTCUSDT",
-            "timeframe": "4h",
-            "direction": "long",
-            "entry_rationale": "Test",
-            "lessons": "ok",
-            "emotions": ["calm"],
-            "result": "loss",
-        },
-    )
-    trade_id = journal.json()["id"]
-    compare = client.get(f"/human-vs-system/{trade_id}")
-    body = compare.json()
-    assert "limitations" in body
-    assert body.get("early_exit_flag") is not None or body.get("missed_runner_profit_placeholder")
 
 
 def test_no_real_trading_path(settings: Settings) -> None:

@@ -20,18 +20,14 @@ from app.agent_capture import routes as saved_entry_routes
 from app.api.routes import (
     agent_voice,
     alerts,
-    analytics,
     approvals,
-    audit,
     auth,
     autonomous_strategy_stats,
     autonomous_trading_settings,
     backtests,
-    billing,
     blofin_activity,
     canonical,
     chat,
-    coaching,
     conversations,
     dashboard,
     demo,
@@ -40,40 +36,25 @@ from app.api.routes import (
     experiments,
     governed_learning,
     health,
-    human_vs_system,
     interactive_agent,
     journal,
     knowledge,
-    learning_analytics,
     lessons,
-    manual_levels,
-    market,
     market_watcher,
     metrics,
     notifications,
-    organizations,
-    paper_signal_orchestration,
-    paper_validation,
     performance,
     positions,
     pretrade,
     proposals,
-    providers,
-    research_validation,
     risk,
     strategy_analytics,
     strategy_brain,
     strategy_library,
     strategy_modules,
-    strategy_quality,
     telegram_enrollment,
-    tools,
-    tradingview,
-    trendpulse_screening,
     usage,
-    validation_priority,
     watcher_paper,
-    worker,
 )
 from app.core.config import Environment, Settings, get_settings
 from app.core.deployment_safety import deployment_posture
@@ -86,8 +67,6 @@ from app.providers.qdrant import get_process_vector_store
 from app.providers.registry import build_default_registry, get_provider_registry
 from app.strategies.registry import build_default_registry as build_strategy_registry
 from app.strategies.registry import get_strategy_registry
-from app.tools.registry import build_default_registry as build_tool_registry
-from app.tools.registry import get_tool_registry
 
 logger = structlog.get_logger(__name__)
 
@@ -111,7 +90,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.resolved_providers = resolved
     from app.api.routes.health import probe_vector_collections
 
-    # One live vector-size check at boot so /providers/status shows a mismatch at
+    # One live vector-size check at boot so /health/ready shows a mismatch at
     # once. A mismatch logs and degrades readiness; it does not refuse boot.
     logger.info(
         "vector_collection_startup_check",
@@ -136,8 +115,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     _notify_global_kill_switch(settings)
-    worker_driver = _maybe_start_in_process_worker(settings)
-    app.state.worker_driver = worker_driver
     paper_runtime = _maybe_start_watcher_paper_runtime(
         settings, monitor=getattr(app.state, "market_monitor", None)
     )
@@ -147,8 +124,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if paper_runtime is not None:
         paper_runtime.stop()
-    if worker_driver is not None:
-        worker_driver.stop()
     # TODO(slice-18): close Qdrant client gracefully when using live vector store.
     logger.info("shutdown")
 
@@ -172,22 +147,6 @@ def _notify_global_kill_switch(settings: Settings) -> None:
         )
     except Exception:
         logger.error("kill_switch_alert_failed", source="global_setting")
-
-
-def _maybe_start_in_process_worker(settings: Settings) -> _BackgroundStoppable | None:
-    """Start the background worker on a daemon thread when so configured.
-
-    Only runs when ``WORKER_ENABLED=true`` and ``WORKER_MODE=in_process``; the
-    recommended deployment uses a dedicated worker process instead.
-    """
-    if not (settings.worker_enabled and settings.worker_mode == "in_process"):
-        return None
-    from app.workers.entrypoint import build_driver
-
-    driver = build_driver(settings)
-    driver.start_background_thread()
-    logger.info("worker_in_process_enabled", worker_name=settings.worker_name)
-    return driver
 
 
 def _maybe_start_watcher_paper_runtime(
@@ -245,7 +204,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         build_perpetual_market_monitor(settings) if api_monitor_runs_in_process(settings) else None
     )
     app.state.strategy_registry = build_strategy_registry()
-    app.state.tool_registry = build_tool_registry(settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -268,7 +226,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.dependency_overrides[get_settings] = lambda: app.state.settings
     app.dependency_overrides[get_provider_registry] = lambda: app.state.provider_registry
     app.dependency_overrides[get_strategy_registry] = lambda: app.state.strategy_registry
-    app.dependency_overrides[get_tool_registry] = lambda: app.state.tool_registry
 
     for r in (
         health.router,
@@ -276,28 +233,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         interactive_agent.router,
         saved_entry_routes.router,
         metrics.router,
-        providers.router,
         auth.router,
-        organizations.router,
         chat.router,
         conversations.router,
-        market.router,
         strategy_modules.router,
         strategy_library.router,
         governed_learning.router,
         strategy_analytics.router,
         strategy_brain.router,
-        paper_validation.router,
-        research_validation.router,
-        tradingview.router,
-        paper_signal_orchestration.router,
         alerts.router,
         notifications.router,
         market_watcher.router,
         backtests.router,
-        manual_levels.router,
         pretrade.router,
-        human_vs_system.router,
         risk.router,
         autonomous_trading_settings.router,
         autonomous_strategy_stats.router,
@@ -308,24 +256,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         exchange.router,
         blofin_activity.router,
         experiments.router,
-        trendpulse_screening.router,
         positions.router,
         journal.router,
         lessons.router,
-        analytics.router,
-        learning_analytics.router,
-        validation_priority.router,
-        strategy_quality.router,
-        coaching.router,
         performance.router,
         knowledge.router,
-        audit.router,
         usage.router,
-        billing.router,
         dashboard.router,
         demo.router,
-        tools.router,
-        worker.router,
         watcher_paper.router,
         telegram_enrollment.router,
     ):

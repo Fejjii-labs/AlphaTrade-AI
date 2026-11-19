@@ -9,7 +9,6 @@ from fastapi import APIRouter, BackgroundTasks, Query
 from app.core.dependencies import (
     BacktestServiceDep,
     PaperEligibilityServiceDep,
-    PaperValidationServiceDep,
     SessionDep,
     SettingsDep,
     StrategyLibraryServiceDep,
@@ -19,11 +18,6 @@ from app.core.dependencies import (
 )
 from app.schemas.backtest import BacktestRun, BacktestRunCreate, PaginatedBacktestRuns
 from app.schemas.paper_eligibility import PaperEligibilityReport
-from app.schemas.paper_validation import (
-    PaperValidationRun,
-    PaperValidationRunStart,
-    PaperValidationSummary,
-)
 from app.schemas.strategy_library import (
     PaginatedUserStrategies,
     PaginatedUserStrategyVersions,
@@ -214,28 +208,6 @@ async def list_backtests(
     return PaginatedBacktestRuns(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.post(
-    "/{strategy_id}/paper-validation/start",
-    response_model=PaperValidationRun,
-    summary="Start paper validation tracking",
-)
-async def start_paper_validation(
-    strategy_id: uuid.UUID,
-    tenant: TraderDep,
-    service: PaperValidationServiceDep,
-    session: SessionDep,
-    body: PaperValidationRunStart | None = None,
-) -> PaperValidationRun:
-    result = service.start(
-        strategy_id,
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-        payload=body,
-    )
-    session.commit()
-    return result
-
-
 @router.get(
     "/{strategy_id}/paper-eligibility",
     response_model=PaperEligibilityReport,
@@ -254,46 +226,6 @@ async def get_paper_eligibility(
     )
     session.commit()
     return result
-
-
-@router.get(
-    "/{strategy_id}/paper-validation",
-    response_model=PaperValidationSummary,
-    summary="List paper validation runs",
-)
-async def list_paper_validation(
-    strategy_id: uuid.UUID,
-    tenant: TraderDep,
-    service: PaperValidationServiceDep,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-) -> PaperValidationSummary:
-    return service.list_for_strategy(
-        strategy_id,
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.get(
-    "/{strategy_id}/paper-validation/{run_id}",
-    response_model=PaperValidationRun,
-    summary="Get paper validation run with metrics",
-)
-async def get_paper_validation_run(
-    strategy_id: uuid.UUID,
-    run_id: uuid.UUID,
-    tenant: TraderDep,
-    service: PaperValidationServiceDep,
-) -> PaperValidationRun:
-    return service.get_run(
-        strategy_id,
-        run_id,
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-    )
 
 
 @router.get(

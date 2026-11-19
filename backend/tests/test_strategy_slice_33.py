@@ -150,36 +150,6 @@ def test_strategy_crud_and_versions(slice33_client: tuple[TestClient, sessionmak
     assert versions.json()["total"] == 2
 
 
-def test_manual_level_crud(slice33_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice33_client
-    create = client.post(
-        "/manual-levels",
-        json={
-            "symbol": "BTCUSDT",
-            "exchange": "mock",
-            "level_type": "support",
-            "price": "59000",
-            "label": "Daily support",
-        },
-    )
-    assert create.status_code == 200
-    level_id = create.json()["id"]
-
-    listing = client.get("/manual-levels?symbol=BTCUSDT")
-    assert listing.status_code == 200
-    assert listing.json()["total"] == 1
-
-    updated = client.patch(
-        f"/manual-levels/{level_id}",
-        json={"label": "Updated support"},
-    )
-    assert updated.status_code == 200
-    assert updated.json()["label"] == "Updated support"
-
-    deleted = client.delete(f"/manual-levels/{level_id}")
-    assert deleted.status_code == 204
-
-
 def test_pretrade_analysis_schema(slice33_client: tuple[TestClient, sessionmaker]) -> None:
     client, _ = slice33_client
     response = client.post(
@@ -261,34 +231,6 @@ def test_loss_acceptance_gate() -> None:
     )
     assert rejected.can_execute_paper is False
     assert "skip" in rejected.recommendation.lower()
-
-
-def test_human_vs_system_plan_adherence(slice33_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice33_client
-    journal = client.post(
-        "/journal/entries",
-        json={
-            "symbol": "BTCUSDT",
-            "timeframe": "4h",
-            "direction": "long",
-            "strategy_id": "htf_trend_pullback",
-            "entry_rationale": "Test entry",
-            "lessons": "Follow the plan",
-            "emotions": ["calm"],
-            "mistakes": [],
-            "tags": ["slice33"],
-            "result": "win",
-            "pnl": "25",
-        },
-    )
-    assert journal.status_code == 200
-    trade_id = journal.json()["id"]
-
-    compare = client.get(f"/human-vs-system/{trade_id}")
-    assert compare.status_code == 200
-    body = compare.json()
-    assert 0 <= body["plan_adherence_score"] <= 100
-    assert body["plan_adherence"]["journal_completed"] >= 5
 
 
 def test_risk_size_endpoint(slice33_client: tuple[TestClient, sessionmaker]) -> None:

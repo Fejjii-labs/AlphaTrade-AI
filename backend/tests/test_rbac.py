@@ -77,7 +77,7 @@ def _register(client: TestClient, *, email: str) -> dict:
         json={
             "email": email,
             "password": "secure-password-1",
-            "organization_name": "RBAC Org",
+            "organization_name": f"RBAC Org {email}",
         },
     )
     assert response.status_code == 201, response.text
@@ -152,33 +152,6 @@ def test_viewer_cannot_create_proposal(
     assert response.json()["error"]["code"] == "forbidden"
 
 
-def test_trader_can_create_watchlist_item(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, factory = rbac_client
-    registered = _register(client, email="trader@example.com")
-    _set_membership_role(
-        factory,
-        user_id=uuid.UUID(registered["user"]["id"]),
-        role=MembershipRole.TRADER,
-    )
-    token = registered["tokens"]["access_token"]
-
-    response = client.post(
-        "/market/watchlist",
-        headers=_auth_headers(token),
-        json={
-            "organization_id": str(uuid.uuid4()),
-            "user_id": str(uuid.uuid4()),
-            "symbol": "ETHUSDT",
-            "exchange": "binance",
-            "timeframes": ["4h"],
-            "strategy_ids": ["htf_trend_pullback"],
-        },
-    )
-    assert response.status_code == 200
-
-
 def test_owner_can_mutate_journal(rbac_client: tuple[TestClient, sessionmaker[Session]]) -> None:
     client, _factory = rbac_client
     registered = _register(client, email="owner@example.com")
@@ -199,3 +172,51 @@ def test_owner_can_mutate_journal(rbac_client: tuple[TestClient, sessionmaker[Se
         },
     )
     assert response.status_code == 200
+
+
+def test_pending_invitation_cannot_grant_membership(
+    rbac_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from app.db.models import OrganizationInvitation
+    from app.security.account_tokens import hash_account_token
+
+    client, factory = rbac_client
+    owner = _register(client, email="invite-owner@example.com")
+    viewer = _register(client, email="invite-viewer@example.com")
+    owner_org = uuid.UUID(owner["organization"]["id"])
+    viewer_id = uuid.UUID(viewer["user"]["id"])
+    _set_membership_role(factory, user_id=viewer_id, role=MembershipRole.VIEWER)
+    raw_token = "parked-invitation-test-token"
+    with factory() as session:
+        invitation = OrganizationInvitation(
+            organization_id=owner_org,
+            email=viewer["user"]["email"],
+            role=MembershipRole.TRADER,
+            invited_by_user_id=uuid.UUID(owner["user"]["id"]),
+            token_hash=hash_account_token(raw_token),
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+        )
+        session.add(invitation)
+        session.commit()
+        invitation_id = invitation.id
+
+    response = client.post(
+        f"/organizations/invitations/{invitation_id}/accept",
+        headers=_auth_headers(viewer["tokens"]["access_token"]),
+        json={"token": raw_token},
+    )
+    assert response.status_code == 404
+    with factory() as session:
+        assert (
+            session.scalar(
+                select(Membership).where(
+                    Membership.user_id == viewer_id, Membership.organization_id == owner_org
+                )
+            )
+            is None
+        )
+        assert session.get(OrganizationInvitation, invitation_id).accepted_at is None

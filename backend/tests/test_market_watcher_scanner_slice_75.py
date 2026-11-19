@@ -139,27 +139,6 @@ def _scan(client: TestClient, *, dry_run: bool = True) -> dict:
     return resp.json()
 
 
-def test_summary_reads_persisted_scan_state(slice75_db: sessionmaker[Session]) -> None:
-    client = _client(slice75_db)
-    before = client.get("/market-watcher/summary").json()
-    assert before["last_scan_at"] is None
-    assert before["last_scan_conditions_found"] == []
-
-    scan = _scan(client, dry_run=True)
-    assert scan["status"] == "ok"
-    assert scan["alerts_created"] == 0
-
-    after = client.get("/market-watcher/summary").json()
-    assert after["last_scan_at"] is not None
-    assert after["last_scan_status"] == "ok"
-    assert after["last_scan_dry_run"] is True
-    assert after["last_scan_candidate_count"] >= 0
-    if scan["candidates"]:
-        assert set(after["last_scan_conditions_found"]) == {
-            c["condition"] for c in scan["candidates"]
-        }
-
-
 def test_persisted_state_survives_new_service_instance(slice75_db: sessionmaker[Session]) -> None:
     with slice75_db() as session:
         settings = Settings(**_BASE)
@@ -188,37 +167,6 @@ def test_persisted_state_survives_new_service_instance(slice75_db: sessionmaker[
         assert summary.last_scan_dry_run is True
 
 
-def test_scan_writes_persisted_state_on_non_dry_run(slice75_db: sessionmaker[Session]) -> None:
-    client = _client(slice75_db)
-    _scan(client, dry_run=False)
-    with slice75_db() as session:
-        row = session.scalar(
-            select(MarketWatcherScanRecord)
-            .where(MarketWatcherScanRecord.organization_id == ORG_A)
-            .order_by(MarketWatcherScanRecord.scanned_at.desc())
-        )
-        assert row is not None
-        assert row.dry_run is False
-
-
-def test_scan_writes_blocked_status(slice75_db: sessionmaker[Session]) -> None:
-    client = _client(slice75_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": "WRONG",
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "blocked"
-    summary = client.get("/market-watcher/summary").json()
-    assert summary["last_scan_status"] == "blocked"
-    assert summary["last_scan_error"] == "confirmation_required"
-
-
 def test_scan_writes_degraded_status(slice75_db: sessionmaker[Session]) -> None:
     provider = MagicMock()
     provider.name = "mock"
@@ -242,24 +190,6 @@ def test_scan_writes_degraded_status(slice75_db: sessionmaker[Session]) -> None:
         assert summary.last_scan_status == "degraded"
 
 
-def test_tenant_isolation(slice75_db: sessionmaker[Session]) -> None:
-    client_a = _client(slice75_db, email="owner75a@test.example")
-    client_b = _client(slice75_db, email="owner75b@test.example")
-    _scan(client_a, dry_run=True)
-    summary_b = client_b.get("/market-watcher/summary").json()
-    assert summary_b["last_scan_at"] is None
-
-
-def test_recent_scans_endpoint(slice75_db: sessionmaker[Session]) -> None:
-    client = _client(slice75_db)
-    _scan(client, dry_run=True)
-    _scan(client, dry_run=True)
-    recent = client.get("/market-watcher/scans/recent?limit=5").json()
-    assert recent["total"] >= 2
-    assert len(recent["items"]) >= 2
-    assert "conditions_found" in recent["items"][0]
-
-
 def test_errors_are_redacted(slice75_db: sessionmaker[Session]) -> None:
     with slice75_db() as session:
         settings = Settings(**_BASE)
@@ -277,16 +207,6 @@ def test_errors_are_redacted(slice75_db: sessionmaker[Session]) -> None:
         assert row is not None
         assert "password" not in (row.error or "").lower()
         assert "secret" not in (row.error or "").lower()
-
-
-def test_no_secrets_in_summary_or_history(slice75_db: sessionmaker[Session]) -> None:
-    client = _client(slice75_db)
-    _scan(client, dry_run=True)
-    summary_raw = client.get("/market-watcher/summary").text
-    recent_raw = client.get("/market-watcher/scans/recent").text
-    for raw in (summary_raw, recent_raw):
-        assert "TELEGRAM_BOT_TOKEN" not in raw
-        assert "postgresql+psycopg://" not in raw
 
 
 def test_no_telegram_service_called(slice75_db: sessionmaker[Session]) -> None:

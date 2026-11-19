@@ -1,9 +1,8 @@
-"""AT-037 — TradingView signal intake + BloFin demo read-only sync."""
+"""AT-037 — BloFin demo read-only sync."""
 
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -18,14 +17,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
-from app.core.errors import ExchangeDemoInactiveError, ValidationAppError
+from app.core.errors import ExchangeDemoInactiveError
 from app.db.base import Base
 from app.db.models import (
     BloFinDemoSyncSnapshot,
     Membership,
     Organization,
-    PaperValidationCandidate,
-    TradingViewSignal,
     User,
     UserStrategy,
     UserStrategyVersion,
@@ -34,9 +31,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.providers.exchange.base import AccountPermissions, ExchangeBalance, ExchangePositionData
-from app.schemas.common import MembershipRole, StrategyId, TradingViewSignalStatus
-from app.schemas.tradingview_signal import CREATE_TRADINGVIEW_CANDIDATE_CONFIRM
-from app.security.tradingview_webhook import compute_tradingview_signature
+from app.schemas.common import MembershipRole, StrategyId
 from app.services.blofin_activity_config import BloFinActivitySettings
 from app.services.blofin_sync_service import BloFinSyncService
 
@@ -181,209 +176,6 @@ def _login(client: TestClient, email: str) -> dict[str, str]:
     assert response.status_code == 200, response.text
     token = response.json()["tokens"]["access_token"]
     return {"Authorization": f"Bearer {token}"}
-
-
-def _payload(**overrides: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "organization_id": str(ORG_A),
-        "alert_id": "tv-alert-100",
-        "symbol": "BTCUSDT",
-        "timeframe": "15m",
-        "direction": "long",
-        "setup_name": "HTF Pullback",
-        "setup_version": 1,
-        "strategy_id": str(STRATEGY_A),
-        "strategy_version_id": str(VERSION_A),
-        "trigger_level": 65000.0,
-        "invalidation_level": 64000.0,
-        "take_profit_level": 67000.0,
-        "stop_loss_level": 64000.0,
-        "confidence": 0.8,
-        "source": {"chart": "BTCUSDT.P"},
-    }
-    body.update(overrides)
-    return body
-
-
-def _post_webhook(
-    client: TestClient,
-    body: dict[str, Any],
-    *,
-    secret: str = WEBHOOK_SECRET,
-    skew: int = 0,
-    bad_signature: bool = False,
-    omit_headers: bool = False,
-) -> Any:
-    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    timestamp = int(time.time()) + skew
-    signature = compute_tradingview_signature(raw, timestamp=timestamp, secret=secret)
-    if bad_signature:
-        signature = "0" * 64
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if not omit_headers:
-        headers["X-AT-Timestamp"] = str(timestamp)
-        headers["X-AT-Signature"] = signature
-    return client.post("/webhooks/tradingview", content=raw, headers=headers)
-
-
-def test_webhook_signature_and_replay_protection(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, _factory, _settings = client
-    body = _payload()
-
-    missing = _post_webhook(test_client, body, omit_headers=True)
-    assert missing.status_code == 401
-
-    bad = _post_webhook(test_client, body, bad_signature=True)
-    assert bad.status_code == 401
-
-    stale = _post_webhook(test_client, body, skew=-10_000)
-    assert stale.status_code == 401
-
-    ok = _post_webhook(test_client, body)
-    assert ok.status_code == 200, ok.text
-    assert ok.json()["signal"]["status"] == TradingViewSignalStatus.VALIDATED.value
-    assert ok.json()["already_exists"] is False
-
-
-def test_webhook_idempotency_converges(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, factory, _settings = client
-    body = _payload(alert_id="tv-idem-1")
-    first = _post_webhook(test_client, body)
-    second = _post_webhook(test_client, body)
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert second.json()["already_exists"] is True
-    assert second.json()["duplicate"] is True
-    assert first.json()["signal"]["id"] == second.json()["signal"]["id"]
-
-    conflict = _post_webhook(
-        test_client,
-        _payload(alert_id="tv-idem-1", confidence=0.1),
-    )
-    assert conflict.status_code == 422
-
-    with factory() as session:
-        count = len(session.scalars(select(TradingViewSignal)).all())
-        assert count == 1
-
-
-def test_malformed_and_bounded_payload_rejected(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, _factory, _settings = client
-    oversized = _payload(symbol="X" * 40)
-    response = _post_webhook(test_client, oversized)
-    assert response.status_code == 422
-
-    deep_source = _payload(source={"a": {"b": {"c": {"d": 1}}}})
-    deep = _post_webhook(test_client, deep_source)
-    assert deep.status_code == 422
-
-    unknown_org = _payload(organization_id=str(uuid.uuid4()), alert_id="tv-unknown-org")
-    missing_org = _post_webhook(test_client, unknown_org)
-    assert missing_org.status_code == 422
-
-
-def test_tenant_isolation_and_rbac(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, _factory, _settings = client
-    created = _post_webhook(test_client, _payload(alert_id="tv-tenant-1"))
-    assert created.status_code == 200
-    signal_id = created.json()["signal"]["id"]
-
-    owner_a = _login(test_client, "at037-a@test.example")
-    owner_b = _login(test_client, "at037-b@test.example")
-    viewer = _login(test_client, "at037-viewer@test.example")
-    trader = _login(test_client, "at037-trader@test.example")
-
-    listed = test_client.get("/tradingview/signals", headers=owner_a)
-    assert listed.status_code == 200
-    assert listed.json()["total"] == 1
-
-    cross = test_client.get(f"/tradingview/signals/{signal_id}", headers=owner_b)
-    assert cross.status_code == 404
-
-    viewer_list = test_client.get("/tradingview/signals", headers=viewer)
-    assert viewer_list.status_code == 200
-
-    bad_confirm = test_client.post(
-        f"/tradingview/signals/{signal_id}/create-candidate",
-        headers=trader,
-        json={"confirm": "NOPE"},
-    )
-    assert bad_confirm.status_code == 422
-
-    viewer_create = test_client.post(
-        f"/tradingview/signals/{signal_id}/create-candidate",
-        headers=viewer,
-        json={"confirm": CREATE_TRADINGVIEW_CANDIDATE_CONFIRM},
-    )
-    assert viewer_create.status_code == 403
-
-
-def test_candidate_creation_is_paper_only_and_safe(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, factory, _settings = client
-    created = _post_webhook(test_client, _payload(alert_id="tv-candidate-1"))
-    signal_id = created.json()["signal"]["id"]
-    trader = _login(test_client, "at037-trader@test.example")
-
-    result = test_client.post(
-        f"/tradingview/signals/{signal_id}/create-candidate",
-        headers=trader,
-        json={"confirm": CREATE_TRADINGVIEW_CANDIDATE_CONFIRM},
-    )
-    assert result.status_code == 200, result.text
-    body = result.json()
-    assert body["already_exists"] is False
-    assert body["signal"]["status"] == TradingViewSignalStatus.CANDIDATE_CREATED.value
-    assert "Paper-validation candidate only" in body["note"]
-
-    again = test_client.post(
-        f"/tradingview/signals/{signal_id}/create-candidate",
-        headers=trader,
-        json={"confirm": CREATE_TRADINGVIEW_CANDIDATE_CONFIRM},
-    )
-    assert again.status_code == 200
-    assert again.json()["already_exists"] is True
-
-    with factory() as session:
-        candidates = session.scalars(select(PaperValidationCandidate)).all()
-        assert len(candidates) == 1
-        assert candidates[0].promotion_source == "tradingview_signal"
-        assert candidates[0].candidate_status == "queued"
-
-
-def test_foreign_strategy_is_rejected(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, _factory, _settings = client
-    response = _post_webhook(
-        test_client,
-        _payload(
-            alert_id="tv-bad-strategy",
-            strategy_id=str(uuid.uuid4()),
-            strategy_version_id=None,
-        ),
-    )
-    assert response.status_code == 200
-    assert response.json()["signal"]["status"] == TradingViewSignalStatus.REJECTED.value
-    assert response.json()["signal"]["rejection_reason"]
-
-
-def test_webhook_disabled_fail_closed(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    test_client, _factory, settings = client
-    settings.tradingview_webhook_enabled = False
-    response = _post_webhook(test_client, _payload(alert_id="tv-disabled"))
-    assert response.status_code == 503
 
 
 def test_blofin_sync_read_only_contract(
@@ -532,57 +324,3 @@ def test_real_trading_remains_disabled_in_settings(
     assert settings.enable_real_trading is False
     assert settings.real_trading_enabled is False
     assert settings.execution_mode.value == "paper"
-
-
-def _signed(body: dict[str, Any]) -> tuple[bytes, str, str]:
-    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    timestamp = int(time.time())
-    signature = compute_tradingview_signature(raw, timestamp=timestamp, secret=WEBHOOK_SECRET)
-    return raw, signature, str(timestamp)
-
-
-def test_webhook_org_binding_and_no_existence_oracle(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    """M16: the global secret is bound to one org; unknown and foreign orgs look identical."""
-    from app.core.config import Environment
-    from app.services.tradingview_signal_service import TradingViewSignalService
-
-    _test_client, factory, settings = client
-    bound = settings.model_copy(update={"tradingview_webhook_organization_id": str(ORG_A)})
-
-    def _intake(cfg: Settings, org: uuid.UUID, alert_id: str) -> Any:
-        raw, signature, timestamp = _signed(_payload(organization_id=str(org), alert_id=alert_id))
-        with factory() as session:
-            return TradingViewSignalService(session, cfg).intake_webhook(
-                raw, signature_header=signature, timestamp_header=timestamp
-            )
-
-    errors = []
-    for org, alert_id in ((ORG_B, "tv-bound-foreign"), (uuid.uuid4(), "tv-bound-unknown")):
-        with pytest.raises(ValidationAppError) as raised:
-            _intake(bound, org, alert_id)
-        errors.append((raised.value.code, raised.value.message, raised.value.details))
-    assert errors[0] == errors[1]
-    assert errors[0][0] == "tradingview_webhook_organization_refused"
-    assert not errors[0][2]
-
-    assert _intake(bound, ORG_A, "tv-bound-ok").signal.organization_id == ORG_A
-
-    unbound_staging = settings.model_copy(update={"environment": Environment.STAGING})
-    with pytest.raises(ValidationAppError):
-        _intake(unbound_staging, ORG_A, "tv-unbound-staging")
-
-
-def test_webhook_rate_limit_uses_settings(
-    client: tuple[TestClient, sessionmaker[Session], Settings],
-) -> None:
-    """M16: TRADINGVIEW_WEBHOOK_RATE_LIMIT is honoured instead of a hard-coded 60/h."""
-    test_client, _factory, _settings = client
-    app = test_client.app
-    app.state.settings = app.state.settings.model_copy(update={"tradingview_webhook_rate_limit": 2})
-    statuses = [
-        _post_webhook(test_client, _payload(alert_id=f"tv-rate-{i}")).status_code for i in range(3)
-    ]
-    assert statuses[:2] == [200, 200]
-    assert statuses[2] == 429

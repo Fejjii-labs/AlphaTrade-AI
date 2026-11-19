@@ -4,9 +4,8 @@ import path from "node:path";
 import type { components } from "../src/lib/api/generated/types";
 
 type Draft = components["schemas"]["ExperimentVersion"];
-type Screening = components["schemas"]["TrendPulseScreeningDetail"];
-type Fixture = { email: string; password: string; strategy_id: string; trigger_end: string; other: { email: string; password: string } };
-const recoveryPrefixes = ["alphatrade:experiment-draft:", "alphatrade:screening:"];
+type Fixture = { email: string; password: string; strategy_id: string; other: { email: string; password: string } };
+const recoveryPrefixes = ["alphatrade:experiment-draft:"];
 
 test.describe.configure({ mode: "serial" });
 test.skip(!process.env.EXPERIMENT_BROWSER_AUTH_FILE, "Requires explicit disposable local PostgreSQL/login fixtures.");
@@ -67,7 +66,6 @@ async function prepareDraft(page: Page, strategyId: string, name: string) {
 async function logoutAwayFromPanels(page: Page, base: string) {
   await page.goto("/journal");
   await expect(page.getByTestId("experiment-draft")).toHaveCount(0);
-  await expect(page.getByTestId("screenings")).toHaveCount(0);
   expect((await recoveryKeys(page)).length).toBeGreaterThan(0);
   const menu = page.getByTestId("header-status-menu");
   await menu.getByRole("button", { name: "Status", exact: true }).click();
@@ -79,7 +77,7 @@ async function logoutAwayFromPanels(page: Page, base: string) {
   expect(await page.evaluate(() => sessionStorage.getItem("alphatrade_access_token"))).toBeNull();
 }
 
-test("real login keeps exact draft and screening identity through reload and explicit recovery", async ({ page }) => {
+test("real login keeps exact draft identity through reload and explicit recovery", async ({ page }) => {
   test.setTimeout(150_000);
   const { base, fixture } = await localFixture(page);
   const headers = await login(page, base, fixture);
@@ -125,57 +123,10 @@ test("real login keeps exact draft and screening identity through reload and exp
   expect(draftCalls).toBe(2);
   expect((await listing()).total).toBe(afterCommit.total);
   await page.unroute(`${base}/experiments`);
-  await reloadedDraft.getByRole("link", { name: "Open experiment" }).click();
-
-  const screeningPanel = page.getByTestId("screenings");
-  await expect(screeningPanel.getByText("No screenings recorded.")).toBeVisible();
-  await screeningPanel.getByText("Screen a closed trigger").click();
-  await screeningPanel.getByLabel("Trigger close (UTC)").fill(fixture.trigger_end.slice(0, 16));
-  const screeningURL = `${base}/experiments/${committedDraft.experiment_id}/versions/${committedDraft.id}/trendpulse-screenings`;
-  let screeningCalls = 0;
-  let originalScreening = "";
-  let committedScreening!: Screening;
-  await page.route(screeningURL, async route => {
-    if (route.request().method() !== "POST") return route.continue();
-    screeningCalls++;
-    const body = route.request().postData()!;
-    if (screeningCalls === 1) originalScreening = body;
-    else expect(body).toBe(originalScreening);
-    const actual = await route.fetch();
-    expect(actual.ok()).toBe(true);
-    const result = await actual.json() as Screening;
-    if (screeningCalls === 1) committedScreening = result;
-    else expect(result).toEqual(committedScreening);
-    if (screeningCalls === 1) await route.abort("failed");
-    else await route.fulfill({ response: actual });
-  });
-  await screeningPanel.getByRole("button", { name: "Screen trigger" }).click();
-  await expect(screeningPanel.getByRole("button", { name: "Recover screening" })).toBeEnabled();
-  expect(screeningCalls).toBe(1);
-  expect(JSON.parse(originalScreening).request_id).toBe(committedScreening.request_id);
-  expect(committedScreening.receipt_provenance).toBe("synthetic_fixture");
-  expect(committedScreening.execution_authorized).toBe(false);
-  expect(committedScreening.sample_eligible).toBe(false);
-  expect(committedScreening.performance).toBeNull();
-  const pendingScreeningKeys = await recoveryKeys(page);
-  expect(pendingScreeningKeys).toHaveLength(1);
-  await page.reload();
-  await expect(screeningPanel.getByRole("button", { name: "Recover screening" })).toBeEnabled();
-  expect(await recoveryKeys(page)).toEqual(pendingScreeningKeys);
-  expect(screeningCalls).toBe(1);
-  const historyBefore = await (await page.request.get(screeningURL, { headers })).json();
-  expect(historyBefore.total).toBe(1);
-  expect(historyBefore.items[0].id).toBe(committedScreening.id);
-  await screeningPanel.getByRole("button", { name: "Recover screening" }).click();
-  await expect(screeningPanel.getByText("Receipts & evidence")).toBeVisible();
-  expect(screeningCalls).toBe(2);
-  expect((await (await page.request.get(screeningURL, { headers })).json()).total).toBe(1);
-  expect(await (await page.request.get(`${base}/trendpulse-screenings/${committedScreening.id}`, { headers })).json()).toEqual(committedScreening);
-  await expect(screeningPanel.getByText(/Performance unavailable/)).toBeVisible();
   expect(await recoveryKeys(page)).toEqual([]);
 });
 
-test("real logout off the panels removes unresolved drafts and screenings before same or different login", async ({ page }) => {
+test("real logout off the panels removes unresolved drafts before same or different login", async ({ page }) => {
   test.setTimeout(150_000);
   const { base, fixture } = await localFixture(page);
   await login(page, base, fixture);
@@ -192,39 +143,15 @@ test("real logout off the panels removes unresolved drafts and screenings before
   });
   await panel.getByRole("button", { name: "Create experiment draft" }).click();
   await expect(panel.getByRole("button", { name: "Recover draft" })).toBeEnabled();
-  const target = `/strategies?experiment=${committed.experiment_id}`;
-  await page.goto(target);
-  const screenings = page.getByTestId("screenings");
-  await expect(screenings.getByText("No screenings recorded.")).toBeVisible();
-  await screenings.getByText("Screen a closed trigger").click();
-  await screenings.getByLabel("Trigger close (UTC)").fill(fixture.trigger_end.slice(0, 16));
-  const screeningURL = `${base}/experiments/${committed.experiment_id}/versions/${committed.id}/trendpulse-screenings`;
-  let screeningCalls = 0;
-  await page.route(screeningURL, async route => {
-    if (route.request().method() !== "POST") return route.continue();
-    screeningCalls++;
-    const actual = await route.fetch();
-    expect(actual.ok()).toBe(true);
-    await route.fulfill({ response: actual, body: '{"unexpected":true}' });
-  });
-  await screenings.getByRole("button", { name: "Screen trigger" }).click();
-  await expect(screenings.getByRole("button", { name: "Recover screening" })).toBeEnabled();
-  const unresolved = await recoveryKeys(page);
-  expect(unresolved).toHaveLength(2);
-  for (const prefix of recoveryPrefixes) expect(unresolved.filter(key => key.startsWith(prefix))).toHaveLength(1);
+  expect(await recoveryKeys(page)).toHaveLength(1);
   await logoutAwayFromPanels(page, base);
   await login(page, base, fixture);
   await page.goto(`/strategy-lab/${fixture.strategy_id}`);
   await expect(page.getByText("Prepare research draft")).toBeVisible();
   await expect(page.getByRole("button", { name: "Recover draft" })).toHaveCount(0);
-  await page.goto(target);
-  await expect(screenings.getByRole("button", { name: "Details", exact: true })).toBeVisible();
-  await expect(screenings.getByRole("button", { name: "Recover screening" })).toHaveCount(0);
   expect(await recoveryKeys(page)).toEqual([]);
   expect(draftCalls).toBe(1);
-  expect(screeningCalls).toBe(1);
   await page.unroute(`${base}/experiments`);
-  await page.unroute(screeningURL);
 
   // Both accounts are fresh disposable fixtures with persisted conservative safety
   // state; account switching uses the actual login form, never injected tokens.
@@ -237,7 +164,6 @@ test("real logout off the panels removes unresolved drafts and screenings before
   await page.goto("/strategies");
   await expect(page.getByTestId("experiments").getByText("No experiments yet.", { exact: false })).toBeVisible();
   expect(await recoveryKeys(page)).toEqual([]);
-  await expect(page.getByRole("button", { name: /Recover (draft|screening)/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Recover draft/ })).toHaveCount(0);
   expect((await page.request.get(`${base}/experiments/${committed.experiment_id}`, { headers: otherHeaders })).status()).toBe(404);
-  expect((await page.request.get(screeningURL, { headers: otherHeaders })).status()).toBe(404);
 });

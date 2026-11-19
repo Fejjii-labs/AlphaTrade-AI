@@ -28,7 +28,6 @@ from app.schemas.common import (
 from app.schemas.paper_validation import PaperValidationMetrics
 from app.schemas.structured_rules import EntryRuleBlock, ExitRuleBlock, StructuredRules
 from app.security.passwords import hash_password
-from app.services.paper_sample_window_service import PaperSampleWindowService
 from app.services.paper_validation_promotion import evaluate_paper_promotion
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000200")
@@ -172,69 +171,6 @@ def _start_run(client: TestClient, strategy_id: str) -> str:
     return resp.json()["id"]
 
 
-def test_scheduler_disabled_by_default(slice40_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice40_client
-    resp = client.get("/paper-validation/scheduler/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["env_enabled"] is False
-    assert body["effective_enabled"] is False
-    assert body["real_trading_enabled"] is False
-
-
-def test_manual_scheduler_tick_reports_disabled(
-    slice40_client: tuple[TestClient, sessionmaker],
-) -> None:
-    client, _ = slice40_client
-    resp = client.post("/paper-validation/scheduler/tick")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["env_enabled"] is False
-    assert body["effective_enabled"] is False
-
-
-def test_scan_creates_runtime_history_and_alert(
-    slice40_client: tuple[TestClient, sessionmaker],
-) -> None:
-    client, _ = slice40_client
-    strategy_id = _create_strategy(client)
-    run_id = _start_run(client, strategy_id)
-    client.post(f"/paper-validation/{run_id}/scan")
-    hist = client.get("/paper-validation/scheduler/history")
-    assert hist.status_code == 200
-    assert hist.json()["total"] >= 1
-    alerts = client.get("/alerts")
-    assert alerts.status_code == 200
-    assert alerts.json()["total"] >= 0
-
-
-def test_mark_alert_read_and_summary(slice40_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice40_client
-    strategy_id = _create_strategy(client)
-    run_id = _start_run(client, strategy_id)
-    client.post(f"/paper-validation/{run_id}/scan")
-    listing = client.get("/alerts")
-    items = listing.json()["items"]
-    if items:
-        alert_id = items[0]["id"]
-        read_resp = client.patch(f"/alerts/{alert_id}/read")
-        assert read_resp.status_code == 200
-        assert read_resp.json()["read_at"] is not None
-    summary = client.get("/alerts/summary")
-    assert summary.status_code == 200
-    assert "unread" in summary.json()
-
-
-def test_walk_forward_sample_metrics(slice40_client: tuple[TestClient, sessionmaker]) -> None:
-    client, factory = slice40_client
-    strategy_id = _create_strategy(client)
-    run_id = _start_run(client, strategy_id)
-    with factory() as session:
-        svc = PaperSampleWindowService(session)
-        windows = svc.refresh_for_run(uuid.UUID(run_id), organization_id=ORG_ID)
-        assert isinstance(windows, list)
-
-
 def test_promotion_requires_enough_paper_sample() -> None:
     metrics = PaperValidationMetrics(
         paper_trades_count=3,
@@ -287,11 +223,3 @@ def test_agent_routes_scheduler_and_alerts_questions() -> None:
         classify_strategy_workflow("Why was this strategy skipped?")
         is Intent.PAPER_VALIDATION_QUERY
     )
-
-
-def test_no_real_trading_path(slice40_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice40_client
-    health = client.get("/health")
-    assert health.json()["real_trading_enabled"] is False
-    sched = client.get("/paper-validation/scheduler/status")
-    assert sched.json()["real_trading_enabled"] is False

@@ -446,20 +446,20 @@ def test_paper_only_false_blocked(
     assert response.json()["error_code"] == "paper_only_required"
 
 
-def test_deliver_updates_alert_row(
+def test_telegram_outbox_delivers_once_after_parking(
     telegram_configured_client: tuple[TestClient, sessionmaker[Session]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_client, factory = telegram_configured_client
     mock_response = MagicMock()
     mock_response.status_code = 200
-    monkeypatch.setattr(
-        "app.providers.alert_delivery.telegram.httpx.post",
-        MagicMock(return_value=mock_response),
-    )
+    post = MagicMock(return_value=mock_response)
+    monkeypatch.setattr("app.providers.alert_delivery.telegram.httpx.post", post)
     headers, org_id, user_id = _register_owner(test_client, email="row-update@example.com")
     alert_id = _create_alert(factory, org_id=org_id, user_id=user_id)
-    _post_deliver(test_client, alert_id, headers)
+    assert _post_deliver(test_client, alert_id, headers).json()["status"] == "sent"
+    assert _post_deliver(test_client, alert_id, headers).json()["status"] == "already_delivered"
+    post.assert_called_once()
     with factory() as session:
         row = session.scalar(
             select(PaperValidationAlert).where(PaperValidationAlert.id == alert_id)

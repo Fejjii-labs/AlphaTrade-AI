@@ -11,7 +11,6 @@ import pytest
 
 from app.api.routes import canonical as canonical_routes
 from app.api.routes import market_watcher as mw_routes
-from app.api.routes import providers as provider_routes
 from app.providers.base import ProviderHealth, ProviderKind, ProviderStatus
 from app.providers.registry import ProviderRegistry
 from app.services.watcher_monitoring_service import WatcherMonitoringService
@@ -98,48 +97,8 @@ def test_failing_probe_is_cached_as_unavailable_not_raised() -> None:
 
 
 def test_routes_are_sync_so_fastapi_runs_them_in_threadpool() -> None:
-    assert not inspect.iscoroutinefunction(provider_routes.provider_status)
     assert not inspect.iscoroutinefunction(mw_routes.market_watcher_monitoring)
     assert not inspect.iscoroutinefunction(canonical_routes.get_canonical_market_status)
-
-
-def test_provider_route_uses_cache_not_live_probe() -> None:
-    reg, provider, _ = _registry()
-    provider_routes.provider_status(reg)
-    provider_routes.provider_status(reg)
-    assert provider.calls == 1
-
-
-def test_slow_provider_route_does_not_block_event_loop() -> None:
-    """A cold-cache probe runs in the threadpool; other requests keep flowing."""
-    import httpx
-    from fastapi import FastAPI
-
-    from app.core.dependencies import get_provider_registry
-
-    slow = ProviderRegistry()
-    slow.register(_CountingProvider(delay=1.0))
-    app = FastAPI()
-    app.include_router(provider_routes.router)
-    app.dependency_overrides[get_provider_registry] = lambda: slow
-
-    @app.get("/ping")
-    async def ping() -> dict[str, bool]:
-        return {"ok": True}
-
-    async def run() -> float:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-            slow_task = asyncio.create_task(client.get("/providers/status"))
-            await asyncio.sleep(0.05)
-            started = time.monotonic()
-            resp = await client.get("/ping")
-            elapsed = time.monotonic() - started
-            assert resp.status_code == 200
-            assert (await slow_task).status_code == 200
-            return elapsed
-
-    assert asyncio.run(run()) < 0.5
 
 
 def test_monitoring_snapshot_does_not_force_monitor_tick() -> None:
@@ -250,16 +209,6 @@ def test_old_healthy_cache_reported_stale_not_healthy(monkeypatch: pytest.Monkey
     assert "unknown" in (statuses[0].detail or "").lower()
 
 
-def test_provider_route_exposes_checked_at_and_age() -> None:
-    reg, _, clock = _registry()
-    first = provider_routes.provider_status(reg)
-    assert first.checked_at is not None and first.age_seconds == 0 and not first.stale
-    clock.now += 10
-    second = provider_routes.provider_status(reg)
-    assert second.checked_at == first.checked_at
-    assert second.age_seconds == pytest.approx(10)
-
-
 def test_cold_start_is_single_flight() -> None:
     reg = ProviderRegistry()
     provider = _CountingProvider(delay=0.3)
@@ -352,20 +301,6 @@ def test_overdue_refresher_is_declared_dead_and_replaced() -> None:
     clock.now += reg._refresh_deadline() + 1
     reg.cached_statuses(ttl_seconds=45)
     assert _wait_until(lambda: provider.calls == 2 and not reg._refreshing)
-
-
-def test_provider_route_reports_stale_true_for_old_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    reg, _provider, clock = _registry()
-    provider_routes.provider_status(reg)
-
-    def boom() -> list[ProviderStatus]:
-        raise RuntimeError("refresh failed")
-
-    monkeypatch.setattr(reg, "refresh_statuses", boom)
-    clock.now += 1_000_000
-    resp = provider_routes.provider_status(reg)
-    assert resp.stale is True
-    assert resp.age_seconds is not None and resp.age_seconds > 135
 
 
 def test_older_refresh_cannot_overwrite_newer_cache() -> None:

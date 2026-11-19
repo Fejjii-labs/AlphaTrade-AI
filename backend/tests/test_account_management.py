@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -14,11 +13,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
-from app.db.models import AuditLog, EmailVerificationToken, Membership, PasswordResetToken, User
+from app.db.models import AuditLog, EmailVerificationToken, PasswordResetToken, User
 from app.db.session import get_session
 from app.main import create_app
 from app.providers.email.factory import reset_email_provider_for_tests, resolve_email_provider
-from app.schemas.common import AuditEventType, MembershipRole
+from app.schemas.common import AuditEventType
 from app.security.account_tokens import hash_account_token
 from app.security.rate_limit import reset_rate_limiter
 
@@ -427,92 +426,6 @@ def test_invalid_reset_token_audited(
     assert len(failed) >= 1
 
 
-def test_owner_creates_invitation(
-    account_client: AccountClientFixture,
-    account_settings: Settings,
-) -> None:
-    client, _ = account_client
-    owner = _register(client, email="owner@example.com")
-    headers = _auth(owner["tokens"]["access_token"])
-    response = client.post(
-        "/organizations/invitations",
-        headers=headers,
-        json={"email": "invitee@example.com", "role": "trader"},
-    )
-    assert response.status_code == 201
-    assert response.json()["email"] == "invitee@example.com"
-    _extract_token_from_mock_email(account_settings, "organization_invitation")
-
-
-def test_viewer_cannot_create_invitation(
-    account_client: AccountClientFixture,
-) -> None:
-    client, factory = account_client
-    owner = _register(client, email="owner2@example.com")
-    with factory() as session:
-        membership = session.scalars(select(Membership)).one()
-        membership.role = MembershipRole.VIEWER
-        session.commit()
-    headers = _auth(owner["tokens"]["access_token"])
-    response = client.post(
-        "/organizations/invitations",
-        headers=headers,
-        json={"email": "blocked@example.com", "role": "viewer"},
-    )
-    assert response.status_code == 403
-
-
-def test_invite_accept_creates_membership(
-    account_client: AccountClientFixture,
-    account_settings: Settings,
-) -> None:
-    client, factory = account_client
-    owner = _register(client, email="orgowner@example.com", org="Invite Org")
-    headers = _auth(owner["tokens"]["access_token"])
-    created = client.post(
-        "/organizations/invitations",
-        headers=headers,
-        json={"email": "member@example.com", "role": "viewer"},
-    )
-    invitation_id = created.json()["id"]
-    invitee = _register(client, email="member@example.com", org="Other Org")
-    token = _extract_token_from_mock_email(account_settings, "organization_invitation")
-    accept = client.post(
-        f"/organizations/invitations/{invitation_id}/accept",
-        headers=_auth(invitee["tokens"]["access_token"]),
-        json={"token": token},
-    )
-    assert accept.status_code == 200
-    with factory() as session:
-        user = session.scalars(select(User).where(User.email == "member@example.com")).one()
-        org_id = uuid.UUID(created.json()["organization_id"])
-        membership = session.scalars(
-            select(Membership).where(
-                Membership.user_id == user.id,
-                Membership.organization_id == org_id,
-            )
-        ).one()
-        assert membership.role == MembershipRole.VIEWER
-
-
-def test_invite_revoke_works(account_client: AccountClientFixture) -> None:
-    client, _ = account_client
-    owner = _register(client, email="revoker@example.com")
-    headers = _auth(owner["tokens"]["access_token"])
-    created = client.post(
-        "/organizations/invitations",
-        headers=headers,
-        json={"email": "revoked@example.com", "role": "trader"},
-    )
-    invitation_id = created.json()["id"]
-    revoked = client.post(
-        f"/organizations/invitations/{invitation_id}/revoke",
-        headers=headers,
-    )
-    assert revoked.status_code == 200
-    assert revoked.json()["revoked_at"] is not None
-
-
 def test_tokens_not_stored_plaintext(
     account_client: AccountClientFixture,
     account_settings: Settings,
@@ -602,7 +515,7 @@ def test_unverified_registration_session_is_limited_when_verification_required()
         resend = client.post("/auth/verify-email/request", headers=_auth(access), json={})
         assert resend.status_code == 200, resend.text
 
-        blocked = client.get("/organizations/invitations", headers=_auth(access))
+        blocked = client.get("/usage/summary", headers=_auth(access))
         assert blocked.status_code == 401
         assert "not verified" in blocked.json()["error"]["message"].lower()
 
@@ -615,90 +528,8 @@ def test_unverified_registration_session_is_limited_when_verification_required()
             user.email_verified = True
             session.commit()
 
-        allowed = client.get("/organizations/invitations", headers=_auth(access))
+        allowed = client.get("/usage/summary", headers=_auth(access))
         assert allowed.status_code == 200, allowed.text
         assert client.post("/auth/refresh", json={"refresh_token": refresh}).status_code == 200
     finally:
         gen.close()
-
-
-def test_resolve_tenant_uses_membership_matching_token_org(
-    account_client: AccountClientFixture,
-    account_settings: Settings,
-) -> None:
-    """L12: a token for a newer (invited) org resolves that org's membership."""
-    from app.security.tokens import create_access_token
-
-    client, _factory = account_client
-    owner = _register(client, email="inviter@example.com", org="Inviting Org")
-    created = client.post(
-        "/organizations/invitations",
-        headers=_auth(owner["tokens"]["access_token"]),
-        json={"email": "joiner@example.com", "role": "viewer"},
-    )
-    invitation_id = created.json()["id"]
-    inviting_org = uuid.UUID(created.json()["organization_id"])
-    joiner = _register(client, email="joiner@example.com", org="Joiner Home Org")
-    token = _extract_token_from_mock_email(account_settings, "organization_invitation")
-    accept = client.post(
-        f"/organizations/invitations/{invitation_id}/accept",
-        headers=_auth(joiner["tokens"]["access_token"]),
-        json={"token": token},
-    )
-    assert accept.status_code == 200, accept.text
-
-    joiner_id = uuid.UUID(joiner["user"]["id"])
-    second_org_token, _ = create_access_token(
-        user_id=joiner_id,
-        organization_id=inviting_org,
-        email="joiner@example.com",
-        settings=account_settings,
-        actor="user",
-    )
-    me = client.get("/auth/me", headers=_auth(second_org_token))
-    assert me.status_code == 200, me.text
-    assert me.json()["organization"]["id"] == str(inviting_org)
-    assert me.json()["membership_role"] == "viewer"
-
-    # A token for an org the user is not a member of is still refused.
-    stranger_token, _ = create_access_token(
-        user_id=joiner_id,
-        organization_id=uuid.uuid4(),
-        email="joiner@example.com",
-        settings=account_settings,
-        actor="user",
-    )
-    assert client.get("/auth/me", headers=_auth(stranger_token)).status_code == 401
-
-
-def test_invite_token_mismatch_audit_lands_in_caller_org(
-    account_client: AccountClientFixture,
-) -> None:
-    """L12: a wrong invitation token is audited in the caller's org, not the inviter's."""
-    client, factory = account_client
-    owner = _register(client, email="victim-owner@example.com", org="Victim Org")
-    created = client.post(
-        "/organizations/invitations",
-        headers=_auth(owner["tokens"]["access_token"]),
-        json={"email": "guesser@example.com", "role": "viewer"},
-    )
-    invitation_id = created.json()["id"]
-    victim_org = uuid.UUID(created.json()["organization_id"])
-    guesser = _register(client, email="guesser@example.com", org="Guesser Org")
-    guesser_org = uuid.UUID(guesser["organization"]["id"])
-    wrong = client.post(
-        f"/organizations/invitations/{invitation_id}/accept",
-        headers=_auth(guesser["tokens"]["access_token"]),
-        json={"token": "definitely-not-the-token"},
-    )
-    assert wrong.status_code == 401
-    with factory() as session:
-        rows = session.scalars(
-            select(AuditLog).where(AuditLog.action == AuditEventType.AUTH_INVALID_TOKEN)
-        ).all()
-        mismatch = [
-            r for r in rows if (r.redacted_metadata or {}).get("reason") == "invite_token_mismatch"
-        ]
-        assert mismatch, "expected an invite_token_mismatch audit row"
-        assert {r.organization_id for r in mismatch} == {guesser_org}
-        assert victim_org not in {r.organization_id for r in mismatch}

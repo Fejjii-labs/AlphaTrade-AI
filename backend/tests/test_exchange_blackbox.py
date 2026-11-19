@@ -26,7 +26,6 @@ from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.factory import resolve_exchange_provider
 from app.providers.registry import ProviderRegistry
 from app.tools.registry import build_default_registry as build_tool_registry
-from app.workers.scanner import build_market_scan_scanner
 
 _ALLOWED_OUTBOUND_TELEGRAM_ROUTE_PATHS = {
     "/alerts/test-telegram",
@@ -197,13 +196,6 @@ def test_blackbox_provider_status_redacts_secrets() -> None:
     assert "demo-key" not in combined
     assert "demo-secret" not in combined
     assert "demo-pass" not in combined
-
-
-def test_blackbox_worker_scanner_does_not_place_orders() -> None:
-    source = inspect.getsource(build_market_scan_scanner)
-    assert "place_order" not in source
-    assert "ExecutionService" not in source
-    assert "ExchangeExecutionProvider" not in source
 
 
 def test_blackbox_telegram_cannot_place_orders() -> None:

@@ -22,12 +22,10 @@ from app.agents.strategy_intent import classify_strategy_workflow
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import (
-    MarketWatcherBridgeDecision,
     MarketWatcherObservation,
     Membership,
     Organization,
     PaperValidationAlert,
-    PaperValidationRun,
     User,
 )
 from app.db.session import get_session
@@ -39,12 +37,10 @@ from app.schemas.common import (
     AlertDeliveryStatus,
     EntryTriggerType,
     ExitRuleType,
-    MarketWatcherBridgeDecisionType,
     MarketWatcherObservationStatus,
     MembershipRole,
     PaperAlertSource,
     PaperAlertType,
-    PaperValidationRecommendation,
     Timeframe,
 )
 from app.schemas.structured_rules import EntryRuleBlock, ExitRuleBlock, StructuredRules
@@ -53,7 +49,6 @@ from app.services.alert_delivery_service import AlertDeliveryService
 from app.services.market_watcher_bridge_service import MarketWatcherBridgeService
 from app.services.paper_alert_service import PaperAlertService
 from app.services.paper_validation_runtime_service import PaperValidationRuntimeService
-from app.tools.registry import _require_owner_mutation
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000500")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000501")
@@ -237,89 +232,6 @@ def _seed_observation(
     return row
 
 
-def test_bridge_disabled_by_default(slice42_client: TestClient) -> None:
-    resp = slice42_client.get("/market-watcher/bridge/status")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["env_enabled"] is False
-    assert body["effective_enabled"] is False
-
-
-def test_bridge_tick_returns_disabled_result(slice42_client: TestClient) -> None:
-    resp = slice42_client.post("/market-watcher/bridge/tick")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["effective_enabled"] is False
-    assert any("disabled" in d.lower() for d in body["decisions"])
-
-
-def test_bridge_tick_records_history_when_disabled(slice42_client: TestClient) -> None:
-    slice42_client.post("/market-watcher/bridge/tick")
-    history = slice42_client.get("/market-watcher/bridge/history")
-    assert history.status_code == 200
-    assert history.json()["total"] >= 1
-
-
-def test_bridge_skips_stale_observations(
-    slice42_client: TestClient, slice42_db: sessionmaker[Session]
-) -> None:
-    strategy_id = _create_strategy(slice42_client)
-    run_id = _start_run(slice42_client, strategy_id)
-    with slice42_db() as session:
-        _seed_observation(
-            session,
-            run_id=uuid.UUID(run_id),
-            strategy_id=uuid.UUID(strategy_id),
-            status=MarketWatcherObservationStatus.STALE,
-        )
-        session.commit()
-
-        bridge = MarketWatcherBridgeService(session, _settings(market_watcher_bridge_enabled=True))
-        result = bridge.tick(organization_id=ORG_ID, user_id=USER_ID)
-        assert result.scans_triggered == 0
-        decisions = session.scalars(select(MarketWatcherBridgeDecision)).all()
-        assert any(
-            d.decision == MarketWatcherBridgeDecisionType.SKIPPED_STALE_DATA for d in decisions
-        )
-
-
-def test_bridge_triggers_scan_for_eligible_run(
-    slice42_client: TestClient, slice42_db: sessionmaker[Session]
-) -> None:
-    strategy_id = _create_strategy(slice42_client)
-    run_id = _start_run(slice42_client, strategy_id)
-    with slice42_db() as session:
-        _seed_observation(
-            session,
-            run_id=uuid.UUID(run_id),
-            strategy_id=uuid.UUID(strategy_id),
-        )
-        session.commit()
-
-    app = create_app(
-        settings=_settings(market_watcher_bridge_enabled=True, market_watcher_enabled=True)
-    )
-
-    def _override_session() -> Iterator[Session]:
-        with slice42_db() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = _override_session
-    with TestClient(app) as client:
-        login = client.post(
-            "/auth/login",
-            json={"email": "owner42@test.example", "password": "TestPassword123!"},
-        )
-        client.headers.update({"Authorization": f"Bearer {login.json()['tokens']['access_token']}"})
-        tick = client.post("/market-watcher/bridge/tick")
-        assert tick.status_code == 200
-        body = tick.json()
-        assert body["effective_enabled"] is True
-        history = client.get("/market-watcher/bridge/history")
-        assert history.json()["total"] >= 1
-    app.dependency_overrides.clear()
-
-
 def test_webhook_includes_idempotency_key() -> None:
     captured: dict = {}
 
@@ -485,23 +397,6 @@ def test_delivery_retry_stops_after_max_attempts(slice42_db: sessionmaker[Sessio
         assert result.alert.delivery_status == AlertDeliveryStatus.FAILED
 
 
-def test_bridge_tick_requires_owner_confirmation_for_agent(
-    slice42_db: sessionmaker[Session],
-) -> None:
-    with slice42_db() as session:
-        blocked = _require_owner_mutation(
-            session,
-            ORG_ID,
-            USER_ID,
-            {"user_message": "run bridge tick"},
-            tool_name="paper_validation_tool",
-            action_label="market watcher bridge tick",
-            confirm_hint="I confirm market watcher bridge tick",
-        )
-        assert blocked is not None
-        assert blocked.success is False
-
-
 def test_agent_bridge_intent_classification() -> None:
     assert (
         classify_strategy_workflow("Is the market watcher bridge enabled?")
@@ -511,13 +406,6 @@ def test_agent_bridge_intent_classification() -> None:
         classify_strategy_workflow("Did the market watcher trigger any scans?")
         == Intent.MARKET_WATCHER_BRIDGE_QUERY
     )
-
-
-def test_no_real_trading_path_added(slice42_client: TestClient) -> None:
-    health = slice42_client.get("/health")
-    assert health.json()["real_trading_enabled"] is False
-    bridge = slice42_client.get("/market-watcher/bridge/status")
-    assert bridge.json()["real_trading_enabled"] is False
 
 
 def test_alert_source_in_schema(slice42_db: sessionmaker[Session]) -> None:
@@ -538,60 +426,6 @@ def test_bridge_does_not_call_exchange_trading_api(slice42_db: sessionmaker[Sess
         assert not hasattr(runtime, "place_order")
         assert not any(
             name in dir(runtime) for name in ("create_order", "place_order", "submit_order")
-        )
-
-
-def test_bridge_only_calls_paper_validation_scan(
-    slice42_client: TestClient, slice42_db: sessionmaker[Session]
-) -> None:
-    strategy_id = _create_strategy(slice42_client)
-    run_id = _start_run(slice42_client, strategy_id)
-    with slice42_db() as session:
-        _seed_observation(
-            session,
-            run_id=uuid.UUID(run_id),
-            strategy_id=uuid.UUID(strategy_id),
-        )
-        session.commit()
-
-        mock_runtime = MagicMock()
-        mock_runtime.scan.return_value = MagicMock(signal=None, blockers=[], trade_created=False)
-        bridge = MarketWatcherBridgeService(session, _settings(market_watcher_bridge_enabled=True))
-        bridge._runtime = mock_runtime
-        bridge._should_skip_run = MagicMock(return_value=(None, []))
-        result = bridge.tick(organization_id=ORG_ID, user_id=USER_ID)
-        assert result.scans_triggered == 1
-        mock_runtime.scan.assert_called_once()
-        assert not any(
-            name in dir(mock_runtime) for name in ("create_order", "place_order", "submit_order")
-        )
-
-
-def test_bridge_skips_blocked_strategy(
-    slice42_client: TestClient, slice42_db: sessionmaker[Session]
-) -> None:
-    strategy_id = _create_strategy(slice42_client)
-    run_id = _start_run(slice42_client, strategy_id)
-    with slice42_db() as session:
-        run = session.scalar(
-            select(PaperValidationRun).where(PaperValidationRun.id == uuid.UUID(run_id))
-        )
-        assert run is not None
-        run.recommendation = PaperValidationRecommendation.RESTRICT.value
-        _seed_observation(
-            session,
-            run_id=uuid.UUID(run_id),
-            strategy_id=uuid.UUID(strategy_id),
-        )
-        session.commit()
-
-        bridge = MarketWatcherBridgeService(session, _settings(market_watcher_bridge_enabled=True))
-        result = bridge.tick(organization_id=ORG_ID, user_id=USER_ID)
-        assert result.scans_triggered == 0
-        decisions = session.scalars(select(MarketWatcherBridgeDecision)).all()
-        assert any(
-            d.decision == MarketWatcherBridgeDecisionType.SKIPPED_BLOCKED_STRATEGY
-            for d in decisions
         )
 
 

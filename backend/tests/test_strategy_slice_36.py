@@ -16,8 +16,7 @@ from sqlalchemy.pool import StaticPool
 from app.agents.strategy_intent import classify_strategy_workflow
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import Membership, Organization, TradeJournal, User
-from app.db.models import TradeProposal as TradeProposalModel
+from app.db.models import Membership, Organization, User
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.agent import Intent
@@ -25,12 +24,9 @@ from app.schemas.common import (
     EntryTriggerType,
     ExitRuleType,
     MembershipRole,
-    ProposalStatus,
-    RiskSeverity,
     StrategyId,
     Timeframe,
     TradeDirection,
-    TradeResult,
 )
 from app.schemas.structured_rules import EntryRuleBlock, ExitRuleBlock, StructuredRules
 from app.security.passwords import hash_password
@@ -144,57 +140,6 @@ def slice36_client() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
         client.headers.update({"Authorization": f"Bearer {token}"})
         yield client, factory
     app.dependency_overrides.clear()
-
-
-def test_human_vs_system_compares_proposal_and_journal(
-    slice36_client: tuple[TestClient, sessionmaker],
-) -> None:
-    client, factory = slice36_client
-    with factory() as session:
-        proposal = TradeProposalModel(
-            organization_id=ORG_ID,
-            user_id=USER_ID,
-            strategy_id=StrategyId.HTF_TREND_PULLBACK,
-            symbol="BTCUSDT",
-            timeframe="4h",
-            direction=TradeDirection.LONG,
-            entry_price=Decimal("60000"),
-            position_size=Decimal("0.1"),
-            leverage=Decimal("3"),
-            stop_loss=Decimal("58000"),
-            take_profits=[{"price": "62000", "size_fraction": 0.5}],
-            invalidation="Close below 58000",
-            confidence=0.7,
-            risk_level=RiskSeverity.MEDIUM,
-            rationale="Test plan",
-            status=ProposalStatus.APPROVED,
-            planned_loss_amount=Decimal("200"),
-        )
-        session.add(proposal)
-        session.flush()
-        journal = TradeJournal(
-            organization_id=ORG_ID,
-            user_id=USER_ID,
-            symbol="BTCUSDT",
-            timeframe="4h",
-            direction=TradeDirection.LONG,
-            entry_rationale="Followed plan mostly",
-            exit_rationale="Closed early",
-            emotions=["fomo"],
-            result=TradeResult.WIN,
-            pnl=Decimal("50"),
-            linked_proposal_id=proposal.id,
-        )
-        session.add(journal)
-        session.commit()
-        journal_id = journal.id
-
-    resp = client.get(f"/human-vs-system/{journal_id}")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["plan_adherence_score"] >= 0
-    assert "system_would_have_done" in body
-    assert body["missed_runner"] is not None
 
 
 def test_early_exit_analyzer_detects_early_close() -> None:

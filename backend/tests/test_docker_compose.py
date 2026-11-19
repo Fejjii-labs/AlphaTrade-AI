@@ -162,19 +162,11 @@ def test_health_and_provider_status_under_docker_like_settings() -> None:
         assert ready.status_code == 200
         assert ready.json()["ready"] is True
 
-        providers = client.get("/providers/status")
-        assert providers.status_code == 200
-        payload = providers.json()
-        assert payload["providers"]
-        exchange = next(p for p in payload["providers"] if p["kind"] == "exchange")
-        assert exchange["is_mock"] is True
-        assert "real trading disabled" in exchange.get("detail", "").lower()
-
         usage = client.get("/usage/summary")
         assert usage.status_code == 200
 
         audit = client.get("/audit/events")
-        assert audit.status_code == 200
+        assert audit.status_code == 404
 
 
 def test_env_example_documents_docker_safe_defaults() -> None:

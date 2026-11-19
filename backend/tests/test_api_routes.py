@@ -71,13 +71,9 @@ def client_with_db() -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
     engine.dispose()
 
 
-def test_audit_events_endpoint(client_with_db: tuple[TestClient, object]) -> None:
+def test_audit_listing_is_parked(client_with_db: tuple[TestClient, object]) -> None:
     client, _factory = client_with_db
-    response = client.get("/audit/events")
-    assert response.status_code == 200
-    body = response.json()
-    assert "items" in body
-    assert "total" in body
+    assert client.get("/audit/events").status_code == 404
 
 
 def test_usage_events_and_summary(client_with_db: tuple[TestClient, object]) -> None:
@@ -132,11 +128,10 @@ def test_strategies_list_and_evaluate(client_with_db: tuple[TestClient, object])
     assert any("research-only" in note.lower() for note in body["limitations"])
 
 
-def test_tools_list(client_with_db: tuple[TestClient, object]) -> None:
+def test_legacy_tools_route_is_parked(client_with_db: tuple[TestClient, object]) -> None:
     client, _factory = client_with_db
     response = client.get("/tools")
-    assert response.status_code == 200
-    assert len(response.json()) >= 10
+    assert response.status_code == 404
 
 
 def test_knowledge_ingest_and_search(

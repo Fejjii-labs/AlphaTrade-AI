@@ -161,52 +161,6 @@ def _create_strategy(client: TestClient) -> str:
     return strategy_id
 
 
-def test_paper_validation_run_start(slice39_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice39_client
-    strategy_id = _create_strategy(client)
-    started = client.post(
-        f"/strategies/{strategy_id}/paper-validation/start",
-        json={"runtime_mode": "scan_only"},
-    )
-    assert started.status_code == 200, started.text
-    body = started.json()
-    assert body["status"] == "in_progress"
-    assert body["runtime_mode"] == "scan_only"
-
-
-def test_scan_only_signal_no_trade(slice39_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice39_client
-    strategy_id = _create_strategy(client)
-    run = client.post(
-        f"/strategies/{strategy_id}/paper-validation/start",
-        json={"runtime_mode": "scan_only"},
-    ).json()
-    scan = client.post(f"/paper-validation/{run['id']}/scan")
-    assert scan.status_code == 200, scan.text
-    trades = client.get(f"/paper-validation/{run['id']}/trades")
-    assert trades.status_code == 200
-    assert trades.json()["total"] == 0
-    signals = client.get(f"/paper-validation/{run['id']}/signals")
-    assert signals.json()["total"] >= 1
-
-
-def test_auto_paper_mode_can_create_trade(slice39_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice39_client
-    strategy_id = _create_strategy(client)
-    run = client.post(
-        f"/strategies/{strategy_id}/paper-validation/start",
-        json={"runtime_mode": "auto_paper"},
-    ).json()
-    scan = client.post(f"/paper-validation/{run['id']}/scan")
-    assert scan.status_code == 200
-    body = scan.json()
-    assert body["trade_created"] is False
-    signals = client.get(f"/paper-validation/{run['id']}/signals")
-    assert signals.json()["total"] >= 1
-    latest = signals.json()["items"][0]
-    assert latest["status"] == "not_testable"
-
-
 def test_no_trade_filters_block(slice39_client: tuple[TestClient, sessionmaker]) -> None:
     engine = PaperBotEngine()
     from app.schemas.common import TradeDirection
@@ -255,15 +209,6 @@ def test_paper_promotion_conservative() -> None:
         min_runtime_days_met=True,
     )
     assert decision.recommendation.value == "insufficient_data"
-
-
-def test_manual_tick_endpoint(slice39_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice39_client
-    strategy_id = _create_strategy(client)
-    run = client.post(f"/strategies/{strategy_id}/paper-validation/start").json()
-    tick = client.post(f"/paper-validation/{run['id']}/tick")
-    assert tick.status_code == 200, tick.text
-    assert "trades_open" in tick.json()
 
 
 def test_agent_paper_validation_intent() -> None:

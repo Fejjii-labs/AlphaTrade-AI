@@ -1185,23 +1185,6 @@ def _build_armed_supervisor(
     def telegram_cycle() -> CycleOutcome:
         return outcome_from_telegram_cycle(telegram_runtime.run_cycle())
 
-    existing_watcher_cycle = watcher_cycle
-
-    def research_watcher_cycle() -> CycleOutcome:
-        outcome = existing_watcher_cycle()
-        # Reuse this component, its opt-in, and its authority guard. Domain start
-        # never arms execution; this tick acquires bounded research receipts only.
-        if (
-            outcome.status in {"running", "degraded"}
-            and watcher_settings.trendpulse_screening_enabled
-        ):
-            from app.experiments.scheduling import tick_existing_worker
-
-            with factory() as research_session:
-                tick_existing_worker(research_session, watcher_settings)
-                research_session.commit()
-        return outcome
-
     on_stop = compose_watcher_on_stop(stops, releases, closers)
     from app.services.market_ban_visibility import MarketBanPublisher
 
@@ -1209,7 +1192,7 @@ def _build_armed_supervisor(
 
     def published_watcher_cycle() -> CycleOutcome:
         try:
-            return research_watcher_cycle()
+            return watcher_cycle()
         finally:
             ban_publisher.observe()
 

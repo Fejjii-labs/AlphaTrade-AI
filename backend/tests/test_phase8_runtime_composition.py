@@ -9,9 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import NotFoundError, TradingPolicyError
@@ -27,8 +25,6 @@ from app.schemas.execution_protocol import ExecutePaperPlanHttpRequest, Executio
 from app.services.audit_service import AuditService
 from app.services.canonical_execution_journal import CANONICAL_EXECUTION_SOURCE_SYSTEM
 from app.services.proposal_service import ProposalService
-from app.workers.lock import InMemoryWorkerLock
-from app.workers.service import WorkerService
 from tests.support.phase1_plan_fixtures import (
     EXECUTE_AT,
     execute_request,
@@ -204,26 +200,3 @@ def test_execute_paper_plan_http_requires_auth() -> None:
 
 def test_canonical_journal_source_constant() -> None:
     assert CANONICAL_EXECUTION_SOURCE_SYSTEM == "canonical_paper_execution"
-
-
-def test_worker_service_accepts_runtime_without_starting_watcher() -> None:
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-    runtime = SimpleNamespace(
-        watcher_enabled=False,
-        telegram_enabled=False,
-        flags=CanonicalRuntimeFlags(),
-    )
-    service = WorkerService(
-        factory,
-        InMemoryWorkerLock("phase8", ttl_seconds=60),
-        worker_name="phase8-worker",
-        canonical_runtime=runtime,  # type: ignore[arg-type]
-    )
-    assert service.canonical_runtime is runtime
-    assert service.canonical_runtime.watcher_enabled is False  # type: ignore[union-attr]
-    engine.dispose()
