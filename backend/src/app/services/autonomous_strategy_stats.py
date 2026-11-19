@@ -30,6 +30,7 @@ from app.schemas.autonomous_strategy_stats import (
     StrategyTradeStats,
 )
 from app.schemas.common import JournalTradeSource, JournalTradeStatus, TradeResult
+from app.services.autonomous_trading_settings_service import saved_strategy_ids
 
 # Allowlist: every source counted in the per-strategy totals. BACKTEST is left out.
 COUNTED_SOURCES: tuple[JournalTradeSource, ...] = (
@@ -70,12 +71,14 @@ class AutonomousStrategyStatsService:
             organization_id=organization_id,
             setup_names={row.setup_type.value for row in strategies},
         )
-        selected = self._session.scalar(
-            select(AutonomousTradingSettingsRow.strategy_id).where(
+        settings_row = self._session.scalar(
+            select(AutonomousTradingSettingsRow).where(
                 AutonomousTradingSettingsRow.organization_id == organization_id,
                 AutonomousTradingSettingsRow.user_id == user_id,
             )
         )
+        every = settings_row is not None and settings_row.strategy_scope == "all_eligible"
+        selected = set() if settings_row is None else set(saved_strategy_ids(settings_row))
         return AutonomousStrategyStatsView(
             strategies=[
                 StrategyStatsRow(
@@ -84,7 +87,11 @@ class AutonomousStrategyStatsService:
                     setup_type=row.setup_type.value,
                     enabled=bool(row.enabled),
                     paper_eligible=bool(row.paper_eligible),
-                    bot_selected=selected == row.id,
+                    # In all_eligible mode the bot may use any enabled, paper-eligible
+                    # strategy; approval is re-checked per setup.
+                    bot_selected=(
+                        bool(row.enabled and row.paper_eligible) if every else row.id in selected
+                    ),
                     last_setup_at=setups.get(row.setup_type.value),
                     stats=stats.get(row.id, StrategyTradeStats()),
                 )

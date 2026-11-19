@@ -416,6 +416,30 @@ def test_confirmed_setup_opens_one_journal_and_replays_cleanly() -> None:
 
 
 @requires_postgres
+def test_second_candidate_on_an_open_coin_is_refused_and_writes_nothing() -> None:
+    """One open autonomous position per coin: the first intent wins (multi-strategy rule)."""
+
+    confirmed = _confirm()
+    assert confirmed.scan.paper_loop_stage == "filled"
+    discussion = confirmed.scan.discussion
+    assert discussion is not None
+    second = discussion.candidate.model_copy(update={"candidate_id": uuid4()})
+    loop = _loop(confirmed.factory)
+    with confirmed.factory() as session:
+        proof = _continue(loop, session, confirmed, candidate=second)
+        session.commit()
+        assert proof.stage == "blocked"  # type: ignore[attr-defined]
+        assert proof.reason_code == "autonomous_symbol_position_open"  # type: ignore[attr-defined]
+        assert _count(session, JournalTrade) == 1
+        assert _count(session, TradePlanRevision) == 1
+        assert _count(session, ExecutionFillFact) == 1
+        # The first candidate still replays idempotently.
+        replay = _continue(loop, session, confirmed)
+        assert replay.replayed is True  # type: ignore[attr-defined]
+        assert replay.journal_trade_id == confirmed.scan.journal_trade_id  # type: ignore[attr-defined]
+
+
+@requires_postgres
 def test_daily_loss_lock_is_display_only_and_trade_fills() -> None:
     """A set daily loss lock is display only (AT-ADR-152): the trade still fills."""
 
