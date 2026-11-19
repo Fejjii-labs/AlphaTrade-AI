@@ -58,6 +58,13 @@ export function BloFinDemoAccountCard({
   const showWinRate =
     winRate != null &&
     (mirrorReady || (activityStatus === "ready" && mirrorStatus !== "withheld"));
+  const headlineCoverage =
+    performance?.trade_count != null
+      ? performance.mirror_trade_coverage ??
+        `${formatCount(performance.trade_count)} of ${formatCount(
+          performance.trade_count + (performance.unresolved_round_trips ?? 0),
+        )} trades verified`
+      : performance?.mirror_trade_coverage;
   const quietEmpty = status === "inactive" || status === "not_synced";
   const configureLink = (
     <Link
@@ -181,7 +188,8 @@ export function BloFinDemoAccountCard({
             label="Win rate"
             value={showWinRate ? winRate : "—"}
             note={
-              mirrorReady
+              (showWinRate || mirrorReady ? headlineCoverage : null) ??
+              (mirrorReady
                 ? "Closed mirrored BloFin demo trades"
                 : mirrorStatus === "withheld"
                   ? "Withheld until positions-history price, fee, and funding match"
@@ -189,7 +197,7 @@ export function BloFinDemoAccountCard({
                     ? "Not available yet"
                     : activityStatus === "ready"
                       ? "Closed round-trips from stored fills"
-                      : "Withheld until fee basis and a flat start are verified"
+                      : "Withheld until fee basis and a flat start are verified")
             }
             testId="dashboard-win-rate"
           />
@@ -197,7 +205,8 @@ export function BloFinDemoAccountCard({
             label="Realized PnL"
             value={`${formatMoney(hideHeadline ? null : performance?.realized_pnl)} USDT`}
             note={
-              mirrorReady
+              (!hideHeadline && performance?.realized_pnl != null ? headlineCoverage : null) ??
+              (mirrorReady
                 ? "Positions-history price P&L minus fee and funding. fillPnl is not used"
                 : mirrorStatus === "withheld"
                   ? "Withheld. A mirrored trade does not match the price formula"
@@ -205,7 +214,7 @@ export function BloFinDemoAccountCard({
                     ? "Not available yet"
                     : performance?.realized_pnl == null
                       ? "Withheld. fillPnl fee basis and fee sign are not verified"
-                      : "Stored fillPnl. Fees are not added"
+                      : "Stored fillPnl. Fees are not added")
             }
             testId="dashboard-pnl"
           />
@@ -238,17 +247,14 @@ export function BloFinDemoAccountCard({
                     </dd>
                   </div>
                 ))}
-                <div>
-                  <dt className="text-xs text-text-secondary">
-                    Verified closures
-                  </dt>
-                  <dd className="mt-1">
-                    {formatCount(performance.verified_closed_trades)}
-                  </dd>
-                </div>
               </dl>
               <p className="text-xs text-text-secondary">
-                {performance.unresolved_trades} unresolved trades ·{" "}
+                {performance.linked_trade_coverage ??
+                  `${formatCount(performance.verified_closed_trades)} of ${formatCount(
+                    performance.verified_closed_trades + performance.unresolved_trades,
+                  )} trades verified`}
+              </p>
+              <p className="text-xs text-text-secondary">
                 {performance.manual_test_trades} manual connectivity tests
                 included in account activity.
               </p>

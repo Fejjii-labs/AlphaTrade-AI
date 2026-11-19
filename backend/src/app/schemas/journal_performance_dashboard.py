@@ -54,6 +54,7 @@ class JournalDashboardSummary(StrictModel):
 
     trade_count: int = 0
     pnl_sample_count: int = 0
+    pnl_trade_coverage: str | None = None
     wins: int = 0
     losses: int = 0
     breakeven: int = 0

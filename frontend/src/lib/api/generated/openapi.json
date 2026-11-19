@@ -10749,6 +10749,18 @@
             ],
             "title": "Gross Pnl"
           },
+          "linked_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Linked Trade Coverage"
+          },
           "losses": {
             "anyOf": [
               {
@@ -10779,6 +10791,17 @@
             "default": 0,
             "title": "Manual Test Trades",
             "type": "integer"
+          },
+          "mirror_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mirror Trade Coverage"
           },
           "net_pnl": {
             "anyOf": [
@@ -10909,6 +10932,9 @@
             "title": "Wins"
           }
         },
+        "required": [
+          "linked_trade_coverage"
+        ],
         "title": "DemoAccountPerformance",
         "type": "object"
       },
@@ -19439,6 +19465,17 @@
             "default": 0,
             "title": "Pnl Sample Count",
             "type": "integer"
+          },
+          "pnl_trade_coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Trade Coverage"
           },
           "profit_factor": {
             "anyOf": [

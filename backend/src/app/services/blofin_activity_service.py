@@ -30,7 +30,11 @@ from app.providers.exchange.blofin_activity import (
     ActivityIdentityError,
     BloFinActivityProvider,
 )
-from app.providers.exchange.errors import ExchangeError, ExchangeRateLimitError
+from app.providers.exchange.errors import (
+    ExchangeError,
+    ExchangeRateLimitError,
+    ExchangeRequestError,
+)
 from app.repositories.blofin_activity import ActivityConflictError, BloFinActivityRepository
 from app.schemas.blofin_activity import (
     ActivityCoverage,
@@ -133,6 +137,19 @@ def _identity_code(exc: ActivityIdentityError, environment: str) -> str:
     return reason
 
 
+def _log_provider_failure(exc: Exception, kind: str) -> None:
+    """Static stream/type plus numeric codes only; never venue text or payloads."""
+    details = exc.details if isinstance(exc, ExchangeError) else None
+    code = details.venue_error_code if details else None
+    logger.warning(
+        "blofin_activity_provider_failed",
+        stream=kind,
+        error_type=type(exc).__name__,
+        http_status=details.http_status if details else None,
+        venue_error_code=code if code and code.isascii() and code.isdecimal() else None,
+    )
+
+
 def run_activity_sync(
     engine: Engine,
     settings: Settings,
@@ -205,26 +222,48 @@ def run_activity_sync(
                         )
                         else ("order", "fill")
                     )
+                    failed_kinds: set[str] = set()
                     for index in range(config.max_pages):
                         kind = kinds[index % 2]
+                        if kind in failed_kinds:
+                            continue
                         guard()
                         cursor = _window(repo, kind, config, clock())
                         # Window setup is durable even if the first page is interrupted.
                         session.commit()
-                        facts = provider.page(
-                            kind,
-                            begin_ms=cursor.window_begin_ms,
-                            end_ms=cursor.window_end_ms,
-                            after=cursor.native_cursor,
-                            limit=config.page_size,
-                            expected_uid=scope.account_uid,
-                            before_send=guard,
-                        )
+                        try:
+                            facts = provider.page(
+                                kind,
+                                begin_ms=cursor.window_begin_ms,
+                                end_ms=cursor.window_end_ms,
+                                after=cursor.native_cursor,
+                                limit=config.page_size,
+                                expected_uid=scope.account_uid,
+                                before_send=guard,
+                            )
+                        except ExchangeRequestError as exc:
+                            if isinstance(exc, ActivityIdentityError):
+                                raise
+                            # A malformed/rejected order page must not starve fills.
+                            # Keep its checkpoint intact and report degraded health.
+                            session.rollback()
+                            _log_provider_failure(exc, kind)
+                            cursor = _window(repo, kind, config, clock())
+                            cursor.last_attempt_at = clock()
+                            cursor.last_error_code = "provider_unavailable"
+                            cursor.next_retry_at = clock() + timedelta(seconds=60)
+                            session.commit()
+                            failed_kinds.add(kind)
+                            continue
                         guard()
                         repo.persist_page(cursor, facts, metadata, clock())
                         session.commit()
                         pages += 1
-                    return ActivitySyncResult("bounded", pages)
+                    return ActivitySyncResult(
+                        "failed" if failed_kinds else "bounded",
+                        pages,
+                        "provider_unavailable" if failed_kinds else None,
+                    )
                 except ActivityStoppedError:
                     session.rollback()
                     return ActivitySyncResult("interrupted", pages)
@@ -239,6 +278,8 @@ def run_activity_sync(
                         if isinstance(exc, ExchangeRateLimitError)
                         else "provider_unavailable"
                     )
+                    if code == "provider_unavailable":
+                        _log_provider_failure(exc, kind)
                     now = clock()
                     account = session.get(BloFinActivityAccount, scope.key())
                     if account is None:

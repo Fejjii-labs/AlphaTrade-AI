@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, computed_field
 
 from app.schemas.common import StrictModel
 
@@ -59,6 +59,15 @@ class DemoAccountPerformance(StrictModel):
     manual_mirror_status: Literal["disabled", "withheld", "ready"] = "disabled"
     manual_mirror_reason: str = ""
     average_r: Decimal | None = None
+    mirror_trade_coverage: str | None = None
+
+    @computed_field
+    @property
+    def linked_trade_coverage(self) -> str | None:
+        if self.status != "partial":
+            return None
+        total = self.verified_closed_trades + self.unresolved_trades
+        return f"{self.verified_closed_trades} of {total} trades verified"
 
 
 class DashboardDemoAccount(StrictModel):
