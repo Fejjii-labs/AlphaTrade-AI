@@ -266,11 +266,37 @@ def paper_action(state: dict, runtime: AgentRuntime) -> dict:
         return patch_state(state, updates)
 
 
+_JOURNAL_COMPARISON_REPLY = "Trade comparison is available in the journal."
+_ALERTS_REPLY = "Alert history and delivery are available in Alerts settings."
+_WATCHER_REPLY = "Watcher monitoring is available in settings."
+_PAPER_VALIDATION_REPLY = "Legacy paper validation and scheduling are parked."
+_ANALYTICS_REPLY = "Legacy trading analytics are parked. Review trade history in the journal."
+
+_PARKED_WORKFLOW_REPLIES = {
+    Intent.HUMAN_VS_SYSTEM: _JOURNAL_COMPARISON_REPLY,
+    Intent.EARLY_EXIT_QUERY: _JOURNAL_COMPARISON_REPLY,
+    Intent.STOP_DISCIPLINE_QUERY: _JOURNAL_COMPARISON_REPLY,
+    Intent.PAPER_VALIDATION_START: _PAPER_VALIDATION_REPLY,
+    Intent.PAPER_VALIDATION_SCAN: _PAPER_VALIDATION_REPLY,
+    Intent.PAPER_VALIDATION_QUERY: _PAPER_VALIDATION_REPLY,
+    Intent.PAPER_VALIDATION_RECOMMEND: _PAPER_VALIDATION_REPLY,
+    Intent.PAPER_SCHEDULER_QUERY: _PAPER_VALIDATION_REPLY,
+    Intent.PAPER_ALERTS_QUERY: _ALERTS_REPLY,
+    Intent.ALERT_DELIVERY_QUERY: _ALERTS_REPLY,
+    Intent.MARKET_WATCHER_QUERY: _WATCHER_REPLY,
+    Intent.MARKET_WATCHER_BRIDGE_QUERY: _WATCHER_REPLY,
+}
+
+
 def strategy_workflow_tools(state: dict, runtime: AgentRuntime) -> dict:
     """Route Slice 33 tools for strategy library, pre-trade, sizing, and comparison."""
     agent = parse_state(state)
     if agent.organization_id is None or agent.user_id is None:
         return patch_state(state, {"final_answer": "Authentication context is required."})
+
+    parked_reply = _PARKED_WORKFLOW_REPLIES.get(agent.intent)
+    if parked_reply is not None:
+        return patch_state(state, {"final_answer": parked_reply})
 
     org = str(agent.organization_id)
     user = str(agent.user_id)
@@ -443,75 +469,6 @@ def strategy_workflow_tools(state: dict, runtime: AgentRuntime) -> dict:
             )
         else:
             answer_lines.append(f"Manual levels lookup failed: {output.error}")
-
-    elif intent is Intent.HUMAN_VS_SYSTEM:
-        trade_match = re.search(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            agent.message,
-            re.I,
-        )
-        if trade_match is None:
-            answer_lines.append(
-                "Provide a journal or proposal trade ID to compare human vs system plan."
-            )
-        else:
-            output = _run_tool(
-                "human_vs_system_tool",
-                {
-                    "trade_id": trade_match.group(0),
-                    "organization_id": org,
-                    "user_id": user,
-                },
-            )
-            if output.success and output.result:
-                score = output.result.get("plan_adherence_score")
-                answer_lines.append(
-                    _format_tool_answer(
-                        "human_vs_system_tool",
-                        f"Plan adherence score {score}/100.",
-                    )
-                )
-            else:
-                answer_lines.append(f"Comparison failed: {output.error}")
-
-    elif intent in {Intent.EARLY_EXIT_QUERY, Intent.STOP_DISCIPLINE_QUERY}:
-        trade_match = re.search(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            agent.message,
-            re.I,
-        )
-        if trade_match is None:
-            answer_lines.append("Provide a journal or proposal trade ID for discipline analysis.")
-        else:
-            output = _run_tool(
-                "human_vs_system_tool",
-                {
-                    "trade_id": trade_match.group(0),
-                    "organization_id": org,
-                    "user_id": user,
-                },
-            )
-            if output.success and output.result:
-                if intent is Intent.EARLY_EXIT_QUERY:
-                    runner = output.result.get("missed_runner") or {}
-                    flag = runner.get("early_exit_flag")
-                    lesson = runner.get("recommended_lesson", "No early exit lesson available.")
-                    answer_lines.append(
-                        _format_tool_answer(
-                            "human_vs_system_tool",
-                            f"Early exit flag: {flag}. {lesson}",
-                        )
-                    )
-                else:
-                    stop = output.result.get("stop_loss_analysis") or {}
-                    answer_lines.append(
-                        _format_tool_answer(
-                            "human_vs_system_tool",
-                            stop.get("lesson", "Stop discipline data unavailable."),
-                        )
-                    )
-            else:
-                answer_lines.append(f"Analysis failed: {output.error}")
 
     elif intent is Intent.STRATEGY_TESTABILITY:
         output = _run_tool(
@@ -948,274 +905,6 @@ def strategy_workflow_tools(state: dict, runtime: AgentRuntime) -> dict:
             else:
                 answer_lines.append(f"Backtest results failed: {output.error}")
 
-    elif intent in {
-        Intent.PAPER_VALIDATION_START,
-        Intent.PAPER_VALIDATION_SCAN,
-        Intent.PAPER_VALIDATION_QUERY,
-        Intent.PAPER_VALIDATION_RECOMMEND,
-    }:
-        list_out = _run_tool(
-            "strategy_library_tool",
-            {"action": "list", "organization_id": org, "user_id": user},
-        )
-        from app.agents.mutation_policy import mutation_allowed
-
-        strategy_id = _bound_strategy_id(agent)
-        if (
-            strategy_id is None
-            and intent
-            in {
-                Intent.PAPER_VALIDATION_QUERY,
-                Intent.PAPER_VALIDATION_RECOMMEND,
-            }
-            and list_out.success
-            and list_out.result
-        ):
-            items = list_out.result.get("items", [])
-            strategy_id = items[0].get("id") if items else None
-        if strategy_id is None:
-            answer_lines.append(
-                "Name the strategy UUID (or open this chat from Strategy Lab). "
-                "First-listed strategy fallback is disabled for paper mutations."
-            )
-        elif intent in {Intent.PAPER_VALIDATION_START, Intent.PAPER_VALIDATION_SCAN} and (
-            not mutation_allowed(agent.message)
-        ):
-            action = "status"
-            output = _run_tool(
-                "paper_validation_tool",
-                {
-                    "action": action,
-                    "organization_id": org,
-                    "user_id": user,
-                    "strategy_id": strategy_id,
-                    "user_message": agent.message,
-                },
-            )
-            answer_lines.append(
-                "Preview only — paper validation was not started or scanned. "
-                "Reply with 'I confirm' and the strategy id to mutate."
-            )
-            if output.success and output.result:
-                answer_lines.append(
-                    _format_tool_answer(
-                        "paper_validation_tool",
-                        output.result.get("summary", "Paper validation data retrieved."),
-                    )
-                )
-        else:
-            action = "status"
-            if intent is Intent.PAPER_VALIDATION_START:
-                action = "start"
-            elif intent is Intent.PAPER_VALIDATION_SCAN:
-                action = "scan"
-            elif intent is Intent.PAPER_VALIDATION_RECOMMEND:
-                action = "recommend"
-            elif "signal" in agent.message.lower():
-                action = "signals"
-            elif "open" in agent.message.lower():
-                action = "open_trades"
-            elif "metric" in agent.message.lower():
-                action = "metrics"
-            elif "paper bot" in agent.message.lower() or "what did" in agent.message.lower():
-                action = "activity"
-            elif "restricted" in agent.message.lower():
-                action = "restricted"
-            elif "skipped" in agent.message.lower():
-                action = "skip_reason"
-            elif "stale" in agent.message.lower():
-                action = "data_stale"
-            elif "blocker" in agent.message.lower():
-                action = "blockers"
-            elif "last" in agent.message.lower() and "run" in agent.message.lower():
-                action = "last_run"
-            elif "ready" in agent.message.lower() and "paper" in agent.message.lower():
-                action = "ready"
-            output = _run_tool(
-                "paper_validation_tool",
-                {
-                    "action": action,
-                    "organization_id": org,
-                    "user_id": user,
-                    "strategy_id": strategy_id,
-                    "user_message": agent.message,
-                    "confirm": True,
-                },
-            )
-            if output.success and output.result:
-                answer_lines.append(
-                    _format_tool_answer(
-                        "paper_validation_tool",
-                        output.result.get("summary", "Paper validation data retrieved."),
-                    )
-                )
-                metrics = output.result.get("metrics")
-                if metrics:
-                    answer_lines.append(
-                        f"Metrics: trades={metrics.get('paper_trades_count')}, "
-                        f"win_rate={metrics.get('win_rate')}, "
-                        f"max_dd={metrics.get('max_drawdown_pct')}%."
-                    )
-                blockers = output.result.get("blockers") or []
-                if blockers:
-                    answer_lines.append(f"Blockers: {'; '.join(blockers[:3])}")
-            else:
-                answer_lines.append(f"Paper validation failed: {output.error}")
-
-    elif intent is Intent.PAPER_SCHEDULER_QUERY:
-        sched_action = "scheduler_status"
-        if "tick" in agent.message.lower() or "run scheduler" in agent.message.lower():
-            sched_action = "scheduler_tick"
-        output = _run_tool(
-            "paper_validation_tool",
-            {
-                "action": sched_action,
-                "organization_id": org,
-                "user_id": user,
-                "strategy_id": org,
-                "user_message": agent.message,
-            },
-        )
-        if output.success and output.result:
-            answer_lines.append(
-                _format_tool_answer(
-                    "paper_validation_tool",
-                    output.result.get("summary", "Scheduler status retrieved."),
-                )
-            )
-        else:
-            answer_lines.append(f"Scheduler query failed: {output.error}")
-
-    elif intent is Intent.PAPER_ALERTS_QUERY:
-        output = _run_tool(
-            "paper_validation_tool",
-            {
-                "action": "alerts",
-                "organization_id": org,
-                "user_id": user,
-                "strategy_id": org,
-            },
-        )
-        if output.success and output.result:
-            answer_lines.append(
-                _format_tool_answer(
-                    "paper_validation_tool",
-                    output.result.get("summary", "Alerts retrieved."),
-                )
-            )
-            alerts = output.result.get("alerts") or []
-            for alert in alerts[:3]:
-                answer_lines.append(f"- [{alert.get('severity')}] {alert.get('message')}")
-        else:
-            answer_lines.append(f"Alerts query failed: {output.error}")
-
-    elif intent is Intent.ALERT_DELIVERY_QUERY:
-        action = "alert_delivery_status"
-        lowered = agent.message.lower()
-        if "deliver pending" in lowered or "deliver alert" in lowered:
-            action = "deliver_pending"
-        elif "why" in lowered and "not delivered" in lowered:
-            action = "alert_delivery_reason"
-        elif "external" in lowered and "enabled" in lowered:
-            action = "alert_delivery_status"
-        output = _run_tool(
-            "paper_validation_tool",
-            {
-                "action": action,
-                "organization_id": org,
-                "user_id": user,
-                "strategy_id": org,
-                "user_message": agent.message,
-            },
-        )
-        if output.success and output.result:
-            answer_lines.append(
-                _format_tool_answer(
-                    "paper_validation_tool",
-                    output.result.get("summary", "Alert delivery status retrieved."),
-                )
-            )
-            delivery = output.result.get("delivery_status")
-            if delivery:
-                answer_lines.append(
-                    f"External delivery enabled: {delivery.get('effective_external_enabled')}."
-                )
-        else:
-            answer_lines.append(f"Alert delivery query failed: {output.error}")
-
-    elif intent is Intent.MARKET_WATCHER_QUERY:
-        action = "market_watcher_status"
-        lowered = agent.message.lower()
-        if "scan" in lowered and "watcher" in lowered:
-            action = "market_watcher_scan"
-        elif "fresh" in lowered or "observation" in lowered or "setup signal" in lowered:
-            action = "market_watcher_observations"
-        elif "watched" in lowered or "watching" in lowered:
-            action = "market_watcher_status"
-        output = _run_tool(
-            "paper_validation_tool",
-            {
-                "action": action,
-                "organization_id": org,
-                "user_id": user,
-                "strategy_id": org,
-                "user_message": agent.message,
-            },
-        )
-        if output.success and output.result:
-            answer_lines.append(
-                _format_tool_answer(
-                    "paper_validation_tool",
-                    output.result.get("summary", "Market watcher status retrieved."),
-                )
-            )
-            observations = output.result.get("observations") or []
-            for obs in observations[:3]:
-                answer_lines.append(
-                    f"- {obs.get('symbol')}: {obs.get('status')} ({obs.get('data_freshness')})"
-                )
-        else:
-            answer_lines.append(f"Market watcher query failed: {output.error}")
-
-    elif intent is Intent.MARKET_WATCHER_BRIDGE_QUERY:
-        action = "bridge_status"
-        lowered = agent.message.lower()
-        if "tick" in lowered and "bridge" in lowered:
-            action = "bridge_tick"
-        elif "skip" in lowered and ("bridge" in lowered or "strateg" in lowered):
-            action = "bridge_skip_reason"
-        elif "trigger" in lowered and "scan" in lowered:
-            action = "bridge_triggered_scans"
-        elif "linked" in lowered or "observation" in lowered:
-            action = "bridge_linked_runs"
-        elif "history" in lowered or "decision" in lowered:
-            action = "bridge_history"
-        elif "enabled" in lowered:
-            action = "bridge_status"
-        output = _run_tool(
-            "paper_validation_tool",
-            {
-                "action": action,
-                "organization_id": org,
-                "user_id": user,
-                "strategy_id": org,
-                "user_message": agent.message,
-            },
-        )
-        if output.success and output.result:
-            answer_lines.append(
-                _format_tool_answer(
-                    "paper_validation_tool",
-                    output.result.get("summary", "Bridge status retrieved."),
-                )
-            )
-            for item in (output.result.get("bridge_decisions") or [])[:3]:
-                answer_lines.append(
-                    f"- {item.get('symbol')}: {item.get('decision')} — {item.get('reason')}"
-                )
-        else:
-            answer_lines.append(f"Market watcher bridge query failed: {output.error}")
-
     elif intent is Intent.STRATEGY_DISCUSSION:
         output = _run_tool(
             "strategy_discussion_context_tool",
@@ -1418,48 +1107,8 @@ def strategy_workflow_tools(state: dict, runtime: AgentRuntime) -> dict:
 
 
 def trading_analytics_retrieval(state: dict, runtime: AgentRuntime) -> dict:
-    """Load deterministic analytics via tool boundary (no direct DB in nodes)."""
-    agent = parse_state(state)
-    if runtime.session is None or agent.organization_id is None or agent.user_id is None:
-        return patch_state(state, {})
-
-    output = runtime.tool_registry.execute(
-        "analytics_summary_tool",
-        {
-            "organization_id": str(agent.organization_id),
-            "user_id": str(agent.user_id),
-        },
-    )
-    tool_audit = runtime.observability.emit_tool_called(
-        agent,
-        tool_name="analytics_summary_tool",
-        success=output.success,
-        latency_ms=output.latency_ms,
-    )
-    updates: dict = {
-        "tool_outputs": [*agent.tool_outputs, dump_partial(output)],
-        "audit_events": [*agent.audit_events, tool_audit],
-    }
-    if output.success and output.result:
-        review = output.result.get("trade_review") or {}
-        discipline = output.result.get("discipline_summary") or {}
-        setups = output.result.get("setup_statistics") or []
-        mistakes = output.result.get("repeated_mistakes") or []
-        summary_parts = [
-            f"Discipline score {discipline.get('score', 'n/a')} ({discipline.get('grade', '?')}).",
-            f"Journaled trades: {review.get('total_journaled_trades', 0)}.",
-        ]
-        if setups:
-            top = max(setups, key=lambda s: s.get("paper_trade_count", 0))
-            if top:
-                summary_parts.append(
-                    f"Most active setup: {top.get('setup_type')} "
-                    f"({top.get('paper_trade_count', 0)} paper trades)."
-                )
-        if mistakes:
-            summary_parts.append(f"Repeated mistakes: {', '.join(mistakes[:5])}.")
-        updates["final_answer"] = " ".join(summary_parts)
-    return patch_state(state, updates)
+    """Acknowledge the retired legacy analytics tool without calling a provider."""
+    return patch_state(state, {"final_answer": _ANALYTICS_REPLY})
 
 
 def context_retrieval(state: dict, runtime: AgentRuntime) -> dict:
@@ -2071,6 +1720,10 @@ def narrative_enhancement(state: dict, runtime: AgentRuntime) -> dict:
     """Optional LLM narrative polish — deterministic analysis remains authoritative."""
     agent = parse_state(state)
     if FORCE_INVALID_OUTPUT in agent.message.lower():
+        return patch_state(state, {})
+    if agent.final_answer == _ANALYTICS_REPLY or (
+        agent.final_answer and agent.final_answer == _PARKED_WORKFLOW_REPLIES.get(agent.intent)
+    ):
         return patch_state(state, {})
     if agent.intent in {
         Intent.STRATEGY_PROPOSAL_CONFIRM,

@@ -24,14 +24,12 @@ from app.providers.factory import resolve_market_data_provider
 from app.providers.registry import ProviderRegistry, get_provider_registry
 from app.runtime.canonical import ProductionCanonicalRuntime
 from app.services.alert_delivery_service import AlertDeliveryService
-from app.services.analytics.facade import TradingAnalyticsFacade
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
 from app.services.autonomous_trading_settings_service import AutonomousTradingSettingsService
 from app.services.backtest_journal_service import BacktestJournalService
 from app.services.backtest_service import BacktestService
 from app.services.blofin_sync_service import BloFinSyncService
-from app.services.coaching import CoachingService
 from app.services.dashboard_summary_service import DashboardSummaryService
 from app.services.execution_service import ExecutionService
 from app.services.historical_candle_service import HistoricalCandleService
@@ -48,31 +46,15 @@ from app.services.journal_rag_sync_service import JournalRagSyncService
 from app.services.journal_service import JournalService
 from app.services.journal_statistics_service import JournalStatisticsService
 from app.services.journal_trade_service import JournalTradeService
-from app.services.learning_analytics import LearningAnalyticsService
 from app.services.lesson_candidate_service import LessonCandidateService
 from app.services.loss_acceptance_service import LossAcceptanceService
-from app.services.manual_level_service import ManualLevelService
 from app.services.market_cache import MarketDataCache
 from app.services.market_data_service import MarketDataService
 from app.services.market_service import MarketService
-from app.services.market_watcher_bridge_service import MarketWatcherBridgeService
-from app.services.market_watcher_service import MarketWatcherService
 from app.services.notifications.preferences_service import NotificationPreferencesService
 from app.services.paper_alert_service import PaperAlertService
 from app.services.paper_eligibility_service import PaperEligibilityService
 from app.services.paper_portfolio_service import PaperPortfolioService
-from app.services.paper_scheduler_service import PaperSchedulerService
-from app.services.paper_signal_orchestration_service import PaperSignalOrchestrationService
-from app.services.paper_validation_candidate_service import PaperValidationCandidateService
-from app.services.paper_validation_draft_service import PaperValidationDraftService
-from app.services.paper_validation_run_plan_service import PaperValidationRunPlanService
-from app.services.paper_validation_run_session_service import PaperValidationRunSessionService
-from app.services.paper_validation_runtime_service import PaperValidationRuntimeService
-from app.services.paper_validation_service import PaperValidationService
-from app.services.paper_validation_session_observation_service import (
-    PaperValidationSessionObservationService,
-)
-from app.services.paper_validation_session_result_service import PaperValidationSessionResultService
 from app.services.performance_service import PerformanceService
 from app.services.position_service import PositionService
 from app.services.position_sizing_service import PositionSizingService
@@ -80,30 +62,24 @@ from app.services.pretrade_analysis_service import PreTradeAnalysisService
 from app.services.proposal_service import ProposalService
 from app.services.quota_service import QuotaService
 from app.services.rag_service import RagService, build_rag_service
-from app.services.research_validation_service import ResearchValidationService
 from app.services.risk.kill_switch import KillSwitchService
 from app.services.risk.settings_service import RiskSettingsService
 from app.services.risk_service import RiskService
 from app.services.setup_evidence_service import SetupEvidenceService
 from app.services.strategy_analytics_service import StrategyAnalyticsService
 from app.services.strategy_library_service import StrategyLibraryService
-from app.services.strategy_quality import StrategyQualityService
 from app.services.strategy_service import StrategyService
 from app.services.strategy_testability_service import StrategyTestabilityService
 from app.services.structure_from_text_service import StructureFromTextService
 from app.services.structured_rules_service import StructuredRulesService
-from app.services.tradingview_signal_service import TradingViewSignalService
 from app.services.usage_service import UsageService
-from app.services.validation_priority import ValidationPriorityService
 from app.services.watcher_monitoring_service import WatcherMonitoringService
 from app.services.workflow_service import WorkflowService
 from app.strategies.registry import StrategyRegistry, get_strategy_registry
-from app.tools.registry import ToolRegistry, get_tool_registry
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
 ProviderRegistryDep = Annotated[ProviderRegistry, Depends(get_provider_registry)]
-ToolRegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
 StrategyRegistryDep = Annotated[StrategyRegistry, Depends(get_strategy_registry)]
 
 
@@ -433,45 +409,6 @@ JournalAttachmentServiceDep = Annotated[
 WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]
 
 
-def get_analytics_facade(session: SessionDep) -> TradingAnalyticsFacade:
-    return TradingAnalyticsFacade(session)
-
-
-AnalyticsFacadeDep = Annotated[TradingAnalyticsFacade, Depends(get_analytics_facade)]
-
-
-def get_learning_analytics_service(session: SessionDep) -> LearningAnalyticsService:
-    return LearningAnalyticsService(session)
-
-
-LearningAnalyticsServiceDep = Annotated[
-    LearningAnalyticsService, Depends(get_learning_analytics_service)
-]
-
-
-def get_validation_priority_service(session: SessionDep) -> ValidationPriorityService:
-    return ValidationPriorityService(session)
-
-
-ValidationPriorityServiceDep = Annotated[
-    ValidationPriorityService, Depends(get_validation_priority_service)
-]
-
-
-def get_coaching_service(session: SessionDep) -> CoachingService:
-    return CoachingService(session)
-
-
-CoachingServiceDep = Annotated[CoachingService, Depends(get_coaching_service)]
-
-
-def get_strategy_quality_service(session: SessionDep) -> StrategyQualityService:
-    return StrategyQualityService(session)
-
-
-StrategyQualityServiceDep = Annotated[StrategyQualityService, Depends(get_strategy_quality_service)]
-
-
 def get_position_sizing_service() -> PositionSizingService:
     return PositionSizingService()
 
@@ -485,10 +422,6 @@ def get_strategy_library_service(
     rag_service: RagServiceDep,
 ) -> StrategyLibraryService:
     return StrategyLibraryService(session, rag_service=rag_service)
-
-
-def get_manual_level_service(session: SessionDep) -> ManualLevelService:
-    return ManualLevelService(session)
 
 
 def get_pretrade_analysis_service(
@@ -549,46 +482,8 @@ def get_setup_evidence_service(session: SessionDep, settings: SettingsDep) -> Se
     return SetupEvidenceService(session, settings)
 
 
-def get_research_validation_service(
-    session: SessionDep, settings: SettingsDep
-) -> ResearchValidationService:
-    return ResearchValidationService(session, settings)
-
-
-def get_tradingview_signal_service(
-    session: SessionDep, settings: SettingsDep
-) -> TradingViewSignalService:
-    return TradingViewSignalService(session, settings)
-
-
-def get_paper_signal_orchestration_service(
-    session: SessionDep,
-    settings: SettingsDep,
-    kill_switch: KillSwitchServiceDep,
-    proposal_service: ProposalServiceDep,
-    audit_service: AuditServiceDep,
-) -> PaperSignalOrchestrationService:
-    return PaperSignalOrchestrationService(
-        session,
-        settings=settings,
-        kill_switch=kill_switch,
-        proposal_service=proposal_service,
-        audit_service=audit_service,
-    )
-
-
 def get_blofin_sync_service(session: SessionDep, settings: SettingsDep) -> BloFinSyncService:
     return BloFinSyncService(session, settings)
-
-
-def get_paper_validation_service(session: SessionDep) -> PaperValidationService:
-    return PaperValidationService(session)
-
-
-def get_paper_validation_runtime_service(
-    session: SessionDep, settings: SettingsDep
-) -> PaperValidationRuntimeService:
-    return PaperValidationRuntimeService(session, settings)
 
 
 def get_paper_eligibility_service(
@@ -602,48 +497,8 @@ def get_paper_alert_service(session: SessionDep, settings: SettingsDep) -> Paper
     return PaperAlertService(session, delivery_service=delivery)
 
 
-def get_paper_validation_draft_service(session: SessionDep) -> PaperValidationDraftService:
-    return PaperValidationDraftService(session)
-
-
-def get_paper_validation_candidate_service(session: SessionDep) -> PaperValidationCandidateService:
-    return PaperValidationCandidateService(session)
-
-
-def get_paper_validation_run_plan_service(session: SessionDep) -> PaperValidationRunPlanService:
-    return PaperValidationRunPlanService(session)
-
-
-def get_paper_validation_run_session_service(
-    session: SessionDep,
-) -> PaperValidationRunSessionService:
-    return PaperValidationRunSessionService(session)
-
-
-def get_paper_validation_session_observation_service(
-    session: SessionDep,
-) -> PaperValidationSessionObservationService:
-    return PaperValidationSessionObservationService(session)
-
-
-def get_paper_validation_session_result_service(
-    session: SessionDep,
-) -> PaperValidationSessionResultService:
-    return PaperValidationSessionResultService(session)
-
-
 def get_alert_delivery_service(session: SessionDep, settings: SettingsDep) -> AlertDeliveryService:
     return AlertDeliveryService(session, settings)
-
-
-def get_market_watcher_bridge_service(
-    session: SessionDep, settings: SettingsDep, audit_service: AuditServiceDep
-) -> MarketWatcherBridgeService:
-    return MarketWatcherBridgeService(session, settings, audit_service=audit_service)
-
-
-def get_market_watcher_service(session: SessionDep, settings: SettingsDep) -> MarketWatcherService:
-    return MarketWatcherService(session, settings)
 
 
 def get_watcher_monitoring_service(
@@ -665,12 +520,6 @@ def get_watcher_monitoring_service(
     )
 
 
-def get_paper_scheduler_service(
-    session: SessionDep, settings: SettingsDep, audit_service: AuditServiceDep
-) -> PaperSchedulerService:
-    return PaperSchedulerService(session, settings, audit_service=audit_service)
-
-
 def get_historical_candle_service(
     session: SessionDep,
     settings: SettingsDep,
@@ -684,11 +533,12 @@ def get_historical_candle_service(
 PositionSizingServiceDep = Annotated[PositionSizingService, Depends(get_position_sizing_service)]
 LossAcceptanceServiceDep = Annotated[LossAcceptanceService, Depends(get_loss_acceptance_service)]
 StrategyLibraryServiceDep = Annotated[StrategyLibraryService, Depends(get_strategy_library_service)]
-ManualLevelServiceDep = Annotated[ManualLevelService, Depends(get_manual_level_service)]
 PreTradeAnalysisServiceDep = Annotated[
     PreTradeAnalysisService, Depends(get_pretrade_analysis_service)
 ]
+
 HumanVsSystemServiceDep = Annotated[HumanVsSystemService, Depends(get_human_vs_system_service)]
+
 LessonCandidateServiceDep = Annotated[LessonCandidateService, Depends(get_lesson_candidate_service)]
 StrategyTestabilityServiceDep = Annotated[
     StrategyTestabilityService, Depends(get_strategy_testability_service)
@@ -700,52 +550,15 @@ StructureFromTextServiceDep = Annotated[
 BacktestServiceDep = Annotated[BacktestService, Depends(get_backtest_service)]
 BacktestJournalServiceDep = Annotated[BacktestJournalService, Depends(get_backtest_journal_service)]
 SetupEvidenceServiceDep = Annotated[SetupEvidenceService, Depends(get_setup_evidence_service)]
-ResearchValidationServiceDep = Annotated[
-    ResearchValidationService, Depends(get_research_validation_service)
-]
-TradingViewSignalServiceDep = Annotated[
-    TradingViewSignalService, Depends(get_tradingview_signal_service)
-]
-PaperSignalOrchestrationServiceDep = Annotated[
-    PaperSignalOrchestrationService, Depends(get_paper_signal_orchestration_service)
-]
 BloFinSyncServiceDep = Annotated[BloFinSyncService, Depends(get_blofin_sync_service)]
-PaperValidationServiceDep = Annotated[PaperValidationService, Depends(get_paper_validation_service)]
-PaperValidationRuntimeServiceDep = Annotated[
-    PaperValidationRuntimeService, Depends(get_paper_validation_runtime_service)
-]
 PaperEligibilityServiceDep = Annotated[
     PaperEligibilityService, Depends(get_paper_eligibility_service)
 ]
 PaperAlertServiceDep = Annotated[PaperAlertService, Depends(get_paper_alert_service)]
-PaperValidationDraftServiceDep = Annotated[
-    PaperValidationDraftService, Depends(get_paper_validation_draft_service)
-]
-PaperValidationCandidateServiceDep = Annotated[
-    PaperValidationCandidateService, Depends(get_paper_validation_candidate_service)
-]
-PaperValidationRunPlanServiceDep = Annotated[
-    PaperValidationRunPlanService, Depends(get_paper_validation_run_plan_service)
-]
-PaperValidationRunSessionServiceDep = Annotated[
-    PaperValidationRunSessionService, Depends(get_paper_validation_run_session_service)
-]
-PaperValidationSessionObservationServiceDep = Annotated[
-    PaperValidationSessionObservationService,
-    Depends(get_paper_validation_session_observation_service),
-]
-PaperValidationSessionResultServiceDep = Annotated[
-    PaperValidationSessionResultService, Depends(get_paper_validation_session_result_service)
-]
 AlertDeliveryServiceDep = Annotated[AlertDeliveryService, Depends(get_alert_delivery_service)]
-MarketWatcherServiceDep = Annotated[MarketWatcherService, Depends(get_market_watcher_service)]
-MarketWatcherBridgeServiceDep = Annotated[
-    MarketWatcherBridgeService, Depends(get_market_watcher_bridge_service)
-]
 WatcherMonitoringServiceDep = Annotated[
     WatcherMonitoringService, Depends(get_watcher_monitoring_service)
 ]
-PaperSchedulerServiceDep = Annotated[PaperSchedulerService, Depends(get_paper_scheduler_service)]
 HistoricalCandleServiceDep = Annotated[
     HistoricalCandleService, Depends(get_historical_candle_service)
 ]

@@ -247,267 +247,31 @@ def _seed_session(
 # --- auth + empty tenant ----------------------------------------------------
 
 
-def test_endpoints_require_auth(harness: Harness) -> None:
-    for path in (
-        "/learning-analytics/summary",
-        "/learning-analytics/setup-performance",
-        "/learning-analytics/discipline",
-        "/learning-analytics/confidence-outcome",
-        "/learning-analytics/behavior-insights",
-        "/learning-analytics/lessons",
-        "/learning-analytics/setup-ranking",
-    ):
-        assert harness.client.get(path).status_code == 401, path
-
-
-def test_empty_tenant_returns_nulls_not_errors(harness: Harness) -> None:
-    headers, _, _ = _register_owner(harness.client)
-    response = harness.client.get("/learning-analytics/summary", headers=headers)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["results_count"] == 0
-    assert body["total_sessions"] == 0
-    assert body["rates"]["success_rate"] is None
-    assert body["average_minutes_to_outcome"] is None
-    assert len(body["outcome_distribution"]) == 6
-    assert all(item["count"] == 0 for item in body["outcome_distribution"])
-
-
 # --- summary ----------------------------------------------------------------
-
-
-def test_summary_counts_and_rates(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(3):
-        _seed_session(harness.factory, organization_id=org_id, user_id=user_id, outcome="success")
-    _seed_session(
-        harness.factory,
-        organization_id=org_id,
-        user_id=user_id,
-        outcome="failure",
-        behaved_as_expected=False,
-        invalidation_hit=True,
-        observation_kinds=("hit_trigger", "hit_invalidation"),
-    )
-
-    body = harness.client.get(
-        "/learning-analytics/summary", headers=headers, params={"min_sample": 1}
-    ).json()
-    assert body["results_count"] == 4
-    assert body["completed_sessions"] == 4
-    assert body["rates"]["success_rate"] == 0.75
-    assert body["rates"]["failure_rate"] == 0.25
-    assert body["rates"]["invalidation_hit_rate"] == 0.25
-    assert body["rates"]["behaved_as_expected_rate"] == 0.75
-    assert body["funnel"]["results"] == 4
-    assert body["funnel"]["alerts"] == 4
-    assert body["observations"]["total_observations"] == 2
-    assert body["average_minutes_to_outcome"] == 30.0
 
 
 # --- setup performance + small-sample gating --------------------------------
 
 
-def test_setup_performance_gates_small_samples(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(6):
-        _seed_session(
-            harness.factory, organization_id=org_id, user_id=user_id, condition="breakout"
-        )
-    _seed_session(harness.factory, organization_id=org_id, user_id=user_id, condition="pullback")
-
-    body = harness.client.get(
-        "/learning-analytics/setup-performance",
-        headers=headers,
-        params={"dimension": "condition", "min_sample": 5},
-    ).json()
-    groups = {g["dimension_value"]: g for g in body["groups"]}
-    assert groups["breakout"]["insufficient_data"] is False
-    assert groups["breakout"]["quality_score"] is not None
-    assert groups["pullback"]["insufficient_data"] is True
-    assert groups["pullback"]["quality_score"] is None
-
-
 # --- discipline -------------------------------------------------------------
-
-
-def test_discipline_score_and_gating(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(4):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            discipline_assessment="disciplined",
-        )
-    for _ in range(2):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            discipline_assessment="should_have_avoided",
-        )
-
-    gated = harness.client.get(
-        "/learning-analytics/discipline", headers=headers, params={"min_sample": 50}
-    ).json()
-    assert gated["insufficient_data"] is True
-    assert gated["discipline_score"] is None
-    assert gated["discipline_grade"] == "insufficient_data"
-
-    body = harness.client.get(
-        "/learning-analytics/discipline", headers=headers, params={"min_sample": 1}
-    ).json()
-    assert body["insufficient_data"] is False
-    # 4 disciplined (1.0) + 2 avoided (0.0) => 4/6 => 67
-    assert body["discipline_score"] == 67
-    assert body["discipline_grade"] == "D"
-    assert "should_have_avoided" in body["issue_frequency"]
 
 
 # --- confidence vs outcome --------------------------------------------------
 
 
-def test_confidence_outcome_positive_correlation(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    # low bucket: mostly failures; high bucket: mostly successes
-    for _ in range(3):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            confidence=0.3,
-            outcome="failure",
-        )
-    for _ in range(3):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            confidence=0.9,
-            outcome="success",
-        )
-
-    body = harness.client.get(
-        "/learning-analytics/confidence-outcome",
-        headers=headers,
-        params={"min_sample": 2},
-    ).json()
-    buckets = {b["bucket"]: b for b in body["buckets"]}
-    assert buckets["low"]["success_rate"] == 0.0
-    assert buckets["very_high"]["success_rate"] == 1.0
-    assert body["correlation"] == "positive"
-
-
 # --- behavior insights ------------------------------------------------------
-
-
-def test_behavior_insight_strong_setup_misses(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(5):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            confidence=0.9,
-            entry_assessment="missed_entry",
-            outcome="missed_entry",
-        )
-
-    body = harness.client.get(
-        "/learning-analytics/behavior-insights",
-        headers=headers,
-        params={"min_sample": 5},
-    ).json()
-    codes = {insight["code"] for insight in body["insights"]}
-    assert "misses_entries_on_strong_setups" in codes
 
 
 # --- lessons ----------------------------------------------------------------
 
 
-def test_lesson_themes(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(3):
-        _seed_session(
-            harness.factory,
-            organization_id=org_id,
-            user_id=user_id,
-            lessons="Patience before entry improves outcomes",
-        )
-
-    body = harness.client.get(
-        "/learning-analytics/lessons", headers=headers, params={"min_sample": 1}
-    ).json()
-    assert body["lessons_count"] == 3
-    themes = {theme["theme"] for theme in body["themes"]}
-    assert "patience" in themes or "entry" in themes
-
-
 # --- setup ranking ----------------------------------------------------------
-
-
-def test_setup_ranking_excludes_insufficient(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    for _ in range(6):
-        _seed_session(
-            harness.factory, organization_id=org_id, user_id=user_id, condition="breakout"
-        )
-    _seed_session(harness.factory, organization_id=org_id, user_id=user_id, condition="pullback")
-
-    body = harness.client.get(
-        "/learning-analytics/setup-ranking",
-        headers=headers,
-        params={"dimension": "condition", "min_sample": 5},
-    ).json()
-    keys = {item["setup_key"] for item in body["ranked"]}
-    assert "breakout" in keys
-    assert "pullback" not in keys
-    assert body["ranked"][0]["rank"] == 1
-    assert "automation" in body["note"].lower()
 
 
 # --- user filter ------------------------------------------------------------
 
 
-def test_user_filter_scopes_results(harness: Harness) -> None:
-    headers, org_id, user_id = _register_owner(harness.client)
-    other_user = uuid.uuid4()  # not the caller; used only as started_by attribution
-    _seed_session(harness.factory, organization_id=org_id, user_id=user_id)
-    _seed_session(harness.factory, organization_id=org_id, user_id=user_id)
-
-    all_body = harness.client.get(
-        "/learning-analytics/summary", headers=headers, params={"min_sample": 1}
-    ).json()
-    assert all_body["results_count"] == 2
-
-    filtered = harness.client.get(
-        "/learning-analytics/summary",
-        headers=headers,
-        params={"min_sample": 1, "user_id": str(other_user)},
-    ).json()
-    assert filtered["results_count"] == 0
-
-
 # --- tenant isolation -------------------------------------------------------
-
-
-def test_tenant_isolation(harness: Harness) -> None:
-    headers_a, org_a, user_a = _register_owner(harness.client, "a@example.com", "Org A")
-    headers_b, org_b, user_b = _register_owner(harness.client, "b@example.com", "Org B")
-    _seed_session(harness.factory, organization_id=org_a, user_id=user_a)
-    _seed_session(harness.factory, organization_id=org_a, user_id=user_a)
-    _seed_session(harness.factory, organization_id=org_b, user_id=user_b)
-
-    body_a = harness.client.get(
-        "/learning-analytics/summary", headers=headers_a, params={"min_sample": 1}
-    ).json()
-    body_b = harness.client.get(
-        "/learning-analytics/summary", headers=headers_b, params={"min_sample": 1}
-    ).json()
-    assert body_a["results_count"] == 2
-    assert body_b["results_count"] == 1
-    assert body_a["organization_id"] != body_b["organization_id"]
 
 
 # --- pure scoring helpers ---------------------------------------------------

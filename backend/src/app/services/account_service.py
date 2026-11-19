@@ -1,4 +1,4 @@
-"""Email verification, password reset, and organization invitations."""
+"""Email verification and password reset."""
 
 from __future__ import annotations
 
@@ -9,24 +9,17 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import AuthError, ForbiddenError, NotFoundError, ValidationAppError
+from app.core.errors import AuthError, ValidationAppError
 from app.db.models import EmailVerificationToken as EmailVerificationTokenModel
-from app.db.models import Membership as MembershipModel
-from app.db.models import OrganizationInvitation as OrganizationInvitationModel
 from app.db.models import PasswordResetToken as PasswordResetTokenModel
 from app.db.models import User as UserModel
 from app.providers.email.base import EmailMessage, EmailProvider
 from app.providers.email.factory import resolve_email_provider
 from app.repositories.email_verification_tokens import EmailVerificationTokenRepository
-from app.repositories.memberships import MembershipRepository
-from app.repositories.organization_invitations import OrganizationInvitationRepository
 from app.repositories.password_reset_tokens import PasswordResetTokenRepository
 from app.repositories.refresh_tokens import RefreshTokenRepository
 from app.repositories.users import UserRepository
 from app.schemas.account import (
-    AcceptInvitationRequest,
-    CreateInvitationRequest,
-    OrganizationInvitationView,
     PasswordResetConfirmRequest,
     PasswordResetRequest,
     VerifyEmailConfirmRequest,
@@ -38,7 +31,6 @@ from app.schemas.common import (
     AuditEventType,
     AuditResult,
     AuditSeverity,
-    MembershipRole,
 )
 from app.security.account_tokens import generate_account_token, hash_account_token
 from app.security.passwords import hash_password, validate_password
@@ -70,10 +62,8 @@ class AccountService:
         self._session = session
         self._settings = settings
         self._users = UserRepository(session)
-        self._memberships = MembershipRepository(session)
         self._verification_tokens = EmailVerificationTokenRepository(session)
         self._reset_tokens = PasswordResetTokenRepository(session)
-        self._invitations = OrganizationInvitationRepository(session)
         self._refresh_tokens = RefreshTokenRepository(session)
         self._audit = audit_service or AuditService(session)
         self._email = email_provider or resolve_email_provider(settings)
@@ -216,114 +206,6 @@ class AccountService:
         logger.info("password_reset_completed", user_id=str(user.id), revoked_sessions=revoked)
         return "Password updated successfully. Please sign in again."
 
-    def create_invitation(
-        self,
-        tenant: TenantContext,
-        data: CreateInvitationRequest,
-    ) -> OrganizationInvitationView:
-        if data.role == MembershipRole.OWNER:
-            raise ValidationAppError("Cannot invite another owner via this endpoint.")
-        email = str(data.email).lower()
-        existing = self._users.get_by_email(email)
-        if existing is not None:
-            membership = self._memberships.get_for_user_and_org(existing.id, tenant.organization_id)
-            if membership is not None:
-                raise ValidationAppError("User is already a member of this organization.")
-        raw_token = generate_account_token()
-        row = OrganizationInvitationModel(
-            organization_id=tenant.organization_id,
-            email=email,
-            role=data.role,
-            invited_by_user_id=tenant.user_id,
-            token_hash=hash_account_token(raw_token),
-            expires_at=datetime.now(UTC) + timedelta(hours=self._settings.invitation_expire_hours),
-        )
-        self._invitations.add(row)
-        self._send_invitation_email(email, raw_token, tenant.organization_id)
-        self._record_event(
-            AuditEventType.AUTH_INVITE_CREATED,
-            user_id=tenant.user_id,
-            organization_id=tenant.organization_id,
-            result=AuditResult.SUCCESS,
-            metadata={"invitee": email, "role": data.role.value},
-        )
-        return self._invitation_view(row)
-
-    def list_invitations(self, tenant: TenantContext) -> list[OrganizationInvitationView]:
-        rows = self._invitations.list_for_organization(tenant.organization_id)
-        return [self._invitation_view(row) for row in rows]
-
-    def accept_invitation(
-        self,
-        tenant: TenantContext,
-        invitation_id: uuid.UUID,
-        data: AcceptInvitationRequest,
-    ) -> OrganizationInvitationView:
-        row = self._invitations.get(invitation_id)
-        if row is None:
-            raise NotFoundError("Invitation not found.")
-        if row.revoked_at is not None or row.accepted_at is not None:
-            raise ValidationAppError("Invitation is no longer valid.")
-        expires_at = self._ensure_aware(row.expires_at)
-        if expires_at <= datetime.now(UTC):
-            raise ValidationAppError("Invitation has expired.")
-        if hash_account_token(data.token) != row.token_hash:
-            # Record under the caller's org (durably, since the request fails): a
-            # wrong guess must not write rows into the inviting org's audit trail.
-            self._record_event(
-                AuditEventType.AUTH_INVALID_TOKEN,
-                user_id=tenant.user_id,
-                organization_id=tenant.organization_id,
-                result=AuditResult.FAILURE,
-                metadata={"reason": "invite_token_mismatch"},
-                durable=True,
-            )
-            raise AuthError("Invalid invitation token.")
-        user = self._users.get(tenant.user_id)
-        if user is None:
-            raise AuthError("Account unavailable.")
-        if user.email.lower() != row.email.lower():
-            raise ForbiddenError("This invitation was sent to a different email address.")
-        if self._memberships.get_for_user_and_org(user.id, row.organization_id) is not None:
-            raise ValidationAppError("You are already a member of this organization.")
-        membership = MembershipModel(
-            user_id=user.id,
-            organization_id=row.organization_id,
-            role=row.role,
-        )
-        self._memberships.add(membership)
-        row.accepted_at = datetime.now(UTC)
-        row.accepted_by_user_id = user.id
-        self._record_event(
-            AuditEventType.AUTH_INVITE_ACCEPTED,
-            user_id=user.id,
-            organization_id=row.organization_id,
-            result=AuditResult.SUCCESS,
-            metadata={"role": row.role.value},
-        )
-        return self._invitation_view(row)
-
-    def revoke_invitation(
-        self,
-        tenant: TenantContext,
-        invitation_id: uuid.UUID,
-    ) -> OrganizationInvitationView:
-        row = self._invitations.get(invitation_id)
-        if row is None or row.organization_id != tenant.organization_id:
-            raise NotFoundError("Invitation not found.")
-        if row.accepted_at is not None:
-            raise ValidationAppError("Cannot revoke an accepted invitation.")
-        if row.revoked_at is None:
-            row.revoked_at = datetime.now(UTC)
-        self._record_event(
-            AuditEventType.AUTH_INVITE_REVOKED,
-            user_id=tenant.user_id,
-            organization_id=tenant.organization_id,
-            result=AuditResult.SUCCESS,
-            metadata={"invitation_id": str(invitation_id)},
-        )
-        return self._invitation_view(row)
-
     def _send_verification_email(self, email: str, raw_token: str) -> None:
         link = f"{self._settings.email_base_url.rstrip('/')}/verify-email?token={raw_token}"
         self._deliver(
@@ -343,25 +225,6 @@ class AccountService:
                 subject="Reset your AlphaTrade AI password",
                 text_body=f"Reset your password: {link}",
                 template="password_reset",
-            )
-        )
-
-    def _send_invitation_email(
-        self,
-        email: str,
-        raw_token: str,
-        organization_id: uuid.UUID,
-    ) -> None:
-        link = (
-            f"{self._settings.email_base_url.rstrip('/')}/invitations/accept"
-            f"?token={raw_token}&organization_id={organization_id}"
-        )
-        self._deliver(
-            EmailMessage(
-                to_address=email,
-                subject="You are invited to AlphaTrade AI",
-                text_body=f"Accept invitation: {link}",
-                template="organization_invitation",
             )
         )
 
@@ -443,23 +306,3 @@ class AccountService:
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value
-
-    @staticmethod
-    def _invitation_view(row: OrganizationInvitationModel) -> OrganizationInvitationView:
-        pending = (
-            row.accepted_at is None
-            and row.revoked_at is None
-            and AccountService._ensure_aware(row.expires_at) > datetime.now(UTC)
-        )
-        return OrganizationInvitationView(
-            id=row.id,
-            organization_id=row.organization_id,
-            email=row.email,
-            role=row.role,
-            invited_by_user_id=row.invited_by_user_id,
-            expires_at=row.expires_at,
-            accepted_at=row.accepted_at,
-            revoked_at=row.revoked_at,
-            created_at=row.created_at,
-            is_pending=pending,
-        )

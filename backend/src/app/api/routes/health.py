@@ -434,9 +434,8 @@ def probe_vector_collections(registry: ProviderRegistry) -> dict[str, str]:
     """Run each vector provider's cached live collection vector-size check.
 
     Missing collections are fine (created on first write). A mismatch marks the
-    provider degraded in ``/providers/status`` and makes ``/health/ready`` not
-    ready. ``/health`` (Render liveness) never runs this, and boot is not refused,
-    so a mismatch is discovered at deploy without a crash loop.
+    provider degraded internally and makes ``/health/ready`` not ready.
+    The liveness probe does not run this check. A mismatch does not refuse boot.
     """
     outcomes: dict[str, str] = {}
     for provider in registry.all():

@@ -3,21 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.core.config import Settings, get_settings
-from app.db.base import Base
-from app.db.session import get_session
-from app.main import create_app
+from app.core.config import Settings
 from app.providers.market_data import MockMarketDataProvider, OHLCVBar
 from app.providers.registry import build_default_registry
 from app.schemas.common import Timeframe
@@ -30,59 +20,6 @@ from app.strategies.base import StrategyEvaluationInput
 from app.strategies.confidence import adjust_confidence_for_data_quality
 from app.strategies.registry import build_default_registry as build_strategy_registry
 from app.tools.registry import build_default_registry as build_tools
-
-
-@pytest.fixture
-def market_client() -> Iterator[TestClient]:
-    get_settings.cache_clear()
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _fk(dbapi_conn: object, _record: object) -> None:
-        cursor = dbapi_conn.cursor()  # type: ignore[attr-defined]
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
-
-    def _override_session() -> Iterator[Session]:
-        with factory() as session:
-            yield session
-
-    settings = Settings(
-        log_json=False,
-        provider_mode="mock",
-        market_data_provider="mock",
-        rate_limit_use_redis=False,
-        market_data_cache_use_redis=False,
-        database_url="sqlite+pysqlite:///:memory:",
-        jwt_secret="market-data-test-secret-32-bytes-minimum",
-    )
-    app = create_app(settings=settings)
-    app.dependency_overrides[get_session] = _override_session
-    with TestClient(app) as test_client:
-        yield test_client
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def market_auth_headers(market_client: TestClient) -> dict[str, str]:
-    reg = market_client.post(
-        "/auth/register",
-        json={
-            "email": f"market-{uuid.uuid4()}@example.com",
-            "password": "securepassword123",
-            "organization_name": "Market Test Org",
-        },
-    )
-    assert reg.status_code in {200, 201}, reg.text
-    token = reg.json()["tokens"]["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _market_data_service() -> MarketDataService:
@@ -128,31 +65,6 @@ def test_live_provider_disabled_without_config() -> None:
         Settings(provider_mode="mock", market_data_provider="mock", log_json=False)
     )
     assert provider.name == "mock-market-data"
-
-
-def test_ticker_response_schema(
-    market_client: TestClient, market_auth_headers: dict[str, str]
-) -> None:
-    response = market_client.get("/market/ticker?symbol=BTCUSDT", headers=market_auth_headers)
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["meta"]["symbol"] == "BTCUSDT"
-    assert "last_price" in payload
-    assert payload["meta"]["fallback_used"] is True
-    assert payload["meta"]["is_live"] is False
-
-
-def test_ohlcv_response_schema(
-    market_client: TestClient, market_auth_headers: dict[str, str]
-) -> None:
-    response = market_client.get(
-        "/market/ohlcv?symbol=BTCUSDT&timeframe=1h",
-        headers=market_auth_headers,
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert len(payload["bars"]) > 0
-    assert payload["meta"]["provider_name"] == "mock-market-data"
 
 
 def test_stale_data_marking() -> None:
@@ -234,12 +146,10 @@ def test_ticker_service_schema() -> None:
     assert ticker.meta.fallback_used is True
 
 
-def test_provider_status_includes_market_provider(market_client: TestClient) -> None:
-    response = market_client.get("/providers/status")
-    assert response.status_code == 200
-    market = next(p for p in response.json()["providers"] if p["kind"] == "market_data")
-    assert market["name"] in {"mock-market-data", "binance-public"}
-    assert "detail" in market
+def test_registry_includes_market_provider() -> None:
+    registry = build_default_registry(Settings(provider_mode="mock", log_json=False))
+    market = next(p for p in registry.statuses() if p.kind.value == "market_data")
+    assert market.name in {"mock-market-data", "binance-public"}
 
 
 def test_no_real_exchange_execution_path() -> None:

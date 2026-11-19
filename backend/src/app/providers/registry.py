@@ -26,7 +26,6 @@ from app.providers.base import (
     ProviderKind,
     ProviderStatus,
 )
-from app.providers.billing.factory import resolve_billing_provider
 from app.providers.email.factory import resolve_email_provider
 from app.providers.embeddings import EmbeddingsProvider, MockEmbeddingsProvider
 from app.providers.exchange.factory import resolve_exchange_provider
@@ -358,16 +357,6 @@ class _EmailProviderAdapter:
         return self._inner.status()
 
 
-class _BillingProviderAdapter:
-    def __init__(self, inner) -> None:
-        self._inner = inner
-        self.name = inner.name
-        self.kind = inner.kind
-
-    def status(self) -> ProviderStatus:
-        return self._inner.status()
-
-
 class _MarketDataProviderAdapter:
     def __init__(self, inner: MarketDataProvider) -> None:
         self._inner = inner
@@ -413,7 +402,6 @@ def build_default_registry(settings: Settings) -> ProviderRegistry:
 
     registry.register(RedisInfrastructureProvider(settings))
     registry.register(_EmailProviderAdapter(resolve_email_provider(settings)))
-    registry.register(_BillingProviderAdapter(resolve_billing_provider(settings)))
     market_data = resolve_market_data_provider(settings)
     registry.register(_MarketDataProviderAdapter(market_data))
     perpetual_evidence = resolve_perpetual_evidence_source(settings, shared=True)
@@ -438,9 +426,7 @@ def build_default_registry(settings: Settings) -> ProviderRegistry:
     if resolved_exchange.market_data is not None:
         registry.register(_MarketDataProviderAdapter(resolved_exchange.market_data))
 
-    registry.register(BaseMockProvider("mock-news", ProviderKind.NEWS))
     registry.register(BaseMockProvider("mock-notifications", ProviderKind.NOTIFICATIONS))
-    registry.register(BaseMockProvider("mock-tracing", ProviderKind.TRACING))
     return registry
 
 

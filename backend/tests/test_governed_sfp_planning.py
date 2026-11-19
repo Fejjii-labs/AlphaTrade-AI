@@ -179,19 +179,6 @@ def test_governed_sfp_kill_switch_prevents_even_planning(monkeypatch):
     assert proof.reason_code == "kill_switch_active"
 
 
-def test_governed_sfp_worker_pause_prevents_scanner():
-    from unittest.mock import Mock
-
-    from app.workers.service import WorkerService
-
-    worker = WorkerService(
-        None, Mock(), worker_name="sfp-demo", scanner=lambda s: pytest.fail("paused worker scanned")
-    )
-    worker.is_paused = lambda: True
-    worker._beat = Mock()
-    assert worker.run_cycle().reason == "paused"
-
-
 def test_governed_sfp_real_order_path_unreachable():
     from unittest.mock import Mock
 

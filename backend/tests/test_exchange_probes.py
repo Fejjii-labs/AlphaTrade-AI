@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterator
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
+from app.db.models import AuditLog
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.common import AuditEventType
@@ -342,15 +344,13 @@ def test_cancel_is_demo_gated_and_audited(demo_client: TestClient) -> None:
     assert body["inst_id"] == "BTC-USDT"
     _assert_no_secrets(body)
 
-    audit = demo_client.get(
-        "/audit/events",
-        headers=headers,
-        params={"event_type": AuditEventType.EXCHANGE_DEMO_ORDER_CANCELLED.value},
-    )
-    assert audit.status_code == 200, audit.text
-    events = audit.json()["items"]
-    cancelled_type = AuditEventType.EXCHANGE_DEMO_ORDER_CANCELLED.value
-    assert any(e["event_type"] == cancelled_type for e in events)
+    assert demo_client.get("/audit/events", headers=headers).status_code == 404
+    session_override = demo_client.app.dependency_overrides[get_session]
+    with contextlib.closing(session_override()) as sessions:
+        session = next(sessions)
+        assert session.scalar(
+            select(AuditLog).where(AuditLog.action == AuditEventType.EXCHANGE_DEMO_ORDER_CANCELLED)
+        )
 
 
 def test_order_status_after_cancel_falls_back_to_cancel_audit(
@@ -423,13 +423,13 @@ def test_order_status_after_cancel_falls_back_to_cancel_audit(
         assert body["filled_size"] == "0"
         _assert_no_secrets(body)
 
-        audit = client.get(
-            "/audit/events",
-            headers=headers,
-            params={"event_type": AuditEventType.EXCHANGE_DEMO_ORDER_CANCELLED.value},
-        )
-        meta = audit.json()["items"][0]["redacted_metadata"]
-        assert "demo-secret" not in json.dumps(meta).lower()
+        with factory() as session:
+            row = session.scalars(
+                select(AuditLog).where(
+                    AuditLog.action == AuditEventType.EXCHANGE_DEMO_ORDER_CANCELLED
+                )
+            ).one()
+            assert "demo-secret" not in json.dumps(row.redacted_metadata).lower()
 
     exchange_factory.build_blofin_client = original_build
     app.dependency_overrides.clear()

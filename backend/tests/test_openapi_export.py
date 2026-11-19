@@ -54,3 +54,25 @@ def test_export_is_offline_deterministic_and_ignores_inherited_configuration(
     )
     assert "setup_type" in schema["components"]["schemas"]["UserStrategyUpdate"]["properties"]
     print("OpenAPI SHA256", hashlib.sha256(artifacts[0].read_bytes()).hexdigest())
+
+
+def test_post_park_route_inventory(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    output = tmp_path / "openapi.json"
+    subprocess.run(
+        [sys.executable, str(root / "scripts/export_openapi.py"), "--output", str(output)],
+        cwd=tmp_path,
+        check=True,
+        timeout=60,
+    )
+    schema = json.loads(output.read_text())
+
+    expected = (Path(__file__).parent / "fixtures/post_park_routes.txt").read_text().splitlines()
+    operations = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+    actual = sorted(
+        f"{method.upper()} {path}"
+        for path, route in schema["paths"].items()
+        for method in route
+        if method in operations
+    )
+    assert actual == expected

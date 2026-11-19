@@ -8,13 +8,13 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import Membership, Organization, User
+from app.db.models import AuditLog, Membership, Organization, User
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.common import MembershipRole, PaperAlertSource, PaperAlertType
@@ -324,17 +324,13 @@ def test_setup_review_update_emits_audit(
     )
     assert patch_resp.status_code == 200
 
-    audit = test_client.get(
-        "/audit/events?event_type=paper_validation_runtime",
-        headers=headers,
-    )
-    assert audit.status_code == 200
-    events = audit.json()["items"]
-    review_events = [
-        e for e in events if e.get("redacted_metadata", {}).get("action") == "setup_alert_review"
-    ]
-    assert review_events
-    assert review_events[0]["redacted_metadata"]["review_status"] == "important"
+    with factory() as session:
+        events = session.scalars(select(AuditLog).where(AuditLog.resource_id == str(alert_id)))
+        assert any(
+            (row.redacted_metadata or {}).get("action") == "setup_alert_review"
+            and (row.redacted_metadata or {}).get("review_status") == "important"
+            for row in events
+        )
 
 
 def test_setup_review_summary(client: tuple[TestClient, sessionmaker[Session]]) -> None:

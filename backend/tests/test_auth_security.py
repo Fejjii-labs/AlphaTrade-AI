@@ -6,14 +6,16 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
+from app.db.models import AuditLog
 from app.db.session import get_session
 from app.main import create_app
+from app.schemas.common import AuditEventType
 from app.security.rate_limit import reset_rate_limiter
 from app.security.token_denylist import reset_access_token_denylist
 from tests.test_deployment_safety import _PRODUCTION_BASE
@@ -47,7 +49,7 @@ def cookie_settings() -> Settings:
 
 
 @pytest.fixture
-def cookie_client(cookie_settings: Settings) -> Iterator[TestClient]:
+def cookie_session_factory() -> Iterator[sessionmaker[Session]]:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -63,21 +65,25 @@ def cookie_client(cookie_settings: Settings) -> Iterator[TestClient]:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
 
+    yield factory
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def cookie_client(
+    cookie_settings: Settings, cookie_session_factory: sessionmaker[Session]
+) -> Iterator[TestClient]:
     def _override_session() -> Iterator[Session]:
-        with factory() as session:
+        with cookie_session_factory() as session:
             yield session
 
     get_settings.cache_clear()
     app = create_app(settings=cookie_settings)
     app.dependency_overrides[get_session] = _override_session
-
     with TestClient(app) as client:
         yield client
-
-    app.dependency_overrides.clear()
     get_settings.cache_clear()
-    Base.metadata.drop_all(engine)
-    engine.dispose()
 
 
 def _register(client: TestClient, *, email: str) -> dict:
@@ -168,13 +174,15 @@ def test_access_token_denylist_on_logout(cookie_client: TestClient) -> None:
     )
     assert logout.status_code == 200
     blocked = cookie_client.get(
-        "/audit/events",
+        "/usage/summary",
         headers={"Authorization": f"Bearer {access}"},
     )
     assert blocked.status_code == 401
 
 
-def test_refresh_reuse_revokes_family(cookie_client: TestClient) -> None:
+def test_refresh_reuse_revokes_family(
+    cookie_client: TestClient, cookie_session_factory: sessionmaker[Session]
+) -> None:
     _register(cookie_client, email="reuse@example.com")
     login = cookie_client.post(
         "/auth/login",
@@ -189,13 +197,10 @@ def test_refresh_reuse_revokes_family(cookie_client: TestClient) -> None:
         json={"refresh_token": old_refresh},
     )
     assert reuse.status_code == 401
-    audit = cookie_client.get(
-        "/audit/events",
-        headers={"Authorization": f"Bearer {first.json()['access_token']}"},
-    )
-    assert audit.status_code == 200
-    events = audit.json()["items"]
-    assert any(e["event_type"] == "auth_refresh_reuse" for e in events)
+    with cookie_session_factory() as session:
+        assert session.scalar(
+            select(AuditLog).where(AuditLog.action == AuditEventType.AUTH_REFRESH_REUSE)
+        )
 
 
 def test_no_token_leak_in_logs(
@@ -204,7 +209,7 @@ def test_no_token_leak_in_logs(
 ) -> None:
     registered = _register(cookie_client, email="nolog@example.com")
     token = registered["tokens"]["access_token"]
-    cookie_client.get("/audit/events", headers={"Authorization": f"Bearer {token}"})
+    cookie_client.get("/usage/summary", headers={"Authorization": f"Bearer {token}"})
     assert token not in caplog.text
     assert "secure-password-1" not in caplog.text
 

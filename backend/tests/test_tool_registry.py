@@ -21,9 +21,11 @@ def test_registry_registers_all_mvp_tools() -> None:
         "journal_writer",
         "position_reader",
         "paper_execution",
-        "analytics_summary_tool",
     }
     assert expected <= names
+    assert names.isdisjoint(
+        {"analytics_summary_tool", "human_vs_system_tool", "paper_validation_tool"}
+    )
 
 
 def test_registry_rejects_duplicate() -> None:

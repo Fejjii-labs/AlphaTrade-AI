@@ -19,7 +19,6 @@ from app.db.session import get_session
 from app.main import create_app
 from app.schemas.common import (
     MembershipRole,
-    ProposalStatus,
     RiskSeverity,
     StrategyId,
     TradeDirection,
@@ -28,11 +27,8 @@ from app.schemas.journal import JournalEntryCreate
 from app.schemas.proposal import ExitCriteria, TakeProfitLevel, TradeProposalCreate
 from app.security.passwords import hash_password
 from app.services.analytics.discipline_score import DisciplineScoreService
-from app.services.analytics.facade import TradingAnalyticsFacade
-from app.services.analytics.setup_statistics import SetupStatisticsService
 from app.services.audit_service import AuditService
 from app.services.journal_service import JournalService
-from app.tools.registry import build_default_registry
 
 ORG_A = uuid.UUID("00000000-0000-0000-0000-000000000040")
 USER_A = uuid.UUID("00000000-0000-0000-0000-000000000041")
@@ -141,81 +137,12 @@ def analytics_client(
         yield client
 
 
-def test_setup_statistics_counts_proposals(
-    analytics_db: tuple[sessionmaker[Session], Settings],
-) -> None:
-    factory, _ = analytics_db
-    with factory() as session:
-        from app.db.models import TradeProposal
-
-        session.add(
-            TradeProposal(
-                organization_id=ORG_A,
-                user_id=USER_A,
-                strategy_id=StrategyId.HTF_TREND_PULLBACK,
-                symbol="BTCUSDT",
-                timeframe="4h",
-                direction=TradeDirection.LONG,
-                entry_price=Decimal("1"),
-                position_size=Decimal("1"),
-                leverage=Decimal("1"),
-                stop_loss=Decimal("1"),
-                invalidation="x",
-                confidence=0.5,
-                risk_level=RiskSeverity.LOW,
-                rationale="test",
-                status=ProposalStatus.DRAFT,
-            )
-        )
-        session.commit()
-        stats = SetupStatisticsService(session).compute(
-            organization_id=ORG_A,
-            user_id=USER_A,
-        )
-        assert any(
-            s.setup_type is StrategyId.HTF_TREND_PULLBACK and s.proposal_count == 1 for s in stats
-        )
-
-
 def test_discipline_score_bounded(analytics_db: tuple[sessionmaker[Session], Settings]) -> None:
     factory, _ = analytics_db
     with factory() as session:
         result = DisciplineScoreService(session).compute(organization_id=ORG_A, user_id=USER_A)
         assert 0 <= result.score <= 100
         assert result.grade in {"A", "B", "C", "D", "F"}
-
-
-def test_analytics_endpoints_and_tenant_isolation(analytics_client: TestClient) -> None:
-    headers_a = _auth_headers(analytics_client, "analytics-a@test.example")
-    headers_b = _auth_headers(analytics_client, "analytics-b@test.example")
-    _create_proposal(analytics_client, headers_a)
-
-    for path in (
-        "/analytics/setups",
-        "/analytics/trade-review",
-        "/analytics/discipline",
-        "/analytics/risk-behavior",
-    ):
-        resp_a = analytics_client.get(path, headers=headers_a)
-        assert resp_a.status_code == 200, path
-        resp_b = analytics_client.get(path, headers=headers_b)
-        assert resp_b.status_code == 200, path
-        if path == "/analytics/setups":
-            assert resp_a.json()["organization_id"] != resp_b.json()["organization_id"]
-
-
-def test_analytics_tool_output(analytics_db: tuple[sessionmaker[Session], Settings]) -> None:
-    factory, settings = analytics_db
-    with factory() as session:
-        registry = build_default_registry(settings, db_session=session)
-        out = registry.execute(
-            "analytics_summary_tool",
-            {"organization_id": str(ORG_A), "user_id": str(USER_A)},
-        )
-        assert out.success
-        assert out.result is not None
-        assert "discipline_summary" in out.result
-        assert "setup_statistics" in out.result
 
 
 def test_journal_rag_sync_still_works(
@@ -261,28 +188,3 @@ def test_journal_rag_sync_still_works(
             )
         )
         assert any(unique in (c.content or "") for c in search.chunks)
-
-
-def test_no_real_trading_path_in_analytics(analytics_client: TestClient) -> None:
-    settings_resp = analytics_client.get("/health")
-    assert settings_resp.status_code == 200
-    body = analytics_client.get(
-        "/providers/status",
-        headers=_auth_headers(analytics_client, "analytics-a@test.example"),
-    )
-    if body.status_code == 200:
-        data = body.json()
-        assert data.get("execution_mode", "paper") == "paper" or "paper" in str(data)
-
-
-def test_trade_review_analytics_fields(
-    analytics_db: tuple[sessionmaker[Session], Settings],
-) -> None:
-    factory, _ = analytics_db
-    with factory() as session:
-        review = TradingAnalyticsFacade(session).trade_review(
-            organization_id=ORG_A,
-            user_id=USER_A,
-        )
-        assert review.total_journaled_trades >= 0
-        assert review.proposals_rejected_by_user >= 0

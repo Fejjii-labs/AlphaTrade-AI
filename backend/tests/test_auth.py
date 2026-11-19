@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -153,7 +152,7 @@ def test_password_validation(auth_client: TestClient) -> None:
 
 
 def test_protected_route_requires_token(auth_client: TestClient) -> None:
-    response = auth_client.get("/audit/events")
+    response = auth_client.get("/usage/summary")
     assert response.status_code == 401
 
 
@@ -161,7 +160,7 @@ def test_protected_route_with_token(auth_client: TestClient) -> None:
     registered = _register(auth_client, email="protected@example.com")
     token = registered["tokens"]["access_token"]
     response = auth_client.get(
-        "/audit/events",
+        "/usage/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
@@ -181,43 +180,6 @@ def test_me_endpoint(auth_client: TestClient) -> None:
     assert registered["membership_role"] == "owner"
 
 
-def test_tenant_isolation_on_watchlist(auth_client: TestClient) -> None:
-    user_a = _register(auth_client, email="a@example.com", org="Org A")
-    token_a = user_a["tokens"]["access_token"]
-
-    create = auth_client.post(
-        "/market/watchlist",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={
-            "organization_id": str(uuid.uuid4()),
-            "user_id": str(uuid.uuid4()),
-            "symbol": "BTCUSDT",
-            "exchange": "mock",
-            "timeframes": ["1h"],
-            "strategy_ids": ["htf_trend_pullback"],
-            "enabled": True,
-        },
-    )
-    assert create.status_code == 200
-    item_id = create.json()["id"]
-
-    user_b = _register(auth_client, email="b@example.com", org="Org B")
-    token_b = user_b["tokens"]["access_token"]
-
-    foreign_list = auth_client.get(
-        "/market/watchlist",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
-    assert foreign_list.status_code == 200
-    assert foreign_list.json() == []
-
-    foreign_delete = auth_client.delete(
-        f"/market/watchlist/{item_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
-    assert foreign_delete.status_code == 404
-
-
 def test_audit_metadata_does_not_leak_tokens(
     auth_client: TestClient,
     caplog: pytest.LogCaptureFixture,
@@ -225,7 +187,7 @@ def test_audit_metadata_does_not_leak_tokens(
     registered = _register(auth_client, email="audit@example.com")
     token = registered["tokens"]["access_token"]
     refresh = registered["tokens"]["refresh_token"]
-    auth_client.get("/audit/events", headers={"Authorization": f"Bearer {token}"})
+    auth_client.get("/usage/summary", headers={"Authorization": f"Bearer {token}"})
     assert "secure-password-1" not in caplog.text
     assert refresh not in caplog.text
     assert token not in caplog.text

@@ -44,3 +44,17 @@ counts in `/workspace/at-notes/park/park-report.md`.
 Keep commits logical and add `Full-Backend: false`. Push with the authorized
 wrapper to the task branch and verify its head with `git ls-remote`. Request
 Griller review for the final implementation head before merge.
+
+## Implementation deviations after Griller review
+
+- Agent turns, configured LLM attempts, RAG indexing and realtime voice still
+  have billable paths. Keep the quota limits, admission writes, provider usage
+  accounting and voice reservations under C1 and C3.
+- Keep the approval, proposal, paper-position and pretrade routers. They still
+  handle approval or revocation, paper closes, or active agent handoffs. Keep
+  the Watcher monitoring read used by the settings and dashboard.
+- Keep shared paper validation, Watcher, analytics and coaching code reached by
+  retained readers, and the native experiment outcome reader. The deprecated
+  worker heartbeat and scan-table readers in autonomy and Watcher stay in their
+  owners' scope. Historical ORM mappings and migrations stay in place.
+- The coordinator owns the rebase after #473 and the full gate.

@@ -231,44 +231,12 @@ def _seed(engine):
         version = world.running()
         world.sample(version, reference="retained-synthetic-setup")
         session.commit()
-        from app.schemas.trendpulse_screening import TrendPulseScreeningCreate
-        from app.strategy_brain.trendpulse_screening.service import TrendPulseScreeningService
-        from tests.support.trendpulse_screening import DelayedReplayAcquirer, after_close
-        from tests.test_trendpulse_1r_adapter import END
+        from tests.support.parked_screening_rows import seed_screening_history
         from tests.test_trendpulse_1r_domain import configure
 
-        world.now = after_close()
         research = world.create(configure(world))
-        settings = world.settings.model_copy(update={"trendpulse_screening_enabled": True})
-        service = TrendPulseScreeningService(
-            session, settings, acquirer=DelayedReplayAcquirer(), clock=lambda: world.now
-        )
-        body = TrendPulseScreeningCreate(
-            request_id=uuid4(), variant_key="baseline", trigger_end=END
-        )
-        first = service.screen(world.tenant, research.experiment_id, research.id, body)
+        seed_screening_history(session, research)
         session.commit()
-        assert first.receipt_provenance == "synthetic_fixture"
-        assert first.status == "qualified_research_signal" and first.trend_receipts == 250
-        duplicate = service.screen(
-            world.tenant,
-            research.experiment_id,
-            research.id,
-            body.model_copy(update={"request_id": uuid4()}),
-        )
-        session.commit()
-        assert duplicate.status == "duplicate" and duplicate.duplicate_of == first.id
-        from datetime import timedelta
-
-        world.now = END + timedelta(seconds=60)
-        rejected = service.screen(
-            world.tenant,
-            research.experiment_id,
-            research.id,
-            body.model_copy(update={"request_id": uuid4()}),
-        )
-        session.commit()
-        assert rejected.status == "refused" and rejected.reason == "trigger_expired"
 
 
 def _seed_feature_retention(engine):

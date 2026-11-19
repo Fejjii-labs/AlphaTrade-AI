@@ -9,20 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.analysis.types import Level
 from app.core.config import ExecutionMode, Settings, get_settings
 from app.db.base import Base
-from app.db.models import Membership, Organization, PaperValidationAlert, User
+from app.db.models import Membership, Organization, User
 from app.db.session import get_session
 from app.main import create_app
 from app.providers.market_data import MockMarketDataProvider, OHLCVBar
 from app.schemas.common import (
-    AlertDeliveryChannel,
-    AlertDeliveryStatus,
     MembershipRole,
 )
 from app.schemas.market_watcher import (
@@ -222,46 +220,6 @@ def test_detect_candidates_with_real_analyze_levels() -> None:
         )
 
 
-def test_summary_readiness_paper_only(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db)
-    resp = client.get("/market-watcher/summary")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["paper_only"] is True
-    assert body["manual_scan_available"] is True
-    assert body["readiness"] == "ready"
-    assert body["worker_enabled"] is False
-
-
-def test_scan_requires_owner(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db, role=MembershipRole.TRADER)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": SCAN_CONFIRM_PHRASE,
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert resp.status_code == 403
-
-
-def test_scan_requires_confirmation(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": "WRONG",
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "blocked"
-
-
 def test_real_trading_blocks_scan(slice72_db: sessionmaker[Session]) -> None:
     from pydantic import ValidationError
 
@@ -281,75 +239,6 @@ def test_non_paper_execution_blocks_scan(slice72_db: sessionmaker[Session]) -> N
             slice72_db,
             settings_overrides={"execution_mode": ExecutionMode.READ_ONLY.value},
         )
-
-
-def test_non_dry_run_without_second_confirmation_blocked(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": SCAN_CONFIRM_PHRASE,
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": False,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "blocked"
-    assert body["dry_run"] is False
-    assert body["error"] == "create_in_app_alerts_confirmation_required"
-    with slice72_db() as session:
-        count = session.scalar(select(func.count()).select_from(PaperValidationAlert))
-        assert count == 0
-
-
-def test_dry_run_returns_candidates_without_alerts(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": SCAN_CONFIRM_PHRASE,
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["dry_run"] is True
-    assert body["alerts_created"] == 0
-    assert body["status"] == "ok"
-    with slice72_db() as session:
-        count = session.scalar(select(func.count()).select_from(PaperValidationAlert))
-        assert count == 0
-
-
-def test_dry_run_false_creates_in_app_alerts_only(slice72_db: sessionmaker[Session]) -> None:
-    client = _client(slice72_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": SCAN_CONFIRM_PHRASE,
-            "create_in_app_alerts_confirm": CREATE_IN_APP_ALERTS_CONFIRM_PHRASE,
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": False,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["dry_run"] is False
-    with slice72_db() as session:
-        rows = list(session.scalars(select(PaperValidationAlert)).all())
-        for row in rows:
-            assert row.delivery_channel == AlertDeliveryChannel.IN_APP
-            assert row.delivery_status in (
-                AlertDeliveryStatus.DISABLED,
-                AlertDeliveryStatus.PENDING,
-                AlertDeliveryStatus.SKIPPED,
-            )
-            assert row.metadata_json.get("source") == "market_watcher"
 
 
 def test_dedupe_prevents_duplicate_alerts(slice72_db: sessionmaker[Session]) -> None:

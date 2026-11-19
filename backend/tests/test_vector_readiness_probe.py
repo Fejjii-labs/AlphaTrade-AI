@@ -115,9 +115,7 @@ def test_ready_endpoint_not_ready_on_mismatch_but_liveness_stays_ok(settings: Se
         assert ready["status"] == "degraded"
         assert ready["degraded_providers"] == ["qdrant"]
         assert client.get("/health").status_code == 200
-        providers = client.get("/providers/status").json()
-        text = str(providers)
-        assert "qdrant.internal.example" not in text
+        assert "qdrant.internal.example" not in str(ready)
 
 
 def test_ready_endpoint_ready_when_collection_missing(settings: Settings) -> None:
