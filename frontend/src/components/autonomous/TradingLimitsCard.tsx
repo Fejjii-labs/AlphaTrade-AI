@@ -116,7 +116,7 @@ export function botValidationMessage(code: string, ceilings: AutonomousTradingSe
 /** Why the bot would skip this strategy today; null when it can trade it. */
 function strategyBlocker(option: AutonomousStrategyOption): string | null {
   if (!option.approved) return "Not approved";
-  if (!option.paper_eligible) return "Not paper-eligible yet";
+  if (!option.paper_eligible) return "Not paper-eligible (paper loop only; demo can trade it)";
   return null;
 }
 
@@ -378,7 +378,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                     checked={botForm.strategy_scope === "all_eligible"}
                     onChange={() => setBot({ strategy_scope: "all_eligible" })}
                   />
-                  Every approved, paper-eligible strategy
+                  Every approved and enabled strategy
                 </label>
                 <ul className="space-y-1 border-l border-border-subtle pl-3">
                   {bot.strategy_options.map((option) => {
@@ -411,7 +411,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
                 <span className="block text-xs text-text-muted">
                   {bot.strategy_options.length === 0
                     ? "No enabled strategies yet. Enable one under Strategies."
-                    : "The bot skips any strategy that is not approved and paper-eligible. One open trade per coin: the first setup wins."}
+                    : "The bot trades approved and enabled strategies. The internal paper loop also needs paper eligibility; BloFin demo does not. One open or pending trade per coin: the first setup wins."}
                 </span>
               </div>
               <Field

@@ -132,6 +132,15 @@ describe("TradingLimitsCard", () => {
     expect(onBotSaved).toHaveBeenCalledOnce();
   });
 
+  it("does not tell demo users strategies must be paper-eligible", () => {
+    renderCard();
+    const section = screen.getByTestId("autonomous-strategy");
+    expect(section).toHaveTextContent("Every approved and enabled strategy");
+    expect(section).toHaveTextContent("BloFin demo does not");
+    expect(section).not.toHaveTextContent("approved, paper-eligible strategy");
+    expect(section).not.toHaveTextContent("not approved and paper-eligible");
+  });
+
   it("lets the owner pick several approved strategies but not an unapproved one", async () => {
     const { api } = await import("@/lib/api");
     renderCard();
