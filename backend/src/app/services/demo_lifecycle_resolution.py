@@ -4,6 +4,7 @@ Called only by governed venue reconciliation; no caller-supplied close API. Dail
 loss allocation and consumed trade counts remain conservative, not replenished.
 """
 
+from datetime import UTC
 from decimal import ROUND_FLOOR, Decimal
 from uuid import uuid5
 
@@ -56,7 +57,7 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.execution_fills import adjust_symbol_map
 from app.services.journal_lifecycle_projector import JournalLifecycleProjector
 from app.services.risk_policy.profile import PolicyKind
-from app.services.safety_epoch import SafetyEpochService
+from app.services.safety_epoch import SafetyEpochService, release_demo_daily_loss
 
 logger = structlog.get_logger(__name__)
 
@@ -274,6 +275,8 @@ def resolve_verified_demo_exit(
         account_id=command.account_id,
         user_id=command.user_id,
         exposure_unit=reservation.exposure_unit,
+        now=evidence.observed_at,
+        roll_demo_daily_loss=True,
     )
     # Keep any sub-unit rounding remainder charged; never subtract another trade's exposure.
     exposure = sum(
@@ -315,6 +318,7 @@ def resolve_verified_demo_exit(
         and all(f.fee is not None and f.fee_currency == currency for f in evidence.fills)
     )
     fees = None
+    entry_fees: list[Decimal] = []
     if fee_currency_verified:
         entry_fees = [Decimal(str(event.payload["venue_fill_fee"])) for event in entry_fee_events]
         if not all(fee.is_finite() for fee in entry_fees):
@@ -393,6 +397,39 @@ def resolve_verified_demo_exit(
     )
     if close_event is None:
         raise ValidationAppError("Verified demo close event missing.")
+    entry_price = (
+        sum((fill.quantity * fill.price for fill in fills), Decimal("0")) / evidence.entry_quantity
+    )
+    realized_pnl = signed_verified_demo_pnl(
+        is_long=plan.side is EntrySide.BUY,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        quantity=evidence.entry_quantity,
+        contract_multiplier=plan.instrument_rules.contract_multiplier,
+        reported_pnl=reported_pnl,
+        fees=fees,
+        funding=verified_demo_funding_cash(evidence),
+    )
+    release_demo_daily_loss(accounting, reservation)
+    day = accounting.demo_loss_utc_date
+    daily_fills = [
+        fill for fill in evidence.fills if fill.occurred_at.astimezone(UTC).date() == day
+    ]
+    daily_quantity = sum((fill.quantity for fill in daily_fills), Decimal("0"))
+    direction = 1 if plan.side is EntrySide.BUY else -1
+    daily_pnl = (
+        direction
+        * plan.instrument_rules.contract_multiplier
+        * sum(((fill.price - entry_price) * fill.quantity for fill in daily_fills), Decimal("0"))
+    )
+    if fees is not None:
+        daily_pnl -= sum((fill.fee or Decimal("0") for fill in daily_fills), Decimal("0"))
+        daily_pnl -= sum(entry_fees, Decimal("0")) * daily_quantity / evidence.entry_quantity
+    funding = verified_demo_funding_cash(evidence)
+    if funding is not None and close_time.astimezone(UTC).date() == day:
+        daily_pnl -= funding
+    realized_loss = max(Decimal("0"), -daily_pnl)
+    accounting.actual_daily_loss += realized_loss
     accounting.actual_notional -= exposure
     accounting.reserved_notional -= unused
     accounting.symbol_actual = adjust_symbol_map(
@@ -423,7 +460,8 @@ def resolve_verified_demo_exit(
                 "released_notional": str(exposure),
                 "released_unused_reservation": str(unused),
                 "daily_trade_count_retained": accounting.actual_trade_count,
-                "daily_loss_budget": "retained_conservatively",
+                "released_daily_loss": str(reservation.daily_loss_allocation),
+                "realized_daily_loss": str(realized_loss),
                 "journal_close_event_id": str(close_event.id),
             },
         )
@@ -449,30 +487,12 @@ def resolve_verified_demo_exit(
     effect.reconciliation_disposition = "DEMO_CLOSED_RECONCILED"
     session.flush()
     if plan.risk_and_exits.margin_assumption_id == "verified-demo-read-leverage":
-        entry_price = (
-            sum((fill.quantity * fill.price for fill in fills), Decimal("0"))
-            / evidence.entry_quantity
-        )
         _streak, refused_new_trades = _note_profile_close(
             session,
             organization_id=command.organization_id,
             user_id=command.user_id,
             account_id=command.account_id,
-            net_pnl=signed_verified_demo_pnl(
-                is_long=plan.side is EntrySide.BUY,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                quantity=evidence.entry_quantity,
-                contract_multiplier=plan.instrument_rules.contract_multiplier,
-                reported_pnl=reported_pnl,
-                fees=fees,
-                funding=verified_demo_funding_cash(evidence),
-                notional=(
-                    entry_price
-                    * evidence.entry_quantity
-                    * plan.instrument_rules.contract_multiplier
-                ),
-            ),
+            net_pnl=realized_pnl,
             now=evidence.observed_at,
             kind=PolicyKind.DEMO,
         )

@@ -156,7 +156,9 @@ class Venue:
         elif path.endswith("positions") or path.endswith("orders-pending"):
             data = []
         elif path.endswith("balance"):
-            data = [{"currency": "USDT", "balance": "10000", "available": "10000"}]
+            data = [
+                {"currency": "USDT", "balance": "10000", "available": "10000", "equity": "10000"}
+            ]
         elif path.endswith("order-detail"):
             self.reads += 1
             if self.order is None or (self.behavior == "restart" and self.reads == 1):

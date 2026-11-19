@@ -25,11 +25,13 @@ from app.core.execution_credentials import (
 )
 from app.db.models import (
     AuditLog,
+    BotRiskSettings,
     ExecutionAccount,
     ExecutionCommand,
     ExecutionProjection,
     GovernedDemoLifecycleResolution,
     JournalTrade,
+    KillSwitchState,
     Membership,
     TradePlanRevision,
     VenueSubmitEffect,
@@ -67,6 +69,7 @@ from app.schemas.trade_plan import (
     TradePlanRevisionCreate,
 )
 from app.schemas.trade_plan import TradePlanRevision as PlanRevision
+from app.schemas.trade_plan import TradePlanRevision as PlanSchema
 from app.security.tenant import TenantContext
 from app.services.approval_service import (
     CHANNEL_MISMATCH_REASON,
@@ -93,6 +96,13 @@ from app.services.canonical_serialization import canonical_sha256
 from app.services.demo_account_history import has_demo_entry_history
 from app.services.demo_leverage_config import DemoLeverageConfig
 from app.services.demo_lifecycle_resolution import resolve_verified_demo_exit
+from app.services.demo_risk_v2 import (
+    demo_grade_risk,
+    demo_stop_sized_contracts,
+    enforce_demo_equity_stop,
+    valid_demo_equity,
+)
+from app.services.execution_claim import ExecutionClaimHooks
 from app.services.execution_service import ExecutionService
 from app.services.paper_alert_service import PaperAlertService
 from app.services.partial_exits.demo import (
@@ -600,6 +610,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self._experiment_context = experiment_context
         self._activity_provider = activity_provider
         self._scan_funding_rate: Decimal | None = None
+        self._demo_risk_config: BotRiskSettings | None = None
         self._leverage_config: DemoLeverageConfig | None = None
         self._remaining_exposure: Decimal | None = None
         # True when the configured leverage is written only after the plan passes.
@@ -664,6 +675,82 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
 
     def _policy_version(self) -> str:
         return DEMO_POLICY
+
+    def _uses_demo_risk_v2(self) -> bool:
+        return getattr(self._settings, "risk_model_v2_enabled", False) is True
+
+    def _demo_leverage_settings(
+        self, session: Session, target: PaperScanTarget
+    ) -> DemoLeverageConfig:
+        from app.services.demo_leverage_config import (
+            DemoLeverageValidationError,
+            load_demo_leverage_config,
+        )
+
+        if self._uses_demo_risk_v2():
+            row = session.get(BotRiskSettings, 1, populate_existing=True)
+            if row is None:
+                raise DemoLeverageValidationError(
+                    "demo_risk_settings_missing", "Demo risk settings are missing."
+                )
+            self._demo_risk_config = row
+            return DemoLeverageConfig(row.leverage, row.margin_mode, "risk_model_v2")
+        return load_demo_leverage_config(
+            session,
+            organization_id=target.organization_id,
+            user_id=target.user_id,
+            symbol=target.symbol,
+        )
+
+    def _check_demo_equity(
+        self,
+        session: Session,
+        organization_id: UUID,
+        user_id: UUID,
+        account_id: UUID,
+        equity: Decimal | None,
+    ) -> str | None:
+        if equity is None or not valid_demo_equity(equity):
+            return "demo_equity_unverified"
+        now = self._clock.now()
+        from app.services.risk.kill_switch import KillSwitchService
+
+        # Operator activation takes the kill-switch row before any account epoch.
+        KillSwitchService(session, AuditService(session), self._settings).get_status(
+            organization_id=organization_id
+        )
+        session.scalar(
+            select(KillSwitchState.id)
+            .where(KillSwitchState.organization_id == organization_id)
+            .with_for_update()
+        )
+        safety = self._safety(session)
+        safety.lock_epoch(organization_id=organization_id, account_id=account_id)
+        accounting = safety.lock_risk_accounting(
+            organization_id=organization_id,
+            account_id=account_id,
+            user_id=user_id,
+            exposure_unit="USDT",
+            now=now,
+            roll_demo_daily_loss=True,
+        )
+        config = session.get(BotRiskSettings, 1, populate_existing=True)
+        if config is None:
+            session.rollback()
+            return "demo_risk_settings_missing"
+        if enforce_demo_equity_stop(
+            session,
+            accounting=accounting,
+            user_id=user_id,
+            equity=equity,
+            threshold=config.daily_stop_pct,
+            now=now,
+            settings=self._settings,
+        ):
+            session.commit()
+            return "account_equity_stop"
+        session.commit()
+        return None
 
     def _risk_policy_kind(self) -> str:
         return "demo"
@@ -741,28 +828,27 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         ):
             return _proof(candidate, "blocked", "demo_prior_entry_requires_reconciliation")
         from app.services.automated_paper_loop import _load_active_profile
-        from app.services.demo_leverage_config import (
-            DemoLeverageValidationError,
-            load_demo_leverage_config,
-        )
+        from app.services.demo_leverage_config import DemoLeverageValidationError
 
-        active = _load_active_profile(
-            session, target.organization_id, self._risk_policy_kind(), self._clock.now()
+        demo_v2 = self._uses_demo_risk_v2()
+        active = (
+            None
+            if demo_v2
+            else _load_active_profile(
+                session, target.organization_id, self._risk_policy_kind(), self._clock.now()
+            )
         )
         try:
-            config = load_demo_leverage_config(
-                session,
-                organization_id=target.organization_id,
-                user_id=target.user_id,
-                symbol=target.symbol,
-            )
+            config = self._demo_leverage_settings(session, target)
         except DemoLeverageValidationError:
             return _proof(candidate, "blocked", "demo_leverage_config_invalid")
         session.commit()  # Persist Candidate; no DB transaction held over venue IO.
         # Without a binding configured leverage, trade at the demo account's
         # existing leverage and margin mode (read only); a profile still reads isolated.
         write_allowed = demo_leverage_write_allowed(self._settings)
-        self._leverage_config = binding_demo_leverage_config(config, self._settings)
+        self._leverage_config = (
+            config if demo_v2 else binding_demo_leverage_config(config, self._settings)
+        )
         self._leverage_write_pending = self._leverage_config is not None and write_allowed
         required_leverage: Decimal | None = None
         read_margin_mode: str | None = "isolated" if active is not None else None
@@ -801,15 +887,26 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             diagnostic = failure_diagnostics(exc, stage="snapshot")
             return _proof(candidate, "blocked", f"demo_{diagnostic['reason_code']}")
         self._scan_funding_rate = _read_demo_funding(self._get_provider(), target.symbol)
-        try:
-            self._remaining_exposure = demo_remaining_total_exposure(
+        if demo_v2:
+            refusal = self._check_demo_equity(
                 session,
-                organization_id=target.organization_id,
-                user_id=target.user_id,
-                account_id=account.id,
+                target.organization_id,
+                target.user_id,
+                account.id,
+                self._snapshot.venue_equity,
             )
-        except Exception:
-            return _proof(candidate, "blocked", "risk_limits_unverified")
+            if refusal is not None:
+                return _proof(candidate, "blocked", refusal)
+        else:
+            try:
+                self._remaining_exposure = demo_remaining_total_exposure(
+                    session,
+                    organization_id=target.organization_id,
+                    user_id=target.user_id,
+                    account_id=account.id,
+                )
+            except Exception:
+                return _proof(candidate, "blocked", "risk_limits_unverified")
         proof = super()._bound(
             session,
             target=target,
@@ -847,6 +944,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         account: ExecutionAccount,
         now: datetime,
     ) -> ActionEligibilityCommand:
+        snapshot = self._action_time_snapshot(now)
         command = _eligibility_command(
             session,
             settings=settings,
@@ -857,20 +955,19 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             assembled=assembled,
             account=account,
             now=now,
+            demo_equity=snapshot.venue_equity if self._uses_demo_risk_v2() else None,
         )
-        snapshot = self._action_time_snapshot(now)
-        return command.model_copy(
-            update={
-                "market_action": demo_action_evidence(
-                    command.market_action, snapshot, window=_plan_window(settings)
-                ),
-                "configuration": PaperExecutionConfiguration(
-                    execution_mode=ExecutionMode.PAPER,
-                    enable_real_trading=False,
-                    exchange_mode=ExchangeMode.PAPER_EXCHANGE_DEMO,
-                ),
-            }
-        )
+        update: dict[str, object] = {
+            "market_action": demo_action_evidence(
+                command.market_action, snapshot, window=_plan_window(settings)
+            ),
+            "configuration": PaperExecutionConfiguration(
+                execution_mode=ExecutionMode.PAPER,
+                enable_real_trading=False,
+                exchange_mode=ExchangeMode.PAPER_EXCHANGE_DEMO,
+            ),
+        }
+        return command.model_copy(update=update)
 
     def _plan_terms(
         self,
@@ -893,7 +990,13 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         fixed_risk_percent: Decimal | None = None,
     ) -> TradePlanRevisionCreate | str:
         snapshot = self._require_snapshot()
-        equity = min(equity, snapshot.equity, snapshot.available)
+        demo_v2 = self._uses_demo_risk_v2()
+        if demo_v2:
+            if snapshot.venue_equity is None or not valid_demo_equity(snapshot.venue_equity):
+                return "demo_equity_unverified"
+            equity = snapshot.venue_equity
+        else:
+            equity = min(equity, snapshot.equity, snapshot.available)
         # Stops and targets stay on the existing path. The unprofiled 1%
         # minimum is not a gate once a profile is active: that plan is sized
         # below with size_for_profile. Leverage and margin-mode reads still
@@ -914,15 +1017,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             now=now,
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
-            accept_unprofiled_minimum=active_profile is not None or sfp,
-            **(
-                {
-                    "governed_demo_sfp": True,
-                    "min_stop_atr_floor": self._settings.sfp_min_stop_atr_multiple,
-                }
-                if sfp
-                else {}
-            ),
+            accept_unprofiled_minimum=demo_v2 or active_profile is not None or sfp,
+            governed_demo_sfp=sfp,
+            min_stop_atr_floor=self._settings.sfp_min_stop_atr_multiple if sfp else Decimal("0"),
         )
         if isinstance(terms, str):
             return terms
@@ -966,7 +1063,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         # Stop-loss band: the stop-distance loss must land in [min%, max%] of
         # equity (configurable). Size just above the floor; notional is bounded
         # by what the account's leverage (configured or existing) can margin.
-        loss_floor, loss_ceiling = stop_loss_band(self._settings, equity)
+        loss_floor, loss_ceiling = (
+            (Decimal("0"), Decimal("0")) if demo_v2 else stop_loss_band(self._settings, equity)
+        )
         if loss_floor is None or loss_ceiling is None:
             return "stop_loss_band_invalid"
         risk_cap = loss_floor + (loss_ceiling - loss_floor) / Decimal("10")
@@ -996,7 +1095,20 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         profile_funding_periods: Decimal | None = None
         profile_grade = None
         profile_grade_cap: Decimal | None = None
-        if active_profile is None:
+        if demo_v2:
+            from app.services.automated_paper_loop import _grade_for_plan
+
+            if self._demo_risk_config is None or config is None:
+                return "demo_risk_settings_missing"
+            decision, _ = _grade_for_plan(candidate, assembled)
+            profile_grade = decision.grade
+            profile_grade_cap = demo_grade_risk(self._demo_risk_config, profile_grade)
+            if profile_grade_cap is None:
+                return "demo_risk_grade_blocked"
+            sfp_stop_cap = equity * profile_grade_cap / 100
+            notional_cap = snapshot.available * account_leverage
+            raw = demo_stop_sized_contracts(snapshot, stop=stop, risk=sfp_stop_cap)
+        elif active_profile is None:
             # The claim also caps notional plus fee and slippage allowances at the
             # account's remaining total exposure; size within it rather than plan a
             # trade the claim will refuse (e.g. 10x leverage on a 1x exposure limit).
@@ -1133,6 +1245,16 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             funding_rate=profile_funding_rate,
             funding_periods=profile_funding_periods,
         )
+        if demo_v2:
+            from app.services.risk_policy.plan_sizing import PAPER_DEMO_TAKER_FEE_RATE
+
+            stop_risk_per_base = abs(adverse_entry - stop)
+            if (upper + stop) * PAPER_DEMO_TAKER_FEE_RATE > stop_risk_per_base / 5:
+                return "demo_fees_exceed_risk_limit"
+            if base * (upper / account_leverage + upper * PAPER_DEMO_TAKER_FEE_RATE) > (
+                snapshot.available
+            ):
+                return "demo_margin_exceeds_available"
         if sfp_stop_cap is not None and base * abs(adverse_entry - stop) > sfp_stop_cap:
             return "demo_depth_exceeds_risk_limit"
         if base * upper > notional_cap:
@@ -1140,9 +1262,9 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if profile_leverage is not None:
             if profile_cash_ceiling is None or maximum_loss > profile_cash_ceiling:
                 return "demo_depth_exceeds_risk_limit"
-        elif maximum_loss > loss_ceiling:
+        elif not demo_v2 and maximum_loss > loss_ceiling:
             return "stop_loss_above_band"
-        elif maximum_loss < loss_floor:
+        elif not demo_v2 and maximum_loss < loss_floor:
             return "stop_loss_below_band"
         values = terms.model_dump(mode="python")
         values.update(
@@ -1214,7 +1336,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 },
                 "stop": {"value": stop, "unit": "USDT"},
                 "margin_assumption_id": margin_assumption,
-                "margin_assumption_version": "1",
+                "margin_assumption_version": "2" if demo_v2 else "1",
             }
         )
         if profile_leverage is not None:
@@ -1280,7 +1402,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         self,
         session: Session,
         target: PaperScanTarget,
-        plan: object,
+        plan: PlanSchema,
     ) -> tuple[str | None, RiskLimitSnapshot | None]:
         """Refuse demo auto-approval unless mode, kill switch, and limits verify.
 
@@ -1312,7 +1434,24 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if kill is not None:
             return kill, None
         try:
-            intent = conservative_reservation(plan)  # type: ignore[arg-type]
+            intent = conservative_reservation(plan, stop_risk_only=self._uses_demo_risk_v2())
+            if self._uses_demo_risk_v2():
+                return experiment_reservation_refusal(
+                    session,
+                    plan,
+                    intent,
+                    self._clock.now(),
+                ), None
+            safety = self._safety(session)
+            safety.lock_epoch(organization_id=target.organization_id, account_id=plan.account_id)
+            safety.lock_risk_accounting(
+                organization_id=target.organization_id,
+                account_id=plan.account_id,
+                user_id=target.user_id,
+                exposure_unit=intent.exposure_unit,
+                now=self._clock.now(),
+                roll_demo_daily_loss=True,
+            )
             snapshot = _demo_risk_snapshot(session, target, plan, intent)
         except Exception:
             return "risk_limits_unverified", None
@@ -1322,7 +1461,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         try:
             experiment = experiment_reservation_refusal(
                 session,
-                plan,  # type: ignore[arg-type]
+                plan,
                 intent,
                 self._clock.now(),
             )
@@ -1362,7 +1501,11 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         )
         if missing is not None:
             return missing
-        if plan.execution_venue != "BLOFIN_DEMO" or plan.execution_policy_version != DEMO_POLICY:
+        if (
+            plan is None
+            or plan.execution_venue != "BLOFIN_DEMO"
+            or plan.execution_policy_version != DEMO_POLICY
+        ):
             return _proof(
                 candidate, "blocked", "demo_existing_plan_venue_mismatch", revision_id=revision_id
             )
@@ -1530,6 +1673,25 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 reason=blocked,
             )
             return _proof(candidate, "blocked", blocked, revision_id=revision_id)
+        demo_equity = None
+        if self._uses_demo_risk_v2():
+            try:
+                snapshot = self._get_provider().snapshot(
+                    now=self._clock.now(),
+                    symbol=target.symbol,
+                    side=plan.side,
+                    quantity=plan.quantity.value,
+                )
+            except Exception:
+                return _proof(
+                    candidate, "blocked", "demo_equity_unverified", revision_id=revision_id
+                )
+            demo_equity = snapshot.venue_equity
+            refusal = self._check_demo_equity(
+                session, target.organization_id, target.user_id, account_id, demo_equity
+            )
+            if refusal is not None:
+                return _proof(candidate, "blocked", refusal, revision_id=revision_id)
         blocked = self._apply_planned_leverage(session, target, candidate, plan)
         if blocked is not None:
             approval.revoke_authorization(
@@ -1552,6 +1714,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
                 autonomous=use_autonomous,
             ),
             clock=self._clock.now,
+            hooks=ExecutionClaimHooks(demo_v2_equity=demo_equity),
         )
         if result.outcome is ExecutionCommandOutcome.ALLOW and result.command_id is not None:
             from app.services.automated_paper_loop import _commit_risk_record
@@ -1660,12 +1823,8 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         Returns a block reason, or None to continue to the claim and the entry.
         """
 
-        from app.schemas.trade_plan import TradePlanRevision as PlanSchema
         from app.services.autonomous_trading import kill_switch_refusal
-        from app.services.demo_leverage_config import (
-            DemoLeverageValidationError,
-            load_demo_leverage_config,
-        )
+        from app.services.demo_leverage_config import DemoLeverageValidationError
 
         assumption = getattr(getattr(plan, "risk_and_exits", None), "margin_assumption_id", None)
         if assumption != CONFIGURED_DEMO_MARGIN_ASSUMPTION:
@@ -1679,12 +1838,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             return "demo_leverage_config_invalid"
         # The owner's setting must still be what the plan was sized for.
         try:
-            config = load_demo_leverage_config(
-                session,
-                organization_id=target.organization_id,
-                user_id=target.user_id,
-                symbol=target.symbol,
-            )
+            config = self._demo_leverage_settings(session, target)
         except DemoLeverageValidationError:
             return "demo_leverage_config_invalid"
         if config.leverage_decimal != leverage or config.margin_mode != margin_mode:
@@ -2246,6 +2400,20 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             )
         )
         session.commit()
+        if self._uses_demo_risk_v2():
+            try:
+                equity = self._get_provider().read_demo_equity()
+            except Exception as exc:
+                diagnostic = failure_diagnostics(exc, stage="balance")
+                logger.warning("demo_equity_sweep_failed reason=%s", diagnostic["reason_code"])
+            else:
+                self._check_demo_equity(
+                    session,
+                    UUID(self._settings.governed_blofin_demo_organization_id),
+                    UUID(self._settings.governed_blofin_demo_user_id),
+                    UUID(self._settings.governed_blofin_demo_account_id),
+                    equity,
+                )
         governed = tuple(self.reconcile_command(session, command_id=identity) for identity in ids)
         # Aged manual demo entries are outside governed lineage but still gate
         # every governed entry via has_demo_entry_history; resolve proven-closed ones.
