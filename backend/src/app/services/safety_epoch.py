@@ -13,7 +13,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -126,6 +126,7 @@ class SafetyEpochService:
         exposure_unit: str,
         now: datetime | None = None,
         roll_daily_trade_slots: bool = False,
+        roll_demo_daily_loss: bool = False,
     ) -> AccountRiskAccountingState:
         """Lock the account ledger. Paper callers may roll the trade-slot day.
 
@@ -142,6 +143,8 @@ class SafetyEpochService:
             organization_id=organization_id, account_id=account_id
         )
         if existing is not None:
+            if roll_demo_daily_loss:
+                self._roll_demo_daily_loss(existing, observed_at.astimezone(UTC).date())
             if roll_daily_trade_slots:
                 self._roll_daily_trade_slots(
                     existing,
@@ -187,6 +190,8 @@ class SafetyEpochService:
         )
         if locked is None:
             raise RuntimeError("Risk accounting row missing after insert-or-lock.")
+        if roll_demo_daily_loss:
+            self._roll_demo_daily_loss(locked, observed_at.astimezone(UTC).date())
         if roll_daily_trade_slots:
             self._roll_daily_trade_slots(
                 locked,
@@ -195,6 +200,48 @@ class SafetyEpochService:
                 now=observed_at,
             )
         return locked
+
+    def _roll_demo_daily_loss(self, accounting: AccountRiskAccountingState, today: date) -> None:
+        stamped = accounting.demo_loss_utc_date
+        if stamped is not None and today <= stamped:
+            return
+        demo_allocations = (
+            select(func.coalesce(func.sum(RiskReservation.daily_loss_allocation), 0))
+            .join(TradePlanRevision, TradePlanRevision.id == RiskReservation.plan_revision_id)
+            .where(
+                RiskReservation.organization_id == accounting.organization_id,
+                RiskReservation.account_id == accounting.account_id,
+                TradePlanRevision.execution_venue == "BLOFIN_DEMO",
+                or_(
+                    RiskReservation.release_state != RiskReservationReleaseState.RELEASED,
+                    RiskReservation.converted_trade_slots > 0,
+                ),
+            )
+        )
+        # Legacy filled demo reservations were charged even after final close.
+        prior = (
+            self._session.scalar(demo_allocations) or Decimal("0")
+            if stamped is None
+            else accounting.demo_reserved_daily_loss
+        )
+        pending = self._session.scalar(
+            demo_allocations.where(
+                RiskReservation.release_reason.is_distinct_from(
+                    RiskReservationReleaseReason.VERIFIED_DEMO_EXIT
+                )
+            )
+        )
+        pending = pending or Decimal("0")
+        accounting.demo_reserved_daily_loss = pending
+        accounting.reserved_daily_loss = (
+            max(Decimal("0"), accounting.reserved_daily_loss - prior) + pending
+        )
+        if stamped is not None or self._last_written_before(
+            accounting, day=today, timezone_name="UTC"
+        ):
+            accounting.actual_daily_loss = Decimal("0")
+        accounting.demo_loss_utc_date = today
+        accounting.version += 1
 
     def advance_for_kill_activation(
         self,
@@ -534,6 +581,15 @@ def _release_reason_for(cause: str) -> RiskReservationReleaseReason:
     if cause == "proven_unsent":
         return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_PROVEN_UNSENT
     return RiskReservationReleaseReason.UNUSED_REMAINDER_AFTER_REJECTION
+
+
+def release_demo_daily_loss(
+    accounting: AccountRiskAccountingState, reservation: RiskReservation
+) -> None:
+    """Release at most this reservation's share of the demo allocation."""
+    amount = min(accounting.demo_reserved_daily_loss, reservation.daily_loss_allocation)
+    accounting.demo_reserved_daily_loss -= amount
+    accounting.reserved_daily_loss = max(Decimal("0"), accounting.reserved_daily_loss - amount)
 
 
 def _release_reservation_remainder(

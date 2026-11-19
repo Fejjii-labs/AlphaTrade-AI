@@ -42,9 +42,9 @@ def _columns(engine: Engine) -> set[str]:
 def test_a30_revises_a29_on_a_single_head() -> None:
     script = alembic_script_directory()
     assert_down_revision_chain(script, (_A30, _A29))
-    head = single_alembic_head(script)
-    assert head == _A30
-    assert _A29 in alembic_ancestry(head)
+    ancestry = alembic_ancestry(single_alembic_head(script))
+    assert _A30 in ancestry
+    assert _A29 in ancestry
 
 
 def _seed_legacy_rows(engine: Engine) -> tuple[str, str]:
