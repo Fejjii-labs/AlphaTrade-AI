@@ -83,7 +83,7 @@ it("does not preserve another account's snapshot when a new account read fails",
   await loaded();
   expect(screen.getByTestId("dashboard-equity")).toHaveTextContent("1,001.5");
   rerender(<BloFinDemoAccountCard refreshKey={1} />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("refresh failed");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Refresh failed.");
   expect(screen.getByTestId("dashboard-equity")).not.toHaveTextContent("1,001.5");
 });
 
@@ -99,9 +99,9 @@ describe("BloFin demo Dashboard", () => {
     await loaded();
     openCount("1");
     expect(screen.getByText("1,001.50 USD")).toBeInTheDocument();
-    expect(screen.getByText("BLOFIN_DEMO")).toBeInTheDocument();
+    expect(screen.queryByText("BLOFIN_DEMO")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "View exchange status" }),
+      screen.getByRole("link", { name: "Exchange" }),
     ).toHaveAttribute("href", "/settings/exchange");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("demo-last-synced")).toHaveTextContent("Last synced");
@@ -195,7 +195,7 @@ describe("BloFin demo Dashboard", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Refresh demo account" }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent("refresh failed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refresh failed.");
     expect(screen.getByTestId("dashboard-available")).toHaveTextContent("900.13 USDT");
     expect(screen.getByText("Stale snapshot")).toBeInTheDocument();
     openCount("1");
@@ -209,7 +209,7 @@ describe("BloFin demo Dashboard", () => {
       screen.getByRole("button", { name: "Refresh demo account" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "refresh failed",
+      "Refresh failed.",
     );
     expect(screen.getByTestId("dashboard-available")).toHaveTextContent("900.13 USDT");
     expect(screen.getByText("Stale snapshot")).toBeInTheDocument();
@@ -234,7 +234,10 @@ describe("BloFin demo Dashboard", () => {
       latest.mockResolvedValue(payload);
       refresh.mockResolvedValue(payload);
       render(<BloFinDemoAccountCard />);
-      await screen.findByText("Configure or refresh demo account.");
+      expect(
+        (await screen.findAllByText(status === "inactive" ? "Demo account not connected" : "No snapshot yet")).length,
+      ).toBeGreaterThan(0);
+      expect(screen.queryByText("Configure or refresh demo account.")).not.toBeInTheDocument();
       expect(
         screen.queryByTestId("dashboard-open-count"),
       ).not.toBeInTheDocument();
@@ -381,7 +384,7 @@ describe("BloFin demo Dashboard", () => {
   it("retains server-preserved evidence on reload after a failed native attempt", async () => {
     latest.mockResolvedValue(account({ status: "stale", refresh_error: "Latest sync failed." }));
     render(<BloFinDemoAccountCard />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("refresh failed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refresh failed.");
     openCount("1");
     expect(screen.getByText("Stale snapshot")).toBeInTheDocument();
   });
@@ -622,9 +625,9 @@ it("renders only the simplified account summary", async () => {
   await loaded();
   const card = screen.getByTestId("dashboard-demo-account");
   expect(screen.getByText("BloFin demo account")).toBeInTheDocument();
-  expect(screen.getByText("BLOFIN_DEMO")).toBeInTheDocument();
+  expect(screen.queryByText("BLOFIN_DEMO")).not.toBeInTheDocument();
   expect(screen.getByText("Fresh snapshot")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "View exchange status" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Exchange" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Refresh demo account" })).toBeInTheDocument();
   for (const id of ["dashboard-equity", "dashboard-available", "dashboard-open-count", "dashboard-win-rate", "dashboard-pnl"]) {
     expect(screen.getByTestId(id)).toBeInTheDocument();

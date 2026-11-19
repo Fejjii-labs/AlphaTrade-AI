@@ -88,7 +88,7 @@ describe("Trader dashboard unavailable sources", () => {
     );
     expect(
       screen.getByTestId("dashboard-strategy-performance"),
-    ).toHaveTextContent("Closed paper strategy performance unavailable");
+    ).toHaveTextContent("Unavailable");
     expect(screen.getByTestId("dashboard-watcher-status")).toHaveTextContent(
       "Unavailable",
     );

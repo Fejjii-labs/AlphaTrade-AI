@@ -290,7 +290,7 @@ export function PerformanceKpiCards({
         icon={Sigma}
         value={formatMonetary(s?.expectancy)}
         tone={moneyTone(s?.expectancy)}
-        detail={["Net P&L per closed trade", tradeCoverage].filter(Boolean).join(" · ")}
+        detail={tradeCoverage}
       />
       <KpiCard
         testId="kpi-profit-factor"
@@ -305,7 +305,7 @@ export function PerformanceKpiCards({
         detail={
           s && s.profit_factor === null && s.losses === 0 && s.wins > 0
             ? "No losing trades yet"
-            : "Gross profit ÷ gross loss"
+            : undefined
         }
         visual={
           <ProfitFactorRing
@@ -320,7 +320,7 @@ export function PerformanceKpiCards({
         icon={Percent}
         value={formatPercent(winRate, 1)}
         tone={winRate === null ? "none" : "neutral"}
-        detail={["Wins ÷ (wins + losses) · excludes breakevens", tradeCoverage].filter(Boolean).join(" · ")}
+        detail={tradeCoverage}
         visual={
           <WinRateGauge
             wins={s?.wins ?? 0}
@@ -335,7 +335,6 @@ export function PerformanceKpiCards({
         icon={CalendarCheck}
         value={formatPercent(dayRate, 1)}
         tone={dayRate === null ? "none" : "neutral"}
-        detail="Green days ÷ (green + red days)"
         visual={
           <WinRateGauge
             wins={risk?.winning_days ?? 0}

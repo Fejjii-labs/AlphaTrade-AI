@@ -57,7 +57,7 @@ export function BloFinDemoAccountCard({
       href="/settings/exchange"
       className={cn(buttonVariants({ variant: "outline" }), "h-11")}
     >
-      View exchange status
+      Exchange
     </Link>
   );
   const refreshControl = account?.can_refresh ? (
@@ -86,7 +86,6 @@ export function BloFinDemoAccountCard({
         <div className="min-w-0 flex-1 space-y-2">
           <SectionHeader eyebrow="Account" title="BloFin demo account" />
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="info">BLOFIN_DEMO</Badge>
             <Badge variant={status === "ok" ? "success" : "warning"}>
               {status
                 ? statusLabel[status]
@@ -116,10 +115,6 @@ export function BloFinDemoAccountCard({
               status === "inactive"
                 ? "Demo account not connected"
                 : "No snapshot yet"
-            }
-            description={
-              account?.message ??
-              "BloFin demo credentials are set by the operator. Once they are, equity, balances and positions appear here."
             }
             action={refreshControl ?? configureLink}
           />

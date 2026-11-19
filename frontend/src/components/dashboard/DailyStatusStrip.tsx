@@ -40,20 +40,20 @@ export function DailyStatusStrip({
       {killSwitch?.known ? (
         killSwitch.blocked ? (
           <Badge variant="danger" data-testid="dashboard-strip-kill-switch">
-            Kill switch active · new entries paused
+            Paused
           </Badge>
         ) : (
           <Badge variant="success" data-testid="dashboard-strip-kill-switch">
-            Kill switch off
+            Not paused
           </Badge>
         )
       ) : (
         <Badge variant="warning" data-testid="dashboard-strip-kill-switch">
-          Kill switch status unknown
+          Pause unknown
         </Badge>
       )}
       {summary.pending ? (
-        <span data-testid="dashboard-strip-loading">Loading today’s status…</span>
+        <span data-testid="dashboard-strip-loading">Loading…</span>
       ) : daily ? (
         <>
           <Badge
@@ -69,9 +69,7 @@ export function DailyStatusStrip({
             {humanizeToken(daily.discipline_status)}
           </Badge>
           {daily.loss_lock_active ? (
-            <Badge variant="warning" title="Display only; the account daily equity stop arms the kill switch.">
-              Daily loss limit reached (display only)
-            </Badge>
+            <Badge variant="warning">Loss limit reached</Badge>
           ) : null}
           {daily.overtrading_warning_active ? (
             <Badge variant="warning">Overtrading warning</Badge>
@@ -79,12 +77,9 @@ export function DailyStatusStrip({
           {daily.green_day_protection_active ? (
             <Badge variant="warning">Green day protection</Badge>
           ) : null}
-          <span className="text-text-muted">
-            {daily.date} · {daily.timezone}
-          </span>
         </>
       ) : (
-        <span data-testid="dashboard-strip-unavailable">Daily status unavailable</span>
+        <span data-testid="dashboard-strip-unavailable">Unavailable</span>
       )}
       {alerts}
     </section>

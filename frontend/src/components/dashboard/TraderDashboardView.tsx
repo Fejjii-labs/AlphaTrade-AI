@@ -97,16 +97,8 @@ export function DashboardVenueControl({
   );
 }
 
-function SectionEmpty({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <EmptyState title={title} description={description} className="py-6" />
-  );
+function SectionEmpty({ title }: { title: string }) {
+  return <EmptyState title={title} className="py-6" />;
 }
 
 export function TraderDashboardView({
@@ -209,13 +201,8 @@ export function TraderDashboardView({
           role="status"
           className="rounded-control border border-warning-border bg-warning-muted p-3 text-sm text-warning"
         >
-          Unavailable: {unavailable}. Available sections remain visible.
+          Unavailable: {unavailable}
         </div>
-      ) : null}
-      {refreshing ? (
-        <p role="status" className="text-sm text-text-secondary">
-          Refreshing dashboard; showing the previous snapshot.
-        </p>
       ) : null}
 
       <DailyStatusStrip
@@ -242,8 +229,7 @@ export function TraderDashboardView({
           className="rounded-control border border-dashed border-border bg-surface-1 px-3 py-2 text-sm text-text-muted"
           data-testid="dashboard-venue-no-account"
         >
-          No account snapshot for {SCOPE_LABELS[venue]}. The performance figures above
-          cover journal trades in this scope only.
+          No account for {SCOPE_LABELS[venue]}
         </p>
       ) : null}
       {demo && user && organization ? (
@@ -264,21 +250,15 @@ export function TraderDashboardView({
               </p>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-              <p className="col-span-2 text-xs text-text-secondary lg:col-span-3">
-                All metrics in this view cover internal simulator proposal and
-                validation history.
-              </p>
               <TradingMetric
                 label="Portfolio value"
                 value={metric(portfolioEquity(data.portfolio))}
-                note="Paper account equity"
                 testId="dashboard-equity"
               />
               <TradingMetric
                 label="Realized PnL"
                 value={metric(portfolioPnl(data.portfolio))}
                 amount={data.portfolio.data?.metrics.net_pnl}
-                note="Closed paper trades · net of costs"
                 testId="dashboard-pnl"
               />
               <TradingMetric
@@ -286,7 +266,6 @@ export function TraderDashboardView({
                 value={metric(
                   formatCount(data.portfolio.data?.account.open_trade_count),
                 )}
-                note="Internal simulator · proposal and validation history"
                 testId="dashboard-open-count"
               />
               <TradingMetric
@@ -306,11 +285,7 @@ export function TraderDashboardView({
                 label="Today’s realized PnL"
                 value={formatMonetary(daily?.realized_pnl_today_paper)}
                 amount={daily?.realized_pnl_today_paper}
-                note={
-                  daily
-                    ? `${daily.date} · ${daily.timezone}`
-                    : "Daily status unavailable"
-                }
+                note={daily ? null : "Unavailable"}
                 testId="dashboard-daily-pnl"
               />
             </CardContent>
@@ -346,12 +321,7 @@ export function TraderDashboardView({
                     >
                       {humanizeToken(daily.discipline_status)}
                     </Badge>
-                    <p className="text-sm leading-relaxed text-text-primary">
-                      {daily.recommended_action}
-                    </p>
                     <p className="text-xs text-text-secondary">
-                      Proposal and validation activity · {daily.date} ·{" "}
-                      {daily.timezone}:{" "}
                       {formatCount(daily.paper_trades_opened_today)} opened ·{" "}
                       {formatCount(daily.paper_trades_closed_today)} closed ·{" "}
                       {formatCount(daily.remaining_trades_allowed)} remaining
@@ -367,22 +337,10 @@ export function TraderDashboardView({
                         <Badge variant="warning">Overtrading warning</Badge>
                       ) : null}
                     </div>
-                    {daily.reasons.length ? (
-                      <ul className="space-y-1 text-xs text-text-secondary">
-                        {daily.reasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {daily.limitations.length ? (
-                      <p className="text-xs text-text-secondary">
-                        {daily.limitations.join(" · ")}
-                      </p>
-                    ) : null}
                   </>
                 ) : (
                   <UnavailableState
-                    message="Daily status unavailable"
+                    message="Unavailable"
                     onRetry={onRetry}
                     className="py-4"
                   />
@@ -416,10 +374,10 @@ export function TraderDashboardView({
                     </p>
                   ) : null}
                   <Link
-                    href="/watcher"
+                    href="/settings/watcher"
                     className="mt-2 inline-flex min-h-11 items-center text-sm text-accent hover:underline"
                   >
-                    Watcher details
+                    Markets
                   </Link>
                 </div>
                 <div
@@ -447,12 +405,6 @@ export function TraderDashboardView({
                       {market.symbol}
                     </p>
                   ) : null}
-                  <Link
-                    href="/market"
-                    className="inline-flex min-h-11 items-center text-sm text-accent hover:underline"
-                  >
-                    Market monitor
-                  </Link>
                 </div>
               </CardContent>
             </Card>
@@ -463,7 +415,7 @@ export function TraderDashboardView({
               <CardHeader className="flex-row flex-wrap items-center justify-between">
                 <CardTitle>Important alerts</CardTitle>
                 <Link
-                  href="/alerts"
+                  href="/settings/alerts"
                   className="inline-flex min-h-11 items-center text-sm text-accent hover:underline"
                 >
                   All alerts
@@ -479,10 +431,7 @@ export function TraderDashboardView({
                     className="py-4"
                   />
                 ) : alerts.length === 0 ? (
-                  <SectionEmpty
-                    title="No alerts"
-                    description="New alerts will appear here for review."
-                  />
+                  <SectionEmpty title="No alerts" />
                 ) : (
                   <ul className="space-y-3">
                     {alerts.map((alert) => (
@@ -545,7 +494,7 @@ export function TraderDashboardView({
                       href={`/journal?trade_id=${t.id}`}
                       className="min-h-11 inline-flex items-center text-accent"
                     >
-                      Open exact trade
+                      Open
                     </Link>
                   </li>
                 ))}
@@ -563,21 +512,9 @@ export function TraderDashboardView({
       </Card> : null}
       {simulator ? (
         <>
-          <p className="text-sm text-text-secondary">
-            Internal simulator history · proposal and validation activity.{" "}
-            <Link href="/portfolio" className="text-accent underline">
-              Open simulator portfolio
-            </Link>
-          </p>
           <Card data-testid="dashboard-strategy-performance">
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle>Performance by strategy</CardTitle>
-              <Link
-                href="/portfolio"
-                className="inline-flex min-h-11 items-center text-sm text-accent hover:underline"
-              >
-                Simulator statistics
-              </Link>
             </CardHeader>
             <CardContent className="grid gap-6 lg:grid-cols-2">
               <div className="min-w-0">
@@ -588,15 +525,12 @@ export function TraderDashboardView({
                   <p className="text-sm text-text-muted">Loading…</p>
                 ) : closedByStrategy == null ? (
                   <UnavailableState
-                    message="Closed paper strategy performance unavailable"
+                    message="Unavailable"
                     onRetry={onRetry}
                     className="py-4"
                   />
                 ) : closedByStrategy.length === 0 ? (
-                  <SectionEmpty
-                    title="No closed paper strategy results"
-                    description="Results appear after paper trades close."
-                  />
+                  <SectionEmpty title="No closed trades yet" />
                 ) : (
                   <ul>
                     {closedByStrategy.map((row) => (

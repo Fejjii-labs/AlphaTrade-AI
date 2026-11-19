@@ -130,9 +130,9 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("kpi-net-pnl")).toHaveTextContent("5 of 5 trades verified");
     expect(screen.getByTestId("kpi-profit-factor")).toHaveTextContent("1.50");
     expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("+20.00");
-    expect(screen.getByTestId("kpi-expectancy")).toHaveTextContent("Net P&L per closed trade");
+    expect(screen.getByTestId("kpi-expectancy")).not.toHaveTextContent("Net P&L per closed trade");
     expect(screen.getByTestId("kpi-win-rate")).toHaveTextContent("50.0%");
-    expect(screen.getByTestId("kpi-win-rate")).toHaveTextContent("excludes breakevens");
+    expect(screen.getByTestId("kpi-win-rate")).not.toHaveTextContent("excludes breakevens");
     expect(within(screen.getByTestId("win-rate-counts")).getAllByText(/\d/).map((n) => n.textContent)).toEqual([
       "2",
       "1",

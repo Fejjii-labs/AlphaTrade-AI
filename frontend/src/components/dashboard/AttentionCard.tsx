@@ -9,7 +9,7 @@ import { SectionHeader } from "@/components/ui/section-header";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
 import type { AttentionQueue } from "@/lib/api/attention-types";
-import { formatDateTime, humanizeToken } from "@/lib/format";
+import { humanizeToken } from "@/lib/format";
 
 export function AttentionContent({
   queue,
@@ -25,11 +25,8 @@ export function AttentionContent({
   );
   return (
     <div className="space-y-3 text-sm" data-testid="attention-content">
-      <p className="text-xs text-text-muted">
-        Paper review only · As of {formatDateTime(queue.generated_at)}
-      </p>
       {items.length === 0 ? (
-        <p>No action available from the recorded attention sources.</p>
+        <p>No alerts</p>
       ) : (
         <ul className="space-y-3">
           {items.slice(0, limit).map((item) => (
@@ -38,27 +35,11 @@ export function AttentionContent({
                 {humanizeToken(item.severity)} · {item.title}{item.symbol ? ` · ${item.symbol}` : ""}
               </p>
               <p className="mt-1 whitespace-pre-wrap text-text-secondary">{item.reason}</p>
-              {item.recommended_next_action ? <p className="mt-1">{item.recommended_next_action}</p> : null}
-              <details className="mt-2 text-xs text-text-muted">
-                <summary className="cursor-pointer">Sources and review state</summary>
-                <p>{humanizeToken(item.category)}</p>
-                <p>Acknowledgement: {humanizeToken(item.acknowledgement_state)}</p>
-                <p>Expires: {item.expires_at ? formatDateTime(item.expires_at) : "On recorded state change"}</p>
-                <ul className="mt-1 space-y-1">
-                  {item.sources.map((source, index) => (
-                    <li key={index}>{humanizeToken(source.record_type)} · {formatDateTime(source.occurred_at)}</li>
-                  ))}
-                </ul>
-              </details>
             </li>
           ))}
         </ul>
       )}
-      {items.length > limit ? <p className="text-xs text-text-muted">Showing {limit} of {items.length} recorded items.</p> : null}
-      <details className="text-xs text-text-muted">
-        <summary className="cursor-pointer">Coverage</summary>
-        <ul className="mt-1 space-y-1">{queue.limitations.map((text) => <li key={text}>{text}</li>)}</ul>
-      </details>
+      {items.length > limit ? <p className="text-xs text-text-muted">{limit} of {items.length}</p> : null}
     </div>
   );
 }
@@ -112,8 +93,7 @@ export function AttentionCard({ limit }: { limit?: number } = {}) {
     <Card data-testid="dashboard-attention">
       <CardHeader className="gap-2 pb-2">
         <SectionHeader
-          eyebrow="Queue"
-          title="Attention"
+          title="Recent alerts"
           actions={
             <button
               type="button"
@@ -121,14 +101,14 @@ export function AttentionCard({ limit }: { limit?: number } = {}) {
               disabled={loading}
               className="text-[length:var(--text-label)] text-accent underline-offset-2 hover:underline"
             >
-              Refresh attention
+              Refresh
             </button>
           }
         />
       </CardHeader>
       <CardContent className="card-inner pt-0">
-        {loading ? <p role="status">Loading attention…</p> : error || !valid ? (
-          <p role="alert">Attention unavailable. Refresh to retry.</p>
+        {loading ? <p role="status">Loading…</p> : error || !valid ? (
+          <p role="alert">Alerts unavailable</p>
         ) : data ? <AttentionContent queue={data} now={Math.max(now, Date.now())} limit={limit} /> : null}
       </CardContent>
     </Card>
