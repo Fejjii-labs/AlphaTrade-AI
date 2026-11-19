@@ -62,6 +62,8 @@ def autonomous_target_matches(
     settings: ResolvedAutonomousSettings,
     target: PaperScanTarget,
     strategy_status: AutonomousStrategyStatus | None,
+    *,
+    require_paper_eligible: bool = True,
 ) -> str | None:
     selected = settings.strategy_scope == "selected"
     if (selected and not settings.strategy_ids) or not settings.symbol:
@@ -76,7 +78,10 @@ def autonomous_target_matches(
         return "autonomous_strategy_disabled"
     if not strategy_status.approved:
         return "autonomous_strategy_not_approved"
-    if not strategy_status.paper_eligible:
+    # BloFin demo needs no paper eligibility or backtest (owner decision
+    # 2026-11-19): enabled plus approved/active is enough. Every other path
+    # keeps the paper gate.
+    if require_paper_eligible and not strategy_status.paper_eligible:
         return "autonomous_strategy_not_paper_eligible"
     return None
 
@@ -94,6 +99,7 @@ def autonomous_precheck_refusal(
     snapshot: AuthoritativeDailySnapshot,
     *,
     strategy_status: AutonomousStrategyStatus | None,
+    require_paper_eligible: bool = True,
 ) -> str | None:
     # Unsaved settings keep the previous loop. Trade count, strategy, and coin
     # apply only after the user saves a row. The saved daily loss percent is
@@ -101,7 +107,9 @@ def autonomous_precheck_refusal(
     # (AT-ADR-152).
     if settings.using_defaults:
         return None
-    mismatch = autonomous_target_matches(settings, target, strategy_status)
+    mismatch = autonomous_target_matches(
+        settings, target, strategy_status, require_paper_eligible=require_paper_eligible
+    )
     if mismatch is not None:
         return mismatch
     if autonomous_max_trades_reached(settings, snapshot):
