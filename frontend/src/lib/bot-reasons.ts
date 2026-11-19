@@ -5,8 +5,10 @@
  */
 const EXACT: Record<string, string> = {
   insufficient_daily_loss_allocation: "Daily loss budget used up.",
-  demo_leverage_exceeds_profile_max: "Leverage is above the risk profile maximum.",
-  demo_leverage_exceeds_ceiling: "Leverage is above the allowed maximum.",
+  // Older decisions only: the risk profile no longer caps demo leverage.
+  demo_leverage_exceeds_profile_max: "Leverage was above the old risk profile cap (no longer applied).",
+  demo_leverage_exceeds_ceiling: "Leverage must be between 1× and 10×.",
+  demo_leverage_above_ceiling: "BloFin demo leverage is above 10×.",
   demo_liquidation_inside_stop: "Liquidation would hit before the stop.",
   demo_liquidation_inside_stop_buffer: "Liquidation would be too close to the stop.",
   demo_liquidation_estimate_invalid: "Could not estimate the liquidation price.",

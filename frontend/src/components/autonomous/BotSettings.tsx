@@ -11,7 +11,7 @@ import { useAppContext } from "@/contexts/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAsyncData } from "@/hooks/useAsyncData";
 import { api } from "@/lib/api";
-import type { AutonomousSettingsBounds, AutonomousTradingSettingsView } from "@/lib/api/types";
+import type { AutonomousTradingSettingsView } from "@/lib/api/types";
 import { describedWorkerHealth } from "@/lib/worker-runtime";
 
 type Tile = { tone: StatusTone; state: string };
@@ -46,18 +46,11 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export function BotSettings() {
   const { membershipRole } = useAuth();
   const { killSwitchStatus } = useAppContext();
-  const loader = useCallback(
-    () =>
-      Promise.all([
-        api.autonomous.settings(),
-        api.autonomous.bounds().catch((): AutonomousSettingsBounds | null => null),
-      ]),
-    [],
-  );
+  const loader = useCallback(() => api.autonomous.settings(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
   const [view, setView] = useState<AutonomousTradingSettingsView | null>(null);
   useEffect(() => {
-    if (data) setView(data[0]);
+    if (data) setView(data);
   }, [data]);
 
   if (loading) return <LoadingState label="Loading bot…" />;
@@ -70,7 +63,7 @@ export function BotSettings() {
         <StatusTile name="Venue" tone="unknown" state="BloFin demo" />
         <StatusTile name="Worker" {...workerTile(view)} />
       </div>
-      <DemoLeverageControl view={view} bounds={data?.[1] ?? null} owner={membershipRole === "owner"} onSaved={setView} />
+      <DemoLeverageControl view={view} owner={membershipRole === "owner"} onSaved={setView} />
       <Block title="Strategies">
         <BotStrategiesList />
       </Block>
