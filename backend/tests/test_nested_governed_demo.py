@@ -14,10 +14,12 @@ from app.db.models import (
     JournalTrade,
     Organization,
     User,
+    UserStrategy,
+    UserStrategyVersion,
 )
 from app.providers.exchange.blofin_client import BloFinClient
 from app.providers.exchange.governed_blofin import GovernedBloFinDemoProvider
-from app.schemas.common import JournalTradeStatus, TradeDirection
+from app.schemas.common import BacktestStatus, JournalTradeStatus, TradeDirection
 from app.schemas.nested_continuation import NestedContinuationSpec
 from app.services import demo_leverage_config
 from app.services.governed_blofin_demo import GovernedBloFinDemoLoop
@@ -59,6 +61,12 @@ def test_approved_nested_produces_protected_actual_demo_entry_and_verified_exit(
         runtime, _held, template, now = nested.nested_runtime_world(
             (session, ORG, USER), monkeypatch
         )
+        version = session.get(UserStrategyVersion, template["version_id"])
+        assert version is not None
+        assert version.backtest_status is BacktestStatus.NOT_RUN
+        strategy = session.get(UserStrategy, version.strategy_id)
+        assert strategy is not None and strategy.enabled
+        assert strategy.paper_eligible is False
         account = session.scalar(select(ExecutionAccount))
         settings = demo_settings(str(account.id))
         # demo_settings() arms autonomous BloFin demo mode (M1 requires it for
