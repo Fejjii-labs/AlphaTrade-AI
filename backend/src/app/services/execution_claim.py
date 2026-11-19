@@ -261,7 +261,7 @@ class PaperPlanClaimService:
             and not demo_v2
         ):
             blocked_reason = "demo_risk_model_v2_disabled"
-        intent = conservative_reservation(plan, stop_risk_only=demo_v2)
+        intent = conservative_reservation(plan)
         accounting = self._epochs.lock_risk_accounting(
             organization_id=request.organization_id,
             account_id=request.account_id,
@@ -858,10 +858,12 @@ class PaperPlanClaimService:
             hook()
 
 
-def conservative_reservation(
-    plan: TradePlanRevision, *, stop_risk_only: bool = False
-) -> ReservationIntent:
-    """Conservative claim reservation using immutable plan instrument semantics."""
+def conservative_reservation(plan: TradePlanRevision) -> ReservationIntent:
+    """Conservative claim reservation using immutable plan instrument semantics.
+
+    Demo risk v2 plans (margin assumption "2") reserve only their stop risk
+    against the daily loss; the plan, not the caller, decides.
+    """
 
     quantity = plan.quantity.value
     multiplier = plan.instrument_rules.contract_multiplier
@@ -893,7 +895,8 @@ def conservative_reservation(
         pending_notional=notional,
         daily_loss=(
             plan.risk_and_exits.risk_budget.value
-            if stop_risk_only
+            if plan.execution_venue == "BLOFIN_DEMO"
+            and plan.risk_and_exits.margin_assumption_version == "2"
             else plan.risk_and_exits.maximum_loss.value
         ),
         trade_slots=1,

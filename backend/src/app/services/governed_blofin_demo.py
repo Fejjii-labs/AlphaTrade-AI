@@ -1014,8 +1014,14 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
             eligibility_valid_until=eligibility_valid_until,
             eligibility_id=eligibility_id,
             accept_unprofiled_minimum=demo_v2 or active_profile is not None or sfp,
-            governed_demo_sfp=sfp,
-            min_stop_atr_floor=self._settings.sfp_min_stop_atr_multiple if sfp else Decimal("0"),
+            **(
+                {
+                    "governed_demo_sfp": True,
+                    "min_stop_atr_floor": self._settings.sfp_min_stop_atr_multiple,
+                }
+                if sfp
+                else {}
+            ),
         )
         if isinstance(terms, str):
             return terms
@@ -1430,7 +1436,7 @@ class GovernedBloFinDemoLoop(AutomatedPaperLoop):
         if kill is not None:
             return kill, None
         try:
-            intent = conservative_reservation(plan, stop_risk_only=self._uses_demo_risk_v2())
+            intent = conservative_reservation(plan)  # type: ignore[arg-type]
             if self._uses_demo_risk_v2():
                 return experiment_reservation_refusal(
                     session,
