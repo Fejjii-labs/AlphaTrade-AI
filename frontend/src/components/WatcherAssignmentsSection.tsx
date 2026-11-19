@@ -46,7 +46,7 @@ export function WatcherAssignmentsSection() {
       const loaded = await monitoringAssignments.read(controller.signal);
       if (controller.signal.aborted || request !== serial.current || generation !== sessionGeneration() || identityRef.current !== identity) return;
       setConfig(loaded); setRows(writeRows(loaded.assignments)); setCoin(loaded.symbols[0] ?? "");
-    } catch (error) {
+    } catch {
       if (!controller.signal.aborted && request === serial.current) setLoadFailed(true);
     }
   }, [identity]);
@@ -73,7 +73,7 @@ export function WatcherAssignmentsSection() {
     const request = recover ? pending : { revision: config.revision, request_key: crypto.randomUUID(), assignments: writeRows(rows) };
     if (!request) return;
     try { monitoringAssignments.validateRequest(request); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Invalid monitoring request."); return; }
+    catch (error) { setMessage(friendlyError(error, "Invalid monitoring request.")); return; }
     if (!recover) {
       try { sessionStorage.setItem(storageKey, JSON.stringify(request)); }
       catch { setMessage("Request recovery storage unavailable. Nothing was sent."); return; }

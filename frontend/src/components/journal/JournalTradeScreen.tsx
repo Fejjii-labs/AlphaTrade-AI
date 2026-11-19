@@ -16,6 +16,7 @@ import {
   isBlofinReconciledJournalTrade,
 } from "@/lib/journal-blofin-reconciliation";
 import { formatDateTime, formatMoney, formatQuantity, humanizeToken, venueLabel } from "@/lib/format";
+import { friendlyError } from "@/lib/api/client";
 
 export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
   const load = useCallback(() => journalTradeApi.detail(tradeId), [tradeId]);
@@ -87,7 +88,7 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
       setSaved(true);
       await reload();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Reflection could not be saved.");
+      setSaveError(friendlyError(err, "Reflection could not be saved."));
     } finally {
       pending.current = false;
       setSaving(false);
@@ -109,7 +110,7 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
       setTagSaved(true);
       await reload();
     } catch (err) {
-      setTagError(err instanceof Error ? err.message : "Tags could not be saved.");
+      setTagError(friendlyError(err, "Tags could not be saved."));
     } finally {
       tagPending.current = false;
       setTagging(false);
@@ -148,7 +149,6 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {fields.map(([label, value]) => <div key={label} className="min-w-0"><dt className="text-xs text-text-secondary">{label}</dt><dd className="mt-1 break-words text-sm font-medium tabular-nums">{value}</dd></div>)}
         </dl>
-        <p className="text-xs text-text-secondary">Unavailable values (—) remain unverified. Account flatness alone does not establish this trade’s closure.</p>
         {!reconciled && evidence?.missing_evidence[0] ? <p role="status" className="text-sm text-warning">{evidence.missing_evidence[0]}</p> : null}
         {attempt && !reconciled ? <Link href={`/execution/manual-demo/${encodeURIComponent(attempt.command_id)}`} className="inline-flex min-h-11 items-center text-sm text-accent">Open this exact attempt</Link> : null}
         <details className="rounded-control border border-border-subtle p-3 text-sm">
@@ -174,10 +174,6 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
       <Card data-testid="journal-mirror-annotation">
         <CardHeader><CardTitle>Strategy tag</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-text-secondary">
-            Tag this mirrored BloFin demo trade so it can be compared by strategy.
-            Prices, size, fees, and P&amp;L stay as recorded.
-          </p>
           <form onSubmit={(event) => void saveTags(event)} className="space-y-3">
             <Label htmlFor="mirror-strategy">Strategy</Label>
             <Input id="mirror-strategy" value={strategy} maxLength={120} disabled={tagging}
@@ -199,7 +195,6 @@ export function JournalTradeScreen({ tradeId }: { tradeId: string }) {
     <Card>
       <CardHeader><CardTitle>Personal reflection</CardTitle></CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-text-secondary">Reflections attach to this trade separately from immutable execution evidence.</p>
         {data.observations.map((note) => <article key={note.id} className="rounded-control border border-border-subtle p-3"><p className="whitespace-pre-wrap break-words text-sm">{note.observation}</p><p className="mt-2 text-xs text-text-secondary">{formatDateTime(note.created_at)}</p></article>)}
         <form onSubmit={(event) => void saveReflection(event)} className="space-y-3">
           <Label htmlFor="trade-reflection">What would you repeat or change?</Label>

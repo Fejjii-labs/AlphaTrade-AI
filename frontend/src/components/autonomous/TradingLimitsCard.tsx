@@ -11,6 +11,7 @@ import { api, ApiError } from "@/lib/api";
 import type { AutonomousTradingSettingsView, UserRiskSettings, UserRiskSettingsUpdate } from "@/lib/api/types";
 
 import { type Bounds, boundHint, inputLimits } from "./bounds";
+import { friendlyError } from "@/lib/api/client";
 
 type BotForm = {
   daily_loss_limit_percent: string;
@@ -177,7 +178,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
           done.push("Account limits saved.");
         } catch (err) {
           failures.push(
-            `Account limits not saved: ${err instanceof Error ? err.message : "unknown error"}.`,
+            `Account limits not saved: ${friendlyError(err, "unknown error")}.`,
           );
           if (botDirty) failures.push("Bot limits not saved: skipped because the account limits failed.");
         }
@@ -216,7 +217,7 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
       onAccountSaved(updated);
       setSaved("Account limits reset to defaults.");
     } catch (err) {
-      setErrors([err instanceof Error ? err.message : "Unable to reset account limits."]);
+      setErrors([friendlyError(err, "Unable to reset account limits.")]);
     } finally {
       setSaving(false);
       inFlight.current = false;

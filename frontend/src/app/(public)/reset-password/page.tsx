@@ -7,7 +7,8 @@ import { Suspense, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FieldHint, Input, Label } from "@/components/ui/input";
 import { ErrorState, SuccessState } from "@/components/states";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 const ERROR_ID = "reset-password-error";
 const PASSWORD_HINT_ID = "reset-password-hint";
@@ -33,7 +34,7 @@ function ResetPasswordForm() {
       const response = await api.auth.confirmPasswordReset(token, password);
       setMessage(response.message);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Reset failed.");
+      setError(friendlyError(err, "Reset failed."));
     } finally {
       setBusy(false);
     }

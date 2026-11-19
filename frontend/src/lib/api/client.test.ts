@@ -346,7 +346,7 @@ describe("api client resilience (timeouts, one GET retry, shared in-flight GETs)
 
   it("shares one request between identical concurrent GETs", async () => {
     const resolvers: Array<(value: unknown) => void> = [];
-    const fetchMock = vi.fn((_url: string) => new Promise((r) => { resolvers.push(r); }));
+    const fetchMock = vi.fn<(url: string) => Promise<unknown>>(() => new Promise((r) => { resolvers.push(r); }));
     vi.stubGlobal("fetch", fetchMock);
     const { apiFetch } = await import("@/lib/api/client");
     const first = apiFetch("/shared", { auth: false });

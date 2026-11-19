@@ -165,7 +165,7 @@ export function CumulativePnlChart({
         </div>
       ) : (
         <p className="my-8 text-center text-sm text-text-muted">
-          No closed trades with recorded P&amp;L in this range.
+          No closed trades in this range.
         </p>
       )}
       {points.length ? (

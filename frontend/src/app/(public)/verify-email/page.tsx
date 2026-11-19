@@ -7,7 +7,8 @@ import { Suspense, useEffect, useState } from "react";
 import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
 import { ErrorState, SuccessState } from "@/components/states";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 function VerifyEmailContent() {
   const params = useSearchParams();
@@ -35,7 +36,7 @@ function VerifyEmailContent() {
         setStatus("success");
         await refreshProfile();
       } catch (err) {
-        setMessage(err instanceof ApiError ? err.message : "Verification failed.");
+        setMessage(friendlyError(err, "Verification failed."));
         setStatus("error");
       }
     })();

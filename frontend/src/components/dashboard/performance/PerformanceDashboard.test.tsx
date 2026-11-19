@@ -178,7 +178,7 @@ describe("PerformanceDashboard", () => {
     expect(screen.getByTestId("kpi-net-pnl")).toHaveAttribute("data-tone", "none");
     expect(screen.getByTestId("score-overall")).toHaveTextContent("—");
     expect(screen.getByText(/Not enough closed trades to score/)).toBeInTheDocument();
-    expect(screen.getByText(/No closed trades with recorded P&L/)).toBeInTheDocument();
+    expect(screen.getAllByText(/No closed trades in this range/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("calendar-month-total")).toHaveTextContent("—");
   });
 

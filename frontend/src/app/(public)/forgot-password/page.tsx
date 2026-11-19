@@ -6,7 +6,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { ErrorState, SuccessState } from "@/components/states";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { friendlyError } from "@/lib/api/client";
 
 const ERROR_ID = "forgot-password-error";
 
@@ -25,7 +26,7 @@ export default function ForgotPasswordPage() {
       const response = await api.auth.requestPasswordReset(email);
       setMessage(response.message);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Request failed.");
+      setError(friendlyError(err, "Request failed."));
     } finally {
       setBusy(false);
     }
