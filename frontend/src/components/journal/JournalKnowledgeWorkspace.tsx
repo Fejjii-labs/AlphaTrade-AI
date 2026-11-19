@@ -130,7 +130,7 @@ export function SavedEntryDetail({
         </Link>
         {current.source_document_id && (
           <Link
-            href={`/knowledge?document_id=${current.source_document_id}`}
+            href={`/agent?tab=documents&document_id=${encodeURIComponent(current.source_document_id)}`}
           >
             Original document
           </Link>
