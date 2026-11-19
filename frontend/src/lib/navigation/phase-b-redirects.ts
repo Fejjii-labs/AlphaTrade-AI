@@ -1,7 +1,7 @@
 /**
- * AT-040 Phase B redirects approved by AT-039 screen inventory.
- * Settings hub consolidations only. Advanced placements keep existing URLs.
- * Query strings are preserved by Next.js redirects by default.
+ * Config redirects for every removed route (next.config `redirects()`).
+ * Each old URL lands on its nearest kept page. Query strings are preserved by
+ * Next.js redirects by default; `:path*` also matches the bare prefix.
  */
 export type RedirectQueryMatch = { type: "query"; key: string; value?: string };
 
@@ -12,6 +12,10 @@ export type PhaseBRedirect = {
   /** Only redirect when the request has this query (Next.js `has`). */
   has?: RedirectQueryMatch[];
 };
+
+function redirectAll(destination: string, sources: readonly string[]): PhaseBRedirect[] {
+  return sources.map((source) => ({ source, destination, permanent: false }));
+}
 
 export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   // Settings has four tabs: Account, Exchange, Alerts, Markets. Removed tabs land on Account.
@@ -43,7 +47,47 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   },
   { source: "/strategy-lab/new", destination: "/agent?intent=strategy", permanent: false },
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
-] as const;
+  { source: "/strategy-lab/:id", destination: "/agent?strategy_id=:id", permanent: false },
+  // Removed redirect pages.
+  { source: "/dashboard", destination: "/", permanent: false },
+  { source: "/coaching", destination: "/agent", permanent: false },
+  { source: "/journal/statistics", destination: "/journal?tab=stats", permanent: false },
+  // Removed diagnostics pages (UI slim, 2026-11-19).
+  ...redirectAll("/settings/watcher", ["/watcher", "/market-watcher", "/market", "/manual-levels"]),
+  ...redirectAll("/settings/alerts", [
+    "/alerts",
+    "/alerts/:path*",
+    "/tradingview-signals",
+    "/paper-signal-orchestration",
+  ]),
+  ...redirectAll("/autonomous", [
+    "/decision",
+    "/decision/:path*",
+    "/approvals",
+    "/proposals",
+    "/pre-trade",
+  ]),
+  ...redirectAll("/strategies", [
+    "/strategy-lab",
+    "/paper-validation",
+    "/paper-validation/:path*",
+    "/research-validation",
+    "/validation-priority",
+    "/strategy-quality",
+    "/backtests/:path*",
+  ]),
+  ...redirectAll("/journal", [
+    "/journal/import",
+    "/journal/comparison",
+    "/analytics",
+    "/analytics/:path*",
+    "/learning-analytics",
+    "/lessons",
+    "/lessons/:path*",
+  ]),
+  ...redirectAll("/", ["/portfolio", "/positions"]),
+  ...redirectAll("/agent", ["/workspace"]),
+];
 
 /** Pages that must stay reachable from navigation (for tests). */
 export const PHASE_B_CAPABILITY_PATHS: readonly string[] = [

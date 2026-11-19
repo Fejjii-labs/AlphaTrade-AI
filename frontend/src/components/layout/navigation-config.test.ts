@@ -48,14 +48,10 @@ describe("Trader primary navigation", () => {
   it.each([
     ["/", "dashboard"],
     ["/autonomous", "autonomous"],
-    ["/risk", "autonomous"],
-    ["/risk/autonomous", "autonomous"],
     ["/strategies", "strategies"],
     ["/strategies/detections", "strategies"],
     ["/strategies/setups/setup-1", "strategies"],
     ["/journal", "journal"],
-    ["/journal/statistics", "journal"],
-    ["/coaching", "journal"],
     ["/agent", "agent"],
     ["/agent/history", "agent"],
     ["/knowledge", "agent"],
@@ -82,7 +78,7 @@ describe("Trader primary navigation", () => {
     expect(isNavLinkActive("/", "/")).toBe(true);
     expect(isNavLinkActive("/agent", "/")).toBe(false);
     expect(isNavLinkActive("/journal", "/journal")).toBe(true);
-    expect(isNavLinkActive("/journal/statistics", "/journal")).toBe(false);
+    expect(isNavLinkActive("/journal/trade-1", "/journal")).toBe(false);
     expect(isNavLinkActive("/autonomous", "/autonomous")).toBe(true);
     expect(isNavLinkActive("/settings", "/settings")).toBe(true);
     expect(isNavLinkActive("/settings/alerts", "/settings")).toBe(false);
@@ -119,10 +115,11 @@ describe("Trader primary navigation", () => {
   });
 });
 
-describe("AT-040 Phase B redirects", () => {
+describe("Removed-route redirects", () => {
   it("defines redirects without loops", () => {
     expect(PHASE_B_REDIRECTS.length).toBeGreaterThan(0);
-    const sources = new Set(PHASE_B_REDIRECTS.map((rule) => rule.source));
+    // A query-matched rule (`/journal?tab=knowledge`) leaves its path a real page.
+    const sources = new Set(PHASE_B_REDIRECTS.filter((rule) => !rule.has).map((rule) => rule.source));
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source).not.toBe(rule.destination);
       expect(sources.has(rule.destination.split(/[?#]/)[0]!), rule.source).toBe(false);
@@ -147,19 +144,11 @@ describe("AT-040 Phase B redirects", () => {
     expect(PHASE_B_REDIRECTS.find((rule) => rule.source === source)?.destination).toBe(destination);
   });
 
-  it("does not redirect dynamic capability IDs or paper-validation paths", () => {
-    for (const rule of PHASE_B_REDIRECTS) {
-      expect(rule.source.includes("[")).toBe(false);
-      expect(rule.source.startsWith("/paper-validation")).toBe(false);
-      expect(rule.source.startsWith("/backtests")).toBe(false);
-      expect(rule.source === "/strategy-lab/:id").toBe(false);
-    }
-  });
-
   it("preserves query parameters by using path-only redirect sources", () => {
     for (const rule of PHASE_B_REDIRECTS) {
       expect(rule.source.includes("?")).toBe(false);
-      if (!rule.source.startsWith("/strategy-lab/")) expect(rule.destination.includes("?")).toBe(false);
+      if (!rule.source.startsWith("/strategy-lab/") && rule.source !== "/journal/statistics")
+        expect(rule.destination.includes("?")).toBe(false);
     }
   });
 });

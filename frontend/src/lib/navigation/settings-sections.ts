@@ -1,4 +1,4 @@
-import { pathMatchesPrefix } from "@/components/layout/advanced-routes";
+import { pathMatchesPrefix } from "@/lib/navigation/route-registry";
 
 export type SettingsSection = {
   href: string;

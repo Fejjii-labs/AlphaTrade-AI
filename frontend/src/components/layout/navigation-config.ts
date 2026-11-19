@@ -2,13 +2,10 @@ import type { LucideIcon } from "lucide-react";
 import { BookOpen, Bot, Cpu, Layers, LayoutDashboard, Settings } from "lucide-react";
 
 import {
-  ADVANCED_ROUTES,
-  isAdvancedPath,
   LABELED_ROUTES,
   matchesAnyPrefix,
   resolveLabeledRoute,
-  SETTINGS_ROUTE_PREFIXES,
-} from "@/components/layout/advanced-routes";
+} from "@/lib/navigation/route-registry";
 
 export type DestinationId =
   | "dashboard"
@@ -22,7 +19,6 @@ export type NavLink = {
   href: string;
   label: string;
   icon: LucideIcon;
-  advanced?: boolean;
 };
 
 export type PrimaryDestination = {
@@ -77,11 +73,12 @@ export const MOBILE_MORE_DESTINATION_IDS: readonly DestinationId[] = [
   "settings",
 ] as const;
 
-const JOURNAL_PREFIXES = ["/journal", "/learning-analytics", "/coaching"] as const;
-const AUTONOMOUS_PREFIXES = ["/autonomous", "/risk"] as const;
-const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab"] as const;
+const JOURNAL_PREFIXES = ["/journal"] as const;
+const AUTONOMOUS_PREFIXES = ["/autonomous"] as const;
+const STRATEGY_PREFIXES = ["/strategies"] as const;
 // Knowledge is part of the Agent page.
-const AGENT_PREFIXES = ["/agent", "/knowledge", "/lessons"] as const;
+const AGENT_PREFIXES = ["/agent", "/knowledge"] as const;
+const SETTINGS_PREFIXES = ["/settings", "/execution/manual-demo"] as const;
 
 export const SECONDARY_NAV: readonly SecondaryNavGroup[] = [
   {
@@ -113,10 +110,7 @@ const DESTINATION_MATCHERS: readonly {
   },
   {
     id: "settings",
-    match: (pathname) =>
-      matchesAnyPrefix(pathname, SETTINGS_ROUTE_PREFIXES) ||
-      pathname.startsWith("/execution/manual-demo/") ||
-      isAdvancedPath(pathname),
+    match: (pathname) => matchesAnyPrefix(pathname, SETTINGS_PREFIXES),
   },
   { id: "dashboard", match: (pathname) => pathname === "/" },
 ];
@@ -154,16 +148,6 @@ export function isNavLinkActive(pathname: string, href: string): boolean {
       pathname === "/settings" || pathname.startsWith("/execution/manual-demo/")
     );
   if (href === "/journal") return pathname === "/journal";
-  if (href === "/settings/diagnostics") {
-    return (
-      pathname === href ||
-      (pathname !== "/settings" && isAdvancedPath(pathname))
-    );
-  }
-  if (href === "/risk")
-    return pathname === "/risk" || pathname.startsWith("/risk/");
-  if (href === "/alerts")
-    return pathname === "/alerts" || pathname.startsWith("/alerts/");
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -255,7 +239,7 @@ export function listReachableHrefs(): string[] {
       hrefs.add(item.href);
     }
   }
-  for (const route of [...ADVANCED_ROUTES, ...LABELED_ROUTES]) {
+  for (const route of LABELED_ROUTES) {
     hrefs.add(route.href);
   }
   return [...hrefs].sort();

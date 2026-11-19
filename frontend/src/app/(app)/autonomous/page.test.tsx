@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import nextConfig from "../../../../next.config";
 import AutonomousPage from "./page";
-import RiskRedirectPage from "../risk/page";
-import BotRedirectPage from "../risk/autonomous/page";
 
 const appContext = {
   killSwitchStatus: null as { active?: boolean; execution_blocked: boolean; reason: string | null } | null,
@@ -87,14 +85,6 @@ describe("Autonomous page", () => {
     expect(screen.getByTestId("portfolio-risk-block")).toHaveTextContent(
       "Kill switch blocking execution: Drawdown breach",
     );
-  });
-
-  it("renders the same view at the old /risk pages", () => {
-    render(<RiskRedirectPage />);
-    expect(screen.getByRole("heading", { level: 1, name: "Autonomous Trading" })).toBeInTheDocument();
-    cleanup();
-    render(<BotRedirectPage />);
-    expect(screen.getByRole("heading", { level: 1, name: "Autonomous Trading" })).toBeInTheDocument();
   });
 
   it.each([
