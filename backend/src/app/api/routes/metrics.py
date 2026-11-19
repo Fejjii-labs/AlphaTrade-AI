@@ -20,7 +20,7 @@ router = APIRouter(tags=["metrics"])
     summary="Prometheus/OpenMetrics scrape (gated)",
     include_in_schema=False,
 )
-async def scrape_metrics(request: Request, settings: SettingsDep) -> Response:
+def scrape_metrics(request: Request, settings: SettingsDep) -> Response:
     """Expose RED metrics when explicitly enabled and authorized.
 
     Health/readiness remain separate. Default is disabled. Outside local, a

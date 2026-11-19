@@ -111,7 +111,7 @@ def register_paper_account(
     summary="Place a paper order",
     dependencies=[_EXECUTION_RATE_LIMIT, _PAPER_EXECUTION_QUOTA],
 )
-async def place_paper_order(
+def place_paper_order(
     body: PaperOrderRequest,
     tenant: TraderDep,
     proposal_service: ProposalServiceDep,
@@ -156,7 +156,7 @@ async def place_paper_order(
     summary="Execute an approved paper trade plan revision",
     dependencies=[_PAPER_PLAN_RATE_LIMIT, _PAPER_EXECUTION_QUOTA],
 )
-async def execute_paper_plan(
+def execute_paper_plan(
     body: ExecutePaperPlanHttpRequest,
     tenant: TraderDep,
     execution_service: ExecutionServiceDep,
@@ -208,7 +208,7 @@ async def execute_paper_plan(
     summary="Close a filled canonical paper plan and record the outcome",
     dependencies=[_PAPER_PLAN_RATE_LIMIT],
 )
-async def close_paper_plan(
+def close_paper_plan(
     body: ClosePaperPlanHttpRequest,
     tenant: TraderDep,
     execution_service: ExecutionServiceDep,
@@ -237,7 +237,7 @@ async def close_paper_plan(
 
 
 @router.get("/orders", response_model=PaginatedPaperOrders, summary="List paper orders")
-async def list_orders(
+def list_orders(
     tenant: TenantDep,
     execution_service: ExecutionServiceDep,
     limit: int = Query(default=50, ge=1, le=200),
@@ -253,7 +253,7 @@ async def list_orders(
 
 
 @router.get("/orders/{order_id}", response_model=PaperOrder, summary="Get paper order")
-async def get_order(
+def get_order(
     order_id: uuid.UUID,
     tenant: TenantDep,
     execution_service: ExecutionServiceDep,

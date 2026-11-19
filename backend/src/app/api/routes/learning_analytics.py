@@ -43,7 +43,7 @@ _MinSample = Query(default=5, ge=1, le=100)
     summary="Paper validation learning summary",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def learning_summary(
+def learning_summary(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     start_date: date | None = Query(default=None),
@@ -66,7 +66,7 @@ async def learning_summary(
     summary="Setup performance by dimension",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def setup_performance(
+def setup_performance(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     dimension: SetupDimension = Query(default=SetupDimension.CONDITION),
@@ -91,7 +91,7 @@ async def setup_performance(
     summary="Discipline analytics and score",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def discipline_analytics(
+def discipline_analytics(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     start_date: date | None = Query(default=None),
@@ -114,7 +114,7 @@ async def discipline_analytics(
     summary="Confidence bucket vs outcome correlation",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def confidence_outcome(
+def confidence_outcome(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     start_date: date | None = Query(default=None),
@@ -137,7 +137,7 @@ async def confidence_outcome(
     summary="Derived behavior insights",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def behavior_insights(
+def behavior_insights(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     start_date: date | None = Query(default=None),
@@ -160,7 +160,7 @@ async def behavior_insights(
     summary="Recurring lesson themes",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def lesson_themes(
+def lesson_themes(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     start_date: date | None = Query(default=None),
@@ -183,7 +183,7 @@ async def lesson_themes(
     summary="Read-only setup ranking (no automation)",
     dependencies=[_LEARNING_ANALYTICS_READ_LIMIT],
 )
-async def setup_ranking(
+def setup_ranking(
     tenant: ReaderDep,
     service: LearningAnalyticsServiceDep,
     dimension: SetupDimension = Query(default=SetupDimension.CONDITION),

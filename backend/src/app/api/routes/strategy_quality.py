@@ -40,7 +40,7 @@ _MinSample = Query(default=5, ge=1, le=100)
     summary="Per-detector quality reports from paper validation outcomes",
     dependencies=[_STRATEGY_QUALITY_READ_LIMIT],
 )
-async def strategy_quality_detectors(
+def strategy_quality_detectors(
     tenant: ReaderDep,
     service: StrategyQualityServiceDep,
     condition: str | None = Query(default=None),
@@ -67,7 +67,7 @@ async def strategy_quality_detectors(
     summary="Detector counts by trust tier and verdict with a quality ranking",
     dependencies=[_STRATEGY_QUALITY_READ_LIMIT],
 )
-async def strategy_quality_summary(
+def strategy_quality_summary(
     tenant: ReaderDep,
     service: StrategyQualityServiceDep,
     start_date: date | None = Query(default=None),
@@ -90,7 +90,7 @@ async def strategy_quality_summary(
     summary="Detailed quality breakdown for one detector including timeframes",
     dependencies=[_STRATEGY_QUALITY_READ_LIMIT],
 )
-async def strategy_quality_explain(
+def strategy_quality_explain(
     tenant: ReaderDep,
     service: StrategyQualityServiceDep,
     condition: str,

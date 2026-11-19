@@ -93,7 +93,7 @@ _ALERTS_PREVIEW_LIMIT = Depends(
     summary="List paper validation alerts",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def list_alerts(
+def list_alerts(
     tenant: ReaderDep,
     service: PaperAlertServiceDep,
     alert_type: PaperAlertType | None = None,
@@ -118,7 +118,7 @@ async def list_alerts(
     summary="Alert summary counts",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def alerts_summary(
+def alerts_summary(
     tenant: ReaderDep,
     service: PaperAlertServiceDep,
 ) -> PaperAlertSummary:
@@ -131,7 +131,7 @@ async def alerts_summary(
     summary="Alert routing and market watcher bridge diagnostics",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def alert_routing_summary(
+def alert_routing_summary(
     tenant: OwnerDep,
     settings: SettingsDep,
     session: SessionDep,
@@ -151,7 +151,7 @@ async def alert_routing_summary(
     summary="Preview eligible alerts for automatic Telegram delivery (read-only)",
     dependencies=[_ALERTS_PREVIEW_LIMIT],
 )
-async def preview_alert_delivery(
+def preview_alert_delivery(
     body: AlertDeliveryPreviewRequest,
     tenant: OwnerDep,
     settings: SettingsDep,
@@ -172,7 +172,7 @@ async def preview_alert_delivery(
     summary="Send owner-gated Telegram test alert (paper only, no trades)",
     dependencies=[_ALERTS_TELEGRAM_TEST_LIMIT],
 )
-async def send_telegram_test_alert(
+def send_telegram_test_alert(
     body: TelegramTestAlertRequest,
     tenant: OwnerDep,
     settings: SettingsDep,
@@ -196,7 +196,7 @@ async def send_telegram_test_alert(
     summary="External alert delivery configuration status",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def alert_delivery_status(
+def alert_delivery_status(
     tenant: ReaderDep,
     delivery: AlertDeliveryServiceDep,
 ) -> AlertDeliveryStatusResponse:
@@ -212,7 +212,7 @@ async def alert_delivery_status(
     summary="Alert delivery status counts for tenant",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def alert_delivery_summary(
+def alert_delivery_summary(
     tenant: ReaderDep,
     delivery: AlertDeliveryServiceDep,
 ) -> AlertDeliverySummary:
@@ -225,7 +225,7 @@ async def alert_delivery_summary(
     summary="Deliver pending alerts (owner/admin)",
     dependencies=[_ALERTS_DELIVER_LIMIT],
 )
-async def deliver_pending_alerts(
+def deliver_pending_alerts(
     tenant: OwnerDep,
     delivery: AlertDeliveryServiceDep,
     session: SessionDep,
@@ -241,7 +241,7 @@ async def deliver_pending_alerts(
 
 
 @router.patch("/read-all", summary="Mark all alerts as read", dependencies=[_ALERTS_WRITE_LIMIT])
-async def mark_all_alerts_read(
+def mark_all_alerts_read(
     tenant: TraderDep,
     service: PaperAlertServiceDep,
     session: SessionDep,
@@ -257,7 +257,7 @@ async def mark_all_alerts_read(
     summary="List scanner-created setup alerts for review",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def list_setup_alert_review(
+def list_setup_alert_review(
     tenant: ReaderDep,
     service: PaperAlertServiceDep,
     status: SetupAlertReviewStatus | None = Query(default=None, alias="status"),
@@ -288,7 +288,7 @@ async def list_setup_alert_review(
     summary="Setup alert review summary counts",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def setup_alert_review_summary(
+def setup_alert_review_summary(
     tenant: ReaderDep,
     service: PaperAlertServiceDep,
 ) -> SetupAlertReviewSummary:
@@ -301,7 +301,7 @@ async def setup_alert_review_summary(
     summary="Update setup alert review state",
     dependencies=[_ALERTS_WRITE_LIMIT],
 )
-async def update_setup_alert_review(
+def update_setup_alert_review(
     alert_id: uuid.UUID,
     body: SetupAlertReviewUpdate,
     tenant: TraderDep,
@@ -324,7 +324,7 @@ async def update_setup_alert_review(
     summary="Create a non-executable paper validation draft from a reviewed setup alert",
     dependencies=[_ALERTS_WRITE_LIMIT],
 )
-async def create_setup_alert_draft(
+def create_setup_alert_draft(
     alert_id: uuid.UUID,
     body: SetupAlertDraftCreateRequest,
     tenant: TraderDep,
@@ -347,7 +347,7 @@ async def create_setup_alert_draft(
     summary="Get alert by id",
     dependencies=[_ALERTS_READ_LIMIT],
 )
-async def get_alert(
+def get_alert(
     alert_id: uuid.UUID,
     tenant: ReaderDep,
     service: PaperAlertServiceDep,
@@ -361,7 +361,7 @@ async def get_alert(
     summary="Mark alert as read",
     dependencies=[_ALERTS_WRITE_LIMIT],
 )
-async def mark_alert_read(
+def mark_alert_read(
     alert_id: uuid.UUID,
     tenant: TraderDep,
     service: PaperAlertServiceDep,
@@ -382,7 +382,7 @@ async def mark_alert_read(
     summary="Deliver one in-app alert to Telegram (owner, confirmation required)",
     dependencies=[_ALERTS_TELEGRAM_DELIVER_LIMIT],
 )
-async def deliver_alert_to_telegram(
+def deliver_alert_to_telegram(
     alert_id: uuid.UUID,
     body: TelegramAlertDeliveryRequest,
     tenant: OwnerDep,
@@ -407,7 +407,7 @@ async def deliver_alert_to_telegram(
     summary="Deliver single alert externally (owner/admin)",
     dependencies=[_ALERTS_DELIVER_LIMIT],
 )
-async def deliver_alert(
+def deliver_alert(
     alert_id: uuid.UUID,
     tenant: OwnerDep,
     delivery: AlertDeliveryServiceDep,

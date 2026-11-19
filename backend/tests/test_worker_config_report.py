@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -270,7 +269,7 @@ def test_paper_worker_health_projects_config_and_ban_rows(
         "app.services.worker_heartbeat.raise_heartbeat_alert", lambda *_a, **_k: False
     )
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
-    body = asyncio.run(paper_worker_heartbeat(settings, BackgroundTasks()))
+    body = paper_worker_heartbeat(settings, BackgroundTasks())
     assert body.worker_config.status == "degraded"
     assert [check.name for check in body.worker_config.checks if not check.ok] == ["autonomy_mode"]
     assert (body.market_data_ban.banned, body.market_data_ban.last_status_code) == (True, 418)

@@ -22,7 +22,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 @router.get(
     "/setups", response_model=SetupAnalyticsResponse, summary="Setup performance statistics"
 )
-async def get_setup_analytics(
+def get_setup_analytics(
     tenant: ReaderDep,
     analytics: AnalyticsFacadeDep,
     start_date: date | None = Query(default=None),
@@ -39,7 +39,7 @@ async def get_setup_analytics(
 
 
 @router.get("/trade-review", response_model=TradeReviewAnalytics, summary="Trade review analytics")
-async def get_trade_review_analytics(
+def get_trade_review_analytics(
     tenant: ReaderDep,
     analytics: AnalyticsFacadeDep,
     start_date: date | None = Query(default=None),
@@ -54,7 +54,7 @@ async def get_trade_review_analytics(
 
 
 @router.get("/discipline", response_model=DisciplineScoreResult, summary="Discipline score")
-async def get_discipline_score(
+def get_discipline_score(
     tenant: ReaderDep,
     analytics: AnalyticsFacadeDep,
     start_date: date | None = Query(default=None),
@@ -71,7 +71,7 @@ async def get_discipline_score(
 @router.get(
     "/risk-behavior", response_model=RiskBehaviorAnalytics, summary="Risk behavior dashboard"
 )
-async def get_risk_behavior_analytics(
+def get_risk_behavior_analytics(
     tenant: ReaderDep,
     analytics: AnalyticsFacadeDep,
     start_date: date | None = Query(default=None),

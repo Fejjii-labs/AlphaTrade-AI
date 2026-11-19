@@ -27,7 +27,7 @@ def _billing_service(session: SessionDep, settings: SettingsDep) -> BillingServi
 
 
 @router.get("/plans", response_model=list[SubscriptionPlanView], summary="List subscription plans")
-async def list_plans(
+def list_plans(
     tenant: ReaderDep,
     session: SessionDep,
     settings: SettingsDep,
@@ -37,7 +37,7 @@ async def list_plans(
 
 
 @router.get("/status", response_model=BillingStatusResponse, summary="Billing status")
-async def billing_status(
+def billing_status(
     tenant: ReaderDep,
     session: SessionDep,
     settings: SettingsDep,
@@ -50,7 +50,7 @@ async def billing_status(
     response_model=BillingCustomerView,
     summary="Create billing customer (OWNER)",
 )
-async def create_billing_customer(
+def create_billing_customer(
     body: BillingCustomerCreate,
     tenant: OwnerDep,
     request: Request,
@@ -68,7 +68,7 @@ async def create_billing_customer(
 
 
 @router.post("/checkout", response_model=CheckoutResponse, summary="Start checkout (OWNER)")
-async def billing_checkout(
+def billing_checkout(
     body: CheckoutRequest,
     tenant: OwnerDep,
     request: Request,
@@ -84,7 +84,7 @@ async def billing_checkout(
 
 
 @router.post("/portal", response_model=PortalResponse, summary="Customer portal (OWNER)")
-async def billing_portal(
+def billing_portal(
     tenant: OwnerDep,
     request: Request,
     session: SessionDep,
@@ -98,7 +98,7 @@ async def billing_portal(
 
 
 @router.post("/usage/export", response_model=UsageExportResponse, summary="Export usage (OWNER)")
-async def billing_usage_export(
+def billing_usage_export(
     body: UsageExportRequest,
     tenant: OwnerDep,
     request: Request,
