@@ -5,23 +5,31 @@ import { leverageChoices, LeverageSelect } from "./LeverageSelect";
 
 afterEach(cleanup);
 
-const ONE_TO_TEN = ["1×", "2×", "3×", "4×", "5×", "6×", "7×", "8×", "9×", "10×"];
+const labels = () =>
+  [...screen.getByRole("combobox", { name: "Leverage" }).querySelectorAll("option")].map((o) => o.textContent);
 
 describe("LeverageSelect", () => {
-  it("always offers 1x to 10x, all choosable", () => {
-    expect(leverageChoices()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  it("always lists the 2x, 3x, 5x and 10x presets, none disabled, no cap text", () => {
+    expect(leverageChoices(3)).toEqual([2, 3, 5, 10]);
     render(<LeverageSelect value={3} onChange={() => {}} />);
+    expect(labels()).toEqual(["2×", "3×", "5×", "10×"]);
     const options = [...screen.getByRole("combobox", { name: "Leverage" }).querySelectorAll("option")];
-    expect(options.map((o) => o.textContent)).toEqual(ONE_TO_TEN);
     expect(options.some((o) => o.disabled)).toBe(false);
     expect(screen.queryByText(/above max/)).toBeNull();
   });
 
-  it("shows a saved value outside 1..10 as unset", () => {
-    render(<LeverageSelect value={15} onChange={() => {}} />);
-    const select = screen.getByRole("combobox", { name: "Leverage" }) as HTMLSelectElement;
-    expect(select.value).toBe("");
-    expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["—", ...ONE_TO_TEN]);
+  it("keeps a saved non-preset value selected alongside the presets", () => {
+    expect(leverageChoices(1)).toEqual([1, 2, 3, 5, 10]);
+    expect(leverageChoices(7)).toEqual([2, 3, 5, 7, 10]);
+    render(<LeverageSelect value={7} onChange={() => {}} />);
+    expect(screen.getByRole("combobox", { name: "Leverage" })).toHaveValue("7");
+    expect(labels()).toEqual(["2×", "3×", "5×", "7×", "10×"]);
+  });
+
+  it("shows an unknown value as a dash", () => {
+    render(<LeverageSelect value={null} onChange={() => {}} />);
+    expect(screen.getByRole("combobox", { name: "Leverage" })).toHaveValue("");
+    expect(labels()).toEqual(["—", "2×", "3×", "5×", "10×"]);
   });
 
   it("reports the picked number", () => {

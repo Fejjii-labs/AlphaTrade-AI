@@ -2,12 +2,10 @@
 
 import { useState } from "react";
 
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { AutonomousTradingSettingsView } from "@/lib/api/types";
 
-import { DEMO_LEVERAGE_MAX, LeverageSelect } from "./LeverageSelect";
-import { leverageValidationMessage } from "./LeverageSettingsSlot";
+import { LeverageSelect } from "./LeverageSelect";
 
 type Props = {
   view: AutonomousTradingSettingsView;
@@ -15,56 +13,46 @@ type Props = {
   onSaved: (view: AutonomousTradingSettingsView) => void;
 };
 
+type Status = "idle" | "saving" | "saved" | "error";
+
 /**
  * BloFin demo leverage bound to `demo_leverage` on /autonomous/settings.
- * Always 1x to 10x; the risk profile does not cap it. Raising asks first.
+ * Presets 2x/3x/5x/10x, saved on change; the risk profile does not cap it here.
  */
 export function DemoLeverageControl({ view, owner, onSaved }: Props) {
-  const [pending, setPending] = useState<number | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<Status>("idle");
   const current = view.demo_leverage ?? null;
 
   async function save(leverage: number) {
-    setSaving(true);
-    setError(null);
+    setStatus("saving");
     try {
       onSaved(await api.autonomous.updateSettings({ demo_leverage: leverage }));
-      setPending(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? leverageValidationMessage(err.message, DEMO_LEVERAGE_MAX) : "Could not save leverage.");
-      setPending(null);
-    } finally {
-      setSaving(false);
+      setStatus("saved");
+    } catch {
+      setStatus("error");
     }
   }
 
   return (
-    <div className="space-y-1" data-testid="demo-leverage-control">
-      <LeverageSelect
-        value={current}
-        disabled={!owner || saving}
-        onChange={(next) => {
-          if (current != null && next > current) setPending(next);
-          else void save(next);
-        }}
-      />
-      {error ? (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-      <ConfirmDialog
-        open={pending != null}
-        title={`Raise leverage to ${pending}×?`}
-        description="Liquidation moves closer to entry. Trade size does not change."
-        confirmLabel="Raise leverage"
-        busy={saving}
-        error={null}
-        onConfirm={() => pending != null && void save(pending)}
-        onCancel={() => setPending(null)}
-        testId="leverage-raise-confirm"
-      />
+    <div className="flex items-center justify-end gap-3" data-testid="demo-leverage-control">
+      <div className="flex-1">
+        <LeverageSelect
+          value={current}
+          disabled={!owner || status === "saving"}
+          onChange={(next) => {
+            if (next !== current) void save(next);
+          }}
+        />
+      </div>
+      {status === "idle" ? null : (
+        <span
+          role={status === "error" ? "alert" : "status"}
+          data-testid="leverage-status"
+          className={status === "error" ? "text-xs text-danger" : "text-xs text-text-muted"}
+        >
+          {status === "saving" ? "Saving…" : status === "saved" ? "Saved" : "Not saved. Try again."}
+        </span>
+      )}
     </div>
   );
 }
