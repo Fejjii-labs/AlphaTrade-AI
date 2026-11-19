@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { PaperModeBanner } from "@/components/PaperModeBanner";
 import { SafetyDisclaimers } from "@/components/SafetyDisclaimers";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -28,6 +29,7 @@ export default function DiagnosticsPage() {
           </Button>
         }
       />
+      <PaperModeBanner />
       <section aria-labelledby="diagnostics-providers" className="space-y-2">
         <h2 id="diagnostics-providers" className="text-section">Providers</h2>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">

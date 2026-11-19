@@ -12,7 +12,7 @@ import { useAppContext, useSafetyPosture } from "@/contexts/AppContext";
  * (real trading enabled or non-paper mode), and paper mode confirmed. The banner
  * never claims "paper mode active" from build-time configuration.
  */
-export function PaperModeBanner() {
+export function PaperModeBanner({ compact = false }: { compact?: boolean }) {
   const { executionMode, realTradingEnabled, providerMode, postureKnown } = useSafetyPosture();
   const { providers, health } = useAppContext();
 
@@ -72,29 +72,33 @@ export function PaperModeBanner() {
           <ShieldCheck className="h-4 w-4" />
           <span className="text-sm font-medium">Paper mode active</span>
         </div>
-        <Badge variant="success">{executionMode.toUpperCase()}</Badge>
+        {!compact ? <Badge variant="success">{executionMode.toUpperCase()}</Badge> : null}
         <Badge variant="success">Real trading disabled</Badge>
-        <Badge variant="info">Provider mode: {providerMode}</Badge>
+        {!compact ? <Badge variant="info">Provider mode: {providerMode}</Badge> : null}
       </div>
-      <p className="mt-2 text-sm text-zinc-400">
-        No real exchange orders are placed. Approvals gate paper execution only. Market data is
-        read-only (Binance public API or mock fallback).
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-        {marketProvider ? (
-          <Badge variant={marketProvider.is_mock ? "warning" : "info"}>
-            Market: {marketProvider.name}
-            {marketProvider.using_fallback ? " (fallback)" : ""}
-          </Badge>
-        ) : null}
-        {llmProvider ? <Badge variant="muted">LLM: {llmProvider.name}</Badge> : null}
-        {embeddingProvider ? (
-          <Badge variant="muted">Embeddings: {embeddingProvider.name}</Badge>
-        ) : null}
-        {vectorProvider ? <Badge variant="muted">Qdrant: {vectorProvider.name}</Badge> : null}
-        {redisProvider ? <Badge variant="muted">Redis: {redisProvider.health}</Badge> : null}
-        {health ? <Badge variant="muted">API {health.status}</Badge> : null}
-      </div>
+      {!compact ? (
+        <>
+          <p className="mt-2 text-sm text-zinc-400">
+            No real exchange orders are placed. Approvals gate paper execution only. Market data is
+            read-only (Binance public API or mock fallback).
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            {marketProvider ? (
+              <Badge variant={marketProvider.is_mock ? "warning" : "info"}>
+                Market: {marketProvider.name}
+                {marketProvider.using_fallback ? " (fallback)" : ""}
+              </Badge>
+            ) : null}
+            {llmProvider ? <Badge variant="muted">LLM: {llmProvider.name}</Badge> : null}
+            {embeddingProvider ? (
+              <Badge variant="muted">Embeddings: {embeddingProvider.name}</Badge>
+            ) : null}
+            {vectorProvider ? <Badge variant="muted">Qdrant: {vectorProvider.name}</Badge> : null}
+            {redisProvider ? <Badge variant="muted">Redis: {redisProvider.health}</Badge> : null}
+            {health ? <Badge variant="muted">API {health.status}</Badge> : null}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

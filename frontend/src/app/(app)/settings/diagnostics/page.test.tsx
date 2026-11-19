@@ -17,7 +17,12 @@ const runtime = {
 };
 vi.mock("@/contexts/AppContext", () => ({
   useAppContext: () => runtime,
-  useSafetyPosture: () => ({ executionMode: null, realTradingEnabled: null, postureKnown: false }),
+  useSafetyPosture: () => ({
+    executionMode: runtime.health?.execution_mode ?? null,
+    realTradingEnabled: runtime.health?.real_trading_enabled ?? null,
+    providerMode: "fallback",
+    postureKnown: runtime.health?.execution_mode != null,
+  }),
 }));
 
 const provider = (over: Partial<ProviderStatus>): ProviderStatus => ({
@@ -45,6 +50,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Diagnostics", () => {
+  it("shows the paper explanation, provider mode and all service health chips", () => {
+    runtime.health = { status: "ok", execution_mode: "paper", real_trading_enabled: false } as HealthResponse;
+    runtime.providers!.providers.push(
+      provider({ name: "openai-embeddings", kind: "embeddings" }),
+      provider({ name: "qdrant", kind: "vector" }),
+    );
+    render(<DiagnosticsPage />);
+    for (const text of [
+      "Paper mode active", "Real trading disabled", "Provider mode: fallback",
+      "Market: binance-usdm", "LLM: mock-llm", "Embeddings: openai-embeddings",
+      "Qdrant: qdrant", "Redis: healthy", "API ok",
+    ]) {
+      expect(screen.getByText(text)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/No real exchange orders are placed/)).toHaveTextContent(
+      "Approvals gate paper execution only. Market data is read-only (Binance public API or mock fallback).",
+    );
+  });
+
   it("lists every diagnostics route from the registry, grouped", () => {
     render(<DiagnosticsPage />);
     const tools = screen.getByRole("heading", { name: "Tools" }).parentElement!;
