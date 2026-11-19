@@ -167,7 +167,12 @@ def exchange_diagnostics_summary(
         stale_after_seconds=settings.watcher_heartbeat_stale_after_seconds,
     )
     telegram_enabled = response.telegram_enabled
+    # ``worker_enabled`` from Settings is the API's in-process worker flag; the
+    # recommended deployment runs a dedicated worker, so report that worker's
+    # heartbeat instead (enabled only while it is fresh).
+    worker_enabled = response.worker_enabled
     if effective.source == "worker":
+        worker_enabled = worker_enabled or not effective.stale
         telegram_enabled = any(
             (
                 effective.telegram_alerts_enabled,
@@ -177,7 +182,11 @@ def exchange_diagnostics_summary(
             )
         )
     return response.model_copy(
-        update={"worker_effective": effective, "telegram_enabled": telegram_enabled}
+        update={
+            "worker_effective": effective,
+            "worker_enabled": worker_enabled,
+            "telegram_enabled": telegram_enabled,
+        }
     )
 
 
