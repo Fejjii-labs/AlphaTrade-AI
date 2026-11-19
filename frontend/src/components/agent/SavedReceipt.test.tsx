@@ -25,7 +25,7 @@ describe("saved conversation receipts", () => {
     const link = screen.getByRole("link", { name: /^Open$/ });
     expect(link).toHaveAttribute("href", category === "journal"
       ? "/journal?saved=private-record"
-      : `/journal?tab=knowledge&category=${category}&saved=private-record`);
+      : `/agent?tab=documents&saved=private-record`);
     expect(screen.getAllByText(record.summary)[0]).toHaveClass("line-clamp-2");
     expect(screen.getByText("Saved note details").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText(record.id)).not.toBeInTheDocument();
@@ -41,6 +41,6 @@ describe("saved conversation receipts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reclassify" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Reclassify saved entry" }), { target: { value: "lessons" } });
     await waitFor(() => expect(savedEntries.update).toHaveBeenCalledWith(record.id, { expected_revision: 3, category: "lessons" }));
-    expect(await screen.findByRole("link", { name: /^Open$/ })).toHaveAttribute("href", "/journal?tab=knowledge&category=lessons&saved=private-record");
+    expect(await screen.findByRole("link", { name: /^Open$/ })).toHaveAttribute("href", "/agent?tab=documents&saved=private-record");
   });
 });

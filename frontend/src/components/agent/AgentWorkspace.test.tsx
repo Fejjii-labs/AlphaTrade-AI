@@ -345,7 +345,7 @@ describe("Agent workspace", () => {
     const view = render(<AgentWorkspace />);
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: record.original_text } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    const target = "/journal?tab=knowledge&category=rules&saved=owned-saved-rule";
+    const target = "/agent?tab=documents&saved=owned-saved-rule";
     expect(await screen.findByRole("link", { name: /^Open$/ })).toHaveAttribute("href", target);
     expect(screen.getByText("Your rule is saved.")).toBeInTheDocument();
     view.unmount();
@@ -1021,7 +1021,7 @@ describe("Agent workspace", () => {
     expect(apiMocks.confirmProposal).not.toHaveBeenCalled();
     expect(await screen.findByText(/Source document retained in this conversation/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Open original document" })).toHaveAttribute(
-      "href", "/journal?tab=knowledge&document_id=44444444-4444-4444-8444-444444444444",
+      "href", "/agent?tab=documents&document_id=44444444-4444-4444-8444-444444444444",
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Capture failed");
   });
