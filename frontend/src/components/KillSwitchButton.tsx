@@ -18,6 +18,7 @@ export function KillSwitchButton({ compact = false }: { compact?: boolean }) {
     killSwitchBusy,
     killSwitchError,
     setKillSwitchActive,
+    refreshKillSwitch,
   } = useAppContext();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -60,9 +61,7 @@ export function KillSwitchButton({ compact = false }: { compact?: boolean }) {
       await setKillSwitchActive(nextActive, trimmed);
       closeDialog();
     } catch {
-      setLocalError(
-        killSwitchError ?? "Kill switch update failed (owner role required).",
-      );
+      setLocalError(killSwitchError ?? "Couldn't update. Try again.");
     }
   }
 
@@ -174,10 +173,17 @@ export function KillSwitchButton({ compact = false }: { compact?: boolean }) {
 
       {killSwitchError && !confirmOpen ? (
         <span
-          className="max-w-[16rem] text-right text-xs text-danger"
+          className="flex max-w-[16rem] items-center gap-1 text-right text-xs text-danger"
           role="alert"
         >
           {killSwitchError}
+          <button
+            type="button"
+            className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            onClick={() => void refreshKillSwitch()}
+          >
+            Retry
+          </button>
         </span>
       ) : null}
     </div>

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Row, rowBadgeClass } from "@/components/ui/row";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import type { WatcherSymbolRuntimeStatus, WatcherWatchlistSlot } from "@/lib/api/types";
 
@@ -45,6 +46,8 @@ export function WatcherWatchlistEditor({
   configurationRevision = 0,
   staleAfterSeconds = 90,
   message = null,
+  loadState = "ready",
+  onRetry,
   onChange,
   onSave,
 }: {
@@ -54,6 +57,9 @@ export function WatcherWatchlistEditor({
   configurationRevision?: number;
   staleAfterSeconds?: number;
   message?: string | null;
+  /** The saved configuration: loading shows a skeleton, error offers Retry. */
+  loadState?: "loading" | "error" | "ready";
+  onRetry?: () => void;
   onChange: (slots: WatcherWatchlistSlot[]) => void;
   onSave: () => void;
 }) {
@@ -85,12 +91,26 @@ export function WatcherWatchlistEditor({
     <Card data-testid="watcher-watchlist">
       <CardHeader>
         <CardTitle className="text-base">Watcher markets</CardTitle>
-        <p className="text-xs text-text-muted">
-          Five paper markets, scanned in order. Unsupported markets stay unavailable.
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
-        {slots.map((slot, index) => {
+        {loadState === "loading" ? (
+          <div className="space-y-2" data-testid="watchlist-loading" aria-busy="true">
+            {[0, 1, 2, 3, 4].map((key) => (
+              <Skeleton key={key} className="h-10 w-full" />
+            ))}
+          </div>
+        ) : null}
+        {loadState === "error" ? (
+          <div className="flex items-center gap-3 text-sm text-text-secondary" role="alert">
+            Couldn&apos;t load.
+            {onRetry ? (
+              <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {loadState !== "ready" ? null : slots.map((slot, index) => {
           const found = statusBySymbol.get(slot.symbol.trim().toUpperCase());
           const status = found?.enabled === slot.enabled ? found : undefined;
           return (
@@ -182,12 +202,14 @@ export function WatcherWatchlistEditor({
             />
           );
         })}
-        <div className="flex items-center gap-3">
-          <Button type="button" onClick={onSave} disabled={saving} data-testid="watchlist-save">
-            {saving ? "Saving" : "Save watchlist"}
-          </Button>
-          {message ? <p className="text-xs text-text-muted">{message}</p> : null}
-        </div>
+        {loadState === "ready" ? (
+          <div className="flex items-center gap-3">
+            <Button type="button" onClick={onSave} disabled={saving} data-testid="watchlist-save">
+              {saving ? "Saving…" : "Save watchlist"}
+            </Button>
+            {message ? <p className="text-xs text-text-muted">{message}</p> : null}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -200,6 +222,7 @@ export function WatcherWatchlistSection() {
   const [staleAfter, setStaleAfter] = useState(90);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [loadState, setLoadState] = useState<"loading" | "error" | "ready">("loading");
   const generation = useRef(0);
   const refreshRequest = useRef<number | null>(null);
   const pollRequest = useRef<number | null>(null);
@@ -219,7 +242,7 @@ export function WatcherWatchlistSection() {
       setRevision(config.revision);
       setStatuses(status?.configuration_revision === config.revision ? status.symbols : []);
       if (status) setStaleAfter(status.stale_after_seconds);
-      setMessage(status ? null : "Market availability unavailable. Your saved watchlist is shown.");
+      setLoadState("ready");
       return status !== null;
     } finally {
       if (refreshRequest.current === request) refreshRequest.current = null;
@@ -229,7 +252,7 @@ export function WatcherWatchlistSection() {
   useEffect(() => {
     mounted.current = true;
     void refresh().catch(() => {
-      if (mounted.current) setMessage("Watchlist configuration unavailable. Reload to try again.");
+      if (mounted.current) setLoadState("error");
     });
     // Leave capacity in the shared 120/hour read quota for configuration and saves.
     const timer = setInterval(() => {
@@ -261,6 +284,13 @@ export function WatcherWatchlistSection() {
       staleAfterSeconds={staleAfter}
       saving={saving || revision === null}
       message={message}
+      loadState={loadState}
+      onRetry={() => {
+        setLoadState("loading");
+        void refresh().catch(() => {
+          if (mounted.current) setLoadState("error");
+        });
+      }}
       onChange={setSlots}
       onSave={() => {
         if (revision === null || savingRef.current) return;
@@ -273,13 +303,11 @@ export function WatcherWatchlistSection() {
         void api.watcherWatchlist
           .replace(slots.map((slot) => ({ symbol: slot.symbol, enabled: slot.enabled })), revision)
           .then(async () => {
-            const availabilityLoaded = await refresh();
-            if (mounted.current) setMessage(availabilityLoaded
-              ? "Watchlist saved. Paper only."
-              : "Watchlist saved. Market availability unavailable. Paper only.");
+            await refresh();
+            if (mounted.current) setMessage("Saved.");
           })
           .catch(() => {
-            if (mounted.current) setMessage("Save or refresh failed. Reload before trying again.");
+            if (mounted.current) setMessage("Couldn't save. Try again.");
           })
           .finally(() => {
             savingRef.current = false;

@@ -100,14 +100,15 @@ it("keeps restored recovery disabled until the initial configuration is ready", 
   const first = render(<WatcherAssignmentsSection />);
   await screen.findByText("BTCUSDT · Nested"); toggleFirst();
   fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
-  await screen.findByText("Lost reply");
+  await screen.findByText("Couldn't save. Try again.");
+  expect(screen.queryByText("Lost reply")).not.toBeInTheDocument();
   const original = structuredClone(replace.mock.calls[0]![0]);
   first.unmount();
   let finish!: (value: AssignmentsConfiguration) => void;
   read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   render(<WatcherAssignmentsSection />);
   const recovery = await screen.findByRole("button", { name: "Recover saved request" });
-  expect(screen.getByText("Loading monitoring…")).toBeInTheDocument();
+  expect(screen.getByTestId("assignments-loading")).toBeInTheDocument();
   expect(recovery).toBeDisabled();
   fireEvent.click(recovery);
   expect(replace).toHaveBeenCalledTimes(1);
@@ -140,7 +141,7 @@ it("validates a restored original request again before explicit recovery transpo
   const first = render(<WatcherAssignmentsSection />);
   await screen.findByText("BTCUSDT · Nested"); toggleFirst();
   fireEvent.click(screen.getByRole("button", { name: "Save monitoring" }));
-  await screen.findByText("Lost reply");
+  await screen.findByText("Couldn't save. Try again.");
   first.unmount(); render(<WatcherAssignmentsSection />);
   await screen.findByText("BTCUSDT · Nested");
   expect(validateRequest).toHaveBeenCalledTimes(2);
@@ -192,4 +193,14 @@ it("account changes discard old data and cancel late reads", async () => {
   await screen.findByText("No saved strategy assignments.");
   finish(configuration());
   await waitFor(() => expect(screen.queryByText("BTCUSDT · Nested")).not.toBeInTheDocument());
+});
+
+it("shows Retry instead of raw text when monitoring cannot load, and has no explainer", async () => {
+  read.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  render(<WatcherAssignmentsSection />);
+  await screen.findByText("Couldn't load.");
+  expect(screen.queryByText(/Failed to fetch|Assign saved versions/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findByText("BTCUSDT · Nested");
+  expect(screen.queryByText("Couldn't load.")).not.toBeInTheDocument();
 });

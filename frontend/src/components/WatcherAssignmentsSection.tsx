@@ -5,7 +5,8 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import { ApiError } from "@/lib/api/client";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError, friendlyError } from "@/lib/api/client";
 import { recoverySessionId } from "@/lib/auth/recovery-session";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import { formatDateTime } from "@/lib/format";
@@ -24,6 +25,7 @@ export function WatcherAssignmentsSection() {
   const [pending, setPending] = useState<AssignmentsReplace | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [coin, setCoin] = useState("");
   const [versionId, setVersionId] = useState("");
   const [detail, setDetail] = useState<string | null>(null);
@@ -39,12 +41,13 @@ export function WatcherAssignmentsSection() {
     flight.current = controller;
     const request = ++serial.current;
     const generation = sessionGeneration();
+    setLoadFailed(false);
     try {
       const loaded = await monitoringAssignments.read(controller.signal);
       if (controller.signal.aborted || request !== serial.current || generation !== sessionGeneration() || identityRef.current !== identity) return;
       setConfig(loaded); setRows(writeRows(loaded.assignments)); setCoin(loaded.symbols[0] ?? "");
     } catch (error) {
-      if (!controller.signal.aborted && request === serial.current) setMessage(error instanceof Error ? error.message : "Monitoring unavailable.");
+      if (!controller.signal.aborted && request === serial.current) setLoadFailed(true);
     }
   }, [identity]);
 
@@ -90,7 +93,7 @@ export function WatcherAssignmentsSection() {
         try { sessionStorage.removeItem(storageKey); } catch { /* Cleanup cannot block local state. */ }
         setPending(null);
       }
-      setMessage(error instanceof Error ? error.message : "Reply interrupted. Recover the saved request.");
+      setMessage(friendlyError(error, "Couldn't save. Try again."));
     } finally {
       if (identityRef.current === identity && generation === sessionGeneration()) setBusy(false);
     }
@@ -118,8 +121,8 @@ export function WatcherAssignmentsSection() {
   }
   return <section className="space-y-3 rounded-card border border-border-subtle p-4" data-testid="monitoring-assignments">
     <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Coin strategies</h3><Button variant="secondary" size="sm" disabled={busy || !!pending || dirty} onClick={() => void refresh()}>Refresh</Button></div>
-    <p className="text-xs text-text-muted">Assign saved versions for monitoring. Trading requires its existing approvals.</p>
-    {!config && <p className="text-sm">Loading monitoring…</p>}
+    {!config && !loadFailed && <div className="space-y-2" data-testid="assignments-loading" aria-busy="true"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div>}
+    {!config && loadFailed && <div role="alert" className="flex items-center gap-3 text-sm text-text-secondary">Couldn&apos;t load.<Button variant="outline" size="sm" onClick={() => void refresh()}>Retry</Button></div>}
     {config && rows.length === 0 && <p className="text-sm text-text-muted">No saved strategy assignments.</p>}
     <div className="grid gap-2 lg:grid-cols-2">{rows.map(row => {
       const saved = config?.assignments.find(r => r.id === row.id);
