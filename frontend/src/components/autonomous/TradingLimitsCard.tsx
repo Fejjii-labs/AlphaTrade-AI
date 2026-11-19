@@ -8,7 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
-import type { AutonomousTradingSettingsView, UserRiskSettings, UserRiskSettingsUpdate } from "@/lib/api/types";
+import type {
+  AutonomousStrategyOption,
+  AutonomousStrategyScope,
+  AutonomousTradingSettingsView,
+  UserRiskSettings,
+  UserRiskSettingsUpdate,
+} from "@/lib/api/types";
 
 import { type Bounds, boundHint, inputLimits } from "./bounds";
 
@@ -16,7 +22,8 @@ type BotForm = {
   daily_loss_limit_percent: string;
   max_trades_per_day: string;
   risk_per_trade_percent: string;
-  strategy_id: string;
+  strategy_ids: string[];
+  strategy_scope: AutonomousStrategyScope;
   symbol: string;
 };
 
@@ -38,7 +45,8 @@ function toBotForm(data: AutonomousTradingSettingsView): BotForm {
     daily_loss_limit_percent: data.daily_loss_limit_percent,
     max_trades_per_day: String(data.max_trades_per_day),
     risk_per_trade_percent: data.risk_per_trade_percent ?? "",
-    strategy_id: data.strategy_id ?? "",
+    strategy_ids: data.strategy_ids ?? (data.strategy_id ? [data.strategy_id] : []),
+    strategy_scope: data.strategy_scope ?? "selected",
     symbol: data.symbol ?? "",
   };
 }
@@ -80,7 +88,8 @@ function toBotPayload(form: BotForm): Record<string, unknown> {
   return {
     daily_loss_limit_percent: form.daily_loss_limit_percent.trim(),
     max_trades_per_day: Number(form.max_trades_per_day),
-    strategy_id: form.strategy_id || null,
+    strategy_ids: form.strategy_ids,
+    strategy_scope: form.strategy_scope,
     symbol: form.symbol || null,
     ...(risk ? { risk_per_trade_percent: risk } : { clear_risk_per_trade_percent: true }),
   };
@@ -98,9 +107,17 @@ export function botValidationMessage(code: string, ceilings: AutonomousTradingSe
     risk_per_trade_non_positive: "Bot risk per trade must be greater than 0% when set.",
     risk_per_trade_invalid: "Bot risk per trade must be a number when set.",
     symbol_not_watched: "Choose a coin from your monitoring watchlist.",
-    strategy_not_available: "Choose an enabled strategy.",
+    strategy_not_available: "Choose enabled strategies only.",
+    strategy_selection_conflict: "Could not save the strategy selection. Reload and try again.",
   };
   return map[code] ?? `Could not save bot settings (${code}).`;
+}
+
+/** Why the bot would skip this strategy today; null when it can trade it. */
+function strategyBlocker(option: AutonomousStrategyOption): string | null {
+  if (!option.approved) return "Not approved";
+  if (!option.paper_eligible) return "Not paper-eligible yet";
+  return null;
 }
 
 const same = <T,>(a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
@@ -337,25 +354,66 @@ export function TradingLimitsCard({ bot, account, owner, ownerReason, onBotSaved
           </Section>
           <Section id="target" title="Strategy and coin">
             <div className="grid gap-4 md:grid-cols-2">
-              <Field
-                label="Strategy"
-                hint={bot.strategy_options.length === 0 ? "No enabled strategies yet. Enable one under Strategies." : undefined}
-              >
-                <select
-                  data-testid="autonomous-strategy"
-                  className={selectClass}
-                  disabled={!owner}
-                  value={botForm.strategy_id}
-                  onChange={(e) => setBot({ strategy_id: e.target.value })}
-                >
-                  <option value="">Select strategy</option>
-                  {bot.strategy_options.map((s) => (
-                    <option key={s.strategy_id} value={s.strategy_id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              <div className="space-y-2 text-sm" role="group" aria-labelledby="autonomous-strategy-label" data-testid="autonomous-strategy">
+                <span id="autonomous-strategy-label" className="text-text-secondary">
+                  Strategies (long or short)
+                </span>
+                <label className="flex min-h-11 items-center gap-2">
+                  <input
+                    type="radio"
+                    name="autonomous-strategy-scope"
+                    data-testid="autonomous-strategy-scope-selected"
+                    disabled={!owner}
+                    checked={botForm.strategy_scope === "selected"}
+                    onChange={() => setBot({ strategy_scope: "selected" })}
+                  />
+                  Only the strategies ticked below
+                </label>
+                <label className="flex min-h-11 items-center gap-2">
+                  <input
+                    type="radio"
+                    name="autonomous-strategy-scope"
+                    data-testid="autonomous-strategy-scope-all"
+                    disabled={!owner}
+                    checked={botForm.strategy_scope === "all_eligible"}
+                    onChange={() => setBot({ strategy_scope: "all_eligible" })}
+                  />
+                  Every approved, paper-eligible strategy
+                </label>
+                <ul className="space-y-1 border-l border-border-subtle pl-3">
+                  {bot.strategy_options.map((option) => {
+                    const checked = botForm.strategy_ids.includes(option.strategy_id);
+                    const blocker = strategyBlocker(option);
+                    return (
+                      <li key={option.strategy_id}>
+                        <label className="flex min-h-11 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            data-testid={`autonomous-strategy-${option.strategy_id}`}
+                            // Unapproved strategies can be unticked but not newly picked.
+                            disabled={!owner || botForm.strategy_scope === "all_eligible" || (!option.approved && !checked)}
+                            checked={checked}
+                            onChange={() =>
+                              setBot({
+                                strategy_ids: checked
+                                  ? botForm.strategy_ids.filter((id) => id !== option.strategy_id)
+                                  : [...botForm.strategy_ids, option.strategy_id],
+                              })
+                            }
+                          />
+                          <span>{option.name}</span>
+                          {blocker ? <span className="text-xs text-text-muted">· {blocker}</span> : null}
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <span className="block text-xs text-text-muted">
+                  {bot.strategy_options.length === 0
+                    ? "No enabled strategies yet. Enable one under Strategies."
+                    : "The bot skips any strategy that is not approved and paper-eligible. One open trade per coin: the first setup wins."}
+                </span>
+              </div>
               <Field
                 label="Coin (from watchlist)"
                 hint={

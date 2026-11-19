@@ -53,6 +53,10 @@ class AutonomousTradingSettingsRow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "(demo_margin_mode IS NULL) OR (demo_margin_mode IN ('isolated', 'cross'))",
             name="ck_autonomous_trading_settings_demo_margin_mode",
         ),
+        CheckConstraint(
+            "strategy_scope IN ('selected', 'all_eligible')",
+            name="ck_autonomous_trading_settings_strategy_scope",
+        ),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -62,8 +66,17 @@ class AutonomousTradingSettingsRow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     daily_loss_limit_percent: Mapped[Decimal] = mapped_column(_MONEY, nullable=False)
     max_trades_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
     risk_per_trade_percent: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    # Legacy single strategy. Kept readable and mirrored to the first entry of
+    # ``strategy_ids`` (None in ``all_eligible`` mode) for older readers.
     strategy_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("user_strategies.id"), nullable=True
+    )
+    # Ordered UUID strings. NULL on rows saved before a30: read as [strategy_id].
+    strategy_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # "selected": only ``strategy_ids``. "all_eligible": any enabled, approved,
+    # paper-eligible strategy of the user. Both are re-checked at decision time.
+    strategy_scope: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="selected", server_default="selected"
     )
     symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
     demo_leverage: Mapped[int | None] = mapped_column(Integer, nullable=True)

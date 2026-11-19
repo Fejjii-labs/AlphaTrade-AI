@@ -24,7 +24,13 @@ from app.schemas.autonomous_trading_settings import (
     AutonomousTradingSettingsUpdate,
     AutonomousTradingSettingsView,
 )
-from app.schemas.common import ActorType, AuditEventType, AuditResult, AuditSeverity
+from app.schemas.common import (
+    ActorType,
+    AuditEventType,
+    AuditResult,
+    AuditSeverity,
+    StrategyLifecycleState,
+)
 from app.services.audit_service import AuditService
 from app.services.autonomous_paper_switch import (
     read_internal_paper_switch,
@@ -136,12 +142,30 @@ def _demo_leverage_view(row: AutonomousTradingSettingsRow | None) -> dict[str, o
     }
 
 
+APPROVED_LIFECYCLE_STATES = frozenset(
+    {StrategyLifecycleState.APPROVED, StrategyLifecycleState.ACTIVE}
+)
+
+
+def saved_strategy_ids(row: AutonomousTradingSettingsRow) -> list[uuid.UUID]:
+    """Saved set in order. A row from before a30 has no set: read its one strategy."""
+
+    if row.strategy_ids is None:
+        return [] if row.strategy_id is None else [row.strategy_id]
+    return [uuid.UUID(str(value)) for value in row.strategy_ids]
+
+
+def _dedupe(values: list[uuid.UUID]) -> list[uuid.UUID]:
+    return list(dict.fromkeys(values))
+
+
 @dataclass(frozen=True)
 class ResolvedAutonomousSettings:
     daily_loss_limit_percent: Decimal
     max_trades_per_day: int
     risk_per_trade_percent: Decimal | None
-    strategy_id: uuid.UUID | None
+    strategy_ids: frozenset[uuid.UUID]
+    strategy_scope: str
     symbol: str | None
     using_defaults: bool
 
@@ -170,6 +194,8 @@ class AutonomousTradingSettingsService:
                 max_trades_per_day=defaults.max_trades_per_day,
                 risk_per_trade_percent=None,
                 strategy_id=None,
+                strategy_ids=[],
+                strategy_scope="selected",
                 symbol=None,
                 using_defaults=True,
                 # Unsaved settings do not enforce the bot cap; only the account cap applies.
@@ -186,6 +212,8 @@ class AutonomousTradingSettingsService:
             max_trades_per_day=row.max_trades_per_day,
             risk_per_trade_percent=row.risk_per_trade_percent,
             strategy_id=row.strategy_id,
+            strategy_ids=saved_strategy_ids(row),
+            strategy_scope=row.strategy_scope,
             symbol=row.symbol,
             using_defaults=False,
             account_max_trades_per_day=account_cap,
@@ -206,7 +234,8 @@ class AutonomousTradingSettingsService:
             daily_loss_limit_percent=view.daily_loss_limit_percent,
             max_trades_per_day=view.max_trades_per_day,
             risk_per_trade_percent=view.risk_per_trade_percent,
-            strategy_id=view.strategy_id,
+            strategy_ids=frozenset(view.strategy_ids),
+            strategy_scope=view.strategy_scope,
             symbol=view.symbol.upper().strip() if view.symbol else None,
             using_defaults=view.using_defaults,
         )
@@ -218,12 +247,13 @@ class AutonomousTradingSettingsService:
         organization_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> AutonomousTradingSettingsView:
-        current = self.resolve(organization_id=organization_id, user_id=user_id)
-        daily = current.daily_loss_limit_percent
-        max_trades = current.max_trades_per_day
-        risk = current.risk_per_trade_percent
-        strategy_id = current.strategy_id
-        symbol = current.symbol
+        view = self.get(organization_id=organization_id, user_id=user_id)
+        daily = view.daily_loss_limit_percent
+        max_trades = view.max_trades_per_day
+        risk = view.risk_per_trade_percent
+        strategy_ids = list(view.strategy_ids)
+        strategy_scope: str = view.strategy_scope
+        symbol = view.symbol.upper().strip() if view.symbol else None
         existing = self._load_row(organization_id=organization_id, user_id=user_id)
         demo_leverage = None if existing is None else existing.demo_leverage
         demo_margin_mode = None if existing is None else existing.demo_margin_mode
@@ -255,15 +285,28 @@ class AutonomousTradingSettingsService:
         elif "risk_per_trade_percent" in data:
             risk = validate_risk_per_trade_percent(data["risk_per_trade_percent"])
             changes["risk_per_trade_percent"] = "null" if risk is None else format(risk, "f")
-        if "strategy_id" in data:
-            strategy_id = data["strategy_id"]
-            if strategy_id is not None:
+        if "strategy_id" in data and "strategy_ids" in data:
+            raise AutonomousSettingsValidationError(
+                "strategy_selection_conflict",
+                "Send strategy_ids, or the legacy strategy_id, not both.",
+            )
+        if "strategy_id" in data or "strategy_ids" in data:
+            if "strategy_id" in data:
+                legacy = data["strategy_id"]
+                requested = [] if legacy is None else [legacy]
+            else:
+                requested = _dedupe(list(data["strategy_ids"] or []))
+            for strategy_id in requested:
                 self._assert_strategy(
                     organization_id=organization_id,
                     user_id=user_id,
                     strategy_id=strategy_id,
                 )
-            changes["strategy_id"] = str(strategy_id) if strategy_id else "null"
+            strategy_ids = requested
+            changes["strategy_ids"] = ",".join(str(value) for value in requested) or "null"
+        if data.get("strategy_scope") is not None:
+            strategy_scope = data["strategy_scope"]
+            changes["strategy_scope"] = strategy_scope
         if "symbol" in data:
             symbol = None if data["symbol"] is None else data["symbol"].strip().upper()
             if symbol:
@@ -322,7 +365,8 @@ class AutonomousTradingSettingsService:
                 daily_loss_limit_percent=daily,
                 max_trades_per_day=max_trades,
                 risk_per_trade_percent=risk,
-                strategy_id=strategy_id,
+                strategy_ids=strategy_ids,
+                strategy_scope=strategy_scope,
                 symbol=symbol,
                 demo_leverage=demo_leverage,
                 demo_margin_mode=demo_margin_mode,
@@ -382,7 +426,8 @@ class AutonomousTradingSettingsService:
         daily_loss_limit_percent: Decimal,
         max_trades_per_day: int,
         risk_per_trade_percent: Decimal | None,
-        strategy_id: uuid.UUID | None,
+        strategy_ids: list[uuid.UUID],
+        strategy_scope: str,
         symbol: str | None,
         demo_leverage: int | None = None,
         demo_margin_mode: str | None = None,
@@ -397,6 +442,9 @@ class AutonomousTradingSettingsService:
             from sqlalchemy.dialects.sqlite import insert as dialect_insert
 
         now = datetime.now(UTC)
+        # The legacy column mirrors the first selected strategy for older readers.
+        strategy_id = strategy_ids[0] if strategy_ids and strategy_scope == "selected" else None
+        stored_ids = [str(value) for value in strategy_ids]
         stmt = dialect_insert(AutonomousTradingSettingsRow).values(
             id=uuid.uuid4(),
             organization_id=organization_id,
@@ -405,6 +453,8 @@ class AutonomousTradingSettingsService:
             max_trades_per_day=max_trades_per_day,
             risk_per_trade_percent=risk_per_trade_percent,
             strategy_id=strategy_id,
+            strategy_ids=stored_ids,
+            strategy_scope=strategy_scope,
             symbol=symbol,
             demo_leverage=demo_leverage,
             demo_margin_mode=demo_margin_mode,
@@ -419,6 +469,8 @@ class AutonomousTradingSettingsService:
                 "max_trades_per_day": max_trades_per_day,
                 "risk_per_trade_percent": risk_per_trade_percent,
                 "strategy_id": strategy_id,
+                "strategy_ids": stored_ids,
+                "strategy_scope": strategy_scope,
                 "symbol": symbol,
                 "demo_leverage": demo_leverage,
                 "demo_margin_mode": demo_margin_mode,
@@ -480,12 +532,28 @@ class AutonomousTradingSettingsService:
         symbols = [s.strip().upper() for s in watchlist.enabled_symbols() if s.strip()]
         return {
             "strategy_options": [
-                AutonomousStrategyOption(strategy_id=row.id, name=row.name) for row in strategies
+                AutonomousStrategyOption(
+                    strategy_id=row.id,
+                    name=row.name,
+                    approved=self._current_version_approved(row),
+                    paper_eligible=bool(row.paper_eligible),
+                )
+                for row in strategies
             ],
             "symbol_options": symbols,
             "max_daily_loss_percent_ceiling": HARD_MAX_DAILY_LOSS_PERCENT,
             "max_risk_per_trade_percent_ceiling": PAPER_DEMO_MAX_RISK_PER_TRADE_PERCENT,
         }
+
+    def _current_version_approved(self, strategy: UserStrategy) -> bool:
+        from app.services.strategy_versioning import StrategyVersioningService
+
+        versioning = StrategyVersioningService(self._session)
+        version = versioning.selected_version(strategy)
+        if version is None:
+            return False
+        lifecycle = versioning.latest_lifecycle_event_for_version(version.id)
+        return lifecycle is not None and lifecycle.new_state in APPROVED_LIFECYCLE_STATES
 
     def _assert_strategy(
         self,
