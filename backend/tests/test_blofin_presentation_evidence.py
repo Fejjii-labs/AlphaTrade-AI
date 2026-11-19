@@ -65,6 +65,9 @@ def test_account_performance_uses_exact_closed_lifecycle_and_retains_unknown_fun
         assert performance.funding is None and performance.net_pnl is None
         assert performance.verified_closed_trades == 1 and performance.manual_test_trades == 1
         assert performance.strategy_closed_trades is None and performance.unresolved_trades == 0
+        assert performance.model_dump(mode="json")["linked_trade_coverage"] == (
+            "1 of 1 trades verified"
+        )
         assert "outside venue history" in performance.coverage
 
 

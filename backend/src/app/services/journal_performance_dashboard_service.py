@@ -612,6 +612,10 @@ def build_dashboard(
     now: datetime | None = None,
 ) -> JournalPerformanceDashboardResponse:
     summary = summarize(rows)
+    if filters.scope == JournalDashboardScope.DEMO:
+        summary.pnl_trade_coverage = (
+            f"{summary.pnl_sample_count} of {summary.trade_count} trades verified"
+        )
     days = bucket_days(rows, tz)
     risk = risk_metrics(rows, days, summary.net_pnl)
     confidence = _confidence(len(rows))

@@ -495,6 +495,7 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
       manual_mirror_reason: "Closed BloFin demo manual journal entries.",
       win_rate: "1.0000",
       trade_count: 1,
+      unresolved_round_trips: 2,
       wins: 1,
       losses: 0,
       realized_pnl: "0.186",
@@ -506,6 +507,8 @@ it("shows mirrored win rate while activity sync stays disabled", async () => {
     expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
   });
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("1 of 3 trades verified");
+  expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("1 of 3 trades verified");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("Average R 0.9300");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
   expect(screen.queryByTestId("activity-sync-disabled")).not.toBeInTheDocument();
@@ -535,6 +538,7 @@ it("does not pair a ready mirror with the activity fillPnl withhold sentence", a
       manual_mirror_reason: "Closed BloFin demo manual journal entries.",
       win_rate: "1.0000",
       trade_count: 1,
+      unresolved_round_trips: 2,
       wins: 1,
       losses: 0,
       realized_pnl: "0.186",
@@ -548,6 +552,8 @@ it("does not pair a ready mirror with the activity fillPnl withhold sentence", a
     expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("100.0%");
   });
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("0.186");
+  expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("1 of 3 trades verified");
+  expect(screen.getByTestId("dashboard-win-rate")).toHaveTextContent("1 of 3 trades verified");
   expect(screen.getByTestId("manual-mirror-ready")).toHaveTextContent("1 closed trades");
   expect(screen.queryByTestId("activity-coverage")).not.toBeInTheDocument();
   expect(screen.queryByText(/fillPnl is not established/)).not.toBeInTheDocument();
@@ -595,6 +601,7 @@ it("uses native scope and verified partial performance without rounding tiny PnL
   expect(screen.getByTestId("dashboard-open-count")).toHaveTextContent("1");
   expect(screen.getByTestId("dashboard-pnl")).toHaveTextContent("— USDT");
   expect(screen.getByText("0.007656 USDT")).toBeInTheDocument();
+  expect(screen.getByText("1 of 3 trades verified")).toBeInTheDocument();
   expect(screen.getByText(/Manual connectivity tests are excluded/)).toBeInTheDocument();
 });
 

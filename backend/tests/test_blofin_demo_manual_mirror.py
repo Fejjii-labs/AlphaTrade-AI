@@ -359,6 +359,29 @@ def test_five_position_closes_reconcile_costs_partial_legs_and_all_dashboard_kpi
     assert account.performance.realized_pnl == Decimal("33.3")
 
 
+def test_resting_limit_entries_reconcile_by_position_id(session):
+    bundle = _five_closes()
+    for order in bundle["orders"]:
+        if order["pnl"] == "0":
+            order["createTime"] = str(int(order["createTime"]) - 60_000)
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert [row.exit_reason for row in rows if row.net_pnl is None] == []
+    assert sorted(row.net_pnl for row in rows) == list(
+        map(Decimal, ("-10.2", "9.3", "9.8", "9.8", "14.6"))
+    )
+
+
+def test_conflicting_order_id_cannot_verify_two_positions(session):
+    bundle = _five_closes()
+    entries = [order for order in bundle["orders"] if order["pnl"] == "0"]
+    entries[1]["orderId"] = entries[0]["orderId"]
+    _apply_five(session, bundle)
+    rows = _rows(session)
+    assert len([row for row in rows if row.exit_reason == "unverified:conflicting_order_id"]) == 2
+    assert sum(row.net_pnl is not None for row in rows) == 3
+
+
 def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
     bundle = _five_closes()
     del bundle["orders"][-1]["fee"]  # missing opening fee for the funding position
@@ -377,6 +400,19 @@ def test_only_unreconciled_position_is_withheld_with_a_short_reason(session):
     assert account.performance.realized_pnl == Decimal("24")
     assert account.performance.trade_count == 4 and account.performance.unresolved_round_trips == 1
     assert account.performance.win_rate == Decimal("0.75")
+    assert account.model_dump(mode="json")["performance"]["mirror_trade_coverage"] == (
+        "4 of 5 trades verified"
+    )
+    from app.services.journal_performance_dashboard_service import (
+        JournalPerformanceDashboardService,
+    )
+
+    dashboard = JournalPerformanceDashboardService(session, settings=_settings()).compute(
+        organization_id=ORG, user_id=USER, timezone="UTC"
+    )
+    assert dashboard.model_dump(mode="json")["summary"]["pnl_trade_coverage"] == (
+        "4 of 5 trades verified"
+    )
 
 
 def test_positions_fee_cannot_stand_in_for_missing_entry_order_fee(session):
@@ -1437,6 +1473,7 @@ def test_dashboard_publishes_verified_subset_with_unresolved_count(
     publish_mirror_performance(quiet, session=session, tenant=tenant, settings=_settings())
     assert quiet.performance.manual_mirror_status == "ready"
     assert quiet.performance.trade_count == 0
+    assert quiet.performance.mirror_trade_coverage == "0 of 0 trades verified"
     assert quiet.performance.realized_pnl == Decimal("0")
 
     _apply(session, _FIXTURE["long"])

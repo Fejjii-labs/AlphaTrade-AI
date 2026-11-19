@@ -889,6 +889,7 @@ def _position_draft(
     group: list[_Slice],
     all_slices: list[_Slice],
     orders: list[dict[str, Any]],
+    conflicting_order_ids: set[str],
     positions: list[dict[str, Any]],
     window_begin: datetime,
 ) -> MirrorDraft:
@@ -914,7 +915,9 @@ def _position_draft(
         reason = "entry_before_lookback"
     elif any(not item.funding_ok for item in group):
         reason = "funding_incomplete"
-    fees, order_ids, cost_reason = _position_costs(group, all_slices, orders, positions)
+    fees, order_ids, cost_reason = _position_costs(
+        group, all_slices, orders, conflicting_order_ids, positions
+    )
     reason = reason or cost_reason
     if reason is None and (
         any(item.fee is None for item in group)
@@ -956,6 +959,7 @@ def _position_costs(
     group: list[_Slice],
     all_slices: list[_Slice],
     orders: list[dict[str, Any]],
+    conflicting_order_ids: set[str],
     positions: list[dict[str, Any]],
 ) -> tuple[Decimal | None, tuple[str, ...], str | None]:
     """Prove both order sides and their fee sign/total against positions history.
@@ -964,27 +968,49 @@ def _position_costs(
     permits attribution. Never add order P&L to the positions-history P&L.
     """
     first = group[0]
-    start, end = min(i.opened_at for i in group), max(i.closed_at for i in group)
+    start, end = first.opened_at, max(i.closed_at for i in group)
+    other_lifetimes: dict[datetime, datetime] = {}
+    for other in all_slices:
+        if (
+            other.position_id == first.position_id
+            and other.opened_at != start
+            and other.inst_id == first.inst_id
+        ):
+            other_lifetimes[other.opened_at] = max(
+                other_lifetimes.get(other.opened_at, other.closed_at), other.closed_at
+            )
     by_id: dict[str, dict[str, Any]] = {}
     for row in orders:
-        when = _time(row.get("createTime"))
-        if row.get("instId") != first.inst_id or when is None or not start <= when <= end:
+        if row.get("instId") != first.inst_id:
             continue
         pid = row.get("positionId")
-        if pid and pid != first.position_id:
-            continue
-        if not pid and any(
-            other.position_id != first.position_id
-            and other.inst_id == first.inst_id
-            and other.opened_at <= end
-            and start <= other.closed_at
-            for other in all_slices
-        ):
-            return None, (), "ambiguous_order_position"
+        if pid:
+            if pid != first.position_id:
+                continue
+            if other_lifetimes:
+                # The venue can reuse a position ID. Require a unique lifetime
+                # when the ID alone cannot establish ownership.
+                when = _time(row.get("updateTime")) or _time(row.get("createTime"))
+                if when is None or not start <= when <= end:
+                    continue
+                if any(opened <= when <= closed for opened, closed in other_lifetimes.items()):
+                    return None, (), "ambiguous_order_position"
+        else:
+            when = _time(row.get("createTime"))
+            if when is None or not start <= when <= end:
+                continue
+            if any(
+                (other.position_id, other.opened_at) != (first.position_id, start)
+                and other.inst_id == first.inst_id
+                and other.opened_at <= end
+                and start <= other.closed_at
+                for other in all_slices
+            ):
+                return None, (), "ambiguous_order_position"
         oid = row.get("orderId")
         if not isinstance(oid, str) or not oid:
             return None, (), "missing_order_id"
-        if oid in by_id and by_id[oid] != row:
+        if oid in conflicting_order_ids:
             return None, (), "conflicting_order_id"
         by_id[oid] = row
     entry_qty = close_qty = entry_fee = close_fee = closing_pnl = Decimal(0)
@@ -1148,9 +1174,15 @@ def drafts_from_raw(
     groups: dict[tuple[str, datetime], list[_Slice]] = {}
     for sliver in slices:
         groups.setdefault((sliver.position_id, sliver.opened_at), []).append(sliver)
+    orders_by_id: dict[str, dict[str, Any]] = {}
+    conflicting_order_ids: set[str] = set()
+    for row in orders:
+        oid = row.get("orderId")
+        if isinstance(oid, str) and oid and orders_by_id.setdefault(oid, row) != row:
+            conflicting_order_ids.add(oid)
     return BuildResult(
         closed=tuple(
-            _position_draft(group, slices, orders, positions, window_begin)
+            _position_draft(group, slices, orders, conflicting_order_ids, positions, window_begin)
             for group in groups.values()
         ),
         opens=tuple(opens),
@@ -2024,7 +2056,11 @@ def publish_mirror_performance(
         ).all()
     )
     rows = [row for row in rows if row.external_ref != _CYCLE_REF]
-    if not cycle_marker_ok(cycle) and not any(_verified_row(row) for row in rows):
+    verified = [row for row in rows if _verified_row(row)]
+    unverified_count = len(rows) - len(verified)
+    performance.unresolved_round_trips = unverified_count
+    performance.mirror_trade_coverage = f"{len(verified)} of {len(rows)} trades verified"
+    if not cycle_marker_ok(cycle) and not verified:
         performance.manual_mirror_status = "withheld"
         performance.manual_mirror_reason = (
             "Win rate and realized P&L stay withheld. The latest hand-trade "
@@ -2038,12 +2074,10 @@ def publish_mirror_performance(
         performance.losses = None
         performance.realized_pnl = None
         return
-    unverified = [row for row in rows if not _verified_row(row)]
-    performance.unresolved_round_trips = len(unverified)
-    if unverified and len(unverified) == len(rows):
+    if unverified_count and not verified:
         performance.manual_mirror_status = "withheld"
         performance.manual_mirror_reason = (
-            f"{len(unverified)} positions unreconciled: price, order fees or funding "
+            f"{unverified_count} positions unreconciled: price, order fees or funding "
             "do not reconcile. See each journal entry's closure reason."
         )
         performance.average_r = None
@@ -2053,7 +2087,7 @@ def publish_mirror_performance(
         performance.losses = None
         performance.realized_pnl = None
         return
-    rows = [row for row in rows if _verified_row(row)]
+    rows = verified
     wins = sum(1 for row in rows if row.result is TradeResult.WIN)
     losses = sum(1 for row in rows if row.result is TradeResult.LOSS)
     decided = wins + losses
@@ -2078,8 +2112,8 @@ def publish_mirror_performance(
         if rows
         else ("Manual mirror is on. No closed mirrored trades yet. fillPnl is not used.")
     )
-    if unverified:
-        performance.manual_mirror_reason += f" {len(unverified)} unreconciled trades excluded."
+    if unverified_count:
+        performance.manual_mirror_reason += f" {unverified_count} unreconciled trades excluded."
     if not cycle_marker_ok(cycle):
         performance.manual_mirror_reason += (
             " Latest mirror read incomplete; showing saved reconciled trades."

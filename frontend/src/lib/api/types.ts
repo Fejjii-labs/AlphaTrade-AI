@@ -4575,6 +4575,7 @@ export type JournalPerformanceDashboardParams = {
 export interface JournalDashboardSummary {
   trade_count: number;
   pnl_sample_count: number;
+  pnl_trade_coverage?: string | null;
   wins: number;
   losses: number;
   breakeven: number;
