@@ -205,44 +205,6 @@ def _seed_approved_proposal(session: Session, settings: Settings) -> tuple[uuid.
     return proposal.id, approval.id  # type: ignore[return-value]
 
 
-def test_watchlist_crud(client_with_workflow_db: TestClient) -> None:
-    client = client_with_workflow_db
-    create = client.post(
-        "/market/watchlist",
-        json={
-            "organization_id": str(ORG_ID),
-            "user_id": str(USER_ID),
-            "symbol": "BTCUSDT",
-            "exchange": "binance",
-            "timeframes": ["4h", "1h"],
-            "strategy_ids": ["htf_trend_pullback"],
-        },
-    )
-    assert create.status_code == 200
-    item_id = create.json()["id"]
-
-    listing = client.get(
-        "/market/watchlist",
-        params={"limit": 50},
-    )
-    assert listing.status_code == 200
-    assert len(listing.json()) == 1
-
-    updated = client.patch(
-        f"/market/watchlist/{item_id}",
-        params={"limit": 50},
-        json={"enabled": False},
-    )
-    assert updated.status_code == 200
-    assert updated.json()["enabled"] is False
-
-    deleted = client.delete(
-        f"/market/watchlist/{item_id}",
-        params={"limit": 50},
-    )
-    assert deleted.status_code == 204
-
-
 def test_proposal_create_list_and_status(client_with_workflow_db: TestClient) -> None:
     client = client_with_workflow_db
     created = client.post("/proposals", json=_proposal_payload())

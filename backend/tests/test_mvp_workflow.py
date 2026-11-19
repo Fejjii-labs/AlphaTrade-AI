@@ -7,10 +7,12 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import TradingPolicyError
+from app.db.models import AuditLog
 from app.providers.qdrant import reset_process_vector_store
 from app.schemas.approval import ApprovalDecisionRequest
 from app.schemas.common import (
@@ -117,10 +119,16 @@ def test_full_proposal_approval_paper_flow(
         assert body["can_execute_paper"] is True
         assert body["approval"]["status"] == "approved"
 
-        audit = client.get("/audit/events", params={"limit": 20})
-        assert audit.status_code == 200
-        event_types = {item["event_type"] for item in audit.json()["items"]}
-        assert AuditEventType.PAPER_ORDER_CREATED.value not in event_types
+    with factory() as session:
+        assert (
+            session.scalar(
+                select(AuditLog).where(
+                    AuditLog.organization_id == ORG_ID,
+                    AuditLog.action == AuditEventType.PAPER_ORDER_CREATED,
+                )
+            )
+            is None
+        )
 
 
 def test_rejected_approval_cannot_execute(
@@ -248,17 +256,17 @@ def test_modified_approval_preserves_audit(
         assert data["approval"]["modified_fields"]["position_size"] == "0.005"
         assert data["can_execute_paper"] is False
 
-        audit = client.get("/audit/events", params={"limit": 50})
-        decisions = [
-            e
-            for e in audit.json()["items"]
-            if e["event_type"] == AuditEventType.APPROVAL_DECISION.value
-        ]
-        assert len(decisions) >= 1
+    with factory() as session:
+        decisions = session.scalars(
+            select(AuditLog).where(
+                AuditLog.organization_id == ORG_ID,
+                AuditLog.action == AuditEventType.APPROVAL_DECISION,
+                AuditLog.resource_id == str(approval_id),
+            )
+        ).all()
         assert any(
-            (e.get("redacted_metadata") or {}).get("modified_fields", {}).get("position_size")
-            == "0.005"
-            for e in decisions
+            (row.redacted_metadata or {}).get("modified_fields", {}).get("position_size") == "0.005"
+            for row in decisions
         )
 
 

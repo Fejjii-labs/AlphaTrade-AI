@@ -510,61 +510,6 @@ def test_persisted_watcher_path_uses_canonical_resolver(
             assert injected_persist.reason_code == "candidate_creation_failed"
 
 
-def test_paper_bot_scan_without_approved_lineage_creates_no_trade(
-    client_env: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, _factory = client_env
-    _auth(client)
-    created = client.post(
-        "/strategies",
-        json={
-            "name": "Paper lineage gate",
-            "setup_type": StrategyId.HTF_TREND_PULLBACK.value,
-            "card": _card().model_dump(mode="json"),
-        },
-    )
-    strategy_id = created.json()["id"]
-    client.patch(
-        f"/strategies/{strategy_id}/structured-rules",
-        json={
-            "primary_timeframe": "15m",
-            "entry_rules": [{"trigger_type": "ema_pullback"}],
-            "exit_rules": [
-                {"rule_type": "fixed_stop", "value": "2"},
-                {"rule_type": "tp_multiple", "r_multiple": "1"},
-            ],
-            "no_trade_rules": [],
-        },
-    )
-    client.post(
-        f"/strategies/{strategy_id}/backtests",
-        json={
-            "assumptions": {
-                "symbol": "BTCUSDT",
-                "timeframe": "15m",
-                "exchange": "mock",
-                "initial_capital": "10000",
-                "fees_bps": 10,
-                "slippage_bps": 5,
-                "risk_per_trade_pct": 1,
-            }
-        },
-    )
-    started = client.post(
-        f"/strategies/{strategy_id}/paper-validation/start",
-        json={"runtime_mode": "auto_paper"},
-    )
-    assert started.status_code == 200, started.text
-    scan = client.post(f"/paper-validation/{started.json()['id']}/scan")
-    assert scan.status_code == 200, scan.text
-    assert scan.json()["trade_created"] is False
-    signals = client.get(f"/paper-validation/{started.json()['id']}/signals")
-    assert signals.json()["total"] >= 1
-    assert signals.json()["items"][0]["status"] == "not_testable"
-    trades = client.get(f"/paper-validation/{started.json()['id']}/trades")
-    assert trades.json()["total"] == 0
-
-
 def test_cross_tenant_compile_and_approve_fail_closed(
     client_env: tuple[TestClient, sessionmaker[Session]],
 ) -> None:

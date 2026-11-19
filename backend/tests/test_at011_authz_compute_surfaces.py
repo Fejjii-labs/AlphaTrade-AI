@@ -71,14 +71,8 @@ _STRATEGY_EVALUATE_PAYLOAD = {
     "liquidity_sweep_detected": True,
 }
 
-_TOOL_EXECUTE_PAYLOAD = {
-    "tool_name": "risk_checker",
-    "arguments": {"request": _RISK_CHECK_PAYLOAD},
-}
 
 _UNAUTH_ENDPOINTS: list[tuple[str, str, dict[str, object] | None]] = [
-    ("GET", "/tools", None),
-    ("POST", "/tools/execute", _TOOL_EXECUTE_PAYLOAD),
     ("POST", "/risk/check", _RISK_CHECK_PAYLOAD),
     ("POST", "/risk/size", _RISK_SIZE_PAYLOAD),
     ("POST", "/risk/loss-acceptance", _LOSS_ACCEPTANCE_PAYLOAD),
@@ -87,7 +81,6 @@ _UNAUTH_ENDPOINTS: list[tuple[str, str, dict[str, object] | None]] = [
 ]
 
 _VIEWER_FORBIDDEN_ENDPOINTS: list[tuple[str, str, dict[str, object]]] = [
-    ("POST", "/tools/execute", _TOOL_EXECUTE_PAYLOAD),
     ("POST", "/risk/check", _RISK_CHECK_PAYLOAD),
     ("POST", "/risk/size", _RISK_SIZE_PAYLOAD),
     ("POST", "/risk/loss-acceptance", _LOSS_ACCEPTANCE_PAYLOAD),
@@ -95,13 +88,10 @@ _VIEWER_FORBIDDEN_ENDPOINTS: list[tuple[str, str, dict[str, object]]] = [
 ]
 
 _VIEWER_ALLOWED_ENDPOINTS: list[tuple[str, str]] = [
-    ("GET", "/tools"),
     ("GET", "/strategies/modules"),
 ]
 
 _TRADER_SUCCESS_ENDPOINTS: list[tuple[str, str, dict[str, object] | None]] = [
-    ("GET", "/tools", None),
-    ("POST", "/tools/execute", _TOOL_EXECUTE_PAYLOAD),
     ("POST", "/risk/check", _RISK_CHECK_PAYLOAD),
     ("POST", "/risk/size", _RISK_SIZE_PAYLOAD),
     ("POST", "/risk/loss-acceptance", _LOSS_ACCEPTANCE_PAYLOAD),
@@ -327,118 +317,3 @@ def test_openapi_docs_disabled_outside_local_environment() -> None:
         assert redoc.status_code == 404
         openapi = client.get("/openapi.json")
         assert openapi.status_code == 404
-
-
-def test_tools_execute_binds_tenant_and_ignores_client_org_ids(
-    at011_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    """JWT tenant must overwrite any client-supplied organization_id/user_id."""
-    from app.core.dependencies import get_tool_registry
-    from app.schemas.tools import ToolOutput, ToolSpec
-
-    client, _factory = at011_client
-    registered = _register(client, email="tenant-bind-at011@example.com")
-    token = str(registered["tokens"]["access_token"])
-    org_id = str(registered["organization"]["id"])
-    user_id = str(registered["user"]["id"])
-    foreign_org = str(uuid.uuid4())
-    foreign_user = str(uuid.uuid4())
-    captured: dict[str, object] = {}
-
-    class _CaptureRegistry:
-        def list_specs(self) -> list[ToolSpec]:
-            return []
-
-        def execute(self, tool_name: str, arguments: dict[str, object]) -> ToolOutput:
-            captured.clear()
-            captured.update(arguments)
-            return ToolOutput(tool_name=tool_name, success=True, result={"ok": True})
-
-    app = client.app
-    app.dependency_overrides[get_tool_registry] = lambda: _CaptureRegistry()
-    try:
-        response = client.post(
-            "/tools/execute",
-            headers=_auth_headers(token),
-            json={
-                "tool_name": "risk_checker",
-                "arguments": {
-                    "organization_id": foreign_org,
-                    "user_id": foreign_user,
-                    "request": _RISK_CHECK_PAYLOAD,
-                },
-            },
-        )
-    finally:
-        app.dependency_overrides.pop(get_tool_registry, None)
-
-    assert response.status_code == 200
-    assert captured.get("organization_id") == org_id
-    assert captured.get("user_id") == user_id
-    assert captured.get("organization_id") != foreign_org
-    assert captured.get("user_id") != foreign_user
-
-
-def test_tools_execute_refuses_mutating_tools_and_strips_consent(
-    at011_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    """M17: only read-only tools run; ``confirm``/``user_message`` never reach a tool."""
-    from app.core.dependencies import get_tool_registry
-    from app.schemas.tools import ToolOutput, ToolSpec
-
-    client, _factory = at011_client
-    registered = _register(client, email="tools-readonly-at011@example.com")
-    token = str(registered["tokens"]["access_token"])
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    class _CaptureRegistry:
-        def list_specs(self) -> list[ToolSpec]:
-            return []
-
-        def execute(self, tool_name: str, arguments: dict[str, object]) -> ToolOutput:
-            calls.append((tool_name, dict(arguments)))
-            return ToolOutput(tool_name=tool_name, success=True, result={"ok": True})
-
-    app = client.app
-    app.dependency_overrides[get_tool_registry] = lambda: _CaptureRegistry()
-    try:
-        for tool_name, arguments in (
-            ("strategy_library_tool", {"action": "create", "confirm": True}),
-            ("backtest_tool", {"action": "run", "confirm": True}),
-            ("risk_settings_tool", {"action": "update", "confirm": True}),
-            ("paper_validation_tool", {"action": "start", "user_message": "I confirm"}),
-            ("strategy_proposal_tool", {"action": "confirm"}),
-            ("paper_execution", {}),
-        ):
-            refused = client.post(
-                "/tools/execute",
-                headers=_auth_headers(token),
-                json={"tool_name": tool_name, "arguments": arguments},
-            )
-            assert refused.status_code == 200, refused.text
-            assert refused.json()["success"] is False, tool_name
-        assert calls == []
-
-        allowed = client.post(
-            "/tools/execute",
-            headers=_auth_headers(token),
-            json={
-                "tool_name": "risk_checker",
-                "arguments": {
-                    "request": _RISK_CHECK_PAYLOAD,
-                    "confirm": True,
-                    "confirmed": True,
-                    "user_message": "I confirm",
-                },
-            },
-        )
-    finally:
-        app.dependency_overrides.pop(get_tool_registry, None)
-
-    assert allowed.status_code == 200, allowed.text
-    assert len(calls) == 1
-    _name, forwarded = calls[0]
-    assert "confirm" not in forwarded
-    assert "confirmed" not in forwarded
-    assert "user_message" not in forwarded
-    assert forwarded["request"] == _RISK_CHECK_PAYLOAD

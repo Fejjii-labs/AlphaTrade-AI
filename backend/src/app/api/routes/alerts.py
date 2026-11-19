@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, Query
 from app.core.dependencies import (
     AlertDeliveryServiceDep,
     PaperAlertServiceDep,
-    PaperValidationDraftServiceDep,
     SessionDep,
     SettingsDep,
 )
@@ -30,10 +29,6 @@ from app.schemas.alerts import (
     SetupAlertReviewUpdate,
 )
 from app.schemas.common import PaperAlertSeverity, PaperAlertType, SetupAlertReviewStatus
-from app.schemas.paper_validation_draft import (
-    SetupAlertDraftCreateRequest,
-    SetupAlertDraftCreateResult,
-)
 from app.schemas.telegram_alert_delivery import (
     TelegramAlertDeliveryRequest,
     TelegramAlertDeliveryResponse,
@@ -309,29 +304,6 @@ async def update_setup_alert_review(
     session: SessionDep,
 ) -> SetupAlertReviewItem:
     result = service.update_setup_review(
-        alert_id,
-        body,
-        organization_id=tenant.organization_id,
-        user_id=tenant.user_id,
-    )
-    session.commit()
-    return result
-
-
-@router.post(
-    "/setup-review/{alert_id}/draft",
-    response_model=SetupAlertDraftCreateResult,
-    summary="Create a non-executable paper validation draft from a reviewed setup alert",
-    dependencies=[_ALERTS_WRITE_LIMIT],
-)
-async def create_setup_alert_draft(
-    alert_id: uuid.UUID,
-    body: SetupAlertDraftCreateRequest,
-    tenant: TraderDep,
-    service: PaperValidationDraftServiceDep,
-    session: SessionDep,
-) -> SetupAlertDraftCreateResult:
-    result = service.create_from_setup_alert(
         alert_id,
         body,
         organization_id=tenant.organization_id,

@@ -1,9 +1,4 @@
-"""Loopback-only synthetic screening dependency for the real local API/browser.
-
-The application routes/auth/database are real. Public acquisition alone is replaced
-with original tagged synthetic receipts. Runtime settings remain disarmed; no
-production dependency or operator flag is changed. Never deploy this test harness.
-"""
+"""Loopback-only synthetic capture dependency for the local API/browser."""
 
 import json
 import os
@@ -11,13 +6,9 @@ import re
 from dataclasses import replace
 
 from sqlalchemy.engine import make_url
-from tests.support.trendpulse_screening import DelayedReplayAcquirer, after_close
 
-from app.api.routes.trendpulse_screening import get_screening_service
 from app.core.config import get_settings
-from app.core.dependencies import SessionDep
 from app.main import create_app
-from app.strategy_brain.trendpulse_screening.service import TrendPulseScreeningService
 
 settings = get_settings()
 url = make_url(settings.database_url)
@@ -40,18 +31,6 @@ async def fixture_identity(request, call_next):
     response = await call_next(request)
     response.headers["X-Synthetic-Fixture-Process"] = str(os.getpid())
     return response
-
-
-def synthetic_service(session: SessionDep):
-    return TrendPulseScreeningService(
-        session,
-        settings.model_copy(update={"trendpulse_screening_enabled": True}),
-        acquirer=DelayedReplayAcquirer(),
-        clock=after_close,
-    )
-
-
-app.dependency_overrides[get_screening_service] = synthetic_service
 
 
 if os.getenv("SYNTHETIC_CAPTURE_BROWSER") == "true":

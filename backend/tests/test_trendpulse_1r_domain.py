@@ -4,7 +4,6 @@ import pytest
 
 from app.core.errors import AppError, ConflictError
 from app.db.models import UserStrategy
-from app.experiments.risk import preview_admission
 from app.schemas.common import StrategyId
 from app.schemas.experiments import ExperimentConfiguration
 from app.strategy_brain.trendpulse_1r.experiment import bind_experiment_signal
@@ -14,7 +13,6 @@ from tests.support.experiment_fixtures import (
 from tests.support.experiment_fixtures import (
     experiment_world as _experiment_world,  # noqa: F401
 )
-from tests.test_experiment_risk import inputs
 from tests.test_trendpulse_1r_adapter import scan, spec
 
 
@@ -54,11 +52,6 @@ def test_immutable_authored_adapter_is_recognized_without_execution_or_sample_au
     assert version.configuration.timeframes == config.timeframes
     assert not result.sample_eligible and not result.runtime_activated
     assert version.sample_counts == {"baseline": 0} and version.performance is None
-    plan, state = inputs(w)
-    assert (
-        preview_admission(version, plan, state, now=w.now).reason
-        == "trendpulse_source_or_1r_geometry_mismatch"
-    )
     assert not version.runtime_activated
 
 

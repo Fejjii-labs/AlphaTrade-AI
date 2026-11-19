@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -130,17 +130,3 @@ def estimate_placeholder_cost(
     if estimated is not None:
         return estimated
     return Decimal("0")
-
-
-def rates_metadata(model: str | None) -> dict[str, Any] | None:
-    name = (model or "").strip()
-    rates = MODEL_COST_TABLE.get(name)
-    if rates is None:
-        return None
-    return {
-        "source": rates.source,
-        "checked_date": rates.checked_date,
-        "input_usd_per_million": str(rates.input_usd_per_million),
-        "cached_input_usd_per_million": str(rates.cached_input_usd_per_million),
-        "output_usd_per_million": str(rates.output_usd_per_million),
-    }

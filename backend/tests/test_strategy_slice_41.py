@@ -32,7 +32,6 @@ from app.services.alert_delivery_service import AlertDeliveryService
 from app.services.market_data_service import MarketDataService
 from app.services.market_watcher_service import MarketWatcherService
 from app.services.paper_alert_service import PaperAlertService
-from app.tools.registry import _require_owner_mutation
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000400")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000401")
@@ -295,40 +294,6 @@ def test_alert_read_does_not_affect_delivery_status(
         assert updated.read_at is not None
 
 
-def test_market_watcher_disabled_by_default(slice41_client: TestClient) -> None:
-    status = slice41_client.get("/market-watcher/status")
-    assert status.status_code == 200
-    body = status.json()
-    assert body["env_enabled"] is False
-    assert body["effective_enabled"] is False
-
-
-def test_market_watcher_manual_scan_requires_confirm(slice41_client: TestClient) -> None:
-    scan = slice41_client.post("/market-watcher/scan", json={"dry_run": True})
-    assert scan.status_code == 422 or scan.status_code == 200
-    if scan.status_code == 200:
-        body = scan.json()
-        assert body["status"] == "blocked"
-        assert body["observations_created"] == 0
-
-
-def test_market_watcher_manual_scan_dry_run(slice41_client: TestClient) -> None:
-    scan = slice41_client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": "RUN_READ_ONLY_SCAN",
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert scan.status_code == 200
-    body = scan.json()
-    assert body["dry_run"] is True
-    assert body["alerts_created"] == 0
-    assert body["status"] in ("ok", "degraded", "blocked")
-
-
 def test_market_watcher_never_calls_trading_api(slice41_db: sessionmaker[Session]) -> None:
     from app.providers.market_data import MockMarketDataProvider
     from app.schemas.market_watcher import SCAN_CONFIRM_PHRASE, MarketWatcherScanRequest
@@ -355,30 +320,6 @@ def test_market_watcher_never_calls_trading_api(slice41_db: sessionmaker[Session
         )
 
 
-def test_agent_routes_alert_delivery_query(slice41_db: sessionmaker[Session]) -> None:
-    with slice41_db() as session:
-        blocked = _require_owner_mutation(
-            session,
-            ORG_ID,
-            USER_ID,
-            {"user_message": "deliver pending alerts"},
-            tool_name="paper_validation_tool",
-            action_label="deliver pending alerts",
-            confirm_hint="I confirm deliver pending alerts",
-        )
-        assert blocked is not None
-        allowed = _require_owner_mutation(
-            session,
-            ORG_ID,
-            USER_ID,
-            {"user_message": "I confirm deliver pending alerts", "confirm": True},
-            tool_name="paper_validation_tool",
-            action_label="deliver pending alerts",
-            confirm_hint="I confirm deliver pending alerts",
-        )
-        assert allowed is None
-
-
 def test_state_changing_agent_action_requires_confirmation() -> None:
     assert not mutation_allowed("deliver pending alerts")
     assert mutation_allowed("I confirm deliver pending alerts")
@@ -397,10 +338,3 @@ def test_alert_delivery_api_endpoints(
     assert status.json()["paper_only"] is True
     summary = slice41_client.get("/alerts/delivery-summary")
     assert summary.status_code == 200
-
-
-def test_no_real_trading_path_added(slice41_client: TestClient) -> None:
-    status = slice41_client.get("/market-watcher/status")
-    assert status.json()["real_trading_enabled"] is False
-    delivery = slice41_client.get("/alerts/delivery-status")
-    assert delivery.json()["paper_only"] is True

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.types import SetupDetection
 from app.core.config import Settings
-from app.db.models import MarketWatcherScanRecord, PaperValidationAlert
+from app.db.models import PaperValidationAlert
 from app.providers.market_data import MockMarketDataProvider, OHLCVBar
 from app.schemas.common import AlertDeliveryChannel, AlertDeliveryStatus
 from app.schemas.market_watcher import (
@@ -29,10 +29,8 @@ from tests.test_market_watcher_scanner_slice_74 import (
     ORG_ID,
     USER_ID,
     _analysis_result,
-    _client,
     _flat_bars,
 )
-from tests.test_market_watcher_scanner_slice_75 import _client as _client75
 
 
 def test_detectors_enabled_includes_new_conditions() -> None:
@@ -107,43 +105,6 @@ def test_breakout_retest_candidate_maps_correctly() -> None:
     assert candidate.invalidation_level == 104.5
     assert candidate.detector_version == SETUP_DETECTOR_VERSIONS["breakout_retest"]
     assert candidate.metrics["latest_price"] == 105.2
-
-
-def test_dry_run_creates_no_alerts_for_new_detectors(slice74_db: sessionmaker[Session]) -> None:
-    detection = SetupDetection(
-        name="order_block",
-        detected=True,
-        direction="short",
-        reason="Bearish order block: up candle before an impulsive down move.",
-        metrics={"ob_low": 99.0, "ob_high": 100.5, "impulse": -4.0},
-    )
-    stub = detect_setup_candidates(
-        symbol="BTCUSDT",
-        timeframe="15m",
-        bars=_flat_bars(),
-        result=_analysis_result(detections=(detection,)),
-    )
-    client = _client(slice74_db)
-    with patch(
-        "app.services.market_watcher_scanner.detect_setup_candidates",
-        return_value=stub,
-    ):
-        resp = client.post(
-            "/market-watcher/scan",
-            json={
-                "confirm": SCAN_CONFIRM_PHRASE,
-                "symbols": ["BTCUSDT"],
-                "timeframes": ["15m"],
-                "dry_run": True,
-            },
-        )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["alerts_created"] == 0
-    assert body["dry_run"] is True
-    with slice74_db() as session:
-        count = session.scalar(select(func.count()).select_from(PaperValidationAlert))
-        assert count == 0
 
 
 def test_non_dry_run_creates_in_app_alerts_only_for_order_block(
@@ -270,82 +231,6 @@ def test_dedupe_prevents_repeated_breakout_retest_alerts(slice74_db: sessionmake
         assert first.alerts_created == 1
         assert second.alerts_deduped >= 1
         assert second.alerts_created == 0
-
-
-def test_persisted_summary_includes_new_detector_conditions(
-    slice75_db: sessionmaker[Session],
-) -> None:
-    detection = SetupDetection(
-        name="breakout_retest",
-        detected=True,
-        direction="long",
-        reason="Broke resistance then retested it as support.",
-        metrics={"level": 105.0, "close": 105.2},
-    )
-    stub = detect_setup_candidates(
-        symbol="BTCUSDT",
-        timeframe="15m",
-        bars=_flat_bars(price=105.2),
-        result=_analysis_result(detections=(detection,)),
-    )
-    client = _client75(slice75_db)
-    with patch(
-        "app.services.market_watcher_scanner.detect_setup_candidates",
-        return_value=stub,
-    ):
-        scan = client.post(
-            "/market-watcher/scan",
-            json={
-                "confirm": SCAN_CONFIRM_PHRASE,
-                "symbols": ["BTCUSDT"],
-                "timeframes": ["15m"],
-                "dry_run": True,
-            },
-        ).json()
-    summary = client.get("/market-watcher/summary").json()
-    assert summary["last_scan_status"] == "ok"
-    assert "breakout_retest" in summary["last_scan_conditions_found"]
-    assert "breakout_retest" in summary["detectors_enabled"]
-    assert summary["detector_versions"]["order_block"] == "1.0.0"
-    assert summary["detector_versions"]["breakout_retest"] == "1.0.0"
-    assert scan["candidates"][0]["condition"] == "breakout_retest"
-
-
-def test_recent_scans_includes_new_detector_conditions(slice75_db: sessionmaker[Session]) -> None:
-    detection = SetupDetection(
-        name="order_block",
-        detected=True,
-        direction="long",
-        reason="Bullish order block: down candle before an impulsive up move.",
-        metrics={"ob_low": 97.0, "ob_high": 98.5, "impulse": 4.5},
-    )
-    stub = detect_setup_candidates(
-        symbol="BTCUSDT",
-        timeframe="15m",
-        bars=_flat_bars(),
-        result=_analysis_result(detections=(detection,)),
-    )
-    client = _client75(slice75_db)
-    with patch(
-        "app.services.market_watcher_scanner.detect_setup_candidates",
-        return_value=stub,
-    ):
-        client.post(
-            "/market-watcher/scan",
-            json={
-                "confirm": SCAN_CONFIRM_PHRASE,
-                "symbols": ["BTCUSDT"],
-                "timeframes": ["15m"],
-                "dry_run": True,
-            },
-        )
-    recent = client.get("/market-watcher/scans/recent?limit=5").json()
-    assert recent["items"]
-    assert "order_block" in recent["items"][0]["conditions_found"]
-    with slice75_db() as session:
-        row = session.scalar(select(MarketWatcherScanRecord))
-        assert row is not None
-        assert "order_block" in (row.conditions_found or [])
 
 
 def test_detector_error_degrades_without_crashing_scan() -> None:

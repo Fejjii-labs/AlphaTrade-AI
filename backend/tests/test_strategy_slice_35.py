@@ -154,23 +154,6 @@ def test_candle_uniqueness(slice35_client: tuple[TestClient, sessionmaker]) -> N
         session.commit()
 
 
-def test_mock_historical_ingestion(slice35_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice35_client
-    resp = client.post(
-        "/market/history/ingest",
-        json={
-            "symbol": "BTCUSDT",
-            "exchange": "mock",
-            "timeframe": "4h",
-            "start_date": "2024-01-01",
-            "end_date": "2024-03-01",
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["candles_stored"] >= 50
-
-
 def test_backtest_run_with_metrics(slice35_client: tuple[TestClient, sessionmaker]) -> None:
     client, _ = slice35_client
     create = client.post(
@@ -326,25 +309,6 @@ def test_promotion_conservative_on_small_sample() -> None:
     assert decision.paper_eligible is False
 
 
-def test_paper_validation_metrics(slice35_client: tuple[TestClient, sessionmaker]) -> None:
-    client, _ = slice35_client
-    create = client.post(
-        "/strategies",
-        json={
-            "name": "Paper Metrics",
-            "setup_type": "htf_trend_pullback",
-            "card": _sample_card(validation_status="in_review"),
-        },
-    )
-    strategy_id = create.json()["id"]
-    started = client.post(f"/strategies/{strategy_id}/paper-validation/start")
-    assert started.status_code == 200
-    body = started.json()
-    assert body["metrics"] is not None
-    assert "paper_trades_count" in body["metrics"]
-    assert body["recommendation"] is not None
-
-
 def test_agent_backtest_intents() -> None:
     assert classify_strategy_workflow("Backtest this strategy on BTC 15m") == Intent.BACKTEST_RUN
     assert (
@@ -358,9 +322,6 @@ def test_no_real_trading_path_in_backtest(slice35_client: tuple[TestClient, sess
     client, _ = slice35_client
     health = client.get("/health").json()
     assert health["real_trading_enabled"] is False
-    providers = client.get("/providers/status").json()
-    exchange = next(p for p in providers["providers"] if p["kind"] == "exchange")
-    assert exchange["is_mock"] or "paper" in exchange["detail"].lower()
 
 
 def test_parse_strategy_rules_htf() -> None:

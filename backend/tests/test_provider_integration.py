@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.agents.runtime import AgentRuntime
 from app.core.config import Settings, get_settings
@@ -44,11 +43,11 @@ def test_openai_llm_fallback_when_no_key() -> None:
     assert result.provider == "mock-llm"
 
 
-def test_llm_provider_status_without_key(client: TestClient) -> None:
-    response = client.get("/providers/status")
-    llm = next(p for p in response.json()["providers"] if p["kind"] == "llm")
-    assert llm["name"] == "mock-llm"
-    assert llm["is_mock"] is True
+def test_llm_provider_status_without_key() -> None:
+    registry = build_default_registry(Settings(provider_mode="mock", log_json=False))
+    llm = next(p for p in registry.statuses() if p.kind.value == "llm")
+    assert llm.name == "mock-llm"
+    assert llm.is_mock is True
 
 
 def test_embeddings_fallback_when_no_key() -> None:
@@ -119,13 +118,12 @@ def test_agent_response_includes_analysis_schema() -> None:
     assert response.analysis.market_data_quality == "mock"
 
 
-def test_provider_status_shows_fallback_modes(client: TestClient) -> None:
-    body = client.get("/providers/status").json()
-    kinds = {p["kind"] for p in body["providers"]}
-    assert {"llm", "embeddings", "vector", "exchange"}.issubset(kinds)
-    exchange = next(p for p in body["providers"] if p["kind"] == "exchange")
-    assert exchange["is_mock"] is True
-    assert "real trading disabled" in (exchange.get("detail") or "").lower()
+def test_registry_shows_fallback_modes() -> None:
+    statuses = build_default_registry(Settings(provider_mode="mock", log_json=False)).statuses()
+    assert {"llm", "embeddings", "vector", "exchange"} <= {p.kind.value for p in statuses}
+    exchange = next(p for p in statuses if p.kind.value == "exchange")
+    assert exchange.is_mock is True
+    assert "real trading disabled" in (exchange.detail or "").lower()
 
 
 def test_usage_metadata_from_mock_llm_provider() -> None:

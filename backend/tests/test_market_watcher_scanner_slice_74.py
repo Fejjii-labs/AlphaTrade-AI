@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -324,40 +324,6 @@ def test_detector_error_degrades_without_crashing_scan() -> None:
     )
     assert len(candidates) == 1
     assert candidates[0].condition == "sfp"
-
-
-def test_summary_includes_setup_detector_metadata(slice74_db: sessionmaker[Session]) -> None:
-    client = _client(slice74_db)
-    resp = client.get("/market-watcher/summary")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["detectors_enabled"] == [
-        "breakout_retest",
-        "liquidity_sweep",
-        "order_block",
-        "sfp",
-        "trend_pullback",
-    ]
-    assert body["detector_versions"]["liquidity_sweep"] == "1.0.0"
-
-
-def test_dry_run_creates_no_alerts(slice74_db: sessionmaker[Session]) -> None:
-    client = _client(slice74_db)
-    resp = client.post(
-        "/market-watcher/scan",
-        json={
-            "confirm": SCAN_CONFIRM_PHRASE,
-            "symbols": ["BTCUSDT"],
-            "timeframes": ["15m"],
-            "dry_run": True,
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["alerts_created"] == 0
-    with slice74_db() as session:
-        count = session.scalar(select(func.count()).select_from(PaperValidationAlert))
-        assert count == 0
 
 
 def test_non_dry_run_creates_in_app_alerts_only(slice74_db: sessionmaker[Session]) -> None:

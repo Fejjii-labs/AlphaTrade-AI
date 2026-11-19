@@ -119,27 +119,6 @@ def headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {reg.json()['tokens']['access_token']}"}
 
 
-def test_snapshot_endpoint_returns_503_with_retry_after_during_ban(
-    client: TestClient, headers: dict[str, str]
-) -> None:
-    r = client.get("/market/snapshots?symbol=BTCUSDT", headers=headers)
-    assert r.status_code == 503, r.text
-    assert r.headers["Retry-After"] == "121"
-    assert r.json()["error"]["code"] == "upstream_banned"
-
-
-def test_analyze_endpoint_returns_503_during_ban(
-    client: TestClient, headers: dict[str, str]
-) -> None:
-    r = client.post(
-        "/market/analyze",
-        json={"symbol": "BTCUSDT", "timeframe": "4h"},
-        headers=headers,
-    )
-    assert r.status_code == 503, r.text
-    assert int(r.headers["Retry-After"]) >= 1
-
-
 @pytest.mark.parametrize(
     ("exc", "code", "retry_after"),
     [

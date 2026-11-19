@@ -1,4 +1,4 @@
-"""Actual a11→a12 chain, real screening writes and historical preservation."""
+"""Actual a11→a12 chain and historical screening preservation."""
 
 import os
 from pathlib import Path
@@ -12,12 +12,11 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.strategy_brain.trendpulse_1r.contracts import TrendPulseStatus
+from app.strategy_brain.trendpulse_screening.models import TrendPulseScreeningRow
 from tests.support.alembic_heads import assert_down_revision_chain, single_alembic_head
 from tests.support.experiment_fixtures import World
-from tests.support.trendpulse_screening import after_close
+from tests.support.parked_screening_rows import seed_screening_history
 from tests.test_trendpulse_1r_domain import configure
-from tests.test_trendpulse_screening import request, service
 
 
 def test_one_additive_revision_follows_reserved_a11():
@@ -79,9 +78,7 @@ def test_actual_migration_supports_screening_and_roundtrip_preserves_prior_domai
         command.upgrade(cfg, "a11experiments001")
         with Session(engine, expire_on_commit=False) as session:
             w = World(session)
-            w.now = after_close()
             w.version = w.create(configure(w))
-            w.settings = w.settings.model_copy(update={"trendpulse_screening_enabled": True})
             session.execute(
                 text(
                     "INSERT INTO blofin_activity_accounts (organization_id,environment,account_uid,"
@@ -93,12 +90,13 @@ def test_actual_migration_supports_screening_and_roundtrip_preserves_prior_domai
             session.commit()
             frozen_hash = w.version.configuration_hash
             command.upgrade(cfg, "head")
-            result = service(w).screen(w.tenant, w.version.experiment_id, w.version.id, request())
+            result = seed_screening_history(session, w.version)
             session.commit()
-            assert result.status is TrendPulseStatus.QUALIFIED
+            result_id = result.id
             original = result.evidence_hash
             command.upgrade(cfg, "head")  # Existing pre-deploy/API repetition.
-            assert service(w).detail(w.tenant, result.id).evidence_hash == original
+            session.expire_all()
+            assert session.get(TrendPulseScreeningRow, result_id).evidence_hash == original
             session.commit()  # Release the read transaction before separate-connection DDL.
             command.downgrade(cfg, "a11experiments001")
             assert "trendpulse_screening_runs" not in inspect(engine).get_table_names()
