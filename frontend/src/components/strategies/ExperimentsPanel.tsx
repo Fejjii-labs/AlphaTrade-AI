@@ -6,7 +6,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { experiments, experimentDetail, experimentTransition } from "@/lib/api/generated/client";
-import { ScreeningsPanel } from "./ScreeningsPanel";
 import { ApiError } from "@/lib/api/client";
 import { onSessionCleared, sessionGeneration } from "@/lib/auth/session-events";
 import {
@@ -177,7 +176,6 @@ function ExperimentDetails({ id, onBack, onChange }: { id: string; onBack: () =>
               <p className="text-xs text-text-muted">{version.configuration.account.source === "blofin_demo" ? "BloFin demo" : "Internal simulation"} samples remain separate. No portfolio return is inferred.</p>
             </div>
           </div>
-          {version.configuration.family === "trendpulse_1r/v1" ? <ScreeningsPanel key={version.id} version={version} /> : null}
           <details className="rounded-card border border-border-subtle p-4">
             <summary className="min-h-11 cursor-pointer font-semibold">Configuration &amp; evidence</summary>
             <div className="space-y-3 pt-3 text-sm">
