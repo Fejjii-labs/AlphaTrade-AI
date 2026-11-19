@@ -48,20 +48,16 @@ export const DIAGNOSTICS_GROUPS: readonly DiagnosticsGroup[] = [
 export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/", kind: "primary", label: "Dashboard" },
   { path: "/agent", kind: "primary", label: "Agent" },
-  { path: "/journal", kind: "primary", label: "Journal" },
-  { path: "/knowledge", kind: "primary", label: "Knowledge" },
+  { path: "/journal", kind: "primary", label: "Trades" },
   { path: "/strategies", kind: "primary", label: "Strategies" },
   { path: "/settings", kind: "primary", label: "Settings" },
-  { path: "/autonomous", kind: "primary", label: "Autonomous" },
+  { path: "/autonomous", kind: "primary", label: "Bot" },
 
-  { path: "/settings/billing", kind: "section", label: "Billing & Usage" },
-  { path: "/settings/team", kind: "section", label: "Team" },
-  { path: "/settings/exchange", kind: "section", label: "Exchange status" },
-  { path: "/settings/help", kind: "section", label: "Help" },
+  // Knowledge belongs to the Agent page.
+  { path: "/knowledge", kind: "section", label: "Knowledge" },
+  { path: "/settings/exchange", kind: "section", label: "Exchange" },
   { path: "/settings/alerts", kind: "section", label: "Alerts" },
-  { path: "/settings/notifications", kind: "section", label: "Notifications" },
-  { path: "/settings/watcher", kind: "section", label: "Watcher" },
-  { path: "/settings/diagnostics", kind: "section", label: "Diagnostics" },
+  { path: "/settings/watcher", kind: "section", label: "Markets" },
 
   { path: "/strategies/setups/[id]", kind: "deep-link", label: "Setup" },
   { path: "/strategy-lab/[id]", kind: "deep-link", label: "Strategy" },
@@ -114,15 +110,9 @@ export const ROUTE_REGISTRY: readonly RegisteredRoute[] = [
   { path: "/positions", kind: "diagnostics", label: "Positions", group: "Portfolio" },
   { path: "/workspace", kind: "diagnostics", label: "AI assist", group: "Portfolio" },
 
-  { path: "/settings/audit", kind: "diagnostics", label: "Audit", group: "System" },
-
   { path: "/dashboard", kind: "redirect", label: "Dashboard (old link)" },
   { path: "/coaching", kind: "redirect", label: "Coaching (old link)" },
   { path: "/journal/statistics", kind: "redirect", label: "Journal statistics (old link)" },
-  { path: "/audit", kind: "redirect", label: "Audit (old link)" },
-  { path: "/exchange", kind: "redirect", label: "Exchange (old link)" },
-  { path: "/invitations", kind: "redirect", label: "Invitations (old link)" },
-  { path: "/settings/advanced", kind: "redirect", label: "Advanced (old link)" },
   { path: "/risk", kind: "redirect", label: "Risk settings (old link)" },
   { path: "/risk/autonomous", kind: "redirect", label: "Autonomous settings (old link)" },
   // /watchlist and /strategies/detections have no page file any more; their

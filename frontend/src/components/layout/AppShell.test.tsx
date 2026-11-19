@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/layout/AppShell";
-import { PRIMARY_DESTINATIONS } from "@/components/layout/navigation-config";
+import { ALL_DESTINATIONS } from "@/components/layout/navigation-config";
 
 const posture = {
   executionMode: "paper" as string | null,
@@ -69,12 +69,12 @@ describe("AT-040 Phase B AppShell", () => {
   beforeEach(() => {
     posture.executionMode = "paper";
     posture.realTradingEnabled = false;
-    navigationState.pathname = "/tradingview-signals";
+    navigationState.pathname = "/execution/manual-demo/cmd-1";
   });
 
   afterEach(() => cleanup());
 
-  it("renders seven desktop primary destinations and highlights Settings on retained routes", () => {
+  it("renders five desktop pages plus the Settings gear and highlights Settings on its detail routes", () => {
     render(
       <AppShell>
         <div>Page</div>
@@ -82,8 +82,8 @@ describe("AT-040 Phase B AppShell", () => {
     );
     const sidebar = screen.getByTestId("desktop-sidebar");
     const links = within(sidebar).getAllByRole("link");
-    expect(links).toHaveLength(7);
-    for (const destination of PRIMARY_DESTINATIONS) {
+    expect(links).toHaveLength(6);
+    for (const destination of ALL_DESTINATIONS) {
       expect(
         within(sidebar).getByRole("link", { name: destination.ariaLabel }),
       ).toHaveAttribute("href", destination.href);
@@ -93,7 +93,7 @@ describe("AT-040 Phase B AppShell", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders four phone tabs plus More, with Autonomous, Knowledge and Settings in its sheet", () => {
+  it("renders four phone tabs plus More, with Agent and Settings in its sheet", () => {
     render(
       <AppShell>
         <div>Page</div>
@@ -108,10 +108,10 @@ describe("AT-040 Phase B AppShell", () => {
       ["Dashboard", "/"],
       ["Trades", "/journal"],
       ["Strategies", "/strategies"],
-      ["Agent", "/agent"],
+      ["Bot", "/autonomous"],
     ]);
     const more = within(bottom).getByRole("button", { name: "More" });
-    // /tradingview-signals belongs to Settings, which sits behind More.
+    // The manual demo detail belongs to Settings, which sits behind More.
     expect(more).toHaveAttribute("data-active", "true");
     expect(bottom.querySelectorAll('[aria-current="page"]')).toHaveLength(0);
     fireEvent.click(more);
@@ -121,16 +121,15 @@ describe("AT-040 Phase B AppShell", () => {
         .getAllByRole("link")
         .map((link) => [link.textContent, link.getAttribute("href")]),
     ).toEqual([
-      ["Autonomous", "/autonomous"],
-      ["Knowledge", "/knowledge"],
+      ["Agent", "/agent"],
       ["Settings", "/settings"],
     ]);
     expect(within(sheet).getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByTestId("mobile-menu-button")).not.toBeInTheDocument();
   });
 
-  it.each(["/knowledge", "/lessons/lesson-42"])(
-    "selects Knowledge on %s in the sidebar and marks More on the phone",
+  it.each(["/agent", "/knowledge"])(
+    "selects Agent on %s in the sidebar and marks More on the phone",
     (pathname) => {
       navigationState.pathname = pathname;
       render(
@@ -139,11 +138,11 @@ describe("AT-040 Phase B AppShell", () => {
         </AppShell>,
       );
       const sidebar = screen.getByTestId("desktop-sidebar");
-      expect(within(sidebar).getByRole("link", { name: "Knowledge" })).toHaveAttribute("aria-current", "page");
+      expect(within(sidebar).getByRole("link", { name: "Agent" })).toHaveAttribute("aria-current", "page");
+      expect(within(sidebar).getByRole("link", { name: "Agent" })).toHaveAttribute("data-primary-workspace", "true");
       expect(sidebar.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
       const bottom = screen.getByTestId("mobile-bottom-navigation");
       expect(within(bottom).getByRole("button", { name: "More" })).toHaveAttribute("data-active", "true");
-      expect(within(bottom).getByRole("link", { name: "Agent" })).toHaveAttribute("data-primary-workspace", "true");
       expect(screen.queryByTestId("secondary-navigation")).not.toBeInTheDocument();
     },
   );
@@ -160,20 +159,19 @@ describe("AT-040 Phase B AppShell", () => {
     expect(within(bottom).getByRole("button", { name: "More" })).not.toHaveAttribute("data-active");
   });
 
-  it("opens the command menu from the phone status menu", () => {
+  it("opens the command menu from the avatar menu", () => {
     render(
       <AppShell>
         <div>Page</div>
       </AppShell>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Search pages and destinations" }),
     );
     expect(screen.getByTestId("command-menu")).toBeInTheDocument();
-    expect(
-      screen.getByRole("option", { name: /Strategy Lab/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Bot/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Strategy Lab/i })).not.toBeInTheDocument();
   });
 
   it("omits a redundant Settings secondary tab on its parent page", () => {
@@ -186,7 +184,7 @@ describe("AT-040 Phase B AppShell", () => {
     expect(screen.queryByTestId("secondary-navigation")).not.toBeInTheDocument();
   });
 
-  it("keeps diagnostic navigation contextual on operational routes", () => {
+  it("offers a way back to Settings on the manual demo detail", () => {
     render(
       <AppShell>
         <div>Page</div>
@@ -272,11 +270,11 @@ describe("AT-040 Phase B AppShell", () => {
       .filter((name) => /menu/i.test(name));
     expect(names.length).toBeGreaterThan(0);
     expect(new Set(names).size).toBe(names.length);
-    expect(screen.getByRole("button", { name: "Status" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Account menu" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Search pages and destinations" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     expect(
       screen.getByRole("button", { name: "Search pages and destinations" }),
     ).toBeInTheDocument();

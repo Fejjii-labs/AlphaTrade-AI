@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { BookOpen, Bot, Cpu, Layers, LayoutDashboard, Library, Settings } from "lucide-react";
+import { BookOpen, Bot, Cpu, Layers, LayoutDashboard, Settings } from "lucide-react";
 
 import {
   ADVANCED_ROUTES,
@@ -12,11 +12,10 @@ import {
 
 export type DestinationId =
   | "dashboard"
-  | "autonomous"
-  | "strategies"
   | "journal"
+  | "strategies"
+  | "autonomous"
   | "agent"
-  | "knowledge"
   | "settings";
 
 export type NavLink = {
@@ -40,37 +39,49 @@ export type SecondaryNavGroup = {
   items: readonly NavLink[];
 };
 
-/** Seven trader destinations (UI overhaul B6). Specialized routes stay under Settings → Diagnostics. */
+/** The five trader pages, in sidebar order. Settings sits apart as a gear. */
 export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
   { id: "dashboard", label: "Dashboard", href: "/", icon: LayoutDashboard, ariaLabel: "Dashboard" },
-  { id: "autonomous", label: "Autonomous", href: "/autonomous", icon: Cpu, ariaLabel: "Autonomous" },
-  { id: "strategies", label: "Strategies", href: "/strategies", icon: Layers, ariaLabel: "Strategies" },
   { id: "journal", label: "Trades", href: "/journal", icon: BookOpen, ariaLabel: "Trades" },
+  { id: "strategies", label: "Strategies", href: "/strategies", icon: Layers, ariaLabel: "Strategies" },
+  { id: "autonomous", label: "Bot", href: "/autonomous", icon: Cpu, ariaLabel: "Bot" },
   { id: "agent", label: "Agent", href: "/agent", icon: Bot, ariaLabel: "Agent" },
-  { id: "knowledge", label: "Knowledge", href: "/knowledge", icon: Library, ariaLabel: "Knowledge" },
-  { id: "settings", label: "Settings", href: "/settings", icon: Settings, ariaLabel: "Settings" },
 ] as const;
+
+/** Settings, shown as a gear at the bottom of the sidebar. */
+export const SETTINGS_DESTINATION: PrimaryDestination = {
+  id: "settings",
+  label: "Settings",
+  href: "/settings",
+  icon: Settings,
+  ariaLabel: "Settings",
+};
+
+/** Every destination: the five pages, then Settings. */
+export const ALL_DESTINATIONS: readonly PrimaryDestination[] = [
+  ...PRIMARY_DESTINATIONS,
+  SETTINGS_DESTINATION,
+];
 
 /** Phone tab bar: four destinations, then More. */
 export const MOBILE_BOTTOM_DESTINATION_IDS: readonly DestinationId[] = [
   "dashboard",
   "journal",
   "strategies",
-  "agent",
+  "autonomous",
 ] as const;
 
 /** Destinations behind the phone More sheet. */
 export const MOBILE_MORE_DESTINATION_IDS: readonly DestinationId[] = [
-  "autonomous",
-  "knowledge",
+  "agent",
   "settings",
 ] as const;
 
 const JOURNAL_PREFIXES = ["/journal", "/learning-analytics", "/coaching"] as const;
-const KNOWLEDGE_PREFIXES = ["/knowledge", "/lessons"] as const;
 const AUTONOMOUS_PREFIXES = ["/autonomous", "/risk"] as const;
 const STRATEGY_PREFIXES = ["/strategies", "/strategy-lab"] as const;
-const AGENT_PREFIXES = ["/agent"] as const;
+// Knowledge is part of the Agent page.
+const AGENT_PREFIXES = ["/agent", "/knowledge", "/lessons"] as const;
 
 export const SECONDARY_NAV: readonly SecondaryNavGroup[] = [
   {
@@ -87,10 +98,6 @@ const DESTINATION_MATCHERS: readonly {
   {
     id: "journal",
     match: (pathname) => matchesAnyPrefix(pathname, JOURNAL_PREFIXES),
-  },
-  {
-    id: "knowledge",
-    match: (pathname) => matchesAnyPrefix(pathname, KNOWLEDGE_PREFIXES),
   },
   {
     id: "autonomous",
@@ -122,7 +129,7 @@ export function getDestinationId(pathname: string): DestinationId | null {
 }
 
 export function getPrimaryDestination(id: DestinationId): PrimaryDestination {
-  const found = PRIMARY_DESTINATIONS.find(
+  const found = ALL_DESTINATIONS.find(
     (destination) => destination.id === id,
   );
   if (!found) {
@@ -240,7 +247,7 @@ export function resolvePageIdentity(pathname: string): PageIdentity {
 /** Flat reachability map used by tests — every retained capability path. */
 export function listReachableHrefs(): string[] {
   const hrefs = new Set<string>();
-  for (const destination of PRIMARY_DESTINATIONS) {
+  for (const destination of ALL_DESTINATIONS) {
     hrefs.add(destination.href);
   }
   for (const group of SECONDARY_NAV) {

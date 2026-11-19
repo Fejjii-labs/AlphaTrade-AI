@@ -14,14 +14,20 @@ export type PhaseBRedirect = {
 };
 
 export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
-  { source: "/billing", destination: "/settings/billing", permanent: false },
-  // Billing & Usage share one canonical Settings route.
-  { source: "/usage", destination: "/settings/billing#usage", permanent: false },
-  { source: "/settings/usage", destination: "/settings/billing#usage", permanent: false },
-  { source: "/invitations", destination: "/settings/team", permanent: false },
-  { source: "/audit", destination: "/settings/audit", permanent: false },
+  // Settings has four tabs: Account, Exchange, Alerts, Markets. Removed tabs land on Account.
+  { source: "/billing", destination: "/settings", permanent: false },
+  { source: "/usage", destination: "/settings", permanent: false },
+  { source: "/settings/usage", destination: "/settings", permanent: false },
+  { source: "/settings/billing", destination: "/settings", permanent: false },
+  { source: "/invitations", destination: "/settings", permanent: false },
+  { source: "/settings/team", destination: "/settings", permanent: false },
+  { source: "/audit", destination: "/settings", permanent: false },
+  { source: "/settings/audit", destination: "/settings", permanent: false },
+  { source: "/settings/diagnostics", destination: "/settings", permanent: false },
+  { source: "/settings/advanced", destination: "/settings", permanent: false },
+  { source: "/settings/help", destination: "/settings", permanent: false },
+  { source: "/settings/notifications", destination: "/settings/alerts", permanent: false },
   { source: "/exchange", destination: "/settings/exchange", permanent: false },
-  { source: "/settings/advanced", destination: "/settings/diagnostics", permanent: false },
   // Account and bot limits share one form on Autonomous Trading; the kill switch moved there from /watchlist.
   { source: "/risk", destination: "/autonomous#limits", permanent: false },
   { source: "/risk/autonomous", destination: "/autonomous#limits", permanent: false },
@@ -39,25 +45,16 @@ export const PHASE_B_REDIRECTS: readonly PhaseBRedirect[] = [
   { source: "/strategy-lab/:id/edit", destination: "/agent?strategy_id=:id", permanent: false },
 ] as const;
 
-/** Capability paths that must remain reachable after Phase B (for tests). */
+/** Pages that must stay reachable from navigation (for tests). */
 export const PHASE_B_CAPABILITY_PATHS: readonly string[] = [
   "/",
-  "/tradingview-signals",
-  "/paper-validation",
-  "/paper-validation/candidates",
-  "/paper-validation/drafts",
-  "/paper-validation/run-plans",
-  "/paper-validation/run-sessions",
-  "/paper-signal-orchestration",
   "/journal",
-  "/journal/comparison",
-  "/backtests/example-id",
-  "/portfolio",
-  "/settings",
-  "/settings/billing",
+  "/strategies",
   "/autonomous",
-  "/workspace",
-  "/decision",
-  "/proposals",
-  "/approvals",
+  "/agent",
+  "/knowledge",
+  "/settings",
+  "/settings/exchange",
+  "/settings/alerts",
+  "/settings/watcher",
 ] as const;

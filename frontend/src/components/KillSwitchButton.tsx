@@ -78,14 +78,13 @@ export function KillSwitchButton({ compact = false }: { compact?: boolean }) {
         aria-pressed={killSwitchActive}
         aria-haspopup="dialog"
         aria-expanded={confirmOpen}
-        title="Organization kill switch (owner only to change)"
         data-testid="kill-switch-button"
       >
         <OctagonAlert className="h-4 w-4" aria-hidden="true" />
         {killSwitchBusy
           ? "Updating…"
           : killSwitchActive
-            ? "Review pause"
+            ? "Paused"
             : "Pause"}
       </Button>
 
@@ -118,10 +117,9 @@ export function KillSwitchButton({ compact = false }: { compact?: boolean }) {
                     id={`${dialogId}-description`}
                     className="mt-2 text-sm text-text-secondary"
                   >
-                    This is a server-side control. While active, new paper
-                    execution is blocked for the whole organization. Read-only
-                    portfolio views remain available and real trading stays
-                    disabled either way.
+                    {nextActive
+                      ? "The bot stops opening new trades."
+                      : "The bot may open new trades again."}
                   </p>
                 </div>
 

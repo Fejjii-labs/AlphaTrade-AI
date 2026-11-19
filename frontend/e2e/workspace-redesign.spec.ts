@@ -493,8 +493,8 @@ for (const width of [1280, 390]) {
     await expect(page).toHaveURL(/\/strategies$/);
     await page.goto("/settings");
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("link")).toHaveCount(6);
-    await expect(sections.getByRole("link", { name: "Diagnostics" })).toBeVisible();
+    await expect(sections.getByRole("link")).toHaveCount(4);
+    await expect(sections.getByRole("link", { name: "Markets" })).toBeVisible();
     await screenshot("settings");
     await noOverflow();
     const otherWrites = writes.filter(

@@ -10,33 +10,23 @@ vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
 afterEach(cleanup);
 
 describe("Settings sub-nav", () => {
-  it("lists the seven sections in order", () => {
+  it("lists the four sections in order", () => {
     render(<SettingsLayout><p>Body</p></SettingsLayout>);
     const subNav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(subNav).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
       ["Account", "/settings"],
-      ["Exchange status", "/settings/exchange"],
+      ["Exchange", "/settings/exchange"],
       ["Alerts", "/settings/alerts"],
-      ["Notifications", "/settings/notifications"],
-      ["Watcher", "/settings/watcher"],
-      ["Diagnostics", "/settings/diagnostics"],
-      ["Help", "/settings/help"],
+      ["Markets", "/settings/watcher"],
     ]);
     expect(screen.getByText("Body")).toBeInTheDocument();
   });
 
   it.each([
     ["/settings", "Account"],
-    ["/settings/team", "Account"],
-    ["/settings/billing", "Account"],
-    ["/settings/exchange", "Exchange status"],
+    ["/settings/exchange", "Exchange"],
     ["/settings/alerts", "Alerts"],
-    ["/settings/notifications", "Notifications"],
-    ["/settings/watcher", "Watcher"],
-    ["/settings/diagnostics", "Diagnostics"],
-    ["/settings/advanced", "Diagnostics"],
-    ["/settings/audit", "Diagnostics"],
-    ["/settings/help", "Help"],
+    ["/settings/watcher", "Markets"],
   ])("marks exactly one section current on %s", (pathname, label) => {
     nav.pathname = pathname;
     render(<SettingsLayout><p>Body</p></SettingsLayout>);
@@ -56,6 +46,6 @@ describe("Settings sub-nav", () => {
   it("does not claim paths outside Settings", () => {
     expect(resolveSettingsSection("/settings-old")).toBeNull();
     expect(resolveSettingsSection("/strategies")).toBeNull();
-    expect(SETTINGS_SECTIONS).toHaveLength(7);
+    expect(SETTINGS_SECTIONS).toHaveLength(4);
   });
 });

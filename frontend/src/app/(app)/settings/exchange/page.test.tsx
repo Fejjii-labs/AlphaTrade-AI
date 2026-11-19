@@ -36,7 +36,7 @@ vi.mock("@/components/ExchangeDiagnosticsCard", () => ({
   ExchangeDiagnosticsCard: () => <div data-testid="exchange-diagnostics-card">Diagnostics</div>,
 }));
 
-describe("Settings exchange shim (FP2-129)", () => {
+describe("Settings > Exchange", () => {
   beforeEach(() => {
     asyncState = { data: null, loading: true, error: null };
   });
@@ -66,8 +66,8 @@ describe("Settings exchange shim (FP2-129)", () => {
       error: null,
     };
     render(<SettingsExchangePage />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/Exchange status/i);
-    expect(screen.getByText(/provisioned by the operator/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^Exchange$/);
+    expect(screen.queryByText(/provisioned by the operator/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("exchange-diagnostics-card")).toBeInTheDocument();
     expect(screen.getByTestId("blofin-sync-panel")).toBeInTheDocument();
   });

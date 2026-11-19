@@ -29,23 +29,19 @@ describe("CommandMenu keyboard interaction (FP2-202)", () => {
     expect(input).toHaveAttribute("aria-controls", listbox.id);
   });
 
-  it("shows the seven primary destinations first without duplicating Knowledge", () => {
+  it("lists the five pages and the four Settings tabs only", () => {
     const { options } = openMenu();
-    expect(
-      options()
-        .slice(0, 7)
-        .map((option) => option.getAttribute("href")),
-    ).toEqual(["/", "/autonomous", "/strategies", "/journal", "/agent", "/knowledge", "/settings"]);
-    expect(
-      options().filter(
-        (option) => option.getAttribute("href") === "/knowledge",
-      ),
-    ).toHaveLength(1);
-    expect(
-      options().some(
-        (option) => option.getAttribute("href") === "/strategy-lab",
-      ),
-    ).toBe(true);
+    expect(options().map((option) => option.getAttribute("href"))).toEqual([
+      "/",
+      "/journal",
+      "/strategies",
+      "/autonomous",
+      "/agent",
+      "/settings",
+      "/settings/exchange",
+      "/settings/alerts",
+      "/settings/watcher",
+    ]);
   });
 
   it("marks the first option active and tracks it with aria-activedescendant", () => {
@@ -98,7 +94,7 @@ describe("CommandMenu keyboard interaction (FP2-202)", () => {
   it("resets the active option to the first match when the query changes", () => {
     const { input, options } = openMenu();
     fireEvent.keyDown(input, { key: "End" });
-    fireEvent.change(input, { target: { value: "port" } });
+    fireEvent.change(input, { target: { value: "set" } });
 
     const matches = options();
     expect(matches.length).toBeGreaterThan(0);

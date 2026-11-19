@@ -106,7 +106,7 @@ async function installNotificationFixture(page: Page, supported = true) {
   // a real 401 would correctly clear the session and redirect to /login.
   await page.route(
     (url) =>
-      /\/(health|providers\/status|risk\/|market-watcher\/|strategies\/|watcher\/watchlist(?:\/status)?$|watcher\/assignments$|notifications\/filter-options$)/.test(
+      /\/(health|providers\/status|dashboard\/attention$|risk\/|market-watcher\/|strategies\/|watcher\/watchlist(?:\/status)?$|watcher\/assignments$|notifications\/filter-options$)/.test(
         url.pathname,
       ),
     (route) =>
@@ -119,7 +119,7 @@ async function installNotificationFixture(page: Page, supported = true) {
 }
 
 async function expectNotificationSession(page: Page) {
-  await expect(page).toHaveURL(/\/settings\/notifications$/);
+  await expect(page).toHaveURL(/\/settings\/alerts$/);
   const marker = (await page.context().cookies(page.url())).find(
     (cookie) => cookie.name === SESSION_MARKER_COOKIE,
   );
@@ -134,7 +134,7 @@ async function expectNotificationSession(page: Page) {
     await page.evaluate(() => sessionStorage.getItem("alphatrade_access_token")),
   ).toBe(FIXTURE_ACCESS_TOKEN);
   await expect(
-    page.getByRole("link", { name: "Notifications", exact: true }),
+    page.getByRole("link", { name: "Alerts", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 }
 
@@ -216,7 +216,7 @@ for (const viewport of [
       path: `test-results/notifications-v2-mobile-${viewport.width}.png`,
       fullPage: true,
     });
-    await page.getByRole("link", { name: "Watcher", exact: true }).click();
+    await page.getByRole("link", { name: "Markets", exact: true }).click();
     await expect(page).toHaveURL(/\/settings\/watcher$/);
     await expect(
       page.getByText("Watchlist configuration unavailable. Reload to try again."),

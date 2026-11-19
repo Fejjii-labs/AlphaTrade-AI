@@ -22,7 +22,6 @@ const ROUTES = [
   "/approvals",
   "/market",
   "/settings",
-  "/settings/billing",
   "/decision",
 ] as const;
 

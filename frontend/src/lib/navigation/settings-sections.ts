@@ -7,15 +7,12 @@ export type SettingsSection = {
   includes?: readonly string[];
 };
 
-/** The Settings sections, in sub-nav order (UI overhaul B2a). */
+/** The four Settings tabs, in sub-nav order. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  { href: "/settings", label: "Account", includes: ["/settings/team", "/settings/billing"] },
-  { href: "/settings/exchange", label: "Exchange status" },
+  { href: "/settings", label: "Account" },
+  { href: "/settings/exchange", label: "Exchange" },
   { href: "/settings/alerts", label: "Alerts" },
-  { href: "/settings/notifications", label: "Notifications" },
-  { href: "/settings/watcher", label: "Watcher" },
-  { href: "/settings/diagnostics", label: "Diagnostics", includes: ["/settings/advanced", "/settings/audit"] },
-  { href: "/settings/help", label: "Help" },
+  { href: "/settings/watcher", label: "Markets" },
 ];
 
 /** The section a Settings path belongs to, or null outside Settings. */
@@ -33,6 +30,6 @@ export function resolveSettingsSection(pathname: string): SettingsSection | null
 
 /** Old in-page anchors on `/settings`, forwarded to their own section. */
 export const SETTINGS_HASH_FORWARDS: Readonly<Record<string, string>> = {
-  notifications: "/settings/notifications",
+  notifications: "/settings/alerts",
   markets: "/settings/watcher",
 };

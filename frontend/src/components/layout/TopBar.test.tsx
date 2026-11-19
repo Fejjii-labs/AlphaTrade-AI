@@ -89,21 +89,20 @@ describe("Compact truthful header", () => {
     appState.providers = { providers: [] };
   });
   afterEach(cleanup);
-  it("has one mode label and describes only the global pause", () => {
+  it("shows the Demo badge, the Pause button and the avatar menu only", () => {
     renderTopBar();
     expect(
       screen.getByRole("status", { name: "Execution status" }),
-    ).toHaveTextContent("PAPER");
-    expect(
-      screen.getByRole("status", { name: "Execution status" }),
-    ).toHaveTextContent("No global pause");
+    ).toHaveTextContent(/^Demo$/);
+    expect(screen.queryByText("No global pause")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
     expect(screen.queryByTestId("status-strip")).not.toBeInTheDocument();
     expect(screen.queryByText("Execution ready")).not.toBeInTheDocument();
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+    expect(screen.getByTestId("header-account-menu")).toHaveAttribute(
       "data-open",
       "false",
     );
-    expect(screen.getByRole("button", { name: "Status" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Account menu" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
@@ -124,30 +123,29 @@ describe("Compact truthful header", () => {
       screen.getByRole("status", { name: "Execution status" }),
     ).not.toHaveTextContent(/^Paper/);
   });
-  it("keeps secondary diagnostics and account controls in the dropdown", () => {
+  it("keeps only search, the account and log out in the avatar menu", () => {
     appState.providers = null;
     renderTopBar();
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    expect(screen.getByTestId("header-account-menu")).toHaveAttribute(
       "data-open",
       "true",
     );
-    expect(screen.getByText("Providers unknown")).toBeVisible();
-    expect(
-      screen.getByText("Strategy and account gates still apply."),
-    ).toBeVisible();
+    for (const gone of [/Providers/, /Real trading/, /gates still apply/])
+      expect(screen.queryByText(gone)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).not.toBeInTheDocument();
     expect(screen.getByText("trader@example.com")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     expect(logout).toHaveBeenCalledOnce();
   });
   it("closes on Escape and restores keyboard focus", () => {
     renderTopBar();
-    const status = screen.getByRole("button", { name: "Status" });
+    const status = screen.getByRole("button", { name: "Account menu" });
     fireEvent.click(status);
     fireEvent.keyDown(screen.getByRole("button", { name: "Log out" }), {
       key: "Escape",
     });
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+    expect(screen.getByTestId("header-account-menu")).toHaveAttribute(
       "data-open",
       "false",
     );
@@ -159,19 +157,19 @@ describe("Compact truthful header", () => {
     expect(
       screen.queryByRole("button", { name: "Search pages and destinations" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     fireEvent.click(screen.getByRole("button", { name: "Search pages and destinations" }));
     expect(openSearch).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+    expect(screen.getByTestId("header-account-menu")).toHaveAttribute(
       "data-open",
       "false",
     );
   });
   it("dismisses the secondary menu on an outside pointer press", () => {
     renderTopBar();
-    fireEvent.click(screen.getByRole("button", { name: "Status" }));
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
     fireEvent.pointerDown(document.body);
-    expect(screen.getByTestId("header-status-menu")).toHaveAttribute(
+    expect(screen.getByTestId("header-account-menu")).toHaveAttribute(
       "data-open",
       "false",
     );

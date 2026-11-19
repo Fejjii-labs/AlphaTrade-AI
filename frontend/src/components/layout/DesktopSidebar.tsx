@@ -8,6 +8,8 @@ import { useEffect, useState } from "react";
 import {
   isPrimaryDestinationActive,
   PRIMARY_DESTINATIONS,
+  type PrimaryDestination,
+  SETTINGS_DESTINATION,
 } from "@/components/layout/navigation-config";
 import { IconButton } from "@/components/ui/icon-button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -91,44 +93,22 @@ export function DesktopSidebar({ onOpenCommandMenu }: DesktopSidebarProps) {
         aria-label="Primary destinations"
         className="flex-1 space-y-1 overflow-y-auto p-2"
       >
-        {PRIMARY_DESTINATIONS.map((destination) => {
-          const { href, label, icon: Icon, ariaLabel } = destination;
-          const active = isPrimaryDestinationActive(pathname, destination);
-          const link = (
-            <Link
-              href={href}
-              aria-label={ariaLabel}
-              aria-current={active ? "page" : undefined}
-              data-destination={destination.id}
-              data-primary-workspace={
-                destination.id === "agent" ? "true" : undefined
-              }
-              title={collapsed ? label : undefined}
-              className={cn(
-                "flex items-center rounded-control border text-sm font-medium transition-colors",
-                "border-transparent",
-                "min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
-                collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
-                active
-                  ? "border-l-2 border-accent bg-accent-muted text-accent"
-                  : "border-l-2 border-transparent text-text-secondary hover:bg-surface-1 hover:text-text-primary",
-              )}
-            >
-              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className={cn("truncate", collapsed && "sr-only")}>
-                {label}
-              </span>
-            </Link>
-          );
-          return (
-            <div key={destination.id}>
-              {collapsed ? <Tooltip content={label}>{link}</Tooltip> : link}
-            </div>
-          );
-        })}
+        {PRIMARY_DESTINATIONS.map((destination) => (
+          <SidebarLink
+            key={destination.id}
+            destination={destination}
+            active={isPrimaryDestinationActive(pathname, destination)}
+            collapsed={collapsed}
+          />
+        ))}
       </nav>
 
-      <div className="space-y-2 border-t border-border-subtle p-2">
+      <div className="space-y-1 border-t border-border-subtle p-2">
+        <SidebarLink
+          destination={SETTINGS_DESTINATION}
+          active={isPrimaryDestinationActive(pathname, SETTINGS_DESTINATION)}
+          collapsed={collapsed}
+        />
         {collapsed ? (
           <Tooltip content="Command menu">
             <button
@@ -167,6 +147,41 @@ export function DesktopSidebar({ onOpenCommandMenu }: DesktopSidebarProps) {
       </div>
     </aside>
   );
+}
+
+function SidebarLink({
+  destination,
+  active,
+  collapsed,
+}: {
+  destination: PrimaryDestination;
+  active: boolean;
+  collapsed: boolean;
+}) {
+  const { href, label, icon: Icon, ariaLabel } = destination;
+  const link = (
+    <Link
+      href={href}
+      aria-label={ariaLabel}
+      aria-current={active ? "page" : undefined}
+      data-destination={destination.id}
+      data-primary-workspace={destination.id === "agent" ? "true" : undefined}
+      title={collapsed ? label : undefined}
+      className={cn(
+        "flex items-center rounded-control border text-sm font-medium transition-colors",
+        "border-transparent",
+        "min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
+        collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
+        active
+          ? "border-l-2 border-accent bg-accent-muted text-accent"
+          : "border-l-2 border-transparent text-text-secondary hover:bg-surface-1 hover:text-text-primary",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span className={cn("truncate", collapsed && "sr-only")}>{label}</span>
+    </Link>
+  );
+  return <div>{collapsed ? <Tooltip content={label}>{link}</Tooltip> : link}</div>;
 }
 
 export { SIDEBAR_COLLAPSED_KEY };
