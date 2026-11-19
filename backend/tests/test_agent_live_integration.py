@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -21,14 +21,23 @@ from app.agent_voice.live_service import LiveSession, TranscriptFragment
 from app.agent_voice.service import shared_turn
 from app.api.routes.agent_voice import voice_config
 from app.core.config import Settings
-from app.db.models import ConversationMessage, Membership, OrganizationQuota, UsageEvent, User
+from app.db.models import (
+    AgentSavedEntry,
+    ConversationMessage,
+    Membership,
+    OrganizationQuota,
+    UsageEvent,
+    User,
+)
 from app.db.voice_realtime import VoiceSessionReservation
+from app.interactive_agent.contracts import PAYLOAD_KEY, RECORDED_EVIDENCE_LIMIT
 from app.providers.base import ProviderKind
 from app.providers.llm import LLMCompletionResult
 from app.schemas.common import MembershipRole
 from app.schemas.conversation import ConversationCreate
 from app.security.tokens import create_access_token
 from app.services.conversation_service import ConversationService
+from app.services.turn_coordinator import RESERVATION
 from tests.test_workflows import ORG_ID, USER_ID
 
 
@@ -926,3 +935,92 @@ async def test_user_fragments_do_not_clear_playback_unless_new_speech_follows_th
     await caption(session, "input", "u5", "Wait", 3500, 3600)
     assert len(clears()) == 2
     await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_large_saved_note_lookup_reaches_playback(live_ledger, monkeypatch):
+    ledger = live_ledger
+    with ledger.sessions() as database:
+        database.add_all(
+            AgentSavedEntry(
+                organization_id=ORG_ID,
+                user_id=USER_ID,
+                conversation_id=ledger.conversation_id,
+                category="rules",
+                title=f"BTC risk rule {index}: "
+                + "Risk guidelines for volatile trading conditions. " * 3,
+                summary=("Keep BTC position size small when price is volatile. " * 32)[:1600],
+                original_text="BTC risk rule",
+            )
+            for index in range(8)
+        )
+        database.commit()
+
+    class SyntheticLLM:
+        name, kind = "synthetic", ProviderKind.LLM
+
+        def complete(self, request):
+            return LLMCompletionResult(
+                content=(
+                    json.dumps({"entries": [], "clarification": None})
+                    if request.response_format
+                    else "Your saved BTC rules say to keep position sizes small."
+                ),
+                model=request.model,
+                provider=self.name,
+                input_tokens=100,
+                output_tokens=50,
+                fallback_used=False,
+            )
+
+    monkeypatch.setattr(
+        "app.agent_voice.service.resolve_providers", lambda _: SimpleNamespace(llm=SyntheticLLM())
+    )
+    monkeypatch.setattr("app.agent_voice.service.voice_llm", lambda provider, _settings: provider)
+    session, _, sent, upstream = live_session(ledger.limits, shared_turn)
+    session.ledger = ledger
+    session.start = session.start.model_copy(update={"conversation_id": ledger.conversation_id})
+    # The fixture has already activated the ledger for this provider.
+    session.ready = True
+    session.provider_id = "live_fixture"
+    await caption(session, "input", "u1", "What are my saved BTC risk rules?", 0, 900)
+    await caption(session, "output", "a1", "Checking that now.", 1000, 1200)
+    await delegate(session, sent, "lookup", 950)
+    result = next(event["result"] for event in sent if event["type"] == "turn.result")
+    assert "saved BTC rules say" in result["reply"]
+    assert "native_blofin_fills" in result["recorded_evidence"]
+    assert not any(event["type"] == "turn.uncertain" for event in sent)
+    commentary = [event for event in upstream if event["type"] == "session.commentary.append"]
+    assert commentary and all(event["delegation_id"] == "lookup" for event in commentary)
+    assert "saved BTC rules say" in "".join(event["content"] for event in commentary)
+
+    audio = base64.b64encode(bytes(48)).decode()
+    await session.provider({"type": "session.output_audio.delta", "delta": audio})
+    assert sent[-1] == {"type": "audio.delta", "audio": audio, "item_id": "live_fixture"}
+
+    pending = next(event for event in sent if event["type"] == "turn.pending")
+    evidence = result["recorded_evidence"]
+    # Verify the evidence is bounded on disk and an old oversized receipt still replays.
+    with ledger.sessions() as database:
+        assistant = database.get(ConversationMessage, UUID(result["assistant_message_id"]))
+        assert assistant.payload[PAYLOAD_KEY]["recorded_evidence"].strip() == evidence
+        reservation = database.scalars(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == ledger.conversation_id,
+                ConversationMessage.intent == RESERVATION,
+            )
+        ).one()
+        receipt = reservation.payload[RESERVATION]
+        assert len(receipt["response"]["recorded_evidence"]) == RECORDED_EVIDENCE_LIMIT
+        reservation.payload = {
+            **reservation.payload,
+            RESERVATION: {
+                **receipt,
+                "response": {
+                    **receipt["response"],
+                    "recorded_evidence": receipt["response"]["recorded_evidence"] + " extra",
+                },
+            },
+        }
+        database.commit()
+    assert shared_turn(ledger, pending["request_key"], pending["body"]) == result
