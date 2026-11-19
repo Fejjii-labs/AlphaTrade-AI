@@ -610,3 +610,41 @@ def test_cached_session_refreshes_locked_capacity_and_fill_projection(world, mon
     assert accounting.actual_notional == Decimal("199.999")
     assert accounting.actual_trade_count == reservation.converted_trade_slots == 1
     assert epoch.account_id == command.account_id and venue.post_count == 1
+
+
+def test_dispatched_unfilled_demo_entry_occupies_the_coin_until_terminal(world, monkeypatch):
+    """Griller B1: an unfilled demo entry has no journal yet but still holds the coin."""
+    from types import SimpleNamespace
+
+    from app.db.models import JournalTrade, TradePlanRevision
+    from app.services.autonomous_trading_guard import open_symbol_position_refusal
+    from tests.support.phase6_fusion import ORG_ID, USER_ID
+
+    loop, venue, command = open_owned(world, monkeypatch, behavior="unfilled")
+    world.session.commit()
+    assert (
+        world.session.scalar(
+            select(JournalTrade).where(JournalTrade.execution_lifecycle_id == command.id)
+        )
+        is None
+    )
+    own = world.session.get(TradePlanRevision, command.revision_id).candidate_id
+
+    def refusal(symbol="BTCUSDT", candidate_id=None):
+        target = SimpleNamespace(organization_id=ORG_ID, user_id=USER_ID, symbol=symbol)
+        return open_symbol_position_refusal(
+            world.session, target, candidate_id=candidate_id or uuid4()
+        )
+
+    # A second strategy's entry (either direction: the guard is per coin) is refused.
+    assert refusal() == "autonomous_symbol_position_open"
+    assert refusal("BTC-USDT") == "autonomous_symbol_position_open"
+    # The pending intent itself may replay; another coin is independent.
+    assert refusal(candidate_id=own) is None
+    assert refusal("ETHUSDT") is None
+    world.session.rollback()
+    # Once the venue proves the entry cancelled with no fill, the coin is free.
+    venue.terminal_unfilled = True
+    assert loop.reconcile_command(world.session, command_id=command.id) == "demo_cancelled_unfilled"
+    assert refusal() is None
+    assert venue.post_count == 1

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.schemas.execution_protocol import ExecutionReceiptState
 from app.services.autonomous_trading_settings_service import (
     APPROVED_LIFECYCLE_STATES,
     ResolvedAutonomousSettings,
@@ -16,6 +17,15 @@ from app.services.risk.daily_risk_accounting import AuthoritativeDailySnapshot
 from app.workers.watcher_paper_targets import PaperScanTarget
 
 SYMBOL_POSITION_OPEN = "autonomous_symbol_position_open"
+# An entry in one of these receipt states with nothing filled never opened a position.
+_ENDED_UNFILLED = (
+    ExecutionReceiptState.BLOCKED,
+    ExecutionReceiptState.BLOCKED_BEFORE_DISPATCH,
+    ExecutionReceiptState.REJECTED,
+    ExecutionReceiptState.EXPIRED,
+    ExecutionReceiptState.CANCELLED,
+    ExecutionReceiptState.ABSENCE_PROVEN,
+)
 
 
 @dataclass(frozen=True)
@@ -127,17 +137,27 @@ def open_symbol_position_refusal(
     *,
     candidate_id: uuid.UUID,
 ) -> str | None:
-    """One open autonomous position per coin, whichever strategy or direction.
+    """One open or pending autonomous position per coin, whichever strategy or direction.
 
     The first intent that opens a position on a coin wins. Any other candidate on
     that coin is refused until the position closes. The candidate that opened it
-    may still replay (idempotent). On Postgres a transaction lock per user and
-    coin serialises two loops checking at the same moment; the paper loop holds
-    it until its fill commits.
+    may still replay (idempotent). A pending entry holds the coin too: a PLANNED
+    journal (unless its entry provably ended unfilled) and an unresolved BloFin
+    demo entry, which has no journal until it fills. On Postgres a transaction
+    lock per user and coin serialises two loops checking at the same moment; the
+    paper loop holds it until its fill commits.
     """
 
-    from app.db.models import JournalTrade, Position
+    from app.db.models import (
+        ExecutionCommand,
+        ExecutionProjection,
+        ExecutionReceipt,
+        JournalTrade,
+        Position,
+        TradePlanRevision,
+    )
     from app.schemas.common import JournalTradeSource, JournalTradeStatus, PositionStatus
+    from app.services.demo_account_history import unresolved_demo_entries
 
     symbol = _normalized_symbol(target.symbol)
     if session.get_bind().dialect.name == "postgresql":
@@ -149,7 +169,7 @@ def open_symbol_position_refusal(
         select(JournalTrade).where(
             JournalTrade.organization_id == target.organization_id,
             JournalTrade.user_id == target.user_id,
-            JournalTrade.status == JournalTradeStatus.OPEN,
+            JournalTrade.status.in_((JournalTradeStatus.OPEN, JournalTradeStatus.PLANNED)),
             JournalTrade.source.in_(
                 (
                     JournalTradeSource.PAPER_EXECUTION,
@@ -159,8 +179,43 @@ def open_symbol_position_refusal(
             ),
         )
     ).all()
+    # A PLANNED entry the venue (or a block) provably ended with no fill is free.
+    planned = {
+        trade.execution_lifecycle_id
+        for trade in journals
+        if trade.status is JournalTradeStatus.PLANNED and trade.execution_lifecycle_id is not None
+    }
+    ended = (
+        set(
+            session.scalars(
+                select(ExecutionReceipt.command_id)
+                .join(ExecutionProjection, ExecutionProjection.receipt_id == ExecutionReceipt.id)
+                .where(
+                    ExecutionReceipt.command_id.in_(planned),
+                    ExecutionProjection.filled_quantity == 0,
+                    ExecutionProjection.state.in_(_ENDED_UNFILLED),
+                )
+            ).all()
+        )
+        if planned
+        else set()
+    )
     for trade in journals:
-        if _normalized_symbol(trade.symbol) == symbol and trade.candidate_id != candidate_id:
+        if (
+            _normalized_symbol(trade.symbol) == symbol
+            and trade.candidate_id != candidate_id
+            and trade.execution_lifecycle_id not in ended
+        ):
+            return SYMBOL_POSITION_OPEN
+    # A sent or uncertain BloFin demo entry has no journal until it fills.
+    pending = session.execute(
+        unresolved_demo_entries(
+            select(TradePlanRevision.execution_instrument, TradePlanRevision.candidate_id),
+            organization_id=target.organization_id,
+        ).where(ExecutionCommand.user_id == target.user_id)
+    ).all()
+    for instrument, pending_candidate in pending:
+        if _normalized_symbol(instrument) == symbol and pending_candidate != candidate_id:
             return SYMBOL_POSITION_OPEN
     # The replaying candidate's own position is not a second position.
     own = {trade.linked_position_id for trade in journals if trade.candidate_id == candidate_id}

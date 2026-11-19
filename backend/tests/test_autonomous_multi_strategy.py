@@ -796,6 +796,74 @@ def test_bound_refuses_a_new_intent_on_an_open_coin_before_any_plan(db) -> None:
     assert plans == []
 
 
+def test_a_pending_entry_occupies_the_coin(db) -> None:
+    """Griller B1: a dispatched but unfilled entry is still PLANNED, not OPEN."""
+
+    factory, _settings = db
+    with factory() as session:
+        pending = _open_trade(session, strategy_id=LONG, status=JournalTradeStatus.PLANNED)
+        for strategy in (SHORT, LONG):
+            assert (
+                open_symbol_position_refusal(session, _target(strategy), candidate_id=uuid4())
+                == "autonomous_symbol_position_open"
+            ), strategy
+        # The pending intent replaying itself is not refused; another coin is free.
+        assert (
+            open_symbol_position_refusal(
+                session, _target(LONG), candidate_id=pending.candidate_id or uuid4()
+            )
+            is None
+        )
+        assert (
+            open_symbol_position_refusal(
+                session, _target(SHORT, symbol="ETHUSDT"), candidate_id=uuid4()
+            )
+            is None
+        )
+        # A planned backtest row is not a pending entry.
+        pending.status = JournalTradeStatus.CANCELLED
+        _open_trade(
+            session,
+            strategy_id=LONG,
+            status=JournalTradeStatus.PLANNED,
+            source=JournalTradeSource.BACKTEST,
+        )
+        assert open_symbol_position_refusal(session, _target(SHORT), candidate_id=uuid4()) is None
+
+
+@pytest.mark.parametrize("direction", [TradeDirection.SHORT, TradeDirection.LONG])
+def test_bound_refuses_a_second_strategy_while_an_entry_is_pending(db, direction) -> None:
+    factory, settings = db
+
+    class _Store:
+        def get_by_candidate_scope(self, **_kwargs: object) -> None:
+            return None
+
+    class _Loop(AutomatedPaperLoop):
+        def _eligibility_service(self) -> object:
+            raise AssertionError("a refused second intent must not reach eligibility")
+
+    loop = _Loop(
+        SimpleNamespace(plan_store=_Store()),  # type: ignore[arg-type]
+        settings,
+        FrozenClock(datetime(2026, 11, 19, tzinfo=UTC)),
+    )
+    with factory() as session:
+        _open_trade(session, strategy_id=LONG, status=JournalTradeStatus.PLANNED)
+        proof = loop._bound(
+            session,
+            target=_target(SHORT),
+            candidate=SimpleNamespace(candidate_id=uuid4(), direction=direction),  # type: ignore[arg-type]
+            assessment=None,  # type: ignore[arg-type]
+            window=None,  # type: ignore[arg-type]
+            assembled=None,  # type: ignore[arg-type]
+            policy=None,  # type: ignore[arg-type]
+            account=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
+        )
+    assert proof.stage == "blocked"
+    assert proof.reason_code == "autonomous_symbol_position_open"
+
+
 def test_bound_replays_an_existing_plan_even_when_the_coin_is_open(db) -> None:
     factory, settings = db
     replayed: list[object] = []
