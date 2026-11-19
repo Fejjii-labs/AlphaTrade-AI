@@ -34,7 +34,7 @@ describe("BotActivityPanel", () => {
     const list = await screen.findByTestId("bot-activity");
     expect(list.querySelectorAll("li")).toHaveLength(5);
     expect(list).toHaveTextContent("Opened BTCUSDT long");
-    expect(list).toHaveTextContent("Skipped: Leverage is above the risk profile maximum.");
+    expect(list).toHaveTextContent("Skipped: Leverage was above the old risk profile cap (no longer applied).");
     expect(screen.getByRole("link", { name: "Trade" })).toHaveAttribute("href", "/journal?trade_id=11111111-1111-4111-8111-111111111111");
     expect(list).not.toHaveTextContent("demo_leverage");
     expectNoIdentifiers();
