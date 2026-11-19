@@ -289,7 +289,7 @@ class Settings(BaseSettings):
     governed_demo_plan_valid_max_seconds: int = 300
     risk_model_v2_enabled: bool = False
     # Ceiling on the demo account's existing leverage; above it a plan is refused.
-    governed_demo_max_leverage: Decimal = Decimal("20")
+    governed_demo_max_leverage: Decimal = Decimal("10")
     governed_blofin_demo_organization_id: str = ""
     governed_blofin_demo_user_id: str = ""
     governed_blofin_demo_account_id: str = ""

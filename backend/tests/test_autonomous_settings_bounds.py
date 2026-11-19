@@ -114,12 +114,12 @@ def test_stop_loss_band_reports_configured_and_hard_limits() -> None:
 
 def test_leverage_and_profile_ceilings() -> None:
     bounds = autonomous_settings_bounds(_settings(governed_demo_max_leverage=Decimal("8")))
-    assert bounds.leverage.demo_hard_cap == Decimal("20")
+    assert bounds.leverage.demo_hard_cap == Decimal("10")
     assert bounds.leverage.profile_max_leverage_ceiling == Decimal("20")
     assert bounds.leverage.demo_effective_max == Decimal("8")
     # Config may only lower the demo cap.
     raised = autonomous_settings_bounds(_settings(governed_demo_max_leverage=Decimal("50")))
-    assert raised.leverage.demo_effective_max == Decimal("20")
+    assert raised.leverage.demo_effective_max == Decimal("10")
 
     by_kind = {p.kind: p for p in bounds.profiles}
     assert set(by_kind) == {"internal_paper", "demo"}

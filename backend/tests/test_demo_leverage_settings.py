@@ -35,10 +35,10 @@ def test_demo_leverage_migration_follows_binance_gate() -> None:
 
 def test_validation_default_ceiling_and_floor() -> None:
     assert validate_demo_leverage(10) == 10
-    assert validate_demo_leverage(20) == 20
+    assert validate_demo_leverage(1) == 1
     assert validate_demo_leverage(Decimal("5")) == 5
     for bad, code in (
-        (21, "demo_leverage_exceeds_ceiling"),
+        (11, "demo_leverage_exceeds_ceiling"),
         (125, "demo_leverage_exceeds_ceiling"),
         (0, "demo_leverage_below_one"),
         (-3, "demo_leverage_below_one"),
@@ -97,7 +97,7 @@ def test_api_default_is_ten_isolated(client: TestClient) -> None:
     assert body["demo_margin_mode"] == "isolated"
     assert body["demo_leverage_overrides"] == {}
     assert body["demo_leverage_using_default"] is True
-    assert body["max_demo_leverage_ceiling"] == 20
+    assert body["max_demo_leverage_ceiling"] == 10
 
 
 def test_api_saves_leverage_mode_and_override(
@@ -108,14 +108,14 @@ def test_api_saves_leverage_mode_and_override(
         "/autonomous/settings",
         headers=headers,
         json={
-            "demo_leverage": 15,
+            "demo_leverage": 7,
             "demo_margin_mode": "cross",
             "demo_leverage_overrides": {"ethusdt": {"leverage": 4, "margin_mode": "isolated"}},
         },
     )
     assert saved.status_code == 200, saved.text
     body = saved.json()
-    assert body["demo_leverage"] == 15
+    assert body["demo_leverage"] == 7
     assert body["demo_margin_mode"] == "cross"
     assert body["demo_leverage_overrides"] == {
         "ETHUSDT": {"leverage": 4, "margin_mode": "isolated"}
@@ -124,7 +124,7 @@ def test_api_saves_leverage_mode_and_override(
     factory, _settings = settings_db
     with factory() as session:
         row = session.scalar(select(AutonomousTradingSettingsRow))
-        assert row is not None and row.demo_leverage == 15
+        assert row is not None and row.demo_leverage == 7
         eth = load_demo_leverage_config(
             session, organization_id=ORG, user_id=OWNER, symbol="ETHUSDT"
         )
@@ -132,18 +132,18 @@ def test_api_saves_leverage_mode_and_override(
             session, organization_id=ORG, user_id=OWNER, symbol="BTCUSDT"
         )
     assert (eth.leverage, eth.margin_mode) == (4, "isolated")
-    assert (btc.leverage, btc.margin_mode) == (15, "cross")
+    assert (btc.leverage, btc.margin_mode) == (7, "cross")
     cleared = client.patch(
         "/autonomous/settings", headers=headers, json={"clear_demo_leverage_overrides": True}
     )
     assert cleared.json()["demo_leverage_overrides"] == {}
-    assert cleared.json()["demo_leverage"] == 15
+    assert cleared.json()["demo_leverage"] == 7
 
 
 @pytest.mark.parametrize(
     ("payload", "code"),
     [
-        ({"demo_leverage": 21}, "demo_leverage_exceeds_ceiling"),
+        ({"demo_leverage": 11}, "demo_leverage_exceeds_ceiling"),
         ({"demo_leverage": 0}, "demo_leverage_below_one"),
         ({"demo_margin_mode": "portfolio"}, "demo_margin_mode_invalid"),
         (

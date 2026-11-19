@@ -20,8 +20,9 @@ from app.services.risk_policy.ceilings import HARD_MAX_LEVERAGE
 
 DEFAULT_DEMO_LEVERAGE = 10
 DEFAULT_DEMO_MARGIN_MODE = "isolated"
-# Hard ceiling, also the DB CHECK. Never above the risk-policy code ceiling.
-DEMO_LEVERAGE_CEILING = min(20, int(HARD_MAX_LEVERAGE))
+# Demo leverage is the owner's choice from 1x to 10x; the risk profile does not cap it.
+# The settings-row DB CHECK still allows 20, so stored values above 10 refuse here.
+DEMO_LEVERAGE_CEILING = min(10, int(HARD_MAX_LEVERAGE))
 DEMO_MARGIN_MODES = frozenset({"isolated", "cross"})
 MAX_DEMO_LEVERAGE_OVERRIDES = 50
 _SYMBOL = re.compile(r"^[A-Z0-9]{2,24}USDT$")
