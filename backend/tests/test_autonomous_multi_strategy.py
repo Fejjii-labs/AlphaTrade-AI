@@ -5,6 +5,8 @@ enabled, lifecycle-approved, paper-eligible strategy, long or short. Unlisted,
 disabled, unapproved and non-eligible strategies are still refused, and two
 strategies firing on the same coin never open two positions: the first intent
 wins and the second is refused with ``autonomous_symbol_position_open``.
+On the BloFin demo loop paper eligibility is not required (enabled plus
+approved/active is enough); every other loop keeps that gate.
 """
 
 from __future__ import annotations
@@ -314,6 +316,50 @@ def test_all_eligible_mode_accepts_any_eligible_strategy_only() -> None:
     )
 
 
+@pytest.mark.parametrize("scope", ["selected", "all_eligible"])
+def test_demo_does_not_require_paper_eligibility(scope: str) -> None:
+    # Owner decision 2026-11-19: on BloFin demo, enabled + approved/active is enough.
+    settings = _resolved(strategy_ids=frozenset({NOT_ELIGIBLE}), strategy_scope=scope)
+    status = _status(NOT_ELIGIBLE, paper_eligible=False)
+    assert (
+        autonomous_precheck_refusal(
+            settings,
+            _target(NOT_ELIGIBLE),
+            _snapshot(),
+            strategy_status=status,
+            require_paper_eligible=False,
+        )
+        is None
+    )
+    # Off demo (the default) the paper gate still applies.
+    assert (
+        autonomous_precheck_refusal(
+            settings, _target(NOT_ELIGIBLE), _snapshot(), strategy_status=status
+        )
+        == "autonomous_strategy_not_paper_eligible"
+    )
+
+
+def test_demo_still_refuses_disabled_unapproved_and_unverified() -> None:
+    every = _resolved(strategy_ids=frozenset(), strategy_scope="all_eligible")
+    cases = {
+        "autonomous_strategy_disabled": _status(enabled=False, paper_eligible=False),
+        "autonomous_strategy_not_approved": _status(approved=False, paper_eligible=False),
+        "autonomous_strategy_status_unverified": None,
+    }
+    for expected, status in cases.items():
+        assert (
+            autonomous_precheck_refusal(
+                every,
+                _target(),
+                _snapshot(),
+                strategy_status=status,
+                require_paper_eligible=False,
+            )
+            == expected
+        ), expected
+
+
 def test_existing_caps_still_apply_with_many_strategies() -> None:
     empty = _resolved(strategy_ids=frozenset())
     assert (
@@ -542,6 +588,7 @@ def _probe(
     *,
     direction: TradeDirection = TradeDirection.LONG,
     kill_switch_active: bool = False,
+    loop_class: type[_ProbeLoop] = _ProbeLoop,
 ) -> AutomatedPaperLoopProof:
     class _Accounting:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -551,7 +598,7 @@ def _probe(
             return _snapshot()
 
     monkeypatch.setattr("app.services.risk.daily_risk_accounting.DailyRiskAccounting", _Accounting)
-    loop = _ProbeLoop(settings)
+    loop = loop_class(settings)
     with factory() as session:
         return loop.continue_confirmed_setup(
             session,
@@ -607,6 +654,44 @@ def test_loop_all_eligible_mode_refuses_draft_and_unproven(db, monkeypatch) -> N
     assert _probe(factory, settings, monkeypatch, _target(DISABLED)).reason_code == (
         "autonomous_strategy_disabled"
     )
+
+
+class _DemoProbeLoop(_ProbeLoop):
+    def _risk_policy_kind(self) -> str:
+        return "demo"
+
+
+@pytest.mark.parametrize("scope", ["selected", "all_eligible"])
+def test_demo_loop_takes_long_and_short_from_non_paper_eligible_strategy(
+    db, monkeypatch, scope: str
+) -> None:
+    factory, settings = db
+    with factory() as session:
+        _service(session).update(
+            AutonomousTradingSettingsUpdate(
+                strategy_ids=[NOT_ELIGIBLE], strategy_scope=scope, symbol="BTCUSDT"
+            ),
+            organization_id=ORG,
+            user_id=OWNER,
+        )
+        session.commit()
+    for direction in (TradeDirection.LONG, TradeDirection.SHORT):
+        demo = _probe(
+            factory,
+            settings,
+            monkeypatch,
+            _target(NOT_ELIGIBLE),
+            direction=direction,
+            loop_class=_DemoProbeLoop,
+        )
+        assert demo.reason_code == "probe_reached_bound", direction
+        # The internal paper loop keeps the paper-eligibility gate.
+        paper = _probe(factory, settings, monkeypatch, _target(NOT_ELIGIBLE), direction=direction)
+        assert paper.reason_code == "autonomous_strategy_not_paper_eligible", direction
+    # Demo still refuses an unlisted or unapproved strategy.
+    draft = _probe(factory, settings, monkeypatch, _target(DRAFT), loop_class=_DemoProbeLoop)
+    expected = "mismatch" if scope == "selected" else "not_approved"
+    assert draft.reason_code == f"autonomous_strategy_{expected}"
 
 
 def _open_trade(

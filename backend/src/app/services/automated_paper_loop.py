@@ -217,6 +217,8 @@ class AutomatedPaperLoop:
                 if autonomous_settings.using_defaults
                 else load_autonomous_strategy_status(session, target)
             ),
+            # Only the governed BloFin demo loop skips the paper-eligibility gate.
+            require_paper_eligible=self._risk_policy_kind() != "demo",
         )
         if autonomous_block is not None:
             return _proof(candidate, "blocked", autonomous_block)
