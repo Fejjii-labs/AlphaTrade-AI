@@ -310,6 +310,16 @@ class Settings(BaseSettings):
     # both keys with sync: false and sets no value (Fable audit I5).
     paper_exit_monitor_enabled: bool = False
     paper_exit_monitor_dry_run: bool = True
+    # Partial exits (TP1..TPn plus an optional trailing runner), one switch per
+    # venue, both off. Off keeps the single full-size target path; a plan with
+    # several targets or a runner stays out of the monitor and the demo loop.
+    # Only an explicit true/false parses; anything else refuses to load. Never
+    # enables a real-money venue (services/partial_exits/flags.py).
+    paper_partial_exits_enabled: bool = False
+    # BloFin DEMO only (EXCHANGE_MODE=paper_exchange_demo, real trading off):
+    # a ladder is entered without attached TP/SL and every exit is a
+    # bot-managed market reduceOnly close (services/partial_exits/demo.py).
+    governed_demo_partial_exits_enabled: bool = False
     # Retention (H5 + the approved data policy). Kept forever: strategies,
     # conversations, journal, trades/orders/fills/plans, paper_decision and
     # paper_trade_* setup events, knowledge, accounts and settings. Candidates
@@ -813,6 +823,18 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip().lower()
         return value
+
+    @field_validator(
+        "paper_partial_exits_enabled", "governed_demo_partial_exits_enabled", mode="before"
+    )
+    @classmethod
+    def _strict_partial_exit_flag(cls, value: object) -> object:
+        """Fail closed: only a boolean or the words true/false are accepted."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+        raise ValueError("Partial-exit flags accept only true or false.")
 
     @field_validator("auth_cookie_samesite", mode="before")
     @classmethod

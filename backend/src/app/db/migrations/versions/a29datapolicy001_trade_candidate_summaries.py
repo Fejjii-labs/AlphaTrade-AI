@@ -153,11 +153,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    with op.get_context().autocommit_block():
-        for name, table, _columns in reversed(_INDEXES):
-            op.drop_index(name, table_name=table, postgresql_concurrently=True, if_exists=True)
+    # Transactional drops (no CONCURRENTLY/autocommit block): an autocommit block
+    # would commit every newer revision's pending downgrade, and these drops,
+    # before an older revision's guard (a28promptsha001) refuses the rest.
+    # lock_timeout bounds the ACCESS EXCLUSIVE lock a plain DROP INDEX takes.
     if _is_postgres():
         op.execute("SET LOCAL lock_timeout = '5s'")
+    for name, table, _columns in reversed(_INDEXES):
+        op.drop_index(name, table_name=table, if_exists=True)
+    if _is_postgres():
         _point_triggers({})
         op.execute(f"DROP FUNCTION IF EXISTS {_GUARD}()")
     op.drop_index("ix_trade_candidate_summaries_org_strategy", table_name=_SUMMARY)

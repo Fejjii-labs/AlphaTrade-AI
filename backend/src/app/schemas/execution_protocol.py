@@ -114,6 +114,22 @@ class ExecutePaperPlanHttpRequest(BaseModel):
     correlation_id: UUID | None = None
 
 
+class ClosePaperExitFill(BaseModel):
+    """One partial-exit reduction carried into the final close, costs attributed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fill_id: str = Field(min_length=1, max_length=160)
+    kind: Literal["target", "stop", "runner_stop"]
+    leg_order: int | None = Field(default=None, ge=1)
+    quantity: PositiveCanonicalDecimal
+    price: PositiveCanonicalDecimal
+    occurred_at: datetime
+    fees: NonNegativeCanonicalDecimal = Decimal("0")
+    funding: NonNegativeCanonicalDecimal = Decimal("0")
+    slippage: NonNegativeCanonicalDecimal = Decimal("0")
+
+
 class ClosePaperPlanRequest(BaseModel):
     """Close one filled canonical paper plan. Prices are explicit; no market I/O."""
 
@@ -136,6 +152,10 @@ class ClosePaperPlanRequest(BaseModel):
     exit_channel: str | None = Field(default=None, min_length=1, max_length=40)
     exit_actor: str | None = Field(default=None, min_length=1, max_length=40)
     exit_evidence: dict[str, str] | None = None
+    # Set only by the partial-exit monitor: the reductions that make up this
+    # close. Their quantities must sum to the recorded size and their costs to
+    # the totals above; PnL is then the exact sum of the fills.
+    exit_fills: tuple[ClosePaperExitFill, ...] | None = None
 
 
 class ClosePaperPlanHttpRequest(BaseModel):
