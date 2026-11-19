@@ -13,13 +13,16 @@ const bot: AutonomousTradingSettingsView = {
   max_trades_per_day: 5,
   risk_per_trade_percent: null,
   strategy_id: "strategy-1",
+  strategy_ids: ["strategy-1"],
+  strategy_scope: "selected",
   symbol: "BTCUSDT",
   using_defaults: false,
   account_max_trades_per_day: 3,
   effective_max_trades_per_day: 3,
   strategy_options: [
-    { strategy_id: "strategy-1", name: "Nested BTC" },
-    { strategy_id: "strategy-2", name: "SFP ETH" },
+    { strategy_id: "strategy-1", name: "Nested BTC", approved: true, paper_eligible: true },
+    { strategy_id: "strategy-2", name: "SFP ETH", approved: true, paper_eligible: true },
+    { strategy_id: "strategy-3", name: "Draft idea", approved: false, paper_eligible: false },
   ],
   symbol_options: ["BTCUSDT", "ETHUSDT"],
   max_daily_loss_percent_ceiling: "6",
@@ -112,7 +115,7 @@ describe("TradingLimitsCard", () => {
   it("saves only bot settings when only bot fields change", async () => {
     const { api } = await import("@/lib/api");
     renderCard();
-    change("autonomous-strategy", "strategy-2");
+    fireEvent.click(screen.getByTestId("autonomous-strategy-strategy-2"));
     change("autonomous-symbol", "ETHUSDT");
     change("autonomous-risk-per-trade", "0.5");
     save();
@@ -121,11 +124,49 @@ describe("TradingLimitsCard", () => {
     expect(api.autonomous.updateSettings).toHaveBeenCalledExactlyOnceWith({
       daily_loss_limit_percent: "3",
       max_trades_per_day: 5,
-      strategy_id: "strategy-2",
+      strategy_ids: ["strategy-1", "strategy-2"],
+      strategy_scope: "selected",
       symbol: "ETHUSDT",
       risk_per_trade_percent: "0.5",
     });
     expect(onBotSaved).toHaveBeenCalledOnce();
+  });
+
+  it("does not tell demo users strategies must be paper-eligible", () => {
+    renderCard();
+    const section = screen.getByTestId("autonomous-strategy");
+    expect(section).toHaveTextContent("Every approved and enabled strategy");
+    expect(section).toHaveTextContent("BloFin demo does not");
+    expect(section).not.toHaveTextContent("approved, paper-eligible strategy");
+    expect(section).not.toHaveTextContent("not approved and paper-eligible");
+  });
+
+  it("lets the owner pick several approved strategies but not an unapproved one", async () => {
+    const { api } = await import("@/lib/api");
+    renderCard();
+    expect(screen.getByTestId("autonomous-strategy-strategy-1")).toBeChecked();
+    expect(screen.getByTestId("autonomous-strategy-strategy-3")).toBeDisabled();
+    expect(screen.getByTestId("autonomous-strategy")).toHaveTextContent("Not approved");
+    fireEvent.click(screen.getByTestId("autonomous-strategy-strategy-1"));
+    fireEvent.click(screen.getByTestId("autonomous-strategy-strategy-2"));
+    save();
+    await waitFor(() => expect(api.autonomous.updateSettings).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.autonomous.updateSettings).mock.calls[0][0]).toMatchObject({
+      strategy_ids: ["strategy-2"],
+      strategy_scope: "selected",
+    });
+  });
+
+  it("saves the every-eligible-strategy mode and locks the checklist", async () => {
+    const { api } = await import("@/lib/api");
+    renderCard();
+    fireEvent.click(screen.getByTestId("autonomous-strategy-scope-all"));
+    expect(screen.getByTestId("autonomous-strategy-strategy-2")).toBeDisabled();
+    save();
+    await waitFor(() => expect(api.autonomous.updateSettings).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.autonomous.updateSettings).mock.calls[0][0]).toMatchObject({
+      strategy_scope: "all_eligible",
+    });
   });
 
   it("clears bot risk per trade back to grade risk when emptied", async () => {

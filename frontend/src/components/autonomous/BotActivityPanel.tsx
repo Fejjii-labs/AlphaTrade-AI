@@ -50,7 +50,14 @@ function describe(action: BotAction): string {
 export function BotActivityPanel({ view }: { view: AutonomousTradingSettingsView }) {
   const loader = useCallback(() => api.autonomous.activity(), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
-  const strategy = view.strategy_options.find((s) => s.strategy_id === view.strategy_id)?.name;
+  const selected = view.strategy_ids ?? (view.strategy_id ? [view.strategy_id] : []);
+  const strategy =
+    view.strategy_scope === "all_eligible"
+      ? "All eligible strategies"
+      : view.strategy_options
+          .filter((s) => selected.includes(s.strategy_id))
+          .map((s) => s.name)
+          .join(", ");
   const target = [strategy, view.symbol].filter(Boolean).join(" · ") || "No strategy or coin set";
   const actions = data?.recent_actions ?? [];
   const last = actions[0];
