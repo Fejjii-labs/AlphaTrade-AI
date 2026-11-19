@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { EmailVerificationNotice } from "@/components/account/EmailVerificationNotice";
-import { PaperModeBanner } from "@/components/PaperModeBanner";
 import { ErrorState, SuccessState } from "@/components/states";
 import { useAuth } from "@/contexts/AuthContext";
 import { api, ApiError } from "@/lib/api";
@@ -58,7 +57,6 @@ function VerifyEmailContent() {
             : "Confirm your address to unlock staging and production policies."}
         </p>
       </div>
-      <PaperModeBanner />
       {status === "confirming" ? <p className="text-sm text-zinc-400">Confirming your link…</p> : null}
       {status === "success" && message ? <SuccessState message={message} /> : null}
       {status === "error" && message ? <ErrorState message={message} /> : null}

@@ -3,10 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import ForgotPasswordPage from "@/app/(public)/forgot-password/page";
 
-vi.mock("@/components/PaperModeBanner", () => ({
-  PaperModeBanner: () => null,
-}));
-
 vi.mock("@/lib/api", () => ({
   api: { auth: { requestPasswordReset: vi.fn() } },
   ApiError: class ApiError extends Error {},

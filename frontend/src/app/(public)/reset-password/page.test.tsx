@@ -3,10 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import ResetPasswordPage from "@/app/(public)/reset-password/page";
 
-vi.mock("@/components/PaperModeBanner", () => ({
-  PaperModeBanner: () => null,
-}));
-
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams("token=test-reset-token-value-xxx"),
 }));
