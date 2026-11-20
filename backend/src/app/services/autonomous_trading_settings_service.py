@@ -391,6 +391,30 @@ class AutonomousTradingSettingsService:
             )
         return self.get(organization_id=organization_id, user_id=user_id)
 
+    def sync_demo_leverage(
+        self, *, organization_id: uuid.UUID, user_id: uuid.UUID, leverage: int
+    ) -> None:
+        """Mirror v2 leverage in the caller's transaction, preserving other settings."""
+        if self._session.get_bind().dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+
+        defaults = SYSTEM_AUTONOMOUS_DEFAULTS
+        stmt = insert(AutonomousTradingSettingsRow).values(
+            organization_id=organization_id,
+            user_id=user_id,
+            demo_leverage=leverage,
+            daily_loss_limit_percent=defaults.daily_loss_limit_percent,
+            max_trades_per_day=defaults.max_trades_per_day,
+        )
+        self._session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["organization_id", "user_id"],
+                set_={"demo_leverage": leverage, "updated_at": datetime.now(UTC)},
+            )
+        )
+
     def _switch_view(self, organization_id: uuid.UUID) -> dict[str, object]:
         """Owner switch plus the worker ceiling. A missing heartbeat is not effective."""
 
@@ -398,8 +422,9 @@ class AutonomousTradingSettingsService:
 
         enabled = read_internal_paper_switch(self._session, organization_id)
         org_enabled = enabled is True
+        worker = load_worker_runtime_from_session(self._session)
         observation = project_worker_effective(
-            load_worker_runtime_from_session(self._session),
+            worker,
             now=datetime.now(UTC),
             stale_after_seconds=get_settings().watcher_heartbeat_stale_after_seconds,
         )
@@ -415,6 +440,7 @@ class AutonomousTradingSettingsService:
             "worker_runtime_health": observation.health_state,
             "worker_heartbeat_age_seconds": observation.heartbeat_age_seconds,
             "worker_flags_stale": observation.source != "worker" or observation.stale,
+            "risk_model_v2_enabled": None if worker is None else worker.risk_model_v2_enabled,
             "autonomy_mode": observation.autonomy_mode if observation.source == "worker" else "",
         }
 

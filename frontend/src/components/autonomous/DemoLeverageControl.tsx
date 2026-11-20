@@ -15,18 +15,24 @@ type Props = {
 
 type Status = "idle" | "saving" | "saved" | "error";
 
-/**
- * BloFin demo leverage bound to `demo_leverage` on /autonomous/settings.
- * Presets 2x/3x/5x/10x, saved on change; the risk profile does not cap it here.
- */
 export function DemoLeverageControl({ view, owner, onSaved }: Props) {
   const [status, setStatus] = useState<Status>("idle");
-  const current = view.demo_leverage ?? null;
+  const v2 = view.risk_model_v2_enabled;
+  const current = v2 === true
+    ? view.demo_risk_v2_leverage ?? null
+    : v2 === false ? view.demo_leverage ?? null : null;
 
   async function save(leverage: number) {
+    if (current === null || v2 == null) return;
     setStatus("saving");
     try {
-      onSaved(await api.autonomous.updateSettings({ demo_leverage: leverage }));
+      if (v2) {
+        const currentSettings = await api.riskPolicy.demoBotSettings();
+        const saved = await api.riskPolicy.updateDemoBotSettings({ ...currentSettings, leverage });
+        onSaved({ ...view, demo_risk_v2_leverage: saved.leverage });
+      } else {
+        onSaved(await api.autonomous.updateSettings({ demo_leverage: leverage }));
+      }
       setStatus("saved");
     } catch {
       setStatus("error");
@@ -38,13 +44,15 @@ export function DemoLeverageControl({ view, owner, onSaved }: Props) {
       <div className="flex-1">
         <LeverageSelect
           value={current}
-          disabled={!owner || status === "saving"}
+          disabled={!owner || current === null || status === "saving"}
           onChange={(next) => {
             if (next !== current) void save(next);
           }}
         />
       </div>
-      {status === "idle" ? null : (
+      {status === "idle" ? (
+        current === null ? <span className="text-xs text-text-muted">Leverage unavailable.</span> : null
+      ) : (
         <span
           role={status === "error" ? "alert" : "status"}
           data-testid="leverage-status"

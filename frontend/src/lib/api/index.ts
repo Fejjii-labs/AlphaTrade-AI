@@ -117,6 +117,7 @@ import type {
   AutonomousActivityView,
   AutonomousSettingsBounds,
   AutonomousStrategyStatsView,
+  DemoBotRiskSettings,
   RiskPolicyView,
   AutonomousTradingSettingsView,
   UserRiskSettings,
@@ -1352,6 +1353,14 @@ export const api = {
       }),
   },
   riskPolicy: {
+    demoBotSettings: () =>
+      apiFetch<DemoBotRiskSettings>("/risk/policy/demo-bot-settings", { auth: true }),
+    updateDemoBotSettings: (body: DemoBotRiskSettings) =>
+      apiFetch<DemoBotRiskSettings>("/risk/policy/demo-bot-settings", {
+        method: "PUT",
+        body: JSON.stringify(body),
+        auth: true,
+      }),
     profile: (kind: "internal_paper" | "demo") =>
       apiFetch<RiskPolicyView>(`/risk/policy/profiles/${kind}`, { auth: true }),
   },
